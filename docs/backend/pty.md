@@ -92,7 +92,7 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 8. Broadcast to WebSocket clients (if any connected)
 9. Assemble the lines of the chunk and match them against the compiled plugin OutputWatchers (`output_watchers.rs`), then emit `pty-watcher-lines-{session_id}` with the batch — see [Plugin OutputWatcher matching](#plugin-outputwatcher-matching) below. No raw-output Tauri event is emitted any more: the desktop canvas renders from grid frames, and the assembled lines are the only text the WebView needs. (The raw `output` frame of step 8 is unaffected — it is fed from the output ring buffer to raw-mode WebSocket clients.)
 
-**Cursor-up clamping** — The `clamp_cursor_up()` function limits `ESC[nA` (cursor up) and `ESC[nF` (cursor previous line) sequences to prevent them from moving the cursor beyond the visible viewport. This replaced the previous DiffRenderer approach for simpler escape sequence handling.
+**Cursor-up clamping** — there is no reader-thread-level clamp on `ESC[nA` (cursor up) / `ESC[nF` (cursor previous line) sequences; a `clamp_cursor_up()` function used to fill that role but no longer exists. Cursor bounds are enforced by the terminal grid itself (`alacritty_terminal`'s `Term::move_up`/`move_up_and_cr`, driven from `terminal_grid.rs`), which clamps to the screen's top line. The `clamped_data` binding a few lines below in the reader loop is a naming relic from that era — no clamping happens there today.
 
 **ANSI anomaly detection** — The `detect_anomalous_sequences()` function scans PTY output for unusual escape sequences (screen clears, cursor home, alt-screen toggles, scrollback clears) and logs them at warn level. This is a diagnostic tool for investigating scroll-jump issues.
 

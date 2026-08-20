@@ -1,3 +1,6 @@
+#[cfg(test)]
+use unicode_width::UnicodeWidthChar;
+
 /// Virtual line editor that reconstructs user input from raw PTY keystrokes.
 ///
 /// Handles cursor movement, word operations, and editing sequences to maintain
@@ -12,7 +15,14 @@
 pub(crate) struct InputLineBuffer {
     /// The character content of the current line.
     chars: Vec<char>,
-    /// Cursor position as a character index (0 = before first char).
+    /// Cursor position as a **character** index (0 = before first char), not
+    /// a terminal display column — every arrow-key press this buffer parses
+    /// moves it by exactly one `char`, matching one keystroke. That equals
+    /// the display column for ASCII/narrow content, but diverges once the
+    /// line contains a wide character (CJK, emoji, etc.), each of which
+    /// occupies one `char` slot here but two terminal columns. A caller that
+    /// needs the real column (to compare against the grid's cursor position,
+    /// for example) must use `display_column()`, not this field directly.
     cursor: usize,
     /// State machine for multi-byte escape sequences.
     esc_state: EscState,
@@ -83,10 +93,24 @@ impl InputLineBuffer {
         self.chars.first() == Some(&c)
     }
 
-    /// Get current cursor position.
+    /// Get current cursor position as a character index. See the `cursor`
+    /// field doc — this is NOT a terminal display column.
     #[cfg(test)]
     pub(crate) fn cursor_pos(&self) -> usize {
         self.cursor
+    }
+
+    /// Get the cursor position as a terminal display column: the sum of the
+    /// display width of every character before it. Equal to `cursor_pos()`
+    /// for ASCII/narrow content; diverges by one column per wide character
+    /// (CJK, emoji, etc.) already typed. This is what a caller comparing
+    /// against the grid's actual cursor column should use.
+    #[cfg(test)]
+    pub(crate) fn display_column(&self) -> usize {
+        self.chars[..self.cursor]
+            .iter()
+            .map(|c| c.width().unwrap_or(0))
+            .sum()
     }
 
     fn feed_char(&mut self, ch: char) -> Option<InputAction> {
@@ -500,6 +524,34 @@ mod tests {
         assert_eq!(buf.cursor_pos(), 0);
         buf.feed("\x05"); // Ctrl+E (end)
         assert_eq!(buf.cursor_pos(), 5);
+    }
+
+    #[test]
+    fn test_display_column_matches_cursor_pos_for_ascii() {
+        let mut buf = InputLineBuffer::new();
+        buf.feed("hello");
+        assert_eq!(buf.cursor_pos(), 5);
+        assert_eq!(buf.display_column(), 5);
+        buf.feed("\x01"); // Ctrl+A (home)
+        assert_eq!(buf.display_column(), 0);
+    }
+
+    #[test]
+    fn test_display_column_diverges_from_cursor_pos_with_wide_chars() {
+        // "界" is one `char` (cursor_pos steps over it as 1) but occupies two
+        // terminal columns (display_column must step over it as 2).
+        let mut buf = InputLineBuffer::new();
+        buf.feed("界");
+        assert_eq!(buf.cursor_pos(), 1, "one char consumed");
+        assert_eq!(buf.display_column(), 2, "but two display columns");
+
+        buf.feed("x");
+        assert_eq!(buf.cursor_pos(), 2);
+        assert_eq!(buf.display_column(), 3);
+
+        buf.feed("界界");
+        assert_eq!(buf.cursor_pos(), 4);
+        assert_eq!(buf.display_column(), 7);
     }
 
     #[test]

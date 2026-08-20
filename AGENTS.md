@@ -43,6 +43,7 @@ You can exercise features through the **web UI** instead of the Tauri desktop ap
 - **Plugin dashboards MUST follow [`docs/plugins-style.md`](docs/plugins-style.md)** — use the shared `.dashboard`/`.dash-*` classes from `PLUGIN_BASE_CSS`, never hand-roll inline layout CSS. The built-in Claude Usage dashboard is the reference.
 - Icons: monochrome inline SVGs with `fill="currentColor"` — never emoji.
 - Take a screenshot after EVERY visual/CSS/layout change to verify rendering.
+- **The canvas-terminal frame protocol's bit layout is defined once** in `terminal_grid.rs`'s `serialize_dirty_rows` doc comment. Any bit added there MUST be mirrored in `canvasTerminalUtils.ts::decodeBinaryFrame` AND in `docs/frontend/canvas-terminal-audit.md`'s bit-layout paragraph, not just the two code sites — three separate bugs (the DECCKM `app_cursor` bit, the DECSCUSR `cursor_steady` bit, and a stale scrollbar-visibility condition next to them) have traced back to that three-way split staying out of sync.
 
 ## Branching
 

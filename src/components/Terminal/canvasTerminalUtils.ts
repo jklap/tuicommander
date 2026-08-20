@@ -93,6 +93,10 @@ export interface DecodedFrame {
 	 *  arrows/Home/End must be sent as SS3 (`\x1bO{A,B,C,D,H,F}`) instead of
 	 *  CSI (`\x1b[{A,B,C,D,H,F}`). */
 	appCursor: boolean;
+	/** The app requested a steady (non-blinking) cursor via DECSCUSR (an even
+	 *  Ps, e.g. `\x1b[2 q`). False also covers "no DECSCUSR seen" — today's
+	 *  default is to blink a focused cursor. */
+	cursorSteady: boolean;
 	bell: boolean;
 	mouseMode: 0 | 1 | 2 | 3;
 	sgrMouse: boolean;
@@ -372,11 +376,12 @@ export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number
 	offset += 2;
 	const historyBase = view.getUint32(offset, true);
 	offset += 4;
-	// bits 5-6 of keyboard_flags ride along as alt-screen / app-cursor state,
-	// not keyboard flags — they land here because frame_flags is full (see
-	// serialize_dirty_rows).
+	// bits 5-7 of keyboard_flags ride along as alt-screen / app-cursor /
+	// cursor-steady state, not keyboard flags — they land here because
+	// frame_flags is full (see serialize_dirty_rows).
 	const altScreen = (rawKeyboardFlags & 0x20) !== 0;
 	const appCursor = (rawKeyboardFlags & 0x40) !== 0;
+	const cursorSteady = (rawKeyboardFlags & 0x80) !== 0;
 	const keyboardFlags = rawKeyboardFlags & 0x1f;
 	const bell = (frameFlags & 0x01) !== 0;
 	const cursorShapeRaw = (frameFlags >> 1) & 0x03;
@@ -467,6 +472,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number
 		keyboardFlags,
 		altScreen,
 		appCursor,
+		cursorSteady,
 		bell,
 		mouseMode,
 		sgrMouse,
@@ -571,6 +577,16 @@ export function resolveCursorShape(frameShape: DecodedFrame["cursorShape"], sett
 	return frameShape === "default" ? settingShape : frameShape;
 }
 
+/**
+ * Whether the cursor should be painted on this tick, given the blink phase
+ * and whether the app requested a steady (non-blinking) cursor via DECSCUSR.
+ * A steady request always paints — it opts out of the blink cycle entirely,
+ * rather than just starting from a different phase.
+ */
+export function shouldPaintCursor(cursorBlinkOn: boolean, cursorSteady: boolean): boolean {
+	return cursorSteady || cursorBlinkOn;
+}
+
 export interface CursorRect {
 	x: number;
 	y: number;
@@ -578,18 +594,46 @@ export interface CursorRect {
 	h: number;
 }
 
-/** Compute the pixel rectangle for a cursor at the given grid position. */
-export function computeCursorRect(shape: CursorShape, row: number, col: number, m: CellMetrics): CursorRect {
+/**
+ * Compute the pixel rectangle for a cursor at the given grid position.
+ *
+ * `spanCols` widens a block/underline cursor to cover a wide glyph (CJK,
+ * emoji, …) that bleeds into the next cell — the wire protocol carries no
+ * "is this cell wide" flag (the spacer cell it occupies is indistinguishable
+ * from a genuinely empty cell), so the caller determines width by measuring
+ * the actual glyph (see `isWideCursorGlyph`) rather than from frame data. A
+ * beam cursor stays a fixed-width insertion marker regardless, matching how
+ * other terminals render it.
+ */
+export function computeCursorRect(
+	shape: CursorShape,
+	row: number,
+	col: number,
+	m: CellMetrics,
+	spanCols: 1 | 2 = 1,
+): CursorRect {
 	const x = col * m.cellWidth;
 	const y = row * m.cellHeight;
 	switch (shape) {
 		case "block":
-			return { x, y, w: m.cellWidth, h: m.cellHeight };
+			return { x, y, w: m.cellWidth * spanCols, h: m.cellHeight };
 		case "beam":
 			return { x, y, w: 2, h: m.cellHeight };
 		case "underline":
-			return { x, y: y + m.cellHeight - 2, w: m.cellWidth, h: 2 };
+			return { x, y: y + m.cellHeight - 2, w: m.cellWidth * spanCols, h: 2 };
 	}
+}
+
+/**
+ * Whether a glyph measured at `measuredWidthPx` occupies two grid columns
+ * rather than one, given the terminal's cell width. Driven by an actual
+ * canvas `measureText` result (not a Unicode East-Asian-Width table) because
+ * that is what the renderer already does to lay the glyph out — it stays
+ * correct for exactly the same set of characters the renderer treats as wide,
+ * with no separate width table to keep in sync.
+ */
+export function isWideCursorGlyph(measuredWidthPx: number, cellWidth: number): boolean {
+	return measuredWidthPx > cellWidth * 1.5;
 }
 
 /**
