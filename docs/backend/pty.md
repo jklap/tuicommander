@@ -119,6 +119,8 @@ repainting its unchanged anchor does not close it as replaced prose.
 
 For a managed Claude child with workspace trust acceptance enabled, the rendered screen is also checked for its exact startup safety question, both choices, and **No, exit** selected. Only then does the reader send Up followed by Enter under the PTY writer lock, once for that session. Other dialogs and user-opened terminals are never answered by this path; session cleanup removes an unused allowance.
 
+**Cursor-up clamping** — there is no reader-thread-level clamp on `ESC[nA` (cursor up) / `ESC[nF` (cursor previous line) sequences; a `clamp_cursor_up()` function used to fill that role but no longer exists. Cursor bounds are enforced by the terminal grid itself (`alacritty_terminal`'s `Term::move_up`/`move_up_and_cr`, driven from `terminal_grid.rs`), which clamps to the screen's top line. The `clamped_data` binding a few lines below in the reader loop is a naming relic from that era — no clamping happens there today.
+
 **ANSI anomaly detection** — The `detect_anomalous_sequences()` function scans PTY output for unusual escape sequences (screen clears, cursor home, alt-screen toggles, scrollback clears) and logs them at warn level. This is a diagnostic tool for investigating scroll-jump issues.
 
 **Pause behavior:** When `paused` flag is set (`AtomicBool`), the reader thread sleeps in 10 ms slices instead of reading. This prevents output flooding during background operations.
