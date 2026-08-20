@@ -34,6 +34,7 @@ function makeFrame(opts: {
 		keyboardFlags: 0,
 		altScreen: opts.altScreen ?? false,
 		appCursor: false,
+		cursorSteady: false,
 		bell: false,
 		mouseMode: 0,
 		sgrMouse: false,
