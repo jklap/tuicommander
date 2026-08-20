@@ -8,7 +8,9 @@ import {
 	type DecodedFrame,
 	type DecodedRow,
 	GUTTER_PX,
+	isWideCursorGlyph,
 	resolveCursorShape,
+	shouldPaintCursor,
 } from "./canvasTerminalUtils";
 import type { GridRenderer } from "./gridRenderer";
 import { scrollbarThumb } from "./scrollbarThumb";
@@ -109,7 +111,7 @@ export function paintCursor(
 	if (frame.displayOffset > 0) return;
 	if (!frame.cursorVisible) return;
 	if (!focused()) return;
-	if (!cursorBlinkOn) return;
+	if (!shouldPaintCursor(cursorBlinkOn, frame.cursorSteady)) return;
 
 	const settingShape: CursorShape =
 		settingsStore.state.cursorStyle === "block"
@@ -122,24 +124,36 @@ export function paintCursor(
 		? projection.toDisplay(frame.cursorRow, frame.cursorCol)
 		: { row: frame.cursorRow, col: frame.cursorCol };
 	if (!point) return;
-	const rect = computeCursorRect(shape, point.row, point.col, m);
+
+	// Measure the glyph under the cursor up front (not just for "block") so a
+	// wide character (CJK, emoji, …) widens a block/underline cursor to cover
+	// both columns it occupies — computeCursorRect ignores spanCols for beam.
+	const row = rowMap.get(frame.cursorRow);
+	const col = frame.cursorCol;
+	let glyph = "";
+	let spanCols: 1 | 2 = 1;
+	if (row && col < row.count) {
+		const cp = row.codepoints[col];
+		glyph = cellText(row, col);
+		if (glyph !== "" && (cp !== 0x20 || row.cellExtras?.has(col))) {
+			const fontFamily = settingsStore.getFontFamily();
+			octx.font = gridRenderer.buildFontStyle(row.attrs[col], m.fontSize, fontFamily);
+			if (isWideCursorGlyph(octx.measureText(glyph).width, m.cellWidth)) {
+				spanCols = 2;
+			}
+		} else {
+			glyph = "";
+		}
+	}
+
+	const rect = computeCursorRect(shape, point.row, point.col, m, spanCols);
 
 	octx.fillStyle = cachedFgDefault;
 	octx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
-	if (shape === "block") {
-		const row = rowMap.get(frame.cursorRow);
-		const col = frame.cursorCol;
-		if (row && col < row.count) {
-			const cp = row.codepoints[col];
-			const glyph = cellText(row, col);
-			if (glyph !== "" && (cp !== 0x20 || row.cellExtras?.has(col))) {
-				const fontFamily = settingsStore.getFontFamily();
-				octx.font = gridRenderer.buildFontStyle(row.attrs[col], m.fontSize, fontFamily);
-				octx.fillStyle = cachedBgDefault;
-				octx.fillText(glyph, rect.x, point.row * m.cellHeight + m.baseline);
-			}
-		}
+	if (shape === "block" && glyph !== "") {
+		octx.fillStyle = cachedBgDefault;
+		octx.fillText(glyph, rect.x, point.row * m.cellHeight + m.baseline);
 	}
 
 	syncImePosition(keyInputRef, point.row, point.col, m);

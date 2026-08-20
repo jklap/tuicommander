@@ -210,7 +210,6 @@ repainting its unchanged anchor does not close it as replaced prose.
 
 For a managed Claude child with workspace trust acceptance enabled, the rendered screen is also checked for its exact startup safety question, both choices, and **No, exit** selected above **Yes, I trust this folder**, as recorded in the Claude startup capture. Only then does the reader send Down followed by Enter under the PTY writer lock, once for that session. Other dialogs and user-opened terminals are never answered by this path; session cleanup removes an unused allowance.
 
-
 **Pause behavior:** When `paused` flag is set (`AtomicBool`), the reader thread sleeps in 10 ms slices instead of reading. This prevents output flooding during background operations.
 
 **Exit detection:** When the read returns 0 bytes or an error, the thread:
