@@ -58,6 +58,7 @@ export interface WorkspaceState {
 	isMain: boolean; // true for main/master/develop
 	isShell?: boolean; // true for non-git directory shell entries
 	isRemoving?: boolean; // true while worktree removal is in progress
+	isRebasing?: boolean; // true while the worktree has a rebase/merge/cherry-pick/revert/bisect in progress
 	worktreePath: string | null; // Path to worktree directory (null for main branch)
 	terminals: string[]; // terminal IDs belonging to this workspace
 	hadTerminals: boolean; // true once a terminal has been created — suppresses auto-spawn after close-all
