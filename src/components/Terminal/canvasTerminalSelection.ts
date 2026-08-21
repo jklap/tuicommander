@@ -5,6 +5,35 @@ export interface SelectionPoint {
 	row: number;
 }
 
+/** What a drag extends by: plain cells, whole words (started by a double-click),
+ *  or whole lines (started by a triple-click). */
+export type SelectionMode = "char" | "word" | "line";
+
+/** Separator characters for word-boundary scans — mirrors the double-click word
+ *  predicate that has always lived inline in CanvasTerminal's mousedown handler;
+ *  pulled out here so word-mode drag extension can reuse the identical rule. */
+const WORD_SEPARATOR_RE = /[\s\t\x00-\x1f\x7f "'`(){}[\]<>|;:,.!?@#$%^&*~=+/\\]/;
+
+function isWordCodepoint(cp: number): boolean {
+	if (cp === 0 || cp === 32) return false;
+	return !WORD_SEPARATOR_RE.test(String.fromCodePoint(cp));
+}
+
+/**
+ * Word boundaries at `col` on `row`, or null when `col` isn't on a word
+ * character (matches a click landing on whitespace/punctuation: falls back to
+ * a bare caret rather than a bogus zero-width "word").
+ */
+export function wordBoundsAt(row: DecodedRow, col: number): { left: number; right: number } | null {
+	if (col < 0 || col >= row.count) return null;
+	if (!isWordCodepoint(row.codepoints[col])) return null;
+	let left = col;
+	let right = col;
+	while (left > 0 && isWordCodepoint(row.codepoints[left - 1])) left--;
+	while (right < row.count - 1 && isWordCodepoint(row.codepoints[right + 1])) right++;
+	return { left, right };
+}
+
 export interface SearchMatch {
 	row: number;
 	col_start: number;
@@ -22,6 +51,9 @@ export interface CanvasSelectionController {
 	start: SelectionPoint | null;
 	end: SelectionPoint | null;
 	cachedText: string;
+	/** Granularity a drag extends by. Set at mousedown (char/word/line for a
+	 *  single/double/triple click); consulted only by the drag-extend path. */
+	mode: SelectionMode;
 	clear: () => void;
 	hasRange: () => boolean;
 	spansOffscreen: (toViewportRow: (absoluteRow: number) => number | null) => boolean;
@@ -43,6 +75,7 @@ export function createCanvasSelectionController(): CanvasSelectionController {
 	let start: SelectionPoint | null = null;
 	let end: SelectionPoint | null = null;
 	let cachedText = "";
+	let mode: SelectionMode = "char";
 
 	return {
 		get selecting() {
@@ -69,11 +102,18 @@ export function createCanvasSelectionController(): CanvasSelectionController {
 		set cachedText(value) {
 			cachedText = value;
 		},
+		get mode() {
+			return mode;
+		},
+		set mode(value) {
+			mode = value;
+		},
 		clear() {
 			selecting = false;
 			start = null;
 			end = null;
 			cachedText = "";
+			mode = "char";
 		},
 		hasRange() {
 			return Boolean(start && end && (start.row !== end.row || start.col !== end.col));
