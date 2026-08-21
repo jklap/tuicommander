@@ -474,13 +474,16 @@ impl<T> Term<T> {
     /// Erase a cell range, resetting row provenance only for a complete replacement.
     fn erase_row_cells(&mut self, line: Line, start: Column, end: Column) {
         let columns = self.columns();
-        let template: Cell = self.grid.cursor.template.bg.into();
+        // Background-color-erase, carrying the pen's reverse video too.
+        let blank = Cell::erase_blank(&self.grid.cursor.template);
         let row = &mut self.grid[line];
-        if start == Column(0) && end == Column(columns) {
-            row.reset(&template);
+        // `Row::reset` goes through `GridCell::reset`, which deliberately carries
+        // only `bg`; a reverse pen needs the explicit fill to keep its flag.
+        if start == Column(0) && end == Column(columns) && blank.flags.is_empty() {
+            row.reset(&blank);
         } else {
             for cell in &mut row[start..end] {
-                *cell = template.clone();
+                *cell = blank.clone();
             }
         }
     }
@@ -1530,7 +1533,7 @@ impl<T: EventListener> Handler for Term<T> {
         self.grid.cursor.input_needs_wrap = false;
 
         let cursor = &self.grid.cursor;
-        let bg = cursor.template.bg;
+        let blank = Cell::erase_blank(&cursor.template);
 
         // Ensure inserting within terminal bounds
         let count = cmp::min(count, self.columns() - cursor.point.column.0);
@@ -1556,7 +1559,7 @@ impl<T: EventListener> Handler for Term<T> {
         // Cells were just moved out toward the end of the line;
         // fill in between source and dest with blanks.
         for cell in &mut row[source.0..destination] {
-            *cell = bg.into();
+            *cell = blank.clone();
         }
     }
 
@@ -1956,7 +1959,7 @@ impl<T: EventListener> Handler for Term<T> {
 
         let columns = self.columns();
         let cursor = &self.grid.cursor;
-        let bg = cursor.template.bg;
+        let blank = Cell::erase_blank(&cursor.template);
 
         let start = cursor.point.column.0;
 
@@ -1981,7 +1984,7 @@ impl<T: EventListener> Handler for Term<T> {
 
         // The cells vacated at the right margin are exactly the ones removed.
         for cell in &mut row[columns - removed..] {
-            *cell = bg.into();
+            *cell = blank.clone();
         }
     }
 
