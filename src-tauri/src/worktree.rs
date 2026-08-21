@@ -1244,6 +1244,24 @@ fn parse_orphan_worktrees(porcelain: &str) -> Vec<String> {
         .collect()
 }
 
+/// List worktree directory paths that currently have a git operation in progress
+/// (rebase/merge/cherry-pick/revert/bisect). `map_worktree_branch_paths` already recovers a
+/// mid-rebase worktree's branch, so its sidebar row survives on its own — this is purely a
+/// signal for the frontend to explain *why* the row looks the way it does (e.g. a "Rebasing"
+/// badge), not something the removal logic needs to consult.
+pub(crate) fn list_in_progress_worktrees(repo_path: &str) -> Result<Vec<String>, String> {
+    let out = git_cmd(Path::new(repo_path))
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|e| format!("git worktree list failed: {e}"))?;
+
+    Ok(parse_worktree_entries(&out.stdout)
+        .into_iter()
+        .filter(|e| has_operation_in_progress(&e.path))
+        .map(|e| e.path)
+        .collect())
+}
+
 /// Detect orphan worktrees: linked worktrees present on the filesystem but in detached HEAD
 /// state (i.e. their branch has been deleted). Returns a list of worktree directory paths.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1261,14 +1279,65 @@ pub(crate) async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<Str
     .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
 }
 
-/// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
+/// Archive an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
+///
+/// "Orphan" detection (detached HEAD + no branch) is a heuristic — it can't distinguish a
+/// branch genuinely deleted out from under the worktree from a worktree deliberately left on
+/// a detached commit for some other reason. Because a false positive here is plausible and the
+/// consequence of misclassifying is otherwise unrecoverable, this archives (moves aside, same
+/// as the merged-branch cleanup path) rather than deleting outright. Returns the archive
+/// destination path.
 ///
 /// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
 /// arbitrary directory deletion via a crafted path.
+///
+/// Blocking — callers wrap in `spawn_blocking` when on an async runtime. Shared by the Tauri
+/// command and the MCP HTTP route so the two transports can't drift apart.
+pub(crate) fn remove_orphan_worktree_impl(
+    state: &Arc<AppState>,
+    repo_path: String,
+    worktree_path: String,
+) -> Result<String, String> {
+    validate_worktree_path(&repo_path, &worktree_path)?;
+
+    let base_repo = PathBuf::from(&repo_path);
+    let path = PathBuf::from(&worktree_path);
+    let archive_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| worktree_path.clone());
+    let script = resolve_archive_script(&repo_path);
+
+    let archive_path = archive_worktree_dir(&base_repo, &path, &archive_name, script.as_deref())?;
+    state.invalidate_repo_caches(&repo_path);
+    Ok(archive_path)
+}
+
+/// Archive an orphan worktree (Tauri command).
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn remove_orphan_worktree(
     state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    worktree_path: String,
+) -> Result<String, String> {
+    remove_orphan_worktree_impl(state.inner(), repo_path, worktree_path)
+}
+
+/// Hard-delete an orphan worktree by its filesystem path — no archive step, unrecoverable.
+///
+/// Unlike `remove_orphan_worktree`, this is only ever reached via the `OrphanCleanup::Delete`
+/// setting — a deliberate, explicit opt-in to skip archiving. `On` (the default auto-cleanup
+/// mode) and `Ask` both archive instead, because orphan detection is a heuristic that can
+/// misclassify a worktree that was never actually abandoned.
+///
+/// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
+/// arbitrary directory deletion via a crafted path.
+///
+/// Blocking — callers wrap in `spawn_blocking` when on an async runtime. Shared by the Tauri
+/// command and the MCP HTTP route so the two transports can't drift apart.
+pub(crate) fn delete_orphan_worktree_impl(
+    state: &Arc<AppState>,
     repo_path: String,
     worktree_path: String,
 ) -> Result<(), String> {
@@ -1288,6 +1357,17 @@ pub(crate) fn remove_orphan_worktree(
     remove_worktree_internal(&worktree, false)?;
     state.invalidate_repo_caches(&repo_path);
     Ok(())
+}
+
+/// Hard-delete an orphan worktree (Tauri command).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn delete_orphan_worktree(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    worktree_path: String,
+) -> Result<(), String> {
+    delete_orphan_worktree_impl(state.inner(), repo_path, worktree_path)
 }
 
 /// Validate that `worktree_path` is a known worktree of the given repo by checking it against
@@ -1783,6 +1863,34 @@ fn cleanup_needs_confirmation(action: &str, force: bool, dirt: &WorktreeDirtines
     dirt.blocks_cleanup()
 }
 
+/// Refuse an automatic archive/delete when the branch's worktree has a git operation in
+/// progress (rebase/merge/cherry-pick/revert/bisect). Checked with an attached HEAD in mind —
+/// a merge or cherry-pick conflict never detaches, so it isn't already caught by
+/// `worktree_dirtiness` unless the conflict also left the index dirty, and a *clean* mid-bisect
+/// or mid-cherry-pick worktree would otherwise sail through `cleanup_needs_confirmation`.
+///
+/// This is a hard error, not a `needs_confirmation` — unlike plain dirtiness there is no sensible
+/// "yes, destroy my in-flight rebase" answer to offer unattended, so `force` does not bypass it.
+///
+/// Used only by the *automatic* consequences of a merge (auto-archive-merged,
+/// finalize-after-merge) — not the plain manual "remove this worktree" command, which stays a
+/// deliberate user override.
+fn err_if_branch_worktree_busy(base_repo: &Path, branch_name: &str) -> Result<(), String> {
+    let out = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|e| format!("git worktree list failed: {e}"))?;
+    if let Some(path) = find_worktree_path_for_branch(&out.stdout, branch_name)
+        && has_operation_in_progress(&path.to_string_lossy())
+    {
+        return Err(format!(
+            "Cannot finalize worktree for branch '{branch_name}': a git operation \
+             (rebase/merge/cherry-pick) is in progress"
+        ));
+    }
+    Ok(())
+}
+
 /// What the pre-flight learned about a worktree branch before we merge it.
 pub(crate) struct MergePreflight {
     pub(crate) commits_ahead: usize,
@@ -1844,6 +1952,8 @@ pub(crate) fn finalize_merged_worktree_impl(
 ) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = std::path::PathBuf::from(&repo_path);
+
+    err_if_branch_worktree_busy(&base_repo, &branch_name)?;
 
     let dirt = worktree_dirtiness(&base_repo, &branch_name);
     if cleanup_needs_confirmation(&action, force, &dirt) {
@@ -1927,8 +2037,8 @@ pub(crate) fn merge_and_archive_worktree_impl(
     let script = resolve_archive_script(&repo_path);
     let base_repo = PathBuf::from(&repo_path);
 
-    // 0. Pre-flight: would the cleanup take uncommitted work with it? Both
-    //    "archive" and "delete" end in `git worktree remove --force`, so any
+    // 0. Pre-flight: would the cleanup take uncommitted work with it? Archive moves
+    //    the directory aside and delete removes it outright, but either way any
     //    worktree not known to be clean must be confirmed first — whether or not
     //    the branch carries commits. `commits_ahead` is reported alongside so the
     //    dialog can also say that an empty branch's merge would be a no-op.
@@ -1970,6 +2080,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
     let worktree_dirty = worktree_dirty.is_dirty();
     match after_merge.as_str() {
         "archive" => {
+            err_if_branch_worktree_busy(&base_repo, &branch_name)?;
             let archive_path = archive_worktree(&base_repo, &branch_name, script.as_deref())?;
             // Archiving moves the worktree out of the repo — as far as the sidebar
             // is concerned the row is gone, same as a delete.
@@ -1983,6 +2094,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
             })
         }
         "delete" => {
+            err_if_branch_worktree_busy(&base_repo, &branch_name)?;
             remove_worktree_by_branch(&repo_path, &branch_name, true, script.as_deref(), false)?;
             state.notify_worktree_removed(&repo_path, &branch_name);
             Ok(MergeArchiveResult {
@@ -2071,15 +2183,31 @@ pub(crate) fn archive_worktree(
     let wt_path = find_worktree_path_for_branch(&wt_list_out.stdout, branch_name)
         .ok_or_else(|| format!("No worktree found for branch '{branch_name}'"))?;
 
+    archive_worktree_dir(base_repo, &wt_path, branch_name, archive_script)
+}
+
+/// Archive a worktree directory by path rather than by branch lookup. Used for orphan
+/// (detached-HEAD) worktrees, which by definition have no branch to look up via
+/// `find_worktree_path_for_branch`.
+///
+/// `archive_name` seeds the destination directory name under `__archived/` (run through
+/// `sanitize_name`); callers typically pass the branch name or, for orphans, the worktree
+/// directory's own basename.
+pub(crate) fn archive_worktree_dir(
+    base_repo: &Path,
+    wt_path: &Path,
+    archive_name: &str,
+    archive_script: Option<&str>,
+) -> Result<String, String> {
     // Run archive script before archiving (if configured)
     if let Some(script) = archive_script
         && !script.is_empty()
     {
-        run_script_in_dir(script, &wt_path).map_err(|e| format!("Archive script failed: {e}"))?;
+        run_script_in_dir(script, wt_path).map_err(|e| format!("Archive script failed: {e}"))?;
     }
     let parent_dir = wt_path.parent().ok_or("Worktree has no parent directory")?;
     let archive_dir = parent_dir.join("__archived");
-    let sanitized = sanitize_name(branch_name);
+    let sanitized = sanitize_name(archive_name);
     let mut archive_dest = archive_dir.join(&sanitized);
 
     // Create archive directory
@@ -2092,9 +2220,9 @@ pub(crate) fn archive_worktree(
     // nothing left to move and silently did nothing.
     if wt_path.exists() {
         // Archive is the non-destructive alternative to delete — never clobber a
-        // prior archive for the same branch name; land on the next free suffix.
+        // prior archive for the same branch/archive name; land on the next free suffix.
         archive_dest = free_archive_dest(&archive_dir, &sanitized);
-        std::fs::rename(&wt_path, &archive_dest)
+        std::fs::rename(wt_path, &archive_dest)
             .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
     }
 
@@ -3200,6 +3328,93 @@ mod tests {
         assert_eq!(res.action, "archived", "no confirmation needed");
     }
 
+    // --- the busy-worktree guard ---
+    //
+    // A worktree mid-rebase/merge/cherry-pick/revert/bisect must not be swept up by the
+    // *automatic* consequences of a merge (auto-archive-merged, finalize-after-merge), even
+    // when it is otherwise clean (so `cleanup_needs_confirmation` alone would let it through)
+    // and even with `force: true` (there is no sensible unattended answer to "destroy my
+    // in-flight rebase").
+
+    #[test]
+    fn merge_and_archive_refuses_a_worktree_with_operation_in_progress() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let wt = worktree_with(repo.path(), "feat-busy-merge", true);
+        let admin = worktree_admin_dir(&wt.to_string_lossy()).expect("resolve admin dir");
+        fs::create_dir_all(admin.join("rebase-merge")).expect("create rebase-merge marker");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = merge_and_archive_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-busy-merge".to_string(),
+            base,
+            "archive".to_string(),
+            true, // force: even the user's confirmation must not bypass this guard
+        );
+
+        assert!(res.is_err(), "a busy worktree must refuse the cleanup");
+        assert!(wt.exists(), "the worktree survives untouched");
+    }
+
+    #[test]
+    fn finalize_refuses_a_worktree_with_operation_in_progress() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let wt = worktree_with(repo.path(), "feat-busy-finalize", true);
+        let admin = worktree_admin_dir(&wt.to_string_lossy()).expect("resolve admin dir");
+        fs::create_dir_all(admin.join("rebase-merge")).expect("create rebase-merge marker");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-busy-finalize".to_string(),
+            "delete".to_string(),
+            true,
+        );
+
+        assert!(res.is_err(), "a busy worktree must refuse the cleanup");
+        assert!(wt.exists(), "the worktree survives untouched");
+    }
+
+    #[test]
+    fn list_in_progress_worktrees_finds_only_the_busy_one() {
+        let repo = setup_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let idle = worktree_with(repo.path(), "idle-branch", true);
+        let busy = worktree_with(repo.path(), "busy-branch", true);
+        let admin = worktree_admin_dir(&busy.to_string_lossy()).expect("resolve admin dir");
+        fs::create_dir_all(admin.join("rebase-merge")).expect("create rebase-merge marker");
+
+        let in_progress =
+            list_in_progress_worktrees(&repo_path).expect("list_in_progress_worktrees");
+
+        // `git worktree list --porcelain` reports canonicalized (symlink-resolved) paths —
+        // e.g. macOS /var -> /private/var — so compare against the same form.
+        let busy_real = busy
+            .canonicalize()
+            .unwrap_or(busy)
+            .to_string_lossy()
+            .to_string();
+        let idle_real = idle
+            .canonicalize()
+            .unwrap_or(idle)
+            .to_string_lossy()
+            .to_string();
+
+        assert!(
+            in_progress.contains(&busy_real),
+            "busy worktree should be reported in progress: {in_progress:?}"
+        );
+        assert!(
+            !in_progress.contains(&idle_real),
+            "idle worktree must not be reported in progress: {in_progress:?}"
+        );
+    }
+
     #[test]
     fn an_unanswered_dirty_check_blocks_the_cleanup() {
         // Failing open here is what let a transient git error wipe a worktree.
@@ -3264,6 +3479,75 @@ mod tests {
         // Archive destination should exist (only if worktree dir wasn't deleted by git)
         // Note: git worktree remove --force may delete the dir, in which case archive_dest won't exist
         // but the operation should still succeed
+    }
+
+    // --- orphan worktree cleanup: archive by default, delete only as an explicit opt-in ---
+    //
+    // Orphan detection (detached HEAD + no branch) is a heuristic — it can misclassify a
+    // worktree that was never actually abandoned. A false positive must stay recoverable,
+    // which is why `remove_orphan_worktree_impl` archives instead of hard-deleting.
+
+    #[test]
+    fn orphan_cleanup_archives_instead_of_deleting() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let wt = worktree_with(repo.path(), "feat-orphan-archive", true);
+        git_cmd(&wt)
+            .args(["checkout", "--detach"])
+            .run()
+            .expect("detach HEAD");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        // `validate_worktree_path` compares against `git worktree list --porcelain`, which
+        // reports canonicalized (symlink-resolved) paths — e.g. macOS /var -> /private/var.
+        let wt_real = wt.canonicalize().unwrap_or_else(|_| wt.clone());
+        let archive_path =
+            remove_orphan_worktree_impl(&state, repo_path, wt_real.to_string_lossy().to_string())
+                .expect("archive should succeed");
+
+        assert!(!wt.exists(), "the original worktree path should be gone");
+        let archived = PathBuf::from(archive_path);
+        assert!(
+            archived.exists(),
+            "the worktree's contents should have moved to the archive, not been deleted"
+        );
+        let archive_root = repo
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| repo.path().to_path_buf())
+            .join("worktrees")
+            .join("__archived");
+        assert!(
+            archived.starts_with(&archive_root),
+            "archive destination should live under __archived/: {archived:?}"
+        );
+    }
+
+    #[test]
+    fn orphan_delete_mode_is_a_true_hard_delete() {
+        // `OrphanCleanup::Delete` is a deliberate opt-in to skip archiving — unlike `On`/`Ask`,
+        // it must not leave a recoverable copy anywhere.
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let wt = worktree_with(repo.path(), "feat-orphan-delete", true);
+        git_cmd(&wt)
+            .args(["checkout", "--detach"])
+            .run()
+            .expect("detach HEAD");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let wt_real = wt.canonicalize().unwrap_or_else(|_| wt.clone());
+        delete_orphan_worktree_impl(&state, repo_path, wt_real.to_string_lossy().to_string())
+            .expect("delete should succeed");
+
+        assert!(!wt.exists(), "the worktree path should be gone");
+        let archive_dir = repo.path().join("worktrees").join("__archived");
+        assert!(
+            !archive_dir.exists() || fs::read_dir(&archive_dir).unwrap().next().is_none(),
+            "delete mode must not leave anything behind in __archived/"
+        );
     }
 
     #[test]

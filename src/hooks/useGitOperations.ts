@@ -43,6 +43,8 @@ export interface GitOperationsDeps {
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, string>;
 			merged_branches: string[];
+			/** Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress. */
+			in_progress_worktrees: string[];
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
 			diff_stats: Record<string, { additions: number; deletions: number }>;
@@ -88,7 +90,8 @@ export interface GitOperationsDeps {
 		getMergedBranches: (repoPath: string) => Promise<string[]>;
 		checkoutRemoteBranch: (repoPath: string, branchName: string) => Promise<void>;
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
+		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<string>;
+		deleteOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
 		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
 		switchBranch: (
 			repoPath: string,

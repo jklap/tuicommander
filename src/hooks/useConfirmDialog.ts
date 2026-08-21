@@ -201,13 +201,14 @@ export function useConfirmDialog() {
 		});
 	}
 
-	/** Confirm removing orphaned worktrees (detached-HEAD, branch deleted) */
+	/** Confirm archiving orphaned worktrees (detached-HEAD, branch deleted). Archives rather
+	 *  than deletes: orphan detection is a heuristic, so a false positive must stay recoverable. */
 	async function confirmOrphanCleanup(paths: string[]): Promise<boolean> {
 		const list = paths.map((p) => `  • ${p}`).join("\n");
 		return await confirm({
 			title: "Orphaned worktrees found",
-			message: `${paths.length} worktree(s) have no branch and will be removed:\n${list}`,
-			okLabel: "Remove",
+			message: `${paths.length} worktree(s) have no branch and will be archived:\n${list}`,
+			okLabel: "Archive",
 			cancelLabel: "Keep",
 			kind: "warning",
 		});
