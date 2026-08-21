@@ -85,6 +85,12 @@ than a missed check.
 >
 > **Everything else labelled "needs a restart" is already live** — including the
 > whole 09-04/09-05 wave. Test it now; do not wait for a rebuild.
+> **Gate status as of the `wip`→`main` rebase (2026-09-04).** This branch was
+> just rebased onto `origin/main`'s `1.7.6` tip, so every prior "gate satisfied"
+> or "stale as of" note above is talking about a running binary that no longer
+> corresponds to what's on disk. Re-verify anything Rust-touching against a
+> fresh `make dev` restart before trusting a prior `[x]` — don't assume an
+> older gate note still holds.
 >
 > **The frontend has no such gate.** In a debug build the HTTP server reads
 > `dist/` from disk on every request (`static_files.rs:65-90`), not the
@@ -214,6 +220,11 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] **[MANUAL]** oh-my-zsh vi-mode plugin: switching insert/normal mode visibly changes the terminal's own rendered cursor between beam and block.
 - [ ] **[MANUAL]** Run a full-width character (e.g. `echo 界` or a Nerd Font icon) under the cursor in a real pane: the block/underline cursor visibly covers both columns instead of only the leading half.
 - [ ] **[MANUAL]** `\x1b[2 q` (steady block) in a live shell: cursor stops blinking and stays solid; `\x1b[1 q` (blink block) restores blinking.
+
+## Background-color-erase reverse-video fix (2026-08-21/27, **Rust change — needs `make dev` restart**)
+
+- [ ] **[VISUAL]** In a real terminal, run something that enters standout mode and prints a highlighted status line then scrolls (e.g. `tput smso; echo "status"; tput sgr0` in a loop that pushes it up through several more lines of plain output). Confirm the reverse bar stays scoped to the original highlighted line and does NOT reappear on later blank rows scrolled into view.
+- [ ] **[VISUAL]** Separately, confirm `tput smso; tput el` (explicit erase-to-end-of-line under a reverse pen) STILL paints a highlighted bar to the edge — the original, still-intended behavior for explicit erases, which the row-recycling fix must not have regressed.
 
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 
