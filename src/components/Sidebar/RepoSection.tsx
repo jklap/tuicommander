@@ -1227,6 +1227,15 @@ export const BranchItem: Component<{
 						</Show>
 					</div>
 					<BranchItemBadge repoPath={props.repoPath} branch={props.branch.branchName} />
+					<Show when={props.branch.isRebasing && !props.branch.isMain}>
+						<span
+							class={s.rebasingBadge}
+							data-tooltip="This worktree has a rebase/merge/cherry-pick in progress — it will not be auto-cleaned up until it's resolved or aborted"
+							data-tooltip-pos="bottom"
+						>
+							Rebasing
+						</span>
+					</Show>
 					{/* The badge answers one question — what would removing this workspace
 				    lose? A main checkout is never removed here, so it gets no badge at
 				    all: "Dirty" on every main row was noise about a risk that does not

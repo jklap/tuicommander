@@ -8,6 +8,7 @@ describe("repository refresh interval (#1491)", () => {
 	const structure = vi.fn(async (path: string) => ({
 		worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } },
 		merged_branches: [],
+		in_progress_worktrees: [],
 	}));
 	const stats = vi.fn(async (path: string) => ({
 		diff_stats: { [path]: { additions, deletions: 0 } },
@@ -98,7 +99,11 @@ describe("repository refresh interval (#1491)", () => {
 			await new Promise<void>((resolve) => {
 				release = resolve;
 			});
-			return { worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } }, merged_branches: [] };
+			return {
+				worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } },
+				merged_branches: [],
+				in_progress_worktrees: [],
+			};
 		});
 		const first = refresh("/repo");
 		const queued = refresh("/repo");
@@ -159,7 +164,11 @@ describe("repository refresh interval (#1491)", () => {
 			await new Promise<void>((resolve) => {
 				release = resolve;
 			});
-			return { worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } }, merged_branches: [] };
+			return {
+				worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } },
+				merged_branches: [],
+				in_progress_worktrees: [],
+			};
 		});
 		const active = refresh("/repo");
 		const explicit = refresh("/repo", { immediate: true });

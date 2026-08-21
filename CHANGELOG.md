@@ -1551,6 +1551,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   produced the empty string, which is also the correct answer for `make dev`,
   so a broken `Makefile` passed the check and printed its tick.
 
+### Added
+
+### Changed
+
+### Fixed
+- **Erasing or scrolling while a reverse-video pen was active dropped the highlight instead of extending it** — `EL`/`ED`/`ECH`/`DCH`/`ICH` and scroll/insert-line fills only ever propagated the pen's background color into the blank cells they wrote (background-color-erase, but only the background half of it), so `tput smso; tput el` painted a plain gap instead of a highlighted bar to the edge, unlike xterm/VTE. Blank cells now also carry the pen's reverse flag and swapped foreground; underline and strikeout deliberately do not ride along, since terminals disagree on whether background-color-erase extends those.
+- **Merge cleanup could archive a worktree mid-rebase** — Merge & Archive and the post-merge finalize / auto-archive-merged flows archived a worktree with a rebase, merge, cherry-pick, revert, or bisect in progress whenever it otherwise looked clean (or the user had confirmed), moving an in-flight operation out from under git. The archive step now refuses such a worktree outright, even with confirmation (the delete step already did), and the sidebar shows a **Rebasing** badge while an operation is in flight.
+- **Mouse wheel scrolling was far too fast in mouse-aware apps (Claude Code, vim, lazygit, htop)** — Every DOM wheel event forwarded exactly one SGR scroll notch regardless of its size, so macOS's momentum-decay burst (dozens of small-delta events per flick) became dozens of notches sent to the app. The wheel now accumulates pixels and emits one notch per line height, capped at 3 per event, matching native terminal behavior; `deltaMode` (line/page-reporting devices) is normalized the same way. Also fixed Shift+wheel — TUIC's scrollback escape hatch — silently doing nothing on macOS, because it reads `deltaX` on that gesture rather than `deltaY`.
+- **TUIC's own scrollback could accelerate past 5x on a long momentum fling** — The wheel/touch gesture-acceleration ramp had no upper bound and never reset on direction reversal, so scrolling back after an outbound fling stayed accelerated by distance traveled in the opposite direction. The ramp is now capped at 2x and restarts whenever the gesture changes direction.
+- **Forwarded SGR mouse reports could corrupt a submitted prompt with literal escape-code fragments** — TUIC's internal keystroke-reconstruction buffer (used for busy-detection and prompt capture) didn't recognize `<` as a CSI private-parameter-prefix byte, so an SGR mouse report (`ESC [ < Cb ; Cx ; Cy M`, sent whenever mouse tracking is on — e.g. every wheel notch or mouse-move motion report) got misparsed: the `<` terminated the sequence early, and the remaining digits/semicolons/final-byte were spliced into the reconstructed line as literal characters. Affected any session with mouse tracking enabled, most visibly ones that shelled out to a subprocess (`less`, `top`) that doesn't itself consume mouse escapes. The parser now recognizes the full CSI parameter-byte range (`:`, `<`, `=`, `>`, `?`), so these sequences are silently discarded end-to-end like other unrecognized CSI commands.
+
+## [1.7.7] - 2026-09-16
+
+### Added
+
+- **Settings → AI Providers shows what `ego` is configured with, and sets the
+  model it starts from.** It replaces the provider registry deleted with the
+  embedded engine, and it is not a registry: every value is read and written by
+  running ego — `config ls`, `models`, `doctor`, and `config set model` — so
+  TUICommander stores no API key, puts nothing in the OS keyring, and makes no
+  provider HTTP call. The one call that reaches a provider is
+  `ego models --refresh`, which ego makes, and only when you press Refresh;
+  opening the tab makes none. Credential state comes from `ego doctor` and keeps
+  its distinctions: a store that could not be *read* is not an empty store, and
+  an expired credential says ego renews it on its next run instead of sending
+  you to log in again. `model` is the only writable key and it is its own
+  operation rather than a key/value pair, so no caller over IPC or HTTP can
+  reach `sandbox` or `permissions.judge`. When ego is not configured the tab
+  names the field to fill instead of rendering an empty list, and when an ego
+  command fails it shows the command, the exit code and what ego printed, word
+  for word. Offered while Experimental Features is on, beside the AI Chat panel
+  it configures.
+- **Project Progress answers "what changed since I last looked?"** Agents
+  record outcomes — capabilities, decisions, discoveries, blockers, completed
+  objectives — through one compact MCP `progress` call that persists the event
+  and shows its toast together; starting or finishing an agent task is
+  deliberately not an outcome. History belongs to the project, in a SQLite
+  store at its own root that local Git excludes cover, so closing a session or
+  deleting a temporary workspace never takes it away. A dedicated panel, opened
+  from the command palette or the notification bell, shows all projects or one:
+  since last visit, today, blockers, completed, and full history, with
+  provenance on demand. Collection can be paused and resumed per project,
+  events can be deleted, corrected, merged or re-grouped, and clearing a
+  project pauses it in the same transaction. There is no inference job and no
+  background model: grouping is exact and every sentence in the panel is one an
+  agent wrote. The optional fuller reporting prompt, and the measured
+  comparison against the short default, are in the user guide.
+- **Progress exports a readable `progress.md` when you ask it to.** One
+  deterministic snapshot of the owning project — revision, UTC time, workstream
+  states, open blockers and dated history, with source metadata off by default —
+  is previewed in the panel before anything is written. Writing succeeds only
+  while that same snapshot is current, replacing an existing file needs the
+  exact content the preview returned, and a hand edit, a removal, a symlink or a
+  directory at the target is refused instead of overwritten. The write is atomic
+  and touches nothing else: no Git staging, no change to collection or read
+  state, no scheduled re-export, and the Markdown is never read back in.
+
+### Changed
+
+- **Workspace creation now has one mechanism: linked Git worktrees.** The
+  experimental whole-repository copy-on-write workspace path, its adopt,
+  publish, recovery, and lifecycle projections, and the `mode`/`dirty` fields
+  on Tauri, HTTP, and MCP creation requests have been removed. Linked
+  worktrees still arrive warm: Git-ignored directories are copied with the
+  existing copy-on-write primitive when the filesystem supports it. Parent
+  tracked changes are deliberately not inherited.
+
+- **Project Progress can now export a safe, versionable `progress.md`.** The
+  project panel previews one deterministic backend snapshot and writes it only
+  while both the database snapshot and existing-file content still match.
+  Exports target the owning project root, optionally include bounded provenance,
+  refuse symlinks/directories, and use atomic replacement without changing
+  Progress state or Git.
+
+- **Claude and Codex status signals are launch-scoped and on by default.** TUIC adds a private Claude settings file or Codex notify adapter only to processes launched inside TUIC. Explicit CLI overrides win, Codex still calls the user's existing notify command, and each agent has an independent off switch. Global hook installation remains explicit for agents without a launch-scoped route.
+
+- **Plan Tracker and Stories Ticker are now external plugins.** The former
+  compiled built-ins are installed once as ordinary plugin packages during the
+  upgrade, preserving existing behavior while making both independently
+  uninstallable and updateable from the plugin catalog. Plan file opening now
+  uses a capability-gated background-tab host API instead of importing app
+  stores directly.
+
+### Fixed
 
 - **Plugins can no longer read legacy MCP-upstream credentials.** The
   `credentials:read` guard now rejects the historical `tuicommander-mcp`
