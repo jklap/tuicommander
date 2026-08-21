@@ -104,6 +104,21 @@ export interface FrameGridDecision {
  * (frame.screenRows === 0): onFrame passes lastResizeRows. The backend always sets
  * frame.screenRows in practice, so the fallback only differs on degenerate frames.
  */
+/**
+ * Map a DOM `MouseEvent.buttons` bitmask to an SGR mouse-report button code
+ * for a *motion* report (xterm `?1002h`/`?1003h`): 0=left, 1=middle, 2=right,
+ * 3="no button" — the code reserved for a bare hover. An app tracking its own
+ * click-drag from motion reports (e.g. Claude Code's own text selection)
+ * needs the actually-held button here to tell a drag from a hover; reporting
+ * 3 unconditionally makes every drag look like a hover with nothing pressed.
+ */
+export function sgrMotionButton(buttons: number): 0 | 1 | 2 | 3 {
+	if (buttons & 1) return 0;
+	if (buttons & 4) return 1;
+	if (buttons & 2) return 2;
+	return 3;
+}
+
 export function decideFrameGrid(prev: FrameGridPrev, frame: DecodedFrame, fallbackRows: number): FrameGridDecision {
 	const geomChanged = frame.screenRows !== prev.lastScreenRows || frame.screenCols !== prev.lastScreenCols;
 	const scrollChanged = frame.displayOffset !== prev.lastDisplayOffset || frame.historySize !== prev.lastHistorySize;

@@ -16,7 +16,7 @@ import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
 import { createCanvasLinkController } from "./canvasTerminalLinks";
 import { createCanvasScrollController, gestureAccelFactor } from "./canvasTerminalScroll";
-import { createCanvasSearchController, createCanvasSelectionController } from "./canvasTerminalSelection";
+import { createCanvasSearchController, createCanvasSelectionController, wordBoundsAt } from "./canvasTerminalSelection";
 import { installTouchHandlers } from "./canvasTerminalTouch";
 import { createTransport, type TerminalTransport } from "./canvasTerminalTransport";
 import {
@@ -33,6 +33,7 @@ import {
 	isWideCursorGlyph,
 	reconcileDelay,
 	resolveCursorShape,
+	sgrMotionButton,
 	shouldFireReconcile,
 	shouldPaintCursor,
 	snapLineHeight,
@@ -349,6 +350,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			col: Math.max(0, Math.min(Math.floor(x / m.cellWidth), maxCol)),
 			row: Math.max(0, Math.min(Math.floor(y / m.cellHeight), maxRow)),
 		};
+	}
+
+	/** Last selectable column of a line — shared by triple-click and line-mode
+	 *  drag extension so both agree with canvasToGrid's own maxCol (which
+	 *  subtracts GUTTER_PX; this used to be computed ad hoc without it). */
+	function lastGridCol(rect: DOMRect): number {
+		const m = metrics();
+		if (!m) return 79;
+		return Math.max(0, Math.floor((rect.width - GUTTER_PX) / m.cellWidth) - 1);
 	}
 
 	function mouseModifiers(e: MouseEvent): number {
@@ -2535,6 +2545,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// --- Mouse selection ---
 		let clickCount = 0;
 		let lastClickTime = 0;
+		// Set alongside selection.mode at mousedown (word/line respectively); the
+		// fixed span flushSelectionDrag must keep fully included no matter which
+		// way the drag goes. Only read while selection.mode says to read them, so
+		// staleness across gestures can't leak in.
+		let wordAnchor: { row: number; left: number; right: number } | null = null;
+		let lineAnchorRow: number | null = null;
 
 		bindings.listen(canvasRef, "mousedown", (e: MouseEvent) => {
 			keyInputRef.focus({ preventScroll: true });
@@ -2593,6 +2609,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (e.shiftKey && selection.start) {
 				selection.end = absPos;
 				selection.selecting = true;
+				selection.mode = "char";
 				fullRepaintNeeded = true;
 				scheduleRepaint();
 				return;
@@ -2610,38 +2627,31 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (clickCount === 2) {
 				const vpRow = absRowToViewport(absRow);
 				const row = vpRow !== null ? rowMap.get(vpRow) : null;
-				if (row) {
-					const isWordChar = (col: number) => {
-						if (col < 0 || col >= row.count) return false;
-						const cp = row.codepoints[col];
-						if (cp === 0 || cp === 32) return false;
-						const ch = String.fromCodePoint(cp);
-						return !/[\s\t\x00-\x1f\x7f "'`(){}[\]<>|;:,.!?@#$%^&*~=+/\\]/.test(ch);
-					};
-					let left = pos.col;
-					let right = pos.col;
-					while (left > 0 && isWordChar(left - 1)) left--;
-					while (right < row.count - 1 && isWordChar(right + 1)) right++;
-					if (isWordChar(pos.col)) {
-						selection.start = { col: left, row: absRow };
-						selection.end = { col: right, row: absRow };
-					} else {
-						selection.start = absPos;
-						selection.end = absPos;
-					}
+				const bounds = row ? wordBoundsAt(row, pos.col) : null;
+				if (bounds) {
+					selection.start = { col: bounds.left, row: absRow };
+					selection.end = { col: bounds.right, row: absRow };
+					wordAnchor = { row: absRow, left: bounds.left, right: bounds.right };
+					selection.mode = "word";
 				} else {
+					// Landed on whitespace/punctuation — nothing to hold fixed on drag,
+					// so fall back to plain cell-wise extension for this gesture.
 					selection.start = absPos;
 					selection.end = absPos;
+					wordAnchor = null;
+					selection.mode = "char";
 				}
 			} else if (clickCount >= 3) {
-				const m = metrics();
-				const maxCol = m ? Math.floor(canvasRef.getBoundingClientRect().width / m.cellWidth) - 1 : 79;
+				const maxCol = lastGridCol(canvasRef.getBoundingClientRect());
 				selection.start = { col: 0, row: absRow };
 				selection.end = { col: maxCol, row: absRow };
+				lineAnchorRow = absRow;
+				selection.mode = "line";
 				clickCount = 3;
 			} else {
 				selection.start = absPos;
 				selection.end = null;
+				selection.mode = "char";
 			}
 			selection.selecting = true;
 			// Cache the canvas rect for the whole drag — its position doesn't move
@@ -2673,20 +2683,63 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const pos = canvasToGrid(e, rect);
 			const absRow = viewportRowToAbs(pos.row);
 			if (absRow === null) return;
-			selection.end = { col: pos.col, row: absRow };
+
+			// Word/line drag extension: re-derive the boundary at the live drag
+			// position each frame and union it with whichever edge of the
+			// mousedown anchor (word or line) sits away from the drag direction —
+			// that anchor edge must stay included no matter which way the drag
+			// goes, matching double-click-drag / triple-click-drag in every
+			// mainstream terminal. Falls back to plain cell-wise extension when
+			// there's no anchor (e.g. double-click landed on whitespace).
+			if (selection.mode === "word" && wordAnchor) {
+				const vpRow = absRowToViewport(absRow);
+				const row = vpRow !== null ? rowMap.get(vpRow) : null;
+				const dragBounds = row ? wordBoundsAt(row, pos.col) : null;
+				const dragLeft = dragBounds?.left ?? pos.col;
+				const dragRight = dragBounds?.right ?? pos.col;
+				const draggingForward = absRow > wordAnchor.row || (absRow === wordAnchor.row && dragLeft >= wordAnchor.left);
+				if (draggingForward) {
+					selection.start = { row: wordAnchor.row, col: wordAnchor.left };
+					selection.end = { row: absRow, col: dragRight };
+				} else {
+					selection.start = { row: absRow, col: dragLeft };
+					selection.end = { row: wordAnchor.row, col: wordAnchor.right };
+				}
+			} else if (selection.mode === "line" && lineAnchorRow !== null) {
+				const maxCol = lastGridCol(rect);
+				if (absRow >= lineAnchorRow) {
+					selection.start = { row: lineAnchorRow, col: 0 };
+					selection.end = { row: absRow, col: maxCol };
+				} else {
+					selection.start = { row: absRow, col: 0 };
+					selection.end = { row: lineAnchorRow, col: maxCol };
+				}
+			} else {
+				selection.end = { col: pos.col, row: absRow };
+			}
 			const mRepaint = metrics();
 			if (currentFrame && mRepaint) paintFrame(currentFrame, mRepaint);
 		};
 
 		const onMouseMove = (e: MouseEvent) => {
-			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
-				if (currentFrame.mouseMode >= 3) {
+			// A gesture already claimed for local selection (mousedown decided this
+			// one wasn't forwarded — see below) stays local for its whole lifetime,
+			// even if the app's mouse-reporting mode flips mid-drag. Without this,
+			// a long-enough drag could straddle a mode change and have its tail end
+			// silently forwarded instead of extending the selection.
+			if (!selection.selecting && currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
+				// Motion tracking (mode 3, ?1003h) reports EVERY move, drag-tracking
+				// (mode 2, ?1002h) only while a button is held. Either way, the report
+				// must carry which button (if any) is actually down — SGR button code 3
+				// ("no button") is reserved for a bare hover. Hardcoding 3 here for every
+				// motion event, regardless of e.buttons, told the app "nothing is
+				// pressed" for the entire duration of a real drag: an app tracking its
+				// own click-drag selection (as Claude Code does) never saw the held
+				// button in the motion stream, so it had no way to tell a drag from a
+				// hover and the selection never extended.
+				if (currentFrame.mouseMode >= 3 || (currentFrame.mouseMode >= 2 && e.buttons > 0)) {
 					const pos = canvasToGrid(e);
-					writePtyNoScroll(sgrMouseSequence(35, pos.col, pos.row, true, e));
-				} else if (currentFrame.mouseMode >= 2 && e.buttons > 0) {
-					const pos = canvasToGrid(e);
-					const btn = e.buttons & 1 ? 0 : e.buttons & 4 ? 1 : 2;
-					writePtyNoScroll(sgrMouseSequence(32 + btn, pos.col, pos.row, true, e));
+					writePtyNoScroll(sgrMouseSequence(32 + sgrMotionButton(e.buttons), pos.col, pos.row, true, e));
 				}
 				return;
 			}
@@ -2710,7 +2763,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		};
 
 		const onMouseUp = (e: MouseEvent) => {
-			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
+			// Same latch as onMouseMove: once a gesture is a local selection, its
+			// own mouseup must always run local teardown (stop autoscroll, copy,
+			// clear selecting/rect/rAF) — never get swallowed by a mode flip that
+			// happened mid-drag, which used to leave selecting/autoscroll/rAF
+			// dangling until the next unrelated mousedown reset them.
+			if (!selection.selecting && currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				const pos = canvasToGrid(e);
 				if (currentFrame.sgrMouse) {
 					writePtyNoScroll(sgrMouseSequence(e.button, pos.col, pos.row, false, e));
