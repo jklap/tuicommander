@@ -382,13 +382,15 @@ export function useRepository() {
 		detached_worktrees: DetachedWorktree[];
 		worktree_diagnostics?: WorktreeDiagnostic[];
 		merged_branches: string[];
+		/** Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress. */
+		in_progress_worktrees: string[];
 	}> {
 		try {
 			return await invoke("get_repo_structure", { repoPath });
 		} catch (err) {
 			checkTccError(err, repoPath);
 			appLogger.warn("git", `Failed to get repo structure for ${repoPath}`, err);
-			return { worktree_paths: {}, detached_worktrees: [], merged_branches: [] };
+			return { worktree_paths: {}, detached_worktrees: [], merged_branches: [], in_progress_worktrees: [] };
 		}
 	}
 
