@@ -1853,18 +1853,19 @@ impl TerminalGrid {
         // frame_flags/keyboard_flags are computed here — BEFORE the damage-based
         // early-out below — because a mode-only DECSET/DECRST (mouse tracking,
         // focus reporting, bracketed paste) or DECSCUSR touches no grid cell and
-        // so produces no damage. Deciding purely on damage meant such a change
-        // was silently dropped until the next frame that *did* have dirty rows —
-        // for an app that toggles a mode while otherwise idle, that window can
-        // be arbitrarily long. During it the frontend's cached mouse_mode/
-        // sgr_mouse bits are stale, so a click/drag gesture starting inside the
-        // window gets classified against the wrong mode. This is the root cause
-        // behind "double/triple-click select fine in an agent pane but
-        // click-drag doesn't": a short click can complete entirely inside one
-        // stale-but-self-consistent window, while a drag spans long enough to
-        // straddle the next (correct, but late) frame and flip mode mid-gesture.
-        // (The bell is deliberately NOT part of this comparison — it is drained
-        // only into a frame that will carry it, see below.)
+        // so produces no damage of its own. `Term::damage()` also always damages
+        // the cursor's current line on every read, which usually piggybacks a
+        // mode-only change onto the next tick anyway — except while scrolled
+        // back far enough that the damage iterator's viewport truncation
+        // discards every entry outright (see
+        // `serialize_forces_a_frame_when_mouse_mode_changes_while_scrolled_back`).
+        // Without this, that specific case drops the change until the user
+        // scrolls back to the bottom — the frontend's cached mouse_mode/
+        // sgr_mouse bits go stale for that whole window, so a selection
+        // gesture starting inside it gets classified against the wrong mode.
+        // (The bell is deliberately NOT part of this comparison —
+        // `mode_header_flags` excludes bit 0; a pending bell instead forces the
+        // frame directly, see `force_send` below.)
         let (keyboard_flags, frame_flags) = self.mode_header_flags();
         let flags_changed = self.last_frame_keyboard_flags != Some(keyboard_flags)
             || self.last_frame_frame_flags != Some(frame_flags);
@@ -1905,14 +1906,18 @@ impl TerminalGrid {
             }
         };
 
-        // The bell is drained only into a frame that will carry it: an empty
-        // frame is never sent, so swallowing the flag here would lose the ring.
-        // A mode-only change forces a (possibly zero-row) frame through so the
-        // frontend's cached mode state never lags the real TermMode.
-        let frame = if dirty_lines.is_empty() && !flags_changed {
+        // The bell is edge-triggered (`drain_bell()` self-clears), so it forces
+        // a frame of its own rising edge rather than riding the sustained-mode
+        // comparison above — comparing it byte-for-byte against the cache would
+        // force a *second* frame on the very next call just to report "bell is
+        // off again". A mode-only change likewise forces a (possibly zero-row)
+        // frame through so the frontend's cached mode state never lags the real
+        // TermMode.
+        let bell = self.drain_bell();
+        let force_send = flags_changed || bell;
+        let frame = if dirty_lines.is_empty() && !force_send {
             Vec::new()
         } else {
-            let bell = self.drain_bell();
             self.encode_frame(&dirty_lines, bell)
         };
 
@@ -3894,6 +3899,86 @@ mod tests {
         let frame_flags = buf[TEST_FRAME_FLAGS_OFFSET];
         // bits 3-6 should all be zero
         assert_eq!(frame_flags & 0x78, 0, "no mouse/focus flags by default");
+    }
+
+    // Regression coverage for the click-drag-selection bug this enables: an
+    // app (Claude Code's Ink UI) that toggles mouse tracking with no
+    // accompanying visible output relied purely on damage-based dirty
+    // tracking to reach the frontend. That tracking already includes the
+    // cursor's own line on *every* read (`Term::damage`'s "always damage
+    // current cursor"), so at rest it usually piggybacks a mode change onto
+    // the next frame anyway — except while scrolled back far enough that the
+    // damage iterator's viewport truncation (`lines[..num_lines -
+    // display_offset]`) discards every entry outright. That's the case this
+    // test pins down: a mode-only change while scrolled back used to vanish
+    // completely, leaving the frontend's cached mouse_mode stale until the
+    // user scrolled back to the bottom — exactly the kind of staleness that
+    // lets a click complete locally (against the last frame that *did* carry
+    // rows) while a longer drag straddles the next real one and gets
+    // forwarded to the app mid-gesture instead of extending the selection.
+    #[test]
+    fn serialize_forces_a_frame_when_mouse_mode_changes_while_scrolled_back() {
+        let mut grid = TerminalGrid::new(5, 10, 100);
+        for i in 0..10 {
+            let _ = grid.process(format!("line{i}\r\n").as_bytes());
+        }
+        let _ = grid.serialize_dirty_rows(); // drain the fill
+
+        // Scroll back far enough that `num_lines.saturating_sub(display_offset)`
+        // is 0 — the damage iterator's truncated slice is empty regardless of
+        // which line the cursor sits on, so any ordinary (non-mode) change
+        // here would report zero dirty rows.
+        grid.scroll(5);
+        assert!(grid.display_offset() >= 5);
+        let _ = grid.serialize_dirty_rows(); // drain the scroll's own full-damage frame
+
+        let _ = grid.process(b"\x1b[?1003h\x1b[?1006h");
+        let buf = grid.serialize_dirty_rows();
+        assert!(
+            !buf.is_empty(),
+            "a protocol-mode-only change must still be delivered even while scrolled back"
+        );
+        let (num_rows, _, _, _) = decode_header(&buf);
+        assert_eq!(
+            num_rows, 0,
+            "viewport truncation drops every line-damage entry here"
+        );
+        let frame_flags = buf[TEST_FRAME_FLAGS_OFFSET];
+        assert_eq!((frame_flags >> 3) & 0x03, 3, "mouse mode = motion");
+        assert_ne!(frame_flags & 0x20, 0, "SGR mouse active");
+    }
+
+    #[test]
+    fn serialize_forces_a_frame_for_a_bell_while_scrolled_back_but_not_a_repeat() {
+        let mut grid = TerminalGrid::new(5, 10, 100);
+        for i in 0..10 {
+            let _ = grid.process(format!("line{i}\r\n").as_bytes());
+        }
+        let _ = grid.serialize_dirty_rows();
+        grid.scroll(5);
+        let _ = grid.serialize_dirty_rows(); // drain the scroll's full-damage frame
+
+        // BEL rings the bell but writes no cell, and (per the test above)
+        // being scrolled back means no cursor-damage fallback either.
+        let _ = grid.process(b"\x07");
+        let buf = grid.serialize_dirty_rows();
+        assert!(
+            !buf.is_empty(),
+            "a bell with no damage must still be delivered"
+        );
+        assert_ne!(buf[TEST_FRAME_FLAGS_OFFSET] & 0x01, 0, "bell bit set");
+
+        // The bell is one-shot (drain_bell clears it) and deliberately masked
+        // out of the sustained-flags comparison, so this call — still
+        // scrolled back, nothing else changed — must go back to reporting
+        // nothing. Without that mask, the bell bit flipping 1->0 would itself
+        // look like a "flags changed" event and force a second, spurious
+        // empty frame right behind the first.
+        let buf2 = grid.serialize_dirty_rows();
+        assert!(
+            buf2.is_empty(),
+            "bell already drained and masked out; nothing else changed"
+        );
     }
 
     // --- DECCKM (application cursor keys) tests ---
