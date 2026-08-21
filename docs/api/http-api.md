@@ -521,7 +521,7 @@ GET /repo/orphan-worktrees?repoPath=/path/to/repo
 
 Returns list of worktree directory paths that are in detached HEAD state (their branch was deleted).
 
-### Remove Orphan Worktree
+### Archive Orphan Worktree
 
 ```
 POST /repo/remove-orphan
@@ -530,7 +530,18 @@ Content-Type: application/json
 { "repoPath": "/path/to/repo", "worktreePath": "/path/to/worktree" }
 ```
 
-Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list.
+Archives (moves aside) an orphan worktree by filesystem path — recoverable, since orphan detection is a heuristic that can misclassify a worktree that was never actually abandoned. The worktree path is validated against the repo's actual worktree list. Returns `{"ok": true, "archivePath": "..."}` on success.
+
+### Delete Orphan Worktree
+
+```
+POST /repo/delete-orphan
+Content-Type: application/json
+
+{ "repoPath": "/path/to/repo", "worktreePath": "/path/to/worktree" }
+```
+
+Hard-deletes an orphan worktree by filesystem path — no archive step, unrecoverable. Only reached via the explicit `Delete` orphan-cleanup setting; the default modes archive instead. The worktree path is validated against the repo's actual worktree list.
 
 ### Merge PR via GitHub
 

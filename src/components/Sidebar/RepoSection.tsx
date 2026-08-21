@@ -461,6 +461,14 @@ export const BranchItem: Component<{
 						</span>
 					</Show>
 				</div>
+				<Show when={props.branch.isRebasing && !props.branch.isMain}>
+					<span
+						class={s.rebasingBadge}
+						title="This worktree has a rebase/merge/cherry-pick in progress — it will not be auto-cleaned up until it's resolved"
+					>
+						Rebasing
+					</span>
+				</Show>
 				<Show
 					when={
 						props.branch.isMerged &&

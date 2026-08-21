@@ -264,10 +264,17 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 							default: props.defaults.orphanCleanup,
 						})}
 					</option>
-					<option value="ask">{t("repoWorktree.orphanCleanup.ask", "Ask before removing")}</option>
-					<option value="on">{t("repoWorktree.orphanCleanup.on", "Auto-remove")}</option>
+					<option value="ask">{t("repoWorktree.orphanCleanup.ask", "Ask before archiving")}</option>
+					<option value="on">{t("repoWorktree.orphanCleanup.on", "Auto-archive")}</option>
+					<option value="delete">{t("repoWorktree.orphanCleanup.delete", "Auto-remove (delete, no archive)")}</option>
 					<option value="off">{t("repoWorktree.orphanCleanup.off", "Keep (mark as detached)")}</option>
 				</select>
+				<p class={s.hint}>
+					{t(
+						"repoWorktree.hint.orphanCleanup",
+						"A worktree whose branch was deleted out from under it. 'Auto-archive' and 'Ask' move it aside (recoverable) since detection is a heuristic that can misfire; 'Auto-remove' deletes it outright with no recovery.",
+					)}
+				</p>
 			</div>
 
 			<div class={s.group}>

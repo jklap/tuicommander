@@ -268,27 +268,41 @@ pub(super) async fn remove_orphan_worktree_http(
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
+    // Shares `remove_orphan_worktree_impl` with the Tauri command: the archive-not-delete
+    // behavior lives there, once, for both transports.
     let repo_path = body.repo_path.clone();
     let worktree_path = body.worktree_path.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::validate_worktree_path(&repo_path, &worktree_path)?;
-        let worktree = crate::state::WorktreeInfo {
-            name: std::path::Path::new(&worktree_path)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| worktree_path.clone()),
-            path: std::path::PathBuf::from(&worktree_path),
-            branch: None,
-            base_repo: std::path::PathBuf::from(&repo_path),
-        };
-        crate::worktree::remove_worktree_internal(&worktree, false)
+        crate::worktree::remove_orphan_worktree_impl(&state, repo_path, worktree_path)
     })
     .await;
     match result {
-        Ok(Ok(())) => {
-            state.invalidate_repo_caches(&body.repo_path);
-            (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
-        }
+        Ok(Ok(archive_path)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"ok": true, "archivePath": archive_path})),
+        )
+            .into_response(),
+        Ok(Err(e)) => err_500(&e),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}
+
+pub(super) async fn delete_orphan_worktree_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::RemoveOrphanRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    // Shares `delete_orphan_worktree_impl` with the Tauri command — see above.
+    let repo_path = body.repo_path.clone();
+    let worktree_path = body.worktree_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::worktree::delete_orphan_worktree_impl(&state, repo_path, worktree_path)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Ok(Err(e)) => err_500(&e),
         Err(e) => err_500(&format!("task panic: {e}")),
     }

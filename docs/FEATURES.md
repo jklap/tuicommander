@@ -827,6 +827,8 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Three creation flows: dialog (with base ref dropdown), instant (auto-name), right-click branch (quick-clone with hybrid `{branch}--{random}` name)
 - Base ref selection: choose which branch to start from when creating new worktrees
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
+- Orphan cleanup modes: Ask before archiving / Auto-archive / Auto-remove (delete, no archive) / Keep. Orphan detection (detached HEAD, no branch) is a heuristic that can misclassify a worktree that was never actually abandoned, so "Ask" and "Auto-archive" move the worktree aside into `__archived/` (recoverable) instead of deleting it outright; "Auto-remove" is a separate, deliberate opt-in for the old hard-delete behavior.
+- A worktree with a rebase, merge, cherry-pick, revert, or bisect in progress shows a **Rebasing** badge in the sidebar and is never auto-archived or auto-deleted by the merge cleanup flows (Merge & Archive, auto-archive-merged) — regardless of setting — until the operation is resolved.
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before a worktree is archived or deleted; non-zero exit blocks the operation
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
@@ -834,7 +836,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Remove via sidebar `×` button or context menu (with confirmation)
 - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
   - Dedicated overlay listing all worktrees across all repos with metadata: branch name, repo badge, PR state (open/merged/closed), dirty stats, last commit timestamp
-  - Orphan worktree detection with warning badge and Prune action
+  - Orphan worktree detection with warning badge and Archive action (moves the worktree aside, recoverable)
   - Repo filter pills and text search for branch names
   - Multi-select with checkboxes and select-all for batch operations
   - Batch delete and batch merge & archive

@@ -135,6 +135,8 @@ struct ChangedFile {
 struct RepoStructure {
     worktree_paths: HashMap<String, String>,  // branch → worktree path
     merged_branches: Vec<String>,             // branches merged into default
+    in_progress_worktrees: Vec<String>,       // worktree dirs with a rebase/merge/cherry-pick/
+                                               // revert/bisect in progress (see worktree::list_in_progress_worktrees)
 }
 ```
 
