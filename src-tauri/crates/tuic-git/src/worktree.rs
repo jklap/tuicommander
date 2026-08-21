@@ -3098,7 +3098,7 @@ fn worktree_admin_dir(worktree_path: &str) -> Option<PathBuf> {
 }
 
 /// True when the worktree is in the middle of a rebase / merge / cherry-pick / revert / bisect.
-fn has_operation_in_progress(worktree_path: &str) -> bool {
+pub fn has_operation_in_progress(worktree_path: &str) -> bool {
     let Some(admin) = worktree_admin_dir(worktree_path) else {
         return false;
     };
@@ -3263,6 +3263,24 @@ fn parse_orphan_worktrees(porcelain: &str) -> Vec<String> {
         .filter(|e| e.detached && e.branch.is_none() && !has_operation_in_progress(&e.path))
         .map(|e| e.path)
         .collect()
+}
+
+/// List worktree directory paths that currently have a git operation in progress
+/// (rebase/merge/cherry-pick/revert/bisect). `map_worktree_workspace_paths` already recovers a
+/// mid-rebase worktree's branch, so its sidebar row survives on its own — this is purely a
+/// signal for the frontend to explain *why* the row looks the way it does (e.g. a "Rebasing"
+/// badge), not something the removal logic needs to consult.
+pub fn list_in_progress_worktrees(repo_path: &str) -> Result<Vec<String>, String> {
+    let out = git_cmd(Path::new(repo_path))
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|e| format!("git worktree list failed: {e}"))?;
+
+    Ok(parse_worktree_entries(&out.stdout)
+        .into_iter()
+        .filter(|e| has_operation_in_progress(&e.path))
+        .map(|e| e.path)
+        .collect())
 }
 
 /// Detect orphan worktrees: linked worktrees present on the filesystem but in detached HEAD
@@ -9926,6 +9944,34 @@ branch refs/heads/feat
         let error = remove_worktree_internal(&worktree, false).unwrap_err();
         assert!(error.contains("operation"), "{error}");
         assert!(path.exists());
+    }
+
+    #[test]
+    fn list_in_progress_worktrees_finds_only_the_busy_one() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let idle = add_worktree(&repo, "idle-branch");
+        let busy = add_worktree(&repo, "busy-branch");
+        let admin = worktree_admin_dir(&busy.to_string_lossy()).unwrap();
+        fs::create_dir_all(admin.join("rebase-merge")).unwrap();
+
+        let in_progress = list_in_progress_worktrees(&repo.to_string_lossy()).unwrap();
+
+        // `git worktree list --porcelain` reports canonicalized (symlink-resolved) paths —
+        // e.g. macOS /var -> /private/var — so compare against the same form.
+        let canon = |p: &Path| {
+            p.canonicalize()
+                .unwrap_or_else(|_| p.to_path_buf())
+                .to_string_lossy()
+                .to_string()
+        };
+        assert!(
+            in_progress.contains(&canon(&busy)),
+            "busy worktree should be reported in progress: {in_progress:?}"
+        );
+        assert!(
+            !in_progress.contains(&canon(&idle)),
+            "idle worktree must not be reported in progress: {in_progress:?}"
+        );
     }
 
     #[test]

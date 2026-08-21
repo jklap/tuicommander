@@ -44,6 +44,8 @@ export interface GitOperationsDeps {
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, import("./useRepository").WorkspaceWorktree>;
 			merged_branches: string[];
+			/** Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress. */
+			in_progress_worktrees: string[];
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
 			diff_stats: Record<string, { additions: number; deletions: number }>;
