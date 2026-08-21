@@ -17,7 +17,7 @@ import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
 import { createCanvasLinkController } from "./canvasTerminalLinks";
-import { createCanvasScrollController, ROW_CACHE_CHUNK } from "./canvasTerminalScroll";
+import { createCanvasScrollController, gestureAccelFactor, ROW_CACHE_CHUNK } from "./canvasTerminalScroll";
 import { createCanvasSearchController, createCanvasSelectionController } from "./canvasTerminalSelection";
 import { installTouchHandlers } from "./canvasTerminalTouch";
 import { createTransport, type TerminalTransport, toBinaryPayload } from "./canvasTerminalTransport";
@@ -1368,15 +1368,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	// Apply one wheel/touch delta (raw pixels) with gesture acceleration → smooth
-	// sub-line scroll.
+	// sub-line scroll. The acceleration ramp is capped (gestureAccelFactor) and resets
+	// on direction reversal (accumulateGesture) so a long momentum fling can't ramp
+	// past a 2x ceiling or keep accelerating a scroll-back after the gesture reverses.
 	function handleScrollDelta(dy: number) {
 		const m = metrics();
 		const ch = m?.cellHeight ?? 20;
 		const screenPx = ch * (lastResizeRows || 24);
-		scroll.gestureDistancePx += Math.abs(dy);
-		const excess = Math.max(0, scroll.gestureDistancePx - screenPx);
-		const factor = 0.5 + 0.5 * (excess / screenPx);
-		applySmoothScroll((dy * factor) / ch);
+		const distance = scroll.accumulateGesture(dy);
+		applySmoothScroll((dy * gestureAccelFactor(distance, screenPx)) / ch);
 	}
 
 	// The transport normalizes every payload shape (see toBinaryPayload) and drops

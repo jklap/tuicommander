@@ -391,6 +391,14 @@ display-only metadata from the original spawn prompt.
 
 - [ ] **After a `make dev` restart**: a Codex collaboration subagent shows its task description above the terminal.
 
+## Scroll acceleration cap + SGR-report input corruption (2026-08-20)
+
+- [x] `gestureAccelFactor` stays within `[0.5, 2.0]` and reaches exactly `1.0` at two screens of cumulative travel _(verified: `src/components/Terminal/__tests__/canvasTerminalScroll.test.ts` "gestureAccelFactor" suite; `cargo`/`vitest` n/a here, this is the frontend suite — 141/141 pass)_
+- [x] A direction reversal restarts the acceleration ramp from `|dy|` instead of continuing to accelerate off distance traveled the other way _(verified: `canvasTerminalScroll.test.ts` "accumulates same-signed gesture distance and restarts the ramp on reversal", and the `snap()`/`cancel()` sign-reset case)_
+- [x] An SGR mouse report (`ESC [ < Cb ; Cx ; Cy M`, wheel notch or mouse-move motion report) fed into `InputLineBuffer` no longer splices its digits into the reconstructed line _(verified: `src-tauri/src/input_line_buffer.rs` `test_sgr_mouse_report_does_not_leak_into_content` — feeds real notch/motion-report bytes mid-line and asserts the reconstructed content is unaffected; 122/122 `input_line_buffer` tests, 472/472 `pty`, 12/12 `mcp_http::session` tests pass; `cargo clippy`/`cargo fmt --check` clean)_
+- [ ] **Needs a `make build`/dev-restart to observe live** (Rust doesn't hot-reload): after rebuilding, run a long session in Claude Code with mouse tracking on (default) and use the wheel/mouse heavily, including while a subprocess pager (`less`, `top`) is displayed; confirm `last_prompt`/submitted text for that session contains no `NN;NN;NNM`/`m` fragments (previously visible via `GET /sessions` on the debug HTTP port).
+- [ ] A long momentum fling over deep scrollback (`seq 1 100000 | less` main-buffer scrollback, or a Claude Code pane without mouse tracking) no longer visibly outruns a shorter fling — the acceleration ceiling should be reachable but not exceeded, felt as "fast, but not runaway."
+
 ## Mouse wheel quantization in mouse-aware apps (2026-08-20)
 
 - [ ] Flick the wheel over a Claude Code pane: moves a few lines, not a page; scrolling back to a specific earlier message lands on it accurately.

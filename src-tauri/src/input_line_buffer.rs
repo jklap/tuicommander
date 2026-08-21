@@ -284,8 +284,17 @@ impl InputLineBuffer {
 
     fn handle_csi(&mut self, ch: char) -> Option<InputAction> {
         match ch {
-            // Parameter bytes: digits and semicolons
-            '0'..='9' | ';' => {
+            // Parameter bytes: digits, semicolon, and the CSI private-marker /
+            // intermediate bytes ':' '<' '=' '>' '?' (ECMA-48 0x3A, 0x3C-0x3F).
+            // SGR mouse reports forwarded from the frontend wheel/click handlers
+            // (`ESC [ < Cb ; Cx ; Cy M`, see CanvasTerminal.tsx sgrMouseSequence)
+            // use '<' as a private parameter prefix. Without this, '<' was
+            // misread as the FINAL byte: execute_csi no-opped on it and reset to
+            // Normal, and the remaining "Cb;Cx;CyM" bytes fell through to
+            // handle_normal, splicing literal mouse-report digits into whatever
+            // line was being reconstructed (visible as SGR-report fragments in
+            // last_prompts / busy-detection text on any mouse-tracking session).
+            '0'..='9' | ';' | ':' | '<' | '=' | '>' | '?' => {
                 self.csi_params.push(ch as u8);
                 None
             }
@@ -584,6 +593,38 @@ mod tests {
         assert_eq!(buf.cursor_pos(), 0);
         buf.feed("\x1b[F"); // End
         assert_eq!(buf.cursor_pos(), 5);
+    }
+
+    #[test]
+    fn test_sgr_mouse_report_does_not_leak_into_content() {
+        // Forwarded wheel/click events (CanvasTerminal.tsx sgrMouseSequence) write
+        // raw SGR mouse reports into the PTY input side whenever mouse tracking is
+        // on, regardless of which process is actually reading — the same input
+        // stream this buffer reconstructs "typed" lines from. Before the '<'
+        // private-marker fix, '<' terminated the CSI sequence early and the
+        // trailing "35;51;26M" digits/semicolons/final-byte were spliced in as
+        // literal characters.
+        let mut buf = InputLineBuffer::new();
+        buf.feed("hi");
+        buf.feed("\x1b[<35;51;26M"); // motion report (button 35 = 32|3)
+        buf.feed("\x1b[<64;17;36M"); // wheel-up notch
+        buf.feed("\x1b[<65;17;36m"); // wheel-down notch, release form
+        assert_eq!(
+            feed_and_get_line(&mut buf, " there\r"),
+            Some("hi there".into())
+        );
+    }
+
+    #[test]
+    fn test_kitty_keyboard_query_responses_do_not_leak_into_content() {
+        // Broader private-marker coverage beyond SGR mouse's '<': kitty keyboard
+        // protocol push/query/pop responses use '>' and '?' the same way (see
+        // strip_kitty_sequences's use of this exact string elsewhere in the
+        // codebase). These must not corrupt the reconstructed line either.
+        let mut buf = InputLineBuffer::new();
+        buf.feed("hi");
+        buf.feed("\x1b[>1u\x1b[?u\x1b[<u");
+        assert_eq!(feed_and_get_line(&mut buf, "\r"), Some("hi".into()));
     }
 
     #[test]
