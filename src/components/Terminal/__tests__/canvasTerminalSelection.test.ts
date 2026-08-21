@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createCanvasSearchController, createCanvasSelectionController } from "../canvasTerminalSelection";
+import {
+	createCanvasSearchController,
+	createCanvasSelectionController,
+	wordBoundsAt,
+} from "../canvasTerminalSelection";
 import type { DecodedRow } from "../canvasTerminalUtils";
 
 function row(text: string): DecodedRow {
@@ -46,6 +50,40 @@ describe("canvas terminal selection controller", () => {
 		expect(selection.start).toBeNull();
 		expect(selection.end).toBeNull();
 		expect(selection.cachedText).toBe("");
+	});
+
+	it("defaults mode to char and resets it on clear", () => {
+		const selection = createCanvasSelectionController();
+		expect(selection.mode).toBe("char");
+		selection.mode = "word";
+		expect(selection.mode).toBe("word");
+		selection.clear();
+		expect(selection.mode).toBe("char");
+	});
+});
+
+describe("wordBoundsAt", () => {
+	it("finds the word span around a column landing inside a word", () => {
+		expect(wordBoundsAt(row("foo bar baz"), 5)).toEqual({ left: 4, right: 6 });
+		expect(wordBoundsAt(row("foo bar baz"), 0)).toEqual({ left: 0, right: 2 });
+		expect(wordBoundsAt(row("foo bar baz"), 10)).toEqual({ left: 8, right: 10 });
+	});
+
+	it("returns null when the column is whitespace or a separator", () => {
+		expect(wordBoundsAt(row("foo bar"), 3)).toBeNull();
+		expect(wordBoundsAt(row("a.b.c"), 1)).toBeNull();
+	});
+
+	it("returns null out of range and treats NUL cells as non-word", () => {
+		expect(wordBoundsAt(row("abc"), -1)).toBeNull();
+		expect(wordBoundsAt(row("abc"), 3)).toBeNull();
+		const withGap = row("ab\0cd");
+		expect(wordBoundsAt(withGap, 2)).toBeNull();
+		expect(wordBoundsAt(withGap, 0)).toEqual({ left: 0, right: 1 });
+	});
+
+	it("stops at punctuation/quote separators on both sides", () => {
+		expect(wordBoundsAt(row(`say "hello" now`), 5)).toEqual({ left: 5, right: 9 });
 	});
 });
 
