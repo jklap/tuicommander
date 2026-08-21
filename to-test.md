@@ -391,6 +391,19 @@ display-only metadata from the original spawn prompt.
 
 - [ ] **After a `make dev` restart**: a Codex collaboration subagent shows its task description above the terminal.
 
+## Mouse wheel quantization in mouse-aware apps (2026-08-20)
+
+- [ ] Flick the wheel over a Claude Code pane: moves a few lines, not a page; scrolling back to a specific earlier message lands on it accurately.
+- [ ] Slow drag over the same pane: nothing moves until a full line of travel, then exactly one line, with no 1px jitter; a mid-scroll reversal responds within one notch.
+- [ ] Discrete mouse (USB wheel or Magic Mouse) click ≈ 3 lines.
+- [ ] Plain shell pane scrolling feels unchanged from before this fix (it was already on the scrollback path).
+- [ ] Shift+wheel, held for the whole gesture, scrolls TUIC's own scrollback (not the app) in Claude Code, `vim`, `lazygit`, and `htop` — this previously did nothing on macOS until Shift was released.
+- [ ] `vim` (`:set mouse=a`) still scrolls the file on wheel without the cursor jumping; `lazygit` scrolls only the hovered panel; `htop` scrolls the process list — no regression from the alt-screen forwarding path.
+- [ ] `grok --no-alt-screen` still scrolls its own conversation on wheel (the `e92200f0` inline-mouse-mode behavior the guard must preserve).
+- [ ] Ctrl+wheel in an app that binds it: the modifier bit survives the coalesced multi-notch write.
+- [ ] Scrollbar thumb drag, then wheel immediately after releasing: no smooth-scroll re-entry or repaint freeze.
+- [ ] Blur the pane mid-flick, refocus, then wheel once: no stray leftover notch fires.
+
 ## Agent worktree creation prompt (2026-08-05)
 
 - [ ] Create a worktree through MCP while an agent terminal is active, then choose **Open Worktree**: the worktree's terminal must open while the agent terminal remains attached to its original branch and working directory, with no injected stop/switch message.

@@ -39,12 +39,21 @@ Consolidated reference for all terminal behaviors, keyboard shortcuts, and confi
 | Shift+Wheel | Force scrollback scroll, never sent to the app |
 
 **Wheel vs. mouse-reporting apps.** When an app enables mouse tracking, the wheel
-is forwarded to it as SGR mouse codes — both in the alternate screen (vim,
-lazygit, htop) **and** on the primary screen (e.g. `grok --no-alt-screen`).
-Those apps own the viewport and scroll their own conversation. Hold **Shift**
-to force TUIC scrollback scrolling regardless of mouse mode (consistent with
-Shift bypassing mouse reporting for clicks/selection). The scrollbar thumb
-always moves TUIC history.
+is forwarded to it as SGR mouse codes whenever mouse reporting is on, in **either**
+buffer — the alternate screen (vim, lazygit, htop) and inline fullscreen TUIs in the
+main buffer alike (e.g. `grok --no-alt-screen`, or Claude Code, which enables mouse
+tracking without switching to the alt screen). Hold **Shift** to force scrollback
+scrolling regardless of mouse mode (consistent with Shift bypassing mouse reporting
+for clicks/selection). The scrollbar thumb always moves TUIC history.
+
+**Quantization.** A physical wheel notch or trackpad flick delivers a burst of many
+small-delta DOM wheel events (macOS reports the whole momentum decay, not just the
+initial motion). Both the forwarded and the scrollback path accumulate those pixel
+deltas and only act once a full line height has been crossed — one SGR notch, or one
+line of scrollback, per line height — capped at 3 notches per event to match native
+terminal behavior for a single discrete mouse click. `deltaMode` (line/page-reporting
+devices) is normalized the same way, so non-pixel-reporting mice and touchpads track
+correctly too.
 
 ### Split Panes
 
