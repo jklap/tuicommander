@@ -605,6 +605,7 @@ Disable: <span class="esc">\x1b[</span>?1l</div>
       </table>
     </div>
     <p style="color:var(--ink-muted); font-size:0.9rem;">No separate urxvt-style (1015) path — the SGR encoding (1006) covers it. A recent fix stopped SGR mouse reports from leaking stray bytes into the input buffer (test: <code style="font-family:var(--font-mono)">sgr_mouse_report_does_not_leak_into_content</code>).</p>
+    <p class="detail-note">Under any-motion tracking (1003), TUIC's own <code style="font-family:var(--font-mono)">sgrMotionButton()</code> (<code>canvasTerminalUtils.ts</code>) reports which button is actually held during the drag (left &gt; middle &gt; right priority, "no button" only on a bare hover) — an earlier version hardcoded SGR button 3 ("no button") on every motion event regardless of what was held, which silently broke click-and-drag text selection inside apps that rely on motion reports for drag tracking (e.g. Claude Code's own Ink-based UI). Test: <code style="font-family:var(--font-mono)">sgrMotionButton.test.ts</code>.</p>
   </section>
 
   <!-- ================= Screen modes ================= -->
