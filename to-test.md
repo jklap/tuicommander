@@ -16,24 +16,15 @@ agent, so it stays open forever and the backlog fills with stories nobody can
 close. Add an item here instead. When an item passes, delete it; a section with
 no items left goes too. What stays open must carry its own stated reason.
 
-> **The `make dev` restart gate is satisfied (2026-08-20 16:23).** Every section
-> below tagged "**After a `make dev` restart**" was waiting on a Rust rebuild.
-> The backend serving `:9876` is a debug build whose process started today at
-> 16:23:54 — later than every commit those sections describe (the newest is
-> 08-19 10:35). Two of those Rust changes were observed live end-to-end: OSC 133
-> events reach a browser client, and `pty-activity` frames arrive on `/events` at
-> the ~1/s throttle. So the gate is no longer a reason to leave an item open;
-> whatever stays open below has its own stated reason.
->
-> Side note for Boss: the on-disk `src-tauri/target/debug/tuicommander` was
-> rewritten at **16:25**, after the running process started at 16:23:54. The live
-> process is therefore one build behind the binary on disk.
->
-> **A new gate opened on 2026-08-21.** The process above is still the one serving
-> `:9876`, so every 08-21 Rust change — the repository delta contract and the
-> UTF-16 search offsets, both still uncommitted in the working tree — is *not*
-> loaded. That skew already cost the repo list once (first section below). The
-> 08-21 sections stay open until a `make dev` restart.
+> **Stale as of 2026-08-27 — needs re-verification, not trusted as-is.** This note
+> previously described an 08-20/08-21 restart gate against a since-superseded
+> running binary. Since then the branch gained ~50 more commits through
+> `47217d2c` (2026-08-27), a large fraction touching `src-tauri/**` — every
+> section below tagged "**Rust change — needs `make dev` restart**" needs a
+> fresh restart against the *current* tip before any of it can be marked
+> verified, regardless of what an older gate note claimed. Do not assume any
+> prior "gate satisfied" note still holds; check the running binary's build
+> time against the commit you're verifying before trusting a `[x]`.
 
 ## Atomic MCP managed-agent submission (2026-08-27, **Rust change — needs `make dev` restart**)
 
@@ -54,6 +45,11 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] **[MANUAL]** oh-my-zsh vi-mode plugin: switching insert/normal mode visibly changes the terminal's own rendered cursor between beam and block.
 - [ ] **[MANUAL]** Run a full-width character (e.g. `echo 界` or a Nerd Font icon) under the cursor in a real pane: the block/underline cursor visibly covers both columns instead of only the leading half.
 - [ ] **[MANUAL]** `\x1b[2 q` (steady block) in a live shell: cursor stops blinking and stays solid; `\x1b[1 q` (blink block) restores blinking.
+
+## Background-color-erase reverse-video fix (2026-08-21/27, **Rust change — needs `make dev` restart**)
+
+- [ ] **[VISUAL]** In a real terminal, run something that enters standout mode and prints a highlighted status line then scrolls (e.g. `tput smso; echo "status"; tput sgr0` in a loop that pushes it up through several more lines of plain output). Confirm the reverse bar stays scoped to the original highlighted line and does NOT reappear on later blank rows scrolled into view.
+- [ ] **[VISUAL]** Separately, confirm `tput smso; tput el` (explicit erase-to-end-of-line under a reverse pen) STILL paints a highlighted bar to the edge — the original, still-intended behavior for explicit erases, which the row-recycling fix must not have regressed.
 
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 

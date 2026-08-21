@@ -129,9 +129,23 @@ impl<T: Copy> ResetDiscriminant<T> for T {
     }
 }
 
-impl ResetDiscriminant<Color> for Cell {
-    fn discriminant(&self) -> Color {
-        self.bg
+impl ResetDiscriminant<(Color, Color, bool)> for Cell {
+    /// `(bg, fg, inverse)` — `fg` only participates when `inverse` is set, i.e.
+    /// only when it is actually painted. Folding it in unconditionally would
+    /// force `Row::reset` onto its full-width path for every ordinary
+    /// colored-text pen change on every scroll, not just reverse-video ones.
+    ///
+    /// Widened from plain `bg` so a scrolled-in row notices a flag-only pen
+    /// change (`SGR 7` with no bg change) and gets fully reset instead of only
+    /// its previously-occupied prefix.
+    fn discriminant(&self) -> (Color, Color, bool) {
+        let inverse = self.flags.contains(Flags::INVERSE);
+        let fg = if inverse {
+            self.fg
+        } else {
+            Color::Named(NamedColor::Foreground)
+        };
+        (self.bg, fg, inverse)
     }
 }
 
@@ -242,6 +256,41 @@ impl Cell {
     pub fn hyperlink(&self) -> Option<Hyperlink> {
         self.extra.as_ref()?.hyperlink.clone()
     }
+
+    /// The blank a scroll-fill or an erase (EL/ED/ECH/DCH/ICH) writes.
+    ///
+    /// This is xterm/VTE background-color-erase, widened to also carry reverse
+    /// video: `smso` (SGR 7) followed by `el` paints a highlighted bar to the
+    /// edge on a real terminal, not a plain-background gap. Only `bg`, `fg` and
+    /// `Flags::INVERSE` ride along — underline/strikeout deliberately do not,
+    /// since terminals disagree there (xterm extends them across BCE fill, VTE
+    /// does not) and guessing wrong smears an attribute across erased space
+    /// instead of just leaving it unhighlighted.
+    ///
+    /// `cell_type` (the OSC 133 prompt/input/output zone marker) never rides
+    /// along: erasing text ends whatever zone it was part of, so the blank it
+    /// leaves behind must go back to `None` — carrying `template.cell_type`
+    /// here tagged every erased/scroll-filled cell as still being inside the
+    /// shell's last-seen zone (e.g. `Prompt`) and broke the `colored_underline`
+    /// ref test.
+    #[inline]
+    pub fn erase_blank(template: &Cell) -> Cell {
+        let inverse = template.flags.contains(Flags::INVERSE);
+        Cell {
+            bg: template.bg,
+            fg: if inverse {
+                template.fg
+            } else {
+                Cell::default().fg
+            },
+            flags: if inverse {
+                Flags::INVERSE
+            } else {
+                Flags::empty()
+            },
+            ..Cell::default()
+        }
+    }
 }
 
 impl GridCell for Cell {
@@ -273,6 +322,18 @@ impl GridCell for Cell {
 
     #[inline]
     fn reset(&mut self, template: &Self) {
+        // Deliberately NOT `Cell::erase_blank(template)`: this path also backs
+        // `Row::reset`, which recycles rows on scroll and on a hard grid reset —
+        // not an explicit erase. Routing it through `erase_blank` meant a row
+        // that scrolled while the pen was reversed (e.g. a status line drawn
+        // with SGR 7, followed by more output) kept painting every
+        // later-recycled blank row with that reverse pen, well past the
+        // original highlighted line — visibly wrong, and it also failed the
+        // `alt_reset`/`deccolm_reset` alacritty_terminal ref tests (their
+        // fixtures record the old, correct "recycled rows go fully blank"
+        // behavior). BCE-with-reverse belongs to explicit erase/scroll-fill
+        // commands (already routed through `erase_blank` in term/mod.rs), not
+        // to ring-buffer recycling.
         *self = Cell {
             bg: template.bg,
             cell_type: template.cell_type,
