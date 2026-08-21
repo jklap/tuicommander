@@ -570,6 +570,13 @@ pub struct TerminalGrid {
     last_frame_history_size: Option<usize>,
     last_frame_screen_lines: Option<usize>,
     last_frame_columns: Option<usize>,
+    // Last-sent protocol-mode header bytes (mouse tracking, SGR encoding, focus
+    // reporting, bracketed paste, DECCKM, DECSCUSR, ...). Tracked separately from
+    // the viewport fields above because a mode-only DECSET/DECRST touches no grid
+    // cell, so damage-based dirty tracking alone would miss it — see the comment
+    // in `serialize_dirty_rows` where this is compared.
+    last_frame_keyboard_flags: Option<u8>,
+    last_frame_frame_flags: Option<u8>,
     bell_flag: Arc<AtomicBool>,
     events: Arc<Mutex<Vec<TermEvent>>>,
     /// When true, column resizes reflow scrollback history while leaving the
@@ -626,6 +633,8 @@ impl TerminalGrid {
             last_frame_history_size: None,
             last_frame_screen_lines: None,
             last_frame_columns: None,
+            last_frame_keyboard_flags: None,
+            last_frame_frame_flags: None,
             bell_flag,
             events,
             reflow_history: true,
@@ -1804,6 +1813,11 @@ impl TerminalGrid {
     /// Serialize dirty rows as a compact binary frame.
     ///
     /// Uses alacritty's built-in damage tracking to identify changed rows.
+    /// `num_rows` may legitimately be 0 with a fully-populated header: a
+    /// protocol-mode-only change (mouse tracking, focus reporting, bracketed
+    /// paste, DECSCUSR, DECCKM, a bell) forces a frame even with no damaged
+    /// cells, so the frontend's cached mode bits never lag behind a real
+    /// `TermMode` change waiting on the next visible redraw.
     /// Wire format (22-byte header):
     /// ```text
     /// Header: [num_rows: u16] [cursor_row: u16] [cursor_col: u16] [cursor_visible: u8]
@@ -1836,6 +1850,25 @@ impl TerminalGrid {
             || self.last_frame_history_size != Some(history_size)
             || self.last_frame_screen_lines != Some(num_lines)
             || self.last_frame_columns != Some(num_cols);
+        // frame_flags/keyboard_flags are computed here — BEFORE the damage-based
+        // early-out below — because a mode-only DECSET/DECRST (mouse tracking,
+        // focus reporting, bracketed paste) or DECSCUSR touches no grid cell and
+        // so produces no damage. Deciding purely on damage meant such a change
+        // was silently dropped until the next frame that *did* have dirty rows —
+        // for an app that toggles a mode while otherwise idle, that window can
+        // be arbitrarily long. During it the frontend's cached mouse_mode/
+        // sgr_mouse bits are stale, so a click/drag gesture starting inside the
+        // window gets classified against the wrong mode. This is the root cause
+        // behind "double/triple-click select fine in an agent pane but
+        // click-drag doesn't": a short click can complete entirely inside one
+        // stale-but-self-consistent window, while a drag spans long enough to
+        // straddle the next (correct, but late) frame and flip mode mid-gesture.
+        // (The bell is deliberately NOT part of this comparison — it is drained
+        // only into a frame that will carry it, see below.)
+        let (keyboard_flags, frame_flags) = self.mode_header_flags();
+        let flags_changed = self.last_frame_keyboard_flags != Some(keyboard_flags)
+            || self.last_frame_frame_flags != Some(frame_flags);
+
         if viewport_changed {
             self.term.mark_fully_damaged();
         }
@@ -1874,7 +1907,9 @@ impl TerminalGrid {
 
         // The bell is drained only into a frame that will carry it: an empty
         // frame is never sent, so swallowing the flag here would lose the ring.
-        let frame = if dirty_lines.is_empty() {
+        // A mode-only change forces a (possibly zero-row) frame through so the
+        // frontend's cached mode state never lags the real TermMode.
+        let frame = if dirty_lines.is_empty() && !flags_changed {
             Vec::new()
         } else {
             let bell = self.drain_bell();
@@ -1886,6 +1921,8 @@ impl TerminalGrid {
         self.last_frame_history_size = Some(history_size);
         self.last_frame_screen_lines = Some(num_lines);
         self.last_frame_columns = Some(num_cols);
+        self.last_frame_keyboard_flags = Some(keyboard_flags);
+        self.last_frame_frame_flags = Some(frame_flags);
         frame
     }
 
@@ -1917,9 +1954,6 @@ impl TerminalGrid {
     /// bookkeeping its frame implies, which is what lets a full frame be built
     /// for one subscriber without disturbing the others.
     fn encode_frame(&self, rows: &[(usize, usize, usize)], bell: bool) -> Vec<u8> {
-        if rows.is_empty() {
-            return Vec::new();
-        }
         let num_cols = self.term.grid().columns();
         let num_lines = self.term.grid().screen_lines();
         let cursor = self.term.grid().cursor.point;
@@ -1935,8 +1969,69 @@ impl TerminalGrid {
             .total_scrolled()
             .saturating_sub(history_size);
         let has_selection = self.term.selection.is_some();
+        let (keyboard_flags, mut frame_flags) = self.mode_header_flags();
+        if bell {
+            frame_flags |= 0x01;
+        }
+
+        // Header: 26 bytes. `rows` may legitimately be empty with a fully-
+        // populated header: a protocol-mode-only change (mouse tracking, focus
+        // reporting, bracketed paste, DECSCUSR, DECCKM) forces a frame even with
+        // no damaged cells, so the frontend's cached mode bits never lag behind
+        // a real `TermMode` change waiting on the next visible redraw.
+        let row_count = rows.len();
+        let estimated = 26 + row_count * (4 + num_cols * 11);
+        let mut buf = Vec::with_capacity(estimated);
+
+        buf.extend_from_slice(&(row_count as u16).to_le_bytes());
+        buf.extend_from_slice(&(cursor.line.0.max(0) as u16).to_le_bytes());
+        buf.extend_from_slice(&(cursor.column.0 as u16).to_le_bytes());
+        buf.push(cursor_visible as u8);
+        buf.extend_from_slice(&(display_offset as u32).to_le_bytes());
+        buf.extend_from_slice(&(history_size as u32).to_le_bytes());
+        buf.push(has_selection as u8);
+        buf.push(keyboard_flags);
+        buf.push(frame_flags);
+        buf.extend_from_slice(&(num_lines as u16).to_le_bytes());
+        buf.extend_from_slice(&(num_cols as u16).to_le_bytes());
+        buf.extend_from_slice(&(history_base as u32).to_le_bytes());
+
+        let grid = self.term.grid();
+        let colors = self.term.colors();
+        for &(row_idx, left, right) in rows {
+            let line = Line(row_idx as i32 - display_offset as i32);
+            // A span shorter than the row saves 11 bytes per column dropped and
+            // costs 2 for `start_col`, so any narrowing at all is worth sending
+            // partial. An empty grid (num_cols == 0) has nothing to narrow.
+            let span = (right + 1).saturating_sub(left).min(num_cols);
+            let partial = span < num_cols;
+            buf.extend_from_slice(&(row_idx as u16).to_le_bytes());
+            let count = encode_col_count(grid, line, num_cols, span);
+            buf.extend_from_slice(
+                &(count | if partial { ROW_PARTIAL_FLAG } else { 0 }).to_le_bytes(),
+            );
+            if partial {
+                buf.extend_from_slice(&(left as u16).to_le_bytes());
+            }
+
+            // Bounded by `num_cols`, not `right`, so a zero-column grid indexes
+            // nothing — the old `0..num_cols` loop was empty there too.
+            for col in left..num_cols.min(right + 1) {
+                encode_cell(&mut buf, &grid[line][Column(col)], colors);
+            }
+        }
+
+        buf
+    }
+
+    /// Mode-derived header flag bytes: (`keyboard_flags`, `frame_flags` WITHOUT
+    /// the bell bit — bit 0 is per-frame, OR'd in by `encode_frame`). Factored
+    /// out so `serialize_dirty_rows` can compare against `last_frame_*` and
+    /// force a frame on a mode-only change without duplicating the bit layout.
+    fn mode_header_flags(&self) -> (u8, u8) {
         let mode = *self.term.mode();
         let cursor_style = self.term.cursor_style();
+        let cursor_shape = cursor_style.shape;
         let mut keyboard_flags: u8 = 0;
         if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
             keyboard_flags |= 0x01;
@@ -1982,17 +2077,7 @@ impl TerminalGrid {
         if !cursor_style.blinking {
             keyboard_flags |= 0x80;
         }
-
-        // Header: 26 bytes
-        let row_count = rows.len();
-        let estimated = 26 + row_count * (4 + num_cols * 11);
-        let mut buf = Vec::with_capacity(estimated);
-
-        let cursor_shape = cursor_style.shape;
         let mut frame_flags: u8 = 0;
-        if bell {
-            frame_flags |= 0x01;
-        }
         // bits 1-2: cursor shape (0=block, 1=underline, 2=beam, 3=app-default).
         // `HollowBlock` is never produced by DECSCUSR (see `default_cursor_style`
         // below) — it is our sentinel for "the app has not requested a shape",
@@ -2029,46 +2114,7 @@ impl TerminalGrid {
         if mode.contains(TermMode::BRACKETED_PASTE) {
             frame_flags |= 0x80;
         }
-
-        buf.extend_from_slice(&(row_count as u16).to_le_bytes());
-        buf.extend_from_slice(&(cursor.line.0.max(0) as u16).to_le_bytes());
-        buf.extend_from_slice(&(cursor.column.0 as u16).to_le_bytes());
-        buf.push(cursor_visible as u8);
-        buf.extend_from_slice(&(display_offset as u32).to_le_bytes());
-        buf.extend_from_slice(&(history_size as u32).to_le_bytes());
-        buf.push(has_selection as u8);
-        buf.push(keyboard_flags);
-        buf.push(frame_flags);
-        buf.extend_from_slice(&(num_lines as u16).to_le_bytes());
-        buf.extend_from_slice(&(num_cols as u16).to_le_bytes());
-        buf.extend_from_slice(&(history_base as u32).to_le_bytes());
-
-        let grid = self.term.grid();
-        let colors = self.term.colors();
-        for &(row_idx, left, right) in rows {
-            let line = Line(row_idx as i32 - display_offset as i32);
-            // A span shorter than the row saves 11 bytes per column dropped and
-            // costs 2 for `start_col`, so any narrowing at all is worth sending
-            // partial. An empty grid (num_cols == 0) has nothing to narrow.
-            let span = (right + 1).saturating_sub(left).min(num_cols);
-            let partial = span < num_cols;
-            buf.extend_from_slice(&(row_idx as u16).to_le_bytes());
-            let count = encode_col_count(grid, line, num_cols, span);
-            buf.extend_from_slice(
-                &(count | if partial { ROW_PARTIAL_FLAG } else { 0 }).to_le_bytes(),
-            );
-            if partial {
-                buf.extend_from_slice(&(left as u16).to_le_bytes());
-            }
-
-            // Bounded by `num_cols`, not `right`, so a zero-column grid indexes
-            // nothing — the old `0..num_cols` loop was empty there too.
-            for col in left..num_cols.min(right + 1) {
-                encode_cell(&mut buf, &grid[line][Column(col)], colors);
-            }
-        }
-
-        buf
+        (keyboard_flags, frame_flags)
     }
 
     /// Damage geometry for one frame, as `serialize_dirty_rows` would see it: the
@@ -5352,6 +5398,156 @@ mod tests {
             (fg_r1, fg_g1, fg_b1),
             "fg same on wrap"
         );
+    }
+
+    // --- Reverse video (SGR 7) and background-color-erase ---
+    //
+    // These pin two things at once: that `\e[7m` is encoded as ATTR_INVERSE (no
+    // prior test asserted this at all), and that erase/scroll fills now carry the
+    // reverse pen (xterm/VTE background-color-erase), which the vendored
+    // alacritty patch didn't do — see `Cell::erase_blank` in
+    // `patches/alacritty_terminal/src/term/cell.rs`.
+
+    #[test]
+    fn serialize_inverse_attr() {
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"\x1b[7mx\x1b[27my");
+        let buf = grid.serialize_dirty_rows();
+
+        let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
+        let (ch0, _, _, _, _, _, _, attrs0) = decode_cell(&buf, off0);
+        assert_eq!(ch0, 'x');
+        assert_ne!(attrs0 & super::ATTR_INVERSE, 0, "reverse video set");
+
+        let off1 = find_cell_offset(&buf, 0, 1).expect("row 0 col 1 present");
+        let (ch1, _, _, _, _, _, _, attrs1) = decode_cell(&buf, off1);
+        assert_eq!(ch1, 'y');
+        assert_eq!(attrs1 & super::ATTR_INVERSE, 0, "reverse video cancelled");
+    }
+
+    #[test]
+    fn erase_in_line_with_reverse_pen_fills_bar_to_edge() {
+        // `smso; el` on a real terminal paints a highlighted bar to the right
+        // edge — the vendored alacritty erase paths used to drop the pen down to
+        // "background color only", losing the reverse flag. Cursor sits at col 2
+        // after writing "ab", so EL (Right) clears cols 2..10.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"ab\x1b[7m\x1b[K");
+        let buf = grid.serialize_dirty_rows();
+
+        for col in 2..10u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_ne!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "col {col} carries reverse pen"
+            );
+        }
+    }
+
+    #[test]
+    fn erase_in_line_without_reverse_pen_stays_plain() {
+        // Regression guard for the default (non-reverse) path.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"ab\x1b[K");
+        let buf = grid.serialize_dirty_rows();
+
+        for col in 2..10u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_eq!(attrs & super::ATTR_INVERSE, 0, "col {col} stays plain");
+        }
+    }
+
+    #[test]
+    fn scroll_up_with_reverse_pen_does_not_fill_new_row_reverse() {
+        // Pen is reverse when a new row scrolls into view. Unlike an explicit
+        // erase (EL/ED/ECH/DCH/ICH), row-recycling on scroll is not BCE — a row
+        // that scrolls while the pen happens to be reversed must not leave
+        // every later-recycled blank row painted with that reverse pen, well
+        // past the line that was actually highlighted. Carrying it through
+        // `Row::reset`/`GridCell::reset` also failed the alacritty_terminal
+        // `alt_reset`/`deccolm_reset` ref tests — see `Cell::reset` in
+        // `patches/alacritty_terminal/src/term/cell.rs`.
+        let mut grid = TerminalGrid::new(3, 10, 100);
+        let _ = grid.process(b"row0\r\nrow1\r\n\x1b[7m");
+        let _ = grid.process(b"\r\n"); // scroll: pen (reverse) must NOT fill the new bottom row
+        grid.force_full_damage();
+        let buf = grid.serialize_dirty_rows();
+
+        let bottom = grid.screen_lines() as u16 - 1;
+        for col in 0..10u16 {
+            let off = find_cell_offset(&buf, bottom, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_eq!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "scrolled-in row col {col} stays plain"
+            );
+        }
+    }
+
+    #[test]
+    fn erase_chars_and_delete_chars_carry_reverse_pen() {
+        // ECH (\e[<n>X) and DCH (\e[<n>P) tails.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"abcde\x1b[1G\x1b[7m\x1b[3X"); // erase 3 chars from col 0
+        let buf = grid.serialize_dirty_rows();
+        for col in 0..3u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_ne!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "erased col {col} carries reverse pen"
+            );
+        }
+
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"abcde\x1b[1G\x1b[7m\x1b[2P"); // delete 2 chars from col 0
+        let buf = grid.serialize_dirty_rows();
+        // delete_chars fills the tail of the row (columns 8..10 for a 10-wide row
+        // after deleting 2).
+        for col in 8..10u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_ne!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "deleted tail col {col} carries reverse pen"
+            );
+        }
+    }
+
+    #[test]
+    fn less_hilite_unread_line_does_not_bleed_past_text() {
+        // Real bytes captured from `less --HILITE-UNREAD` highlighting a line
+        // after `space`/`g` (see plan doc). Pins the reported symptom as
+        // less-correct-behavior: the bar must stop exactly where less's \e[27m
+        // does, and the new background-color-erase fill must not extend it.
+        let mut grid = TerminalGrid::new(5, 80, 0);
+        let _ = grid.process(b"\r\x1b[K\x1b[7mline 30 plain text here\x1b[27m\x1b[m\r\n");
+        let buf = grid.serialize_dirty_rows();
+
+        for col in 0..23u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_ne!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "col {col} is inside the highlighted text"
+            );
+        }
+        for col in 23..80u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_eq!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "col {col} is past the text; must not be highlighted"
+            );
+        }
     }
 
     #[test]
