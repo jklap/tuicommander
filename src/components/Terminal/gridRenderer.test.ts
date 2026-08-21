@@ -135,3 +135,57 @@ describe("gridRenderer paintRow — background of trailing cells (story 036)", (
 		}
 	});
 });
+
+describe("gridRenderer paintRow — reverse-video run does not bleed into the rest of the row", () => {
+	it("fills only the inverse run, not the plain text before or the default spaces after", () => {
+		// Mirrors `less --HILITE-UNREAD`: plain text, then a reverse-video run
+		// (\e[7m...\e[27m), then default trailing spaces to fill the row. The bar
+		// must stop exactly at the run — see the terminal_grid.rs
+		// `less_hilite_unread_line_does_not_bleed_past_text` test for the backend
+		// half of this guard.
+		const { ctx, fillRect } = mockCtx();
+		const r = createGridRenderer(ctx, { fontWeight: () => "normal", getFontFamily: () => "monospace" });
+
+		const count = 10;
+		const codepoints = new Uint32Array(count);
+		const fg = new Uint32Array(count);
+		const bg = new Uint32Array(count);
+		const attrs = new Uint8Array(count);
+
+		// cols 0-2: plain glyphs, default fg/bg.
+		codepoints[0] = 0x41; // A
+		codepoints[1] = 0x42; // B
+		codepoints[2] = 0x43; // C
+		for (let c = 0; c < 3; c++) attrs[c] = ATTR_DEFAULT_FG | ATTR_DEFAULT_BG;
+
+		// cols 3-5: the reverse-video run — real terminals fill the swapped
+		// background here even though both colors are otherwise "default".
+		codepoints[3] = 0x44; // D
+		codepoints[4] = 0x45; // E
+		codepoints[5] = 0x46; // F
+		for (let c = 3; c < 6; c++) attrs[c] = ATTR_DEFAULT_FG | ATTR_DEFAULT_BG | ATTR_INVERSE;
+
+		// cols 6-9: trailing spaces back on the default background.
+		for (let c = 6; c < count; c++) {
+			codepoints[c] = 0x20;
+			attrs[c] = ATTR_DEFAULT_FG | ATTR_DEFAULT_BG;
+		}
+
+		r.paintRow({ index: 0, count, wrapped: false, codepoints, fg, bg, attrs }, 0, METRICS);
+
+		// The renderer merges equal adjacent background fills into one rect
+		// (74aa29f63), so assert cell coverage rather than one rect per cell.
+		const covers = (c: number) =>
+			fillRect.mock.calls.some(([x, , width]) => {
+				const left = x as number;
+				const right = left + (width as number);
+				return left <= c * METRICS.cellWidth && right >= (c + 1) * METRICS.cellWidth;
+			});
+		for (let c = 3; c < 6; c++) {
+			expect(covers(c)).toBe(true);
+		}
+		for (const c of [0, 1, 2, 6, 7, 8, 9]) {
+			expect(covers(c)).toBe(false);
+		}
+	});
+});
