@@ -81,7 +81,14 @@ describe("viewport projection", () => {
 		const { rows, frame, projection, answer } = recorded();
 		const fillRect = vi.fn();
 		const fillText = vi.fn();
-		const ctx = { canvas: { width: 1400, height: 900 }, fillRect, fillText } as unknown as CanvasRenderingContext2D;
+		// paintCursor measures the glyph under the cursor to widen it for wide glyphs.
+		const measureText = vi.fn(() => ({ width: metrics.cellWidth }));
+		const ctx = {
+			canvas: { width: 1400, height: 900 },
+			fillRect,
+			fillText,
+			measureText,
+		} as unknown as CanvasRenderingContext2D;
 		const selection = createCanvasSelectionController();
 		const vp = { historyBase: 900, historySize: 100, displayOffset: 30, screenRows: 35 };
 		const absolute = viewportRowToSelectionRow(vp, answer);
