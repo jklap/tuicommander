@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Mouse wheel scrolling was far too fast in mouse-aware apps (Claude Code, vim, lazygit, htop)** — Every DOM wheel event forwarded exactly one SGR scroll notch regardless of its size, so macOS's momentum-decay burst (dozens of small-delta events per flick) became dozens of notches sent to the app. The wheel now accumulates pixels and emits one notch per line height, capped at 3 per event, matching native terminal behavior; `deltaMode` (line/page-reporting devices) is normalized the same way. Also fixed Shift+wheel — TUIC's scrollback escape hatch — silently doing nothing on macOS, because it reads `deltaX` on that gesture rather than `deltaY`.
+
 ## [2.0.0-beta.1] - 2026-10-22
 
 - Keep the terminal mobile composer's bottom safe-area inset inside its painted surface, above the Home Indicator; the separately reported iPhone shell-height band still needs device evidence (#2116-0213).
