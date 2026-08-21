@@ -129,9 +129,23 @@ impl<T: Copy> ResetDiscriminant<T> for T {
     }
 }
 
-impl ResetDiscriminant<Color> for Cell {
-    fn discriminant(&self) -> Color {
-        self.bg
+impl ResetDiscriminant<(Color, Color, bool)> for Cell {
+    /// `(bg, fg, inverse)` — `fg` only participates when `inverse` is set, i.e.
+    /// only when it is actually painted. Folding it in unconditionally would
+    /// force `Row::reset` onto its full-width path for every ordinary
+    /// colored-text pen change on every scroll, not just reverse-video ones.
+    ///
+    /// Widened from plain `bg` so a scrolled-in row notices a flag-only pen
+    /// change (`SGR 7` with no bg change) and gets fully reset instead of only
+    /// its previously-occupied prefix — see `Cell::erase_blank`.
+    fn discriminant(&self) -> (Color, Color, bool) {
+        let inverse = self.flags.contains(Flags::INVERSE);
+        let fg = if inverse {
+            self.fg
+        } else {
+            Color::Named(NamedColor::Foreground)
+        };
+        (self.bg, fg, inverse)
     }
 }
 
@@ -242,6 +256,35 @@ impl Cell {
     pub fn hyperlink(&self) -> Option<Hyperlink> {
         self.extra.as_ref()?.hyperlink.clone()
     }
+
+    /// The blank a scroll-fill or an erase (EL/ED/ECH/DCH/ICH) writes.
+    ///
+    /// This is xterm/VTE background-color-erase, widened to also carry reverse
+    /// video: `smso` (SGR 7) followed by `el` paints a highlighted bar to the
+    /// edge on a real terminal, not a plain-background gap. Only `bg`, `fg` and
+    /// `Flags::INVERSE` ride along — underline/strikeout deliberately do not,
+    /// since terminals disagree there (xterm extends them across BCE fill, VTE
+    /// does not) and guessing wrong smears an attribute across erased space
+    /// instead of just leaving it unhighlighted.
+    #[inline]
+    pub fn erase_blank(template: &Cell) -> Cell {
+        let inverse = template.flags.contains(Flags::INVERSE);
+        Cell {
+            bg: template.bg,
+            fg: if inverse {
+                template.fg
+            } else {
+                Cell::default().fg
+            },
+            flags: if inverse {
+                Flags::INVERSE
+            } else {
+                Flags::empty()
+            },
+            cell_type: template.cell_type,
+            ..Cell::default()
+        }
+    }
 }
 
 impl GridCell for Cell {
@@ -273,11 +316,7 @@ impl GridCell for Cell {
 
     #[inline]
     fn reset(&mut self, template: &Self) {
-        *self = Cell {
-            bg: template.bg,
-            cell_type: template.cell_type,
-            ..Cell::default()
-        };
+        *self = Cell::erase_blank(template);
     }
 }
 

@@ -1,0 +1,733 @@
+<title>TUICommander Escape Sequences</title>
+<meta name="description" content="Every OSC, CSI, and SGR sequence TUICommander's terminal parser recognizes, with real wire-format examples pulled from its own shell-integration scripts and tests.">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@500;600;700&family=Literata:ital,opsz,wght@0,14..72,400;0,14..72,500;0,14..72,600;1,14..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --bg:#e8e5dc;
+  --surface:#dcd8cb;
+  --surface-2:#f1eee5;
+  --ink:#20241f;
+  --ink-muted:#5b594c;
+  --rule:#b9b3a0;
+  --accent-osc:#a35a0a;
+  --accent-csi:#286966;
+  --accent-absent:#8a3b2e;
+  --shadow: 0 1px 0 rgba(32,36,31,0.06);
+  --font-display:'Big Shoulders', 'Arial Narrow', sans-serif;
+  --font-body:'Literata', Georgia, 'Times New Roman', serif;
+  --font-mono:'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15181a;
+    --surface:#1d2023;
+    --surface-2:#101214;
+    --ink:#e8e4d6;
+    --ink-muted:#9c9887;
+    --rule:#33362f;
+    --accent-osc:#e2953f;
+    --accent-csi:#59a6a0;
+    --accent-absent:#c15b47;
+    --shadow: 0 1px 0 rgba(0,0,0,0.4);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15181a;
+  --surface:#1d2023;
+  --surface-2:#101214;
+  --ink:#e8e4d6;
+  --ink-muted:#9c9887;
+  --rule:#33362f;
+  --accent-osc:#e2953f;
+  --accent-csi:#59a6a0;
+  --accent-absent:#c15b47;
+  --shadow: 0 1px 0 rgba(0,0,0,0.4);
+}
+
+*{ box-sizing:border-box; }
+html{ -webkit-text-size-adjust:100%; }
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--font-body);
+  font-size:16px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{ background:var(--accent-osc); color:var(--surface-2); }
+
+a{ color:var(--accent-csi); text-decoration-thickness: 1px; }
+a:focus-visible, button:focus-visible, summary:focus-visible{
+  outline:2px solid var(--accent-osc);
+  outline-offset:2px;
+  border-radius:2px;
+}
+
+.wrap{ max-width:920px; margin:0 auto; padding:0 24px 96px; }
+
+/* ---------- nameplate ---------- */
+.nameplate{
+  border-bottom:1px solid var(--rule);
+  padding:56px 0 28px;
+}
+.nameplate .eyebrow{
+  font-family:var(--font-mono);
+  font-size:12.5px;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  color:var(--accent-osc);
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.nameplate .eyebrow::before{
+  content:"";
+  width:7px; height:7px;
+  background:var(--accent-osc);
+  display:inline-block;
+}
+.nameplate h1{
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:clamp(2.4rem, 5vw, 3.6rem);
+  letter-spacing:0.01em;
+  text-transform:uppercase;
+  line-height:0.98;
+  margin:10px 0 14px;
+  text-wrap:balance;
+}
+.nameplate p{
+  max-width:62ch;
+  color:var(--ink-muted);
+  font-size:1.05rem;
+  margin:0;
+}
+.nameplate .src{
+  margin-top:18px;
+  font-family:var(--font-mono);
+  font-size:12.5px;
+  color:var(--ink-muted);
+}
+.nameplate .src code{ color:var(--ink); }
+
+/* ---------- quick nav ---------- */
+.quicknav{
+  position:sticky; top:0; z-index:5;
+  background:var(--bg);
+  border-bottom:1px solid var(--rule);
+  margin:0 -24px 40px;
+  padding:0 24px;
+}
+.quicknav ul{
+  display:flex; flex-wrap:wrap; gap:2px 18px;
+  list-style:none; margin:0; padding:12px 0;
+  font-family:var(--font-mono); font-size:12.5px;
+}
+.quicknav a{
+  color:var(--ink-muted); text-decoration:none;
+  text-transform:uppercase; letter-spacing:0.06em;
+}
+.quicknav a:hover{ color:var(--accent-osc); }
+
+/* ---------- anatomy strip ---------- */
+.anatomy{
+  display:flex; flex-wrap:wrap; gap:28px;
+  margin:8px 0 48px;
+}
+.anatomy-block{ flex:1 1 260px; }
+.anatomy-block h3{
+  font-family:var(--font-mono);
+  font-size:11px; letter-spacing:0.1em; text-transform:uppercase;
+  color:var(--ink-muted); margin:0 0 10px;
+  font-weight:500;
+}
+.chips{ display:flex; flex-wrap:wrap; gap:1px; }
+.chip{
+  font-family:var(--font-mono); font-size:13px;
+  background:var(--surface); border:1px solid var(--rule);
+  padding:7px 10px; display:flex; flex-direction:column; gap:4px; align-items:center;
+  min-width:44px;
+}
+.chip .lbl{ font-size:9px; letter-spacing:0.06em; text-transform:uppercase; color:var(--ink-muted); }
+.chip.osc{ border-color:var(--accent-osc); }
+.chip.osc .lbl{ color:var(--accent-osc); }
+.chip.csi{ border-color:var(--accent-csi); }
+.chip.csi .lbl{ color:var(--accent-csi); }
+
+/* ---------- module cards ---------- */
+.module{ margin-bottom:56px; }
+.module-head{
+  display:flex; align-items:baseline; gap:14px;
+  border-bottom:2px solid var(--ink); padding-bottom:8px; margin-bottom:6px;
+}
+.module-head h2{
+  font-family:var(--font-display); font-weight:700;
+  font-size:1.7rem; text-transform:uppercase; letter-spacing:0.01em;
+  margin:0;
+}
+.module-head .count{
+  font-family:var(--font-mono); color:var(--ink-muted); font-size:13px;
+}
+.module > .dek{ color:var(--ink-muted); max-width:68ch; margin:10px 0 28px; }
+
+.pill{
+  display:inline-block; font-family:var(--font-mono); font-size:10.5px;
+  letter-spacing:0.05em; text-transform:uppercase;
+  padding:2px 7px; border-radius:3px; border:1px solid currentColor;
+  line-height:1.6;
+}
+.pill.osc{ color:var(--accent-osc); }
+.pill.csi{ color:var(--accent-csi); }
+.pill.absent{ color:var(--accent-absent); }
+
+/* seq entries */
+.seq{
+  border:1px solid var(--rule);
+  background:var(--surface);
+  padding:18px 20px;
+  margin-bottom:14px;
+  box-shadow:var(--shadow);
+}
+.seq.deep{ padding:22px 24px 24px; }
+.seq-top{
+  display:flex; justify-content:space-between; align-items:baseline;
+  gap:12px; margin-bottom:6px; flex-wrap:wrap;
+}
+.seq-top .num{
+  font-family:var(--font-mono); font-weight:600; font-size:1.05rem;
+  color:var(--accent-osc);
+}
+.seq-top .name{
+  font-weight:600; font-size:1rem;
+}
+.seq p{ margin:8px 0 12px; color:var(--ink-muted); font-size:0.97rem; }
+.seq p strong{ color:var(--ink); font-weight:600; }
+
+.code{
+  background:var(--surface-2);
+  border:1px solid var(--rule);
+  font-family:var(--font-mono);
+  font-size:13px;
+  padding:10px 12px;
+  overflow-x:auto;
+  white-space:pre;
+  color:var(--ink);
+}
+.code .esc{ color:var(--accent-osc); font-weight:600; }
+.code .st{ color:var(--accent-csi); font-weight:600; }
+.code .cmt{ color:var(--ink-muted); }
+
+.seq + .seq{ margin-top:14px; }
+
+/* tables */
+.table-wrap{ overflow-x:auto; border:1px solid var(--rule); }
+table{ border-collapse:collapse; width:100%; min-width:520px; font-size:0.93rem; }
+caption{ text-align:left; font-family:var(--font-mono); font-size:11px; color:var(--ink-muted); padding:8px 0; }
+th, td{ text-align:left; padding:9px 14px; border-bottom:1px solid var(--rule); }
+thead th{
+  font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:0.07em;
+  color:var(--ink-muted); font-weight:500; background:var(--surface);
+}
+tbody tr:last-child td{ border-bottom:none; }
+td.mode, td code{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:0.9rem; }
+tbody tr:hover{ background:var(--surface-2); }
+
+.subtable{ margin:14px 0 18px; }
+.subtable table{ min-width:0; }
+.subtable td, .subtable th{ padding:8px 12px; }
+
+/* flow / pipeline */
+.flow{
+  display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+  font-family:var(--font-mono); font-size:12px;
+  margin:14px 0 4px;
+}
+.flow .step{
+  border:1px solid var(--rule); background:var(--surface-2);
+  padding:5px 9px; color:var(--ink);
+}
+.flow .arrow{ color:var(--ink-muted); }
+.flow-note{ color:var(--ink-muted); font-size:0.92rem; margin:8px 0 0; }
+
+.detail-note{
+  font-size:0.92rem; color:var(--ink-muted);
+  border-left:2px solid var(--accent-csi);
+  padding:2px 0 2px 12px;
+  margin:12px 0;
+}
+.detail-note strong{ color:var(--ink); }
+
+/* absent list */
+.absent-list{
+  border:1px dashed var(--accent-absent);
+  padding:16px 20px;
+  color:var(--ink-muted);
+}
+.absent-list h3{
+  margin:0 0 8px; font-size:0.95rem; color:var(--accent-absent);
+  font-family:var(--font-mono); text-transform:uppercase; letter-spacing:0.06em; font-weight:500;
+}
+.absent-list ul{ margin:0; padding-left:1.1em; }
+.absent-list li{ margin-bottom:4px; }
+
+/* deviations */
+.deviation{
+  display:grid; grid-template-columns:auto 1fr; gap:4px 16px;
+  padding:14px 0; border-bottom:1px solid var(--rule);
+}
+.deviation:last-child{ border-bottom:none; }
+.deviation .tag{
+  font-family:var(--font-mono); font-size:11px; text-transform:uppercase;
+  color:var(--accent-csi); letter-spacing:0.05em; white-space:nowrap;
+  grid-column:1;
+}
+.deviation p{ margin:0; grid-column:2; color:var(--ink-muted); }
+
+footer{
+  border-top:1px solid var(--rule);
+  margin-top:40px; padding-top:20px;
+  font-family:var(--font-mono); font-size:11.5px; color:var(--ink-muted);
+}
+
+.subhead{
+  font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-muted);margin:28px 0 10px;
+}
+
+@media (max-width:640px){
+  .nameplate{ padding:40px 0 24px; }
+  .quicknav ul{ gap:2px 12px; }
+  .anatomy{ gap:20px; }
+  .deviation{ grid-template-columns:1fr; }
+  .deviation p{ grid-column:1; }
+}
+
+@media (prefers-reduced-motion:no-preference){
+  .seq, .module{ scroll-margin-top:52px; }
+}
+</style>
+
+<div class="wrap">
+
+  <header class="nameplate">
+    <div class="eyebrow">Terminal Protocol Reference</div>
+    <h1>TUICommander<br>Escape Sequences</h1>
+    <p>What the parser actually recognizes when a program writes control bytes to the PTY — OSC, CSI, and SGR — verified against the patched <code style="font-family:var(--font-mono)">vte</code> fork and the shell-integration scripts that emit these sequences in practice.</p>
+    <div class="src">Source: <code>src-tauri/patches/vte/src/ansi.rs</code>, <code>patches/alacritty_terminal/src/term/{mod,cell}.rs</code>, <code>terminal_grid.rs</code>, <code>output_parser.rs</code>, <code>shell_integration.rs</code>, <code>pty.rs</code>, <code>state.rs</code></div>
+  </header>
+
+  <nav class="quicknav">
+    <ul>
+      <li><a href="#anatomy">Anatomy</a></li>
+      <li><a href="#osc">OSC</a></li>
+      <li><a href="#csi-cursor">Cursor &amp; Mouse</a></li>
+      <li><a href="#modes">Screen Modes</a></li>
+      <li><a href="#sgr">Color &amp; SGR</a></li>
+      <li><a href="#dcs">DCS</a></li>
+      <li><a href="#deviations">Deviations</a></li>
+    </ul>
+  </nav>
+
+  <section class="anatomy" id="anatomy">
+    <div class="anatomy-block">
+      <h3>OSC grammar — Operating System Command</h3>
+      <div class="chips">
+        <div class="chip osc"><span>ESC</span><span class="lbl">1b</span></div>
+        <div class="chip osc"><span>]</span><span class="lbl">5d</span></div>
+        <div class="chip osc"><span>Ps</span><span class="lbl">number</span></div>
+        <div class="chip osc"><span>;</span><span class="lbl">3b</span></div>
+        <div class="chip osc"><span>Pt</span><span class="lbl">payload</span></div>
+        <div class="chip osc"><span>BEL</span><span class="lbl">07 / esc\</span></div>
+      </div>
+    </div>
+    <div class="anatomy-block">
+      <h3>CSI grammar — Control Sequence Introducer</h3>
+      <div class="chips">
+        <div class="chip csi"><span>ESC</span><span class="lbl">1b</span></div>
+        <div class="chip csi"><span>[</span><span class="lbl">5b</span></div>
+        <div class="chip csi"><span>Ps</span><span class="lbl">params</span></div>
+        <div class="chip csi"><span>SP</span><span class="lbl">optional</span></div>
+        <div class="chip csi"><span>ƒ</span><span class="lbl">final byte</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= OSC ================= -->
+  <section class="module" id="osc">
+    <div class="module-head">
+      <h2>OSC Sequences</h2>
+      <span class="count">14 recognized</span>
+    </div>
+    <p class="dek">Dispatched from a single match statement in <code style="font-family:var(--font-mono)">Performer::osc_dispatch</code> (ansi.rs:1361–1577). Two exceptions — progress and notifications — bypass the parser entirely and are pulled from raw PTY bytes with regex.</p>
+
+    <h3 class="subhead">Title &amp; directory</h3>
+
+    <article class="seq deep">
+      <div class="seq-top"><span class="num">OSC 0 / 2</span><span class="name">Window &amp; icon title</span></div>
+      <p>Grammar: both codes hit the exact same match arm (ansi.rs:1363–1376) — TUIC makes no distinction between "icon title" (0) and "window title" (2). Params from index 1 onward are UTF-8-decoded, joined with <code>;</code>, then trimmed, and handed to <strong>set_title(Some(title))</strong>. A bare <code>\x1b]0;\x07</code> with nothing after the semicolon falls through to <code>unhandled()</code>.</p>
+      <p class="detail-note">Downstream: the real handler stores the title and emits <code>Event::Title</code> (or <code>Event::ResetTitle</code> when cleared) — picked up as <code>TermEvent::Title(t)</code> in <code>terminal_grid.rs:48–49</code> and read again in <code>pty.rs:4457</code> to relabel the pane/tab in the UI.</p>
+      <div class="code"><span class="esc">\x1b]</span>0;My Title<span class="st">\x07</span>   <span class="cmt"># identical effect to OSC 2</span>
+<span class="esc">\x1b]</span>2;My Title<span class="st">\x07</span></div>
+    </article>
+
+    <article class="seq">
+      <div class="seq-top"><span class="num">OSC 7</span><span class="name">Working directory</span></div>
+      <p>Reports the shell's current directory as a <code>file://</code> URL, forwarded to <strong>osc7()</strong> so TUIC can track cwd per pane.</p>
+      <div class="code"><span class="esc">\x1b]</span>7;file://myhost/home/user/project<span class="st">\x07</span></div>
+    </article>
+
+    <h3 class="subhead">Color &amp; appearance</h3>
+
+    <article class="seq deep">
+      <div class="seq-top"><span class="num">OSC 4</span><span class="name">Palette get/set</span></div>
+      <p>Grammar: needs an odd, &gt;1 total param count — index/color pairs (ansi.rs:1393–1417); anything else is dropped via <code>unhandled()</code>. The index is read by a hand-rolled decimal parser clamped to <code>u8</code> (0–255). Colors accept two formats via <code>xparse_color()</code> (ansi.rs:180–227):</p>
+      <div class="subtable table-wrap">
+        <table>
+          <thead><tr><th>Format</th><th>Example</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>Legacy hex</td><td><code>#rgb</code> / <code>#rrggbb</code> / <code>#rrrgggbbb</code></td><td>truncated/filled to 8 bits per channel</td></tr>
+            <tr><td>XParseColor</td><td><code>rgb:r/g/b</code></td><td>each channel scaled from however many hex digits are given — <code>rgb:f/f/f</code> is full white</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="detail-note">A color of <code>?</code> is a real query, not a no-op — TUIC writes an actual report back down the PTY via <code>dynamic_color_sequence()</code>, doubling each byte to fake 16-bit-per-channel X11 reporting: <code>\x1b]4;&#123;index&#125;;rgb:&#123;rr&#125;&#123;rr&#125;/&#123;gg&#125;&#123;gg&#125;/&#123;bb&#125;&#123;bb&#125;&lt;terminator&gt;</code>.</p>
+      <div class="code">Set:      <span class="esc">\x1b]</span>4;1;#ff0000<span class="st">\x07</span>
+Query:    <span class="esc">\x1b]</span>4;1;?<span class="st">\x07</span>
+Response: <span class="esc">\x1b]</span>4;1;rgb:ffff/0000/0000<span class="st">\x07</span></div>
+    </article>
+
+    <article class="seq">
+      <div class="seq-top"><span class="num">OSC 10 / 11 / 12</span><span class="name">Foreground / background / cursor color</span></div>
+      <p>Same get/set shape as OSC 4, but for the three fixed slots rather than a palette index — the offset from 10 selects which one.</p>
+      <div class="code">Query fg: <span class="esc">\x1b]</span>10;?<span class="st">\x07</span>
+Set bg:   <span class="esc">\x1b]</span>11;#000000<span class="st">\x07</span></div>
+    </article>
+
+    <article class="seq">
+      <div class="seq-top"><span class="num">OSC 104</span><span class="name">Reset palette</span></div>
+      <p>With no params, resets all 256 palette entries. With params, resets only the listed indices.</p>
+      <div class="code">All:      <span class="esc">\x1b]</span>104<span class="st">\x07</span>
+Indices:  <span class="esc">\x1b]</span>104;5;6<span class="st">\x07</span></div>
+    </article>
+
+    <article class="seq">
+      <div class="seq-top"><span class="num">OSC 110 / 111 / 112</span><span class="name">Reset fg / bg / cursor color</span></div>
+      <p>No parameters — each just reverts one of the three fixed color slots to default.</p>
+      <div class="code"><span class="esc">\x1b]</span>110<span class="st">\x07</span>  <span class="cmt">/* fg */</span>
+<span class="esc">\x1b]</span>111<span class="st">\x07</span>  <span class="cmt">/* bg */</span>
+<span class="esc">\x1b]</span>112<span class="st">\x07</span>  <span class="cmt">/* cursor */</span></div>
+    </article>
+
+    <article class="seq deep">
+      <div class="seq-top"><span class="num">OSC 22</span><span class="name">Mouse cursor icon</span></div>
+      <p>Grammar: exactly 2 params required (ansi.rs:1483–1489). The shape string is matched against <code>CursorIcon::from_str</code> — the full standard CSS3 cursor keyword set, and nothing else:</p>
+      <div class="code" style="font-size:12px; line-height:1.9; white-space:pre-wrap;">default · context-menu · help · pointer · progress · wait · cell · crosshair · text · vertical-text · alias · copy · move · no-drop · not-allowed · grab · grabbing · e-resize · n-resize · ne-resize · nw-resize · s-resize · se-resize · sw-resize · w-resize · ew-resize · ns-resize · nesw-resize · nwse-resize · col-resize · row-resize · all-scroll · zoom-in · zoom-out · dnd-ask · all-resize</div>
+      <p class="detail-note">An unrecognized string logs <code>debug!("[osc 22] unrecognized cursor icon shape…")</code> and is dropped — there's no fallback icon, the pointer just stays whatever it already was.</p>
+      <div class="code"><span class="esc">\x1b]</span>22;grab<span class="st">\x07</span></div>
+    </article>
+
+    <article class="seq">
+      <div class="seq-top"><span class="num">OSC 50</span><span class="name">Text cursor shape</span></div>
+      <p>App-level override of the caret style, independent of DECSCUSR. <code>0</code> = block, <code>1</code> = beam, <code>2</code> = underline.</p>
+      <div class="code"><span class="esc">\x1b]</span>50;CursorShape=1<span class="st">\x07</span></div>
+    </article>
+
+    <h3 class="subhead">Hyperlinks &amp; clipboard</h3>
+
+    <article class="seq deep">
+      <div class="seq-top"><span class="num">OSC 8</span><span class="name">Hyperlinks</span></div>
+      <p>Grammar: requires more than 2 params (ansi.rs:1420–1446). The URI is rebuilt from <code>params[2]</code> plus any further params rejoined on <code>;</code> — needed because a literal <code>;</code> inside the URI itself gets split apart by the OSC parser and has to be stitched back together; there's no length cap. An empty URI closes the link (<code>set_hyperlink(None)</code>).</p>
+      <p>The field before the URI is split on <code>:</code> into <code>key=value</code> pairs — only <code>id=</code> is recognized; e.g. <code>id=42:foo=bar</code> still only extracts <code>id</code>, the rest is ignored.</p>
+      <p class="detail-note"><strong>No nesting:</strong> the link is stored on the cursor's cell template, the same way an SGR color is — there's no stack. Opening a second <code>OSC 8</code> before closing the first just overwrites the template; every cell after that gets whichever link was set most recently.</p>
+      <div class="code"><span class="esc">\x1b]</span>8;id=42;https://example.com<span class="st">\x1b\</span>link text<span class="esc">\x1b]</span>8;;<span class="st">\x1b\</span></div>
+    </article>
+
+    <article class="seq">
+      <div class="seq-top"><span class="num">OSC 52</span><span class="name">Clipboard</span></div>
+      <p>The base64 payload passes straight through to <strong>clipboard_store()</strong> undecoded; a <code>?</code> payload requests the current contents back via <strong>clipboard_load()</strong>.</p>
+      <div class="code">Set:   <span class="esc">\x1b]</span>52;c;SGVsbG8=<span class="st">\x07</span>
+Query: <span class="esc">\x1b]</span>52;c;?<span class="st">\x07</span></div>
+    </article>
+
+    <h3 class="subhead">Shell integration &amp; agent protocol</h3>
+
+    <!-- ============ OSC 133 — DEEP DETAIL ============ -->
+    <article class="seq deep">
+      <div class="seq-top"><span class="num">OSC 133</span><span class="name">Prompt / command marks</span></div>
+      <p>Grammar: <code>\x1b]133;COMMAND[;PARAMS]&lt;BEL|ST&gt;</code>. In <code style="font-family:var(--font-mono)">ansi.rs:1550–1563</code> the command is read as <code>params[1][0]</code> (a single letter); the payload comes from whatever follows it — either the rest of that same param (if a literal <code>;</code> immediately follows the letter) or a separate third param, e.g. <code>D;42</code> parses as <code>["133","D","42"]</code>.</p>
+
+      <div class="subtable table-wrap">
+        <table>
+          <caption>Recognized command letters — alacritty_terminal/term/mod.rs:2625–2642</caption>
+          <thead><tr><th>Letter</th><th>Cell type applied</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td class="mode">A</td><td>Prompt</td><td>Prompt is being drawn</td></tr>
+            <tr><td class="mode">B</td><td>Input</td><td>Prompt ended, user input begins</td></tr>
+            <tr><td class="mode">C</td><td>Output</td><td>Command execution / output begins</td></tr>
+            <tr><td class="mode">D</td><td>None</td><td>Command finished — params carry the exit code</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="detail-note">Any other letter hits the fallback arm and returns before an event is even built — no <code>TermEvent::Osc133</code> is emitted for it. And although the parser accepts <strong>B</strong>, TUIC's own bash/zsh/fish hooks never send it — only <strong>A</strong>, <strong>C</strong>, and <strong>D</strong> — it's recognized purely for compatibility with other tools (FinalTerm/iTerm2-style) that do emit it.</p>
+
+      <div class="code">printf '<span class="esc">\e]</span>133;A<span class="st">\a</span>'          <span class="cmt"># prompt start (real preexec hook output)</span>
+printf '<span class="esc">\e]</span>133;C<span class="st">\a</span>'          <span class="cmt"># about to run</span>
+printf '<span class="esc">\e]</span>133;D;%d<span class="st">\a</span>' "$ec"  <span class="cmt"># done, exit code 42 for example</span>
+<span class="esc">\x1b]</span>133;D;0<span class="st">\x1b\</span>              <span class="cmt"># ST terminator works identically to BEL</span></div>
+
+      <p><strong>Zone extraction:</strong> <code>extract_semantic_zones()</code> (terminal_grid.rs:1195–1239) walks the grid and coalesces contiguous same-typed cells into <code>(prompt|input|output, start_line, end_line, text)</code> tuples. That's how TUIC hands an agent "just the command" or "just the output" without falling back to raw screen-scraping.</p>
+      <div class="flow">
+        <span class="step">A</span><span class="arrow">→ prompt drawn</span>
+        <span class="step">typed text + C</span><span class="arrow">→ exec starts</span>
+        <span class="step">output + D;0</span><span class="arrow">→ zone closed, exit 0</span>
+        <span class="step">A again</span><span class="arrow">→ next prompt</span>
+      </div>
+      <p class="flow-note">That exact interleaving — including an OSC 7770 <code>suggest=</code> riding along in the same chunk — is covered by the integration test <code>osc7770_and_osc133_full_flow</code> (terminal_grid.rs:3651–3693).</p>
+    </article>
+
+    <!-- ============ OSC 7770 — DEEP DETAIL ============ -->
+    <article class="seq deep">
+      <div class="seq-top"><span class="num">OSC 7770</span><span class="name">TUIC agent protocol <span class="pill osc" style="margin-left:6px;">proprietary</span></span></div>
+      <p>Grammar: <code>\x1b]7770;VERB=PAYLOAD&lt;BEL|ST&gt;</code>, dispatched inside vte at <code style="font-family:var(--font-mono)">ansi.rs:1565–1574</code>. The body is split on the <strong>first</strong> <code>=</code> only. No <code>=</code> at all means the whole sequence is dropped before the handler is even called — <code>Handler::osc7770()</code> never runs. The real implementation (alacritty_terminal/term/mod.rs:2650–2658) stamps the current cursor line and emits <code>Event::Tuic&#123;verb, payload, line&#125;</code> — the payload is <strong>never</strong> written to the visible grid (verified by <code>osc7770_not_written_to_grid</code>, terminal_grid.rs:3574–3582).</p>
+
+      <div class="subtable table-wrap">
+        <table>
+          <caption>Verbs actually wired up by TUIC's shell hooks</caption>
+          <thead><tr><th>Verb</th><th>Payload shape</th><th>Emitted by</th></tr></thead>
+          <tbody>
+            <tr><td class="mode">state</td><td>free-text token, e.g. <code>idle</code>, <code>busy</code></td><td><code>tuic_state()</code></td></tr>
+            <tr><td class="mode">suggest</td><td>pipe-delimited action list</td><td><code>tuic_suggest()</code></td></tr>
+            <tr><td class="mode">intent</td><td>free-text description of current activity</td><td><code>tuic_intent()</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="detail-note">The parser itself is <strong>verb-agnostic</strong> — anything before the first <code>=</code> is accepted and forwarded as-is. Only these three are actually sent by the shell integration scripts or consumed downstream; there's no <code>error</code>, <code>done</code>, or <code>progress</code> verb.</p>
+
+      <div class="code"><span class="esc">\x1b]</span>7770;state=idle<span class="st">\x07</span>
+<span class="esc">\x1b]</span>7770;suggest=Fix the bug|Run tests|Deploy<span class="st">\x07</span>
+<span class="esc">\x1b]</span>7770;intent=Refactoring auth module (Auth Refactor)<span class="st">\x07</span>
+<span class="esc">\x1b]</span>7770;state=busy<span class="st">\x1b\</span>          <span class="cmt"># ST terminator, same result as BEL</span>
+<span class="esc">\x1b]</span>7770;garbage<span class="st">\x07</span>              <span class="cmt"># no '=' → silently dropped</span>
+<span class="esc">\x1b]</span>7770;state=<span class="st">\x07</span>                <span class="cmt"># empty payload is valid: verb="state", payload=""</span></div>
+
+      <p class="detail-note">Separate from the escape channel: if a line of <em>plain text</em> at the cursor literally starts with <code>suggest:</code> or <code>intent:</code>, it's excluded from certain scans while still being typed (terminal_grid.rs:3605–3648) — a heuristic safety net for shells/agents that print these as visible text instead of the OSC sequence.</p>
+    </article>
+
+    <h3 class="subhead">Progress &amp; notifications <span class="pill csi" style="margin-left:2px;">bypasses vte</span></h3>
+    <p style="color:var(--ink-muted); font-size:0.93rem; margin-top:-6px;">These two never reach <code style="font-family:var(--font-mono)">osc_dispatch</code> — <code style="font-family:var(--font-mono)">output_parser.rs</code> regexes the raw PTY stream for them directly.</p>
+
+    <article class="seq deep">
+      <div class="seq-top"><span class="num">OSC 9;4</span><span class="name">Progress reporting</span></div>
+      <p>Grammar: <code>parse_osc94()</code> matches <code>\x1b\]9;4;(\d);(\d&#123;1,3&#125;)</code> (output_parser.rs:815–829). The percent value is clamped to <code>.min(100)</code>.</p>
+      <p class="detail-note"><strong>The state digit carries no enumerated meaning in TUIC</strong> — unlike ConEmu/Windows Terminal's real OSC 9;4 spec, where 0/1/2/3/4 mean normal/running/error/indeterminate/paused, TUIC's consumer (state.rs:3242–3253) only checks one thing: state <code>0</code> always clears the progress value, any other state sets it. A state of <code>2</code> ("error" in the real spec) still just renders as a plain progress bar — there's no error styling.</p>
+      <div class="code">Show 75%:      <span class="esc">\x1b]</span>9;4;1;75<span class="st">\x07</span>
+"Error" 50%:   <span class="esc">\x1b]</span>9;4;2;50<span class="st">\x07</span>  <span class="cmt"># still renders as plain 50% — no error state</span>
+Clear:         <span class="esc">\x1b]</span>9;4;0;0<span class="st">\x07</span></div>
+    </article>
+
+    <!-- ============ OSC 777 — DEEP DETAIL ============ -->
+    <article class="seq deep">
+      <div class="seq-top"><span class="num">OSC 777</span><span class="name">Desktop notification → question detection</span></div>
+      <p>Grammar: <code>\x1b]777;notify;TITLE;BODY&lt;BEL|ST&gt;</code>, matched by <code style="font-family:var(--font-mono)">parse_osc777_notifies()</code> (output_parser.rs:852–883) against the regex <code>\x1b\]777;notify;([^;\x07\x1b]*)(?:;([^\x07\x1b]*))?(?:\x07|\x1b\\)</code>. The text actually tested is the body if it's non-empty, otherwise the title falls back into its place.</p>
+
+      <div class="subtable table-wrap">
+        <table>
+          <caption>Complete keyword list (case-insensitive substring match) — output_parser.rs:873–876</caption>
+          <thead><tr><th>Phrase</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>"needs your permission"</td><td><code>Question&#123;confident: true&#125;</code></td></tr>
+            <tr><td>"approval required"</td><td><code>Question&#123;confident: true&#125;</code></td></tr>
+            <tr><td>"is waiting for your input"</td><td><code>Question&#123;confident: false&#125;</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="detail-note">Nothing else qualifies — including the deliberately excluded "Claude Code needs your attention" (output_parser.rs:834–839), which was dropped on purpose because it also fires on ordinary turn completion, not just real questions.</p>
+
+      <div class="code"><span class="esc">\x1b]</span>777;notify;Approval required;Run rm -rf build/?<span class="st">\x07</span>
+<span class="esc">\x1b]</span>777;notify;Claude needs your permission;<span class="st">\x07</span>
+<span class="esc">\x1b]</span>777;notify;Claude is waiting for your input;<span class="st">\x07</span>
+<span class="esc">\x1b]</span>777;notify;Claude Code needs your attention;<span class="st">\x07</span>  <span class="cmt"># ambiguous — no event at all</span></div>
+
+      <p><strong>End-to-end:</strong> the resulting <code>Question</code> is one input among several — alongside a silence-timer and screen-scrape heuristic in <code>pty.rs</code> — feeding a state machine that flips <code>session.awaiting_input</code> (state.rs:258, 402, 3080–3234). This is <em>not</em> a blocking modal: it surfaces as a session status flag/badge and can trigger a push notification via <code>relay_client.rs</code> (<code>reason: "awaiting_input"</code>).</p>
+      <div class="flow">
+        <span class="step">regex match</span><span class="arrow">→</span>
+        <span class="step">Question{confident}</span><span class="arrow">→</span>
+        <span class="step">awaiting_input = true</span><span class="arrow">→</span>
+        <span class="step">status badge + push notify</span>
+      </div>
+      <p class="flow-note">A <strong>confident</strong> question only clears once the user actually types something. An <strong>unconfident</strong> one auto-retracts on its own (<code>emit_question_cleared_if_stale</code>, pty.rs:3669) once the screen goes quiet with no visible prompt on it.</p>
+    </article>
+
+    <div class="absent-list" style="margin-top:24px;">
+      <h3>Explicitly not handled</h3>
+      <ul>
+        <li><strong>OSC 9</strong> (plain, without <code>;4</code>) — falls through to <code>unhandled()</code>, logged and dropped.</li>
+        <li><strong>OSC 1337</strong> — iTerm2's inline image / file-transfer protocol has no handler anywhere in the codebase.</li>
+        <li><strong>OSC 6, 21</strong> and any other unlisted number — same silent drop via <code>unhandled()</code>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= CSI: cursor & mouse ================= -->
+  <section class="module" id="csi-cursor">
+    <div class="module-head"><h2>Cursor &amp; Mouse</h2></div>
+    <p class="dek">CSI-level behavior, plus the private DEC modes (<code style="font-family:var(--font-mono)">CSI ? Ps h/l</code>) that switch mouse reporting and cursor-key encoding on and off.</p>
+
+    <article class="seq">
+      <div class="seq-top"><span class="num">DECSCUSR</span><span class="name">Cursor style</span></div>
+      <p><code>CSI Ps SP q</code> — sets block, underline, or beam. Odd <code>Ps</code> blinks, even is steady; <code>0</code> resets to the terminal default. (ansi.rs:1765–1780)</p>
+      <div class="code"><span class="esc">\x1b[</span>5 q  <span class="cmt">/* blinking beam */</span></div>
+    </article>
+
+    <article class="seq">
+      <div class="seq-top"><span class="num">DECCKM</span><span class="name">Application cursor keys — mode 1</span></div>
+      <p>When set, arrow keys and Home/End are re-encoded as <code>SS3</code> sequences (<code>ESC O A</code>…) instead of the normal <code>CSI A</code> form, so full-screen apps like vim and less get the encoding they expect. (terminal_grid.rs:1613)</p>
+      <div class="code">Enable:  <span class="esc">\x1b[</span>?1h
+Disable: <span class="esc">\x1b[</span>?1l</div>
+    </article>
+
+    <div class="table-wrap">
+      <table>
+        <caption>Mouse-reporting private modes — ansi.rs:911–936</caption>
+        <thead><tr><th>Mode</th><th>Name</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr><td class="mode">1000</td><td>ReportMouseClicks</td><td>X10/normal click reporting</td></tr>
+          <tr><td class="mode">1002</td><td>ReportCellMouseMotion</td><td>Motion reported while a button is held</td></tr>
+          <tr><td class="mode">1003</td><td>ReportAllMouseMotion</td><td>Every motion event, button or not</td></tr>
+          <tr><td class="mode">1004</td><td>ReportFocusInOut</td><td>Pane focus gained/lost events</td></tr>
+          <tr><td class="mode">1005</td><td>Utf8Mouse</td><td>UTF-8 coordinate encoding</td></tr>
+          <tr><td class="mode">1006</td><td>SgrMouse</td><td>SGR coordinate encoding — what TUIC actually emits on the wire</td></tr>
+          <tr><td class="mode">1007</td><td>AlternateScroll</td><td>Wheel events become arrow keys in the alt screen</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="color:var(--ink-muted); font-size:0.9rem;">No separate urxvt-style (1015) path — the SGR encoding (1006) covers it. A recent fix stopped SGR mouse reports from leaking stray bytes into the input buffer (test: <code style="font-family:var(--font-mono)">sgr_mouse_report_does_not_leak_into_content</code>).</p>
+  </section>
+
+  <!-- ================= Screen modes ================= -->
+  <section class="module" id="modes">
+    <div class="module-head"><h2>Screen &amp; Terminal Modes</h2></div>
+    <p class="dek">The remaining private DEC modes recognized via <code style="font-family:var(--font-mono)">CSI ? Ps h</code> / <code>CSI ? Ps l</code>.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Mode</th><th>Name</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td class="mode">3</td><td>DECCOLM</td><td>80/132 column switch</td></tr>
+          <tr><td class="mode">6</td><td>DECOM</td><td>Origin mode for cursor addressing</td></tr>
+          <tr><td class="mode">7</td><td>DECAWM</td><td>Autowrap at the right margin</td></tr>
+          <tr><td class="mode">12</td><td>—</td><td>Blinking cursor on/off</td></tr>
+          <tr><td class="mode">25</td><td>DECTCEM</td><td>Show/hide the text cursor</td></tr>
+          <tr><td class="mode">1042</td><td>—</td><td>Urgency hint on bell</td></tr>
+          <tr><td class="mode">1049</td><td>—</td><td>Swap to alternate screen, save/restore cursor</td></tr>
+          <tr><td class="mode">2004</td><td>—</td><td>Bracketed paste</td></tr>
+          <tr><td class="mode">2026</td><td>Synchronized update</td><td>Batches a frame's redraws; handled automatically by the renderer</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="absent-list" style="margin-top:20px;">
+      <h3>Explicitly not handled</h3>
+      <ul>
+        <li><strong>DECSCNM</strong> (mode 5) — screen-wide reverse video has no handler. <code>PrivateMode::new</code> has no arm for <code>5</code>, so it resolves to <code>Unknown(5)</code>, and both <code>set_private_mode</code> / <code>unset_private_mode</code> just log <code>"Ignoring unknown mode"</code> and return — there's no screen-level reverse flag anywhere in <code>TermMode</code>. Only the per-cell SGR 7 exists; see <a href="#sgr">Reverse (7)</a>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= SGR ================= -->
+  <section class="module" id="sgr">
+    <div class="module-head"><h2>Color &amp; SGR</h2></div>
+    <p class="dek"><code style="font-family:var(--font-mono)">CSI Ps ; Ps … m</code> — text attributes, built by <code style="font-family:var(--font-mono)">attrs_from_sgr_parameters()</code> (ansi.rs:1884–1970) into the <code>Attr</code> enum (ansi.rs:1149–1200).</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Category</th><th>Supported</th></tr></thead>
+        <tbody>
+          <tr><td>Weight &amp; style</td><td>Bold(1), Dim(2), Italic(3), Blink slow(5)/fast(6), Reverse(7), Hidden(8), Strike(9) — reset codes 21–29 cancel them individually</td></tr>
+          <tr><td>Underline styles</td><td>Colon sub-params, not code 21 — see table below</td></tr>
+          <tr><td>Standard 8/16 color</td><td><code>30–37</code> / <code>90–97</code> fg, <code>40–47</code> / <code>100–107</code> bg — dedicated arms, separate from the indexed/truecolor path</td></tr>
+          <tr><td>Indexed color</td><td><code>38;5;n</code> / <code>48;5;n</code> — 256-color palette</td></tr>
+          <tr><td>Truecolor</td><td><code>38;2;r;g;b</code> / <code>48;2;r;g;b</code> — <code>;</code> or <code>:</code> sub-param separators both accepted (<code>handle_colon_rgb</code>, ansi.rs:1983–1993)</td></tr>
+          <tr><td>Underline color</td><td><code>58</code> sets it, <code>59</code> resets it — stored as its own <code>Attr::UnderlineColor</code>, fully independent of text foreground</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="subtable table-wrap" style="margin-top:18px;">
+      <table>
+        <caption>Underline sub-params — <code>4:n</code>, not the legacy code 21</caption>
+        <thead><tr><th>Code</th><th>Style</th></tr></thead>
+        <tbody>
+          <tr><td class="mode">4</td><td>plain underline</td></tr>
+          <tr><td class="mode">4:0</td><td>cancel</td></tr>
+          <tr><td class="mode">4:2</td><td>double</td></tr>
+          <tr><td class="mode">4:3</td><td>curly (undercurl)</td></tr>
+          <tr><td class="mode">4:4</td><td>dotted</td></tr>
+          <tr><td class="mode">4:5</td><td>dashed</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="detail-note">Because double-underline lives at <code>4:2</code> rather than the legacy code <code>21</code>, TUIC avoids the code-21 ambiguity some terminals carry — <code>21</code> is free to just mean "cancel bold" here.</p>
+
+    <article class="seq" style="margin-top:16px;">
+      <div class="seq-top"><span class="num">Example</span><span class="name">Bold, curly underline, truecolor orange</span></div>
+      <div class="code"><span class="esc">\x1b[</span>1;4:3;38;2;255;95;0mwarning<span class="esc">\x1b[</span>0m</div>
+    </article>
+
+    <article class="seq deep" style="margin-top:16px;">
+      <div class="seq-top"><span class="num">Reverse (7)</span><span class="name">Reverse video &amp; background-color-erase</span></div>
+      <p>SGR 7 sets <code>Flags::INVERSE</code> on the cursor's cell template (<code>Attr::Reverse</code> / <code>Attr::CancelReverse</code> for 27, <code>alacritty_terminal/term/mod.rs:2236–2237</code>); the renderer swaps fg/bg for any cell carrying it — there's no separate "standout" attribute, just this one flag.</p>
+      <p class="detail-note"><strong>Background-color-erase, both halves:</strong> when the pen has Reverse active, erasing (<code>EL</code> / <code>ED</code> / <code>ECH</code> / <code>DCH</code> / <code>ICH</code>) and scroll/insert-line fills carry the reverse flag — and the fg it swaps in — into the blank cells they write, via <code>Cell::erase_blank()</code> (<code>term/cell.rs</code>). Upstream alacritty's erase paths only ever propagated the background color, so <code>tput smso; tput el</code> used to paint a plain gap instead of a highlighted bar to the edge, unlike xterm/VTE. Underline and strikeout deliberately do <em>not</em> ride along the same way — terminals disagree on whether BCE extends those, and picking wrong smears an attribute across erased space instead of just leaving it unhighlighted. Covered by <code>erase_in_line_with_reverse_pen_fills_bar_to_edge</code>, <code>scroll_up_with_reverse_pen_fills_new_row</code>, and <code>erase_chars_and_delete_chars_carry_reverse_pen</code> (terminal_grid.rs).</p>
+      <p class="detail-note">This is cell-level only — there is no screen-wide reverse video. See <strong>DECSCNM</strong> in <a href="#modes">Screen &amp; Terminal Modes</a>.</p>
+      <div class="code">printf 'ab<span class="esc">\e[</span>7m<span class="esc">\e[</span>K'  <span class="cmt"># "ab" plain, then EL under a reverse pen — cols 2.. fill as a highlighted bar to the edge</span></div>
+    </article>
+  </section>
+
+  <!-- ================= DCS ================= -->
+  <section class="module" id="dcs">
+    <div class="module-head"><h2>Device Control Strings</h2></div>
+    <p class="dek"><code style="font-family:var(--font-mono)">hook</code> / <code>put</code> / <code>unhook</code> (ansi.rs:1324–1337) exist only as empty stubs.</p>
+    <div class="absent-list">
+      <h3>Parsed, not acted on</h3>
+      <ul>
+        <li>DCS frames are recognized structurally by <code>vte</code> so the parser doesn't desync, but the payload is discarded.</li>
+        <li>No Sixel graphics, no DECRQSS status reports, no tmux passthrough.</li>
+        <li>No APC (Application Program Command) handling either.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= Deviations ================= -->
+  <section class="module" id="deviations">
+    <div class="module-head"><h2>Deliberate Deviations</h2></div>
+    <p class="dek">Fixes where TUIC diverges from naive spec-following to keep real-world apps usable, per recent commit history.</p>
+
+    <div class="deviation">
+      <span class="tag">Reverse-video erase</span>
+      <p>Vendored alacritty's erase and scroll-fill paths only ever propagated the pen's background color into blank cells — the xterm/VTE background-color-erase convention, but just the background half of it. A pen with SGR 7 active lost the reverse flag (and swapped foreground) on <code>EL</code>/<code>ED</code>/<code>ECH</code>/<code>DCH</code>/<code>ICH</code> and on rows scrolled in while reverse. Patched via <code>Cell::erase_blank()</code> so those blanks carry reverse video too, matching real terminals — see <a href="#sgr">Reverse (7)</a>.</p>
+    </div>
+    <div class="deviation">
+      <span class="tag">Input safety</span>
+      <p>SGR mouse reports (mode 1006) were leaking raw bytes into the pane's typed-input buffer under some timing; the parser now consumes them fully before they can reach line content.</p>
+    </div>
+    <div class="deviation">
+      <span class="tag">Cursor width</span>
+      <p>The cursor cell now widens to cover full double-width glyphs (CJK, emoji) instead of highlighting only the leading half.</p>
+    </div>
+    <div class="deviation">
+      <span class="tag">Cursor keys</span>
+      <p>DECCKM (mode 1) is honored for arrows, Home, and End, and apps are allowed to set the cursor shape themselves rather than TUIC always overriding it.</p>
+    </div>
+    <div class="deviation">
+      <span class="tag">Scroll input</span>
+      <p>Forwarded wheel events are quantized to whole notches and acceleration is capped, so a fast trackpad swipe doesn't flood an app with scroll events.</p>
+    </div>
+  </section>
+
+  <footer>
+    Compiled from <code>src-tauri/patches/vte/src/ansi.rs</code>, <code>src-tauri/patches/alacritty_terminal/src/term/mod.rs</code>, <code>src-tauri/patches/alacritty_terminal/src/term/cell.rs</code>, <code>src-tauri/src/terminal_grid.rs</code>, <code>src-tauri/src/output_parser.rs</code>, <code>src-tauri/src/shell_integration.rs</code>, <code>src-tauri/src/pty.rs</code>, and <code>src-tauri/src/state.rs</code>. Line numbers reflect the state of those files as read for this reference.
+  </footer>
+
+</div>

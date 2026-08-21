@@ -426,6 +426,13 @@ pub struct TerminalGrid {
     last_frame_history_size: Option<usize>,
     last_frame_screen_lines: Option<usize>,
     last_frame_columns: Option<usize>,
+    // Last-sent protocol-mode header bytes (mouse tracking, SGR encoding, focus
+    // reporting, bracketed paste, DECCKM, DECSCUSR, ...). Tracked separately from
+    // the viewport fields above because a mode-only DECSET/DECRST touches no grid
+    // cell, so damage-based dirty tracking alone would miss it — see the comment
+    // in `serialize_dirty_rows` where this is compared.
+    last_frame_keyboard_flags: Option<u8>,
+    last_frame_frame_flags: Option<u8>,
     bell_flag: Arc<AtomicBool>,
     events: Arc<Mutex<Vec<TermEvent>>>,
     /// When true, column resizes reflow scrollback history while leaving the
@@ -477,6 +484,8 @@ impl TerminalGrid {
             last_frame_history_size: None,
             last_frame_screen_lines: None,
             last_frame_columns: None,
+            last_frame_keyboard_flags: None,
+            last_frame_frame_flags: None,
             bell_flag,
             events,
             reflow_history: true,
@@ -1549,6 +1558,11 @@ impl TerminalGrid {
     /// Serialize dirty rows as a compact binary frame.
     ///
     /// Uses alacritty's built-in damage tracking to identify changed rows.
+    /// `num_rows` may legitimately be 0 with a fully-populated header: a
+    /// protocol-mode-only change (mouse tracking, focus reporting, bracketed
+    /// paste, DECSCUSR, DECCKM, a bell) forces a frame even with no damaged
+    /// cells, so the frontend's cached mode bits never lag behind a real
+    /// `TermMode` change waiting on the next visible redraw.
     /// Wire format (22-byte header):
     /// ```text
     /// Header: [num_rows: u16] [cursor_row: u16] [cursor_col: u16] [cursor_visible: u8]
@@ -1630,38 +1644,20 @@ impl TerminalGrid {
             keyboard_flags |= 0x80;
         }
 
-        let viewport_changed = self.last_frame_display_offset != Some(display_offset)
-            || self.last_frame_history_size != Some(history_size)
-            || self.last_frame_screen_lines != Some(num_lines)
-            || self.last_frame_columns != Some(num_cols);
-        if viewport_changed {
-            self.term.mark_fully_damaged();
-        }
-
-        let dirty_lines: Vec<usize> = {
-            let damage = self.term.damage();
-            match damage {
-                TermDamage::Full => (0..num_lines).collect(),
-                TermDamage::Partial(iter) => {
-                    iter.map(|b| b.line).filter(|&l| l < num_lines).collect()
-                }
-            }
-        };
-
-        if dirty_lines.is_empty() {
-            self.term.reset_damage();
-            self.last_frame_display_offset = Some(display_offset);
-            self.last_frame_history_size = Some(history_size);
-            self.last_frame_screen_lines = Some(num_lines);
-            self.last_frame_columns = Some(num_cols);
-            return Vec::new();
-        }
-
-        // Header: 26 bytes
-        let row_count = dirty_lines.len();
-        let estimated = 26 + row_count * (4 + num_cols * 11);
-        let mut buf = Vec::with_capacity(estimated);
-
+        // frame_flags is computed here — BEFORE the damage-based early return
+        // below — because a mode-only DECSET/DECRST (mouse tracking, focus
+        // reporting, bracketed paste) or DECSCUSR touches no grid cell and so
+        // produces no damage. Computing it after the early return (as before)
+        // meant such a change was silently dropped until the next frame that
+        // *did* have dirty rows — for an app that toggles a mode while otherwise
+        // idle, that window can be arbitrarily long. During it the frontend's
+        // cached mouse_mode/sgr_mouse bits are stale, so a click/drag gesture
+        // starting inside the window gets classified against the wrong mode.
+        // This is the root cause behind "double/triple-click select fine in an
+        // agent pane but click-drag doesn't": a short click can complete
+        // entirely inside one stale-but-self-consistent window, while a drag
+        // spans long enough to straddle the next (correct, but late) frame and
+        // flip mode mid-gesture.
         let bell = self.drain_bell();
         let cursor_shape = cursor_style.shape;
         let mut frame_flags: u8 = 0;
@@ -1705,6 +1701,44 @@ impl TerminalGrid {
             frame_flags |= 0x80;
         }
 
+        // A protocol-mode change can't wait for damage (see above) — force a
+        // frame through (possibly zero rows) so the frontend's cached mode
+        // state never lags the real TermMode by more than one tick.
+        let flags_changed = self.last_frame_keyboard_flags != Some(keyboard_flags)
+            || self.last_frame_frame_flags != Some(frame_flags);
+
+        let viewport_changed = self.last_frame_display_offset != Some(display_offset)
+            || self.last_frame_history_size != Some(history_size)
+            || self.last_frame_screen_lines != Some(num_lines)
+            || self.last_frame_columns != Some(num_cols);
+        if viewport_changed {
+            self.term.mark_fully_damaged();
+        }
+
+        let dirty_lines: Vec<usize> = {
+            let damage = self.term.damage();
+            match damage {
+                TermDamage::Full => (0..num_lines).collect(),
+                TermDamage::Partial(iter) => {
+                    iter.map(|b| b.line).filter(|&l| l < num_lines).collect()
+                }
+            }
+        };
+
+        if dirty_lines.is_empty() && !flags_changed {
+            self.term.reset_damage();
+            self.last_frame_display_offset = Some(display_offset);
+            self.last_frame_history_size = Some(history_size);
+            self.last_frame_screen_lines = Some(num_lines);
+            self.last_frame_columns = Some(num_cols);
+            return Vec::new();
+        }
+
+        // Header: 26 bytes
+        let row_count = dirty_lines.len();
+        let estimated = 26 + row_count * (4 + num_cols * 11);
+        let mut buf = Vec::with_capacity(estimated);
+
         buf.extend_from_slice(&(row_count as u16).to_le_bytes());
         buf.extend_from_slice(&(cursor.line.0.max(0) as u16).to_le_bytes());
         buf.extend_from_slice(&(cursor.column.0 as u16).to_le_bytes());
@@ -1735,6 +1769,8 @@ impl TerminalGrid {
         self.last_frame_history_size = Some(history_size);
         self.last_frame_screen_lines = Some(num_lines);
         self.last_frame_columns = Some(num_cols);
+        self.last_frame_keyboard_flags = Some(keyboard_flags);
+        self.last_frame_frame_flags = Some(frame_flags);
         buf
     }
 
@@ -4129,6 +4165,152 @@ mod tests {
             (fg_r1, fg_g1, fg_b1),
             "fg same on wrap"
         );
+    }
+
+    // --- Reverse video (SGR 7) and background-color-erase ---
+    //
+    // These pin two things at once: that `\e[7m` is encoded as ATTR_INVERSE (no
+    // prior test asserted this at all), and that erase/scroll fills now carry the
+    // reverse pen (xterm/VTE background-color-erase), which the vendored
+    // alacritty patch didn't do — see `Cell::erase_blank` in
+    // `patches/alacritty_terminal/src/term/cell.rs`.
+
+    #[test]
+    fn serialize_inverse_attr() {
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"\x1b[7mx\x1b[27my");
+        let buf = grid.serialize_dirty_rows();
+
+        let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
+        let (ch0, _, _, _, _, _, _, attrs0) = decode_cell(&buf, off0);
+        assert_eq!(ch0, 'x');
+        assert_ne!(attrs0 & super::ATTR_INVERSE, 0, "reverse video set");
+
+        let off1 = find_cell_offset(&buf, 0, 1).expect("row 0 col 1 present");
+        let (ch1, _, _, _, _, _, _, attrs1) = decode_cell(&buf, off1);
+        assert_eq!(ch1, 'y');
+        assert_eq!(attrs1 & super::ATTR_INVERSE, 0, "reverse video cancelled");
+    }
+
+    #[test]
+    fn erase_in_line_with_reverse_pen_fills_bar_to_edge() {
+        // `smso; el` on a real terminal paints a highlighted bar to the right
+        // edge — the vendored alacritty erase paths used to drop the pen down to
+        // "background color only", losing the reverse flag. Cursor sits at col 2
+        // after writing "ab", so EL (Right) clears cols 2..10.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"ab\x1b[7m\x1b[K");
+        let buf = grid.serialize_dirty_rows();
+
+        for col in 2..10u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_ne!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "col {col} carries reverse pen"
+            );
+        }
+    }
+
+    #[test]
+    fn erase_in_line_without_reverse_pen_stays_plain() {
+        // Regression guard for the default (non-reverse) path.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"ab\x1b[K");
+        let buf = grid.serialize_dirty_rows();
+
+        for col in 2..10u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_eq!(attrs & super::ATTR_INVERSE, 0, "col {col} stays plain");
+        }
+    }
+
+    #[test]
+    fn scroll_up_with_reverse_pen_fills_new_row() {
+        // Pen is reverse when a new row scrolls into view; that row's blanks must
+        // carry the reverse flag even past where the previous occupant's text
+        // ended (this is the case the widened `ResetDiscriminant` exists for —
+        // `Row::reset` used to only notice a background-color change).
+        let mut grid = TerminalGrid::new(3, 10, 100);
+        let _ = grid.process(b"row0\r\nrow1\r\n\x1b[7m");
+        let _ = grid.process(b"\r\n"); // scroll: pen (reverse) fills the new bottom row
+        grid.force_full_damage();
+        let buf = grid.serialize_dirty_rows();
+
+        let bottom = grid.screen_lines() as u16 - 1;
+        for col in 0..10u16 {
+            let off = find_cell_offset(&buf, bottom, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_ne!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "scrolled-in row col {col} carries reverse pen"
+            );
+        }
+    }
+
+    #[test]
+    fn erase_chars_and_delete_chars_carry_reverse_pen() {
+        // ECH (\e[<n>X) and DCH (\e[<n>P) tails.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"abcde\x1b[1G\x1b[7m\x1b[3X"); // erase 3 chars from col 0
+        let buf = grid.serialize_dirty_rows();
+        for col in 0..3u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_ne!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "erased col {col} carries reverse pen"
+            );
+        }
+
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"abcde\x1b[1G\x1b[7m\x1b[2P"); // delete 2 chars from col 0
+        let buf = grid.serialize_dirty_rows();
+        // delete_chars fills the tail of the row (columns 8..10 for a 10-wide row
+        // after deleting 2).
+        for col in 8..10u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_ne!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "deleted tail col {col} carries reverse pen"
+            );
+        }
+    }
+
+    #[test]
+    fn less_hilite_unread_line_does_not_bleed_past_text() {
+        // Real bytes captured from `less --HILITE-UNREAD` highlighting a line
+        // after `space`/`g` (see plan doc). Pins the reported symptom as
+        // less-correct-behavior: the bar must stop exactly where less's \e[27m
+        // does, and the new background-color-erase fill must not extend it.
+        let mut grid = TerminalGrid::new(5, 80, 0);
+        let _ = grid.process(b"\r\x1b[K\x1b[7mline 30 plain text here\x1b[27m\x1b[m\r\n");
+        let buf = grid.serialize_dirty_rows();
+
+        for col in 0..23u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_ne!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "col {col} is inside the highlighted text"
+            );
+        }
+        for col in 23..80u16 {
+            let off = find_cell_offset(&buf, 0, col).expect("cell present");
+            let (_, _, _, _, _, _, _, attrs) = decode_cell(&buf, off);
+            assert_eq!(
+                attrs & super::ATTR_INVERSE,
+                0,
+                "col {col} is past the text; must not be highlighted"
+            );
+        }
     }
 
     #[test]

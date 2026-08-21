@@ -1479,7 +1479,7 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn insert_blank(&mut self, count: usize) {
         let cursor = &self.grid.cursor;
-        let bg = cursor.template.bg;
+        let blank = Cell::erase_blank(&cursor.template);
 
         // Ensure inserting within terminal bounds
         let count = cmp::min(count, self.columns() - cursor.point.column.0);
@@ -1501,7 +1501,7 @@ impl<T: EventListener> Handler for Term<T> {
         // Cells were just moved out toward the end of the line;
         // fill in between source and dest with blanks.
         for cell in &mut row[source.0..destination] {
-            *cell = bg.into();
+            *cell = blank.clone();
         }
     }
 
@@ -1852,13 +1852,13 @@ impl<T: EventListener> Handler for Term<T> {
         let start = cursor.point.column;
         let end = cmp::min(start + count, Column(self.columns()));
 
-        // Cleared cells have current background color set.
-        let bg = self.grid.cursor.template.bg;
+        // Cleared cells have current background color (and reverse pen) set.
+        let blank = Cell::erase_blank(&self.grid.cursor.template);
         let line = cursor.point.line;
         self.damage.damage_line(line.0 as usize, start.0, end.0);
         let row = &mut self.grid[line];
         for cell in &mut row[start..end] {
-            *cell = bg.into();
+            *cell = blank.clone();
         }
     }
 
@@ -1866,7 +1866,7 @@ impl<T: EventListener> Handler for Term<T> {
     fn delete_chars(&mut self, count: usize) {
         let columns = self.columns();
         let cursor = &self.grid.cursor;
-        let bg = cursor.template.bg;
+        let blank = Cell::erase_blank(&cursor.template);
 
         // Ensure deleting within terminal bounds.
         let count = cmp::min(count, columns);
@@ -1888,7 +1888,7 @@ impl<T: EventListener> Handler for Term<T> {
         // 1 cell.
         let end = columns - count;
         for cell in &mut row[end..] {
-            *cell = bg.into();
+            *cell = blank.clone();
         }
     }
 
@@ -1967,7 +1967,7 @@ impl<T: EventListener> Handler for Term<T> {
         trace!("Clearing line: {mode:?}");
 
         let cursor = &self.grid.cursor;
-        let bg = cursor.template.bg;
+        let blank = Cell::erase_blank(&cursor.template);
         let point = cursor.point;
 
         let (left, right) = match mode {
@@ -1982,7 +1982,7 @@ impl<T: EventListener> Handler for Term<T> {
 
         let row = &mut self.grid[point.line];
         for cell in &mut row[left..right] {
-            *cell = bg.into();
+            *cell = blank.clone();
         }
 
         let range = self.grid.cursor.point.line..=self.grid.cursor.point.line;
@@ -2082,7 +2082,7 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn clear_screen(&mut self, mode: ansi::ClearMode) {
         trace!("Clearing screen: {mode:?}");
-        let bg = self.grid.cursor.template.bg;
+        let blank = Cell::erase_blank(&self.grid.cursor.template);
 
         let screen_lines = self.screen_lines();
 
@@ -2099,7 +2099,7 @@ impl<T: EventListener> Handler for Term<T> {
                 // Clear up to the current column in the current line.
                 let end = cmp::min(cursor.column + 1, Column(self.columns()));
                 for cell in &mut self.grid[cursor.line][..end] {
-                    *cell = bg.into();
+                    *cell = blank.clone();
                 }
 
                 let range = Line(0)..=cursor.line;
@@ -2108,7 +2108,7 @@ impl<T: EventListener> Handler for Term<T> {
             ansi::ClearMode::Below => {
                 let cursor = self.grid.cursor.point;
                 for cell in &mut self.grid[cursor.line][cursor.column..] {
-                    *cell = bg.into();
+                    *cell = blank.clone();
                 }
 
                 if (cursor.line.0 as usize) < screen_lines - 1 {
