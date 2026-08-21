@@ -287,11 +287,16 @@ pub(crate) enum WorktreeStorage {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum OrphanCleanup {
-    /// Auto-remove worktree + prune
+    /// Auto-archive (move aside) worktree + prune. The safe default for unattended cleanup:
+    /// orphan detection is a heuristic (detached HEAD + no branch) that can misfire, so this
+    /// stays recoverable.
     On,
+    /// Auto-delete (hard remove, no archive) worktree + prune. Opt-in only — a deliberate
+    /// choice to skip the archive step entirely.
+    Delete,
     /// Ignore, keep in sidebar
     Off,
-    /// Show toast with Remove/Keep action
+    /// Show toast with Archive/Keep action
     #[default]
     Ask,
 }

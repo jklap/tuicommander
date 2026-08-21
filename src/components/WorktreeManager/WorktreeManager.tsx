@@ -97,12 +97,14 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 		});
 	});
 
+	/** Archives (moves aside) the orphan worktree — recoverable, since orphan detection is a
+	 *  heuristic that can misclassify a worktree that was never actually abandoned. */
 	async function handlePrune(orphan: OrphanRow) {
 		try {
 			await invoke("remove_orphan_worktree", { repoPath: orphan.repoPath, worktreePath: orphan.worktreePath });
 			setOrphanRows((prev) => prev.filter((o) => o.worktreePath !== orphan.worktreePath));
 		} catch (err) {
-			appLogger.warn("git", `Failed to prune orphan worktree ${orphan.worktreePath}`, err);
+			appLogger.warn("git", `Failed to archive orphan worktree ${orphan.worktreePath}`, err);
 		}
 	}
 
@@ -380,8 +382,12 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 									</div>
 									<span />
 									<span />
-									<button class={s.pruneBtn} onClick={() => handlePrune(orphan)}>
-										Prune
+									<button
+										class={s.pruneBtn}
+										onClick={() => handlePrune(orphan)}
+										title="Move this worktree aside into __archived/ — recoverable"
+									>
+										Archive
 									</button>
 								</div>
 							)}

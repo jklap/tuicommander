@@ -59,7 +59,7 @@ Global defaults apply to all repos. Per-repo overrides take precedence when set.
 | **Prompt on create** | On / Off | On |
 | **Delete branch on remove** | On / Off | On |
 | **Auto-archive merged** | On / Off | Off |
-| **Orphan cleanup** | Ask before removing / Auto-remove / Keep | Ask |
+| **Orphan cleanup** | Ask before archiving / Auto-archive / Auto-remove (delete, no archive) / Keep | Ask |
 | **PR merge strategy** | Merge / Squash / Rebase | Merge |
 | **After merge** | Archive / Delete / Ask | Archive |
 

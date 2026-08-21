@@ -80,7 +80,7 @@ describe("useGitOperations", () => {
 		getRepoSummary: vi
 			.fn()
 			.mockResolvedValue({ worktree_paths: {}, merged_branches: [], diff_stats: {}, last_commit_ts: {} }),
-		getRepoStructure: vi.fn().mockResolvedValue({ worktree_paths: {}, merged_branches: [] }),
+		getRepoStructure: vi.fn().mockResolvedValue({ worktree_paths: {}, merged_branches: [], in_progress_worktrees: [] }),
 		getRepoDiffStats: vi.fn().mockResolvedValue({ diff_stats: {}, last_commit_ts: {} }),
 		removeWorktree: vi.fn().mockResolvedValue(undefined),
 		createWorktree: vi.fn(),
@@ -95,7 +95,8 @@ describe("useGitOperations", () => {
 		getMergedBranches: vi.fn().mockResolvedValue(["main"]),
 		checkoutRemoteBranch: vi.fn().mockResolvedValue(undefined),
 		detectOrphanWorktrees: vi.fn().mockResolvedValue([]),
-		removeOrphanWorktree: vi.fn().mockResolvedValue(undefined),
+		removeOrphanWorktree: vi.fn().mockResolvedValue("/wt/__archived/detached-1"),
+		deleteOrphanWorktree: vi.fn().mockResolvedValue(undefined),
 		mergePrViaGithub: vi.fn().mockResolvedValue("abc123sha"),
 		switchBranch: vi
 			.fn()
@@ -1305,10 +1306,13 @@ describe("useGitOperations", () => {
 			merged_branches: string[];
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
+			/** Worktree dirs with a rebase/merge/cherry-pick in progress. Defaults to none. */
+			in_progress_worktrees?: string[];
 		}) {
 			mockRepo.getRepoStructure.mockResolvedValue({
 				worktree_paths: summary.worktree_paths,
 				merged_branches: summary.merged_branches,
+				in_progress_worktrees: summary.in_progress_worktrees ?? [],
 			});
 			mockRepo.getRepoDiffStats.mockResolvedValue({
 				diff_stats: summary.diff_stats,
@@ -1331,6 +1335,56 @@ describe("useGitOperations", () => {
 			const branch = repositoriesStore.get("/repo")?.branches["main"];
 			expect(branch?.additions).toBe(5);
 			expect(branch?.deletions).toBe(3);
+		});
+
+		// The backend keeps a mid-rebase worktree's branch in worktree_paths (it recovers
+		// the pre-rebase branch from git's own state files), so the row and its terminals
+		// are never at risk of removal here. in_progress_worktrees is purely a signal for
+		// the sidebar to show *why* the row looks the way it does.
+		it("marks a branch isRebasing when its worktree has an operation in progress", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt-feature" });
+			const tid = terminalsStore.add(makeTerminal({ name: "T1", cwd: "/repo/wt-feature" }));
+			repositoriesStore.addTerminalToBranch("/repo", "feature", tid);
+
+			mockSummary({
+				worktree_paths: { main: "/repo", feature: "/repo/wt-feature" },
+				merged_branches: [],
+				diff_stats: { "/repo": { additions: 0, deletions: 0 }, "/repo/wt-feature": { additions: 0, deletions: 0 } },
+				last_commit_ts: {},
+				in_progress_worktrees: ["/repo/wt-feature"],
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			expect(branch).toBeDefined();
+			expect(branch?.isRebasing).toBe(true);
+			expect(branch?.terminals).toContain(tid);
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+		});
+
+		it("clears isRebasing once the worktree's operation is no longer in progress", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setBranch("/repo", "feature", {
+				worktreePath: "/repo/wt-feature",
+				isRebasing: true,
+			});
+
+			// Rebase finished — the worktree no longer has an operation in progress.
+			mockSummary({
+				worktree_paths: { main: "/repo", feature: "/repo/wt-feature" },
+				merged_branches: [],
+				diff_stats: { "/repo": { additions: 0, deletions: 0 }, "/repo/wt-feature": { additions: 0, deletions: 0 } },
+				last_commit_ts: {},
+				in_progress_worktrees: [],
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(repositoriesStore.get("/repo")?.branches["feature"]?.isRebasing).toBe(false);
 		});
 
 		it("refreshes the active repo first and caps repo fan-out", async () => {
@@ -2782,10 +2836,10 @@ describe("useGitOperations", () => {
 			await gitOps.refreshAllBranchStats();
 
 			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/detached-1");
-			expect(mockSetStatusInfo).toHaveBeenCalledWith("Removed 1 orphaned worktree(s)");
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Archived 1 orphaned worktree(s)");
 		});
 
-		it("closes terminals in orphan worktree before auto-removing (orphanCleanup=on)", async () => {
+		it("closes terminals in orphan worktree before auto-archiving (orphanCleanup=on)", async () => {
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
@@ -2797,13 +2851,42 @@ describe("useGitOperations", () => {
 
 			expect(mockCloseTerminal).toHaveBeenCalledWith(termInOrphan, true);
 			expect(mockCloseTerminal).not.toHaveBeenCalledWith(termElsewhere, true);
-			// closeTerminal called before the worktree is removed
+			// closeTerminal called before the worktree is archived
 			const closeOrder = mockCloseTerminal.mock.invocationCallOrder[0];
 			const removeOrder = mockRepo.removeOrphanWorktree.mock.invocationCallOrder[0];
 			expect(closeOrder).toBeLessThan(removeOrder);
 		});
 
-		it("asks user before removing when orphanCleanup=ask and user confirms", async () => {
+		it("auto-deletes orphans (no archive) silently when orphanCleanup=delete", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { orphanCleanup: "delete" });
+			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockRepo.deleteOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/detached-1");
+			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Deleted 1 orphaned worktree(s)");
+		});
+
+		it("closes terminals in orphan worktree before auto-deleting (orphanCleanup=delete)", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { orphanCleanup: "delete" });
+			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+
+			const termInOrphan = terminalsStore.add(makeTerminal({ name: "In orphan", cwd: "/wt/detached-1/subdir" }));
+			const termElsewhere = terminalsStore.add(makeTerminal({ name: "Elsewhere", cwd: "/repo" }));
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockCloseTerminal).toHaveBeenCalledWith(termInOrphan, true);
+			expect(mockCloseTerminal).not.toHaveBeenCalledWith(termElsewhere, true);
+			const closeOrder = mockCloseTerminal.mock.invocationCallOrder[0];
+			const deleteOrder = mockRepo.deleteOrphanWorktree.mock.invocationCallOrder[0];
+			expect(closeOrder).toBeLessThan(deleteOrder);
+		});
+
+		it("asks user before archiving when orphanCleanup=ask and user confirms", async () => {
 			const confirmOrphanCleanup = vi.fn().mockResolvedValue(true);
 			const askGitOps = useGitOperations({
 				repo: mockRepo,

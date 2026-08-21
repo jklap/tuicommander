@@ -6,7 +6,7 @@ import { appLogger } from "./appLogger";
 export type WorktreeStorage = "sibling" | "app-dir" | "inside-repo" | "claude-code-default";
 
 /** Orphan worktree cleanup mode — mirrors Rust OrphanCleanup enum */
-export type OrphanCleanup = "on" | "off" | "ask";
+export type OrphanCleanup = "on" | "delete" | "off" | "ask";
 
 /** PR merge strategy — mirrors Rust MergeStrategy enum */
 export type MergeStrategy = "merge" | "squash" | "rebase";

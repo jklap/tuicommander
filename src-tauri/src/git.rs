@@ -1448,6 +1448,11 @@ pub(crate) async fn get_merged_branches(
 pub(crate) struct RepoStructure {
     worktree_paths: HashMap<String, String>,
     merged_branches: Vec<String>,
+    /// Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress.
+    /// Such a worktree already keeps its row (its branch is recovered from git's own state
+    /// files, see `worktree::operation_head_branch`) — this is purely a signal for the
+    /// frontend to show why the row looks the way it does (e.g. a "Rebasing" badge).
+    in_progress_worktrees: Vec<String>,
 }
 
 /// Per-worktree diff stats + last-commit timestamps.
@@ -1608,6 +1613,10 @@ pub(crate) async fn get_repo_structure_impl(
 ) -> Result<RepoStructure, String> {
     // Monitoring slot — see get_repo_summary_impl.
     let _permit = state.monitoring_git_permit().await;
+    let ip_path = repo_path.clone();
+    let in_progress_handle =
+        tokio::task::spawn_blocking(move || crate::worktree::list_in_progress_worktrees(&ip_path));
+
     let mb_path = repo_path.clone();
     let (worktree_paths, merged_branches) = tokio::join!(
         cached_worktree_paths(state, repo_path.clone()),
@@ -1618,9 +1627,17 @@ pub(crate) async fn get_repo_structure_impl(
         ),
     );
 
+    // Best-effort: a worktree listing failure here shouldn't fail the whole structure
+    // snapshot — fall back to "none in progress" rather than surfacing an error.
+    let in_progress_worktrees = in_progress_handle
+        .await
+        .unwrap_or_else(|_| Ok(Vec::new()))
+        .unwrap_or_default();
+
     Ok(RepoStructure {
         worktree_paths: worktree_paths?,
         merged_branches: merged_branches?,
+        in_progress_worktrees,
     })
 }
 

@@ -723,11 +723,12 @@ export const GitHubTab: Component = () => {
 					value={repoDefaultsStore.state.orphanCleanup}
 					onChange={(v) => repoDefaultsStore.setOrphanCleanup(v as OrphanCleanup)}
 					options={[
-						{ value: "ask", label: "Ask before removing" },
-						{ value: "on", label: "Auto-remove" },
+						{ value: "ask", label: "Ask before archiving" },
+						{ value: "on", label: "Auto-archive" },
+						{ value: "delete", label: "Auto-remove (delete, no archive)" },
 						{ value: "off", label: "Keep (mark as detached)" },
 					]}
-					hint="Handle worktrees whose branch was deleted"
+					hint="A worktree whose branch was deleted out from under it. 'Auto-archive' and 'Ask' move it aside (recoverable) since detection is a heuristic that can misfire; 'Auto-remove' deletes it outright with no recovery."
 				/>
 
 				<SettingSelect

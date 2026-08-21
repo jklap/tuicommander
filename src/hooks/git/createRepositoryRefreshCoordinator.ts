@@ -20,13 +20,16 @@ interface RepositoryRefreshCoordinatorDeps {
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, string>;
 			merged_branches: string[];
+			/** Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress. */
+			in_progress_worktrees: string[];
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
 		}>;
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
+		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<string>;
+		deleteOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
 		finalizeMergedWorktree: (
 			repoPath: string,
 			branchName: string,
@@ -195,6 +198,11 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		const worktreePaths = structure.worktree_paths;
 		const mergedSet = new Set(structure.merged_branches);
+		// Worktree dirs with a rebase/merge/cherry-pick/revert/bisect in progress. Such a
+		// worktree already keeps its row (the backend recovers its branch from git's own
+		// state files), so this is purely a signal for the sidebar to show why the row
+		// looks the way it does — the removal logic above never needs to consult it.
+		const inProgressSet = new Set<string>(structure.in_progress_worktrees ?? []);
 
 		const currentRepo = repositoriesStore.get(repoPath);
 		if (!currentRepo) return;
@@ -338,6 +346,10 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					const update: Partial<import("../../stores/repositories").BranchState> = {
 						worktreePath: wtPath,
 						isMerged: mergedSet.has(branchName),
+						// Covers both "rebase just finished" (clear) and "merge conflict
+						// without a detached HEAD" (set, even though the branch stayed in
+						// worktreePaths the whole time).
+						isRebasing: inProgressSet.has(wtPath),
 					};
 					// Branch finished background preparation — clear placeholder state
 					// and queue the deferred setupNewWorktree (setup script, initial
@@ -483,7 +495,14 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		await refreshReposCapped(paths, 4);
 	};
 
-	/** Detect orphaned linked worktrees and act based on the orphanCleanup setting. */
+	/**
+	 * Detect orphaned linked worktrees and act based on the orphanCleanup setting.
+	 * "on" and "ask" archive (move aside) rather than deleting — orphan detection is a
+	 * heuristic (detached HEAD + no branch) that can't distinguish a genuinely deleted
+	 * branch from a worktree left on a detached commit for some other reason, so a false
+	 * positive must stay recoverable. "delete" is a deliberate opt-in to skip that safety
+	 * net entirely.
+	 */
 	let orphanDialogOpen = false;
 	// Orphans the user chose to "Keep" this session — don't nag about them again
 	// on every subsequent refresh/poll. Session-scoped (re-detected on next launch). (#65)
@@ -500,19 +519,21 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		}
 		if (orphanPaths.length === 0) return;
 
-		if (orphanCleanup === "on") {
-			// Auto-remove silently
+		if (orphanCleanup === "on" || orphanCleanup === "delete") {
+			// Auto-cleanup silently — "on" archives, "delete" hard-deletes.
+			const cleanup = orphanCleanup === "delete" ? deps.repo.deleteOrphanWorktree : deps.repo.removeOrphanWorktree;
 			await Promise.allSettled(
 				orphanPaths.map(async (wtPath) => {
 					try {
 						await deps.closeTerminalsInWorktree(wtPath);
-						await deps.repo.removeOrphanWorktree(repoPath, wtPath);
+						await cleanup(repoPath, wtPath);
 					} catch (err) {
-						appLogger.warn("git", `Failed to auto-remove orphan worktree ${wtPath}`, err);
+						appLogger.warn("git", `Failed to auto-clean orphan worktree ${wtPath}`, err);
 					}
 				}),
 			);
-			deps.setStatusInfo(`Removed ${orphanPaths.length} orphaned worktree(s)`);
+			const verb = orphanCleanup === "delete" ? "Deleted" : "Archived";
+			deps.setStatusInfo(`${verb} ${orphanPaths.length} orphaned worktree(s)`);
 			return;
 		}
 
@@ -542,11 +563,11 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					await deps.closeTerminalsInWorktree(wtPath);
 					await deps.repo.removeOrphanWorktree(repoPath, wtPath);
 				} catch (err) {
-					appLogger.warn("git", `Failed to remove orphan worktree ${wtPath}`, err);
+					appLogger.warn("git", `Failed to archive orphan worktree ${wtPath}`, err);
 				}
 			}),
 		);
-		deps.setStatusInfo(`Removed ${pending.length} orphaned worktree(s)`);
+		deps.setStatusInfo(`Archived ${pending.length} orphaned worktree(s)`);
 	};
 
 	/** Archive all merged linked worktrees when the autoArchiveMerged setting is enabled. */

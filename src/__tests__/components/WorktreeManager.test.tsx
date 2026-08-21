@@ -537,7 +537,7 @@ describe("WorktreeManager", () => {
 			expect(orphanBadge?.textContent).toBe("orphan");
 		});
 
-		it("shows prune button on orphan rows", async () => {
+		it("shows archive button on orphan rows", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 
@@ -552,7 +552,7 @@ describe("WorktreeManager", () => {
 			await vi.waitFor(() => {
 				const pruneBtn = container.querySelector("[class*='pruneBtn']");
 				expect(pruneBtn).not.toBeNull();
-				expect(pruneBtn?.textContent).toBe("Prune");
+				expect(pruneBtn?.textContent).toBe("Archive");
 			});
 		});
 
