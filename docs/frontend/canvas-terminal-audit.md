@@ -164,7 +164,7 @@ cell's full text span, since native search points have no subcell index.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Mouse wheel scroll | OK | `terminal_scroll` IPC |
+| Mouse wheel scroll | OK | Pixel-quantized (`canvasTerminalWheel.ts`); scrollback via coalesced `terminal_scroll_to_offset`, app-forwarded via `write_pty` SGR notches |
 | Scrollbar visibility | OK | Shows when `historySize > 0` |
 | Scrollbar thumb drag | OK | Custom implementation |
 | Scrollbar track click-to-position | OK | |
