@@ -988,6 +988,7 @@ re-derived later.
 - Three creation flows: dialog (with base ref dropdown), instant (auto-name), right-click branch (quick-clone with hybrid `{branch}--{random}` name)
 - Base ref selection: choose which branch to start from when creating new worktrees
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup (safe orphan countdown defaults to 10 seconds), PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
+- A worktree with a rebase, merge, cherry-pick, revert, or bisect in progress shows a **Rebasing** badge in the sidebar and is never archived or deleted by the merge cleanup flows (Merge & Archive, auto-archive-merged) — even when confirmed — until the operation is resolved.
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
 - Removal previews distinguish untouched branch history from merged commits, name live sessions, and count uncommitted and untracked files. Automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees.

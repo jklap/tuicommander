@@ -44,6 +44,8 @@ interface RepositoryRefreshCoordinatorDeps {
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, import("../useRepository").WorkspaceWorktree>;
 			merged_branches: string[];
+			/** Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress. */
+			in_progress_worktrees: string[];
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
 			diff_stats: Record<string, { additions: number; deletions: number }>;
@@ -269,6 +271,11 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		const worktreePaths = structure.worktree_paths;
 		const mergedSet = new Set(structure.merged_branches);
+		// Worktree dirs with a rebase/merge/cherry-pick/revert/bisect in progress. Such a
+		// worktree already keeps its row (the backend recovers its branch from git's own
+		// state files), so this is purely a signal for the sidebar to show why the row
+		// looks the way it does — the removal logic above never needs to consult it.
+		const inProgressSet = new Set<string>(structure.in_progress_worktrees ?? []);
 
 		const currentRepo = repositoriesStore.get(repoPath);
 		if (!currentRepo) return;
@@ -449,6 +456,10 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 						branchName: wt.branch,
 						kind: wt.path === repoPath ? "main" : wt.kind,
 						isMerged: mergedSet.has(wt.branch),
+						// Covers both "rebase just finished" (clear) and "merge conflict
+						// without a detached HEAD" (set, even though the branch stayed in
+						// worktreePaths the whole time).
+						isRebasing: inProgressSet.has(wt.path),
 					};
 					repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 				}

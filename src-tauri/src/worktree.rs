@@ -753,6 +753,26 @@ pub(crate) fn finalize_merged_worktree_impl(
     )
 }
 
+/// Refuse an automatic archive when the workspace's checkout has a git operation in
+/// progress (rebase/merge/cherry-pick/revert/bisect). A merge or cherry-pick conflict never
+/// detaches HEAD, and a *clean* mid-bisect or mid-cherry-pick worktree passes the dirtiness
+/// and lifecycle gates, so neither catches this on its own.
+///
+/// A hard error, not `needs_confirmation`: there is no sensible "yes, destroy my in-flight
+/// rebase" answer to offer unattended, so `force` does not bypass it. The delete path needs
+/// no extra check — `tuic_git`'s id-based removal already refuses a busy worktree.
+fn err_if_worktree_busy(base_repo: &Path, workspace_id: &str) -> Result<(), String> {
+    let workspace = resolve_workspace(base_repo, workspace_id)?;
+    if has_operation_in_progress(&workspace.path) {
+        return Err(format!(
+            "Cannot archive worktree for branch '{}': a git operation \
+             (rebase/merge/cherry-pick/revert/bisect) is in progress",
+            workspace.branch
+        ));
+    }
+    Ok(())
+}
+
 /// Both one-click merge cleanup and post-merge finalization use this review
 /// gate. Before the merge, an unmerged commit is expected; afterwards, only
 /// merged work may be cleaned up without an explicit confirmation.
@@ -826,6 +846,7 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
             // show. Resolution here is also still safe to fail — nothing has been
             // mutated yet.
             let branch = resolve_workspace(&base_repo, &workspace_id)?.branch;
+            err_if_worktree_busy(&base_repo, &workspace_id)?;
             let archive_path = archive_worktree(&base_repo, &workspace_id, script.as_deref())?;
             // Archiving moves the worktree out of the repo — as far as the sidebar
             // is concerned the row is gone, same as a delete.
@@ -967,8 +988,8 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
         }
     }
 
-    // 0. Pre-flight: would the cleanup take uncommitted work with it? Both
-    //    "archive" and "delete" end in `git worktree remove --force`, so any
+    // 0. Pre-flight: would the cleanup take uncommitted work with it? Archive moves
+    //    the directory aside and delete removes it outright, but either way any
     //    worktree not known to be clean must be confirmed first — whether or not
     //    the branch carries commits. `commits_ahead` is reported alongside so the
     //    dialog can also say that an empty branch's merge would be a no-op.
@@ -1027,6 +1048,7 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
             // merge subject the caller named, which is not necessarily what this
             // workspace has checked out — the record is.
             let branch = resolve_workspace(&base_repo, &workspace_id)?.branch;
+            err_if_worktree_busy(&base_repo, &workspace_id)?;
             let archive_path = archive_worktree(&base_repo, &workspace_id, script.as_deref())?;
             // Archiving moves the worktree out of the repo — as far as the sidebar
             // is concerned the row is gone, same as a delete.
@@ -1992,6 +2014,76 @@ mod tests {
         .expect("archive");
 
         assert_eq!(res.action, "archived", "no confirmation needed");
+    }
+
+    // --- the busy-worktree guard ---
+    //
+    // A worktree mid-rebase/merge/cherry-pick/revert/bisect must not be archived by the
+    // *automatic* consequences of a merge (Merge & Archive, finalize-after-merge /
+    // auto-archive-merged), even when it is otherwise clean and even with `force: true`
+    // (there is no sensible unattended answer to "destroy my in-flight rebase"). The
+    // delete path is already refused by `tuic_git`'s id-based removal.
+
+    /// Plant a fake in-progress-rebase marker in a linked worktree's admin dir.
+    fn mark_rebase_in_progress(wt: &Path) {
+        let dot_git = fs::read_to_string(wt.join(".git")).expect("read worktree .git file");
+        let admin = PathBuf::from(
+            dot_git
+                .trim()
+                .strip_prefix("gitdir:")
+                .expect("linked worktree gitdir")
+                .trim(),
+        );
+        fs::create_dir_all(admin.join("rebase-merge")).expect("create rebase-merge marker");
+    }
+
+    #[test]
+    fn merge_and_archive_refuses_a_worktree_with_operation_in_progress() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let wt = worktree_with(repo.path(), "feat-busy-merge", true);
+        mark_rebase_in_progress(&wt);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = merge_and_archive_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-busy-merge".to_string(),
+            "feat-busy-merge".to_string(),
+            base,
+            "archive".to_string(),
+            true, // force: even the user's confirmation must not bypass this guard
+        );
+
+        let Err(error) = res else {
+            panic!("a busy worktree must refuse the cleanup");
+        };
+        assert!(error.contains("in progress"), "{error}");
+        assert!(wt.exists(), "the worktree survives untouched");
+    }
+
+    #[test]
+    fn finalize_archive_refuses_a_worktree_with_operation_in_progress() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let wt = worktree_with(repo.path(), "feat-busy-finalize", true);
+        mark_rebase_in_progress(&wt);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-busy-finalize".to_string(),
+            "archive".to_string(),
+            true,
+        );
+
+        let Err(error) = res else {
+            panic!("a busy worktree must refuse the cleanup");
+        };
+        assert!(error.contains("in progress"), "{error}");
+        assert!(wt.exists(), "the worktree survives untouched");
     }
 
     #[test]

@@ -350,13 +350,15 @@ export function useRepository() {
 	async function getRepoStructure(repoPath: string): Promise<{
 		worktree_paths: Record<string, WorkspaceWorktree>;
 		merged_branches: string[];
+		/** Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress. */
+		in_progress_worktrees: string[];
 	}> {
 		try {
 			return await invoke("get_repo_structure", { repoPath });
 		} catch (err) {
 			checkTccError(err, repoPath);
 			appLogger.warn("git", `Failed to get repo structure for ${repoPath}`, err);
-			return { worktree_paths: {}, merged_branches: [] };
+			return { worktree_paths: {}, merged_branches: [], in_progress_worktrees: [] };
 		}
 	}
 
