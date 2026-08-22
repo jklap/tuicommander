@@ -875,7 +875,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let lastScrollbarMarksKey = "";
 
 	function paintScrollbarMarks(totalRows: number) {
-		if (!scrollbarRef || !settingsStore.state.showScrollbarMarks) return;
+		if (!scrollbarRef || !(settingsStore.state.showBlockMarks || settingsStore.state.showPromptMarks)) return;
 		if (!scrollbarMarksContainer) {
 			scrollbarMarksContainer = document.createElement("div");
 			scrollbarMarksContainer.style.cssText =
