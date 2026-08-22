@@ -875,31 +875,48 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let lastScrollbarMarksKey = "";
 
 	function paintScrollbarMarks(totalRows: number) {
-		if (!scrollbarRef || !(settingsStore.state.showBlockMarks || settingsStore.state.showPromptMarks)) return;
+		if (!scrollbarRef) return;
+		const term = terminalsStore.get(props.terminalId);
+		if (!term) return;
+
+		const showBlockMarks = settingsStore.state.showBlockMarks;
+		const showPromptMarks = settingsStore.state.showPromptMarks;
+		const blocks = term.commandBlocks;
+		const promptLines = term.userPromptLines;
+		const searchCount = search.matches.length;
+		const lastBlock = blocks[blocks.length - 1];
+		const lastPrompt = promptLines[promptLines.length - 1];
+
+		// Each toggle's contribution to the key collapses to a fixed placeholder
+		// when that category is hidden, so the key doesn't churn on invisible
+		// changes — but the toggle flip itself always changes the count term
+		// (real count vs. 0), so re-enabling always invalidates the memo even if
+		// blocks/prompts/totalRows are otherwise unchanged since it was hidden.
+		const key =
+			`b${showBlockMarks ? blocks.length : 0}:${showBlockMarks ? (lastBlock?.promptLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.endLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.exitCode ?? "") : ""}` +
+			`:p${showPromptMarks ? promptLines.length : 0}:${showPromptMarks ? (lastPrompt ?? "") : ""}` +
+			`:t${totalRows}` +
+			`:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
+		if (key === lastScrollbarMarksKey) return;
+		lastScrollbarMarksKey = key;
+
 		if (!scrollbarMarksContainer) {
 			scrollbarMarksContainer = document.createElement("div");
 			scrollbarMarksContainer.style.cssText =
 				"position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none";
 			scrollbarRef.appendChild(scrollbarMarksContainer);
 		}
-		const term = terminalsStore.get(props.terminalId);
-		if (!term) return;
-		const blocks = term.commandBlocks;
-		const promptLines = term.userPromptLines;
-		const searchCount = search.matches.length;
-		const showBlocks = blockTimestampsVisible;
-		const key = `${showBlocks ? blocks.length : 0}:${showBlocks ? promptLines.length : 0}:${totalRows}:${showBlocks ? (blocks[blocks.length - 1]?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
-		if (key === lastScrollbarMarksKey) return;
-		lastScrollbarMarksKey = key;
 
 		const trackH = scrollbarTrackHeight;
 		let html = "";
-		if (showBlocks) {
+		if (showBlockMarks) {
 			for (const block of blocks) {
 				const ratio = block.promptLine / totalRows;
 				const color = block.exitCode !== null && block.exitCode !== 0 ? "#f85149" : "rgba(88,166,255,0.5)";
 				html += `<div style="position:absolute;right:0;width:100%;height:2px;top:${ratio * trackH}px;background:${color}"></div>`;
 			}
+		}
+		if (showPromptMarks) {
 			// Dedicated GREEN tick at each line where the USER submitted a prompt
 			// (distinct from the blue/red agent tool-call block ticks above): few,
 			// one per turn. Drawn after the block ticks so it sits on top.
@@ -3242,6 +3259,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		gridRenderer?.invalidateCaches();
 		fullRepaintNeeded = true;
 		remeasure();
+	});
+
+	// Force an immediate scrollbar-marks repaint on toggle — paintScrollbarMarks
+	// is otherwise only invoked from the frame-decode/scroll path, so without
+	// this, flipping a setting wouldn't take visible effect until the next
+	// unrelated repaint.
+	createEffect(() => {
+		settingsStore.state.showBlockMarks;
+		settingsStore.state.showPromptMarks;
+		if (!alive || !currentFrame) return;
+		updateScrollbar(currentFrame);
 	});
 
 	async function copySelection() {

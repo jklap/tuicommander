@@ -56,6 +56,11 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] Manual click-through in a real Claude Code / Ink-based agent pane (the originally reported symptom): click-and-drag over agent output actually extends the app's own text selection instead of doing nothing, and double-click-drag / triple-click-drag extend by word/line respectively.
 - [ ] Manual: Shift+drag (TUIC's local-selection fallback) started while an app has mouse tracking on, then the app toggles mouse tracking off/on mid-drag — selection must not flicker into forwarded-to-app mode or leave stray autoscroll/copy state.
 
+## Scrollbar block/prompt marks respect their own settings independently (2026-08-22/25)
+
+- [ ] **[MANUAL]** With a real terminal open and some command blocks/prompts recorded, flip "Show block marks" and "Show prompt marks" off/on in Settings > Terminal > Blocks with the timestamp overlay (Ctrl+Cmd) NOT held — ticks must appear/disappear immediately, not only while Ctrl+Cmd is held or on the next unrelated repaint.
+- [ ] **[MANUAL]** Open a brand-new shell tab, run one short command (never scroll past one screen), confirm a block tick is visible on the scrollbar track immediately — the track must not be entirely absent as it was before this fix.
+
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 
 `drag::Image` has no "no image" variant, so an unresolvable `icons/drag-file.png`
