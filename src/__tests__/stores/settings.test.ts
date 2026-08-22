@@ -310,6 +310,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ show_block_timestamps: false }),
 				});
 			});
@@ -323,6 +324,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ show_block_marks: false }),
 				});
 			});
@@ -336,6 +338,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ show_prompt_marks: false }),
 				});
 			});
@@ -349,6 +352,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ block_folding_enabled: false }),
 				});
 			});

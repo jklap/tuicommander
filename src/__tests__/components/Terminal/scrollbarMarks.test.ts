@@ -19,7 +19,8 @@ function input(over: Partial<ScrollbarMarksInput> = {}): ScrollbarMarksInput {
 		matchRows: [20, 80],
 		totalRows: 100,
 		trackH: 200,
-		showBlocks: true,
+		showBlockMarks: true,
+		showPromptMarks: true,
 		...over,
 	};
 }
@@ -37,7 +38,7 @@ describe("buildScrollbarMarksHtml", () => {
 	// preference may hide command history; it may not silently disable the feedback
 	// for a search the user just ran.
 	it("keeps search ticks when history markers are off", () => {
-		const html = buildScrollbarMarksHtml(input({ showBlocks: false }));
+		const html = buildScrollbarMarksHtml(input({ showBlockMarks: false, showPromptMarks: false }));
 		expect(countOf(html, SEARCH), "search hits must survive showScrollbarMarks=false").toBe(2);
 		expect(countOf(html, OK) + countOf(html, FAILED), "no block ticks").toBe(0);
 		expect(countOf(html, PROMPT), "no user-prompt ticks").toBe(0);
@@ -49,13 +50,13 @@ describe("buildScrollbarMarksHtml", () => {
 	// the user turned the setting off — returning early instead left them on
 	// screen indefinitely.
 	it("returns an empty overlay with history off and no search", () => {
-		expect(buildScrollbarMarksHtml(input({ showBlocks: false, matchRows: [] }))).toBe("");
+		expect(buildScrollbarMarksHtml(input({ showBlockMarks: false, showPromptMarks: false, matchRows: [] }))).toBe("");
 	});
 
 	it("collapses search hits that round onto the same pixel", () => {
 		// 300 rows over a 10px track: rows 0 and 1 both land on pixel 0.
 		const html = buildScrollbarMarksHtml(
-			input({ showBlocks: false, matchRows: [0, 1, 2, 150], totalRows: 300, trackH: 10 }),
+			input({ showBlockMarks: false, showPromptMarks: false, matchRows: [0, 1, 2, 150], totalRows: 300, trackH: 10 }),
 		);
 		expect(countOf(html, SEARCH)).toBe(2);
 	});
