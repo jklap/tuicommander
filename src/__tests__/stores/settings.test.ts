@@ -222,6 +222,70 @@ describe("settingsStore", () => {
 		});
 	});
 
+	describe("block display settings", () => {
+		it("setShowBlockTimestamps persists show_block_timestamps", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setShowBlockTimestamps(false);
+				expect(store.state.showBlockTimestamps).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ show_block_timestamps: false }),
+				});
+			});
+		});
+
+		it("setShowBlockMarks persists show_block_marks", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setShowBlockMarks(false);
+				expect(store.state.showBlockMarks).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ show_block_marks: false }),
+				});
+			});
+		});
+
+		it("setShowPromptMarks persists show_prompt_marks", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setShowPromptMarks(false);
+				expect(store.state.showPromptMarks).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ show_prompt_marks: false }),
+				});
+			});
+		});
+
+		it("setBlockFoldingEnabled persists block_folding_enabled", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setBlockFoldingEnabled(false);
+				expect(store.state.blockFoldingEnabled).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ block_folding_enabled: false }),
+				});
+			});
+		});
+
+		it("defaults all four to true when absent from the hydrated config", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.state.showBlockTimestamps).toBe(true);
+				expect(store.state.showBlockMarks).toBe(true);
+				expect(store.state.showPromptMarks).toBe(true);
+				expect(store.state.blockFoldingEnabled).toBe(true);
+			});
+		});
+	});
+
 	describe("getFontFamily()", () => {
 		it("returns CSS font family string", () => {
 			testInScope(() => {
