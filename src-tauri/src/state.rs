@@ -1801,6 +1801,20 @@ pub struct SessionMaps {
     /// here suppresses the Inferred-outcome fallback, since the shell-integration
     /// path is authoritative once wired.
     pub(crate) has_osc133_integration: DashMap<String, ()>,
+    /// Sessions that have ever received an OSC 7770 `state=` event. Presence
+    /// here suppresses the `⏺`-heuristic block synthesis, since the
+    /// idle↔busy-edge turn-level block source is authoritative once wired —
+    /// the heuristic only matters for agents without hook instrumentation.
+    pub(crate) has_tuic_state_integration: DashMap<String, ()>,
+    /// Sessions with a pending turn-level failure signal — set by a
+    /// `toolfail` OSC 7770 event (from a `PostToolUseFailure` or `StopFailure`
+    /// hook) or by the `ToolError`/`ApiError` text-pattern fallback. Read and
+    /// cleared at the busy→idle edge (`ChunkProcessor::handle_tuic_state`) to
+    /// decide the closing block's `exit_code` (a red scrollbar tick), and
+    /// also cleared at the *start* of the next turn so a flag that arrives
+    /// too late for the turn it was meant for can't bleed into a later,
+    /// unrelated turn.
+    pub(crate) turn_error_flags: DashMap<String, ()>,
     /// session_id → human alias (e.g. "tc-1", "nr-2"). Assigned on session creation/restore.
     pub(crate) term_aliases: DashMap<String, String>,
     /// Per-prefix counter for alias numbering (e.g. "tc" → 2 means next is tc-3).

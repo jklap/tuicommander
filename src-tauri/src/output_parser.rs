@@ -141,6 +141,11 @@ pub enum ParsedEvent {
         line: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
+        /// The user's submitted prompt text, from `last_prompts` — populated
+        /// only on a turn-level "start" (see `handle_tuic_state`); `None` for
+        /// "end" and for the `⏺`-heuristic fallback, which has no text source.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_text: Option<String>,
     },
     /// Agent failed to start because of a session-id conflict or missing session.
     /// Emitted when Claude Code prints startup errors like

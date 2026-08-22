@@ -3940,15 +3940,19 @@ fn emit_shell_state(state: &crate::state::AppState, session_id: &str, shell_stat
 }
 
 /// Apply an authoritative shell-state marker and emit the new state if it
-/// changed. Shared by OSC 133 A/C and OSC 7770 `state=` handlers.
+/// changed. Shared by OSC 133 A/C and OSC 7770 `state=` handlers. Returns
+/// whether this call caused a real transition (as opposed to a same-state
+/// re-affirmation or a stale/unknown-session no-op) — callers that need to
+/// distinguish a genuine idle↔busy edge from a redundant re-affirmation
+/// (e.g. turn-level block synthesis) use this instead of re-deriving it.
 fn transition_explicit_shell_state(
     state: &crate::state::AppState,
     session_id: &str,
     target: u8,
     label: &str,
     hook_state: bool,
-) {
-    transition_explicit_shell_state_with_hook(state, session_id, target, label, hook_state, || {});
+) -> bool {
+    transition_explicit_shell_state_with_hook(state, session_id, target, label, hook_state, || {})
 }
 
 fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
@@ -3958,7 +3962,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
     label: &str,
     hook_state: bool,
     before_transaction: F,
-) {
+) -> bool {
     // A hook busy/idle transition proves the agent is no longer blocked on a
     // question, so it retracts the awaiting badge. Emit ONLY when a badge is
     // actually set: the badge is sticky state, not a stream, so this is an edge
@@ -3998,7 +4002,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
                     .is_some_and(|session| session.turn_epoch != observed)
             })
         {
-            return;
+            return false;
         }
         if let Some(silence) = silence_guard.as_mut() {
             silence.note_explicit_state(target, hook_state);
@@ -4022,10 +4026,10 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         };
         let prev = match state.session_maps.shell_states.get(session_id) {
             Some(atom) => atom.load(std::sync::atomic::Ordering::Acquire),
-            None => return,
+            None => return false,
         };
         if prev == target {
-            return;
+            return false;
         }
         if prev == SHELL_BUSY
             && target == SHELL_IDLE
@@ -4070,6 +4074,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
             flush_pending_injections_blocking(state, session_id);
         }
     }
+    transitioned
 }
 
 /// Emit an ActiveSubtasks parsed event via both event bus and Tauri IPC.
@@ -4192,6 +4197,78 @@ fn is_cc_tool_call_header(text: &str) -> bool {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     })
+}
+
+/// Synthesize `AgentBlock` start/end events from Claude Code `⏺ ToolName(args)`
+/// tool-call headers — the fallback block source for sessions without hook
+/// instrumentation (see `has_tuic_state_integration`; the turn-level idle↔busy
+/// edge is the primary source and is unconditionally preferred once present).
+///
+/// `end` always carries the *exclusive* upper bound of the block being
+/// closed — the next header's absolute line, or (on agent teardown) one past
+/// the last written row — never the closing block's own start line and never
+/// `abs_line - 1`. `CommandBlock.endLine` is exclusive throughout the
+/// frontend (fold height, block-scoped search), so a block whose `endLine`
+/// equals its own `promptLine` silently breaks folding.
+///
+/// Both branches clamp to `.max(prev + 1)`: once the scrollback ring
+/// saturates, `history_size` stops growing while `row_index` keeps cycling,
+/// so `abs_line` is not globally monotonic — without the clamp a full-screen
+/// redraw could emit `end < start`.
+fn synthesize_cc_block_events(
+    changed_rows: &[crate::state::ChangedRow],
+    history_size: usize,
+    agent_active: bool,
+    teardown_end_line: usize,
+    last_agent_block_line: &mut Option<usize>,
+) -> Vec<ParsedEvent> {
+    let mut events = Vec::new();
+    if !agent_active {
+        if let Some(prev) = last_agent_block_line.take() {
+            events.push(ParsedEvent::AgentBlock {
+                action: "end".into(),
+                line: teardown_end_line.max(prev + 1) as i64,
+                exit_code: None,
+                prompt_text: None,
+            });
+        }
+        return events;
+    }
+    for row in changed_rows {
+        if !is_cc_tool_call_header(&row.text) {
+            continue;
+        }
+        let abs_line = history_size + row.row_index;
+        if Some(abs_line) == *last_agent_block_line {
+            continue;
+        }
+        // The new block's start must never precede the end just emitted for
+        // the block it's closing — otherwise the same scrollback-saturation
+        // regression that requires clamping `end` (see doc comment above)
+        // produces an `end` ahead of an unclamped, regressed `start`,
+        // overlapping the two blocks. Reuse the clamped end line as the new
+        // start whenever there was a previous block to close.
+        let start_line = if let Some(prev) = *last_agent_block_line {
+            let end_line = abs_line.max(prev + 1);
+            events.push(ParsedEvent::AgentBlock {
+                action: "end".into(),
+                line: end_line as i64,
+                exit_code: None,
+                prompt_text: None,
+            });
+            end_line
+        } else {
+            abs_line
+        };
+        events.push(ParsedEvent::AgentBlock {
+            action: "start".into(),
+            line: start_line as i64,
+            exit_code: None,
+            prompt_text: None,
+        });
+        *last_agent_block_line = Some(start_line);
+    }
+    events
 }
 
 /// Emit an `Inferred` command outcome for shells that don't speak OSC 133.
@@ -4462,6 +4539,31 @@ fn completion_adjusted_screen_activity(
     }
 }
 
+/// If the silence timer's tool-error candidate has genuinely fired (turn-ending,
+/// not recovered — see `SilenceState::check_tool_error`), flag the currently-open
+/// turn-level block (the fallback-tier red-tick signal, for non-hook-instrumented
+/// agents or hook-instrumented ones without `jq`) and emit the `ToolError` event.
+/// Only fires post-`check_tool_error()`, not at the raw `mark_tool_error_candidate`
+/// call, so a *recovered* error (the agent retries and the turn ends normally)
+/// never flags. Extracted from `spawn_silence_timer`'s loop body for testability.
+fn fire_tool_error_if_ready(silence: &Mutex<SilenceState>, session_id: &str, state: &AppState) {
+    let Some(text) = silence.lock().check_tool_error() else {
+        return;
+    };
+    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+    let parsed = ParsedEvent::ToolError { matched_text: text };
+    if let Ok(json) = serde_json::to_value(&parsed) {
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
+        }
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: json.into(),
+        });
+    }
+}
+
 /// Spawn the silence-detection timer thread. Shared by desktop and headless readers.
 ///
 /// Two strategies run in priority order:
@@ -4616,19 +4718,7 @@ fn spawn_silence_timer(
 
             // Tool-error turn-end: `Error: Exit code N` + silence = fire playError.
             // Checked before question detection — a tool error is not a question.
-            if let Some(text) = silence.lock().check_tool_error() {
-                let parsed = ParsedEvent::ToolError { matched_text: text };
-                if let Ok(json) = serde_json::to_value(&parsed) {
-                    #[cfg(feature = "desktop")]
-                    if let Some(app) = state.app_handle.read().as_ref() {
-                        let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
-                    }
-                    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
-                        session_id: session_id.clone(),
-                        parsed: json.into(),
-                    });
-                }
-            }
+            fire_tool_error_if_ready(&silence, &session_id, &state);
 
             // Suggest turn-end: drain parked `suggest:` items once the shell
             // has transitioned to IDLE. The reader parks them at parse time
@@ -4933,9 +5023,18 @@ fn clean_action_required_title(title: &str) -> String {
 /// - `awaiting` → confident `Question` (sets `awaiting_input` + `question_confident`)
 /// - `busy`     → `UserInput` clear (hook busy is authoritative — clears an awaiting
 ///   set by a prior `PreToolUse(AskUserQuestion)`; empty content never overwrites
-///   `last_prompt`)
+///   `last_prompt`) — only on a *real* idle→busy edge (`busy_transitioned`), not on
+///   every redundant busy re-affirmation. `claude_hook_map()` still has a narrow
+///   `PostToolUse(AskUserQuestion|ExitPlanMode)` busy re-affirmation (deliberately
+///   kept, to clear the awaiting state) that would otherwise re-fire this on every
+///   turn using those tools, duplicating the green "you submitted a prompt"
+///   scrollbar tick.
 /// - anything else (incl. `idle`, unknown) → `None`
-fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
+fn tuic_state_awaiting_event(
+    payload: &str,
+    line: i64,
+    busy_transitioned: bool,
+) -> Option<ParsedEvent> {
     match payload {
         "awaiting" => Some(ParsedEvent::Question {
             prompt_text: String::new(),
@@ -4944,7 +5043,7 @@ fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
         // `line` is the absolute prompt row (history_size + cursor row) at the
         // busy transition — the row the user's submitted prompt sits on. Carried
         // so the frontend can mark user-prompt lines on the scrollbar.
-        "busy" => Some(ParsedEvent::UserInput {
+        "busy" if busy_transitioned => Some(ParsedEvent::UserInput {
             content: String::new(),
             line,
         }),
@@ -5203,14 +5302,64 @@ impl ChunkProcessor {
         }
     }
 
-    /// Handle OSC 7770 `state=idle|busy` from the TUIC protocol.
-    fn handle_tuic_state(&self, payload: &str, session_id: &str, state: &AppState) {
+    /// Handle OSC 7770 `state=idle|busy` from the TUIC protocol. Returns
+    /// whether this was a real transition (used by the caller to gate the
+    /// sibling `UserInput`/green-tick emission in `tuic_state_awaiting_event`,
+    /// which is a separate consumer of the same OSC event) and, on a real
+    /// idle↔busy edge, the `AgentBlock` marking a turn-level command block's
+    /// start/end — the primary block source for any hook-instrumented
+    /// session, matching the original one-block-per-prompt+output-cycle
+    /// design intent independent of the agent's terminal rendering.
+    fn handle_tuic_state(
+        &self,
+        payload: &str,
+        session_id: &str,
+        line: i64,
+        state: &AppState,
+    ) -> (bool, Option<ParsedEvent>) {
         let (target, label) = match payload {
             "idle" => (SHELL_IDLE, "idle"),
             "busy" => (SHELL_BUSY, "busy"),
-            _ => return,
+            _ => return (false, None),
         };
-        transition_explicit_shell_state(state, session_id, target, label, true);
+        let transitioned = transition_explicit_shell_state(state, session_id, target, label, true);
+        if !transitioned {
+            return (false, None);
+        }
+        let block_event = match target {
+            SHELL_BUSY => {
+                // Clear any stale flag left over from the previous turn. The
+                // ToolError/ApiError fallback tier is gated by a 5s silence
+                // threshold (SILENCE_TOOL_ERROR_THRESHOLD) that typically
+                // fires well after the hook-driven Stop/idle transition
+                // already read-and-cleared turn_error_flags (finding it
+                // still empty) for a hook-instrumented session — without
+                // this, that belated flag would incorrectly attach to
+                // whichever turn happens to be running when it finally sets.
+                state.session_maps.turn_error_flags.remove(session_id);
+                Some(ParsedEvent::AgentBlock {
+                    action: "start".into(),
+                    line,
+                    exit_code: None,
+                    prompt_text: last_prompt_text(state, session_id),
+                })
+            }
+            SHELL_IDLE => {
+                // Read-and-clear: a flag set by a `toolfail` OSC event (from a
+                // PostToolUseFailure or StopFailure hook) or the ToolError/ApiError
+                // text-pattern fallback becomes this block's red-tick exit code.
+                // Cleared unconditionally so it never leaks into the next turn.
+                let flagged = state.session_maps.turn_error_flags.remove(session_id).is_some();
+                Some(ParsedEvent::AgentBlock {
+                    action: "end".into(),
+                    line,
+                    exit_code: if flagged { Some(1) } else { None },
+                    prompt_text: None,
+                })
+            }
+            _ => None,
+        };
+        (true, block_event)
     }
 
     /// Handle a single OSC 133 event from the VTE handler.
@@ -5817,8 +5966,27 @@ impl ChunkProcessor {
                             // ignored here (it's a separate field). The awaiting_input
                             // field is driven by Question/UserInput events instead.
                             explicit_idle_in_chunk |= payload == "idle";
-                            self.handle_tuic_state(&payload, session_id, state);
-                            if let Some(evt) = tuic_state_awaiting_event(&payload, line as i64) {
+                            // Presence of any state event at all (not just idle/busy)
+                            // proves this session's hook (or whatever emits OSC 7770)
+                            // is wired up — suppresses the `⏺` heuristic fallback.
+                            // Guard the insert: this event repeats for the rest of the
+                            // session's life (UserPromptSubmit, every PreToolUse/
+                            // PostToolUse, Stop...), so skip the allocation + DashMap
+                            // write lock once it's already set.
+                            if !state.session_maps.has_tuic_state_integration.contains_key(session_id) {
+                                state
+                                    .session_maps
+                                    .has_tuic_state_integration
+                                    .insert(session_id.to_string(), ());
+                            }
+                            let (transitioned, block_event) =
+                                self.handle_tuic_state(&payload, session_id, line as i64, state);
+                            if let Some(evt) = block_event {
+                                tuic_events.push(evt);
+                            }
+                            if let Some(evt) =
+                                tuic_state_awaiting_event(&payload, line as i64, transitioned)
+                            {
                                 tuic_events.push(evt);
                             }
                         }
@@ -5863,8 +6031,20 @@ impl ChunkProcessor {
                                     action,
                                     line: line as i64,
                                     exit_code,
+                                    prompt_text: None,
                                 });
                             }
+                        }
+                        "toolfail" => {
+                            // From a PostToolUseFailure hook (payload = the jq-extracted
+                            // exit code, or CC's own fallback sentinel if jq/extraction
+                            // failed) or a StopFailure hook (payload = a fixed sentinel —
+                            // the event firing at all, rather than Stop, is itself the
+                            // failure signal). Presence is all that matters — read and
+                            // cleared as an arbitrary non-zero sentinel exit code at the
+                            // next busy→idle edge in `handle_tuic_state`; the actual
+                            // payload value is intentionally never parsed here.
+                            state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
                         }
                         _ => {}
                     },
@@ -5997,39 +6177,39 @@ impl ChunkProcessor {
                 .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
         );
 
-        // Heuristic agent-block detection for Claude Code tool calls.
-        // CC renders tool calls as `⏺ ToolName(args)` — detect these and
-        // synthesize AgentBlock start/end events so the block system works
-        // without CC emitting OSC 7770;block= sequences.
-        if !agent_active_for_parse && let Some(prev) = self.last_agent_block_line.take() {
-            events.push(ParsedEvent::AgentBlock {
-                action: "end".into(),
-                line: prev as i64,
-                exit_code: None,
-            });
-        }
-        if agent_active_for_parse {
-            for row in &changed_rows {
-                if is_cc_tool_call_header(&row.text) {
-                    let abs_line = history_size + row.row_index;
-                    if Some(abs_line) == self.last_agent_block_line {
-                        continue;
-                    }
-                    if let Some(prev) = self.last_agent_block_line {
-                        events.push(ParsedEvent::AgentBlock {
-                            action: "end".into(),
-                            line: prev as i64,
-                            exit_code: None,
-                        });
-                    }
-                    events.push(ParsedEvent::AgentBlock {
-                        action: "start".into(),
-                        line: abs_line as i64,
-                        exit_code: None,
-                    });
-                    self.last_agent_block_line = Some(abs_line);
-                }
+        // Heuristic agent-block detection for Claude Code tool calls — the
+        // fallback source for sessions without hook instrumentation. Once a
+        // session has ever received an OSC 7770 `state=` event, the
+        // idle↔busy-edge turn-level source (handle_tuic_state) is
+        // authoritative and this is suppressed so the two can't produce
+        // conflicting blocks.
+        if state.session_maps.has_tuic_state_integration.contains_key(session_id) {
+            // Suppression can activate mid-turn (e.g. the hook installs a
+            // beat after a `⏺` header already opened a heuristic block, since
+            // UserPromptSubmit's busy event is the common but not only path
+            // to setting this flag). Without this, that block would stay
+            // open forever — never folded, no exit code, no scrollbar tick —
+            // since the heuristic that alone can close it never runs again.
+            // Close it now, at the current cursor position, then let the
+            // primary source take over for everything after.
+            if let Some(prev) = self.last_agent_block_line.take() {
+                let close_line = history_size + cursor_row.map_or(0, |r| r + 1);
+                events.push(ParsedEvent::AgentBlock {
+                    action: "end".into(),
+                    line: close_line.max(prev + 1) as i64,
+                    exit_code: None,
+                    prompt_text: None,
+                });
             }
+        } else {
+            let teardown_end_line = history_size + cursor_row.map_or(0, |r| r + 1);
+            events.extend(synthesize_cc_block_events(
+                &changed_rows,
+                history_size,
+                agent_active_for_parse,
+                teardown_end_line,
+                &mut self.last_agent_block_line,
+            ));
         }
 
         // The snapshot was refilled once inside the vt_log lock scope above and
@@ -6184,6 +6364,14 @@ impl ChunkProcessor {
                 }
                 ParsedEvent::Suggest { .. } => {
                     state.note_marker(session_id, crate::state::MarkerKind::Suggest)
+                }
+                // Fallback-tier red-tick signal, alongside ToolError: flags the
+                // currently-open turn-level block. No recovery-awareness here (unlike
+                // ToolError's silence-timer gate) — a self-recovered API retry loop
+                // still flags the block, a minor documented over-flagging risk.
+                // Already excluded above during startup grace via `suppress_this`.
+                ParsedEvent::ApiError { .. } => {
+                    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
                 }
                 _ => {}
             }
@@ -6804,7 +6992,13 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // Input mode and shell integration describe the process that just died.
     state.session_maps.slash_mode.remove(session_id);
     state.session_maps.last_input_ms.remove(session_id);
+    // These three integration/flag markers must not leak — every session that
+    // ever spoke OSC 133 or OSC 7770 left a permanent dead entry keyed by its
+    // UUID otherwise, on both this path and the explicit close/kill path
+    // (`cleanup_session`, which composes this function).
     state.session_maps.has_osc133_integration.remove(session_id);
+    state.session_maps.has_tuic_state_integration.remove(session_id);
+    state.session_maps.turn_error_flags.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.session_maps.shell_state_since_ms.remove(session_id);
     // A peer that announced its own `$TUIC_SESSION` is filed under that identity,
@@ -8799,6 +8993,14 @@ pub(crate) fn record_submitted_line(
             .session_maps
             .last_prompts
             .insert(session_id.to_string(), content.clone());
+    } else {
+        // Keep last_prompts in sync with the actual last submission rather
+        // than leaving a stale value in place: without this, a short
+        // follow-up ("fix it") would inherit the previous turn's prompt text
+        // for both consumers (get_last_prompt, and AgentBlock.prompt_text at
+        // the busy edge in handle_tuic_state) instead of correctly having
+        // none.
+        state.session_maps.last_prompts.remove(session_id);
     }
     let parsed = ParsedEvent::UserInput { content, line };
     if let Ok(json) = serde_json::to_value(&parsed).map(std::sync::Arc::new) {
@@ -9678,6 +9880,15 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
     }
 }
 
+
+/// Shared lookup for `last_prompts`, kept in one place so the IPC-exposed
+/// getter (`get_last_prompt`, `pty/commands.rs`) and the internal consumer
+/// (`ChunkProcessor::handle_tuic_state`'s `AgentBlock.prompt_text`) can't drift
+/// if the lookup semantics ever change (trimming, a different word-count
+/// threshold, etc.).
+pub(crate) fn last_prompt_text(state: &AppState, session_id: &str) -> Option<String> {
+    state.session_maps.last_prompts.get(session_id).map(|v| v.clone())
+}
 /// Shared resize core for the Tauri command and the HTTP route (story 056-7545).
 ///
 /// Order matters: the grid must adopt the new dimensions BEFORE the PTY ioctl

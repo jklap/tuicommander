@@ -387,11 +387,7 @@ pub(crate) fn get_last_prompt(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Option<String> {
-    state
-        .session_maps
-        .last_prompts
-        .get(&session_id)
-        .map(|v| v.clone())
+    crate::pty::last_prompt_text(&state, &session_id)
 }
 
 /// Get the current shell state for a PTY session.
