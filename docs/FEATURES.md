@@ -185,17 +185,31 @@
 
 ### 1.19 Command Blocks
 
-Terminal output is segmented into command blocks — one per prompt+output cycle. Blocks are detected via OSC 133 shell integration markers (A/C/D sequences) or OSC 7770;block= agent-emitted markers. For Claude Code, heuristic detection synthesizes blocks from tool call headers (`⏺ ToolName(args)`).
+Terminal output is segmented into command blocks — one per prompt+output cycle. Blocks come from
+two sources:
 
-- **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary. Provides a visual map of command history at a glance
-- **User-prompt scrollbar markers** — A distinct green tick on the scrollbar marks each line where the user submitted a prompt to the agent (recorded from the OSC 7770 `state=busy` transition via `userPromptLines`). These are separate from command-block boundary marks and help you quickly locate your own prompts in long sessions
+- **Primary — the agent's own busy/idle hook signal.** For any agent TUICommander installs hooks
+  for (Claude Code, and others via their own hook maps), a block starts on the idle→busy edge and
+  ends on the matching busy→idle edge — one block per turn, regardless of how many tool calls the
+  turn makes. The block's prompt text is populated from the keystrokes that submitted it (only
+  for prompts of 10 words or more — shorter prompts leave it untitled; the block itself is
+  unaffected).
+- **Fallback — `⏺` tool-header heuristic.** For agents without hook instrumentation, blocks are
+  synthesized per tool call from `⏺ ToolName(args)`-style headers. This granularity is coarser
+  (one block per tool call, not per turn) and never has prompt text.
+
+A session only ever uses one source: once it's received a hook-driven signal, the heuristic is
+suppressed for that session.
+
+- **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary, always on. A distinct green tick marks each line where the user submitted a prompt, independent of the block boundary marks. Both are individually toggleable in settings
+- **Red ticks (turn failure)** — A block is flagged failed, primary tier: the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type, requires `jq` on `PATH`); fallback tier for sessions without a hook or without `jq`: text-pattern matching on `⎿ Error: Exit code N` (Bash tool call failures only) or a detected API error. A tool failure the agent itself recovers from and retries successfully does not flag the block
 - **Timestamp overlay** — Hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
 - **Gutter click** — Click the gutter area to select the entire block output for easy copying
-- **Block folding** — Collapse/expand block output with `Cmd+Shift+.` toggle. Folded blocks show a summary line. Backend stores fold state per session via `set_block_fold` Tauri command
+- **Block folding** — Collapse/expand block output with `Cmd+Shift+.` toggle. Folded blocks show a summary line. Fold state is in-memory per session (not persisted across restarts)
 - **Block-scoped search** — Toggle with `Cmd+Shift+B` to restrict terminal search to the current block only
 - **Block navigation** — `Cmd+Shift+Up/Down` jumps between block boundaries
 - **Block cap** — Sessions are capped at 500 command blocks; oldest blocks are evicted when the cap is reached
-- **Settings** — Configure block features at Settings > Terminal > Blocks: show/hide timestamps, enable/disable folding
+- **Settings** — Configure block features at Settings > Terminal > Blocks: show/hide timestamps, show/hide block marks, show/hide prompt marks, enable/disable folding
 
 ### 1.20 Compose Panel (`Cmd+I`)
 
