@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Settings > Terminal: Show block marks / Show prompt marks** — The block (blue/red) and user-prompt (green) scrollbar ticks can now be toggled independently, under the existing **Show scrollbar marks** master toggle (expert settings).
+- **Command blocks can be flagged as failed (red tick)** — Primary signal is the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type, no external dependency — extracted natively by the `tuic-hook` binary) — this tier flags the block on any tool failure during the turn, even one a later retry in the same turn resolves, since Claude Code exposes no per-call retry-succeeded signal to clear it against. A text-pattern fallback (`ToolError`/`ApiError`, Bash-only) covers sessions without hook instrumentation, and *is* recovery-aware there: a failure the agent retries and resolves before the turn ends does not flag the block.
+- **Command blocks carry the submitted prompt text** — For hook-driven blocks, `promptText` is populated from the keystrokes that submitted the turn (10+ words; shorter prompts are left untitled) and shown in Command Overview.
+
 ### Fixed
 - **Erasing or scrolling while a reverse-video pen was active dropped the highlight instead of extending it** — `EL`/`ED`/`ECH`/`DCH`/`ICH` and scroll/insert-line fills only ever propagated the pen's background color into the blank cells they wrote (background-color-erase, but only the background half of it), so `tput smso; tput el` painted a plain gap instead of a highlighted bar to the edge, unlike xterm/VTE. Blank cells now also carry the pen's reverse flag and swapped foreground; underline and strikeout deliberately do not ride along, since terminals disagree on whether background-color-erase extends those.
 - **TUIC's own scrollback could accelerate past 5x on a long momentum fling** — The wheel/touch gesture-acceleration ramp had no upper bound and never reset on direction reversal, so scrolling back after an outbound fling stayed accelerated by distance traveled in the opposite direction. The ramp is now capped at 2x and restarts whenever the gesture changes direction.
