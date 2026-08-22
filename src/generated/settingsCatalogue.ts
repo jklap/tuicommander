@@ -1428,7 +1428,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "block_folding_enabled",
-      "order": 81,
+      "order": 83,
       "path": "/block_folding_enabled",
       "labelKey": "settings.catalogue.app.block_folding_enabled.label",
       "helpKey": "settings.catalogue.app.block_folding_enabled.help",
@@ -1708,7 +1708,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 88,
+      "order": 90,
       "path": "/custom_launchers/{id}/args",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.args.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.args.help",
@@ -1742,7 +1742,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 89,
+      "order": 91,
       "path": "/custom_launchers/{id}/enabled",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.enabled.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.enabled.help",
@@ -1773,7 +1773,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 87,
+      "order": 89,
       "path": "/custom_launchers/{id}/executable",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.executable.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.executable.help",
@@ -1801,7 +1801,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 85,
+      "order": 87,
       "path": "/custom_launchers/{id}/id",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.id.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.id.help",
@@ -1828,7 +1828,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 86,
+      "order": 88,
       "path": "/custom_launchers/{id}/name",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.name.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.name.help",
@@ -1856,7 +1856,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 90,
+      "order": 92,
       "path": "/custom_launchers/{id}/platform",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.platform.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.platform.help",
@@ -2392,7 +2392,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "index_memory_budget_mb",
-      "order": 83,
+      "order": 85,
       "path": "/index_memory_budget_mb",
       "labelKey": "settings.catalogue.app.index_memory_budget_mb.label",
       "helpKey": "settings.catalogue.app.index_memory_budget_mb.help",
@@ -2426,7 +2426,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "index_strategy",
-      "order": 82,
+      "order": 84,
       "path": "/index_strategy",
       "labelKey": "settings.catalogue.app.index_strategy.label",
       "helpKey": "settings.catalogue.app.index_strategy.help",
@@ -2472,7 +2472,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "inline_blame_enabled",
-      "order": 91,
+      "order": 93,
       "path": "/inline_blame_enabled",
       "labelKey": "settings.catalogue.app.inline_blame_enabled.label",
       "helpKey": "settings.catalogue.app.inline_blame_enabled.help",
@@ -3658,6 +3658,38 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "app.show_block_marks": {
+      "id": "app.show_block_marks",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "show_block_marks",
+      "order": 81,
+      "path": "/show_block_marks",
+      "labelKey": "settings.catalogue.app.show_block_marks.label",
+      "helpKey": "settings.catalogue.app.show_block_marks.help",
+      "label": "show block marks",
+      "schema": {
+        "description": "Draw command-block boundary tick marks (blue/red) on the terminal scrollbar.\nFrontend-gated.",
+        "type": "boolean",
+        "default": true
+      },
+      "nullable": false,
+      "default": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates show block marks for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "app.show_block_timestamps": {
       "id": "app.show_block_timestamps",
       "store": "app",
@@ -3715,6 +3747,38 @@ export const settingsCatalogue = {
       "sensitivity": "public",
       "apply": "live",
       "effect": "Updates show last prompt for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.show_prompt_marks": {
+      "id": "app.show_prompt_marks",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "show_prompt_marks",
+      "order": 82,
+      "path": "/show_prompt_marks",
+      "labelKey": "settings.catalogue.app.show_prompt_marks.label",
+      "helpKey": "settings.catalogue.app.show_prompt_marks.help",
+      "label": "show prompt marks",
+      "schema": {
+        "description": "Draw a tick mark on the terminal scrollbar for each line where the user\nsubmitted a prompt. Frontend-gated.",
+        "type": "boolean",
+        "default": true
+      },
+      "nullable": false,
+      "default": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates show prompt marks for the current owner.",
       "operations": [
         "get",
         "set",
@@ -3802,7 +3866,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "standby_timeout_minutes",
-      "order": 84,
+      "order": 86,
       "path": "/standby_timeout_minutes",
       "labelKey": "settings.catalogue.app.standby_timeout_minutes.label",
       "helpKey": "settings.catalogue.app.standby_timeout_minutes.help",
@@ -4066,7 +4130,7 @@ export const settingsCatalogue = {
       "schema": {
         "description": "Update channel: \"stable\", \"beta\" or \"nightly\"",
         "type": "string",
-        "default": "stable",
+        "default": "beta",
         "enum": [
           "stable",
           "beta",
@@ -4074,7 +4138,7 @@ export const settingsCatalogue = {
         ]
       },
       "nullable": false,
-      "default": "stable",
+      "default": "beta",
       "availability": {
         "status": "available"
       },
