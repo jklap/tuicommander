@@ -4,8 +4,12 @@ import { type CommandBlock, terminalsStore } from "../../stores/terminals";
 import { onClickKeyDown } from "../../utils/a11y";
 import s from "./CommandOverview.module.css";
 
-/** Extract command text from a block using the terminal's buffer lines */
+/** Extract command text from a block: prefer the turn-level `promptText` (the
+ *  actual submitted prompt, from the backend's idle→busy edge) when present,
+ *  falling back to slicing the grid between the row markers — the only text
+ *  source a real shell block or the `⏺`-heuristic fallback has. */
 async function getCommandText(termId: string, block: CommandBlock): Promise<string> {
+	if (block.promptText != null) return block.promptText;
 	if (block.commandLine == null || block.executionLine == null) return "";
 	const term = terminalsStore.get(termId);
 	const ref = term?.ref;

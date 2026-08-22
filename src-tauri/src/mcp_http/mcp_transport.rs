@@ -7092,6 +7092,8 @@ mod tests {
             session_knowledge: dashmap::DashMap::new(),
             knowledge_dirty: dashmap::DashMap::new(),
             has_osc133_integration: dashmap::DashMap::new(),
+            has_tuic_state_integration: dashmap::DashMap::new(),
+            turn_error_flags: dashmap::DashMap::new(),
             file_sandboxes: dashmap::DashMap::new(),
             unrestricted_sessions: dashmap::DashMap::new(),
             #[cfg(unix)]

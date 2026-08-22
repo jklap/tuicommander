@@ -2185,6 +2185,8 @@ mod tests {
             session_knowledge: DashMap::new(),
             knowledge_dirty: DashMap::new(),
             has_osc133_integration: DashMap::new(),
+            has_tuic_state_integration: DashMap::new(),
+            turn_error_flags: DashMap::new(),
             file_sandboxes: DashMap::new(),
             unrestricted_sessions: DashMap::new(),
             #[cfg(unix)]

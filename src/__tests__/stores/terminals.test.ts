@@ -104,6 +104,53 @@ describe("terminalsStore", () => {
 		});
 	});
 
+	describe("handleOsc133() promptText", () => {
+		it("carries promptText through on a turn-level block start", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "A", 10, undefined, "please refactor the parser");
+				expect(store.get(id)!.activeBlock?.promptText).toBe("please refactor the parser");
+			});
+		});
+
+		it("defaults promptText to null when not provided (real shell / heuristic blocks)", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "A", 10);
+				expect(store.get(id)!.activeBlock?.promptText).toBeNull();
+			});
+		});
+
+		it("preserves promptText from start through to the completed block on D", () => {
+			// The completed block goes through a requestAnimationFrame-scheduled
+			// flush (_scheduleOsc133Flush) before landing in commandBlocks — mock
+			// rAF and flush it synchronously, mirroring the pattern in remove()'s
+			// "cancels a pending OSC 133 rAF flush" test above.
+			const rafCallbacks = new Map<number, FrameRequestCallback>();
+			let nextHandle = 0;
+			const raf = vi.fn((cb: FrameRequestCallback) => {
+				nextHandle += 1;
+				rafCallbacks.set(nextHandle, cb);
+				return nextHandle;
+			});
+			vi.stubGlobal("requestAnimationFrame", raf);
+			vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+			try {
+				testInScope(() => {
+					const id = store.add(makeTerminal());
+					store.handleOsc133(id, "A", 10, undefined, "please refactor the parser");
+					store.handleOsc133(id, "D", 20, 0);
+					rafCallbacks.get(1)?.(0);
+					const blocks = store.get(id)!.commandBlocks;
+					expect(blocks[blocks.length - 1]?.promptText).toBe("please refactor the parser");
+				});
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+	});
+
 	describe("addUserPromptLine()", () => {
 		it("appends user-prompt lines in order", () => {
 			testInScope(() => {
