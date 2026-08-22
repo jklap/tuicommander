@@ -189,6 +189,8 @@ Targets macOS, Windows, Linux. Use Cmd/Ctrl abstractions, Tauri cross-platform p
 
 **`Path::is_absolute` answers for the host only.** `C:\…` and `\\…` are not absolute on unix, and a leading `/` is merely *rooted* on Windows — while `Path::join` there **replaces** the root, so an unrejected `/etc/passwd` lands at the root of the repo's drive. Any validator deciding whether a path may escape a boundary uses `fs::is_absolute_on_any_platform`.
 
+**Terminal keydown vs. global shortcuts:** `keyToSequence()` (`src/components/Terminal/terminalInput.ts`) excludes `metaKey` but not `ctrlKey` from its printable-character PTY-forwarding fallback — so a global shortcut whose Windows/Linux form uses Ctrl+&lt;printable&gt; (macOS form: Cmd+&lt;printable&gt;) will be silently swallowed and typed into the terminal instead of bubbling to the document-level shortcut listener, unless the terminal's keydown handler explicitly bails out first (see `isGlobalShortcutPassthrough`, `terminalInput.ts`). When adding or rebinding a global shortcut that uses Ctrl/Cmd + a printable key, verify the Windows/Linux (Ctrl) form is special-cased the same way.
+
 ## Panel Refresh
 
 Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath)` in `createEffect` — not file watchers or polling. `repo_watcher` emits `"repo-changed"` → `bumpRevision()`.
