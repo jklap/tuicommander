@@ -37,6 +37,19 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 | **Allow OSC 52 clipboard writes** | `boolean` | `true` | Honor OSC 52 clipboard writes from terminal output (shows a notice per write) |
 | **Bell Style** | `none/visual/sound/both` | `visual` | Terminal bell behavior |
 
+## Terminal Tab
+
+### Blocks
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Show block timestamps** | `boolean` | `true` | Enable the hold-`Ctrl+Cmd` relative-time overlay on command blocks |
+| **Show block marks** | `boolean` | `true` | Draw command-block boundary tick marks (blue/red) on the terminal scrollbar |
+| **Show prompt marks** | `boolean` | `true` | Draw a green tick mark on the scrollbar for each line where you submitted a prompt |
+| **Enable block folding** | `boolean` | `true` | Allow collapsing a command block's output with `Cmd+Shift+.` or a gutter click |
+
+See [Command Blocks](terminals.md#command-blocks) for what each of these controls.
+
 ## Agents Tab
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.

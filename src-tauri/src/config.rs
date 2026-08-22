@@ -3153,6 +3153,32 @@ mod tests {
         assert!(loaded.block_folding_enabled); // defaults to true
     }
 
+    /// `docs/backend/config.md` promises a row for every top-level `AppConfig` field. Mirrors
+    /// `keyboardShortcutsDoc.test.ts`'s enforcement of the keyboard-shortcuts doc: adding a field
+    /// without a doc row turns this suite red instead of silently going undocumented.
+    #[test]
+    fn config_doc_lists_every_top_level_field() {
+        let doc = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/backend/config.md"),
+        )
+        .expect("read docs/backend/config.md");
+
+        let value = serde_json::to_value(AppConfig::default()).expect("serialize AppConfig");
+        let fields = value
+            .as_object()
+            .expect("AppConfig serializes to an object");
+
+        let undocumented: Vec<&str> = fields
+            .keys()
+            .map(String::as_str)
+            .filter(|f| !doc.contains(&format!("`{f}`")))
+            .collect();
+        assert!(
+            undocumented.is_empty(),
+            "fields missing a doc row in docs/backend/config.md: {undocumented:?}"
+        );
+    }
+
     #[test]
     fn migrate_flat_services_fields() {
         let old_json = r#"{
