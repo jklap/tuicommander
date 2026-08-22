@@ -196,6 +196,49 @@ Search text across all open terminal buffers from the command palette:
 
 Also accessible via the "Search Terminals" command in the palette.
 
+## Command Blocks
+
+Terminal output is segmented into command blocks — one per prompt+output cycle:
+
+- **Scrollbar marks** — Color-coded ticks on the scrollbar mark each block boundary; a separate
+  green tick marks each line where you submitted a prompt. Both are always on and independently
+  toggleable at Settings > Terminal > Blocks.
+- **Red ticks** — A block turns red if any tool call in the turn failed, or hit an API error.
+  For a hook-instrumented agent (the primary tier, covering every tool type — the `tuic-hook`
+  binary extracts this natively, with no external dependency), a failure flags the block even
+  if the agent successfully retries it later in the same turn — the hooks don't expose a
+  per-call retry-succeeded signal to clear it against. For a non-hook-instrumented agent (or a
+  still-open turn), coverage falls back to text-pattern matching (`⎿ Error: Exit code N`, Bash
+  only, or a detected API error), which *is* recovery-aware: a failure the agent resolves before
+  the turn ends does not flag the block.
+- **Timestamp overlay** — Hold `Ctrl+Cmd` to see how long ago each block started.
+- **Gutter click** — Click the gutter next to a block to select its entire output.
+- **Fold/unfold** — `Cmd+Shift+.` collapses or expands the block nearest the middle of the
+  viewport. Fold state lives in memory for the session only — it does not survive a restart.
+- **Block navigation** — `Cmd+Shift+Up`/`Cmd+Shift+Down` jump to the previous/next block
+  boundary. Rebindable in Keyboard Shortcuts.
+- **Block-scoped search** — `Cmd+Shift+B` restricts `Cmd+F` search to the current block.
+
+Two sources feed blocks, and a session only ever uses one:
+
+- **Hook-driven (primary)** — For agents TUICommander installs hooks for (Claude Code and
+  others), a block spans one full prompt+output turn: it starts on the idle→busy transition and
+  ends on busy→idle, regardless of how many tool calls the turn makes. The block's title, when
+  visible in Command Overview, comes from the prompt you typed (only for prompts of 10 words or
+  more — shorter prompts show untitled).
+- **Heuristic fallback** — For agents without hook instrumentation, blocks are synthesized per
+  tool call from `⏺ ToolName(args)`-style output headers. This is coarser (one block per tool
+  call rather than per turn) and never has a prompt title.
+
+**Troubleshooting**
+
+- **No marks at all** — the agent has no hook instrumentation installed and its output never
+  produced a heuristic match either; marks require at least one detected block.
+- **Folding does nothing** — you're on a version predating the `endLine` fix; folding is a no-op
+  against a heuristic block whose end line was computed incorrectly.
+- **No red tick on a real failure** — check whether the agent has hook instrumentation
+  installed; without it, only Bash-shaped failures are detected via the text-pattern fallback.
+
 ## Copy & Paste
 
 - **Copy:** Select text in the terminal, then `Cmd+C`. A "Copied to clipboard" confirmation appears in the status bar. Multi-line Claude messages paste as clean text: the repeated `▎` visual gutter is removed while bullets, numbering, and indentation are preserved. Inside such a quote, rows that Claude broke only to fit the terminal width are joined back into one paragraph, so pasting into Slack or an email keeps whole sentences. Blank rows, list items and deeper indents keep their own line, and a quote that never reaches the terminal edge is copied exactly as shown.

@@ -9232,6 +9232,9 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
     );
     state.agent_inbox.entry(sid.to_string()).or_default();
     state.agent_inbox_evictions.insert(sid.to_string(), 2);
+    state.session_maps.has_osc133_integration.insert(sid.to_string(), ());
+    state.session_maps.has_tuic_state_integration.insert(sid.to_string(), ());
+    state.session_maps.turn_error_flags.insert(sid.to_string(), ());
 
     tombstone_transient_cleanup(sid, &state);
 
@@ -9254,6 +9257,22 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
     assert!(!state.peer_agents.contains_key(sid));
     assert!(!state.agent_inbox.contains_key(sid));
     assert!(!state.agent_inbox_evictions.contains_key(sid));
+    // A session that exits normally (as opposed to explicit close/kill)
+    // must not leave these markers behind — each is keyed by UUID with
+    // no other reaper, so a leak here is permanent for the process
+    // lifetime, not just until the next session reuses the id.
+    assert!(
+        !state.session_maps.has_osc133_integration.contains_key(sid),
+        "must not leak a permanent entry per session UUID on normal exit"
+    );
+    assert!(
+        !state.session_maps.has_tuic_state_integration.contains_key(sid),
+        "must not leak a permanent entry per session UUID on normal exit"
+    );
+    assert!(
+        !state.session_maps.turn_error_flags.contains_key(sid),
+        "must not leak a pending failure flag past a normal session exit"
+    );
 }
 
 // ── PTY-injection message delivery (Step 2) ─────────────────────
