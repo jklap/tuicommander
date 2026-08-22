@@ -46,7 +46,7 @@ import { LastPromptBar } from "./LastPromptBar";
 import { trackQuestionReminder } from "./questionReminder";
 import s from "./Terminal.module.css";
 import { ChatViewFallbackBanner, TerminalChatView, ViewModeToggle } from "./TerminalChatView";
-import { TerminalSearch } from "./TerminalSearch";
+import { TerminalSearch, type TerminalSearchRef } from "./TerminalSearch";
 import {
 	REATTACH_PHASE_INITIAL,
 	type ReattachPhase,
@@ -192,6 +192,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const [spawnError, setSpawnError] = createSignal<string | null>(null);
 
 	const [canvasTerminalRef, setCanvasTerminalRef] = createSignal<CanvasTerminalRef | undefined>();
+	const [terminalSearchRef, setTerminalSearchRef] = createSignal<TerminalSearchRef | undefined>();
 	let pendingCanvasFocus = false;
 	let chatSearchRef: TranscriptSearchRef | undefined;
 
@@ -1135,6 +1136,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		scrollToLine: (lineIndex: number) => {
 			if (sessionId) invoke("terminal_scroll_to", { sessionId, line: lineIndex }).catch(() => {});
 		},
+		scrollToBlock: (direction: "previous" | "next") => canvasTerminalRef()?.scrollToBlock(direction),
+		toggleBlockFold: () => canvasTerminalRef()?.toggleBlockFoldAtViewport(),
 		scrollToTop: () => {
 			if (sessionId) {
 				invoke("terminal_scroll_info", { sessionId })
@@ -1172,6 +1175,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			return invoke("terminal_get_lines", { sessionId, start: startLine, end: endLine }) as Promise<string[]>;
 		},
 		paste: (text: string) => canvasTerminalRef()?.paste(text),
+		toggleSearchBlockScope: () => terminalSearchRef()?.toggleBlockScope(),
 	};
 
 	onMount(() => {
@@ -1283,6 +1287,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					closeSearchBar();
 					canvasTerminalRef()?.focus();
 				}}
+				onRef={setTerminalSearchRef}
 			/>
 			<ViewModeToggle terminalId={props.id} />
 			<ChatViewFallbackBanner terminalId={props.id} />
