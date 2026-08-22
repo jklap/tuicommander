@@ -163,6 +163,8 @@ playback also uses the selected output device.
 | **Show prompt marks** | On | Green scrollbar tick for each prompt you sent. Expert setting; needs **Show scrollbar marks**. |
 | **Reflow scrollback on resize** | On | Re-wrap scrollback history when the terminal changes width, so output written at the old width stays readable after a side panel opens or closes. Turn it off to leave history lines as they were written and truncate them to the new width instead. The visible screen is never reflowed either way — cursor-addressed TUIs redraw themselves. A change applies to sessions already open. |
 
+See [Command Blocks](terminals.md#command-blocks) for what the block settings control.
+
 The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control in
 Settings. Set `bell_style` in `config.json` (see [Terminal Bell](terminals.md#terminal-bell)).
 
