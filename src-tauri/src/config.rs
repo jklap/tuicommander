@@ -635,6 +635,18 @@ pub(crate) struct AppConfig {
     /// Terminal renderer: "webgl" (default, GPU-accelerated) or "canvas" (CPU, no atlas bugs)
     #[serde(default = "default_terminal_renderer")]
     pub(crate) terminal_renderer: String,
+    /// Show the hold-Ctrl+Cmd relative-time overlay on command blocks.
+    #[serde(default = "default_true")]
+    pub(crate) show_block_timestamps: bool,
+    /// Draw command-block boundary tick marks (blue/red) on the terminal scrollbar.
+    #[serde(default = "default_true")]
+    pub(crate) show_block_marks: bool,
+    /// Draw a tick mark on the terminal scrollbar for each line where the user submitted a prompt.
+    #[serde(default = "default_true")]
+    pub(crate) show_prompt_marks: bool,
+    /// Allow collapsing a command block's output (Cmd+Shift+. or gutter click).
+    #[serde(default = "default_true")]
+    pub(crate) block_folding_enabled: bool,
     /// Expose `ai_terminal_*` tools to external MCP. Default off: they need a
     /// per-session filesystem sandbox only the internal agent loop creates.
     ///
@@ -787,6 +799,10 @@ impl Default for AppConfig {
             scrollback_reflow: false,
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
+            show_block_timestamps: true,
+            show_block_marks: true,
+            show_prompt_marks: true,
+            block_folding_enabled: true,
             ai_terminal_mcp_enabled: false,
             index_strategy: default_index_strategy(),
             standby_timeout_minutes: default_standby_timeout(),
@@ -3054,6 +3070,10 @@ mod tests {
             index_strategy: "active_and_switch".to_string(),
             cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
+            show_block_timestamps: false,
+            show_block_marks: false,
+            show_prompt_marks: false,
+            block_folding_enabled: false,
             auto_update_plugins_enabled: false,
             standby_timeout_minutes: 5,
             custom_launchers: Vec::new(),
@@ -3091,6 +3111,10 @@ mod tests {
         );
         assert!(!loaded.intent_tab_title);
         assert!(!loaded.suggest_followups);
+        assert!(!loaded.show_block_timestamps);
+        assert!(!loaded.show_block_marks);
+        assert!(!loaded.show_prompt_marks);
+        assert!(!loaded.block_folding_enabled);
     }
 
     #[test]
@@ -3123,6 +3147,10 @@ mod tests {
         assert!(loaded.intent_tab_title); // defaults to true
         assert!(loaded.suggest_followups); // defaults to true
         assert!(!loaded.experimental_features_enabled);
+        assert!(loaded.show_block_timestamps); // defaults to true
+        assert!(loaded.show_block_marks); // defaults to true
+        assert!(loaded.show_prompt_marks); // defaults to true
+        assert!(loaded.block_folding_enabled); // defaults to true
     }
 
     #[test]
