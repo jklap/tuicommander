@@ -11645,7 +11645,7 @@ fn tuic_osc_state_transitions_shell_state() {
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
 
     let proc = ChunkProcessor::new(None, None);
-    proc.handle_tuic_state("busy", session_id, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 0, &state);
 
     let current = state
         .session_maps
@@ -11655,7 +11655,7 @@ fn tuic_osc_state_transitions_shell_state() {
         .load(std::sync::atomic::Ordering::Acquire);
     assert_eq!(current, SHELL_BUSY);
 
-    proc.handle_tuic_state("idle", session_id, &state);
+    let _ = proc.handle_tuic_state("idle", session_id, 0, &state);
     let current = state
         .session_maps
         .shell_states
@@ -11663,6 +11663,201 @@ fn tuic_osc_state_transitions_shell_state() {
         .unwrap()
         .load(std::sync::atomic::Ordering::Acquire);
     assert_eq!(current, SHELL_IDLE);
+}
+
+fn setup_idle_session(session_id: &str) -> crate::state::AppState {
+    let state = crate::state::tests_support::make_test_app_state();
+    state.session_maps.shell_states.insert(
+        session_id.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+    );
+    state.session_maps
+        .shell_state_since_ms
+        .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
+    state
+}
+
+#[test]
+fn short_followup_prompt_clears_stale_last_prompts_entry() {
+    // record_submitted_line only inserts into last_prompts for
+    // submissions of 10+ words. Without an explicit clear on a short
+    // submission, a short follow-up ("fix it") would inherit the
+    // previous turn's prompt text for both get_last_prompt and
+    // AgentBlock.prompt_text — showing the WRONG prompt, not simply a
+    // missing one.
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-short-followup";
+    let state = Arc::new(state);
+    record_submitted_line(
+        &state,
+        session_id,
+        "please refactor the parser to handle nested brackets correctly now".to_string(),
+        -1,
+    );
+    assert_eq!(
+        last_prompt_text(&state, session_id),
+        Some("please refactor the parser to handle nested brackets correctly now".to_string())
+    );
+
+    record_submitted_line(&state, session_id, "fix it".to_string(), -1);
+    assert_eq!(
+        last_prompt_text(&state, session_id),
+        None,
+        "a short follow-up must not inherit the previous turn's stale prompt text"
+    );
+}
+
+#[test]
+fn handle_tuic_state_busy_edge_emits_agent_block_start_with_prompt_text() {
+    let session_id = "test-block-start";
+    let state = setup_idle_session(session_id);
+    state.session_maps.last_prompts.insert(
+        session_id.to_string(),
+        "please refactor the parser".to_string(),
+    );
+
+    let proc = ChunkProcessor::new(None, None);
+    let (transitioned, block_event) = proc.handle_tuic_state("busy", session_id, 42, &state);
+    assert!(transitioned, "idle->busy must be a real transition");
+    match block_event {
+        Some(ParsedEvent::AgentBlock {
+            action,
+            line,
+            exit_code,
+            prompt_text,
+        }) => {
+            assert_eq!(action, "start");
+            assert_eq!(line, 42);
+            assert_eq!(exit_code, None);
+            assert_eq!(prompt_text, Some("please refactor the parser".to_string()));
+        }
+        other => panic!("expected AgentBlock start, got {other:?}"),
+    }
+}
+
+#[test]
+fn handle_tuic_state_idle_edge_emits_agent_block_end_with_no_flag() {
+    let session_id = "test-block-end";
+    let state = setup_idle_session(session_id);
+    let proc = ChunkProcessor::new(None, None);
+    let _ = proc.handle_tuic_state("busy", session_id, 10, &state);
+
+    let (transitioned, block_event) = proc.handle_tuic_state("idle", session_id, 55, &state);
+    assert!(transitioned, "busy->idle must be a real transition");
+    match block_event {
+        Some(ParsedEvent::AgentBlock {
+            action,
+            line,
+            exit_code,
+            ..
+        }) => {
+            assert_eq!(action, "end");
+            assert_eq!(line, 55);
+            assert_eq!(
+                exit_code, None,
+                "no turn_error_flags entry means no red tick"
+            );
+        }
+        other => panic!("expected AgentBlock end, got {other:?}"),
+    }
+}
+
+#[test]
+fn handle_tuic_state_idle_edge_reads_and_clears_turn_error_flags() {
+    let session_id = "test-block-end-flagged";
+    let state = setup_idle_session(session_id);
+    let proc = ChunkProcessor::new(None, None);
+    let _ = proc.handle_tuic_state("busy", session_id, 10, &state);
+    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+
+    let (_, block_event) = proc.handle_tuic_state("idle", session_id, 55, &state);
+    match block_event {
+        Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
+            assert_eq!(
+                exit_code,
+                Some(1),
+                "flagged turn must produce a non-zero exit code"
+            );
+        }
+        other => panic!("expected AgentBlock end, got {other:?}"),
+    }
+    assert!(
+        state.session_maps.turn_error_flags.get(session_id).is_none(),
+        "the flag must be cleared after being read, so it doesn't leak into the next turn"
+    );
+
+    // Next turn, with no new flag set, must not be flagged.
+    let _ = proc.handle_tuic_state("busy", session_id, 60, &state);
+    let (_, next_end) = proc.handle_tuic_state("idle", session_id, 65, &state);
+    match next_end {
+        Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
+            assert_eq!(
+                exit_code, None,
+                "the cleared flag must not leak into the next turn"
+            );
+        }
+        other => panic!("expected AgentBlock end, got {other:?}"),
+    }
+}
+
+#[test]
+fn handle_tuic_state_busy_edge_clears_a_flag_that_arrived_too_late_for_the_previous_turn() {
+    // The ToolError/ApiError fallback tier is gated by a 5s silence
+    // threshold that, for a hook-instrumented session, typically fires
+    // well after Stop's idle transition already read-and-cleared
+    // turn_error_flags (finding it empty). Simulate that: the flag is
+    // set *after* the previous turn's idle edge already ran.
+    let session_id = "test-stale-flag-race";
+    let state = setup_idle_session(session_id);
+    let proc = ChunkProcessor::new(None, None);
+    let _ = proc.handle_tuic_state("busy", session_id, 10, &state);
+    let (_, end_event) = proc.handle_tuic_state("idle", session_id, 20, &state);
+    match end_event {
+        Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
+            assert_eq!(
+                exit_code, None,
+                "no flag was set yet, so turn 1 closes clean"
+            )
+        }
+        other => panic!("expected AgentBlock end, got {other:?}"),
+    }
+
+    // The delayed silence-timer detection for turn 1's error finally
+    // fires, well after turn 1 already closed.
+    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+
+    // Turn 2 starts — its busy edge must discard the stale flag rather
+    // than letting it attach to turn 2's own idle transition.
+    let _ = proc.handle_tuic_state("busy", session_id, 30, &state);
+    let (_, turn2_end) = proc.handle_tuic_state("idle", session_id, 40, &state);
+    match turn2_end {
+        Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
+            assert_eq!(
+                exit_code, None,
+                "a flag that arrived after turn 1 already closed must not bleed into turn 2"
+            );
+        }
+        other => panic!("expected AgentBlock end, got {other:?}"),
+    }
+}
+
+#[test]
+fn handle_tuic_state_same_state_reaffirmation_emits_neither() {
+    let session_id = "test-block-noop";
+    let state = setup_idle_session(session_id);
+    let proc = ChunkProcessor::new(None, None);
+    let (first, _) = proc.handle_tuic_state("busy", session_id, 10, &state);
+    assert!(first);
+
+    // Simulates a redundant busy re-affirmation (e.g. the surviving
+    // PostToolUse(AskUserQuestion|ExitPlanMode) entry): same target,
+    // already busy — must be a no-op, not a second block start.
+    let (second, block_event) = proc.handle_tuic_state("busy", session_id, 20, &state);
+    assert!(
+        !second,
+        "same-state re-affirmation must not be a real transition"
+    );
+    assert!(block_event.is_none(), "must not emit a second block start");
 }
 
 #[test]
@@ -11681,7 +11876,7 @@ fn tuic_osc_state_emits_shell_state_event() {
     let mut rx = state.event_bus.subscribe();
 
     let proc = ChunkProcessor::new(None, None);
-    proc.handle_tuic_state("busy", session_id, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 0, &state);
 
     let evt = rx.try_recv();
     assert!(
@@ -11711,7 +11906,7 @@ fn tuic_osc_state_unknown_verb_ignored() {
     );
 
     let proc = ChunkProcessor::new(None, None);
-    proc.handle_tuic_state("thinking", session_id, &state);
+    let _ = proc.handle_tuic_state("thinking", session_id, 0, &state);
 
     let current = state
         .session_maps
@@ -11725,9 +11920,205 @@ fn tuic_osc_state_unknown_verb_ignored() {
     );
 }
 
+fn heuristic_synthesizes_block_when_no_tuic_state_integration() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-heuristic-active";
+    agent_session(&state, session_id, SHELL_BUSY);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    processor.process_chunk("⏺ Bash(ls)\r\n", &silence, session_id, &state);
+    assert!(
+        processor.last_agent_block_line.is_some(),
+        "the ⏺ heuristic must synthesize a block when no OSC 7770 state event has arrived"
+    );
+}
+
+#[test]
+fn heuristic_suppressed_once_tuic_state_integration_observed() {
+    // The primary turn-level source (idle<->busy edge) is authoritative
+    // once a session has ever received an OSC 7770 state event — the
+    // heuristic must not also run and produce a second, conflicting
+    // block source.
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-heuristic-suppressed";
+    agent_session(&state, session_id, SHELL_BUSY);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    state.session_maps
+        .has_tuic_state_integration
+        .insert(session_id.to_string(), ());
+    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    processor.process_chunk("⏺ Bash(ls)\r\n", &silence, session_id, &state);
+    assert!(
+        processor.last_agent_block_line.is_none(),
+        "the ⏺ heuristic must not fire once has_tuic_state_integration is set"
+    );
+}
+
+#[test]
+fn heuristic_block_open_before_suppression_is_closed_not_orphaned() {
+    // Suppression can activate mid-turn: a `⏺` header opens a heuristic
+    // block before the first OSC 7770 state event sets the flag (the
+    // common path is UserPromptSubmit firing before any tool call, but
+    // this isn't guaranteed). Without an explicit close, that block would
+    // stay open forever — never folded, no exit code, no scrollbar tick.
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-heuristic-orphan";
+    agent_session(&state, session_id, SHELL_BUSY);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    // Open a heuristic block before integration is detected.
+    processor.process_chunk("⏺ Bash(ls)\r\n", &silence, session_id, &state);
+    assert!(processor.last_agent_block_line.is_some());
+
+    // Integration is now detected (simulating a hook event arriving late).
+    state.session_maps
+        .has_tuic_state_integration
+        .insert(session_id.to_string(), ());
+
+    let mut rx = state.event_bus.subscribe();
+    processor.process_chunk("some more output\r\n", &silence, session_id, &state);
+
+    assert!(
+        processor.last_agent_block_line.is_none(),
+        "the dangling block must be closed, not left open forever"
+    );
+    let mut saw_end = false;
+    while let Ok(crate::state::AppEvent::PtyParsed { parsed, .. }) = rx.try_recv() {
+        if parsed["type"] == "agent-block" && parsed["action"] == "end" {
+            saw_end = true;
+        }
+    }
+    assert!(
+        saw_end,
+        "must emit an AgentBlock end event for the orphaned block"
+    );
+}
+
+#[test]
+fn api_error_sets_turn_error_flag() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-api-error-flag";
+    agent_session(&state, session_id, SHELL_BUSY);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    silence.lock().startup_settled = true;
+    let mut processor = ChunkProcessor::new(None, None);
+
+    let input = "API Error: 500 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"},\"request_id\":\"req_1\"}\r\n";
+    processor.process_chunk(input, &silence, session_id, &state);
+    assert!(
+        state.session_maps.turn_error_flags.get(session_id).is_some(),
+        "an ApiError event must flag the session's turn as failed"
+    );
+}
+
+#[test]
+fn tool_error_sets_turn_error_flag() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-tool-error-flag";
+    let silence = Mutex::new(SilenceState::new());
+    {
+        let mut sl = silence.lock();
+        sl.mark_tool_error_candidate("Error: Exit code 1".to_string());
+        sl.last_output_at = std::time::Instant::now()
+            - (SILENCE_TOOL_ERROR_THRESHOLD + std::time::Duration::from_secs(1));
+    }
+    fire_tool_error_if_ready(&silence, session_id, &state);
+    assert!(
+        state.session_maps.turn_error_flags.get(session_id).is_some(),
+        "a genuinely turn-ending tool error must flag the session's turn as failed"
+    );
+}
+
+#[test]
+fn recovered_tool_error_does_not_set_turn_error_flag() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-tool-error-recovered";
+    let silence = Mutex::new(SilenceState::new());
+    {
+        let mut sl = silence.lock();
+        sl.mark_tool_error_candidate("Error: Exit code 1".to_string());
+        // The agent recovers before the silence threshold elapses.
+        sl.clear_tool_error_on_recovery();
+        sl.last_output_at = std::time::Instant::now()
+            - (SILENCE_TOOL_ERROR_THRESHOLD + std::time::Duration::from_secs(1));
+    }
+    fire_tool_error_if_ready(&silence, session_id, &state);
+    assert!(
+        state.session_maps.turn_error_flags.get(session_id).is_none(),
+        "a recovered error must not flag the block"
+    );
+}
+
+#[test]
+fn tuic_osc_toolfail_sets_turn_error_flag() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-toolfail";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    assert!(state.session_maps.turn_error_flags.get(session_id).is_none());
+    processor.process_chunk("\x1b]7770;toolfail=1\x07", &silence, session_id, &state);
+    assert!(
+        state.session_maps.turn_error_flags.get(session_id).is_some(),
+        "a toolfail OSC event must flag the session's turn as failed"
+    );
+}
+
+#[test]
+fn tuic_osc_toolfail_with_non_numeric_payload_still_sets_the_flag() {
+    // The Rust dispatch never parses the payload — presence of the event
+    // is the whole signal (see agent_hook's post_tool_use_failure_hook_command
+    // doc comment) — so a malformed/non-numeric payload from a flaky jq
+    // extraction must not be silently dropped.
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-toolfail-garbage";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    processor.process_chunk(
+        "\x1b]7770;toolfail=not-a-number\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert!(state.session_maps.turn_error_flags.get(session_id).is_some());
+}
+
 #[test]
 fn tuic_state_awaiting_yields_confident_question() {
-    match tuic_state_awaiting_event("awaiting", 0) {
+    // "awaiting" is unrelated to the busy/idle transition edge (see
+    // handle_tuic_state's doc comment — there is no SHELL_AWAITING), so
+    // it must fire regardless of the busy_transitioned flag.
+    match tuic_state_awaiting_event("awaiting", 0, false) {
         Some(ParsedEvent::Question {
             confident,
             prompt_text,
@@ -11743,8 +12134,8 @@ fn tuic_state_awaiting_yields_confident_question() {
 fn tuic_state_busy_yields_userinput_clear_with_prompt_line() {
     // The busy transition's absolute prompt row (history_size + cursor row,
     // here 42) must reach the UserInput event so the frontend can mark the
-    // user-prompt line on the scrollbar.
-    match tuic_state_awaiting_event("busy", 42) {
+    // user-prompt line on the scrollbar. Only on a real transition.
+    match tuic_state_awaiting_event("busy", 42, true) {
         Some(ParsedEvent::UserInput { content, line }) => {
             assert_eq!(content, "", "busy clear must not overwrite last_prompt");
             assert_eq!(line, 42, "busy UserInput must carry the prompt row");
@@ -11754,9 +12145,21 @@ fn tuic_state_busy_yields_userinput_clear_with_prompt_line() {
 }
 
 #[test]
+fn tuic_state_busy_without_transition_yields_no_userinput() {
+    // The green-tick pollution regression guard: a redundant busy
+    // re-affirmation (e.g. from the surviving PostToolUse(AskUserQuestion|
+    // ExitPlanMode) entry in claude_hook_map, or any other agent's own
+    // per-tool busy hook) must not duplicate the scrollbar tick.
+    assert!(
+        tuic_state_awaiting_event("busy", 42, false).is_none(),
+        "a same-state re-affirmation must not emit UserInput"
+    );
+}
+
+#[test]
 fn tuic_state_idle_yields_no_awaiting_event() {
     assert!(
-        tuic_state_awaiting_event("idle", 0).is_none(),
+        tuic_state_awaiting_event("idle", 0, true).is_none(),
         "idle only transitions shell_state; it pushes no awaiting event"
     );
 }
@@ -11764,7 +12167,7 @@ fn tuic_state_idle_yields_no_awaiting_event() {
 #[test]
 fn tuic_state_unknown_yields_no_awaiting_event() {
     assert!(
-        tuic_state_awaiting_event("thinking", 0).is_none(),
+        tuic_state_awaiting_event("thinking", 0, false).is_none(),
         "unknown verb must push no awaiting event"
     );
 }
@@ -13442,6 +13845,116 @@ fn cc_no_bullet_not_tool_call() {
     assert!(!is_cc_tool_call_header("plain text"));
 }
 
+// --- synthesize_cc_block_events tests (fallback block source) ---
+
+fn header_row(row_index: usize, tool: &str) -> ChangedRow {
+    ChangedRow {
+        row_index,
+        text: format!("⏺ {tool}(args)"),
+    }
+}
+
+/// Extract `(action, line)` from an `AgentBlock` event, panicking on any
+/// other variant — keeps the assertions below readable.
+fn agent_block(event: &ParsedEvent) -> (&str, i64) {
+    match event {
+        ParsedEvent::AgentBlock { action, line, .. } => (action.as_str(), *line),
+        other => panic!("expected AgentBlock, got {other:?}"),
+    }
+}
+
+#[test]
+fn cc_block_end_carries_next_header_line_not_previous_start() {
+    // The regression this fixes: end used to carry `prev` (the previous
+    // block's own start line), giving every synthesized block
+    // `endLine === promptLine`.
+    let mut last = None;
+    let rows = vec![header_row(3, "Read"), header_row(9, "Edit")];
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    assert_eq!(events.len(), 3);
+    assert_eq!(agent_block(&events[0]), ("start", 103));
+    assert_eq!(agent_block(&events[1]), ("end", 109));
+    assert_ne!(
+        agent_block(&events[1]).1,
+        103,
+        "end must not be the previous start"
+    );
+    assert_eq!(agent_block(&events[2]), ("start", 109));
+    assert_eq!(last, Some(109));
+}
+
+#[test]
+fn cc_block_end_is_exclusive_so_fold_count_is_positive() {
+    let mut last = Some(50);
+    let rows = vec![header_row(4, "Bash")];
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    let end_line = events
+        .iter()
+        .find_map(|e| match e {
+            ParsedEvent::AgentBlock { action, line, .. } if action == "end" => Some(*line),
+            _ => None,
+        })
+        .expect("expected an end event");
+    // foldStart = promptLine + 1 = 51; must be strictly less than endLine.
+    assert!(end_line > 51, "endLine {end_line} must exceed foldStart 51");
+}
+
+#[test]
+fn cc_block_teardown_uses_cursor_line_not_block_start() {
+    let mut last = Some(50);
+    let events = synthesize_cc_block_events(&[], 100, false, 180, &mut last);
+    assert_eq!(events.len(), 1);
+    assert_eq!(agent_block(&events[0]), ("end", 180));
+    assert_eq!(last, None, "teardown must clear the dangling block");
+}
+
+#[test]
+fn cc_block_end_never_precedes_its_start_when_abs_lines_regress() {
+    // Once scrollback saturates, history_size stops growing while
+    // row_index keeps cycling, so abs_line is not globally monotonic.
+    let mut last = Some(200);
+    let rows = vec![header_row(50, "Bash")]; // abs_line = 100 + 50 = 150 < 200
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    assert_eq!(events.len(), 2, "expected an end event and a start event");
+    assert_eq!(
+        agent_block(&events[0]),
+        ("end", 201),
+        "must clamp to prev + 1, never end < start"
+    );
+    // The new block's start must not precede the end just emitted for the
+    // block it closed — an unclamped start here would overlap the two.
+    assert_eq!(
+        agent_block(&events[1]),
+        ("start", 201),
+        "the new block's start must not regress behind the end it follows"
+    );
+    assert_eq!(
+        last,
+        Some(201),
+        "last_agent_block_line must track the clamped start, not the raw abs_line"
+    );
+}
+
+#[test]
+fn cc_block_dedups_repeated_header_on_same_line() {
+    let mut last = Some(150);
+    let rows = vec![header_row(50, "Bash")]; // abs_line = 100 + 50 = 150 == last
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    assert!(
+        events.is_empty(),
+        "repeated header on the same line must not re-start"
+    );
+    assert_eq!(last, Some(150));
+}
+
+#[test]
+fn cc_block_teardown_with_no_active_block_emits_nothing() {
+    let mut last = None;
+    let events = synthesize_cc_block_events(&[], 100, false, 180, &mut last);
+    assert!(events.is_empty());
+    assert_eq!(last, None);
+}
+
 /// Closing a tab must kill the agent grandchild, not just the shell.
 ///
 /// Mirrors `claude` launched inside the PTY's shell: shell → grandchild,
@@ -13633,6 +14146,9 @@ fn cleanup_session_clears_transient_session_maps() {
         .term_aliases
         .insert(sid.to_string(), "alias".to_string());
     state.session_maps.exit_codes.insert(sid.to_string(), 0);
+    state.session_maps.has_osc133_integration.insert(sid.to_string(), ());
+    state.session_maps.has_tuic_state_integration.insert(sid.to_string(), ());
+    state.session_maps.turn_error_flags.insert(sid.to_string(), ());
 
     cleanup_session(sid, &state);
 
@@ -13643,6 +14159,18 @@ fn cleanup_session_clears_transient_session_maps() {
     assert!(!state.session_maps.last_output_ms.contains_key(sid));
     assert!(!state.session_maps.term_aliases.contains_key(sid));
     assert!(!state.session_maps.exit_codes.contains_key(sid));
+    assert!(
+        !state.session_maps.has_osc133_integration.contains_key(sid),
+        "must not leak a permanent entry per session UUID"
+    );
+    assert!(
+        !state.session_maps.has_tuic_state_integration.contains_key(sid),
+        "must not leak a permanent entry per session UUID"
+    );
+    assert!(
+        !state.session_maps.turn_error_flags.contains_key(sid),
+        "must not leak a pending failure flag past session teardown"
+    );
 }
 
 /// Populate the per-session maps that no teardown phase used to own, plus the

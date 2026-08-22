@@ -3712,6 +3712,7 @@ mod tests {
             &state,
             repo.path().to_string_lossy().to_string(),
             "feat-busy-merge".to_string(),
+            "feat-busy-merge".to_string(),
             base,
             "archive".to_string(),
             true, // force: even the user's confirmation must not bypass this guard
