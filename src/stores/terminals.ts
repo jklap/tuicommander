@@ -179,6 +179,12 @@ export interface TerminalRef {
 	searchBuffer: (query: string) => TerminalMatch[] | Promise<TerminalMatch[]>;
 	/** Scroll to an absolute buffer line index (centered in viewport) */
 	scrollToLine: (lineIndex: number) => void;
+	/** Scroll to the nearest command block boundary in `direction` from the current viewport */
+	scrollToBlock: (direction: "previous" | "next") => void;
+	/** Toggle fold on the command block nearest the viewport's vertical center */
+	toggleBlockFold: () => void;
+	/** Toggle whether the terminal's search bar scopes matches to the current command block */
+	toggleSearchBlockScope: () => void;
 	getSelection: () => string;
 	scrollToTop: () => void;
 	scrollToBottom: () => void;

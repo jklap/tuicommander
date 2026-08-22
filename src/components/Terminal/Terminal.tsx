@@ -28,7 +28,7 @@ import { getSharedMetrics } from "./glyphCache";
 import { handleIntentEvent } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
 import s from "./Terminal.module.css";
-import { TerminalSearch } from "./TerminalSearch";
+import { TerminalSearch, type TerminalSearchRef } from "./TerminalSearch";
 
 const ComposePanel = lazy(() =>
 	import("../ComposePanel/ComposePanel").then((module) => ({ default: module.ComposePanel })),
@@ -173,6 +173,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const [_currentSessionId, setCurrentSessionId] = createSignal<string | null>(null);
 
 	const [canvasTerminalRef, setCanvasTerminalRef] = createSignal<CanvasTerminalRef | undefined>();
+	const [terminalSearchRef, setTerminalSearchRef] = createSignal<TerminalSearchRef | undefined>();
 	let pendingCanvasFocus = false;
 
 	const {
@@ -1027,6 +1028,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		scrollToLine: (lineIndex: number) => {
 			if (sessionId) invoke("terminal_scroll_to", { sessionId, line: lineIndex }).catch(() => {});
 		},
+		scrollToBlock: (direction: "previous" | "next") => canvasTerminalRef()?.scrollToBlock(direction),
+		toggleBlockFold: () => canvasTerminalRef()?.toggleBlockFoldAtViewport(),
 		scrollToTop: () => {
 			if (sessionId) {
 				invoke("terminal_scroll_info", { sessionId })
@@ -1064,6 +1067,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			return invoke("terminal_get_lines", { sessionId, start: startLine, end: endLine }) as Promise<string[]>;
 		},
 		paste: (text: string) => canvasTerminalRef()?.paste(text),
+		toggleSearchBlockScope: () => terminalSearchRef()?.toggleBlockScope(),
 	};
 
 	onMount(() => {
@@ -1152,6 +1156,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					closeSearchBar();
 					canvasTerminalRef()?.focus();
 				}}
+				onRef={setTerminalSearchRef}
 			/>
 			<Show
 				when={

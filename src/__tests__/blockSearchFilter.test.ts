@@ -59,4 +59,19 @@ describe("filterMatchesToBlock", () => {
 		const result = filterMatchesToBlock(allMatches, [], 15);
 		expect(result).toEqual(allMatches);
 	});
+
+	it("never selects a degenerate block (endLine === promptLine) as the active block", () => {
+		// A degenerate block contains no rows — `viewportCenter < endLine` fails when they're
+		// equal, so `find` falls through to the next block that actually contains the line.
+		const degenerateBlocks: Block[] = [
+			{ promptLine: 0, endLine: 10 },
+			{ promptLine: 10, endLine: 10 },
+			{ promptLine: 10, endLine: 25 },
+		];
+		const result = filterMatchesToBlock(allMatches, degenerateBlocks, 10);
+		expect(result).toEqual([
+			{ row: 12, col_start: 0, col_end: 4 },
+			{ row: 20, col_start: 1, col_end: 6 },
+		]);
+	});
 });

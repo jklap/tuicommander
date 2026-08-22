@@ -206,4 +206,43 @@ describe("useAppShortcutHandlers", () => {
 		expect(mockStores.prompts.markAsUsed).toHaveBeenCalledWith("prompt-1");
 		expect(options.executeSmartPrompt).toHaveBeenCalledWith(prompt);
 	});
+
+	describe("block navigation and folding", () => {
+		it("delegates blockPrev/blockNext/blockFoldToggle to the active terminal's ref", () => {
+			const ref = { scrollToBlock: vi.fn(), toggleBlockFold: vi.fn(), openSearch: vi.fn() };
+			mockStores.terminals.getActive.mockReturnValue({ ref, commandBlocks: [] });
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+
+			handlers.blockPrev();
+			handlers.blockNext();
+			handlers.blockFoldToggle();
+
+			expect(ref.scrollToBlock).toHaveBeenNthCalledWith(1, "previous");
+			expect(ref.scrollToBlock).toHaveBeenNthCalledWith(2, "next");
+			expect(ref.toggleBlockFold).toHaveBeenCalledOnce();
+		});
+
+		it("opens search and toggles block scope for blockSearchToggle", () => {
+			const ref = { openSearch: vi.fn(), toggleSearchBlockScope: vi.fn() };
+			mockStores.terminals.getActive.mockReturnValue({ ref, commandBlocks: [] });
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+
+			handlers.blockSearchToggle();
+
+			expect(ref.openSearch).toHaveBeenCalledOnce();
+			expect(ref.toggleSearchBlockScope).toHaveBeenCalledOnce();
+		});
+
+		it("no-ops when there is no active terminal", () => {
+			mockStores.terminals.getActive.mockReturnValue(undefined);
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+
+			expect(() => {
+				handlers.blockPrev();
+				handlers.blockNext();
+				handlers.blockFoldToggle();
+				handlers.blockSearchToggle();
+			}).not.toThrow();
+		});
+	});
 });

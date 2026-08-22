@@ -6,6 +6,8 @@ import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
+import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
+import { pickBlock } from "../../utils/blockNav";
 import { filterMatchesToBlock } from "../../utils/blockSearchFilter";
 import { writeClipboard } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
@@ -78,6 +80,10 @@ export interface CanvasTerminalRef {
 	searchClear: () => void;
 	/** Paste text with correct bracketed paste wrapping based on current terminal state */
 	paste: (text: string) => void;
+	/** Scroll the viewport to the nearest command block boundary in `direction`. */
+	scrollToBlock: (direction: "previous" | "next") => void;
+	/** Toggle fold on the command block nearest the viewport's vertical center. */
+	toggleBlockFoldAtViewport: () => void;
 }
 
 export interface CanvasTerminalProps {
@@ -691,11 +697,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (painted.has(promptLine)) continue;
 			painted.add(promptLine);
 			const block = term.commandBlocks.find((b) => b.promptLine === promptLine);
-			if (block?.endLine == null) continue;
-			const foldStart = (block.executionLine ?? block.promptLine) + 1;
-			const foldEnd = block.endLine;
-			const foldedCount = foldEnd - foldStart;
-			if (foldedCount <= 0) continue;
+			if (!block) continue;
+			const range = foldRange(block);
+			if (!range) continue;
+			const { foldStart, foldedCount } = range;
+			const foldEnd = foldStart + foldedCount;
 			const startVp = absRowToViewport(foldStart);
 			if (startVp === null) continue;
 			const endVp = absRowToViewport(foldEnd - 1);
@@ -2369,69 +2375,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				return;
 			}
 
-			// Cmd+Up/Down (macOS) or Ctrl+Up/Down (Win/Linux): navigate between command blocks (OSC 133)
-			if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-				const term = terminalsStore.get(props.terminalId);
-				if (term) {
-					const blocks = term.commandBlocks;
-					const active = term.activeBlock;
-					const allPromptLines = blocks.map((b) => b.promptLine).concat(active ? [active.promptLine] : []);
-					if (allPromptLines.length > 0 && currentFrame) {
-						const currentViewLine = currentFrame.historySize - currentFrame.displayOffset;
-						let targetLine: number | undefined;
-						if (e.key === "ArrowUp") {
-							for (let i = allPromptLines.length - 1; i >= 0; i--) {
-								if (allPromptLines[i] < currentViewLine) {
-									targetLine = allPromptLines[i];
-									break;
-								}
-							}
-						} else {
-							for (let i = 0; i < allPromptLines.length; i++) {
-								if (allPromptLines[i] > currentViewLine) {
-									targetLine = allPromptLines[i];
-									break;
-								}
-							}
-						}
-						if (targetLine !== undefined) {
-							invokeRef?.("terminal_scroll_to", { sessionId: props.sessionId, line: targetLine }).catch(
-								ipcErr("terminal_scroll_to"),
-							);
-						}
-						e.preventDefault();
-						return;
-					}
-				}
-			}
-
-			// Cmd+Shift+. (macOS) or Ctrl+Shift+. (Win/Linux): toggle fold on current block
-			if (
-				(e.metaKey || e.ctrlKey) &&
-				e.shiftKey &&
-				e.key === "." &&
-				!e.altKey &&
-				settingsStore.state.blockFoldingEnabled
-			) {
-				const term = terminalsStore.get(props.terminalId);
-				if (term && currentFrame) {
-					const viewTop = currentFrame.historySize - currentFrame.displayOffset;
-					const blocks = [...term.commandBlocks, term.activeBlock].filter(
-						Boolean,
-					) as import("../../stores/terminals").CommandBlock[];
-					const current = blocks.find(
-						(b) => b.promptLine <= viewTop + (lastResizeRows >> 1) && (b.endLine ?? Infinity) >= viewTop,
-					);
-					if (current) {
-						terminalsStore.toggleBlockFold(props.terminalId, current.promptLine);
-						fullRepaintNeeded = true;
-						if (metrics()) paintFrame(currentFrame, metrics()!);
-					}
-				}
-				e.preventDefault();
-				return;
-			}
-
 			// Force re-render: clear accumulated buffer and request fresh frame from Rust
 			if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "l" && !e.altKey) {
 				e.preventDefault();
@@ -2693,7 +2636,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						const allBlocks = [...term.commandBlocks, term.activeBlock].filter(
 							Boolean,
 						) as import("../../stores/terminals").CommandBlock[];
-						const block = allBlocks.find((b) => b.promptLine <= absRow && (b.endLine ?? Infinity) >= absRow);
+						const block = findBlockAtViewport(allBlocks, absRow, 0);
 						if (block) {
 							const startRow = (block.executionLine ?? block.promptLine) + 1;
 							const endRow = (block.endLine ?? absRow) - 1;
@@ -3145,8 +3088,50 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			transport?.unsubscribe();
 		}
 
+		function scrollToBlock(direction: "previous" | "next") {
+			const term = terminalsStore.get(props.terminalId);
+			if (!term || !currentFrame) return;
+			const blocks = term.commandBlocks;
+			const active = term.activeBlock;
+			const allPromptLines = blocks.map((b) => b.promptLine).concat(active ? [active.promptLine] : []);
+			if (allPromptLines.length === 0) return;
+			const currentViewLine = currentFrame.historySize - currentFrame.displayOffset;
+			const targetLine = pickBlock(allPromptLines, currentViewLine, direction);
+			if (targetLine === undefined) {
+				// No further block ahead: land at the live tail, matching the old
+				// behavior of falling back to scrollToBottom() on "next".
+				if (direction === "next" && currentFrame.displayOffset > 0) {
+					invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -currentFrame.displayOffset }).catch(
+						ipcErr("terminal_scroll"),
+					);
+				}
+				return;
+			}
+			invokeRef?.("terminal_scroll_to", { sessionId: props.sessionId, line: targetLine }).catch(
+				ipcErr("terminal_scroll_to"),
+			);
+		}
+
+		function toggleBlockFoldAtViewport() {
+			if (!settingsStore.state.blockFoldingEnabled) return;
+			const term = terminalsStore.get(props.terminalId);
+			if (!term || !currentFrame) return;
+			const viewTop = currentFrame.historySize - currentFrame.displayOffset;
+			const blocks = [...term.commandBlocks, term.activeBlock].filter(
+				Boolean,
+			) as import("../../stores/terminals").CommandBlock[];
+			const current = findBlockAtViewport(blocks, viewTop, lastResizeRows >> 1);
+			if (!current) return;
+			terminalsStore.toggleBlockFold(props.terminalId, current.promptLine);
+			fullRepaintNeeded = true;
+			const m = metrics();
+			if (currentFrame && m) paintFrame(currentFrame, m);
+		}
+
 		props.onRef?.({
 			focus: () => keyInputRef.focus({ preventScroll: true }),
+			scrollToBlock,
+			toggleBlockFoldAtViewport,
 			getSelectionText: () => selection.cachedText,
 			refresh: () => {
 				rowMap.clear();
