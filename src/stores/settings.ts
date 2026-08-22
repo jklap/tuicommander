@@ -69,6 +69,7 @@ interface RustAppConfig {
 	cursor_style?: string;
 	terminal_renderer?: string;
 	show_block_timestamps?: boolean;
+	show_scrollbar_marks?: boolean;
 	show_block_marks?: boolean;
 	show_prompt_marks?: boolean;
 	block_folding_enabled?: boolean;
@@ -313,6 +314,8 @@ interface SettingsStoreState {
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
 	showBlockTimestamps: boolean;
+	/** Master toggle for the scrollbar history ticks; the two below pick the categories. */
+	showScrollbarMarks: boolean;
 	showBlockMarks: boolean;
 	showPromptMarks: boolean;
 	blockFoldingEnabled: boolean;
@@ -373,6 +376,7 @@ function createSettingsStore() {
 		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
 		terminalRenderer: "webgl",
 		showBlockTimestamps: true,
+		showScrollbarMarks: true,
 		showBlockMarks: true,
 		showPromptMarks: true,
 		blockFoldingEnabled: true,
@@ -443,6 +447,7 @@ function createSettingsStore() {
 		config.cursor_style = state.cursorStyle;
 		config.terminal_renderer = state.terminalRenderer;
 		config.show_block_timestamps = state.showBlockTimestamps;
+		config.show_scrollbar_marks = state.showScrollbarMarks;
 		config.show_block_marks = state.showBlockMarks;
 		config.show_prompt_marks = state.showPromptMarks;
 		config.block_folding_enabled = state.blockFoldingEnabled;
@@ -550,6 +555,7 @@ function createSettingsStore() {
 				setState("cursorStyle", cs === "block" || cs === "underline" ? cs : "bar");
 				setState("terminalRenderer", validateTerminalRenderer(config.terminal_renderer || null));
 				setState("showBlockTimestamps", config.show_block_timestamps ?? true);
+				setState("showScrollbarMarks", config.show_scrollbar_marks ?? true);
 				setState("showBlockMarks", config.show_block_marks ?? true);
 				setState("showPromptMarks", config.show_prompt_marks ?? true);
 				setState("blockFoldingEnabled", config.block_folding_enabled ?? true);
@@ -852,11 +858,6 @@ function createSettingsStore() {
 			save();
 		},
 
-		setShowBlockTimestamps(enabled: boolean): void {
-			setState("showBlockTimestamps", enabled);
-			save();
-		},
-
 		setShowBlockMarks(enabled: boolean): void {
 			setState("showBlockMarks", enabled);
 			save();
@@ -864,11 +865,6 @@ function createSettingsStore() {
 
 		setShowPromptMarks(enabled: boolean): void {
 			setState("showPromptMarks", enabled);
-			save();
-		},
-
-		setBlockFoldingEnabled(enabled: boolean): void {
-			setState("blockFoldingEnabled", enabled);
 			save();
 		},
 
