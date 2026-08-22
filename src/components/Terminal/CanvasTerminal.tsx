@@ -921,7 +921,31 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let lastScrollbarMarksKey = "";
 
 	function paintScrollbarMarks(totalRows: number) {
-		if (!scrollbarRef || !(settingsStore.state.showBlockMarks || settingsStore.state.showPromptMarks)) return;
+		if (!scrollbarRef) return;
+		const term = terminalsStore.get(props.terminalId);
+		if (!term) return;
+
+		const showBlockMarks = settingsStore.state.showBlockMarks;
+		const showPromptMarks = settingsStore.state.showPromptMarks;
+		const blocks = term.commandBlocks;
+		const promptLines = term.userPromptLines;
+		const searchCount = search.matches.length;
+		const lastBlock = blocks[blocks.length - 1];
+		const lastPrompt = promptLines[promptLines.length - 1];
+
+		// Each toggle's contribution to the key collapses to a fixed placeholder
+		// when that category is hidden, so the key doesn't churn on invisible
+		// changes — but the toggle flip itself always changes the count term
+		// (real count vs. 0), so re-enabling always invalidates the memo even if
+		// blocks/prompts/totalRows are otherwise unchanged since it was hidden.
+		const key =
+			`b${showBlockMarks ? blocks.length : 0}:${showBlockMarks ? (lastBlock?.promptLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.endLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.exitCode ?? "") : ""}` +
+			`:p${showPromptMarks ? promptLines.length : 0}:${showPromptMarks ? (lastPrompt ?? "") : ""}` +
+			`:t${totalRows}` +
+			`:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
+		if (key === lastScrollbarMarksKey) return;
+		lastScrollbarMarksKey = key;
+
 		if (!scrollbarMarksContainer) {
 			scrollbarMarksContainer = document.createElement("div");
 			scrollbarMarksContainer.style.cssText =
@@ -933,18 +957,22 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const blocks = term.commandBlocks;
 		const promptLines = term.userPromptLines;
 		const searchCount = search.matches.length;
-		// `showScrollbarMarks` gates the HISTORY markers only — block boundaries and
+		// The mark settings gate the HISTORY markers only — block boundaries and
 		// user-prompt ticks — not the search hits below. Command history is a display
 		// preference; a search hit is the live result of something the user just did,
 		// and a Cmd+F that silently draws nothing because of a terminal display
 		// setting is not a preference being honoured, it is a broken search.
 		//
-		// It is folded into `showBlocks` rather than returned on early, which also
-		// fixes turning the setting OFF: an early return above the key computation
-		// left the last-painted marks on screen forever, because the repaint that
-		// would clear them never ran.
-		const showBlocks = blockTimestampsVisible && settingsStore.state.showScrollbarMarks;
-		const key = `${showBlocks ? blocks.length : 0}:${showBlocks ? promptLines.length : 0}:${totalRows}:${showBlocks ? (blocks[blocks.length - 1]?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
+		// Gated on the two PERSISTED per-category settings, not the transient
+		// Ctrl+Cmd hold (blockTimestampsVisible) — marks stay visible without
+		// holding the modifier. Folded into the paint inputs rather than returned
+		// on early, which also fixes turning a setting OFF: an early return above
+		// the key computation left the last-painted marks on screen forever,
+		// because the repaint that would clear them never ran. The flags are also
+		// part of the memo key so a toggle flip always invalidates the cache.
+		const showBlockMarks = settingsStore.state.showBlockMarks;
+		const showPromptMarks = settingsStore.state.showPromptMarks;
+		const key = `${showBlockMarks ? 1 : 0}${showPromptMarks ? 1 : 0}:${showBlockMarks ? blocks.length : 0}:${showPromptMarks ? promptLines.length : 0}:${totalRows}:${showBlockMarks ? (blocks[blocks.length - 1]?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
 		if (key === lastScrollbarMarksKey) return;
 		lastScrollbarMarksKey = key;
 
@@ -954,7 +982,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			matchRows: search.matches.map((m) => m.row),
 			totalRows,
 			trackH: scrollbarTrackHeight,
-			showBlocks,
+			showBlockMarks,
+			showPromptMarks,
 		});
 	}
 
@@ -3326,6 +3355,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		gridRenderer?.invalidateCaches();
 		fullRepaintNeeded = true;
 		remeasure();
+	});
+
+	// Force an immediate scrollbar-marks repaint on toggle — paintScrollbarMarks
+	// is otherwise only invoked from the frame-decode/scroll path, so without
+	// this, flipping a setting wouldn't take visible effect until the next
+	// unrelated repaint.
+	createEffect(() => {
+		settingsStore.state.showBlockMarks;
+		settingsStore.state.showPromptMarks;
+		if (!alive || !currentFrame) return;
+		updateScrollbar(currentFrame);
 	});
 
 	async function copySelection() {
