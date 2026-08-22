@@ -59,7 +59,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Block folding was a silent no-op for every heuristic-detected block** — The heuristic's synthesized `endLine` was computed as the *previous* block's own start line, always equal to that block's `promptLine`, which made every fold-count calculation `<= 0`. `endLine` is now the correct exclusive bound (the next block's header line).
 - **Three block display settings never persisted** — `show_block_timestamps`, `show_block_marks` / `show_prompt_marks` (split from the never-wired `show_scrollbar_marks`), and `block_folding_enabled` are now real `AppConfig` fields with setters, instead of being silently dropped by every save.
 - **Scrollbar marks only rendered while holding `Ctrl+Cmd`** — Block and user-prompt scrollbar ticks are now always on (each independently toggleable); the `Ctrl+Cmd` hold now only gates the relative-time overlay, matching the documented behavior.
-- **`Cmd+Shift+.` could fire twice and fold the wrong block** — The inline `CanvasTerminal` handler and the global rebindable shortcut both ran on the same keypress and could pick different blocks. Block navigation, fold-toggle, and block-scoped search now consolidate onto one implementation, delegated to from the global shortcuts.
+- **`Cmd+Shift+.` could fire twice and fold the wrong block** — The inline `CanvasTerminal` handler and the global rebindable shortcut both ran on the same keypress and could pick different blocks. Block navigation, fold-toggle, and block-scoped search now consolidate onto one implementation, delegated to from the global shortcuts. On Windows/Linux, `Ctrl+Shift+.` (the platform form of that same shortcut) is now excluded from the terminal's own raw-keystroke passthrough so it reaches the global handler instead of typing a literal `.` into the shell.
 
 ### Added
 
@@ -68,8 +68,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Patched HTTP/2 denial-of-service dependency** — `h2` is updated to 0.4.16 for RUSTSEC-2026-0258.
 - **Orchestrated PTYs show task descriptions** — MCP `agent action=spawn` and `session action=input` accept an optional `pty_description`, shown above the terminal alongside the last submitted user prompt and updated through the existing event transports.
 - **Settings > Terminal tab** — Command block display settings (timestamps, block marks, prompt marks, folding) now have a home in Settings, matching the existing docs.
-- **Command blocks can be flagged as failed (red tick)** — Primary signal is the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type, needs `jq` on `PATH`); a text-pattern fallback (`ToolError`/`ApiError`, Bash-only) covers sessions without a hook or without `jq`. A tool failure the agent recovers from and retries successfully does not flag the block.
+- **Command blocks can be flagged as failed (red tick)** — Primary signal is the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type, no external dependency — extracted natively by the `tuic-hook` binary) — this tier flags the block on any tool failure during the turn, even one a later retry in the same turn resolves, since Claude Code exposes no per-call retry-succeeded signal to clear it against. A text-pattern fallback (`ToolError`/`ApiError`, Bash-only) covers sessions without hook instrumentation, and *is* recovery-aware there: a failure the agent retries and resolves before the turn ends does not flag the block.
 - **Command blocks carry the submitted prompt text** — For hook-driven blocks, `promptText` is populated from the keystrokes that submitted the turn (10+ words; shorter prompts are left untitled) and shown in Command Overview.
+
 
 ## [1.7.4] - 2026-08-12
 
