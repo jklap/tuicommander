@@ -323,6 +323,9 @@ needs an app restart is what that costs.
 | `shell` | `Option<String>` | `None` | Shell override (platform default if None) |
 | `font_family` | `String` | `"JetBrains Mono"` | Terminal font family |
 | `font_size` | `u16` | `14` | Terminal font size |
+| `font_weight` | `u16` | `400` | Terminal font weight (100–900, e.g. 200 = ExtraLight, 400 = Regular) |
+| `cursor_style` | `String` | `"bar"` | Terminal cursor shape: `"bar"`, `"block"`, or `"underline"` |
+| `terminal_renderer` | `String` | `"webgl"` | Terminal renderer: `"webgl"` (GPU-accelerated) or `"canvas"` (CPU) |
 | `theme` | `String` | `"commander"` | Terminal theme. An empty or unknown key falls back to `commander` (`DEFAULT_THEME`, `src/stores/settings.ts`) |
 | `ide` | `String` | `""` | IDE for "Open in..." |
 | `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP or read for terminal Chat transcript exports. Terminal Chat requires local transcript v1 support (`ego export SESSION --format transcript --after SEQ`). Read at each ACP connect or Chat binding, so a correction takes effect without a restart. Empty means ACP is not configured and terminal ego Chat is unavailable. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General` and written through `save_config` like any other field |
@@ -336,6 +339,7 @@ needs an app restart is what that costs.
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
 | `mcp_capabilities` | `object` | `{denied:["settings","diagnostics"],migration_unknown_tools:[]}` | Native capability denials. Old `disabled_native_tools` migrates once; unknown names remain visible. Parent denials cover grouped actions; member denials remain scoped. See MCP capability cutover documentation. |
+| `mcp_config_installed` | `bool` | `false` | Whether MCP config has been auto-installed in agent configs |
 | `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Discovered native schemas are unchanged: managed commands still use one `call_tool` invocation of `session action=submit` and receive the bounded receipt in that response. Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools). Size figures for both surfaces, and how to reproduce them, are in [Measuring the surfaces](mcp-http.md#measuring-the-surfaces) — the reduction is measured, never estimated |
 | `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
 
@@ -355,30 +359,42 @@ into the vault at load time and the file is rewritten immediately, so the
 cleartext copy does not survive on disk.
 
 | `close_behavior` | `ask \| background \| quit` | `ask` | Main-window close asks, hides visible windows, or quits. Ask offers Remember. Explicit Quit ignores this policy. |
+| `background` | `BackgroundConfig` | `{hide_dock_icon:true,tray_icon:"background_only",webview_unload_minutes:10}` | Background-mode window behaviour: `hide_dock_icon`, `tray_icon`, `webview_unload_minutes`. See [Background window visibility](#background-window-visibility). |
 | `confirm_before_quit` | `bool` | `true` | Confirm real quit when live terminal sessions exist; does not block Background |
 | `confirm_before_closing_tab` | `bool` | `true` | Show tab close confirmation |
 | `copy_on_select` | `bool` | `true` | Auto-copy terminal selection to clipboard |
 | `osc52_clipboard` | `bool` | `true` | Honor OSC 52 clipboard-write sequences from terminal output (a notice shows on each write; disable to ignore them) |
+| `show_last_prompt` | `bool` | `true` | Show last prompt overlay bar at the top of the terminal |
 | `bell_style` | `String` | `"visual"` | Terminal bell: "none", "visual", "sound", "both" |
 | `disabled_agents` | `Vec<String>` | `[]` | Agent IDs hidden from the Add menu |
+| `disabled_native_tools` | `Vec<String>` | `[]` | Native MCP tool names disabled by the user (excluded from the `tools/list` response) |
+| `disabled_plugin_ids` | `Vec<String>` | `[]` | Plugin IDs that the user has disabled (not loaded on startup) |
 | `global_hotkey` | `Option<String>` | `null` | OS-level window toggle hotkey combo |
 | `intent_tab_title` | `bool` | `true` | Show agent intent as tab title |
 | `language` | `String` | `"en"` | UI language code |
 | `max_tab_name_length` | `u32` | `25` | Max tab name display length |
+| `split_tab_mode` | `SplitTabMode` | `"separate"` | Split tab mode: `"separate"` (each pane gets a tab) or `"unified"` (one shared tab) |
+| `tab_ordering_mode` | `TabOrderingMode` | `"grouped-by-type"` | Tab ordering mode: `"grouped-by-type"`, `"terminals-first"`, or `"free"` |
 | `tab_cycling_all_types` | `bool` | `false` | When true, next/prev-tab shortcuts cycle file/diff/markdown/editor tabs too (default cycles terminals only) |
 | `chat_mute_intermediate_text` | `bool` | `true` | Chat (terminal Chat view, AI Chat, mobile) draws assistant text that a tool call follows in the same turn smaller and dimmer. The final text of a turn keeps the normal style. Applies immediately. |
 | `tab_tree_enabled` | `bool` | `false` | Opt-in sidebar activity cards. `false` renders no activity caret, card, or nested agent/session rows. `true` lets every branch with an open terminal session expand its assigned sessions. Applies immediately; no restart is required. |
 | `defer_update_relaunch` | `bool` | `true` | After an update installs, hold the app restart until no session is busy or awaiting input. The APP UPDATE notification shows the busy count and offers Restart now. `false` restarts as soon as the install ends. Applies immediately. |
 | `eager_resume_after_update` | `bool` | `true` | After the app restarts for an update, resume every agent tab whose session id the agent confirmed on disk, on every branch (the resume command is typed at first shell idle). A branch with no such tab, and any unconfirmed tab, keep the lazy click-to-resume banner. Applies at the next update restart. |
 | `prevent_sleep_when_busy` | `bool` | `false` | Prevent macOS sleep when terminal is busy |
+| `standby_timeout_minutes` | `u16` | `5` | Minutes of idle + unfocused before SIGSTOP on the process group. `0` disables it |
+| `custom_launchers` | `Vec<CustomLauncher>` | `[]` | User-defined launchers shown in the "Open in" menu alongside built-ins |
 | `suggest_followups` | `bool` | `true` | Show `suggest:` follow-up actions |
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Opts in to the AI Chat panel shell and SSH Tunnels. It has no sub-flags: `ai_chat_enabled`, `ai_triage_enabled` and `ai_watchers_enabled` went with the embedded AI engine (#784-0aec). A `config.json` written before that upgrade still carries them and still loads — `AppConfig` has no `deny_unknown_fields`, and `a_config_written_before_the_ai_engine_was_deleted_still_loads` holds that open |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
+| `auto_update_enabled` | `bool` | `true` | Automatically check for app updates on startup |
+| `auto_update_plugins_enabled` | `bool` | `true` | Automatically check for plugin updates on startup |
 | `update_channel` | `String` | `"stable"` (`"beta"` in beta builds) | Update channel: "stable", "beta" or "nightly"; legacy stable choices migrate once on beta builds |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
 | `show_block_timestamps` | `bool` | `true` | Label each command block with its elapsed time while Ctrl+Cmd is held. Frontend-gated (painted by the renderer); stored here for persistence |
 | `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > Terminal |
+| `show_block_marks` | `bool` | `true` | Draw command-block boundary tick marks (blue/red) on the terminal scrollbar |
+| `show_prompt_marks` | `bool` | `true` | Draw a tick mark on the terminal scrollbar for each line where the user submitted a prompt |
 | `block_folding_enabled` | `bool` | `true` | Let the `block-fold-toggle` shortcut collapse a command block's output. Frontend-gated. Blocks already folded stay folded when this is off |
 | `scrollback_reflow` | `bool` | `true` | Re-wrap scrollback history on a column resize instead of truncating it. Backend-gated: `AppState::new_vt_log_buffer` applies it to a new grid and `commit_config_change` pushes a change to grids already open. Defaults `true` — including for a config.json written before the key existed — because the grid reflowed unconditionally before the flag had a consumer |
 | `index_strategy` | `String` | `"active_and_switch"` | Which repos get a BM25 content index: `"active_and_switch"` (the boot repo plus every repo switched to), `"active_only"` (boot repo only), `"all_sequential"`, `"disabled"`. Read from the in-memory config on every switch and every `RepoChanged` — never `load_app_config()`, which takes a cross-process file lock |
