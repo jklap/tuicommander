@@ -280,6 +280,7 @@ interface SettingsStoreState {
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
 	showBlockTimestamps: boolean;
+	/** Master toggle for the scrollbar history ticks; the two below pick the categories. */
 	showScrollbarMarks: boolean;
 	showBlockMarks: boolean;
 	showPromptMarks: boolean;

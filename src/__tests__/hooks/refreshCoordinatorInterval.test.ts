@@ -8,7 +8,7 @@ describe("repository refresh interval (#1491)", () => {
 	const structure = vi.fn(async (path: string) => ({
 		worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } },
 		merged_branches: [],
-		in_progress_worktrees: [],
+		in_progress_worktrees: [] as string[],
 	}));
 	const stats = vi.fn(async (path: string) => ({
 		diff_stats: { [path]: { additions, deletions: 0 } },
