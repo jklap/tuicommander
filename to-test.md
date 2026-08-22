@@ -1847,7 +1847,7 @@ display-only metadata from the original spawn prompt.
 
 ## Command Block System (2026-05-20)
 - [ ] [HUMAN] Cmd+F with block-scoped toggle ON → only matches within current block shown _(filter logic and targeted tests pass; residual is a trusted browser SearchBar/CodeMirror interaction on a mounted editor.)_
-- [ ] Settings > Terminal > Blocks → toggle timestamps and folding on/off _(NOTE: the current settings state persists `show_block_timestamps` and `block_folding_enabled`, but no matching Settings-panel controls were found; the only current controls are the runtime modifier/shortcut paths in `CanvasTerminal.tsx:2106-2110,2165-2183`.)_
+- [x] Settings > Terminal > Blocks → toggle timestamps and folding on/off _(verified: Settings > Terminal (`TerminalTab.tsx`) renders Show block timestamps, Block folding, Show scrollbar marks and the Show block marks / Show prompt marks expert toggles, all wired to settingsStore setters and round-tripped by `src/__tests__/components/TerminalTabBlockDisplay.test.tsx`.)_
 - [ ] [HUMAN] Run 500+ commands → ~~no crash~~ **residual:** prove frontend oldest-block eviction, bounded count, and no memory growth. _(HTTP generated 510 OSC 133 blocks and the browser rendered output through `cmd-510` without a crash; store tests pass.)_
 - [ ] [HUMAN] Claude Code session: tool calls show as blocks without OSC 7770 (heuristic detection) _(2026-08-21 Luna audit: the targeted Rust parser tests passed; detection is implemented at `src-tauri/src/pty.rs:3341-3368,4993-5012`. HTTP rendered a Claude-like `⏺ Read(foo.txt)` screen in `luna-legacy-20260821-heuristic`, but its proven `agent_type` was `null` (plain shell), not Claude, and no live agent session was used.)_
 

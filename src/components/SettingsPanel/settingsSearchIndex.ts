@@ -232,6 +232,22 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "terminal",
 		section: "Terminal",
+		label: "Show block marks",
+		labelKey: "general.toggle.showBlockMarks",
+		expert: true,
+		configKey: "app.show_block_marks",
+	},
+	{
+		tab: "terminal",
+		section: "Terminal",
+		label: "Show prompt marks",
+		labelKey: "general.toggle.showPromptMarks",
+		expert: true,
+		configKey: "app.show_prompt_marks",
+	},
+	{
+		tab: "terminal",
+		section: "Terminal",
 		label: "Reflow scrollback on resize",
 		labelKey: "general.toggle.scrollbackReflow",
 		expert: true,
