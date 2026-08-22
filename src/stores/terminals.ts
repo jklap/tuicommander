@@ -26,6 +26,16 @@ export interface CommandBlock {
 	startedAt: number;
 	/** Timestamp when the command finished */
 	endedAt: number | null;
+	/**
+	 * The user's submitted prompt text, from the backend's `last_prompts` —
+	 * populated only for a turn-level block start (see `handleOsc133`'s "A"
+	 * case). `null` for real shell blocks and for the `⏺`-heuristic fallback,
+	 * neither of which has a text source. Unlike `commandLine`/`executionLine`/
+	 * `endLine`, this carries text directly rather than a row to slice from
+	 * the grid — the backend's 10-word gate on `last_prompts` also means
+	 * short prompts leave this `null`.
+	 */
+	promptText: string | null;
 }
 
 /** Shell activity state: null=never had output, busy=producing output, idle=waiting for input, exited=process terminated */
@@ -655,8 +665,10 @@ function createTerminalsStore() {
 
 		/** OSC 133: Handle shell integration marker.
 		 *  A=prompt start, B=command start, C=pre-execution, D=command finished.
-		 *  `line` is the absolute buffer line (baseY + cursorY) when the marker was processed. */
-		handleOsc133(id: string, type: string, line: number, exitCode?: number): void {
+		 *  `line` is the absolute buffer line (baseY + cursorY) when the marker was processed.
+		 *  `promptText` (only ever set on "A", from the backend's turn-level idle→busy edge)
+		 *  is the submitted prompt text — see `CommandBlock.promptText`. */
+		handleOsc133(id: string, type: string, line: number, exitCode?: number, promptText?: string | null): void {
 			const term = state.terminals[id];
 			if (!term) return;
 			const now = Date.now();
@@ -678,6 +690,7 @@ function createTerminalsStore() {
 						exitCode: null,
 						startedAt: now,
 						endedAt: null,
+						promptText: promptText ?? null,
 					});
 					break;
 				}

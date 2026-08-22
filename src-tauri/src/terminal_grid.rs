@@ -1808,60 +1808,6 @@ impl TerminalGrid {
         // scrolls back to the bottom — the frontend's cached mouse_mode/
         // sgr_mouse bits go stale for that whole window, so a selection
         // gesture starting inside it gets classified against the wrong mode.
-        let viewport_changed = self.last_frame_display_offset != Some(display_offset)
-            || self.last_frame_history_size != Some(history_size)
-            || self.last_frame_screen_lines != Some(num_lines)
-            || self.last_frame_columns != Some(num_cols);
-        if viewport_changed {
-            self.term.mark_fully_damaged();
-        }
-
-        // REJECTED (2026-08-20) — F24, skipping the full damage above when only
-        // `history_size` grew. Measured and not worth it: over 11 real captures
-        // (4810 frames, `damage_overship_over_capture_corpus`) full frames are
-        // 0.4% of all frames, and that already counts resizes and scrollback moves
-        // as well as history growth. The audit's "every scrolled line forces a
-        // full-screen frame" does not hold on real workloads. Doing it needs the
-        // frame to carry a scroll delta the frontend applies before indexing rows,
-        // and getting that wrong scrambles text silently. Re-open only if a capture
-        // shows a full-frame rate high enough to pay for that risk.
-        //
-        // DEFERRED (2026-08-20) — F26, not holding the vt lock across this
-        // serialization. It is not a lock-placement fix: this method takes
-        // `&mut self` to reset damage and update the `last_frame_*` state, so
-        // releasing the lock means double-buffering the grid — and copying the grid
-        // costs about what the encode it unblocks costs. No measurement exists
-        // showing the contention is real; take one before paying for it.
-        //
-        // (line, left, right) — `right` inclusive. Keeping the column bounds is
-        // what lets a row ship only its damaged span (see `ROW_PARTIAL_FLAG`);
-        // discarding them cost 2.44x the cells on the measured corpus.
-        let dirty_lines: Vec<(usize, usize, usize)> = {
-            let last_col = num_cols.saturating_sub(1);
-            let damage = self.term.damage();
-            match damage {
-                TermDamage::Full => (0..num_lines).map(|l| (l, 0, last_col)).collect(),
-                TermDamage::Partial(iter) => iter
-                    .filter(|b| b.line < num_lines)
-                    .map(|b| (b.line, b.left.min(last_col), b.right.min(last_col)))
-                    .collect(),
-            }
-        };
-
-        if dirty_lines.is_empty() {
-            self.term.reset_damage();
-            self.last_frame_display_offset = Some(display_offset);
-            self.last_frame_history_size = Some(history_size);
-            self.last_frame_screen_lines = Some(num_lines);
-            self.last_frame_columns = Some(num_cols);
-            return Vec::new();
-        }
-
-        // Header: 26 bytes
-        let row_count = dirty_lines.len();
-        let estimated = 26 + row_count * (4 + num_cols * 11);
-        let mut buf = Vec::with_capacity(estimated);
-
         let bell = self.drain_bell();
         let cursor_shape = cursor_style.shape;
         let mut frame_flags: u8 = 0;
@@ -1928,13 +1874,35 @@ impl TerminalGrid {
             self.term.mark_fully_damaged();
         }
 
-        let dirty_lines: Vec<usize> = {
+        // REJECTED (2026-08-20) — F24, skipping the full damage above when only
+        // `history_size` grew. Measured and not worth it: over 11 real captures
+        // (4810 frames, `damage_overship_over_capture_corpus`) full frames are
+        // 0.4% of all frames, and that already counts resizes and scrollback moves
+        // as well as history growth. The audit's "every scrolled line forces a
+        // full-screen frame" does not hold on real workloads. Doing it needs the
+        // frame to carry a scroll delta the frontend applies before indexing rows,
+        // and getting that wrong scrambles text silently. Re-open only if a capture
+        // shows a full-frame rate high enough to pay for that risk.
+        //
+        // DEFERRED (2026-08-20) — F26, not holding the vt lock across this
+        // serialization. It is not a lock-placement fix: this method takes
+        // `&mut self` to reset damage and update the `last_frame_*` state, so
+        // releasing the lock means double-buffering the grid — and copying the grid
+        // costs about what the encode it unblocks costs. No measurement exists
+        // showing the contention is real; take one before paying for it.
+        //
+        // (line, left, right) — `right` inclusive. Keeping the column bounds is
+        // what lets a row ship only its damaged span (see `ROW_PARTIAL_FLAG`);
+        // discarding them cost 2.44x the cells on the measured corpus.
+        let dirty_lines: Vec<(usize, usize, usize)> = {
+            let last_col = num_cols.saturating_sub(1);
             let damage = self.term.damage();
             match damage {
-                TermDamage::Full => (0..num_lines).collect(),
-                TermDamage::Partial(iter) => {
-                    iter.map(|b| b.line).filter(|&l| l < num_lines).collect()
-                }
+                TermDamage::Full => (0..num_lines).map(|l| (l, 0, last_col)).collect(),
+                TermDamage::Partial(iter) => iter
+                    .filter(|b| b.line < num_lines)
+                    .map(|b| (b.line, b.left.min(last_col), b.right.min(last_col)))
+                    .collect(),
             }
         };
 

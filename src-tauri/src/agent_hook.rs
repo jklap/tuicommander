@@ -2,9 +2,11 @@
 //!
 //! Each supported agent (Claude, Gemini, …) drives its busy/idle/awaiting state
 //! by running a small shell hook that emits `OSC 7770;state=…` to its controlling
-//! tty. This module generates those hook commands and the per-agent event→state
-//! maps the installer (see `agent_hook_installer`) writes into the agent's
-//! settings file.
+//! tty — Claude also emits `OSC 7770;toolfail=…` on failure-path hook events
+//! (`PostToolUseFailure`/`StopFailure`) to flag the turn-level command block's
+//! exit code (see `state.rs::turn_error_flags`). This module generates those
+//! hook commands and the per-agent event→state maps the installer (see
+//! `agent_hook_installer`) writes into the agent's settings file.
 //!
 //! The command is inert outside TUIC (guarded on `TUIC_SESSION`), resolves the
 //! controlling tty from a context where stdout is captured by the agent
@@ -32,8 +34,52 @@ fn tty_resolve() -> &'static str {
 /// `OSC 7770;state=<state>` to the controlling tty. Inert outside TUIC, always
 /// exits 0, ends with the ownership sentinel.
 pub(crate) fn hook_command(state: &str) -> String {
+    hook_command_multi(&[("state", state)])
+}
+
+/// Like `hook_command`, but emits multiple OSC 7770 `verb=payload` pairs from
+/// one guarded shell snippet (tty resolved once, reused for every printf).
+/// Needed where a single CC hook event must drive two independent signals —
+/// e.g. `StopFailure` must both transition the session to idle (like `Stop`)
+/// *and* flag the turn as failed (like `PostToolUseFailure`), which a bare
+/// `state=idle` can't distinguish from an ordinary `Stop`: both events would
+/// otherwise emit an identical wire payload.
+fn hook_command_multi(pairs: &[(&str, &str)]) -> String {
+    // Defensive ordering, not just caller discipline: `handle_tuic_state`
+    // (pty.rs) reads-and-clears `turn_error_flags` at the exact moment it
+    // processes a `state=idle` event, so any `toolfail` pair in the same
+    // call MUST be emitted first — regardless of what order the caller
+    // listed the pairs in. Without this, a future edit that lists
+    // `("state", "idle")` before `("toolfail", ...)` would compile, pass a
+    // casual review, and silently lose the failure flag for that hook.
+    let (toolfail, rest): (Vec<_>, Vec<_>) =
+        pairs.iter().partition(|(verb, _)| *verb == "toolfail");
+    let printfs: String = toolfail
+        .into_iter()
+        .chain(rest)
+        .map(|(verb, payload)| format!(r#"printf '\033]7770;{verb}={payload}\033\\' > "$__t";"#))
+        .collect::<Vec<_>>()
+        .join(" ");
     format!(
-        r#"[ -n "${{TUIC_SESSION:-}}" ] && {{ {tty}; printf '\033]7770;state={state}\033\\' > "$__t"; }} >/dev/null 2>&1 || true {SENTINEL}"#,
+        r#"[ -n "${{TUIC_SESSION:-}}" ] && {{ {tty}; {printfs} }} >/dev/null 2>&1 || true {SENTINEL}"#,
+        tty = tty_resolve(),
+    )
+}
+
+/// Generate the hook command for `PostToolUseFailure`: on tool failure only,
+/// CC pipes a JSON payload (containing `exit_code`, `stderr`, `stdout`) on
+/// stdin — unlike `PostToolUse`, which fires only on success and carries no
+/// error field at all (the two are mutually-exclusive branches of one
+/// lifecycle point, not sequential hooks). Requires `jq` to extract
+/// `exit_code`; if `jq` is absent the whole guard short-circuits and the hook
+/// silently no-ops (same `|| true` never-block-the-agent philosophy as every
+/// other hook here) — TUICommander falls back to the `ToolError`/`ApiError`
+/// text-pattern tier for that session. The extracted value itself is never
+/// parsed on the Rust side; presence of the `toolfail` event is the whole
+/// signal (see `state.rs::turn_error_flags`).
+fn post_tool_use_failure_hook_command() -> String {
+    format!(
+        r#"[ -n "${{TUIC_SESSION:-}}" ] && command -v jq >/dev/null 2>&1 && {{ {tty}; code=$(jq -r '.exit_code // 1' 2>/dev/null); printf '\033]7770;toolfail=%s\033\\' "${{code:-1}}" > "$__t"; }} >/dev/null 2>&1 || true {SENTINEL}"#,
         tty = tty_resolve(),
     )
 }
@@ -53,7 +99,6 @@ pub(crate) fn hook_command(state: &str) -> String {
 pub(crate) fn claude_hook_map() -> Vec<HookEntry> {
     vec![
         ("UserPromptSubmit", "", hook_command("busy")),
-        ("PreToolUse", "", hook_command("busy")),
         (
             "PreToolUse",
             "AskUserQuestion|ExitPlanMode",
@@ -66,7 +111,21 @@ pub(crate) fn claude_hook_map() -> Vec<HookEntry> {
         ),
         ("Elicitation", "", hook_command("awaiting")),
         ("ElicitationResult", "", hook_command("busy")),
+        (
+            "PostToolUseFailure",
+            "",
+            post_tool_use_failure_hook_command(),
+        ),
         ("Stop", "", hook_command("idle")),
+        (
+            "StopFailure",
+            "",
+            // Input order doesn't matter — hook_command_multi always emits
+            // toolfail before state, since the idle transition it drives
+            // reads-and-clears turn_error_flags at the exact moment it's
+            // processed (handle_tuic_state).
+            hook_command_multi(&[("state", "idle"), ("toolfail", "1")]),
+        ),
         ("SessionEnd", "", hook_command("idle")),
     ]
 }
@@ -170,10 +229,22 @@ mod tests {
                 .any(|(e, _, c)| *e == "Stop" && c.contains("state=idle")),
             "Stop must drive idle"
         );
+    }
+
+    #[test]
+    fn claude_map_has_no_broad_pretooluse_busy_entry() {
+        // Removed deliberately: redundant with UserPromptSubmit's single busy
+        // call for the busy/idle atomic (traced through note_explicit_state,
+        // note_ready_screen's hook_busy/turn_activity_seen guard,
+        // stamp_last_output_now, invalidate_background_probe_boundary_locked —
+        // none of it needs re-affirming per tool call), and it was the root
+        // cause of the green-tick scrollbar marker firing once per tool call
+        // instead of once per prompt.
+        let map = claude_hook_map();
         assert!(
-            map.iter()
-                .any(|(e, m, c)| *e == "PreToolUse" && m.is_empty() && c.contains("state=busy")),
-            "broad PreToolUse must drive busy"
+            !map.iter()
+                .any(|(e, m, _)| *e == "PreToolUse" && m.is_empty()),
+            "broad PreToolUse busy entry must not be reintroduced"
         );
     }
 
@@ -192,6 +263,97 @@ mod tests {
         assert!(set.contains("state=awaiting"), "{set}");
         let clear = find("ElicitationResult").expect("answered elicitation must clear awaiting");
         assert!(clear.contains("state=busy"), "{clear}");
+    }
+
+    #[test]
+    fn claude_map_has_stop_failure_driving_idle_and_toolfail() {
+        // PostToolUse/PostToolUseFailure and Stop/StopFailure are
+        // mutually-exclusive success/failure branches of the same lifecycle
+        // point, not sequential hooks — a turn ending via StopFailure would
+        // never reach idle without this (only Stop drove `state=idle` before).
+        let map = claude_hook_map();
+        let (_, _, cmd) = map
+            .iter()
+            .find(|(e, _, _)| *e == "StopFailure")
+            .expect("claude map must have a StopFailure entry");
+        assert!(
+            cmd.contains("state=idle"),
+            "StopFailure must still reach idle: {cmd}"
+        );
+        assert!(
+            cmd.contains("toolfail=1"),
+            "StopFailure must flag the turn failed: {cmd}"
+        );
+        // Order matters: handle_tuic_state reads-and-clears turn_error_flags
+        // at the exact moment it processes the idle transition, so toolfail
+        // must already be set by then — emitting it after state=idle would
+        // silently lose the failure flag for every StopFailure turn.
+        let toolfail_pos = cmd.find("toolfail=1").expect("toolfail present");
+        let state_idle_pos = cmd.find("state=idle").expect("state=idle present");
+        assert!(
+            toolfail_pos < state_idle_pos,
+            "toolfail must be emitted before state=idle: {cmd}"
+        );
+    }
+
+    #[test]
+    fn claude_map_has_post_tool_use_failure_entry() {
+        let map = claude_hook_map();
+        let (_, matcher, cmd) = map
+            .iter()
+            .find(|(e, _, _)| *e == "PostToolUseFailure")
+            .expect("claude map must have a PostToolUseFailure entry");
+        assert!(matcher.is_empty(), "must match every tool, not a subset");
+        assert!(cmd.contains("jq"), "must gate on jq availability: {cmd}");
+        assert!(
+            cmd.contains("toolfail="),
+            "must emit the toolfail verb: {cmd}"
+        );
+    }
+
+    #[test]
+    fn post_tool_use_failure_hook_command_reads_stdin_exit_code_via_jq() {
+        let cmd = post_tool_use_failure_hook_command();
+        assert!(
+            cmd.contains("command -v jq"),
+            "must check jq is on PATH: {cmd}"
+        );
+        assert!(
+            cmd.contains(".exit_code"),
+            "must extract exit_code from stdin JSON: {cmd}"
+        );
+        assert!(cmd.contains("|| true"), "must never block the agent: {cmd}");
+        assert!(cmd.trim_end().ends_with(SENTINEL));
+    }
+
+    #[test]
+    fn hook_command_multi_emits_every_pair_via_one_tty_resolve() {
+        let cmd = hook_command_multi(&[("state", "idle"), ("toolfail", "1")]);
+        assert!(cmd.contains(r"\033]7770;state=idle\033"));
+        assert!(cmd.contains(r"\033]7770;toolfail=1\033"));
+        assert_eq!(
+            cmd.matches(r#"ps -o tty= -p "$PPID""#).count(),
+            1,
+            "tty must be resolved once and reused, not per pair: {cmd}"
+        );
+    }
+
+    #[test]
+    fn hook_command_multi_always_orders_toolfail_before_state_regardless_of_input_order() {
+        // Defensive, not just a caller convention: turn_error_flags is
+        // read-and-cleared at the exact moment state=idle is processed, so
+        // toolfail must be on the wire first no matter how the caller listed
+        // the pairs.
+        let listed_state_first = hook_command_multi(&[("state", "idle"), ("toolfail", "1")]);
+        let listed_toolfail_first = hook_command_multi(&[("toolfail", "1"), ("state", "idle")]);
+        for cmd in [&listed_state_first, &listed_toolfail_first] {
+            let toolfail_pos = cmd.find("toolfail=1").expect("toolfail present");
+            let state_idle_pos = cmd.find("state=idle").expect("state=idle present");
+            assert!(
+                toolfail_pos < state_idle_pos,
+                "toolfail must always precede state=idle, regardless of input order: {cmd}"
+            );
+        }
     }
 
     #[test]

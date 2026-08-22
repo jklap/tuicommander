@@ -1639,6 +1639,30 @@ pub struct AppState {
     /// here suppresses the Inferred-outcome fallback, since the shell-integration
     /// path is authoritative once wired.
     pub(crate) has_osc133_integration: DashMap<String, ()>,
+    /// Sessions that have ever received an OSC 7770 `state=` event. Presence
+    /// here suppresses the `⏺`-heuristic block synthesis, since the
+    /// idle↔busy-edge turn-level block source is authoritative once wired —
+    /// the heuristic only matters for agents without hook instrumentation.
+    pub(crate) has_tuic_state_integration: DashMap<String, ()>,
+    /// Sessions with a pending turn-level failure signal — set by a
+    /// `toolfail` OSC 7770 event (from a `PostToolUseFailure` or `StopFailure`
+    /// hook) or by the `ToolError`/`ApiError` text-pattern fallback. Read and
+    /// cleared at the busy→idle edge (`ChunkProcessor::handle_tuic_state`) to
+    /// decide the closing block's `exit_code` (a red scrollbar tick), and
+    /// also cleared at the *start* of the next turn so a flag that arrives
+    /// too late for the turn it was meant for (the text-pattern fallback's
+    /// 5s silence gate routinely fires after a hook-instrumented session's
+    /// own Stop/idle transition already read-and-cleared it) can't bleed
+    /// into a later, unrelated turn.
+    ///
+    /// Only ever consumed by `handle_tuic_state`, i.e. only for
+    /// hook-instrumented sessions. Sessions without hook instrumentation get
+    /// their blocks from the `⏺` heuristic instead (`synthesize_cc_block_events`),
+    /// which never reads this map — and couldn't cleanly anyway, since the
+    /// heuristic's blocks are per-tool-call while this flag is per-turn, so
+    /// there's no single block a late-arriving turn-level failure should
+    /// attach to. Heuristic-sourced blocks can currently never show a red tick.
+    pub(crate) turn_error_flags: DashMap<String, ()>,
     /// Per-session filesystem sandbox for the L2 agent's file/shell tools.
     /// Keyed by session_id. Populated when the agent loop starts, rooted at the
     /// session's git repo root or CWD. See `ai_agent::sandbox::FileSandbox`.
@@ -2604,6 +2628,8 @@ impl AppState {
             session_knowledge: DashMap::new(),
             knowledge_dirty: DashMap::new(),
             has_osc133_integration: DashMap::new(),
+            has_tuic_state_integration: DashMap::new(),
+            turn_error_flags: DashMap::new(),
             file_sandboxes: DashMap::new(),
             unrestricted_sessions: DashMap::new(),
             #[cfg(unix)]
@@ -6027,6 +6053,8 @@ mod tests {
             session_knowledge: DashMap::new(),
             knowledge_dirty: DashMap::new(),
             has_osc133_integration: DashMap::new(),
+            has_tuic_state_integration: DashMap::new(),
+            turn_error_flags: DashMap::new(),
             file_sandboxes: DashMap::new(),
             unrestricted_sessions: DashMap::new(),
             #[cfg(unix)]

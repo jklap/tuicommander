@@ -691,7 +691,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (painted.has(promptLine)) continue;
 			painted.add(promptLine);
 			const block = term.commandBlocks.find((b) => b.promptLine === promptLine);
-			if (!block?.endLine) continue;
+			if (block?.endLine == null) continue;
 			const foldStart = (block.executionLine ?? block.promptLine) + 1;
 			const foldEnd = block.endLine;
 			const foldedCount = foldEnd - foldStart;
@@ -3264,7 +3264,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// Force an immediate scrollbar-marks repaint on toggle — paintScrollbarMarks
 	// is otherwise only invoked from the frame-decode/scroll path, so without
 	// this, flipping a setting wouldn't take visible effect until the next
-	// unrelated repaint.
+	// unrelated repaint. If a future mark type gets its own setting, it needs
+	// tracking here too, alongside its own placeholder branch in
+	// paintScrollbarMarks's memo key below — the two must stay in sync.
 	createEffect(() => {
 		settingsStore.state.showBlockMarks;
 		settingsStore.state.showPromptMarks;
