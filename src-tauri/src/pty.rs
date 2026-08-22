@@ -3885,7 +3885,7 @@ fn completion_adjusted_screen_activity(
 /// If the silence timer's tool-error candidate has genuinely fired (turn-ending,
 /// not recovered — see `SilenceState::check_tool_error`), flag the currently-open
 /// turn-level block (the fallback-tier red-tick signal, for non-hook-instrumented
-/// agents or hook-instrumented ones without `jq`) and emit the `ToolError` event.
+/// agents) and emit the `ToolError` event.
 /// Only fires post-`check_tool_error()`, not at the raw `mark_tool_error_candidate`
 /// call, so a *recovered* error (the agent retries and the turn ends normally)
 /// never flags. Extracted from `spawn_silence_timer`'s loop body for testability.
@@ -5300,9 +5300,9 @@ impl ChunkProcessor {
                             }
                         }
                         "toolfail" => {
-                            // From a PostToolUseFailure hook (payload = the jq-extracted
-                            // exit code, or CC's own fallback sentinel if jq/extraction
-                            // failed) or a StopFailure hook (payload = a fixed sentinel —
+                            // From a PostToolUseFailure hook (payload = tuic-hook's
+                            // natively-extracted exit code, or its own fallback sentinel
+                            // if extraction failed) or a StopFailure hook (payload = a fixed sentinel —
                             // the event firing at all, rather than Stop, is itself the
                             // failure signal). Presence is all that matters — read and
                             // cleared as an arbitrary non-zero sentinel exit code at the

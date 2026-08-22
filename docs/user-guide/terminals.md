@@ -203,9 +203,14 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 - **Scrollbar marks** — Color-coded ticks on the scrollbar mark each block boundary; a separate
   green tick marks each line where you submitted a prompt. Both are always on and independently
   toggleable at Settings > Terminal > Blocks.
-- **Red ticks** — A block turns red if the turn hit a tool failure or API error that wasn't
-  recovered from. For Claude Code this needs `jq` installed for full coverage across every tool
-  type; without it, only Bash-shaped failures (`⎿ Error: Exit code N`) are caught.
+- **Red ticks** — A block turns red if any tool call in the turn failed, or hit an API error.
+  For a hook-instrumented agent (the primary tier, covering every tool type — the `tuic-hook`
+  binary extracts this natively, with no external dependency), a failure flags the block even
+  if the agent successfully retries it later in the same turn — the hooks don't expose a
+  per-call retry-succeeded signal to clear it against. For a non-hook-instrumented agent (or a
+  still-open turn), coverage falls back to text-pattern matching (`⎿ Error: Exit code N`, Bash
+  only, or a detected API error), which *is* recovery-aware: a failure the agent resolves before
+  the turn ends does not flag the block.
 - **Timestamp overlay** — Hold `Ctrl+Cmd` to see how long ago each block started.
 - **Gutter click** — Click the gutter next to a block to select its entire output.
 - **Fold/unfold** — `Cmd+Shift+.` collapses or expands the block nearest the middle of the
@@ -231,8 +236,8 @@ Two sources feed blocks, and a session only ever uses one:
   produced a heuristic match either; marks require at least one detected block.
 - **Folding does nothing** — you're on a version predating the `endLine` fix; folding is a no-op
   against a heuristic block whose end line was computed incorrectly.
-- **No red tick on a real failure** — check whether `jq` is on `PATH`; without it, only
-  Bash-shaped failures are detected.
+- **No red tick on a real failure** — check whether the agent has hook instrumentation
+  installed; without it, only Bash-shaped failures are detected via the text-pattern fallback.
 
 ## Copy & Paste
 
