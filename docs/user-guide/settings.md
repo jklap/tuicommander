@@ -30,12 +30,6 @@ Two limits are deliberate:
 | **Prevent sleep when busy** | Keep machine awake while agents are working |
 | **Auto-check for updates** | Check for new versions on startup |
 | **Auto-show PR popover** | Automatically display PR details when switching branches. Only shows for OPEN pull requests — CLOSED PRs are hidden, and MERGED PRs fade after 5 minutes of user activity. |
-| **Copy on Select** | Auto-copy terminal selection to clipboard. When text is selected in the terminal, it is immediately copied. A "Copied to clipboard" confirmation appears in the status bar. Enabled by default. Also configurable in Appearance tab. |
-| **Allow OSC 52 clipboard writes** | Let terminal programs set the system clipboard via the OSC 52 escape sequence (used by tmux, vim, ssh yank-over-SSH, etc.). Because OSC 52 is honored from anywhere in the byte stream, a displayed file or log can also overwrite the clipboard — so a non-blocking "Clipboard updated" notice appears on every write. Disable to ignore OSC 52 entirely. Enabled by default. |
-| **Show block timestamps** | While Ctrl+Cmd is held, each command block is labelled at the right edge with how long ago it started. Enabled by default. |
-| **Block folding** | Let the Toggle Block Fold shortcut (Cmd/Ctrl+Shift+.) and its command-palette entry collapse a command block's output. Blocks already folded stay collapsed when this is off. Enabled by default. |
-| **Show scrollbar marks** | Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began. Covers the **history** markers only — the blue/red block ticks and the green user-prompt ticks. Orange search-match ticks are not affected: they are the result of a search you just ran, not a display preference. Enabled by default. |
-| **Reflow scrollback on resize** | Re-wrap scrollback history when the terminal changes width, so output written at the old width stays readable after a side panel opens or closes. Turn it off to leave history lines as they were written and truncate them to the new width instead. The visible screen is never reflowed either way — cursor-addressed TUIs redraw themselves. Enabled by default; a change applies to sessions already open. |
 | **Repository defaults** | Base branch, file handling, setup/run scripts applied to new repos |
 | **Experimental Features** | Master toggle for experimental features. When enabled, shows sub-toggles: **AI Chat** (AI Chat panel, shortcuts, command palette entry), **Scroll History** (scrollback overlay with search when scrolling up in agent mode), **AI Triage** (diff classification), **AI Watchers** (terminal event watchers), **Copy-on-write workspaces** (new workspaces become full repository clones instead of linked worktrees; workspaces you already created stay usable when it is off). |
 
@@ -44,17 +38,34 @@ Two limits are deliberate:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | **Terminal theme** | — | — | Color theme with preview swatches |
-| **Terminal font** | — | JetBrains Mono | 13 bundled monospace fonts: Fira Code, Hack, Cascadia Code, Source Code Pro, IBM Plex Mono, Inconsolata, Ubuntu Mono, Anonymous Pro, Roboto Mono, Space Mono, Monaspace Neon, Geist Mono |
-| **Default font size** | — | — | 8–32px slider. Applies to new terminals; existing terminals keep their zoom level. |
 | **Split tab mode** | — | — | Separate or unified tab appearance |
 | **Cycle All Tab Types** | — | Off | When on, next/prev-tab shortcuts also cycle file/diff/markdown/editor tabs (ordered like the tab bar). Off cycles terminals only. |
 | **Nested Terminal Tabs** | — | Off | When on, a branch with more than one terminal shows a collapsible list of its terminals under its sidebar row, each with a status dot. Off by default. |
 | **Max tab name length** | — | — | 10–60 slider |
 | **Repository groups** | — | — | Create, rename, delete, and color-code groups |
 | **Reset panel sizes** | — | — | Restore sidebar and panel widths to defaults |
-| **Copy on Select** | `boolean` | `true` | Auto-copy terminal selection to clipboard |
-| **Allow OSC 52 clipboard writes** | `boolean` | `true` | Honor OSC 52 clipboard writes from terminal output (shows a notice per write) |
 | **Bell Style** | `none/visual/sound/both` | `visual` | Terminal bell behavior |
+
+## Terminal Tab
+
+### Rendering
+
+A live preview reflects these as you change them.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Terminal font** | — | JetBrains Mono | 13 bundled monospace fonts: Fira Code, Hack, Cascadia Code, Source Code Pro, IBM Plex Mono, Inconsolata, Ubuntu Mono, Anonymous Pro, Roboto Mono, Space Mono, Monaspace Neon, Geist Mono |
+| **Default font size** | — | — | 8–32px slider. Applies to new terminals; existing terminals keep their zoom level. |
+| **Font weight** | — | 400 | 100–900 slider in steps of 100 (e.g. 200 = ExtraLight, 400 = Regular, 700 = Bold) |
+| **Cursor style** | `bar/block/underline` | `bar` | Shape of the terminal cursor. Applies immediately to all terminals. |
+
+### Behavior
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Copy on Select** | `boolean` | `true` | Auto-copy terminal selection to clipboard. When text is selected in the terminal, it is immediately copied. A "Copied to clipboard" confirmation appears in the status bar. |
+| **Allow OSC 52 clipboard writes** | `boolean` | `true` | Let terminal programs set the system clipboard via the OSC 52 escape sequence (used by tmux, vim, ssh yank-over-SSH, etc.). Because OSC 52 is honored from anywhere in the byte stream, a displayed file or log can also overwrite the clipboard — so a non-blocking "Clipboard updated" notice appears on every write. Disable to ignore OSC 52 entirely. |
+| **Show agent context bar** | `boolean` | `true` | Display the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent |
 
 ## Agents Tab
 

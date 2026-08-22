@@ -761,6 +761,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Legacy MCP negotiation advances to 2025-11-25** — the server, HTTP and stdio proxy clients, and `tuic-bridge` now agree on the legacy revision required by clients that negotiate down; HTTP requests carry `MCP-Protocol-Version`, while older clients that omit it remain accepted.
 - **Patched HTTP/2 denial-of-service dependency** — `h2` is updated to 0.4.16 for RUSTSEC-2026-0258.
 - **Orchestrated PTYs show task descriptions** — MCP `agent action=spawn` and `session action=input` accept an optional `pty_description`, shown above the terminal alongside the last submitted user prompt and updated through the existing event transports.
+- **Settings > Terminal tab** — Command block display settings (timestamps, block marks, prompt marks, folding) now have a home in Settings, matching the existing docs.
+- **Command blocks can be flagged as failed (red tick)** — Primary signal is the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type, no external dependency — extracted natively by the `tuic-hook` binary) — this tier flags the block on any tool failure during the turn, even one a later retry in the same turn resolves, since Claude Code exposes no per-call retry-succeeded signal to clear it against. A text-pattern fallback (`ToolError`/`ApiError`, Bash-only) covers sessions without hook instrumentation, and *is* recovery-aware there: a failure the agent retries and resolves before the turn ends does not flag the block.
+- **Command blocks carry the submitted prompt text** — For hook-driven blocks, `promptText` is populated from the keystrokes that submitted the turn (10+ words; shorter prompts are left untitled) and shown in Command Overview.
+
+### Changed
+
+- **Terminal font, cursor, and behavior settings moved into the new Terminal tab** — Terminal Font/Size/Weight, Cursor Style, and the live preview (previously in Appearance) and Copy on Select / OSC 52 clipboard writes / the PTY prompt bar toggle (previously in General) now live alongside the block settings in Settings > Terminal.
 
 ## [1.7.4] - 2026-08-12
 
