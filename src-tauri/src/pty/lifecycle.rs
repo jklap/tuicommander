@@ -2788,23 +2788,19 @@ pub(super) fn emit_shell_state(
 }
 
 /// Apply an authoritative shell-state marker and emit the new state if it
-/// changed. Shared by OSC 133 A/C and OSC 7770 `state=` handlers.
+/// changed. Shared by OSC 133 A/C and OSC 7770 `state=` handlers. Returns
+/// whether this call caused a real transition (as opposed to a same-state
+/// re-affirmation or a stale/unknown-session no-op) — callers that need to
+/// distinguish a genuine idle↔busy edge from a redundant re-affirmation
+/// (e.g. turn-level block synthesis) use this instead of re-deriving it.
 pub(super) fn transition_explicit_shell_state(
     state: &crate::state::AppState,
     session_id: &str,
     target: u8,
     label: &str,
     hook_state: bool,
-) {
-    transition_explicit_shell_state_impl(
-        state,
-        session_id,
-        target,
-        label,
-        hook_state,
-        || {},
-        false,
-    );
+) -> bool {
+    transition_explicit_shell_state_impl(state, session_id, target, label, hook_state, || {}, false)
 }
 
 #[cfg(test)]
@@ -2815,7 +2811,7 @@ pub(super) fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
     label: &str,
     hook_state: bool,
     before_transaction: F,
-) {
+) -> bool {
     transition_explicit_shell_state_impl(
         state,
         session_id,
@@ -2824,7 +2820,7 @@ pub(super) fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         hook_state,
         before_transaction,
         true,
-    );
+    )
 }
 
 fn transition_explicit_shell_state_impl<F: FnOnce()>(
@@ -2835,7 +2831,7 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
     hook_state: bool,
     before_transaction: F,
     flush_on_idle: bool,
-) {
+) -> bool {
     // A hook busy/idle transition proves the agent is no longer blocked on a
     // question, so it retracts the awaiting badge. Emit ONLY when a badge is
     // actually set: the badge is sticky state, not a stream, so this is an edge
@@ -2875,7 +2871,7 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
                     .is_some_and(|session| session.turn_epoch != observed)
             })
         {
-            return;
+            return false;
         }
         if let Some(silence) = silence_guard.as_mut() {
             silence.note_explicit_state(target, hook_state);
@@ -2895,10 +2891,10 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
         }
         let prev = match state.session_maps.shell_states.get(session_id) {
             Some(atom) => atom.load(std::sync::atomic::Ordering::Acquire),
-            None => return,
+            None => return false,
         };
         if prev == target {
-            return;
+            return false;
         }
         if prev == SHELL_BUSY
             && target == SHELL_IDLE
@@ -2935,6 +2931,7 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
             }
         }
     }
+    transitioned
 }
 
 /// Emit an ActiveSubtasks parsed event via both event bus and Tauri IPC.
@@ -3057,6 +3054,78 @@ pub(super) fn is_cc_tool_call_header(text: &str) -> bool {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     })
+}
+
+/// Synthesize `AgentBlock` start/end events from Claude Code `⏺ ToolName(args)`
+/// tool-call headers — the fallback block source for sessions without hook
+/// instrumentation (see `has_tuic_state_integration`; the turn-level idle↔busy
+/// edge is the primary source and is unconditionally preferred once present).
+///
+/// `end` always carries the *exclusive* upper bound of the block being
+/// closed — the next header's absolute line, or (on agent teardown) one past
+/// the last written row — never the closing block's own start line and never
+/// `abs_line - 1`. `CommandBlock.endLine` is exclusive throughout the
+/// frontend (fold height, block-scoped search), so a block whose `endLine`
+/// equals its own `promptLine` silently breaks folding.
+///
+/// Both branches clamp to `.max(prev + 1)`: once the scrollback ring
+/// saturates, `history_size` stops growing while `row_index` keeps cycling,
+/// so `abs_line` is not globally monotonic — without the clamp a full-screen
+/// redraw could emit `end < start`.
+pub(super) fn synthesize_cc_block_events(
+    changed_rows: &[crate::state::ChangedRow],
+    history_size: usize,
+    agent_active: bool,
+    teardown_end_line: usize,
+    last_agent_block_line: &mut Option<usize>,
+) -> Vec<ParsedEvent> {
+    let mut events = Vec::new();
+    if !agent_active {
+        if let Some(prev) = last_agent_block_line.take() {
+            events.push(ParsedEvent::AgentBlock {
+                action: "end".into(),
+                line: teardown_end_line.max(prev + 1) as i64,
+                exit_code: None,
+                prompt_text: None,
+            });
+        }
+        return events;
+    }
+    for row in changed_rows {
+        if !is_cc_tool_call_header(&row.text) {
+            continue;
+        }
+        let abs_line = history_size + row.row_index;
+        if Some(abs_line) == *last_agent_block_line {
+            continue;
+        }
+        // The new block's start must never precede the end just emitted for
+        // the block it's closing — otherwise the same scrollback-saturation
+        // regression that requires clamping `end` (see doc comment above)
+        // produces an `end` ahead of an unclamped, regressed `start`,
+        // overlapping the two blocks. Reuse the clamped end line as the new
+        // start whenever there was a previous block to close.
+        let start_line = if let Some(prev) = *last_agent_block_line {
+            let end_line = abs_line.max(prev + 1);
+            events.push(ParsedEvent::AgentBlock {
+                action: "end".into(),
+                line: end_line as i64,
+                exit_code: None,
+                prompt_text: None,
+            });
+            end_line
+        } else {
+            abs_line
+        };
+        events.push(ParsedEvent::AgentBlock {
+            action: "start".into(),
+            line: start_line as i64,
+            exit_code: None,
+            prompt_text: None,
+        });
+        *last_agent_block_line = Some(start_line);
+    }
+    events
 }
 
 /// Retract a low-confidence `awaiting_input` once the screen is quiet and no
@@ -3291,7 +3360,16 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // Input mode and shell integration describe the process that just died.
     state.session_maps.slash_mode.remove(session_id);
     state.session_maps.last_input_ms.remove(session_id);
+    // These three integration/flag markers must not leak — every session that
+    // ever spoke OSC 133 or OSC 7770 left a permanent dead entry keyed by its
+    // UUID otherwise, on both this path and the explicit close/kill path
+    // (`cleanup_session`, which composes this function).
     state.session_maps.has_osc133_integration.remove(session_id);
+    state
+        .session_maps
+        .has_tuic_state_integration
+        .remove(session_id);
+    state.session_maps.turn_error_flags.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.session_maps.shell_state_since_ms.remove(session_id);
     // A peer that announced its own `$TUIC_SESSION` is filed under that identity,
@@ -3634,6 +3712,19 @@ pub(crate) fn spawn_tombstone_sweeper(state: Arc<AppState>) {
             reap_tombstones(&state, &aged_out_tombstones(&state, now_ms));
         }
     });
+}
+
+/// Shared lookup for `last_prompts`, kept in one place so the IPC-exposed
+/// getter (`get_last_prompt`, `pty/commands.rs`) and the internal consumer
+/// (`ChunkProcessor::handle_tuic_state`'s `AgentBlock.prompt_text`) can't drift
+/// if the lookup semantics ever change (trimming, a different word-count
+/// threshold, etc.).
+pub(crate) fn last_prompt_text(state: &AppState, session_id: &str) -> Option<String> {
+    state
+        .session_maps
+        .last_prompts
+        .get(session_id)
+        .map(|v| v.clone())
 }
 
 /// Shared resize core for the Tauri command and the HTTP route (story 056-7545).

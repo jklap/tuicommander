@@ -1,6 +1,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-fresh-free-text-1980.tcap","agent":"ego","geometry":[40,120]}
 {"record":0,"event":{"type":"shell-state","state":"busy","agent_type":"ego"}}
 {"record":0,"event":{"type":"intent","text":"Use ask_question now with mode free_text, empty options, prompt Which release ch","title":"εgo","_turn_epoch":0}}
+{"record":0,"event":{"type":"agent-block","action":"start","line":10,"_turn_epoch":0}}
 {"record":0,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":0,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
 {"record":0,"event":{"type":"question","prompt_text":"Which release check should we run?","confident":true,"_turn_epoch":0}}

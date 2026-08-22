@@ -140,7 +140,7 @@
 {"record":136,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":137,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":138,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":139,"event":{"type":"agent-block","action":"end","line":11,"_turn_epoch":0}}
+{"record":139,"event":{"type":"agent-block","action":"end","line":263,"_turn_epoch":0}}
 {"record":139,"event":{"type":"agent-block","action":"start","line":263,"_turn_epoch":0}}
 {"record":139,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":140,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -163,7 +163,7 @@
 {"record":157,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":158,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":159,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":160,"event":{"type":"agent-block","action":"end","line":263,"_turn_epoch":0}}
+{"record":160,"event":{"type":"agent-block","action":"end","line":296,"_turn_epoch":0}}
 {"record":160,"event":{"type":"agent-block","action":"start","line":296,"_turn_epoch":0}}
 {"record":160,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":161,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -248,7 +248,7 @@
 {"record":240,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":241,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":242,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":243,"event":{"type":"agent-block","action":"end","line":296,"_turn_epoch":0}}
+{"record":243,"event":{"type":"agent-block","action":"end","line":548,"_turn_epoch":0}}
 {"record":243,"event":{"type":"agent-block","action":"start","line":548,"_turn_epoch":0}}
 {"record":243,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":244,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -271,7 +271,7 @@
 {"record":261,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":262,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":263,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":264,"event":{"type":"agent-block","action":"end","line":548,"_turn_epoch":0}}
+{"record":264,"event":{"type":"agent-block","action":"end","line":581,"_turn_epoch":0}}
 {"record":264,"event":{"type":"agent-block","action":"start","line":581,"_turn_epoch":0}}
 {"record":264,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":265,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -357,7 +357,7 @@
 {"record":345,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":346,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":347,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":348,"event":{"type":"agent-block","action":"end","line":581,"_turn_epoch":0}}
+{"record":348,"event":{"type":"agent-block","action":"end","line":835,"_turn_epoch":0}}
 {"record":348,"event":{"type":"agent-block","action":"start","line":835,"_turn_epoch":0}}
 {"record":348,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":349,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}

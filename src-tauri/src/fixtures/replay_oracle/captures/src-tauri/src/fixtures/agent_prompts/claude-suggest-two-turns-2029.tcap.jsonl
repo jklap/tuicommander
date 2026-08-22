@@ -96,6 +96,7 @@
 {"record":91,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":92,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":93,"event":{"type":"shell-state","state":"idle","agent_type":"claude"}}
+{"record":93,"event":{"type":"agent-block","action":"end","line":33,"_turn_epoch":0}}
 {"record":93,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":94,"event":{"type":"shell-state","state":"busy","agent_type":"claude"}}
 {"record":94,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -144,6 +145,7 @@
 {"record":137,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":138,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":139,"event":{"type":"shell-state","state":"idle","agent_type":"claude"}}
+{"record":139,"event":{"type":"agent-block","action":"end","line":43,"_turn_epoch":0}}
 {"record":139,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":140,"event":{"type":"shell-state","state":"busy","agent_type":"claude"}}
 {"record":140,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}

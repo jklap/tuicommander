@@ -326,6 +326,7 @@
 {"record":318,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":319,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":320,"event":{"type":"shell-state","state":"idle","agent_type":"ego"}}
+{"record":320,"event":{"type":"agent-block","action":"end","line":124,"_turn_epoch":0}}
 {"record":320,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":321,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":322,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
@@ -346,6 +347,7 @@
 {"record":340,"state":{"shell":2,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":341,"event":{"type":"shell-state","state":"busy","agent_type":"ego"}}
 {"record":341,"event":{"type":"intent","text":"Use your native ask_question tool now, mode single, free_text false. Title: May","title":"εgo","_turn_epoch":0}}
+{"record":341,"event":{"type":"agent-block","action":"start","line":144,"_turn_epoch":0}}
 {"record":341,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":341,"state":{"shell":1,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":342,"state":{"shell":1,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
@@ -428,6 +430,7 @@
 {"record":412,"state":{"shell":1,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":413,"state":{"shell":1,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":414,"event":{"type":"shell-state","state":"idle","agent_type":"ego"}}
+{"record":414,"event":{"type":"agent-block","action":"end","line":198,"_turn_epoch":0}}
 {"record":414,"state":{"shell":2,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":415,"state":{"shell":2,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":416,"state":{"shell":2,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}

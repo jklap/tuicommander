@@ -152,6 +152,7 @@
 {"record":143,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":null,"choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":144,"event":{"type":"protocol-question-cleared"}}
 {"record":144,"event":{"type":"shell-state","state":"idle","agent_type":"claude"}}
+{"record":144,"event":{"type":"agent-block","action":"end","line":33,"_turn_epoch":0}}
 {"record":144,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":145,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":146,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
