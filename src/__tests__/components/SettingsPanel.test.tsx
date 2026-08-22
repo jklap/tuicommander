@@ -10,11 +10,19 @@ vi.mock("../../stores/settings", () => ({
 			defaultFontSize: 12,
 			confirmBeforeQuit: true,
 			confirmBeforeClosingTab: true,
+			showBlockTimestamps: true,
+			showBlockMarks: true,
+			showPromptMarks: true,
+			blockFoldingEnabled: true,
 		},
 		setIde: vi.fn(),
 		setFont: vi.fn(),
 		setConfirmBeforeQuit: vi.fn(),
 		setConfirmBeforeClosingTab: vi.fn(),
+		setShowBlockTimestamps: vi.fn(),
+		setShowBlockMarks: vi.fn(),
+		setShowPromptMarks: vi.fn(),
+		setBlockFoldingEnabled: vi.fn(),
 		isAiChatEnabled: vi.fn().mockReturnValue(false),
 	},
 	IDE_NAMES: { vscode: "VS Code", cursor: "Cursor" },
@@ -119,9 +127,26 @@ describe("SettingsPanel", () => {
 		const labels = Array.from(navItems).map((n) => n.textContent);
 		expect(labels).toContain("General");
 		expect(labels).toContain("Appearance");
+		expect(labels).toContain("Terminal");
 		expect(labels).toContain("Notifications");
 		expect(labels).toContain("Agents");
 		expect(labels).not.toContain("Groups");
+	});
+
+	it("shows the Blocks toggles when the Terminal nav item is active", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		const navItems = container.querySelectorAll(".navItem");
+		const terminalItem = Array.from(navItems).find((n) => n.textContent === "Terminal")!;
+		fireEvent.click(terminalItem);
+
+		const heading = container.querySelector(".section h3");
+		expect(heading!.textContent).toBe("Blocks");
+
+		const toggleLabels = Array.from(container.querySelectorAll(".toggle span")).map((n) => n.textContent);
+		expect(toggleLabels).toContain("Show block timestamps");
+		expect(toggleLabels).toContain("Show block marks");
+		expect(toggleLabels).toContain("Show prompt marks");
+		expect(toggleLabels).toContain("Enable block folding");
 	});
 
 	it("close button calls onClose", () => {

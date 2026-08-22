@@ -27,6 +27,7 @@ import {
 	RepoWorktreeTab,
 	ServicesTab,
 	SmartPromptsTab,
+	TerminalTab,
 } from "./tabs";
 import { ProvidersTab } from "./tabs/ProvidersTab";
 
@@ -45,6 +46,7 @@ export interface SettingsPanelProps {
 const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 	{ key: "general", label: t("settings.general", "General") },
 	{ key: "appearance", label: t("settings.appearance", "Appearance") },
+	{ key: "terminal", label: t("settings.terminal", "Terminal") },
 	{ key: "notifications", label: t("settings.notifications", "Notifications") },
 	{ key: "dictation", label: t("settings.dictation", "Dictation") },
 	{ key: "github", label: "Git & GitHub" },
@@ -227,6 +229,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			</Show>
 			<Show when={activeTab() === "appearance"}>
 				<AppearanceTab />
+			</Show>
+			<Show when={activeTab() === "terminal"}>
+				<TerminalTab />
 			</Show>
 			<Show when={activeTab() === "notifications"}>
 				<NotificationsTab />
