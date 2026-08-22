@@ -8,8 +8,14 @@ vi.mock("../../stores/settings", () => ({
 			ide: "vscode",
 			font: "JetBrains Mono",
 			defaultFontSize: 12,
+			fontWeight: 400,
+			cursorStyle: "bar",
+			theme: "vscode-dark",
 			confirmBeforeQuit: true,
 			confirmBeforeClosingTab: true,
+			copyOnSelect: true,
+			osc52Clipboard: true,
+			showLastPrompt: true,
 			showBlockTimestamps: true,
 			showBlockMarks: true,
 			showPromptMarks: true,
@@ -17,8 +23,14 @@ vi.mock("../../stores/settings", () => ({
 		},
 		setIde: vi.fn(),
 		setFont: vi.fn(),
+		setDefaultFontSize: vi.fn(),
+		setFontWeight: vi.fn(),
+		setCursorStyle: vi.fn(),
 		setConfirmBeforeQuit: vi.fn(),
 		setConfirmBeforeClosingTab: vi.fn(),
+		setCopyOnSelect: vi.fn(),
+		setOsc52Clipboard: vi.fn(),
+		setShowLastPrompt: vi.fn(),
 		setShowBlockTimestamps: vi.fn(),
 		setShowBlockMarks: vi.fn(),
 		setShowPromptMarks: vi.fn(),
@@ -133,16 +145,18 @@ describe("SettingsPanel", () => {
 		expect(labels).not.toContain("Groups");
 	});
 
-	it("shows the Blocks toggles when the Terminal nav item is active", () => {
+	it("shows the Rendering/Behavior/Blocks groups when the Terminal nav item is active", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		const navItems = container.querySelectorAll(".navItem");
 		const terminalItem = Array.from(navItems).find((n) => n.textContent === "Terminal")!;
 		fireEvent.click(terminalItem);
 
-		const heading = container.querySelector(".section h3");
-		expect(heading!.textContent).toBe("Blocks");
+		const headings = Array.from(container.querySelectorAll(".section h3")).map((h) => h.textContent);
+		expect(headings).toEqual(["Rendering", "Behavior", "Blocks"]);
 
 		const toggleLabels = Array.from(container.querySelectorAll(".toggle span")).map((n) => n.textContent);
+		expect(toggleLabels).toContain("Copy on select");
+		expect(toggleLabels).toContain("Allow OSC 52 clipboard writes");
 		expect(toggleLabels).toContain("Show block timestamps");
 		expect(toggleLabels).toContain("Show block marks");
 		expect(toggleLabels).toContain("Show prompt marks");
@@ -175,7 +189,6 @@ describe("SettingsPanel", () => {
 		const headingTexts = Array.from(headings).map((h) => h.childNodes[0]?.textContent?.trim() ?? "");
 		expect(headingTexts).toContain("General");
 		expect(headingTexts).toContain("Confirmations");
-		expect(headingTexts).toContain("Terminal");
 		expect(headingTexts).toContain("Power Management");
 		expect(headingTexts).toContain("Updates");
 
