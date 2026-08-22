@@ -2549,6 +2549,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 			if (!e.altKey) leftOptionHeld = false;
 
+			// Ctrl+Shift+. is the Windows/Linux form of the global block-fold-toggle
+			// shortcut (Cmd+Shift+. on macOS, where e.metaKey already short-circuits
+			// keyToSequence below). Without this, the printable-character fallback
+			// would swallow it as a literal "." keystroke instead of letting it
+			// bubble to the document-level shortcut listener.
+			if (e.ctrlKey && e.shiftKey && !e.altKey && e.key === ".") {
+				return;
+			}
+
 			// Default: legacy VT100 encoding
 			const seq = keyToSequence(e, currentFrame?.appCursor ?? false);
 			if (seq !== null) {

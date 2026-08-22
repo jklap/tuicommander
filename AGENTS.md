@@ -82,6 +82,8 @@ Never silently ship a Rust edit expecting hot reload — it will look like your 
 
 Targets macOS, Windows, Linux. Use Cmd/Ctrl abstractions, Tauri cross-platform primitives. Test in release mode (`cargo tauri build`) — release builds lack shell PATH and env vars.
 
+**Terminal keydown vs. global shortcuts:** `keyToSequence()` (`src/components/Terminal/terminalInput.ts`) excludes `metaKey` but not `ctrlKey` from its printable-character PTY-forwarding fallback — so a global shortcut whose Windows/Linux form uses Ctrl+&lt;printable&gt; (macOS form: Cmd+&lt;printable&gt;) will be silently swallowed and typed into the terminal instead of bubbling to the document-level shortcut listener, unless the terminal's keydown handler explicitly bails out first (see `isGlobalShortcutPassthrough`, `terminalInput.ts`). When adding or rebinding a global shortcut that uses Ctrl/Cmd + a printable key, verify the Windows/Linux (Ctrl) form is special-cased the same way.
+
 ## Panel Refresh
 
 Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath)` in `createEffect` — not file watchers or polling. `repo_watcher` emits `"repo-changed"` → `bumpRevision()`.
