@@ -71,6 +71,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Command blocks can be flagged as failed (red tick)** — Primary signal is the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type, no external dependency — extracted natively by the `tuic-hook` binary) — this tier flags the block on any tool failure during the turn, even one a later retry in the same turn resolves, since Claude Code exposes no per-call retry-succeeded signal to clear it against. A text-pattern fallback (`ToolError`/`ApiError`, Bash-only) covers sessions without hook instrumentation, and *is* recovery-aware there: a failure the agent retries and resolves before the turn ends does not flag the block.
 - **Command blocks carry the submitted prompt text** — For hook-driven blocks, `promptText` is populated from the keystrokes that submitted the turn (10+ words; shorter prompts are left untitled) and shown in Command Overview.
 
+### Changed
+
+- **Terminal font, cursor, and behavior settings moved into the new Terminal tab** — Terminal Font/Size/Weight, Cursor Style, and the live preview (previously in Appearance) and Copy on Select / OSC 52 clipboard writes / the PTY prompt bar toggle (previously in General) now live alongside the block settings in Settings > Terminal.
 
 ## [1.7.4] - 2026-08-12
 

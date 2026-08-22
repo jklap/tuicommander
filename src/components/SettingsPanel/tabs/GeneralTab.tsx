@@ -269,32 +269,6 @@ export const GeneralTab: Component = () => {
 				hint={t("general.hint.confirmBeforeClosingTab", "Show a confirmation dialog when closing a terminal tab")}
 			/>
 
-			<h3>{t("general.heading.terminal", "Terminal")}</h3>
-
-			<SettingToggle
-				checked={settingsStore.state.copyOnSelect}
-				onChange={(v) => settingsStore.setCopyOnSelect(v)}
-				label={t("general.toggle.copyOnSelect", "Copy on select")}
-				hint={t("general.hint.copyOnSelect", "Automatically copy selected text to clipboard")}
-			/>
-
-			<SettingToggle
-				checked={settingsStore.state.osc52Clipboard}
-				onChange={(v) => settingsStore.setOsc52Clipboard(v)}
-				label={t("general.toggle.osc52Clipboard", "Allow OSC 52 clipboard writes")}
-				hint={t(
-					"general.hint.osc52Clipboard",
-					"Let terminal programs set the system clipboard (OSC 52). A notice appears on each write. Disable to ignore clipboard writes from terminal output.",
-				)}
-			/>
-
-			<SettingToggle
-				checked={settingsStore.state.showLastPrompt}
-				onChange={(v) => settingsStore.setShowLastPrompt(v)}
-				label="Show agent context bar"
-				hint="Display the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent"
-			/>
-
 			<h3>{t("general.heading.powerManagement", "Power Management")}</h3>
 
 			<SettingToggle
