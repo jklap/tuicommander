@@ -32,6 +32,8 @@ const TIMESTAMPS = "Show block timestamps";
 const FOLDING = "Block folding";
 const MARKS = "Show scrollbar marks";
 const REFLOW = "Reflow scrollback on resize";
+const BLOCK_MARKS = "Show block marks";
+const PROMPT_MARKS = "Show prompt marks";
 
 /** Every Terminal-section display toggle that defaults on, with the config key
  * it round-trips through and the store field it drives. Driving the shared cases
@@ -43,6 +45,8 @@ const DEFAULT_ON = [
 	{ label: FOLDING, key: "block_folding_enabled", field: "blockFoldingEnabled" },
 	{ label: MARKS, key: "show_scrollbar_marks", field: "showScrollbarMarks" },
 	{ label: REFLOW, key: "scrollback_reflow", field: "scrollbackReflow" },
+	{ label: BLOCK_MARKS, key: "show_block_marks", field: "showBlockMarks" },
+	{ label: PROMPT_MARKS, key: "show_prompt_marks", field: "showPromptMarks" },
 ] as const satisfies ReadonlyArray<{ label: string; key: string; field: keyof typeof settingsStore.state }>;
 
 /** Resolve every command the tab's onMount may issue so nothing rejects. */
