@@ -225,10 +225,14 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 		toggleProcessManager: () => options.setShowProcessManager((visible) => !visible),
 		toggleGenerators: () => options.setShowGenerators((visible) => !visible),
 		showRemoteQr: () => options.setShowRemoteQr(true),
-		blockPrev: () => navigateCommandBlock("previous"),
-		blockNext: () => navigateCommandBlock("next"),
-		blockFoldToggle: toggleNearestCommandBlock,
-		blockSearchToggle: () => terminalsStore.getActive()?.ref?.openSearch(),
+		blockPrev: () => terminalsStore.getActive()?.ref?.scrollToBlock("previous"),
+		blockNext: () => terminalsStore.getActive()?.ref?.scrollToBlock("next"),
+		blockFoldToggle: () => terminalsStore.getActive()?.ref?.toggleBlockFold(),
+		blockSearchToggle: () => {
+			const ref = terminalsStore.getActive()?.ref;
+			ref?.openSearch();
+			ref?.toggleSearchBlockScope();
+		},
 		newFile: () => {
 			const defaultPath = gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath || undefined;
 			void saveDialog({ title: "New File", defaultPath })
@@ -263,61 +267,4 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			return true;
 		},
 	};
-}
-
-function navigateCommandBlock(direction: "previous" | "next"): void {
-	const terminal = terminalsStore.getActive();
-	if (!terminal?.ref || terminal.commandBlocks.length === 0) return;
-	const sessionId = terminal.ref.getSessionId();
-	if (!sessionId) return;
-	invoke<[number, number, number]>("terminal_scroll_info", { sessionId })
-		.then(([offset, total]) => {
-			const viewTop = terminal.historyBase + total - offset;
-			if (direction === "previous") {
-				for (let index = terminal.commandBlocks.length - 1; index >= 0; index--) {
-					if (
-						terminal.commandBlocks[index].promptLine >= terminal.historyBase &&
-						terminal.commandBlocks[index].promptLine < viewTop - 1
-					) {
-						terminal.ref!.scrollToLine(terminal.commandBlocks[index].promptLine - terminal.historyBase);
-						return;
-					}
-				}
-				return;
-			}
-			for (const block of terminal.commandBlocks) {
-				if (block.promptLine > viewTop + 1) {
-					terminal.ref!.scrollToLine(block.promptLine - terminal.historyBase);
-					return;
-				}
-			}
-			terminal.ref!.scrollToBottom();
-		})
-		.catch(() => {});
-}
-
-function toggleNearestCommandBlock(): void {
-	// No `blockFoldingEnabled` check here on purpose: `toggleBlockFold` enforces
-	// it for every caller, so this path cannot drift from CanvasTerminal's.
-	const terminal = terminalsStore.getActive();
-	if (!terminal?.ref || terminal.commandBlocks.length === 0) return;
-	const sessionId = terminal.ref.getSessionId();
-	if (!sessionId) return;
-	invoke<[number, number, number]>("terminal_scroll_info", { sessionId })
-		.then(([offset, total, screenRows]) => {
-			const viewCenter = terminal.historyBase + total - offset + Math.floor(screenRows / 2);
-			const blocks = terminal.commandBlocks.filter((block) => block.promptLine >= terminal.historyBase);
-			if (blocks.length === 0) return;
-			let nearest = blocks[0];
-			let bestDistance = Math.abs(nearest.promptLine - viewCenter);
-			for (let index = 1; index < blocks.length; index++) {
-				const distance = Math.abs(blocks[index].promptLine - viewCenter);
-				if (distance < bestDistance) {
-					nearest = blocks[index];
-					bestDistance = distance;
-				}
-			}
-			terminalsStore.toggleBlockFold(terminal.id, nearest.promptLine);
-		})
-		.catch(() => {});
 }

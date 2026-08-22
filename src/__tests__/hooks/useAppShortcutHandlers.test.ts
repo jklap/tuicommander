@@ -217,30 +217,6 @@ describe("useAppShortcutHandlers", () => {
 		expect(mockNavigate).toHaveBeenNthCalledWith(2, "term-2");
 	});
 
-	// This handler picks WHICH block to fold; whether folding is allowed at all
-	// is `blockFoldingEnabled`, enforced inside `toggleBlockFold` so both this
-	// path and CanvasTerminal's Cmd+Shift+. branch obey one check. The gate is
-	// covered in stores/terminalBlockFold.test.ts — asserting it here would
-	// only re-test a mock.
-	// Catches: eviction leaves the viewport centre relative while stored blocks are absolute.
-	it("folds the block nearest the viewport centre after eviction", async () => {
-		mockStores.terminals.getActive.mockReturnValue({
-			id: "term-1",
-			ref: { getSessionId: () => "session-1" },
-			historyBase: 100,
-			commandBlocks: [{ promptLine: 40 }, { promptLine: 140 }, { promptLine: 190 }],
-		});
-		// [displayOffset, historySize, screenRows] — centres the view on absolute line 190
-		mockInvoke.mockResolvedValue([0, 80, 20]);
-		const handlers = useAppShortcutHandlers(createOptions() as never);
-
-		handlers.blockFoldToggle();
-		await Promise.resolve();
-		await Promise.resolve();
-
-		expect(mockStores.terminals.toggleBlockFold).toHaveBeenCalledWith("term-1", 190);
-	});
-
 	it("executes and marks matching smart-prompt shortcuts", async () => {
 		const prompt = { id: "prompt-1", name: "Review", shortcut: "Cmd+R", enabled: true };
 		mockStores.prompts.getAllPrompts.mockReturnValue([prompt]);
@@ -252,5 +228,44 @@ describe("useAppShortcutHandlers", () => {
 
 		expect(mockStores.prompts.markAsUsed).toHaveBeenCalledWith("prompt-1");
 		expect(options.executeSmartPrompt).toHaveBeenCalledWith(prompt);
+	});
+
+	describe("block navigation and folding", () => {
+		it("delegates blockPrev/blockNext/blockFoldToggle to the active terminal's ref", () => {
+			const ref = { scrollToBlock: vi.fn(), toggleBlockFold: vi.fn(), openSearch: vi.fn() };
+			mockStores.terminals.getActive.mockReturnValue({ ref, commandBlocks: [] });
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+
+			handlers.blockPrev();
+			handlers.blockNext();
+			handlers.blockFoldToggle();
+
+			expect(ref.scrollToBlock).toHaveBeenNthCalledWith(1, "previous");
+			expect(ref.scrollToBlock).toHaveBeenNthCalledWith(2, "next");
+			expect(ref.toggleBlockFold).toHaveBeenCalledOnce();
+		});
+
+		it("opens search and toggles block scope for blockSearchToggle", () => {
+			const ref = { openSearch: vi.fn(), toggleSearchBlockScope: vi.fn() };
+			mockStores.terminals.getActive.mockReturnValue({ ref, commandBlocks: [] });
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+
+			handlers.blockSearchToggle();
+
+			expect(ref.openSearch).toHaveBeenCalledOnce();
+			expect(ref.toggleSearchBlockScope).toHaveBeenCalledOnce();
+		});
+
+		it("no-ops when there is no active terminal", () => {
+			mockStores.terminals.getActive.mockReturnValue(undefined);
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+
+			expect(() => {
+				handlers.blockPrev();
+				handlers.blockNext();
+				handlers.blockFoldToggle();
+				handlers.blockSearchToggle();
+			}).not.toThrow();
+		});
 	});
 });
