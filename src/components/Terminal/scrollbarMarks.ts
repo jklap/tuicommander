@@ -2,9 +2,11 @@
  * The scrollbar overlay for one terminal, as a pure string.
  *
  * Extracted from `CanvasTerminal`'s `paintScrollbarMarks` closure so the one
- * decision embedded in it is testable: **`showBlocks` gates the history markers
- * only.** Block boundaries and user-prompt ticks are a display preference, so
- * `showScrollbarMarks` may hide them. Search hits are not — they are the live
+ * decision embedded in it is testable: **the mark settings gate the history
+ * markers only.** Block boundary ticks (`showBlockMarks`) and user-prompt ticks
+ * (`showPromptMarks`) are display preferences, each independently toggleable —
+ * and persisted, not gated on a transient Ctrl+Cmd hold. Search hits are not —
+ * they are the live
  * result of a Cmd+F the user just pressed, and a search that silently draws
  * nothing because of an unrelated terminal display setting reads as a broken
  * search, not as a preference being honoured.
@@ -30,34 +32,35 @@ export interface ScrollbarMarkBlock {
 }
 
 export interface ScrollbarMarksInput {
-	/** Command blocks, drawn only when `showBlocks` is true. */
+	/** Command blocks, drawn only when `showBlockMarks` is true. */
 	blocks: readonly ScrollbarMarkBlock[];
-	/** Rows where the user submitted a prompt; drawn only when `showBlocks` is true. */
+	/** Rows where the user submitted a prompt; drawn only when `showPromptMarks` is true. */
 	promptLines: readonly number[];
-	/** Rows of the current search hits. Drawn regardless of `showBlocks`. */
+	/** Rows of the current search hits. Drawn regardless of the mark settings. */
 	matchRows: readonly number[];
 	/** Total rows in the scrollback, i.e. the denominator for every ratio. */
 	totalRows: number;
 	/** Pixel height of the scrollbar track. */
 	trackH: number;
-	/**
-	 * Whether to draw the history markers. False either because the block
-	 * overlay is not active or because the user turned `showScrollbarMarks` off.
-	 */
-	showBlocks: boolean;
+	/** Whether to draw command-block boundary ticks (`show_block_marks`). */
+	showBlockMarks: boolean;
+	/** Whether to draw user-prompt ticks (`show_prompt_marks`). */
+	showPromptMarks: boolean;
 }
 
 const tick = (top: number, color: string) =>
 	`<div style="position:absolute;right:0;width:100%;height:2px;top:${top}px;background:${color}"></div>`;
 
 export function buildScrollbarMarksHtml(input: ScrollbarMarksInput): string {
-	const { blocks, promptLines, matchRows, totalRows, trackH, showBlocks } = input;
+	const { blocks, promptLines, matchRows, totalRows, trackH, showBlockMarks, showPromptMarks } = input;
 	let html = "";
-	if (showBlocks) {
+	if (showBlockMarks) {
 		for (const block of blocks) {
 			const color = block.exitCode !== null && block.exitCode !== 0 ? FAILED_BLOCK : OK_BLOCK;
 			html += tick((block.promptLine / totalRows) * trackH, color);
 		}
+	}
+	if (showPromptMarks) {
 		// Drawn after the block ticks so a user prompt sits on top of the block
 		// boundary it shares a row with. There are few of these — one per turn.
 		for (const line of promptLines) {
