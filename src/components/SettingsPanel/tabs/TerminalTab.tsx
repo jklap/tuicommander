@@ -415,6 +415,30 @@ export const TerminalTab: Component = () => {
 				/>
 			</ExpertSetting>
 
+			<ExpertSetting configKey="app.show_block_marks" value={settingsStore.state.showBlockMarks}>
+				<SettingToggle
+					checked={settingsStore.state.showBlockMarks}
+					onChange={(v) => settingsStore.setShowBlockMarks(v)}
+					label={t("general.toggle.showBlockMarks", "Show block marks")}
+					hint={t(
+						"general.hint.showBlockMarks",
+						"Tick marks on the scrollbar for each command block — red when the command failed. Needs Show scrollbar marks.",
+					)}
+				/>
+			</ExpertSetting>
+
+			<ExpertSetting configKey="app.show_prompt_marks" value={settingsStore.state.showPromptMarks}>
+				<SettingToggle
+					checked={settingsStore.state.showPromptMarks}
+					onChange={(v) => settingsStore.setShowPromptMarks(v)}
+					label={t("general.toggle.showPromptMarks", "Show prompt marks")}
+					hint={t(
+						"general.hint.showPromptMarks",
+						"A green tick mark on the scrollbar for each prompt you sent. Needs Show scrollbar marks.",
+					)}
+				/>
+			</ExpertSetting>
+
 			<ExpertSetting configKey="app.scrollback_reflow" value={settingsStore.state.scrollbackReflow}>
 				<SettingToggle
 					checked={settingsStore.state.scrollbackReflow}

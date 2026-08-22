@@ -159,6 +159,8 @@ playback also uses the selected output device.
 | **Show block timestamps** | On | While Ctrl+Cmd is held, each command block is labelled at the right edge with how long ago it started. |
 | **Block folding** | On | Let the Toggle Block Fold shortcut (Cmd/Ctrl+Shift+.) and its command-palette entry collapse a command block's output. Blocks already folded stay collapsed when this is off. |
 | **Show scrollbar marks** | On | Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began. Covers the **history** markers only — the blue/red block ticks and the green user-prompt ticks. Orange search-match ticks are not affected: they are the result of a search you just ran, not a display preference. |
+| **Show block marks** | On | Blue/red scrollbar tick for each command block (red when the command failed). Expert setting; needs **Show scrollbar marks**. |
+| **Show prompt marks** | On | Green scrollbar tick for each prompt you sent. Expert setting; needs **Show scrollbar marks**. |
 | **Reflow scrollback on resize** | On | Re-wrap scrollback history when the terminal changes width, so output written at the old width stays readable after a side panel opens or closes. Turn it off to leave history lines as they were written and truncate them to the new width instead. The visible screen is never reflowed either way — cursor-addressed TUIs redraw themselves. A change applies to sessions already open. |
 
 The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control in
