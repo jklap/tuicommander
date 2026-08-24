@@ -19,9 +19,6 @@ enum McpFormat {
     /// command: [path], enabled: true } } }`. The schema is
     /// `additionalProperties: false`, so the standard entry shape is rejected.
     OpenCode,
-    /// JSON, fx profile shape: `{ "mcp": { "tuicommander": { type: "local",
-    /// command: [path], enabled: true, required: false } } }`.
-    Fx,
     /// TOML: `[mcp_servers.tuicommander]`. `forward_session` adds the
     /// `env_vars` allowlist Codex needs to pass `TUIC_SESSION` through its
     /// sandbox; agents that inherit the environment do not use it.
@@ -198,10 +195,6 @@ fn get_mcp_config_spec(agent_type: &str) -> Option<McpConfigSpec> {
             requires_existing_config: true,
             ..json(pi_config_path(), vec!["mcpServers"], &["pi"])
         }),
-        "fx" => Some(McpConfigSpec {
-            format: McpFormat::Fx,
-            ..json(h.join(".fx/mcp.json"), vec!["mcp"], &["fx"])
-        }),
         // aider has no MCP client at all — the feature PRs were never merged.
         "aider" => None,
         _ => None,
@@ -298,7 +291,6 @@ fn get_agent_settings_path(agent_type: &str) -> Option<PathBuf> {
         "opencode" => Some(opencode_config_path()),
         "droid" => Some(h.join(".factory/mcp.json")),
         "pi" => Some(h.join(".pi/agent/settings.json")),
-        "fx" => Some(h.join(".fx/settings.json")),
         "goose" => Some(goose_config_path()),
         "amp" => Some(h.join(".config/amp/settings.json")),
         "zed" => Some(h.join(".config/zed/settings.json")),
@@ -403,7 +395,7 @@ fn write_json_file(path: &std::path::Path, value: &serde_json::Value) -> Result<
 /// Supported agent types for auto-install
 const SUPPORTED_AGENTS: &[&str] = &[
     "claude", "cursor", "windsurf", "vscode", "zed", "amp", "gemini", "codex", "grok", "opencode",
-    "droid", "goose", "pi", "fx",
+    "droid", "goose", "pi",
 ];
 
 /// Build the bridge entry in the shape the target's schema accepts.
@@ -413,12 +405,6 @@ fn json_entry_value(format: McpFormat, bridge_path: &str) -> serde_json::Value {
             "type": "local",
             "command": [bridge_path],
             "enabled": true,
-        }),
-        McpFormat::Fx => serde_json::json!({
-            "type": "local",
-            "command": [bridge_path],
-            "enabled": true,
-            "required": false,
         }),
         _ => serde_json::json!({
             "type": "stdio",
@@ -445,16 +431,6 @@ fn json_entry_is_current(
                 .and_then(|v| v.as_array())
                 .is_some_and(|args| args.len() == 1 && args[0].as_str() == Some(bridge_path));
             command_ok && entry.get("type").and_then(|v| v.as_str()) == Some("local")
-        }
-        McpFormat::Fx => {
-            let command_ok = entry
-                .get("command")
-                .and_then(|v| v.as_array())
-                .is_some_and(|args| args.len() == 1 && args[0].as_str() == Some(bridge_path));
-            command_ok
-                && entry.get("type").and_then(|v| v.as_str()) == Some("local")
-                && entry.get("enabled").and_then(|v| v.as_bool()) == Some(true)
-                && entry.get("required").and_then(|v| v.as_bool()) == Some(false)
         }
         _ => {
             let command_ok = entry.get("command").and_then(|v| v.as_str()) == Some(bridge_path);
@@ -1244,7 +1220,6 @@ mod tests {
             ("gemini", McpFormat::Json),
             ("droid", McpFormat::Json),
             ("pi", McpFormat::Json),
-            ("fx", McpFormat::Fx),
             ("opencode", McpFormat::OpenCode),
             (
                 "codex",
@@ -1266,25 +1241,6 @@ mod tests {
         // aider has no MCP client, so there is nothing to configure.
         assert!(get_mcp_config_spec("aider").is_none());
         assert!(get_mcp_config_spec("unknown-agent").is_none());
-    }
-
-    #[test]
-    fn fx_mcp_entry_uses_native_profile_schema() {
-        let spec = get_mcp_config_spec("fx").expect("fx MCP spec");
-        assert!(spec.config_path.ends_with(".fx/mcp.json"));
-        assert_eq!(spec.key_path, vec!["mcp"]);
-        assert_eq!(spec.binaries, &["fx"]);
-
-        let entry = json_entry_value(McpFormat::Fx, "/path/to/tuic-bridge");
-        assert_eq!(entry["type"], "local");
-        assert_eq!(
-            entry["command"],
-            serde_json::json!(["/path/to/tuic-bridge"])
-        );
-        assert_eq!(entry["enabled"], true);
-        assert_eq!(entry["required"], false);
-        assert!(entry.get("args").is_none());
-        assert!(entry.get("env").is_none());
     }
 
     // --- ensure_agent_mcp_entry tests ---

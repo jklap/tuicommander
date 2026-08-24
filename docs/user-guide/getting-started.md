@@ -6,7 +6,7 @@ TUICommander is a desktop terminal orchestrator for running multiple AI coding a
 
 **Key capabilities:**
 - Up to 50 concurrent terminal sessions with split panes and detachable tabs
-- 12 AI agents supported (Claude Code, Codex, Aider, Gemini, Amp, fx, and more)
+- 11 AI agents supported (Claude Code, Codex, Aider, Gemini, Amp, and more)
 - Git worktree isolation per branch
 - GitHub PR monitoring with CI status and notifications
 - Obsidian-style plugin system with community registry

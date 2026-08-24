@@ -2113,7 +2113,6 @@ mod tests {
                     }],
                     dismiss_key: None,
                     amend_key: None,
-                    requires_confirmation: false,
                 }),
                 ..Default::default()
             }

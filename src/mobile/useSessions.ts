@@ -39,7 +39,6 @@ export interface ChoicePrompt {
 	options: ChoiceOption[];
 	dismiss_key?: string;
 	amend_key?: string;
-	requires_confirmation?: boolean;
 }
 
 /** Single option in a ChoicePrompt. Matches Rust output_parser::ChoiceOption. */

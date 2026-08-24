@@ -22,14 +22,6 @@ describe("agents", () => {
 		expect(MCP_SUPPORT.api).toBe(false);
 	});
 
-	it("fx uses its persistent TUI and non-persistent ask command", () => {
-		expect(AGENTS.fx.binary).toBe("fx");
-		expect(AGENTS.fx.defaultHeadlessTemplate).toBe('fx ask --no-save "{prompt}"');
-		expect(AGENTS.fx.resumeCommand).toBe("fx --resume last");
-		expect(AGENTS.fx.sessionDiscovery?.resumeWithId("session-123")).toBe("fx --resume session-123");
-		expect(MCP_SUPPORT.fx).toBe(true);
-	});
-
 	it("AGENT_DISPLAY has an entry for 'api'", () => {
 		expect(AGENT_DISPLAY.api).toBeDefined();
 	});

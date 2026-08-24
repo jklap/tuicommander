@@ -67,7 +67,7 @@ Sidebar branch icons also show purple when they contain unseen terminals.
 
 Agent activity combines native lifecycle hooks, terminal movement (text
 changing above the input area means the agent is active), and the visible
-ready prompt. Claude, Codex, Gemini, Aider, Grok, pi, fx, and OpenCode require a stable ready
+ready prompt. Claude, Codex, Gemini, Aider, Grok, pi, and OpenCode require a stable ready
 screen before safety-sensitive actions such as auto-standby or queued agent
 message delivery. Pressing Ctrl-C or Escape requests interruption but does not
 turn the dot green until the agent confirms the interruption, returns to its
@@ -80,8 +80,6 @@ the backend even if a browser or event-stream client temporarily falls behind.
 Current Claude and Codex status lines are also recognized when their interface
 keeps an empty composer visible or freezes during a long tool. Completed timing
 summaries are not treated as work, so the indicator can still return to idle.
-fx similarly keeps its `┃` composer visible while running; its live
-`• Thinking (…)` row keeps the session busy until the response settles.
 Grok keeps its composer visible while responding, so TUICommander waits for the
 animated status row to disappear before treating that composer as ready.
 

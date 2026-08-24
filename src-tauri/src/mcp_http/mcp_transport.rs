@@ -158,8 +158,6 @@ fn resolve_agent_type(client_name: Option<&str>) -> Option<&'static str> {
         Some("amp")
     } else if name.contains("goose") {
         Some("goose")
-    } else if name == "fx" {
-        Some("fx")
     } else {
         None
     }
@@ -5856,7 +5854,7 @@ fn finalize_explicit_spawn_args(
 
 /// Final argv + optional deferred initial prompt for an orchestrated agent spawn.
 ///
-/// For prefill-only TUIs (`crate::agent::prompt_prefill_only`, e.g. codex/fx) the
+/// For prefill-only TUIs (`crate::agent::prompt_prefill_only`, e.g. codex) the
 /// task must NOT ride in argv — it prefills the interactive input without
 /// submitting, parking the child forever (story 091). Every argv element
 /// carrying `{prompt}` is dropped and the prompt is returned separately for the
@@ -10589,17 +10587,8 @@ mod tests {
         assert!(!client_requires_meta_tools(None));
     }
 
-    #[test]
-    fn fx_client_name_uses_the_exact_agent_mapping() {
-        assert_eq!(resolve_agent_type(Some("fx")), Some("fx"));
-        assert_eq!(resolve_agent_type(Some("FX")), Some("fx"));
-        assert_eq!(resolve_agent_type(Some("fx-shell")), None);
-        assert_eq!(resolve_agent_type(Some("vercel-fx")), None);
-        assert_eq!(resolve_agent_type(None), None);
-    }
-
     #[tokio::test]
-    async fn unsupported_server_discover_is_the_deliberate_fx_fallback_boundary() {
+    async fn unsupported_server_discover_is_the_deliberate_fallback_boundary() {
         let response = mcp_post(
             State(test_state()),
             ConnectInfo("127.0.0.1:0".parse().unwrap()),
@@ -10611,8 +10600,8 @@ mod tests {
                 "params": {
                     "_meta": {
                         "io.modelcontextprotocol/clientInfo": {
-                            "name": "fx",
-                            "version": "0.0.3"
+                            "name": "probe-client",
+                            "version": "1.0.0"
                         }
                     }
                 }
@@ -13718,17 +13707,6 @@ mod tests {
     }
 
     #[test]
-    fn finalize_fx_launches_persistent_tui_and_defers_prompt() {
-        let merged = vec!["{prompt}".to_string()];
-        let (argv, deferred) = finalize_spawn_args("fx", &merged, "inspect the repository");
-        assert!(
-            argv.is_empty(),
-            "fx interactive argv must not carry a positional prompt"
-        );
-        assert_eq!(deferred.as_deref(), Some("inspect the repository"));
-    }
-
-    #[test]
     fn finalize_codex_keeps_flags_drops_prompt() {
         let merged = vec![
             "{prompt}".to_string(),
@@ -13880,7 +13858,6 @@ mod tests {
     fn agent_enter_uses_command_injection_but_other_inputs_stay_raw() {
         assert!(uses_agent_command_injection(Some("codex"), Some("\r")));
         assert!(uses_agent_command_injection(Some("opencode"), Some("\r")));
-        assert!(uses_agent_command_injection(Some("fx"), Some("\r")));
         assert!(!uses_agent_command_injection(Some("claude"), Some("\r")));
         assert!(!uses_agent_command_injection(None, Some("\r")));
         assert!(!uses_agent_command_injection(Some("codex"), Some("\t")));

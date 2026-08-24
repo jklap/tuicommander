@@ -260,13 +260,8 @@ describe("CommandInput code structure", () => {
 		expect(tsx).toContain("\\t");
 	});
 
-	it("fx confirmation choices send the numeric key and a separate Enter", () => {
-		expect(tsx).toContain("props.choicePrompt?.requires_confirmation");
-		expect(tsx).toContain('await write("\\r")');
-	});
-
 	it("legacy choice prompts retain immediate numeric submission behavior", () => {
-		expect(tsx).toContain("|| !props.choicePrompt?.dismiss_key");
+		expect(tsx).toContain("!props.choicePrompt?.dismiss_key");
 	});
 });
 
