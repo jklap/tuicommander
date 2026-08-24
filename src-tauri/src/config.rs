@@ -1140,6 +1140,13 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates terminal renderer for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("enum" = ["webgl","canvas","native"]))]
     pub(crate) terminal_renderer: String,
+    /// How terminal links activate: "click" (default, opens on plain click),
+    /// "modifier" (Cmd/Ctrl+click opens; underline only while held), or
+    /// "never" (right-click Open/Copy-link menu only).
+    #[serde(default = "default_link_activation")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates terminal link activation for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["click","modifier","never"]))]
+    pub(crate) terminal_link_activation: String,
     /// Label each command block with its elapsed time while Ctrl+Cmd is held.
     /// Frontend-gated (the label is painted in the renderer); stored here so the
     /// choice persists — a field absent from this struct is dropped by serde on
@@ -1287,6 +1294,10 @@ fn default_terminal_renderer() -> String {
     "webgl".to_string()
 }
 
+fn default_link_activation() -> String {
+    "click".to_string()
+}
+
 fn default_mcp_port() -> u16 {
     3845
 }
@@ -1380,6 +1391,7 @@ impl Default for AppConfig {
             scrollback_reflow: true,
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
+            terminal_link_activation: default_link_activation(),
             show_block_timestamps: true,
             show_scrollbar_marks: true,
             show_block_marks: true,
@@ -5597,6 +5609,7 @@ mod tests {
             index_memory_budget_mb: default_index_memory_budget_mb(),
             cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
+            terminal_link_activation: "modifier".to_string(),
             // All three default to true, so `false` is the only value that can
             // tell a real round trip from serde handing back the default.
             show_block_timestamps: false,
@@ -5668,6 +5681,7 @@ mod tests {
         assert!(!loaded.show_block_marks);
         assert!(!loaded.show_prompt_marks);
         assert!(!loaded.block_folding_enabled);
+        assert_eq!(loaded.terminal_link_activation, "modifier");
     }
 
     #[test]
@@ -5866,6 +5880,7 @@ mod tests {
         assert!(loaded.show_block_marks); // defaults to true
         assert!(loaded.show_prompt_marks); // defaults to true
         assert!(loaded.block_folding_enabled);
+        assert_eq!(loaded.terminal_link_activation, "click"); // defaults to "click"
     }
 
     /// `docs/backend/config.md` promises a row for every top-level `AppConfig` field. Mirrors

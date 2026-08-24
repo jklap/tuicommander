@@ -1,9 +1,10 @@
 import { type Component, createEffect, createSignal, onCleanup, onMount, Show, untrack } from "solid-js";
 import { lastMenuActionTime } from "../../menuDedup";
-import { isMacOS, isWindows } from "../../platform";
+import { isLinkModifier, isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { appLogger } from "../../stores/appLogger";
 import { designModeBrowsers } from "../../stores/designMode";
+import { initLinkModifier, linkModifierHeld } from "../../stores/linkModifier";
 import { settingsStore } from "../../stores/settings";
 import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
@@ -30,8 +31,12 @@ import {
 	createCanvasLinkController,
 	createLinkPressTracker,
 	isOverSpan,
-	linkClaimsPress,
 	linkCovers,
+	linkModifierEffectDecision,
+	linkVisuals,
+	shouldOpenOnClick,
+	shouldResolveLinkHoverOnMove,
+	shouldSkipMouseReportForLink,
 	spanAt,
 } from "./canvasTerminalLinks";
 import {
@@ -304,6 +309,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const wrappedLinkSpans = linkController.wrappedSpans;
 	function clearDetectedLinks() {
 		linkController.clearDetected();
+	}
+	// Last document-level mousemove seen while checking link hover — replayed by
+	// the modifier-held effect below so pressing Cmd/Ctrl reveals the link under
+	// the cursor immediately, without requiring the mouse to move.
+	let lastLinkHoverEvent: MouseEvent | null = null;
+	/** Which link decorations (dashed/solid underline, pointer cursor) apply right now. */
+	function currentLinkVisuals() {
+		return linkVisuals(settingsStore.state.linkActivation, linkModifierHeld());
 	}
 
 	// Link context menu: right-clicking a detected link offers Open / Copy link.
@@ -727,11 +740,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function paintLinkUnderline(_frame: DecodedFrame, m: CellMetrics) {
 		const maxRow = currentFrame?.screenRows || lastResizeRows;
+		const visuals = currentLinkVisuals();
 		octx.strokeStyle = cachedFgDefault;
 		octx.lineWidth = 1;
 
 		// Dashed underline for all detected links
-		if (detectedLinks.size > 0) {
+		if (visuals.dashed && detectedLinks.size > 0) {
 			octx.globalAlpha = 0.4;
 			octx.setLineDash([2, 3]);
 			octx.beginPath();
@@ -751,7 +765,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		// Solid underline for hovered link
-		if (hoveredLink) {
+		if (visuals.solid && hoveredLink) {
 			const rowSpans = hoveredLink.spans || [
 				{ row: hoveredLink.row, colStart: hoveredLink.colStart, colEnd: hoveredLink.colEnd },
 			];
@@ -2234,7 +2248,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (found === STALE) return;
 		hoveredLink = found;
 		hoveredSignature = found ? hoverSignature(rowMap, found) : "";
-		canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
+		canvasRef.style.cursor = hoveredLink && currentLinkVisuals().pointer ? "pointer" : "text";
 		if (currentFrame) {
 			const m = metrics();
 			if (m) repaintOverlay(currentFrame, m);
@@ -2505,6 +2519,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	onMount(async () => {
+		initLinkModifier();
 		const overlayCtx = overlayCanvasRef.getContext("2d");
 		if (!overlayCtx) {
 			appLogger.error("terminal", "Failed to acquire overlay 2D context");
@@ -3059,7 +3074,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			keyInputRef.focus({ preventScroll: true });
 			{
 				const at = canvasToGrid(metrics, canvasRef, e);
-				const span = pressSpanAt(at.row, at.col);
+				// A press only claims a link it would open under the "Open links on" setting,
+				// so a press withheld from claiming is still reported to a mouse-reporting app.
+				const span = shouldOpenOnClick(settingsStore.state.linkActivation, isLinkModifier(e))
+					? pressSpanAt(at.row, at.col)
+					: undefined;
 				linkPress.begin(e.button, at.row, span, underlinedText(rowMap, at.row, span));
 			}
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
@@ -3072,7 +3091,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				// right-button mousedown suppresses the contextmenu event, so over a link
 				// we neither forward nor preventDefault: the app loses this one press,
 				// but the link works — UI-first (see #57). Shift bypasses reporting.
-				if (linkClaimsPress(e.button, pressSpanAt(pos.row, pos.col) !== undefined)) {
+				// Which presses are withheld follows the "Open links on" setting — see
+				// shouldSkipMouseReportForLink: right-click always, left only when it opens.
+				const onLink = pressSpanAt(pos.row, pos.col) !== undefined;
+				if (shouldSkipMouseReportForLink(settingsStore.state.linkActivation, e.button, isLinkModifier(e), onLink)) {
 					// A leftover Shift-drag selection would make the click bail as a drag.
 					if (linkPress.isClaimed() && selection.hasRange()) {
 						selection.clear();
@@ -3226,8 +3248,22 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && mRepaint) paintFrame(currentFrame, mRepaint);
 		};
 
+		// Always remember the position so the modifier-held effect can resolve it
+		// instantly on keydown, even when this move itself skipped resolution
+		// (see shouldResolveLinkHoverOnMove).
 		const scheduleLinkProbe = (e: MouseEvent) => {
+			lastLinkHoverEvent = e;
 			clearTimeout(linkThrottle);
+			if (!shouldResolveLinkHoverOnMove(settingsStore.state.linkActivation, linkModifierHeld())) {
+				if (hoveredLink) {
+					hoveredLink = null;
+					hoveredSignature = "";
+					canvasRef.style.cursor = "text";
+					const m = metrics();
+					if (currentFrame && m) repaintOverlay(currentFrame, m);
+				}
+				return;
+			}
 			linkThrottle = setTimeout(() => {
 				const pos = canvasToGrid(metrics, canvasRef, e);
 				checkLinksAtRow(pos.row, pos.col);
@@ -3284,10 +3320,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 			}
 
-			// Link detection (throttled). The listener is on document (see comment
-			// above), so without a rect test every visible pane runs checkLinksAtRow
-			// on every move — up to 3 IPC round trips each — for panes the pointer
-			// never touched.
+			// Link detection (throttled) — see shouldResolveLinkHoverOnMove. Always
+			// remember the position so the modifier-held effect below can resolve
+			// it instantly on keydown, even when this move itself skipped resolution.
+			// The listener is on document (see comment above), so without a rect
+			// test every visible pane runs checkLinksAtRow on every move — up to 3
+			// IPC round trips each — for panes the pointer never touched.
 			if (!selection.selecting && isPointerInsideRect(e, canvasRef.getBoundingClientRect())) {
 				scheduleLinkProbe(e);
 			}
@@ -3353,6 +3391,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		bindings.listen(canvasRef, "click", (e: MouseEvent) => {
 			const at = canvasToGrid(metrics, canvasRef, e);
 			const claimed = linkPress.release(at.row, at.col, underlinedTextAt(rowMap, pressSpanAt, at.row, at.col));
+			// "Open links on": the click's own modifier is the source of truth at activation time.
+			if (!shouldOpenOnClick(settingsStore.state.linkActivation, isLinkModifier(e))) return;
 			// The first click of a double-click already opened it.
 			if (!claimed || e.detail > 1 || selection.hasRange()) {
 				// Only a click on something the user sees as a link is worth a line.
@@ -3753,6 +3793,28 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		gridRenderer?.invalidateCaches();
 		fullRepaintNeeded = true;
 		remeasure();
+	});
+
+	// React to link-activation mode changes and (in "modifier" mode) to the
+	// Cmd/Ctrl hold itself — see linkModifierEffectDecision. Link underlines
+	// are overlay-only, so a repaint suffices; no fullRepaintNeeded.
+	createEffect(() => {
+		const mode = settingsStore.state.linkActivation;
+		const held = linkModifierHeld();
+		if (!alive) return;
+		const decision = linkModifierEffectDecision(mode, held, lastLinkHoverEvent !== null);
+		if (decision.clearHover) {
+			hoveredLink = null;
+			canvasRef.style.cursor = "text";
+		}
+		if (currentFrame) {
+			const m = metrics();
+			if (m) repaintOverlay(currentFrame, m);
+		}
+		if (decision.recheckHover && lastLinkHoverEvent) {
+			const pos = canvasToGrid(metrics, canvasRef, lastLinkHoverEvent);
+			checkLinksAtRow(pos.row, pos.col);
+		}
 	});
 
 	async function copySelection() {

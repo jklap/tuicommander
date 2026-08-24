@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 import appChoiceOptions from "../../src-tauri/src/settings/app_choice_options.json";
+import type { LinkActivation } from "../components/Terminal/canvasTerminalLinks";
 import { setLocale } from "../i18n";
 import { invoke } from "../invoke";
 import { settingNumberDefault } from "../services/settingsCatalogue";
@@ -81,6 +82,7 @@ interface RustAppConfig {
 	scrollback_reflow?: boolean;
 	cursor_style?: string;
 	terminal_renderer?: string;
+	terminal_link_activation?: string;
 	show_block_timestamps?: boolean;
 	show_scrollbar_marks?: boolean;
 	show_block_marks?: boolean;
@@ -220,6 +222,13 @@ function validateTerminalRenderer(value: string | null): TerminalRenderer {
 	return value && (VALID_RENDERERS as readonly string[]).includes(value) ? (value as TerminalRenderer) : "webgl";
 }
 
+/** Valid link-activation values */
+const VALID_LINK_ACTIVATIONS: readonly LinkActivation[] = ["click", "modifier", "never"];
+
+function validateLinkActivation(value: string | null): LinkActivation {
+	return value && (VALID_LINK_ACTIVATIONS as readonly string[]).includes(value) ? (value as LinkActivation) : "click";
+}
+
 /** Split tab mode */
 export type SplitTabMode = "separate" | "unified";
 
@@ -279,6 +288,7 @@ interface SettingsStoreState {
 	scrollbackReflow: boolean;
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
+	linkActivation: LinkActivation;
 	showBlockTimestamps: boolean;
 	/** Master toggle for the scrollbar history ticks; the two below pick the categories. */
 	showScrollbarMarks: boolean;
@@ -350,6 +360,7 @@ function createSettingsStore() {
 		scrollbackReflow: true,
 		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
 		terminalRenderer: "webgl",
+		linkActivation: "click",
 		showBlockTimestamps: true,
 		showScrollbarMarks: true,
 		showBlockMarks: true,
@@ -431,6 +442,7 @@ function createSettingsStore() {
 		const cs = config.cursor_style;
 		values.cursorStyle = cs === "block" || cs === "underline" ? cs : "bar";
 		values.terminalRenderer = validateTerminalRenderer(config.terminal_renderer || null);
+		values.linkActivation = validateLinkActivation(config.terminal_link_activation ?? null);
 		values.showBlockTimestamps = config.show_block_timestamps ?? true;
 		values.showScrollbarMarks = config.show_scrollbar_marks ?? true;
 		values.showBlockMarks = config.show_block_marks ?? true;
@@ -499,6 +511,7 @@ function createSettingsStore() {
 			scrollback_reflow: values.scrollbackReflow,
 			cursor_style: values.cursorStyle,
 			terminal_renderer: values.terminalRenderer,
+			terminal_link_activation: values.linkActivation,
 			show_block_timestamps: values.showBlockTimestamps,
 			show_scrollbar_marks: values.showScrollbarMarks,
 			show_block_marks: values.showBlockMarks,
@@ -989,6 +1002,12 @@ function createSettingsStore() {
 			save();
 		},
 
+		/** How terminal links activate: plain click, Cmd/Ctrl+click, or context menu only */
+		setLinkActivation(mode: LinkActivation): void {
+			setState("linkActivation", mode);
+			save();
+		},
+
 		/** Draw command-block boundary ticks on the terminal scrollbar */
 		setShowBlockMarks(enabled: boolean): void {
 			setState("showBlockMarks", enabled);
@@ -1090,5 +1109,6 @@ registerDebugSnapshot("settings", () => {
 		preventSleepWhenBusy: s.preventSleepWhenBusy,
 		issueFilter: s.issueFilter,
 		terminalRenderer: s.terminalRenderer,
+		linkActivation: s.linkActivation,
 	};
 });
