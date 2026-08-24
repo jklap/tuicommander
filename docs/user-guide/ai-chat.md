@@ -139,8 +139,9 @@ The panel follows the focused terminal automatically — the header shows the ac
 ## Conversations
 
 - **Per-terminal state** — each terminal tab maintains its own independent chat history, streaming state, and conversation ID (keyed by `tuicSession`). Switching tabs switches the conversation. Messages sent from a tab always target that tab's PTY session.
+- **Desktop and browser/PWA persistence** — conversations autosave to the same backend store on every transport, and closing a terminal flushes pending messages immediately. Reloading the page restores the latest conversation for that terminal. The history panel lists, opens, and deletes the same saved conversations in desktop and browser/PWA mode.
 - Hard cap: **100 messages** per conversation in memory; older messages are evicted FIFO. Saved conversations keep the full history on disk.
-- Streaming uses a Tauri `Channel<ChatStreamEvent>` — you see tokens as they arrive. Cancel mid-stream with the stop button or `cancel_ai_chat`.
+- Streaming uses a Tauri `Channel<ChatStreamEvent>` on desktop and a dedicated WebSocket in browser/PWA mode — you see tokens as they arrive. Cancel mid-stream with the stop button or `cancel_ai_chat`.
 - **Conversation history panel** — click the clock/history icon in the header to open a slide-in list of all saved conversations. Each row shows the title, terminal session name, message count, and date. Click a row to load that conversation into the current terminal's chat.
 
 ## Run-this, copy, and actions

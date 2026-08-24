@@ -374,9 +374,7 @@ function clearHistory(): void {
 	});
 	const oldId = s.chatId();
 	void (async () => {
-		if (!isTauri()) return;
 		try {
-			const { invoke } = await import("@tauri-apps/api/core");
 			await invoke("delete_conversation", { id: oldId });
 			const newId = await invoke<string>("new_conversation_id");
 			s.setChatId(newId);
@@ -391,7 +389,6 @@ function clearHistory(): void {
 // ---------------------------------------------------------------------------
 
 function schedulePersist(key?: string): void {
-	if (!isTauri()) return;
 	const resolvedKey = key ?? activeKey();
 	const s = getOrCreate(resolvedKey);
 	if (s.persistTimer) clearTimeout(s.persistTimer);
@@ -402,7 +399,6 @@ function schedulePersist(key?: string): void {
 }
 
 async function persistNow(key?: string): Promise<void> {
-	if (!isTauri()) return;
 	const resolvedKey = key ?? activeKey();
 	const s = getOrCreate(resolvedKey);
 	const msgs = s.messages();
@@ -412,7 +408,6 @@ async function persistNow(key?: string): Promise<void> {
 		const now = Date.now();
 		const firstUser = msgs.find((m) => m.role === "user");
 		const title = firstUser ? firstUser.content.slice(0, 60).replace(/\s+/g, " ").trim() : "New chat";
-		const { invoke } = await import("@tauri-apps/api/core");
 		let provider: string | undefined;
 		let model: string | undefined;
 		try {
@@ -448,9 +443,7 @@ async function initFromDisk(tuicSession?: string): Promise<void> {
 	const s = activeConversation();
 	if (s.initialized) return;
 	s.initialized = true;
-	if (!isTauri()) return;
 	try {
-		const { invoke } = await import("@tauri-apps/api/core");
 		if (tuicSession) {
 			try {
 				const metas = await invoke<BackendConversationMeta[]>("list_conversations");
@@ -993,9 +986,7 @@ function setError(e: string | null): void {
 // ---------------------------------------------------------------------------
 
 async function listAllConversations(): Promise<ConversationMeta[]> {
-	if (!isTauri()) return [];
 	try {
-		const { invoke } = await import("@tauri-apps/api/core");
 		return await invoke<BackendConversationMeta[]>("list_conversations");
 	} catch (e) {
 		appLogger.warn("conversation", "listAllConversations failed", { error: String(e) });
@@ -1004,7 +995,6 @@ async function listAllConversations(): Promise<ConversationMeta[]> {
 }
 
 async function loadConversation(id: string): Promise<void> {
-	if (!isTauri()) return;
 	const s = activeConversation();
 	// What the conversation held when the read started. A read only speaks for a
 	// conversation that has not moved on since: a detached window hydrates on
@@ -1013,7 +1003,6 @@ async function loadConversation(id: string): Promise<void> {
 	// flag — leaving the reply to land on a history that never asked anything.
 	const before = s.messages();
 	try {
-		const { invoke } = await import("@tauri-apps/api/core");
 		const conv = await invoke<BackendConversation>("load_conversation", { id });
 		if (s.messages() !== before) {
 			appLogger.info("conversation", "loadConversation: dropped a read the conversation outran", { id });

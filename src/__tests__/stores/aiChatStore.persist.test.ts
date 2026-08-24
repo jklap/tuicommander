@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock @tauri-apps/api/core — conversationStore dynamic-imports invoke from here.
+// Desktop regression coverage: the shared invoke wrapper delegates to Tauri core.
 const mockInvoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: mockInvoke,

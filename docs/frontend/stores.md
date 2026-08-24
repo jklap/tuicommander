@@ -341,6 +341,20 @@ interface Note {
 
 ## Other Stores
 
+### conversationStore (`conversationStore.ts`)
+
+Owns the per-terminal AI Chat and autonomous-agent conversation state. Each
+terminal key has independent messages, streaming state, conversation ID, usage,
+tool calls, and approval state; the exported accessors follow the active terminal.
+
+Conversation persistence always uses the shared `invoke` transport: desktop calls
+the Tauri IPC commands, while browser/PWA clients use the matching HTTP routes with
+the same request and response shapes. Messages autosave after a 500 ms debounce,
+terminal close performs an immediate save, and initialization restores the newest
+saved conversation for the terminal session. History list, load, and delete use the
+same transport path. A load is discarded if the local message array changed while
+the backend read was in flight, preventing stale history from erasing a newer turn.
+
 ### repoSettingsStore (`repoSettings.ts`)
 Per-repository settings (base branch, scripts, worktree options).
 
