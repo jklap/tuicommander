@@ -1,5 +1,5 @@
 import { pathBasename } from "../utils/pathUtils";
-import { currentBranchKey } from "./repositories";
+import { branchKeyFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
 
 /** Editor tab data */
@@ -79,7 +79,7 @@ function createEditorTabsStore() {
 				filePath,
 				fileName,
 				isDirty: false,
-				branchKey: currentBranchKey(),
+				branchKey: branchKeyFor(repoPath),
 				initialLine,
 				externalEditable: opts?.externalEditable,
 			});

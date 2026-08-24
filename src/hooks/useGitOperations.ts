@@ -4,6 +4,7 @@ import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { repositoriesStore } from "../stores/repositories";
+import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri, rpc } from "../transport";
 import type { RepoInfo } from "../types";
@@ -338,6 +339,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				appLogger.warn("app", `RepoWatcher failed to start for ${info.path}`, err),
 			);
 
+			// A terminal already running inside this path was parked in some other repo
+			// because nothing claimed its cwd. Now something does.
+			reconcileTerminalOwnership();
+
 			await refreshAllBranchStats();
 		} catch (err) {
 			appLogger.error("git", "Failed to add repository", err);
@@ -402,6 +407,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				await handleAddTerminalToBranch(info.path, shellBranch);
 			}
 
+			reconcileTerminalOwnership();
 			repositoriesStore.setActive(info.path);
 		} catch (err) {
 			appLogger.error("git", `Failed to add remote repo from ${connectionId}`, err);

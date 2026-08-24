@@ -10,8 +10,9 @@ import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repoSettingsStore } from "../stores/repoSettings";
-import { repositoriesStore } from "../stores/repositories";
+import { placementBranchFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
+import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
@@ -19,7 +20,7 @@ import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
-import { isAbsolutePath, normalizeSep, pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
+import { isAbsolutePath, pathBasename, pathStripPrefix } from "../utils/pathUtils";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -164,58 +165,37 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
  * so reconnect must use the same ancestor matching and active-branch fallback
  * as the live session-created path. */
 function assignSessionToRepoBranch(sessionId: string, terminalId: string, cwd: string | null): void {
-	let assigned = false;
-	if (cwd) {
-		const candidates: Array<{ repoPath: string; branchName: string | null; normalizedPath: string }> = [];
-		for (const repoPath of repositoriesStore.getPaths()) {
-			if (pathStartsWith(cwd, repoPath)) {
-				candidates.push({ repoPath, branchName: null, normalizedPath: normalizeSep(repoPath).replace(/\/+$/, "") });
-			}
-			const repoState = repositoriesStore.get(repoPath);
-			if (!repoState) continue;
-			for (const branch of Object.values(repoState.branches)) {
-				if (branch.worktreePath && pathStartsWith(cwd, branch.worktreePath)) {
-					candidates.push({
-						repoPath,
-						branchName: branch.name,
-						normalizedPath: normalizeSep(branch.worktreePath).replace(/\/+$/, ""),
-					});
-				}
-			}
-		}
+	const owner = resolveRepoOwner(cwd);
 
-		const matched = candidates.sort(
-			(left, right) =>
-				right.normalizedPath.length - left.normalizedPath.length ||
-				Number(normalizeSep(right.repoPath).replace(/\/+$/, "") === right.normalizedPath) -
-					Number(normalizeSep(left.repoPath).replace(/\/+$/, "") === left.normalizedPath) ||
-				Number(right.branchName !== null) - Number(left.branchName !== null),
-		)[0];
+	// Record the resolved owner on the terminal itself, BEFORE any placement. The
+	// branch arrays are a display index; this field is the truth, and it is what
+	// lets reconcileTerminalOwnership move a wrongly-placed tab home later. `null`
+	// means "no registered repo owns this cwd" — an honest unknown, not a guess.
+	terminalsStore.setRepoPath(terminalId, owner?.repoPath ?? null);
 
-		if (matched) {
-			const repoState = repositoriesStore.get(matched.repoPath);
-			const branchName = matched.branchName || repoState?.activeBranch;
-
-			if (branchName) {
-				repositoriesStore.addTerminalToBranch(matched.repoPath, branchName, terminalId);
-				assigned = true;
-			}
+	if (owner) {
+		const branchName = placementBranchFor(owner);
+		if (branchName) {
+			repositoriesStore.addTerminalToBranch(owner.repoPath, branchName, terminalId);
+			return;
 		}
 	}
 
-	if (assigned) return;
-
+	// No owner. The tab still needs somewhere to render or the user cannot even see
+	// that it exists, so the active repo lends it a slot — but `repoPath` above is
+	// null, so this is marked as the guess it is and reconcileTerminalOwnership
+	// re-homes it the moment the real repo is registered.
 	const fallbackRepo = repositoriesStore.state.activeRepoPath;
 	const fallbackState = fallbackRepo ? repositoriesStore.get(fallbackRepo) : undefined;
 	const fallbackBranch = fallbackState?.activeBranch;
 	if (fallbackRepo && fallbackBranch) {
 		appLogger.warn(
 			"app",
-			`Remote session ${sessionId}: cwd "${cwd ?? "(null)"}" did not match any repo — falling back to active repo/branch`,
+			`Session ${sessionId}: cwd "${cwd ?? "(null)"}" is owned by no registered repo — parking the tab in the active repo until one claims it`,
 		);
 		repositoriesStore.addTerminalToBranch(fallbackRepo, fallbackBranch, terminalId);
 	} else {
-		appLogger.error("app", `Remote session ${sessionId}: no repo/branch to assign tab to — tab will be invisible`);
+		appLogger.error("app", `Session ${sessionId}: no repo/branch to assign tab to — tab will be invisible`);
 	}
 }
 
@@ -532,12 +512,13 @@ export async function initApp(deps: AppInitDeps) {
 				if (!filePath && cmd !== "terminal") return;
 
 				const activeRepoPath = repositoriesStore.state.activeRepoPath;
-				// Resolve: absolute path → find owning repo, relative → active repo
+				// Resolve: absolute path → the repo that owns it, relative → active repo
+				// (a relative path typed into a tuic:// link means "here", so focus IS
+				// the right answer for that case and only that case).
 				let repoPath: string | null = null;
 				let relPath = filePath;
 				if (isAbsolutePath(filePath)) {
-					const repos = repositoriesStore.getPaths();
-					repoPath = repos.find((rp) => pathStartsWith(filePath, rp)) ?? null;
+					repoPath = resolveRepoPathFor(filePath);
 					if (repoPath) relPath = pathStripPrefix(filePath, repoPath)!;
 				} else {
 					repoPath = activeRepoPath ?? null;
@@ -748,6 +729,11 @@ export async function initApp(deps: AppInitDeps) {
 			repositoriesStore.setActiveBranch(repoPath, shellBranch);
 		}
 	}
+
+	// Sessions were attached before the shell-branch migration above ran, so a
+	// non-git repo had no branch to claim its own terminals and they were parked
+	// elsewhere. Ask again now that every repo can answer.
+	reconcileTerminalOwnership();
 
 	// Refresh git stats for persisted repos
 	deps.refreshAllBranchStats();

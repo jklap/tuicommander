@@ -10,7 +10,7 @@ import { notificationsStore } from "../stores/notifications";
 import { pluginStore } from "../stores/pluginStore";
 import { prNotificationsStore } from "../stores/prNotifications";
 import { repoSettingsStore } from "../stores/repoSettings";
-import { repositoriesStore } from "../stores/repositories";
+import { locateFile, repositoriesStore } from "../stores/repositories";
 import { sidebarPluginStore } from "../stores/sidebarPluginStore";
 import { statusBarTicker } from "../stores/statusBarTicker";
 import { terminalsStore } from "../stores/terminals";
@@ -577,7 +577,11 @@ function createPluginRegistry() {
 
 			openMarkdownFile(absolutePath: string): void {
 				requireCapability(pluginId, capabilities, "ui:markdown");
-				mdTabsStore.add("", absolutePath);
+				// The file names its own repo. Passing "" left the tab unowned, so it
+				// showed up in every repo; passing the active repo would have been worse
+				// still — it would have claimed a file belonging to a different one.
+				const { repoPath, fsRoot, filePath } = locateFile(absolutePath);
+				mdTabsStore.add(repoPath, filePath, fsRoot || undefined);
 			},
 
 			async playNotificationSound(sound?: NotificationSound): Promise<void> {

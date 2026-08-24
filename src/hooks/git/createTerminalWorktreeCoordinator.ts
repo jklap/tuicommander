@@ -1,6 +1,6 @@
 import { batch, type Setter } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
-import { repositoriesStore } from "../../stores/repositories";
+import { placementBranchFor, repositoriesStore, resolveRepoOwner } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { pathStartsWith } from "../../utils/pathUtils";
 
@@ -15,41 +15,23 @@ interface TerminalWorktreeCoordinatorDeps {
 export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordinatorDeps) {
 	const cwdDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-	/** Find the repo and branch whose worktree path is the longest CWD prefix. */
+	/** Find the repo and branch that own a CWD.
+	 *
+	 *  A linked worktree names its branch. A match at the repo root does not — what
+	 *  is checked out there changes under the user's feet — so the root resolves
+	 *  through `activeBranch` at the moment we need it. */
 	const findBranchForCwd = (cwd: string): { repoPath: string; branchName: string } | null => {
-		let best: { repoPath: string; branchName: string } | null = null;
-		let bestLength = 0;
-		for (const repoPath of repositoriesStore.getPaths()) {
-			const repo = repositoriesStore.get(repoPath);
-			if (!repo) continue;
-			for (const [branchName, branch] of Object.entries(repo.branches)) {
-				const worktreePath = branch.worktreePath ?? (branch.isMain ? repoPath : null);
-				if (!worktreePath) continue;
-				if (pathStartsWith(cwd, worktreePath) && worktreePath.length > bestLength) {
-					best = { repoPath, branchName };
-					bestLength = worktreePath.length;
-				}
-			}
-		}
-		return best;
+		const owner = resolveRepoOwner(cwd);
+		if (!owner) return null;
+		const branchName = placementBranchFor(owner);
+		return branchName ? { repoPath: owner.repoPath, branchName } : null;
 	};
 
 	const performCwdReassignment = async (terminalId: string, newCwd: string) => {
 		if (!terminalsStore.get(terminalId)) return;
 
 		const currentRepoPath = repositoriesStore.getRepoPathForTerminal(terminalId);
-		let currentBranchName: string | null = null;
-		if (currentRepoPath) {
-			const repo = repositoriesStore.get(currentRepoPath);
-			if (repo) {
-				for (const [branchName, branch] of Object.entries(repo.branches)) {
-					if (branch.terminals.includes(terminalId)) {
-						currentBranchName = branchName;
-						break;
-					}
-				}
-			}
-		}
+		const currentBranchName = repositoriesStore.findOwnerForTerminal(terminalId)?.branchName ?? null;
 
 		let target = findBranchForCwd(newCwd);
 		if (!target && currentRepoPath) {
@@ -68,6 +50,9 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 			if (currentRepoPath && currentBranchName) {
 				repositoriesStore.removeTerminalFromBranch(currentRepoPath, currentBranchName, terminalId);
 			}
+			// The branch arrays are the display index; the terminal's own repoPath is
+			// the record. Moving one without the other is what left ids stranded.
+			terminalsStore.setRepoPath(terminalId, target.repoPath);
 			repositoriesStore.addTerminalToBranch(target.repoPath, target.branchName, terminalId);
 
 			if (terminalsStore.state.activeId === terminalId) {
@@ -108,13 +93,7 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 		const repo = repositoriesStore.get(repoPath);
 		if (!repo) return [];
 
-		let currentBranchName: string | null = null;
-		for (const [branchName, branch] of Object.entries(repo.branches)) {
-			if (branch.terminals.includes(terminalId)) {
-				currentBranchName = branchName;
-				break;
-			}
-		}
+		const currentBranchName = repositoriesStore.findOwnerForTerminal(terminalId)?.branchName ?? null;
 
 		const targets: Array<{ branchName: string; path: string }> = [];
 		for (const [branchName, branch] of Object.entries(repo.branches)) {

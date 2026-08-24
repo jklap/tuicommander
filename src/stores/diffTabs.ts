@@ -1,5 +1,5 @@
 import { pathBasename } from "../utils/pathUtils";
-import { currentBranchKey } from "./repositories";
+import { branchKeyFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
 
 export type DiffStatus = "M" | "A" | "D" | "R" | "?";
@@ -59,7 +59,7 @@ function createDiffTabsStore() {
 				status,
 				scope,
 				untracked,
-				branchKey: currentBranchKey(),
+				branchKey: branchKeyFor(repoPath),
 			});
 			return tabId;
 		},

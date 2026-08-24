@@ -2,7 +2,9 @@ import { batch } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { invoke } from "../invoke";
 import type { SavedTerminal } from "../types";
+import { pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 import { markPerf } from "../utils/perfTrace";
+import { type RepoOwner, resolveRepoOwnerIn } from "../utils/repoOwnership";
 import { appLogger } from "./appLogger";
 import { makeBranchKey } from "./tabManager";
 
@@ -1244,11 +1246,87 @@ registerDebugSnapshot("repositories", () => {
 });
 
 /** Get the branch key for the currently active repo+branch.
- *  Shared helper used by tab stores (diff, md, editor) to scope tabs. */
+ *
+ *  Use this ONLY for something the user is doing to the repo in front of them.
+ *  A tab must be scoped with `branchKeyFor(itsOwnRepo)` instead: scoping it to the
+ *  focused repo is how a preview from one repo ends up filed under another. */
 export function currentBranchKey(): string | undefined {
-	const repoPath = repositoriesStore.state.activeRepoPath;
+	return branchKeyFor(repositoriesStore.state.activeRepoPath);
+}
+
+/** Branch key for a tab that belongs to `repoPath` — the tab's own repo, never the
+ *  focused one. `undefined` (unscoped, visible everywhere) when the repo is unknown
+ *  or has no active branch, which is the honest answer for a tab we cannot place. */
+export function branchKeyFor(repoPath: string | null | undefined): string | undefined {
 	if (!repoPath) return undefined;
 	const repo = repositoriesStore.state.repositories[repoPath];
 	if (!repo?.activeBranch) return undefined;
 	return makeBranchKey(repoPath, repo.activeBranch);
+}
+
+/** Resolve which registered repo owns `path`. Returns null when none does — callers
+ *  must handle that visibly rather than falling back to whatever repo has focus. */
+export function resolveRepoOwner(path: string | null | undefined): RepoOwner | null {
+	return resolveRepoOwnerIn(path, repositoriesStore.state.repositories);
+}
+
+/** The repo that owns `path`, or null. Convenience for callers that do not care
+ *  which worktree branch matched. */
+export function resolveRepoPathFor(path: string | null | undefined): string | null {
+	return resolveRepoOwner(path)?.repoPath ?? null;
+}
+
+/** Where a file on disk belongs: its repo, the filesystem root to do I/O against,
+ *  and the path relative to that root. Empty repo/root means no registered repo
+ *  owns it, and `filePath` stays absolute. */
+export interface FileLocation {
+	repoPath: string;
+	fsRoot: string;
+	filePath: string;
+}
+
+/**
+ * Place an absolute path for tab-opening.
+ *
+ * Every caller that opens a file used to relativize it against the ACTIVE repo's
+ * worktree: a file from another repo then failed the prefix test and opened as an
+ * absolute, unscoped tab — visible under every repo. Ask the path who owns it
+ * instead, and use that owner's worktree as the root.
+ */
+export function locateFile(absolutePath: string): FileLocation {
+	const owner = resolveRepoOwner(absolutePath);
+	if (!owner) return { repoPath: "", fsRoot: "", filePath: absolutePath };
+
+	// A linked worktree is the filesystem root for I/O; the repo root is not.
+	const worktreePath = owner.branchName
+		? repositoriesStore.state.repositories[owner.repoPath]?.branches[owner.branchName]?.worktreePath
+		: null;
+	const fsRoot = worktreePath || owner.repoPath;
+	const filePath = pathStartsWith(absolutePath, fsRoot)
+		? (pathStripPrefix(absolutePath, fsRoot) ?? absolutePath)
+		: absolutePath;
+	return { repoPath: owner.repoPath, fsRoot, filePath };
+}
+
+/**
+ * The branch a terminal owned by `owner` should be filed under.
+ *
+ * A linked worktree names its own branch and is used as-is. A match at the repo
+ * ROOT names none — what is checked out there moves under the user's feet — so it
+ * resolves late, here:
+ *
+ *  1. `activeBranch`, the branch the repo is on right now;
+ *  2. failing that, whichever branch records the repo root as its worktree.
+ *
+ * Step 2 is not redundant. A repo discovered before its branches were scanned has
+ * `activeBranch: null` while already knowing its root checkout, and stopping at
+ * step 1 left every session in it unplaced — invisible tabs, not misfiled ones.
+ */
+export function placementBranchFor(owner: RepoOwner): string | null {
+	if (owner.branchName) return owner.branchName;
+	const repo = repositoriesStore.state.repositories[owner.repoPath];
+	if (!repo) return null;
+	if (repo.activeBranch) return repo.activeBranch;
+	const atRoot = Object.values(repo.branches).find((branch) => branch.worktreePath === owner.repoPath);
+	return atRoot?.name ?? null;
 }

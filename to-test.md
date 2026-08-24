@@ -988,3 +988,69 @@ toggle the source. GFM task lists are list-item-only, so marked never did this.
 - [ ] A table with the checkbox column in a different position must still map
   1:1 (two tables in the same doc with different column indexes).
 - [ ] `[x]` inside a code fence must stay literal text.
+
+## Voice plugin (`tuic-voice`)
+
+Speaks an agent's prose while it streams, via the WebView's `speechSynthesis`.
+Already loaded live (JS hot-reload, no rebuild needed) — the log confirms 68
+voices in the WKWebView. What a human still has to judge is whether it picks the
+right text, because every filter stage is a heuristic and the fixtures are
+synthetic: no real Claude/Codex turn was ever replayed through it.
+
+Right-click a terminal for **Voice: settings / toggle / stop speaking**.
+
+- [ ] Run a Claude turn that mixes prose with tool calls: only the prose is read.
+  A spoken `Bash`, `cargo`, a file path or a diff line is a filter bug — turn on
+  "Log every dropped line" in the settings panel and check `GET :9876/logs` for
+  the rule that let it through (or wrongly dropped a sentence).
+- [ ] The status line / HUD below the input box is never read. This is the
+  bottom-zone rule; if any of it is spoken, `chromeCutoff` found no `❯` anchor.
+- [ ] Speech starts on the first complete sentence, NOT at the end of the turn.
+- [ ] No sentence is repeated as the TUI repaints.
+- [ ] The last sentence of a turn is spoken even without a full stop.
+- [ ] "Voice: stop speaking" cuts off mid-sentence, immediately.
+- [ ] An Italian reply is read with an Italian voice, not an English one
+  mangling it — the plugin sets no `lang` by default, so this may need a voice
+  picked by hand in the settings panel.
+- [ ] Codex / Grok / Gemini: the drop rules were written against Claude Code's
+  glyphs (`⏺`, `⎿`). Check what each of the others does to the filter.
+
+## Voice plugin freeze (fixed)
+
+Boss had to disable the plugin: the app locked up completely as soon as it
+started speaking. Cause was an infinite loop in `drain()` — the buffer was cut on
+`[.!?…:]` but the "is this worth saying" test excluded the colon, so a short
+colon-terminated chunk was consumed, rejected and put back unchanged, and the
+next pass cut it at exactly the same place. Frontend-only, so a reload is enough.
+
+- [ ] Re-enable `tuic-voice` and run a turn containing a short clause before a
+  colon ("Ecco il piano: ..."). The UI must stay responsive throughout.
+- [ ] A turn ending on a colon with nothing after it: nothing is spoken until
+  the turn ends, then the tail flushes. No freeze while waiting.
+- [ ] An abbreviation ("e.g.", "v1.2") mid-sentence does not stop the real
+  sentence after it from being spoken.
+
+## Cross-repo tab misfiling (fixed)
+
+Every "which repo owns this?" question now goes through one resolver
+(`utils/repoOwnership.ts`), which has no parameter through which the focused
+repo could reach it. Frontend-only — a browser reload picks it up, no rebuild.
+
+- [ ] Launch a PTY / agent in repo A while looking at repo B: the tab appears
+  under A, not B.
+- [ ] A plan file written by a session in repo A opens as a tab under A while
+  you are on B. Previously the event was dropped outright — check the app log
+  for `[plan] event:` with the right `ownerRepo=`.
+- [ ] Open the same relative path (e.g. `README.md`) in two different repos:
+  two separate tabs, each visible only under its own repo.
+- [ ] Reopen a file belonging to repo A while focused on repo B: the existing
+  tab is re-activated and stays under A — it must NOT migrate to B.
+- [ ] "Open With TUICommander" on a file from a repo that is not the focused
+  one: the tab is scoped to that file's repo, not shown under every repo.
+- [ ] Click a file path printed by an agent running in another repo: the tab
+  lands under that repo.
+- [ ] Register a repo AFTER sessions are already running inside it (this was
+  `gate-os` in Boss's log): its parked tabs move to it automatically. The log
+  shows `[Reconcile] <id> ... → <repo>:<branch>`.
+- [ ] `cd` a terminal from one repo into another (OSC 7): the tab moves and no
+  stale id is left behind in the old branch list.
