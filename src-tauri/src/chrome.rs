@@ -283,6 +283,15 @@ pub fn find_chrome_cutoff(rows: &[&str]) -> Option<usize> {
     // never have, so search the whole screen for the input box itself.
     .or_else(|| lowest_input_box_row(rows, content_end))
     .or_else(|| lowest_structured_input_box(rows, content_end).map(|(separator, _)| separator));
+    // DEFERRED (2026-08-22) — the fallbacks above still leave this returning None
+    // often. Measured with `detection_over_capture_corpus` (see docs/backend/pty.md)
+    // over a live corpus: 81% and 71% of content ticks found no anchor on two
+    // agent captures that do emit status-line events, against 8% on a third.
+    // A shell session legitimately has no chrome, so a high rate is not proof of
+    // harm — it is unknown whether the untrimmed rows on those ticks carry
+    // anything a parser then misreads. Needs the changed rows sampled at the
+    // no-anchor ticks before anything here is widened; widening blind is how the
+    // loose `is_prompt_line` search starts matching markdown blockquotes.
 
     Some(extend_cutoff_upward(rows, anchor?))
 }
