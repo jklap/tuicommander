@@ -158,6 +158,7 @@ cleartext copy does not survive on disk.
 | `scrollback_reflow` | `bool` | `false` | Reflow scrollback history on column resize. Keeps scrollback readable when side panels temporarily narrow the terminal, without affecting cursor-addressed TUIs on the visible screen |
 | `cursor_style` | `String` | `"bar"` | Terminal cursor style: `"bar"`, `"block"`, `"underline"` |
 | `terminal_renderer` | `String` | `"webgl"` | Terminal renderer: `"webgl"` (GPU-accelerated) or `"canvas"` (CPU, no atlas bugs) |
+| `terminal_link_activation` | `String` | `"click"` | How terminal links activate: `"click"` (opens on plain click), `"modifier"` (Cmd/Ctrl+click opens; underline only while held), or `"never"` (right-click Open/Copy-link menu only) |
 | `show_block_timestamps` | `bool` | `true` | Show the hold-`Ctrl+Cmd` relative-time overlay on command blocks |
 | `show_block_marks` | `bool` | `true` | Draw command-block boundary tick marks (blue/red) on the terminal scrollbar |
 | `show_prompt_marks` | `bool` | `true` | Draw a tick mark on the terminal scrollbar for each line where the user submitted a prompt |

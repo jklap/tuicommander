@@ -3,6 +3,7 @@ import {
 	applyPlatformClass,
 	detectPlatform,
 	getModifierSymbol,
+	isLinkModifier,
 	isLinux,
 	isMacOS,
 	isQuickSwitcherActive,
@@ -198,6 +199,38 @@ describe("platform detection", () => {
 			mockPlatform("Win32");
 			const e = new KeyboardEvent("keyup", { key: "a" });
 			expect(isQuickSwitcherRelease(e)).toBe(false);
+		});
+	});
+
+	describe("isLinkModifier", () => {
+		it("detects Cmd on macOS", () => {
+			mockPlatform("MacIntel");
+			const e = new MouseEvent("click", { metaKey: true, ctrlKey: false });
+			expect(isLinkModifier(e)).toBe(true);
+		});
+
+		it("ignores Ctrl on macOS", () => {
+			mockPlatform("MacIntel");
+			const e = new MouseEvent("click", { metaKey: false, ctrlKey: true });
+			expect(isLinkModifier(e)).toBe(false);
+		});
+
+		it("detects Ctrl on Windows", () => {
+			mockPlatform("Win32");
+			const e = new MouseEvent("click", { ctrlKey: true, metaKey: false });
+			expect(isLinkModifier(e)).toBe(true);
+		});
+
+		it("ignores Cmd/Meta on Windows", () => {
+			mockPlatform("Win32");
+			const e = new MouseEvent("click", { metaKey: true, ctrlKey: false });
+			expect(isLinkModifier(e)).toBe(false);
+		});
+
+		it("detects Ctrl on Linux", () => {
+			mockPlatform("Linux x86_64");
+			const e = new MouseEvent("click", { ctrlKey: true });
+			expect(isLinkModifier(e)).toBe(true);
 		});
 	});
 });

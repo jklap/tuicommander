@@ -1,8 +1,10 @@
 import { type Component, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { t } from "../../../i18n";
+import { getModifierSymbol } from "../../../platform";
 import type { FontType } from "../../../stores/settings";
 import { FONT_FAMILIES, settingsStore } from "../../../stores/settings";
 import { getTerminalTheme } from "../../../themes";
+import type { LinkActivation } from "../../Terminal/canvasTerminalLinks";
 import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -359,6 +361,22 @@ export const TerminalTab: Component = () => {
 				onChange={(v) => settingsStore.setShowLastPrompt(v)}
 				label="Show agent context bar"
 				hint="Display the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent"
+			/>
+
+			<SettingSelect
+				label={t("terminal.label.linkActivation", "Open links on")}
+				value={settingsStore.state.linkActivation}
+				onChange={(v) => settingsStore.setLinkActivation(v as LinkActivation)}
+				options={[
+					{ value: "click", label: t("terminal.linkActivation.click", "Click") },
+					{ value: "modifier", label: `${getModifierSymbol()}Click` },
+					{ value: "never", label: t("terminal.linkActivation.never", "Never (right-click only)") },
+				]}
+				hint={t(
+					"terminal.hint.linkActivation",
+					"How links (URLs, file paths) in terminal output open. Click opens on a plain click; " +
+						`${getModifierSymbol()}Click underlines a link only while ${getModifierSymbol() === "⌘" ? "Cmd" : "Ctrl"} is held, and opens it on ${getModifierSymbol()}+click; Never disables click-to-open — right-click still offers Open/Copy link.`,
+				)}
 			/>
 
 			<h3>{t("terminal.heading.blocks", "Blocks")}</h3>

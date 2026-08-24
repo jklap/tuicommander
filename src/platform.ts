@@ -101,6 +101,14 @@ export function isQuickSwitcherRelease(e: KeyboardEvent): boolean {
 }
 
 /**
+ * Check whether the terminal link-activation modifier is held on this event.
+ * macOS: Cmd (metaKey), Windows/Linux: Ctrl (ctrlKey).
+ */
+export function isLinkModifier(e: MouseEvent | KeyboardEvent): boolean {
+	return isMacOS() ? e.metaKey : e.ctrlKey;
+}
+
+/**
  * Shorten a path for display by replacing the home directory with ~
  * On macOS/Linux: /Users/name/foo → ~/foo, /home/name/foo → ~/foo
  * On Windows: paths are returned unchanged (~ is not a shell convention)
