@@ -20,7 +20,12 @@ import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
 import { createCanvasLinkController } from "./canvasTerminalLinks";
 import { createCanvasScrollController, gestureAccelFactor, ROW_CACHE_CHUNK } from "./canvasTerminalScroll";
-import { createCanvasSearchController, createCanvasSelectionController, wordBoundsAt } from "./canvasTerminalSelection";
+import {
+	createCanvasSearchController,
+	createCanvasSelectionController,
+	extendSelectionDrag,
+	wordBoundsAt,
+} from "./canvasTerminalSelection";
 import { installTouchHandlers } from "./canvasTerminalTouch";
 import { createTransport, type TerminalTransport, toBinaryPayload } from "./canvasTerminalTransport";
 import {
@@ -38,11 +43,13 @@ import {
 	gridDimsForBox,
 	HIDDEN_ACK_INTERVAL_MS,
 	isWideCursorGlyph,
+	lastGridCol,
+	motionReportButton,
 	reconcileDelay,
 	resolveCursorShape,
 	rowText,
-	sgrMotionButton,
 	shouldFireReconcile,
+	shouldForwardMouseGesture,
 	shouldPaintCursor,
 	snapLineHeight,
 } from "./canvasTerminalUtils";
@@ -63,6 +70,7 @@ import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./su
 import {
 	altSequenceFromCode,
 	createCompositionState,
+	isGlobalShortcutPassthrough,
 	isPointerInsideRect,
 	keyToSequence,
 	shouldReportMouseUp,
@@ -387,7 +395,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const rect = cachedRect ?? canvasRef.getBoundingClientRect();
 		const x = e.clientX - rect.left - GUTTER_PX;
 		const y = e.clientY - rect.top;
-		const maxCol = Math.max(0, Math.floor((rect.width - GUTTER_PX) / m.cellWidth) - 1);
+		const maxCol = lastGridCol(rect.width, m.cellWidth);
 		const maxRow = Math.max(0, Math.floor(rect.height / m.cellHeight) - 1);
 		return {
 			col: Math.max(0, Math.min(Math.floor(x / m.cellWidth), maxCol)),
@@ -396,12 +404,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	/** Last selectable column of a line — shared by triple-click and line-mode
-	 *  drag extension so both agree with canvasToGrid's own maxCol (which
-	 *  subtracts GUTTER_PX; this used to be computed ad hoc without it). */
-	function lastGridCol(rect: DOMRect): number {
+	 *  drag extension so both agree with canvasToGrid's own maxCol (see
+	 *  lastGridCol's own doc comment in canvasTerminalUtils.ts). */
+	function lastGridColForRect(rect: DOMRect): number {
 		const m = metrics();
 		if (!m) return 79;
-		return Math.max(0, Math.floor((rect.width - GUTTER_PX) / m.cellWidth) - 1);
+		return lastGridCol(rect.width, m.cellWidth);
 	}
 
 	function mouseModifiers(e: MouseEvent): number {
@@ -931,24 +939,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
 
-		const showBlockMarks = settingsStore.state.showBlockMarks;
-		const showPromptMarks = settingsStore.state.showPromptMarks;
-		const blocks = term.commandBlocks;
-		const promptLines = term.userPromptLines;
-		const searchCount = search.matches.length;
-		const lastBlock = blocks[blocks.length - 1];
-		const lastPrompt = promptLines[promptLines.length - 1];
+		const marksInput: ScrollbarMarksInput = {
+			showBlockMarks: settingsStore.state.showBlockMarks,
+			showPromptMarks: settingsStore.state.showPromptMarks,
+			blocks: term.commandBlocks,
+			promptLines: term.userPromptLines,
+			totalRows,
+			matches: search.matches,
+		};
 
-		// Each toggle's contribution to the key collapses to a fixed placeholder
-		// when that category is hidden, so the key doesn't churn on invisible
-		// changes — but the toggle flip itself always changes the count term
-		// (real count vs. 0), so re-enabling always invalidates the memo even if
-		// blocks/prompts/totalRows are otherwise unchanged since it was hidden.
-		const key =
-			`b${showBlockMarks ? blocks.length : 0}:${showBlockMarks ? (lastBlock?.promptLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.endLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.exitCode ?? "") : ""}` +
-			`:p${showPromptMarks ? promptLines.length : 0}:${showPromptMarks ? (lastPrompt ?? "") : ""}` +
-			`:t${totalRows}` +
-			`:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
+		const key = scrollbarMarksKey(marksInput);
 		if (key === lastScrollbarMarksKey) return;
 		lastScrollbarMarksKey = key;
 
@@ -2638,7 +2638,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// keyToSequence below). Without this, the printable-character fallback
 			// would swallow it as a literal "." keystroke instead of letting it
 			// bubble to the document-level shortcut listener.
-			if (e.ctrlKey && e.shiftKey && !e.altKey && e.key === ".") {
+			if (isGlobalShortcutPassthrough(e)) {
 				return;
 			}
 
@@ -2786,7 +2786,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					selection.mode = "char";
 				}
 			} else if (clickCount >= 3) {
-				const maxCol = lastGridCol(canvasRef.getBoundingClientRect());
+				const maxCol = lastGridColForRect(canvasRef.getBoundingClientRect());
 				selection.start = { col: 0, row: absRow };
 				selection.end = { col: maxCol, row: absRow };
 				lineAnchorRow = absRow;
@@ -2831,36 +2831,18 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// Word/line drag extension: re-derive the boundary at the live drag
 			// position each frame and union it with whichever edge of the
 			// mousedown anchor (word or line) sits away from the drag direction —
-			// that anchor edge must stay included no matter which way the drag
-			// goes, matching double-click-drag / triple-click-drag in every
-			// mainstream terminal. Falls back to plain cell-wise extension when
-			// there's no anchor (e.g. double-click landed on whitespace).
-			if (selection.mode === "word" && wordAnchor) {
-				const vpRow = absRowToViewport(absRow);
-				const row = vpRow !== null ? rowMap.get(vpRow) : null;
-				const dragBounds = row ? wordBoundsAt(row, pos.col) : null;
-				const dragLeft = dragBounds?.left ?? pos.col;
-				const dragRight = dragBounds?.right ?? pos.col;
-				const draggingForward = absRow > wordAnchor.row || (absRow === wordAnchor.row && dragLeft >= wordAnchor.left);
-				if (draggingForward) {
-					selection.start = { row: wordAnchor.row, col: wordAnchor.left };
-					selection.end = { row: absRow, col: dragRight };
-				} else {
-					selection.start = { row: absRow, col: dragLeft };
-					selection.end = { row: wordAnchor.row, col: wordAnchor.right };
-				}
-			} else if (selection.mode === "line" && lineAnchorRow !== null) {
-				const maxCol = lastGridCol(rect);
-				if (absRow >= lineAnchorRow) {
-					selection.start = { row: lineAnchorRow, col: 0 };
-					selection.end = { row: absRow, col: maxCol };
-				} else {
-					selection.start = { row: absRow, col: 0 };
-					selection.end = { row: lineAnchorRow, col: maxCol };
-				}
-			} else {
-				selection.end = { col: pos.col, row: absRow };
-			}
+			// see extendSelectionDrag's doc comment for why.
+			const vpRow = absRowToViewport(absRow);
+			const dragRow = vpRow !== null ? rowMap.get(vpRow) : null;
+			const dragBounds = dragRow ? wordBoundsAt(dragRow, pos.col) : null;
+			const extended = extendSelectionDrag(
+				selection.mode,
+				{ wordAnchor, lineAnchorRow },
+				{ row: absRow, col: pos.col, bounds: dragBounds, maxCol: lastGridColForRect(rect) },
+				selection.start ?? { row: absRow, col: pos.col },
+			);
+			selection.start = extended.start;
+			selection.end = extended.end;
 			const mRepaint = metrics();
 			if (currentFrame && mRepaint) paintFrame(currentFrame, mRepaint);
 		};
@@ -2875,21 +2857,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// even if the app's mouse-reporting mode flips mid-drag. Without this,
 			// a long-enough drag could straddle a mode change and have its tail end
 			// silently forwarded instead of extending the selection.
-			if (!selection.selecting && currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
+			if (
+				currentFrame &&
+				shouldForwardMouseGesture({
+					selecting: selection.selecting,
+					mouseMode: currentFrame.mouseMode,
+					shiftKey: e.shiftKey,
+				})
+			) {
 				const rect = canvasRef.getBoundingClientRect();
 				if (!isPointerInsideRect(e, rect)) return;
-				// Motion tracking (mode 3, ?1003h) reports EVERY move, drag-tracking
-				// (mode 2, ?1002h) only while a button is held. Either way, the report
-				// must carry which button (if any) is actually down — SGR button code 3
-				// ("no button") is reserved for a bare hover. Hardcoding 3 here for every
-				// motion event, regardless of e.buttons, told the app "nothing is
-				// pressed" for the entire duration of a real drag: an app tracking its
-				// own click-drag selection (as Claude Code does) never saw the held
-				// button in the motion stream, so it had no way to tell a drag from a
-				// hover and the selection never extended.
-				if (currentFrame.mouseMode >= 3 || (currentFrame.mouseMode >= 2 && e.buttons > 0)) {
+				const motionButton = motionReportButton(currentFrame.mouseMode, e.buttons);
+				if (motionButton !== null) {
 					const pos = canvasToGrid(e, rect);
-					writePtyNoScroll(sgrMouseSequence(32 + sgrMotionButton(e.buttons), pos.col, pos.row, true, e));
+					writePtyNoScroll(sgrMouseSequence(32 + motionButton, pos.col, pos.row, true, e));
 				}
 				return;
 			}
@@ -2928,7 +2909,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// clear selecting/rect/rAF) — never get swallowed by a mode flip that
 			// happened mid-drag, which used to leave selecting/autoscroll/rAF
 			// dangling until the next unrelated mousedown reset them.
-			if (!selection.selecting && currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
+			if (
+				currentFrame &&
+				shouldForwardMouseGesture({
+					selecting: selection.selecting,
+					mouseMode: currentFrame.mouseMode,
+					shiftKey: e.shiftKey,
+				})
+			) {
 				if (!reportUp) return;
 				// canvasToGrid clamps to the grid, so a release outside the canvas
 				// reports the edge cell — what a terminal does for a drag-out.

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	createCanvasSearchController,
 	createCanvasSelectionController,
+	extendSelectionDrag,
 	wordBoundsAt,
 } from "../canvasTerminalSelection";
 import type { DecodedRow } from "../canvasTerminalUtils";
@@ -163,5 +164,101 @@ describe("canvas terminal search controller", () => {
 			expect(search.dropRows(new Set())).toBe(false);
 			expect(search.matches).toEqual(matches);
 		});
+	});
+});
+
+// Regression coverage for 26a3d449: double/triple-click-drag used to degrade to plain
+// character selection instead of extending by word/line.
+describe("extendSelectionDrag", () => {
+	const currentStart = { row: 0, col: 0 };
+
+	it("word mode, dragging forward: anchor's left stays the start, drag word's right is the end", () => {
+		const result = extendSelectionDrag(
+			"word",
+			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null },
+			{ row: 7, col: 10, bounds: { left: 8, right: 12 }, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 5, col: 2 }, end: { row: 7, col: 12 } });
+	});
+
+	it("word mode, dragging backward: drag word's left is the start, anchor's right is the end", () => {
+		const result = extendSelectionDrag(
+			"word",
+			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null },
+			{ row: 3, col: 1, bounds: { left: 0, right: 1 }, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 3, col: 0 }, end: { row: 5, col: 6 } });
+	});
+
+	it("word mode, same row with dragLeft === anchor.left, is treated as forward", () => {
+		const result = extendSelectionDrag(
+			"word",
+			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null },
+			{ row: 5, col: 2, bounds: { left: 2, right: 6 }, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 5, col: 2 }, end: { row: 5, col: 6 } });
+	});
+
+	it("word mode over whitespace mid-drag falls back to the raw column without losing the anchor", () => {
+		const result = extendSelectionDrag(
+			"word",
+			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null },
+			{ row: 7, col: 20, bounds: null, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 5, col: 2 }, end: { row: 7, col: 20 } });
+	});
+
+	it("line mode dragging forward selects full rows from the anchor through the drag row", () => {
+		const result = extendSelectionDrag(
+			"line",
+			{ wordAnchor: null, lineAnchorRow: 4 },
+			{ row: 8, col: 30, bounds: null, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 4, col: 0 }, end: { row: 8, col: 79 } });
+	});
+
+	it("line mode dragging backward selects full rows from the drag row through the anchor", () => {
+		const result = extendSelectionDrag(
+			"line",
+			{ wordAnchor: null, lineAnchorRow: 8 },
+			{ row: 4, col: 30, bounds: null, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 4, col: 0 }, end: { row: 8, col: 79 } });
+	});
+
+	it("char mode extends by plain cell, leaving start untouched", () => {
+		const result = extendSelectionDrag(
+			"char",
+			{ wordAnchor: null, lineAnchorRow: null },
+			{ row: 2, col: 9, bounds: null, maxCol: 79 },
+			{ row: 1, col: 3 },
+		);
+		expect(result).toEqual({ start: { row: 1, col: 3 }, end: { row: 2, col: 9 } });
+	});
+
+	it("word mode with a null wordAnchor (double-click landed on punctuation) falls back to plain cell-wise extension", () => {
+		const result = extendSelectionDrag(
+			"word",
+			{ wordAnchor: null, lineAnchorRow: null },
+			{ row: 2, col: 9, bounds: null, maxCol: 79 },
+			{ row: 1, col: 3 },
+		);
+		expect(result).toEqual({ start: { row: 1, col: 3 }, end: { row: 2, col: 9 } });
+	});
+
+	it("line mode with a null lineAnchorRow falls back to plain cell-wise extension", () => {
+		const result = extendSelectionDrag(
+			"line",
+			{ wordAnchor: null, lineAnchorRow: null },
+			{ row: 2, col: 9, bounds: null, maxCol: 79 },
+			{ row: 1, col: 3 },
+		);
+		expect(result).toEqual({ start: { row: 1, col: 3 }, end: { row: 2, col: 9 } });
 	});
 });
