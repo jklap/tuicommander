@@ -457,7 +457,10 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Recency-weighted ranking: recently used actions surface first
 - Each row shows action label, category badge, and keybinding hint
 - Keyboard-navigable: `↑/↓` to move, `Enter` to execute, `Esc` to close
+- Browser mode mounts the same palette and exposes it through the magnifying-glass toolbar button, so it does not depend on the browser forwarding `Cmd/Ctrl+P`
+- Browser actions are fail-closed: only commands explicitly verified against the web UI or HTTP transport are shown; native dialogs, detached windows, updater controls, MCP configuration, and user-plugin management remain omitted
 - **Search modes**: type `!` to search files by name, `?` to search file contents, `~` to search across all open terminal buffers. File/content results open in editor tab (content matches jump to the matched line). Terminal results navigate to the terminal tab/pane and scroll to the matched line. Leading spaces after prefix are ignored
+- Browser filename and content searches use the existing HTTP routes. Content results are correlated with a per-search random ID and republished only inside the requesting page, preventing results from leaking across windows or panels
 - **Discoverable search commands**: "Search Terminals", "Search Files", "Search in File Contents" appear as regular palette commands and pre-fill the corresponding prefix
 - **QR for Remote Mobile Connection**: opens a large black-on-white QR (in a dialog) that a phone can scan to launch the mobile companion PWA. Reuses the Settings → Services & MCP connect flow (`get_connect_url` — token stays server-side); shows a hint when Remote Access is disabled and a network picker for multi-IP machines
 - Powered by `actionRegistry.ts` (`ACTION_META` map)
@@ -1098,9 +1101,9 @@ AI automation layer with 29 built-in context-aware prompts. Each prompt includes
 - Prompt rows show inline badges: execution mode (inject/shell/headless/api), built-in, placement tags
 - Prompts are context-aware: 31 variables auto-resolved from git, GitHub, and terminal state
 - **Variable Input Dialog**: unresolved variables show a compact form with variable name + description before execution
-- **Edit Prompt dialog**: full editor with name, description, content textarea, variable insertion dropdown (grouped by Git/GitHub/Terminal with descriptions), placement checkboxes, execution mode + inject target + auto-execute side-by-side, keyboard shortcut capture
-- **Inject target**: inject-mode prompts route to the **Compose box** (default — fills the input for review, never idle-gated) or the **Terminal** (sends straight to the agent, idle-gated)
-- **Auto-execute** (Terminal target only): when enabled, prompts send Enter immediately via agent-aware `sendCommand`; when disabled, text is pasted without Enter so the user can review before sending
+- **Edit Prompt dialog**: full editor with name, description, content textarea, variable insertion dropdown (grouped by Git/GitHub/Terminal with descriptions), placement checkboxes, execution mode, auto-execute, and keyboard shortcut capture
+- **Inject target**: when a prompt is not submitted immediately, the target selects the review surface: the **Compose box** (default) or editable text in the **Terminal**
+- **Auto-execute**: when enabled, a prompt submits exactly once through agent-aware `sendCommand`, regardless of its review target. When disabled, it remains editable. Explicit **Insert** and **Insert & Run** actions override the saved setting.
 - **API execution mode**: calls LLM providers directly via HTTP API (genai crate) without terminal or agent CLI. Per-prompt system prompt field. Output routed via the same outputTarget options (clipboard, commit-message, toast, panel). Tauri-only (PWA shows "requires desktop app")
 - **LLM API config** (Settings > Agents): global provider/model/API key for all API-mode prompts. Supports OpenAI, Anthropic, Gemini, OpenRouter, Ollama, and any OpenAI-compatible endpoint via custom base URL. API key stored in OS keyring. Test button validates connection
 

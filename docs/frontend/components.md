@@ -62,7 +62,7 @@ App.tsx (central orchestrator)
 ├── TaskQueuePanel/           # Agent task queue
 ├── PromptOverlay/            # Agent prompt interception
 ├── PromptDrawer/             # Prompt library management
-├── CommandPalette/           # Cmd+P command palette
+├── CommandPalette/           # Cmd+P / browser-toolbar palette with transport-safe actions
 ├── ActivityDashboard/        # Activity center (bell dropdown)
 ├── BranchSwitcher/           # Quick branch switcher (held-key overlay)
 ├── BranchPopover/            # Branch selection popover
@@ -279,6 +279,6 @@ Native SolidJS component (not a plugin) showing Claude API usage data. Displayed
 | Help | `Cmd+?` | Local state in App.tsx |
 | Prompt Library | `Cmd+Shift+K` | `promptLibraryStore.toggleDrawer()` |
 | Task Queue | — | Local state in App.tsx |
-| Command Palette | `Cmd+P` | `commandPaletteStore.toggle()` |
+| Command Palette | `Cmd+P`; browser toolbar button | `commandPaletteStore.toggle()`; browser mode filters to explicitly supported web/HTTP actions |
 | Activity Dashboard | — | `activityDashboardStore.toggle()` |
 | Worktree Manager | `Cmd+Shift+W` | `worktreeManagerStore.toggle()` |

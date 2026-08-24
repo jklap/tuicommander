@@ -42,16 +42,30 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 	openUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { CommandPalette } from "../../components/CommandPalette/CommandPalette";
 import { Toolbar } from "../../components/Toolbar/Toolbar";
 import { activityStore } from "../../stores/activityStore";
+import { commandPaletteStore } from "../../stores/commandPalette";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { prNotificationsStore } from "../../stores/prNotifications";
 import { repositoriesStore } from "../../stores/repositories";
 import { uiStore } from "../../stores/ui";
 
+function setTauriEnv(on: boolean) {
+	const global = globalThis as Record<string, unknown>;
+	if (on) {
+		global.__TAURI_INTERNALS__ = {};
+		delete global.__TAURI_SHIM__;
+	} else {
+		delete global.__TAURI_INTERNALS__;
+	}
+}
+
 describe("Toolbar", () => {
 	beforeEach(() => {
+		setTauriEnv(true);
 		localStorage.clear();
+		commandPaletteStore.close();
 		for (const path of repositoriesStore.getPaths()) {
 			repositoriesStore.remove(path);
 		}
@@ -63,6 +77,8 @@ describe("Toolbar", () => {
 	});
 
 	afterEach(() => {
+		setTauriEnv(true);
+		commandPaletteStore.close();
 		prNotificationsStore._testCancelPendingTimers();
 		repositoriesStore._testCancelPendingSave();
 		uiStore._testCancelPendingSave();
@@ -110,6 +126,47 @@ describe("Toolbar", () => {
 		expect(container.querySelector(".left")).not.toBeNull();
 		expect(container.querySelector(".center")).not.toBeNull();
 		expect(container.querySelector(".right")).not.toBeNull();
+	});
+
+	it("browser toolbar button opens, closes, and reopens a focused palette", async () => {
+		setTauriEnv(false);
+		const actions = [
+			{
+				id: "search-files",
+				label: "Search Files",
+				category: "Search",
+				keybinding: "",
+				execute: vi.fn(),
+			},
+		];
+		const { container } = render(() => (
+			<>
+				<Toolbar />
+				<CommandPalette actions={actions} browserMode />
+			</>
+		));
+
+		const button = container.querySelector<HTMLButtonElement>('button[aria-controls="command-palette"]');
+		expect(button).not.toBeNull();
+		expect(button?.type).toBe("button");
+		expect(button?.getAttribute("aria-expanded")).toBe("false");
+
+		fireEvent.click(button!);
+		await waitFor(() => {
+			expect(container.querySelector('[role="dialog"][aria-label="Command palette"]')).not.toBeNull();
+			expect(document.activeElement).toBe(container.querySelector('[aria-label="Command palette search"]'));
+		});
+		expect(button?.getAttribute("aria-expanded")).toBe("true");
+
+		fireEvent.click(container.querySelector<HTMLElement>(".overlayTop")!);
+		await waitFor(() => expect(container.querySelector('[role="dialog"]')).toBeNull());
+		expect(button?.getAttribute("aria-expanded")).toBe("false");
+
+		fireEvent.click(button!);
+		await waitFor(() => {
+			expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+			expect(document.activeElement).toBe(container.querySelector('[aria-label="Command palette search"]'));
+		});
 	});
 
 	it("has data-tauri-drag-region attribute", () => {

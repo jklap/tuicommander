@@ -22,11 +22,15 @@ const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
 	};
 });
 
-vi.mock("../../../invoke", async (importOriginal) => ({
-	...(await importOriginal<Record<string, unknown>>()),
-	invoke: mockInvoke,
-	listen: mockListen,
-}));
+vi.mock("../../../invoke", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../../invoke")>();
+	return {
+		...actual,
+		invoke: mockInvoke,
+		listen: (event: string, callback: (event: { payload: unknown }) => void) =>
+			"__TAURI_SHIM__" in globalThis ? actual.listen(event, callback) : mockListen(event, callback),
+	};
+});
 
 const emitEvent = (event: string, payload: unknown) => {
 	for (const handler of [...(listeners.get(event) ?? [])]) handler(payload);
@@ -99,19 +103,29 @@ const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
 		return Promise.resolve(listings.get(`${repoPath}|${subdir}`) ?? []);
 	}
 	return Promise.resolve(undefined);
-});
+};
+
+mockInvoke.mockImplementation(defaultInvoke);
+
+const setBrowserMode = (enabled: boolean) => {
+	const globals = globalThis as Record<string, unknown>;
+	if (enabled) globals.__TAURI_SHIM__ = {};
+	else delete globals.__TAURI_SHIM__;
+};
 
 beforeEach(() => {
 	listings = new Map();
 	listCalls = [];
 	listeners.clear();
-	mockInvoke.mockClear();
+	mockInvoke.mockReset().mockImplementation(defaultInvoke);
+	setBrowserMode(false);
 	uiStore.setFileBrowserViewMode("flat");
 });
 
 // The view-mode toggle persists prefs on a 500 ms debounce; let that timer fire
 // before teardown so it does not leak into the next test file.
 afterEach(async () => {
+	setBrowserMode(false);
 	uiStore.setFileBrowserViewMode("flat");
 	await new Promise((resolve) => setTimeout(resolve, 600));
 });
