@@ -277,6 +277,7 @@ cleartext copy does not survive on disk.
 | `auto_update_plugins_enabled` | `bool` | `true` | Automatically check for plugin updates on startup |
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
+| `terminal_link_activation` | `String` | `"click"` | How terminal links activate: `"click"` (opens on plain click), `"modifier"` (Cmd/Ctrl+click opens; underline only while held), or `"never"` (right-click Open/Copy-link menu only) |
 | `show_block_timestamps` | `bool` | `true` | Label each command block with its elapsed time while Ctrl+Cmd is held. Frontend-gated (painted by the renderer); stored here for persistence |
 | `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > General > Terminal |
 | `show_block_marks` | `bool` | `true` | Draw command-block boundary tick marks (blue/red) on the terminal scrollbar |

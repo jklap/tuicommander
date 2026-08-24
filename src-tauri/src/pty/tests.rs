@@ -2150,6 +2150,7 @@ fn osc133_b_is_a_noop() {
     proc.handle_osc133_event('B', "", session_id, &state);
 
     let current = state
+        .session_maps
         .shell_states
         .get(session_id)
         .map(|s| s.load(std::sync::atomic::Ordering::Relaxed))
@@ -2166,6 +2167,7 @@ fn osc133_b_is_a_noop() {
 
     proc.handle_osc133_event('D', "0", session_id, &state);
     let recorded = state
+        .ai
         .session_knowledge
         .get(session_id)
         .map(|k| k.lock().commands.len())
