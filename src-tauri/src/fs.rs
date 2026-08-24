@@ -3815,10 +3815,17 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(dir.path().join(".env").exists(), ".env was not created on disk");
+        assert!(
+            dir.path().join(".env").exists(),
+            ".env was not created on disk"
+        );
         let entries = list_directory_impl(repo_path, String::new()).unwrap();
         let env = entries.iter().find(|e| e.name == ".env");
-        assert!(env.is_some(), "listing dropped .env: {:?}", entries.iter().map(|e| &e.name).collect::<Vec<_>>());
+        assert!(
+            env.is_some(),
+            "listing dropped .env: {:?}",
+            entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
         assert!(env.unwrap().is_ignored, "expected .env flagged ignored");
     }
 
