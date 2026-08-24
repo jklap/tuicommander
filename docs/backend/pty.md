@@ -471,7 +471,16 @@ strand the sticky awaiting/idle state.
 
 **OSC 777 notification classification:** OSC 777 `notify` is a desktop-notification transport, not an awaiting-state protocol. Raw-stream parsing promotes only response-required wording (`needs your permission`, `approval required`, or `is waiting for your input`) to a confident question. This preserves plan/skill picker detection for hook-instrumented Claude sessions while ignoring the observed generic `Claude Code needs your attention` notification, which can announce completion and otherwise latches awaiting indefinitely.
 
-**State-regression capture:** Enable `POST /diagnostics/capture` before reproducing (`{"enabled":true,"session_id":"<id>"}`), stop it afterward, and copy the exact `<config dir>/captures/<id>.tcap` file into `src-tauri/src/fixtures/agent_prompts/`. `GET /diagnostics/capture` reports the directory and bytes written. Framed records preserve input/output ordering, original chunk boundaries, and monotonic timestamps; legacy `.raw` fixtures remain output-only. Do not build fixtures from `/sessions/:id/output`: the bounded ring can overwrite the signal and its JSON string is lossy UTF-8.
+**State-regression capture:** Enable `POST /diagnostics/capture` before reproducing (`{"enabled":true,"session_id":"<id>"}`), stop it afterward, and copy the exact `<config dir>/captures/<id>.tcap` file into `src-tauri/src/fixtures/agent_prompts/`. `GET /diagnostics/capture` reports the directory and bytes written. The desktop equivalents are the `get_pty_capture` / `set_pty_capture` commands, surfaced as **Capture Session** in the tab context menu whenever `isPerfDebug()` is on (dev by default). Framed records preserve input/output ordering, original chunk boundaries, and monotonic timestamps; legacy `.raw` fixtures remain output-only. Do not build fixtures from `/sessions/:id/output`: the bounded ring can overwrite the signal and its JSON string is lossy UTF-8.
+
+**Reading a corpus back:** `detection_over_capture_corpus` (ignored test in `pty.rs`) replays every capture in a directory through the production composition and reports, per file, the event kinds produced, whether an awaiting badge was left set at the end, and how often `find_chrome_cutoff` found no anchor — the fail-open branch, where no trim happens and every status-line row reaches every parser.
+
+```text
+TUIC_CAPTURE_CORPUS="$HOME/Library/Application Support/com.tuic.commander/captures" \
+  cargo test -p tuicommander detection_over_capture_corpus -- --ignored --nocapture
+```
+
+Captures hold real session content and are not committed; the harness measures them in place. Replay fidelity is bounded by the fixed 41×128 grid it reconstructs — a session recorded at another width wraps differently, which moves chrome detection.
 
 **Safety consumers:** For agents with a verified screen adapter, peer-message injection and Unix auto-standby require confirmed idle (explicit Stop/OSC or stable ready screen). A silence-only idle can update the cosmetic state but cannot type into or `SIGSTOP` a potentially working agent. Agents without an adapter retain the legacy heuristic behavior until their UI is characterized.
 

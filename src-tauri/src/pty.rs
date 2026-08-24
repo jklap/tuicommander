@@ -20511,10 +20511,37 @@ mod tests {
         }
     }
 
+    /// What a replay saw on the way through, beyond the events it produced.
+    ///
+    /// The counter that matters is `ticks_without_cutoff`: `find_chrome_cutoff`
+    /// returning `None` means NO trim, so on that tick every status-line row
+    /// reached every parser. It is the fail-open branch, it is silent, and the
+    /// only way to know how often it fires on a real agent is to count it over
+    /// real bytes.
+    #[derive(Default)]
+    struct CaptureStats {
+        output_records: usize,
+        input_records: usize,
+        bytes: usize,
+        /// Output ticks whose screen held at least one non-blank row.
+        ticks_with_content: usize,
+        /// …of those, the ticks where no chrome anchor was found.
+        ticks_without_cutoff: usize,
+        rows_offered: usize,
+        rows_trimmed: usize,
+    }
+
     /// Replay framed captures using their original PTY read/write boundaries.
     /// Legacy `.raw` files decode as one output record; they retain parser value
     /// but cannot prove boundary-sensitive or input-state behavior.
     fn replay_capture(bytes: &[u8], hook_instrumented: bool) -> Vec<ParsedEvent> {
+        replay_capture_measured(bytes, hook_instrumented).0
+    }
+
+    fn replay_capture_measured(
+        bytes: &[u8],
+        hook_instrumented: bool,
+    ) -> (Vec<ParsedEvent>, CaptureStats) {
         use crate::state::VtLogBuffer;
 
         let mut vt_log = VtLogBuffer::new(41, 128, 2000);
@@ -20522,15 +20549,28 @@ mod tests {
         let mut input = crate::input_line_buffer::InputLineBuffer::new();
         let mut carry = String::new();
         let mut events = Vec::new();
+        let mut stats = CaptureStats::default();
         for record in crate::pty_capture::decode(bytes).expect("valid capture") {
+            stats.bytes += record.data.len();
             match record.direction {
                 crate::pty_capture::CaptureDirection::Output => {
+                    stats.output_records += 1;
                     let mut changed = vt_log.process(&record.data);
+                    let offered = changed.len();
                     let screen = vt_log.screen_rows();
                     let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
-                    if let Some(cutoff) = crate::chrome::find_chrome_cutoff(&refs) {
+                    let cutoff = crate::chrome::find_chrome_cutoff(&refs);
+                    if refs.iter().any(|row| !row.trim().is_empty()) {
+                        stats.ticks_with_content += 1;
+                        if cutoff.is_none() {
+                            stats.ticks_without_cutoff += 1;
+                        }
+                    }
+                    if let Some(cutoff) = cutoff {
                         changed.retain(|row| row.row_index < cutoff);
                     }
+                    stats.rows_offered += offered;
+                    stats.rows_trimmed += offered - changed.len();
                     let data = String::from_utf8_lossy(&record.data);
                     raw_stream_events(&mut carry, &data, &mut events);
                     events.extend(
@@ -20541,6 +20581,7 @@ mod tests {
                     );
                 }
                 crate::pty_capture::CaptureDirection::Input => {
+                    stats.input_records += 1;
                     if let Ok(text) = std::str::from_utf8(&record.data) {
                         for action in input.feed(text) {
                             match action {
@@ -20559,7 +20600,193 @@ mod tests {
                 }
             }
         }
-        events
+        (events, stats)
+    }
+
+    /// grok in `screen_mode = "minimal"` — the mode it is actually run in —
+    /// replayed byte-for-byte off a live 1.0.5 session (40x120, one full turn:
+    /// prompt → thinking → answer → ready).
+    ///
+    /// This is the whole grok chain in one assertion, because every link of it
+    /// has failed independently:
+    ///   1. the foreground binary reports as `grok-1.0.5` (a resolved symlink),
+    ///      and an exact-match table answers `None` — no `agent_type`, so
+    ///      `session_is_agent` is false and NOTHING can ever be typed into the
+    ///      composer: no peer message, no orchestrator mail wake;
+    ///   2. minimal mode draws no composer box, so a boxed-prompt matcher never
+    ///      fires `Ready` and the session stays BUSY for the whole process;
+    ///   3. `completed` needs the `suggest:` marker to survive the chrome trim.
+    ///
+    /// Ready must be the LAST verdict and Working must have occurred: a screen
+    /// adapter that only ever answers `Unknown` leaves `idle_confirmed` false,
+    /// which reads as "idle" to `agent_state` but blocks `should_inject_now` —
+    /// the mismatch that burns the orchestrator wake budget permanently.
+    #[test]
+    fn grok_minimal_capture_reaches_ready_and_declares_completion() {
+        use crate::state::VtLogBuffer;
+
+        assert_eq!(classify_agent("grok-1.0.5"), Some("grok"));
+        assert!(has_ready_screen_adapter(classify_agent("grok-1.0.5")));
+
+        let bytes = agent_prompt_fixture("grok-1.0.5-minimal-turn.tcap");
+        let mut vt_log = VtLogBuffer::new(40, 120, 2000);
+        let mut parser = crate::output_parser::OutputParser::new();
+        let mut saw_working = false;
+        let mut last_activity = AgentScreenActivity::Unknown;
+        let mut suggested = None;
+
+        for record in crate::pty_capture::decode(&bytes).expect("valid capture") {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            let mut changed = vt_log.process(&record.data);
+            let screen = vt_log.screen_rows();
+            let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
+            if let Some(cutoff) = crate::chrome::find_chrome_cutoff(&refs) {
+                changed.retain(|row| row.row_index < cutoff);
+            }
+            for event in parser.parse_clean_lines(&changed, true) {
+                if let ParsedEvent::Suggest { items } = event {
+                    suggested = Some(items);
+                }
+            }
+            match detect_agent_screen_activity(Some("grok"), &screen) {
+                AgentScreenActivity::Unknown => {}
+                activity => {
+                    saw_working |= activity == AgentScreenActivity::Working;
+                    last_activity = activity;
+                }
+            }
+        }
+
+        assert!(
+            saw_working,
+            "grok's turn-status spinner must mark the session working, or a busy \
+             turn reads as idle and a peer message is typed into a live composer"
+        );
+        assert_eq!(
+            last_activity,
+            AgentScreenActivity::Ready,
+            "the bare `❯` composer row of minimal mode must end the turn Ready"
+        );
+        assert_eq!(
+            suggested.as_deref(),
+            Some(
+                &[
+                    "Altra richiesta".to_string(),
+                    "Fermati".to_string(),
+                    "Ripeti il conteggio".to_string(),
+                ][..]
+            ),
+            "the `suggest:` marker must survive the chrome trim — it is the only \
+             thing that promotes grok from `idle` to `completed`"
+        );
+    }
+
+    /// Replay a whole directory of real `.tcap` captures through the production
+    /// composition and report what the detection pipeline made of them.
+    ///
+    /// Ignored by default: the corpus is whatever the operator recorded through
+    /// `POST /diagnostics/capture`, and those files hold real session content —
+    /// prompts, source, paths — so they are deliberately NOT committed. This is a
+    /// measurement harness, not a regression test. What it surfaces becomes
+    /// either a code fix or a single committed fixture, chosen deliberately.
+    ///
+    /// ```text
+    /// TUIC_CAPTURE_CORPUS="$HOME/Library/Application Support/com.tuic.commander/captures" \
+    ///   cargo test -p tuicommander detection_over_capture_corpus -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a capture corpus; see TUIC_CAPTURE_CORPUS"]
+    fn detection_over_capture_corpus() {
+        let Ok(dir) = std::env::var("TUIC_CAPTURE_CORPUS") else {
+            panic!("set TUIC_CAPTURE_CORPUS to a directory of .tcap/.raw captures");
+        };
+        let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .expect("readable corpus directory")
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("tcap" | "raw")
+                )
+                .then_some(path)
+            })
+            .collect();
+        paths.sort();
+        assert!(!paths.is_empty(), "corpus held no captures");
+
+        for path in &paths {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let bytes = std::fs::read(path).expect("readable capture");
+            let Ok(records) = crate::pty_capture::decode(&bytes) else {
+                println!("{name:<42} UNDECODABLE");
+                continue;
+            };
+            if records.is_empty() {
+                println!("{name:<42} empty");
+                continue;
+            }
+
+            let (events, stats) = replay_capture_measured(&bytes, false);
+            let fail_open = if stats.ticks_with_content == 0 {
+                0.0
+            } else {
+                100.0 * stats.ticks_without_cutoff as f64 / stats.ticks_with_content as f64
+            };
+            println!(
+                "\n{name}\n  {:>6} out / {:>4} in records, {:>7} bytes | rows offered {:>6}, \
+                 trimmed {:>6} | no-cutoff {:>5.1}% of {} content ticks",
+                stats.output_records,
+                stats.input_records,
+                stats.bytes,
+                stats.rows_offered,
+                stats.rows_trimmed,
+                fail_open,
+                stats.ticks_with_content,
+            );
+
+            let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
+            for event in &events {
+                let kind = serde_json::to_value(event)
+                    .ok()
+                    .and_then(|v| v["type"].as_str().map(str::to_string))
+                    .unwrap_or_else(|| "?".to_string());
+                *kinds.entry(kind).or_default() += 1;
+            }
+            if kinds.is_empty() {
+                println!("  events: none");
+            } else {
+                let rendered: Vec<String> = kinds.iter().map(|(k, n)| format!("{k}×{n}")).collect();
+                println!("  events: {}", rendered.join(", "));
+            }
+
+            // Awaiting is sticky by construction: whatever SETs it owns nothing
+            // until something retracts it. Walk the sequence and report the
+            // badge a tab would still be rendering at the end of the capture.
+            let mut awaiting: Option<String> = None;
+            let mut sets = 0usize;
+            let mut clears = 0usize;
+            for event in &events {
+                match event {
+                    ParsedEvent::Question { prompt_text, .. } => {
+                        sets += 1;
+                        awaiting = Some(prompt_text.clone());
+                    }
+                    ParsedEvent::QuestionCleared | ParsedEvent::UserInput { .. } => {
+                        clears += usize::from(awaiting.take().is_some());
+                    }
+                    _ => {}
+                }
+            }
+            match awaiting {
+                Some(prompt) => println!(
+                    "  awaiting: {sets} set / {clears} cleared → STILL SET at end: {prompt:?}"
+                ),
+                None if sets > 0 => println!("  awaiting: {sets} set / {clears} cleared → clear"),
+                None => {}
+            }
+        }
     }
 
     fn awaiting_prompts(events: &[ParsedEvent]) -> Vec<String> {
