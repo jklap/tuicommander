@@ -445,6 +445,10 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `search_content` | `repoPath, query, searchId, caseSensitive?, useRegex?, wholeWord?, limit?` | `()` | Full-text content search; streams results progressively via `content-search-batch` events, each echoing `searchId`. Binary files and files >1 MB are skipped. Supports cancellation. |
 | `search_content_all` | `query, searchId, caseSensitive?, limit?` | `()` | Cross-repo BM25 content search over every ready index; streams via the same `content-search-batch` events with each match tagged `repo_path` and every batch echoing `searchId`. Only repos whose index is built participate (depends on Content Indexing strategy). Shares the cancellation slot with `search_content`. |
 
+For both commands, every `ContentMatch.match_start`/`match_end` pair is a
+zero-based, end-exclusive UTF-16 code-unit range within `line_text`, matching
+JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
+
 ## Plugin Management (`plugins.rs`)
 
 | Command | Args | Returns | Description |

@@ -18,6 +18,7 @@ export interface ContentMatch {
 	path: string;
 	line_number: number;
 	line_text: string;
+	/** UTF-16 code-unit offsets, directly consumable by JavaScript String.slice. */
 	match_start: number;
 	match_end: number;
 	/** Set only by cross-repo search (`/fs/search-content-all`); absent for single-repo results. */

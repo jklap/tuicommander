@@ -1156,6 +1156,11 @@ POST /fs/move-abs      { "from": "/abs", "to": "/abs" }        -> { "ok": true }
 POST /fs/transfer      { "destDir": "/abs", "paths": [...], "mode": "move"|"copy", "allowRecursive": bool } -> TransferResult
 ```
 
+Content-search results expose `match_start` and `match_end` as zero-based,
+end-exclusive UTF-16 code-unit offsets within `line_text`. They can be passed
+directly to JavaScript `String.slice`, including when text before the match
+contains multibyte characters or non-BMP emoji.
+
 Sandboxed filesystem operations for the file manager panel. `/fs/read-external` reads an arbitrary absolute path (not sandboxed to a repo).
 
 ## Claude Usage Endpoints

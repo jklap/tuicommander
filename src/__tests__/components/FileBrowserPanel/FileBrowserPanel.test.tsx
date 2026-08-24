@@ -74,15 +74,24 @@ const batch = (matches: ContentMatch[], isFinal: boolean, searchId: string): Con
 	repos_searched: 0,
 });
 
+const unicodeMatch: ContentMatch = {
+	path: "unicode.ts",
+	line_number: 4,
+	// `hit` starts at byte 12, Unicode scalar 6, and JavaScript/UTF-16 offset 7.
+	line_text: "— é 😀 hit tail",
+	match_start: 7,
+	match_end: 10,
+};
+
 /** `list_directory` responses keyed by `${repoPath}|${subdir}`. */
 let listings = new Map<string, DirEntry[]>();
 /** Every `list_directory` call, in order. */
 let listCalls: Array<{ repoPath: string; subdir: string }> = [];
 
-// Installed once, never reset: uiStore persists its prefs on a debounced timer,
-// so a write can still land after a test finished — with no implementation it
-// would return undefined and the store's `.catch` would throw.
-mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+// uiStore persists its prefs on a debounced timer, so a write can still land
+// after a test finished — with no implementation it would return undefined and
+// the store's `.catch` would throw.
+const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
 	if (cmd === "list_directory") {
 		const repoPath = String(args?.repoPath);
 		const subdir = String(args?.subdir);
@@ -202,6 +211,50 @@ describe("FileBrowserPanel streamed content search", () => {
 		await waitFor(() => expect(sentSearchId()).not.toBeNull(), { timeout: 2000 });
 		return sentSearchId() as string;
 	};
+
+	it("renders UTF-16 offsets from desktop streamed batches", async () => {
+		const { container } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+
+		const searchId = await startContentSearch(container);
+		emitEvent("content-search-batch", batch([match("ascii.ts", 1), unicodeMatch], true, searchId));
+
+		await waitFor(() => expect(container.querySelectorAll(".contentMatchHighlight").length).toBe(2));
+		expect(Array.from(container.querySelectorAll(".contentMatchHighlight"), (node) => node.textContent)).toEqual([
+			"hit",
+			"hit",
+		]);
+		expect(Array.from(container.querySelectorAll(".contentMatchText"), (node) => node.textContent)).toEqual([
+			"hit on line 1",
+			unicodeMatch.line_text,
+		]);
+	});
+
+	it("renders UTF-16 offsets returned by the browser HTTP transport", async () => {
+		setBrowserMode(true);
+		mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+			if (cmd === "search_content") {
+				return Promise.resolve({
+					matches: [unicodeMatch],
+					files_searched: 1,
+					files_skipped: 0,
+					truncated: false,
+					repos_pending: 0,
+					repos_searched: 0,
+				});
+			}
+			return defaultInvoke(cmd, args);
+		});
+
+		const { container } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await startContentSearch(container);
+
+		await waitFor(() => expect(container.querySelector(".contentMatchHighlight")?.textContent).toBe("hit"));
+		expect(container.querySelector(".contentMatchText")?.textContent).toBe(unicodeMatch.line_text);
+	});
 
 	it("keeps existing group and match rows across streamed batches", async () => {
 		const { container } = render(() => (
