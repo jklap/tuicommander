@@ -2151,6 +2151,10 @@ struct ProcessTreeEntry {
     parent_pid: u32,
     name: String,
     command: String,
+    /// Seconds this process has been alive, when the platform snapshot reports
+    /// it. `None` on Windows, whose `PROCESSENTRY32` carries no creation time —
+    /// see [`started_with_agent`] for what the absence costs.
+    age_seconds: Option<u64>,
 }
 
 #[derive(Default)]
@@ -2238,6 +2242,45 @@ fn is_persistent_agent_helper_with_command_line(
                 || is_standalone_timed_caffeinate(&command)))
 }
 
+/// How long after the agent's own start a descendant may appear and still count
+/// as session plumbing rather than work.
+///
+/// Measured against a live 14-session instance: every integration daemon came up
+/// within 18s of its agent (`codex-code-mode-host` 12–18s, MCP servers 0–10s),
+/// while work spawned by a turn was hundreds to thousands of seconds younger
+/// than its agent. 60s sits in that gap with room for a cold MCP start.
+const AGENT_STARTUP_WINDOW_SECS: u64 = 60;
+
+/// Whether `descendant` came up alongside the agent instead of being spawned by
+/// a turn.
+///
+/// [`is_persistent_agent_helper`] answers the same question by name, and a name
+/// list cannot keep up: `codex-code-mode-host` arrived with Codex 0.149.0, and
+/// an MCP server started through `npm exec` reports as `npm` — a name that must
+/// stay meaningful because a turn also runs npm. Both pinned every session on
+/// this machine to `working` forever, because `background_work` outranks both
+/// `completion_declared` and an idle shell in the agent-state ladder.
+///
+/// Age is the property that actually separates the two, and it needs no
+/// per-tool knowledge. When either age is missing this returns false, leaving
+/// the name list as the sole rule — which is exactly the Windows behaviour, and
+/// errs toward reporting work rather than hiding it.
+// DEFERRED (2026-08-23) — a daemon that dies and respawns mid-session escapes
+// this window and is then counted as work for the rest of the session. Measured
+// once over the live 14-session instance: 1 session, whose
+// `codex-code-mode-host` had restarted 2494s after its agent. The remaining 13
+// were classified correctly, against 14 wrong before the window existed. Fixing
+// it needs per-session memory of pids already judged plumbing, which is state
+// this pure function does not have — do not reach for a wider window instead,
+// that is the same name-list mistake measured in seconds.
+fn started_with_agent(descendant: &ProcessTreeEntry, agent_age_seconds: Option<u64>) -> bool {
+    let (Some(agent_age), Some(descendant_age)) = (agent_age_seconds, descendant.age_seconds)
+    else {
+        return false;
+    };
+    agent_age.saturating_sub(descendant_age) <= AGENT_STARTUP_WINDOW_SECS
+}
+
 fn agent_process_root(
     session_root: u32,
     agent_type: &str,
@@ -2276,13 +2319,19 @@ fn agent_process_root(
 /// Return whether `root_pid` owns at least one meaningful live descendant.
 /// Helper roots and their entire subtrees are ignored: integration daemons are
 /// session plumbing, not evidence that the agent still owns autonomous work.
+/// A daemon is recognised either by name ([`is_persistent_agent_helper`]) or by
+/// having started with the agent ([`started_with_agent`]).
 fn has_meaningful_descendant(root_pid: u32, processes: &[ProcessTreeEntry]) -> bool {
     let mut children = std::collections::HashMap::<u32, Vec<&ProcessTreeEntry>>::new();
+    let mut agent_age = None;
     for process in processes {
         children
             .entry(process.parent_pid)
             .or_default()
             .push(process);
+        if process.pid == root_pid {
+            agent_age = process.age_seconds;
+        }
     }
     let mut stack = vec![root_pid];
     while let Some(parent) = stack.pop() {
@@ -2290,7 +2339,7 @@ fn has_meaningful_descendant(root_pid: u32, processes: &[ProcessTreeEntry]) -> b
             continue;
         };
         for descendant in descendants {
-            if is_persistent_agent_helper(descendant) {
+            if is_persistent_agent_helper(descendant) || started_with_agent(descendant, agent_age) {
                 continue;
             }
             return true;
@@ -2311,7 +2360,7 @@ fn background_work_from_snapshot(
 #[cfg(not(windows))]
 fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     let output = std::process::Command::new("ps")
-        .args(["-ww", "-axo", "pid=,ppid=,comm=,args="])
+        .args(["-ww", "-axo", "pid=,ppid=,etime=,comm=,args="])
         .output()
         .ok()?;
     parse_process_tree_snapshot(
@@ -2329,15 +2378,39 @@ fn parse_process_tree_snapshot(success: bool, text: &str) -> Option<Vec<ProcessT
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
         let (pid, rest) = take_process_snapshot_field(line)?;
         let (parent_pid, rest) = take_process_snapshot_field(rest)?;
+        let (elapsed, rest) = take_process_snapshot_field(rest)?;
         let (name, command) = take_process_snapshot_field(rest)?;
         result.push(ProcessTreeEntry {
             pid: pid.parse().ok()?,
             parent_pid: parent_pid.parse().ok()?,
             name: name.to_string(),
             command: command.trim_start().to_string(),
+            age_seconds: parse_elapsed_time(elapsed),
         });
     }
     (!result.is_empty()).then_some(result)
+}
+
+/// Parse the POSIX `ps -o etime` field — `[[dd-]hh:]mm:ss` — into seconds.
+///
+/// Returns `None` for anything else so an unparsed field degrades to "age
+/// unknown" rather than to a fabricated age. `ps` always emits at least
+/// `mm:ss`, so a lone number is not a valid reading.
+#[cfg(not(windows))]
+fn parse_elapsed_time(value: &str) -> Option<u64> {
+    let (days, clock) = match value.split_once('-') {
+        Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
+        None => (0, value),
+    };
+    let mut seconds: u64 = 0;
+    let mut fields = 0;
+    for field in clock.split(':') {
+        seconds = seconds
+            .checked_mul(60)?
+            .checked_add(field.parse::<u64>().ok()?)?;
+        fields += 1;
+    }
+    (2..=3).contains(&fields).then_some(days * 86400 + seconds)
 }
 
 #[cfg(not(windows))]
@@ -2379,6 +2452,7 @@ fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
                 parent_pid: entry.th32ParentProcessID,
                 command: String::new(),
                 name,
+                age_seconds: None,
             });
             if Process32Next(snapshot, &mut entry) == 0 {
                 break;
@@ -13307,6 +13381,22 @@ mod tests {
             parent_pid,
             name: name.to_string(),
             command: command.to_string(),
+            age_seconds: None,
+        }
+    }
+
+    /// A process the snapshot could age. Ageless entries keep the name list as
+    /// the only rule, which is what every pre-existing case here asserts.
+    fn aged_process(
+        pid: u32,
+        parent_pid: u32,
+        name: &str,
+        command: &str,
+        age_seconds: u64,
+    ) -> ProcessTreeEntry {
+        ProcessTreeEntry {
+            age_seconds: Some(age_seconds),
+            ..process(pid, parent_pid, name, command)
         }
     }
 
@@ -13396,6 +13486,87 @@ mod tests {
         assert!(has_meaningful_descendant(10, &with_real_child));
     }
 
+    #[test]
+    fn daemons_started_with_the_agent_are_not_background_work() {
+        // Sanitized from a live 14-session instance on 2026-08-23, where every
+        // agent reported `working` forever. Neither name here can go on the
+        // helper list: `codex-code-mode-host` shipped with Codex 0.149.0 and the
+        // next release may rename it, and `npm` must keep meaning work.
+        let agent_age = 129_050;
+        let processes = vec![
+            aged_process(10, 1, "codex", "codex", agent_age),
+            aged_process(
+                11,
+                10,
+                "codex-code-mode-host",
+                "/opt/homebrew/Caskroom/codex/0.149.0/bin/codex-code-mode-host",
+                agent_age - 18,
+            ),
+            aged_process(
+                12,
+                10,
+                "npm",
+                "npm exec @upstash/context7-mcp",
+                agent_age - 1,
+            ),
+        ];
+        assert!(
+            !has_meaningful_descendant(10, &processes),
+            "daemons that came up with the agent are plumbing"
+        );
+
+        // The same two names, spawned by a turn instead of at startup.
+        let mut spawned_by_a_turn = processes.clone();
+        spawned_by_a_turn.push(aged_process(20, 10, "npm", "npm run build", 12));
+        assert!(
+            has_meaningful_descendant(10, &spawned_by_a_turn),
+            "work must stay visible under a name the startup window also sees"
+        );
+
+        // One second past the window is already work.
+        let mut just_outside = processes;
+        just_outside.push(aged_process(
+            21,
+            10,
+            "cargo",
+            "cargo test",
+            agent_age - AGENT_STARTUP_WINDOW_SECS - 1,
+        ));
+        assert!(has_meaningful_descendant(10, &just_outside));
+    }
+
+    #[test]
+    fn missing_ages_leave_the_helper_name_list_in_charge() {
+        // Windows reports no creation time. The rule must then behave exactly as
+        // it did before ages existed — erring toward reporting work.
+        let ageless = vec![
+            process(10, 1, "codex", "codex"),
+            process(11, 10, "codex-code-mode-host", "codex-code-mode-host"),
+        ];
+        assert!(has_meaningful_descendant(10, &ageless));
+
+        // A descendant older than its own agent cannot be work that agent
+        // spawned; a skewed `ps` sample must not invent background work.
+        let skewed = vec![
+            aged_process(10, 1, "codex", "codex", 100),
+            aged_process(11, 10, "mystery", "mystery", 400),
+        ];
+        assert!(!has_meaningful_descendant(10, &skewed));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn elapsed_time_field_parses_every_ps_shape() {
+        assert_eq!(parse_elapsed_time("05:12"), Some(312));
+        assert_eq!(parse_elapsed_time("01:00:00"), Some(3600));
+        assert_eq!(parse_elapsed_time("2-13:45:02"), Some(222_302));
+        // `ps` never emits a bare second count, so one is not a valid reading.
+        assert_eq!(parse_elapsed_time("42"), None);
+        assert_eq!(parse_elapsed_time("-"), None);
+        assert_eq!(parse_elapsed_time("1:2:3:4"), None);
+        assert_eq!(parse_elapsed_time("aa:bb"), None);
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn timed_caffeinate_is_not_background_work_with_authoritative_argv() {
@@ -13435,20 +13606,32 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn background_snapshot_macos_truncated_comm_fixture_excludes_helpers() {
-        // Sanitized from macOS `ps -ww -axo pid=,ppid=,comm=,args=` output.
-        // Darwin may truncate `comm` while unlimited-width `args` retains the
-        // executable path needed to identify persistent integration helpers.
+        // Sanitized from macOS `ps -ww -axo pid=,ppid=,etime=,comm=,args=`
+        // output. Darwin may truncate `comm` while unlimited-width `args`
+        // retains the executable path needed to identify persistent integration
+        // helpers. `codex-code-mode-host` is on no name list and is excluded
+        // purely by having started with the agent.
         const MACOS_PS: &str = r#"
-  700     1 /bin/zsh         /bin/zsh
-  701   700 /Applications/C  /Applications/Codex.app/Contents/MacOS/codex
-  702   701 /Users/boss/.lo  /Users/boss/.local/bin/mdkb serve
-  703   701 /Users/boss/.ca  /Users/boss/.cache/tuic/tuic-bridge --stdio
-  704   701 /opt/homebrew/b  /opt/homebrew/bin/node /Users/boss/.cache/tuic/node_repl.js
-  705   702 sqlite-worker    sqlite-worker
+  700     1    01:00:05 /bin/zsh         /bin/zsh
+  701   700    01:00:00 /Applications/C  /Applications/Codex.app/Contents/MacOS/codex
+  702   701       59:58 /Users/boss/.lo  /Users/boss/.local/bin/mdkb serve
+  703   701       59:58 /Users/boss/.ca  /Users/boss/.cache/tuic/tuic-bridge --stdio
+  704   701       59:58 /opt/homebrew/b  /opt/homebrew/bin/node /Users/boss/.cache/tuic/node_repl.js
+  705   702       59:57 sqlite-worker    sqlite-worker
+  706   701       59:45 /opt/homebrew/Ca /opt/homebrew/Caskroom/codex/0.149.0/bin/codex-code-mode-host
 "#;
         let processes = parse_process_tree_snapshot(true, MACOS_PS).unwrap();
+        assert_eq!(
+            processes[0].age_seconds,
+            Some(3605),
+            "the elapsed column must survive the truncated-comm layout"
+        );
         assert_eq!(agent_process_root(700, "codex", &processes), Some(701));
         assert!(!has_meaningful_descendant(701, &processes));
+
+        let mut with_turn_work = processes;
+        with_turn_work.push(aged_process(707, 701, "cargo", "cargo test", 30));
+        assert!(has_meaningful_descendant(701, &with_turn_work));
     }
 
     #[test]
@@ -13516,9 +13699,13 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn process_snapshot_rejects_nonzero_and_malformed_output() {
-        assert!(parse_process_tree_snapshot(false, "10 1 zsh zsh").is_none());
-        assert!(parse_process_tree_snapshot(true, "10 invalid zsh zsh").is_none());
-        assert!(parse_process_tree_snapshot(true, "10 1").is_none());
+        assert!(parse_process_tree_snapshot(false, "10 1 05:12 zsh zsh").is_none());
+        assert!(parse_process_tree_snapshot(true, "10 invalid 05:12 zsh zsh").is_none());
+        assert!(parse_process_tree_snapshot(true, "10 1 05:12").is_none());
+        // An unreadable elapsed column costs the age, not the whole snapshot:
+        // the name list still has to work.
+        let ageless = parse_process_tree_snapshot(true, "10 1 ? zsh zsh").unwrap();
+        assert_eq!(ageless[0].age_seconds, None);
     }
 
     #[test]
@@ -21444,9 +21631,16 @@ mod tests {
     fn process_tree_snapshot_reports_own_process() {
         let own = std::process::id();
         let snapshot = process_tree_snapshot().expect("ps process-tree snapshot");
+        let mine = snapshot
+            .iter()
+            .find(|process| process.pid == own)
+            .expect("the process-tree parser must preserve live PIDs");
+        // The startup window silently degrades to the old name-only rule when
+        // ages are missing, so this platform's `etime` column has to be proven
+        // readable here rather than inferred from the fixture tests.
         assert!(
-            snapshot.iter().any(|process| process.pid == own),
-            "the process-tree parser must preserve live PIDs"
+            mine.age_seconds.is_some(),
+            "this platform's ps must yield a parsable elapsed time"
         );
     }
 
