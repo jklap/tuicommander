@@ -111,21 +111,62 @@ function isMainBranch(branchName: string): boolean {
 
 const SAVE_DEBOUNCE_MS = 500;
 
-/** Guard: prevent saves before hydrate completes to avoid nuking persisted data */
-let hydrated = false;
+interface RepositorySnapshot {
+	repos: Record<string, RepositoryState>;
+	repoOrder: string[];
+	activeRepoPath: string | null;
+	groups: Record<string, RepoGroup>;
+	groupOrder: string[];
+}
 
-/** Persist repos to Rust backend (fire-and-forget, terminals excluded) */
-function saveReposImmediate(
+interface KeyedRepositoryMutation {
+	id: string;
+	before: RepositoryState | RepoGroup | null;
+	after: RepositoryState | RepoGroup | null;
+}
+
+interface RepositoryFieldMutation<T> {
+	before: T;
+	after: T;
+}
+
+interface RepositoryMutationBatch {
+	mutationVersion: 1;
+	repos: KeyedRepositoryMutation[];
+	groups: KeyedRepositoryMutation[];
+	repoOrder?: RepositoryFieldMutation<string[]>;
+	activeRepoPath?: RepositoryFieldMutation<string | null>;
+	groupOrder?: RepositoryFieldMutation<string[]>;
+}
+
+function cloneJson<T>(value: T): T {
+	return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function emptyRepositorySnapshot(): RepositorySnapshot {
+	return { repos: {}, repoOrder: [], activeRepoPath: null, groups: {}, groupOrder: [] };
+}
+
+/** Capture the exact document loaded from disk before in-memory migrations add
+ * defaults. The next mutation then persists those migrations as part of its
+ * keyed delta instead of assuming the old fields were already written. */
+function snapshotFromLoaded(value: Partial<RepositorySnapshot> | null | undefined): RepositorySnapshot {
+	return cloneJson({
+		repos: value?.repos ?? {},
+		repoOrder: value?.repoOrder ?? [],
+		activeRepoPath: value?.activeRepoPath ?? null,
+		groups: value?.groups ?? {},
+		groupOrder: value?.groupOrder ?? [],
+	});
+}
+
+function serializableSnapshot(
 	repositories: Record<string, RepositoryState>,
 	repoOrder: string[],
 	activeRepoPath: string | null | undefined,
 	groups: Record<string, RepoGroup>,
 	groupOrder: string[],
-): void {
-	if (!hydrated) {
-		appLogger.warn("store", "Repositories save blocked — hydrate not yet complete");
-		return;
-	}
+): RepositorySnapshot {
 	const serializable: Record<string, RepositoryState> = {};
 	for (const [path, repo] of Object.entries(repositories)) {
 		const branches: Record<string, BranchState> = {};
@@ -140,15 +181,118 @@ function saveReposImmediate(
 		}
 		serializable[path] = { ...repo, branches };
 	}
-	invoke("save_repositories", {
-		config: {
-			repos: serializable,
-			repoOrder,
-			activeRepoPath: activeRepoPath ?? null,
-			groups,
-			groupOrder,
-		},
-	}).catch((err) => appLogger.debug("store", "Failed to save repos", err));
+	return cloneJson({
+		repos: serializable,
+		repoOrder: [...repoOrder],
+		activeRepoPath: activeRepoPath ?? null,
+		groups: Object.fromEntries(
+			Object.entries(groups).map(([id, group]) => [id, { ...group, repoOrder: [...group.repoOrder] }]),
+		),
+		groupOrder: [...groupOrder],
+	});
+}
+
+function jsonEqual(left: unknown, right: unknown): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function keyedMutations<T extends RepositoryState | RepoGroup>(
+	before: Record<string, T>,
+	after: Record<string, T>,
+): KeyedRepositoryMutation[] {
+	const mutations: KeyedRepositoryMutation[] = [];
+	for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
+		const previous = before[id] ?? null;
+		const next = after[id] ?? null;
+		if (!jsonEqual(previous, next)) {
+			mutations.push({ id, before: previous, after: next });
+		}
+	}
+	return mutations;
+}
+
+function repositoryMutationBatch(before: RepositorySnapshot, after: RepositorySnapshot): RepositoryMutationBatch {
+	const mutation: RepositoryMutationBatch = {
+		mutationVersion: 1,
+		repos: keyedMutations(before.repos, after.repos),
+		groups: keyedMutations(before.groups, after.groups),
+	};
+	if (!jsonEqual(before.repoOrder, after.repoOrder)) {
+		mutation.repoOrder = { before: before.repoOrder, after: after.repoOrder };
+	}
+	if (before.activeRepoPath !== after.activeRepoPath) {
+		mutation.activeRepoPath = { before: before.activeRepoPath, after: after.activeRepoPath };
+	}
+	if (!jsonEqual(before.groupOrder, after.groupOrder)) {
+		mutation.groupOrder = { before: before.groupOrder, after: after.groupOrder };
+	}
+	return mutation;
+}
+
+function hasRepositoryMutations(mutation: RepositoryMutationBatch): boolean {
+	return (
+		mutation.repos.length > 0 ||
+		mutation.groups.length > 0 ||
+		mutation.repoOrder !== undefined ||
+		mutation.activeRepoPath !== undefined ||
+		mutation.groupOrder !== undefined
+	);
+}
+
+/** Guard: prevent saves before hydrate completes to avoid nuking persisted data */
+let hydrated = false;
+
+/** Last snapshot this client knows it persisted. Saves are serialized so a
+ * second local mutation never races the first with the same stale expectation. */
+let persistedSnapshot: RepositorySnapshot | null = null;
+let queuedSnapshot: RepositorySnapshot | null = null;
+let saveInFlight = false;
+
+function drainRepositorySaveQueue(): void {
+	if (saveInFlight || !queuedSnapshot) return;
+	const next = queuedSnapshot;
+	queuedSnapshot = null;
+	const before = persistedSnapshot ?? emptyRepositorySnapshot();
+	const mutation = repositoryMutationBatch(before, next);
+	if (!hasRepositoryMutations(mutation)) {
+		persistedSnapshot = next;
+		if (queuedSnapshot) drainRepositorySaveQueue();
+		return;
+	}
+
+	saveInFlight = true;
+	invoke("save_repositories", { config: mutation })
+		.then(() => {
+			persistedSnapshot = next;
+		})
+		.catch((err: unknown) => {
+			// An error-level entry increments the visible Errors badge. In particular,
+			// same-record conflicts must never remain a debug-only lost mutation.
+			appLogger.error("store", "Repository changes were not saved", err);
+			// Do not requeue the failed snapshot: a deterministic conflict must not
+			// spin. Preserve a newer snapshot queued while this request was in flight;
+			// it is a distinct user mutation and still deserves one visible attempt.
+		})
+		.finally(() => {
+			saveInFlight = false;
+			if (queuedSnapshot) drainRepositorySaveQueue();
+		});
+}
+
+/** Persist repos to Rust backend (fire-and-forget, terminals excluded) */
+function saveReposImmediate(
+	repositories: Record<string, RepositoryState>,
+	repoOrder: string[],
+	activeRepoPath: string | null | undefined,
+	groups: Record<string, RepoGroup>,
+	groupOrder: string[],
+): void {
+	if (!hydrated) {
+		appLogger.warn("store", "Repositories save blocked — hydrate not yet complete");
+		return;
+	}
+	queuedSnapshot = serializableSnapshot(repositories, repoOrder, activeRepoPath, groups, groupOrder);
+	drainRepositorySaveQueue();
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -211,13 +355,33 @@ function createRepositoriesStore() {
 				// One-time migration from localStorage
 				const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
 				if (legacy) {
+					let parsed: Record<string, RepositoryState> | null = null;
 					try {
-						const parsed = JSON.parse(legacy);
-						await invoke("save_repositories", { config: { repos: parsed } });
+						const decoded = JSON.parse(legacy) as unknown;
+						if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+							throw new Error("legacy repository data must be an object");
+						}
+						parsed = decoded as Record<string, RepositoryState>;
 					} catch {
-						/* ignore corrupt legacy data */
+						// Corrupt browser-local legacy data cannot be recovered.
+						localStorage.removeItem(LEGACY_STORAGE_KEY);
 					}
-					localStorage.removeItem(LEGACY_STORAGE_KEY);
+					if (parsed) {
+						const imported = snapshotFromLoaded({
+							repos: parsed,
+							repoOrder: Object.keys(parsed),
+						});
+						try {
+							await invoke("save_repositories", {
+								config: repositoryMutationBatch(emptyRepositorySnapshot(), imported),
+							});
+							localStorage.removeItem(LEGACY_STORAGE_KEY);
+						} catch (err) {
+							// Keep the legacy copy for a later retry; a concurrent conflict must
+							// never masquerade as corrupt input and delete the only copy.
+							appLogger.error("store", "Failed to migrate legacy repositories", err);
+						}
+					}
 				}
 
 				const loaded = await invoke<{
@@ -227,6 +391,7 @@ function createRepositoriesStore() {
 					groups?: Record<string, RepoGroup>;
 					groupOrder?: string[];
 				}>("load_repositories");
+				persistedSnapshot = snapshotFromLoaded(loaded);
 				const repos = loaded?.repos;
 				if (repos) {
 					// Migration: add collapsed/expanded fields, clear stale terminal IDs
@@ -1019,12 +1184,22 @@ function createRepositoriesStore() {
 		/** Test-only: set hydrated flag to enable saves in tests that skip hydrate */
 		_testSetHydrated(value: boolean): void {
 			hydrated = value;
+			if (value && !persistedSnapshot) {
+				persistedSnapshot = serializableSnapshot(
+					state.repositories,
+					state.repoOrder,
+					state.activeRepoPath,
+					state.groups,
+					state.groupOrder,
+				);
+			}
 		},
 		_testCancelPendingSave(): void {
 			if (saveTimer) {
 				clearTimeout(saveTimer);
 				saveTimer = null;
 			}
+			queuedSnapshot = null;
 		},
 	};
 }

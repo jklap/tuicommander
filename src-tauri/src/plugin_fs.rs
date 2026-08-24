@@ -2435,7 +2435,7 @@ mod tests {
 
         // Register `repo` so it passes the registered-repo intersection.
         let _config_guard = crate::config::set_config_dir_override(tmp.path().join("cfg"));
-        crate::config::save_repositories(serde_json::json!({
+        crate::config::replace_repositories_for_test(serde_json::json!({
             "repos": { repo.to_string_lossy().to_string(): {} }
         }))
         .unwrap();
@@ -2467,7 +2467,7 @@ mod tests {
         // No repos registered — even though `repo` is a valid $HOME-scoped
         // path, it must be skipped because it was never actually registered.
         let _config_guard = crate::config::set_config_dir_override(tmp.path().join("cfg"));
-        crate::config::save_repositories(serde_json::json!({ "repos": {} })).unwrap();
+        crate::config::replace_repositories_for_test(serde_json::json!({ "repos": {} })).unwrap();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let out = rt
@@ -3315,7 +3315,7 @@ mod tests {
 
         // Register `repo` so it passes the registered-repo intersection.
         let _config_guard = crate::config::set_config_dir_override(tmp.path().join("cfg"));
-        crate::config::save_repositories(serde_json::json!({
+        crate::config::replace_repositories_for_test(serde_json::json!({
             "repos": { repo.to_string_lossy().to_string(): {} }
         }))
         .unwrap();
@@ -3364,7 +3364,7 @@ mod tests {
         let target = rust_target_fixture(&repo);
 
         let _config_guard = crate::config::set_config_dir_override(tmp.path().join("cfg"));
-        crate::config::save_repositories(serde_json::json!({
+        crate::config::replace_repositories_for_test(serde_json::json!({
             "repos": { repo.to_string_lossy().to_string(): {} }
         }))
         .unwrap();
@@ -3426,7 +3426,7 @@ mod tests {
         let registered_repo = tmp.path().join("registered-repo");
         std::fs::create_dir_all(&registered_repo).unwrap();
         let _config_guard = crate::config::set_config_dir_override(tmp.path().join("cfg"));
-        crate::config::save_repositories(serde_json::json!({
+        crate::config::replace_repositories_for_test(serde_json::json!({
             "repos": { registered_repo.to_string_lossy().to_string(): {} }
         }))
         .unwrap();

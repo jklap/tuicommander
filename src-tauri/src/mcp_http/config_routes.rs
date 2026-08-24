@@ -233,12 +233,16 @@ pub(super) async fn put_repositories(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_repositories(config) {
+    match crate::config::save_repositories_request(config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        ),
+        Err(e) => {
+            let status = match &e {
+                crate::config::RepositorySaveError::Conflict(_) => StatusCode::CONFLICT,
+                crate::config::RepositorySaveError::Invalid(_) => StatusCode::BAD_REQUEST,
+                crate::config::RepositorySaveError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, Json(serde_json::json!({"error": e.to_string()})))
+        }
     }
 }
 
@@ -901,5 +905,82 @@ mod tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn stale_repository_delta_returns_http_conflict() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let original = serde_json::json!({"path":"/repo","displayName":"Original","branches":{}});
+        crate::config::replace_repositories_for_test(serde_json::json!({
+            "repos": {"/repo": original.clone()},
+            "repoOrder": ["/repo"]
+        }))
+        .expect("seed repositories");
+        crate::config::save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{
+                "id":"/repo",
+                "before":original.clone(),
+                "after":{"path":"/repo","displayName":"First","branches":{}}
+            }],
+            "groups": []
+        }))
+        .expect("first mutation");
+
+        let response = put_repositories(
+            ConnectInfo(loopback()),
+            None,
+            Json(serde_json::json!({
+                "mutationVersion": 1,
+                "repos": [{
+                    "id":"/repo",
+                    "before":original,
+                    "after":{"path":"/repo","displayName":"Stale","branches":{}}
+                }],
+                "groups": []
+            })),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn malformed_repository_delta_returns_http_bad_request() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let response = put_repositories(
+            ConnectInfo(loopback()),
+            None,
+            Json(serde_json::json!({
+                "mutationVersion": 1,
+                "repos": [{"id":"/repo","before":null,"after":"not-an-object"}],
+                "groups": []
+            })),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn unversioned_repository_document_returns_http_bad_request() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let response = put_repositories(
+            ConnectInfo(loopback()),
+            None,
+            Json(serde_json::json!({"repos": {}, "repoOrder": []})),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
