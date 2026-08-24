@@ -47,6 +47,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 This replaces the previous 370-line switch statement with a flat lookup table for easier maintenance and review.
 
+### HTTP Response Semantics
+
+Successful JSON responses preserve the backend's decoded value exactly. In
+particular, a literal `null` body is a valid result for commands whose Tauri
+contract returns `Option<T>`; browser and PWA callers receive the same `null`
+that desktop IPC returns for `None`.
+
+A zero-length text or JSON body is not the same value and is rejected with the
+command name in the error. Responses declared as JSON are also rejected when
+their non-empty body is malformed, while non-success HTTP statuses retain their
+status and command context. Binary `application/octet-stream` routes are the
+deliberate exception: an empty buffer can be a valid terminal chunk.
+
 ### PTY Subscription
 
 ```typescript
