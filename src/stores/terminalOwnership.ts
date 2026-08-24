@@ -15,12 +15,18 @@ import { terminalsStore } from "./terminals";
  *
  * Both are the same question asked again: given this cwd and the repos we know
  * about NOW, who owns this terminal? Call it whenever that answer can change —
- * after repositories load, and after one is added or removed.
+ * after repositories load, after one is added or removed, and after a terminal
+ * reports a new cwd.
+ *
+ * Pass `terminalId` when only one terminal's answer can have changed. A `cd`
+ * fires OSC 7 on every directory change, and walking every terminal against
+ * every repo on each of those is work nobody asked for.
  */
-export function reconcileTerminalOwnership(): void {
+export function reconcileTerminalOwnership(terminalId?: string): void {
 	let moved = 0;
 
-	for (const terminalId of terminalsStore.getIds()) {
+	const scope = terminalId === undefined ? terminalsStore.getIds() : [terminalId];
+	for (const terminalId of scope) {
 		const terminal = terminalsStore.get(terminalId);
 		if (!terminal) continue;
 

@@ -1036,24 +1036,61 @@ Every "which repo owns this?" question now goes through one resolver
 (`utils/repoOwnership.ts`), which has no parameter through which the focused
 repo could reach it. Frontend-only — a browser reload picks it up, no rebuild.
 
-- [ ] Launch a PTY / agent in repo A while looking at repo B: the tab appears
-  under A, not B.
+Four of these were driven through the web UI on `:9876` with `agent-browser`.
+Note for whoever repeats it: in dev, `:9876` serves the **built** `dist/`, not
+Vite (which sits on `:1421`). A source edit is invisible there until
+`pnpm build` — the desktop WebView gets it over HMR, the browser does not.
+
+- [x] Launch a PTY / agent in repo A while looking at repo B: the tab appears
+  under A, not B. _(verified: focused on `tuicommander`, MCP-spawned a session
+  with `cwd=…/ego`; `ego:master` went 3→4 terminals, `tuicommander:main` stayed
+  at 2.)_
 - [ ] A plan file written by a session in repo A opens as a tab under A while
   you are on B. Previously the event was dropped outright — check the app log
   for `[plan] event:` with the right `ownerRepo=`.
-- [ ] Open the same relative path (e.g. `README.md`) in two different repos:
-  two separate tabs, each visible only under its own repo.
-- [ ] Reopen a file belonging to repo A while focused on repo B: the existing
-  tab is re-activated and stays under A — it must NOT migrate to B.
+- [x] Open the same relative path (e.g. `README.md`) in two different repos:
+  two separate tabs, each visible only under its own repo. _(verified: opened
+  `README.md` from `tuicommander` and from `ego`; each repo's tab bar shows
+  exactly one, and the content differs.)_
+- [x] Reopen a file belonging to repo A while focused on repo B: the existing
+  tab is re-activated and stays under A — it must NOT migrate to B. _(verified:
+  reopened tuicommander's `README.md` while focused on `ego`; tuicommander still
+  has exactly one README tab, ego still has its own.)_
 - [ ] "Open With TUICommander" on a file from a repo that is not the focused
   one: the tab is scoped to that file's repo, not shown under every repo.
+  _(NOTE: desktop-only — the file association does not exist in web mode, so
+  this one cannot be driven from the browser.)_
 - [ ] Click a file path printed by an agent running in another repo: the tab
   lands under that repo.
 - [ ] Register a repo AFTER sessions are already running inside it (this was
   `gate-os` in Boss's log): its parked tabs move to it automatically. The log
-  shows `[Reconcile] <id> ... → <repo>:<branch>`.
-- [ ] `cd` a terminal from one repo into another (OSC 7): the tab moves and no
-  stale id is left behind in the old branch list.
+  shows `[Reconcile] <id> ... → <repo>:<branch>`. _(NOTE: not driven from the
+  browser — unregistering and re-registering one of Boss's live repos writes to
+  the shared `repositories.json`. Needs a scratch repo.)_
+- [x] `cd` a terminal from one repo into another (OSC 7): the tab moves and no
+  stale id is left behind in the old branch list. _(This was BROKEN when tested:
+  the cwd updated but the placement never followed, because nothing re-ran the
+  ownership question on an OSC 7. Fixed by calling
+  `reconcileTerminalOwnership(terminalId)` from the `cwd` handler in
+  `CanvasTerminal.tsx`. Verified live:
+  `[Reconcile] term-29 …/veritas:main → …/tuicommander:main`, and the sidebar
+  counts moved with it.)_
+
+## Background file tab must not steal the pane
+
+Found while testing the item above. `tuic://open/<path>` with `focus: false`
+deliberately does NOT switch repo — but it still called `mdTabsStore.add`, which
+activates. The result was the exact ghost the focused branch avoids: the file's
+content filling the pane while its own tab button is filtered out of the bar,
+under a repo it does not belong to.
+
+- [x] Open a file from repo A with `focus: false` while looking at repo B:
+  nothing appears in B — no tab button, no content. _(verified in the web UI:
+  zero occurrences of the filename anywhere in B's view.)_
+- [x] The same tab IS present under repo A, unactivated. _(verified: switching
+  to A shows it in the tab bar.)_
+- [ ] `tuic://edit` with `focus: false` behaves the same way (same fix, via the
+  new `background` option on `editorTabsStore.add`) — not exercised live.
 
 ## Poisoned `repositories.json` guard
 
