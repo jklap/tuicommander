@@ -35,7 +35,9 @@ import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { computeLeafRects } from "../../utils/paneTreeGeometry";
+import { isPerfDebug } from "../../utils/perfDebug";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
+import { ptyCaptureStore } from "../../utils/ptyCapture";
 import type { ContextMenuItem } from "../ContextMenu/ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import s from "./TabBar.module.css";
@@ -311,6 +313,23 @@ export const TabBar: Component<TabBarProps> = (props) => {
 				action: () => globalWorkspaceStore.togglePromote(id),
 			},
 		);
+		// Raw PTY capture — the evidence a state-detection bug needs has to be
+		// recorded BEFORE the reproduction, so it belongs one click from the tab
+		// that misbehaves. Gated on the same debug flag as the rest of the
+		// instrumentation: on in dev, wakeable in a release build.
+		const sessionId = term?.sessionId;
+		if (isPerfDebug() && sessionId) {
+			const recording = ptyCaptureStore.isRecording(sessionId);
+			items.push(
+				{ label: "", separator: true, action: () => {} },
+				{
+					label: recording
+						? t("tabBar.stopCapture", "Stop Capture Session")
+						: t("tabBar.captureSession", "Capture Session"),
+					action: () => void ptyCaptureStore.toggle(sessionId),
+				},
+			);
+		}
 		// Plugin-registered tab actions
 		const tabActions = contextMenuActionsStore.getContextActions("tab");
 		if (tabActions.length > 0) {
@@ -331,6 +350,9 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		e.preventDefault();
 		e.stopPropagation();
 		setContextTabId(id);
+		// The tap is one global switch that curl and other windows can also flip,
+		// so read it back rather than trusting the last value this window wrote.
+		if (isPerfDebug()) void ptyCaptureStore.refresh();
 		tabMenu.open(e);
 	};
 
