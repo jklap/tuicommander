@@ -5731,7 +5731,7 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
     state.ai_suggestions_enabled.remove(session_id);
 }
 
-// DEFERRED (2026-08-18) — four session-keyed maps are deliberately NOT reaped by
+// NOT A DEFERRAL — four session-keyed maps are deliberately NOT reaped by
 // either half, because the session is not what owns them:
 //   * `file_sandboxes` / `unrestricted_sessions` belong to the L2 conversation,
 //     which registers in ACTIVE_CONVERSATIONS and removes both when its task
@@ -7419,6 +7419,15 @@ pub(crate) fn spawn_reader_thread(
             // ever inserted alongside a desktop channel (subscribe_terminal_grid)
             // and removed with it (unsubscribe_terminal_grid, cleanup_session), so
             // no subscriber means no entry for terminal_scroll_to_offset to write.
+            //
+            // DEFERRED (2026-08-20) — parking the THREAD itself, which is what
+            // F28 asked for. What is left after the skip above is timer churn, not
+            // work: ~62.5 wakeups/s per session, each an atomic load and two
+            // checks, and macOS coalesces them. Parking needs a condvar the PTY
+            // writer signals, plus a `wait_timeout` for the DEC 2026 sync flush
+            // above, which must keep running headlessly — and a missed notify
+            // shows up as a terminal that silently stops painting. Small win,
+            // worst failure mode of the group.
             if !grid_has_subscriber(&ticker_state, &ticker_sid) {
                 dirty_run = 0;
                 continue;
