@@ -12,12 +12,17 @@ import { toastsStore } from "../../stores/toasts";
  */
 describe("ToastContainer", () => {
 	beforeEach(() => {
+		vi.useFakeTimers();
 		for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
 		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 		vi.restoreAllMocks();
 	});
 
-	afterEach(cleanup);
+	afterEach(() => {
+		cleanup();
+		vi.runOnlyPendingTimers();
+		vi.useRealTimers();
+	});
 
 	function addTerminal(sessionId: string): string {
 		return terminalsStore.add({
