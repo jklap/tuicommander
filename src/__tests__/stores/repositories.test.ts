@@ -579,6 +579,63 @@ describe("repositoriesStore", () => {
 			errorSpy.mockRestore();
 		});
 
+		it("refuses to hydrate a mutation delta left by a stale backend", async () => {
+			// Exactly what was on disk after the 2026-08-21 incident: a backend too old
+			// to apply the keyed delta stored the delta itself as the whole document.
+			store._testSetHydrated(false);
+			mockInvoke.mockResolvedValueOnce({ mutationVersion: 1, repos: [], groups: [] });
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.getPaths()).toEqual([]);
+				expect(errorSpy).toHaveBeenCalledWith("[store]", expect.stringContaining("mutation delta"), "");
+
+				// The file is still the user's only copy. Saving the empty in-memory state
+				// over it is what made the incident unrecoverable, so saves stay blocked.
+				mockInvoke.mockClear();
+				store.add({ path: "/test-repo", displayName: "Test" });
+				vi.advanceTimersByTime(1000);
+				const saveCalls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
+				expect(saveCalls).toHaveLength(0);
+			});
+
+			errorSpy.mockRestore();
+		});
+
+		it("refuses a delta recognised by its array `repos` alone", async () => {
+			// The envelope carries no `mutationVersion` once a future protocol drops it,
+			// so the shape of `repos` has to be enough on its own.
+			store._testSetHydrated(false);
+			mockInvoke.mockResolvedValueOnce({ repos: [], groups: [] });
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(errorSpy).toHaveBeenCalledWith("[store]", expect.stringContaining("mutation delta"), "");
+			});
+
+			errorSpy.mockRestore();
+		});
+
+		it("hydrates a first-run empty document instead of reading it as a delta", async () => {
+			// Failing closed here would brick every fresh install: no file yet means an
+			// empty document, which must hydrate to an empty store with saves ENABLED.
+			store._testSetHydrated(false);
+			mockInvoke.mockResolvedValueOnce({});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.getPaths()).toEqual([]);
+
+				mockInvoke.mockClear();
+				store.add({ path: "/first-repo", displayName: "First" });
+				vi.advanceTimersByTime(1000);
+				const saveCalls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
+				expect(saveCalls).toHaveLength(1);
+			});
+		});
+
 		it("migrates from localStorage on first run", async () => {
 			const staleData = {
 				"/repo": {

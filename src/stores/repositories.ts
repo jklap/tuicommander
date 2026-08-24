@@ -241,6 +241,25 @@ function hasRepositoryMutations(mutation: RepositoryMutationBatch): boolean {
 	);
 }
 
+/**
+ * True when `repositories.json` holds a mutation delta instead of a repository
+ * document.
+ *
+ * A backend too old to understand the keyed delta decodes it as the whole file and
+ * writes it back wholesale. That is not hypothetical: on 2026-08-21 a hot-reloaded
+ * frontend met a stale Rust process and 35 repositories went from an 11 KB document
+ * to `{"mutationVersion":1,"repos":[]}`. The tell is `mutationVersion` at the root,
+ * or `repos` as an array where a record belongs.
+ */
+function isMutationDeltaDocument(loaded: unknown): boolean {
+	if (!loaded || typeof loaded !== "object") return false;
+	const doc = loaded as { mutationVersion?: unknown; repos?: unknown };
+	return doc.mutationVersion !== undefined || Array.isArray(doc.repos);
+}
+
+const DELTA_DOCUMENT_MESSAGE =
+	"repositories.json holds a mutation delta, not a repository document — a backend too old for the delta protocol wrote it wholesale. Refusing to hydrate, and saves stay blocked. Stop the app, restore a backup, then restart the backend.";
+
 /** Guard: prevent saves before hydrate completes to avoid nuking persisted data */
 let hydrated = false;
 
@@ -393,6 +412,16 @@ function createRepositoriesStore() {
 					groups?: Record<string, RepoGroup>;
 					groupOrder?: string[];
 				}>("load_repositories");
+				// Check before anything reads `loaded`: hydrating a delta yields an empty
+				// repo set, and the first mutation would then persist that emptiness over
+				// the user's only copy. `hydrated` stays false, so every save is blocked
+				// until a human restores the file with the process stopped — which is the
+				// step that failed last time, because the running app clobbered it again.
+				if (isMutationDeltaDocument(loaded)) {
+					appLogger.error("store", DELTA_DOCUMENT_MESSAGE);
+					return;
+				}
+
 				persistedSnapshot = snapshotFromLoaded(loaded);
 				const repos = loaded?.repos;
 				if (repos) {

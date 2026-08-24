@@ -429,6 +429,18 @@ IPC reports that error to the frontend, where it creates a user-visible Errors
 badge; HTTP returns `409 Conflict`. Malformed deltas return HTTP `400`. A
 versioned delta is required; unversioned whole-document bodies are rejected.
 
+**Version skew is the dangerous case, and it is one-sided.** A backend from
+before the delta protocol does not decode `config` at all — it stores it as the
+whole document, so `repositories.json` becomes the delta envelope and every
+repository is lost. This is not theoretical: `make dev` never hot-reloads Rust,
+so a hot-reloaded frontend meeting a stale backend did exactly that on
+2026-08-21. The old binary cannot be fixed retroactively, so the guard lives at
+the read end: `repositoriesStore.hydrate()` treats a root `mutationVersion`, or
+`repos` as an array, as a poisoned file — it logs a user-visible error, refuses
+to hydrate, and leaves `hydrated` false so **no save can run**. That last part is
+what makes a hand-restored backup stick; without it, the running app clobbers the
+restored file within seconds.
+
 `repositories.json` used to be the one file exempt from the (then-real)
 debug/release split: it was seeded into a separate `~/.tuicommander-dev/`
 directory on first debug run so a dev instance wouldn't start with an empty
