@@ -61,6 +61,15 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] **[MANUAL]** With a real terminal open and some command blocks/prompts recorded, flip "Show block marks" and "Show prompt marks" off/on in Settings > Terminal > Blocks with the timestamp overlay (Ctrl+Cmd) NOT held — ticks must appear/disappear immediately, not only while Ctrl+Cmd is held or on the next unrelated repaint.
 - [ ] **[MANUAL]** Open a brand-new shell tab, run one short command (never scroll past one screen), confirm a block tick is visible on the scrollbar track immediately — the track must not be entirely absent as it was before this fix.
 
+## Link click activation (2026-08-24)
+
+- [x] `linkVisuals`/`shouldOpenOnClick`/`shouldSkipMouseReportForLink`/`shouldResolveLinkHoverOnMove`/`linkModifierEffectDecision` are pure functions with exhaustive per-mode/per-modifier unit coverage _(verified: src/components/Terminal/__tests__/canvasTerminalLinks.test.ts)_
+- [x] `linkModifierHeld` store tracks Cmd (macOS) / Ctrl (Windows/Linux), resets on blur/visibilitychange _(verified: src/__tests__/stores/linkModifier.test.ts)_
+- [ ] Manual: Settings > Terminal > "Open links on" = Click (default) — click a URL/file path in a live terminal, confirm it opens exactly as before this change.
+- [ ] Manual: set to "⌘Click"/"Ctrl+Click" — confirm the link shows NO underline/pointer cursor until Cmd (macOS)/Ctrl (Win/Linux) is held, then reveals both and opens on modifier+click; releasing the modifier mid-hover removes the underline without needing to move the mouse.
+- [ ] Manual: set to "Never" — confirm plain click never opens a link but the dashed underline stays visible and right-click's Open/Copy-link menu still works.
+- [ ] Manual: with mouse-reporting on (e.g. inside `vim`/`htop`) and mode = "⌘Click", confirm modifier+left-click on a link opens it without the app receiving a stray click, and confirm a right-click on a link still reaches the Open/Copy-link menu (not swallowed as a mouse report) — regression guard for #57.
+
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 
 `drag::Image` has no "no image" variant, so an unresolvable `icons/drag-file.png`

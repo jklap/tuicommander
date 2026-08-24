@@ -396,6 +396,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Intent tab titles override spawn labels while explicit user renames remain protected across reconnects
 - [x] Remote completion muting survives reconnects and deduplicates idle/exit signals per busy cycle
 - [x] IDE launcher with app icons
+- [x] Configurable link click activation — Click / ⌘Click/Ctrl+Click / Never — for detected terminal links
 
 ### Pending (P2)
 - [ ] Error handling strategy config

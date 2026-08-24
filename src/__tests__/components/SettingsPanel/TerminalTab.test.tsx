@@ -14,6 +14,7 @@ const {
 	mockSetCopyOnSelect,
 	mockSetOsc52Clipboard,
 	mockSetShowLastPrompt,
+	mockSetLinkActivation,
 } = vi.hoisted(() => ({
 	mockSetShowBlockTimestamps: vi.fn(),
 	mockSetShowBlockMarks: vi.fn(),
@@ -26,6 +27,7 @@ const {
 	mockSetCopyOnSelect: vi.fn(),
 	mockSetOsc52Clipboard: vi.fn(),
 	mockSetShowLastPrompt: vi.fn(),
+	mockSetLinkActivation: vi.fn(),
 }));
 
 vi.mock("../../../stores/settings", () => ({
@@ -39,6 +41,7 @@ vi.mock("../../../stores/settings", () => ({
 			copyOnSelect: true,
 			osc52Clipboard: true,
 			showLastPrompt: false,
+			linkActivation: "click",
 			showBlockTimestamps: true,
 			showBlockMarks: true,
 			showPromptMarks: false,
@@ -51,6 +54,7 @@ vi.mock("../../../stores/settings", () => ({
 		setCopyOnSelect: mockSetCopyOnSelect,
 		setOsc52Clipboard: mockSetOsc52Clipboard,
 		setShowLastPrompt: mockSetShowLastPrompt,
+		setLinkActivation: mockSetLinkActivation,
 		setShowBlockTimestamps: mockSetShowBlockTimestamps,
 		setShowBlockMarks: mockSetShowBlockMarks,
 		setShowPromptMarks: mockSetShowPromptMarks,
@@ -149,5 +153,21 @@ describe("TerminalTab", () => {
 		const cursorSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "block"))!;
 		fireEvent.change(cursorSelect, { target: { value: "block" } });
 		expect(mockSetCursorStyle).toHaveBeenCalledWith("block");
+	});
+
+	it("shows the link activation select with the current value and its three options", () => {
+		const { container } = render(() => <TerminalTab />);
+		const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+		const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+		expect(linkSelect.value).toBe("click");
+		expect(Array.from(linkSelect.options).map((o) => o.value)).toEqual(["click", "modifier", "never"]);
+	});
+
+	it("calls setLinkActivation when the link activation select changes", () => {
+		const { container } = render(() => <TerminalTab />);
+		const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+		const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+		fireEvent.change(linkSelect, { target: { value: "modifier" } });
+		expect(mockSetLinkActivation).toHaveBeenCalledWith("modifier");
 	});
 });

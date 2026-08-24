@@ -51,6 +51,7 @@ A live preview reflects these as you change them.
 | **Copy on Select** | `boolean` | `true` | Auto-copy terminal selection to clipboard. When text is selected in the terminal, it is immediately copied. A "Copied to clipboard" confirmation appears in the status bar. |
 | **Allow OSC 52 clipboard writes** | `boolean` | `true` | Let terminal programs set the system clipboard via the OSC 52 escape sequence (used by tmux, vim, ssh yank-over-SSH, etc.). Because OSC 52 is honored from anywhere in the byte stream, a displayed file or log can also overwrite the clipboard — so a non-blocking "Clipboard updated" notice appears on every write. Disable to ignore OSC 52 entirely. |
 | **Show agent context bar** | `boolean` | `true` | Display the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent |
+| **Open links on** | `click/modifier/never` | `click` | How links (URLs, file paths) in terminal output activate. `Click` opens on a plain click. `⌘Click`/`Ctrl+Click` hides the underline until Cmd (macOS) or Ctrl (Windows/Linux) is held, then opens on modifier+click. `Never` disables click-to-open entirely — right-click still offers Open/Copy link. |
 
 ### Blocks
 

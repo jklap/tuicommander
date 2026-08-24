@@ -286,6 +286,45 @@ describe("settingsStore", () => {
 		});
 	});
 
+	describe("setLinkActivation()", () => {
+		it("persists terminal_link_activation", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setLinkActivation("modifier");
+				expect(store.state.linkActivation).toBe("modifier");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ terminal_link_activation: "modifier" }),
+				});
+			});
+		});
+
+		it("defaults to click when absent from the hydrated config", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.state.linkActivation).toBe("click");
+			});
+		});
+
+		it("falls back to click for an invalid persisted value", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					mcp_server_enabled: false,
+					ide: "vscode",
+					default_font_size: 13,
+					terminal_link_activation: "bogus",
+				});
+				await store.hydrate();
+				expect(store.state.linkActivation).toBe("click");
+			});
+		});
+	});
+
 	describe("getFontFamily()", () => {
 		it("returns CSS font family string", () => {
 			testInScope(() => {

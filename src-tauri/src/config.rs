@@ -635,6 +635,11 @@ pub(crate) struct AppConfig {
     /// Terminal renderer: "webgl" (default, GPU-accelerated) or "canvas" (CPU, no atlas bugs)
     #[serde(default = "default_terminal_renderer")]
     pub(crate) terminal_renderer: String,
+    /// How terminal links activate: "click" (default, opens on plain click),
+    /// "modifier" (Cmd/Ctrl+click opens; underline only while held), or
+    /// "never" (right-click Open/Copy-link menu only).
+    #[serde(default = "default_link_activation")]
+    pub(crate) terminal_link_activation: String,
     /// Show the hold-Ctrl+Cmd relative-time overlay on command blocks.
     #[serde(default = "default_true")]
     pub(crate) show_block_timestamps: bool,
@@ -732,6 +737,10 @@ fn default_terminal_renderer() -> String {
     "webgl".to_string()
 }
 
+fn default_link_activation() -> String {
+    "click".to_string()
+}
+
 fn default_mcp_port() -> u16 {
     3845
 }
@@ -799,6 +808,7 @@ impl Default for AppConfig {
             scrollback_reflow: false,
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
+            terminal_link_activation: default_link_activation(),
             show_block_timestamps: true,
             show_block_marks: true,
             show_prompt_marks: true,
@@ -3070,6 +3080,7 @@ mod tests {
             index_strategy: "active_and_switch".to_string(),
             cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
+            terminal_link_activation: "modifier".to_string(),
             show_block_timestamps: false,
             show_block_marks: false,
             show_prompt_marks: false,
@@ -3115,6 +3126,7 @@ mod tests {
         assert!(!loaded.show_block_marks);
         assert!(!loaded.show_prompt_marks);
         assert!(!loaded.block_folding_enabled);
+        assert_eq!(loaded.terminal_link_activation, "modifier");
     }
 
     #[test]
@@ -3151,6 +3163,7 @@ mod tests {
         assert!(loaded.show_block_marks); // defaults to true
         assert!(loaded.show_prompt_marks); // defaults to true
         assert!(loaded.block_folding_enabled); // defaults to true
+        assert_eq!(loaded.terminal_link_activation, "click"); // defaults to "click"
     }
 
     /// `docs/backend/config.md` promises a row for every top-level `AppConfig` field. Mirrors
