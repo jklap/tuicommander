@@ -130,12 +130,6 @@ describe("sessionDiscovery in AgentConfig", () => {
 		expect(disc?.resumeWithId("test-uuid")).toBe("codex resume test-uuid");
 	});
 
-	it("fx has sessionDiscovery with resumeWithId", () => {
-		const disc = AGENTS.fx.sessionDiscovery;
-		expect(disc).not.toBeNull();
-		expect(disc?.resumeWithId("session-123")).toBe("fx --resume session-123");
-	});
-
 	it("aider has null sessionDiscovery (no session IDs)", () => {
 		expect(AGENTS.aider.sessionDiscovery).toBeNull();
 	});
@@ -244,66 +238,5 @@ describe("verifyAndBuildResumeCommand", () => {
 			envOverrides: { HOME: "/tmp/gemini-current-home" },
 		});
 		expect(result).toBe("gemini --resume discovered-gemini-id --model current-model");
-	});
-
-	it("verifies fx agentSessionId with the persisted isolated HOME", async () => {
-		mockAgentConfigsStore.getDefaultConfig.mockReturnValueOnce({
-			name: "Isolated fx",
-			command: "fx",
-			args: ["--model", "current-model"],
-			env: { HOME: "/tmp/fx-current-home" },
-			is_default: true,
-		});
-		mockAgentConfigsStore.getRunConfigs.mockReturnValueOnce([
-			{
-				name: "Historical fx",
-				command: "fx",
-				args: ["--model", "historical-model"],
-				env: { HOME: "/tmp/fx-validation-home" },
-				is_default: false,
-			},
-		]);
-		mockRpc.mockResolvedValueOnce(true);
-
-		const result = await verifyAndBuildResumeCommand(
-			"fx",
-			"/tmp/repo",
-			"tuic-uuid-1",
-			"discovered-fx-id",
-			"fx --model historical-model",
-		);
-
-		expect(mockRpc).toHaveBeenCalledWith("verify_agent_session", {
-			agentType: "fx",
-			sessionId: "discovered-fx-id",
-			cwd: "/tmp/repo",
-			agentPid: null,
-			envOverrides: { HOME: "/tmp/fx-validation-home" },
-		});
-		expect(result).toBe("fx --resume discovered-fx-id");
-		expect(result).not.toContain("--model");
-	});
-
-	it("drops model args from fx's current default config on resume", async () => {
-		mockAgentConfigsStore.getDefaultConfig.mockReturnValueOnce({
-			name: "Isolated fx",
-			command: "fx",
-			args: ["--model", "current-model"],
-			env: { HOME: "/tmp/fx-current-home" },
-			is_default: true,
-		});
-		mockRpc.mockResolvedValueOnce(true);
-
-		const result = await verifyAndBuildResumeCommand("fx", "/tmp/repo", "tuic-uuid-1", "discovered-fx-id");
-
-		expect(mockRpc).toHaveBeenCalledWith("verify_agent_session", {
-			agentType: "fx",
-			sessionId: "discovered-fx-id",
-			cwd: "/tmp/repo",
-			agentPid: null,
-			envOverrides: { HOME: "/tmp/fx-current-home" },
-		});
-		expect(result).toBe("fx --resume discovered-fx-id");
-		expect(result).not.toContain("--model");
 	});
 });

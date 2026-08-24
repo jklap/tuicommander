@@ -210,7 +210,7 @@ A multi-line editor docked under the terminal for writing a prompt without fight
 
 Idle, unfocused terminals are suspended to stop them consuming CPU and battery. A background checker (every 30s) sends `SIGSTOP` to the entire process group of a session — `kill(-pgid, …)`, so children (dev servers, agent processes) are paused too, not just the shell.
 
-- **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, no tracked agent background work, idle for at least the timeout, session startup settled, and not already in standby. Claude/Codex/Gemini/Aider/Grok/pi/fx/OpenCode additionally require confirmed idle (explicit lifecycle marker or stable ready screen); silence-only idle cannot suspend them. Grok distinguishes its active Braille-spinner status row from the persistent `❯` composer; fx gives its captured `• Thinking (Ns)` row precedence over the persistent `┃` composer.
+- **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, no tracked agent background work, idle for at least the timeout, session startup settled, and not already in standby. Claude/Codex/Gemini/Aider/Grok/pi/OpenCode additionally require confirmed idle (explicit lifecycle marker or stable ready screen); silence-only idle cannot suspend them. Grok distinguishes its active Braille-spinner status row from the persistent `❯` composer.
 - **Wake** — `SIGCONT` fires the instant the tab is focused or a message arrives for the agent; the process resumes exactly where it stopped (no session loss, no restart)
 - **Safety** — the process-group id is validated before signalling; an unsafe pgid is refused rather than risking a stop sent to the wrong group
 - **Pause badge** — suspended tabs show a pause indicator in the tab bar
@@ -613,7 +613,6 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 | Goose | `goose` | `goose session --resume --name <uuid>` (session-aware) / `goose session --resume` (fallback) |
 | Droid (Factory) | `droid` | — |
 | pi | `pi` | `pi --continue` |
-| fx | `fx` | `fx --resume <id>` (session-aware) / `fx --resume last` (fallback) |
 | Git (background) | `git` | — |
 
 ### 6.1.1 Session-Aware Resume
@@ -623,7 +622,6 @@ When an agent is detected running in a terminal, TUICommander automatically disc
 - **Gemini CLI** — Sessions stored in `~/.gemini/tmp/<hash>/chats/session-*.json`; `sessionId` field from JSON
 - **Codex CLI** — Sessions stored in `~/.codex/sessions/YYYY/MM/DD/rollout-*-<UUID>.jsonl`; UUID from filename. Codex does *not* partition by project, so candidates are filtered on the working directory recorded in the rollout's first `session_meta` record — otherwise a terminal in one project would bind to another project's session. A rollout whose `cwd` can't be read is rejected rather than accepted
 - **Goose** — Sessions stored in SQLite (`~/Library/Application Support/Block/goose/sessions/sessions.db`); shell wrapper injects `--name $TUIC_SESSION` for deterministic binding, resume by name
-- **fx** — Sessions stored in `~/.fx/sessions/<id>/session.json`; candidates must be recent, match the terminal working directory through `workspace_root`, and repeat the directory ID in the manifest. The launched process's `HOME` selects the profile root
 
 Discovery runs once per terminal on `null→agent` transition. Multiple concurrent agents are handled via a `claimed_ids` deduplication list. On agent exit, the stored session ID is cleared to allow re-discovery on next launch.
 
@@ -645,7 +643,6 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Multi-agent status line detection via regex patterns anchored to line start: Claude Code (`*`/`✢`/`·` + task text + `...`/`…`), `[Running] Task` format, Aider (Knight Rider scanner `░█` + token reports), Codex CLI (`•`/`◦` bullet spinner with time suffix), Goose (`<message>... (Ctrl+C to interrupt)`), Copilot CLI (`∴`/`●`/`○` indicators), Gemini CLI (braille dots `⠋⠙⠹...`)
 - Movement-based activity: BUSY is normally latched/kept by text changing above the input area, user submission, and OSC lifecycle markers, which outrank silence. Ready prompts require a stable 1.5s observation before idle.
 - Codex and Claude also use narrow semantic active markers because their current TUIs can freeze or retain an empty composer during real work. Codex scopes `Working … esc to interrupt` to the lowest `›` or `»` composer. Claude requires a spinner-prefixed phase with an ellipsis and parenthesized progress; completed summaries remain idle-safe, and live work can supersede a premature blocking Stop-hook completion.
-- fx uses its captured bottom-zone contract: `• Thinking (Ns)` is `Working` even though the `┃` composer remains visible, and an exactly empty composer becomes `Ready` only after the activity row disappears.
 - Ctrl-C/Escape are interrupt intent only; status changes after the agent confirms interruption, returns to a stable prompt, emits Stop, or exits.
 - Status lines rejected when they appear in diff output, code listings, or block comments
 - Brand SVG logos for each agent (fallback to capital letter)

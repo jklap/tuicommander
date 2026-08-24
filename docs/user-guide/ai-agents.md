@@ -17,11 +17,6 @@ TUICommander detects, monitors, and manages AI coding agents running in your ter
 | Goose | `goose` | `goose session --resume` | `goose session --resume --name $TUIC_SESSION` |
 | Grok | `grok` | `grok --continue` | `grok --resume <discovered id>` |
 | pi | `pi` | `pi --continue` | — |
-| fx | `fx` | `fx --resume last` | `fx --resume <discovered id>` |
-
-The fx entry launches the native CLI. Its experimental WebAssembly playground is available at [fx.sh/try](https://fx.sh/try).
-The audited fx 0.0.3 release publishes native binaries for macOS and Linux
-(arm64 and x86_64), but no Windows asset.
 
 ## Agent Detection
 
@@ -78,7 +73,7 @@ When enabled, TUIC writes small shell hooks into the agent's settings file that 
 | Codex | `~/.codex/hooks.json` + `~/.codex/config.toml` (`[features] hooks = true`) | Supported |
 | Grok | `~/.grok/hooks/tuic.json` (own file) | Supported |
 | OpenCode | `~/.config/opencode/plugin/tuic.ts` (Bun/TS plugin) | Supported |
-| Others (Aider, Amp, Cursor, Goose, Droid, pi, fx) | — | No TUIC-managed hook system — stays heuristic |
+| Others (Aider, Amp, Cursor, Goose, Droid, pi) | — | No TUIC-managed hook system — stays heuristic |
 
 > **Platform note:** Hook instrumentation is **macOS/Linux only** — it resolves the controlling tty via `ps`/`/dev/tty`, which has no Windows equivalent. On Windows the toggle is hidden and agents keep heuristic detection (no regression).
 
@@ -172,8 +167,6 @@ When TUICommander restores saved terminals after a restart, only tabs that had a
 1. **Verified session** — If the terminal's saved agent session ID maps to an existing session file (e.g. `~/.claude/projects/…/<uuid>.jsonl`), the agent resumes with that agent's ID-specific command
 2. **No saved session ID** — Falls back to the agent's default resume behavior (e.g. `claude --continue` for the last session)
 3. **Saved ID no longer verifies** — Refuses automatic resume instead of opening an unrelated last session
-
-For fx, TUICommander discovers the active ID from `~/.fx/sessions/<id>/session.json`, requires the manifest ID and `workspace_root` to match the directory and terminal, and resumes with `fx --resume <id>`. fx uses the launched process's `HOME` as its profile root, so isolated run configurations keep their sessions isolated.
 
 The resume command honours the agent's **default run config**: TUICommander swaps the binary in the resume command (`claude`) for the run config's `command` (e.g. `c2`) and appends the run config's args after the resume flag. So a user with the default run config `c2 --model claude-opus-4-6` will resume with `c2 --resume <uuid> --model claude-opus-4-6`, not `claude --resume <uuid>`.
 

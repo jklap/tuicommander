@@ -598,7 +598,6 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "goose",
     "droid",
     "pi",
-    "fx",
 ];
 
 /// Detect any agent binary location
@@ -854,9 +853,7 @@ pub(crate) fn default_prompt_args(agent_type: &str) -> Option<Vec<String>> {
         // is preserved by merge_mcp_params_into_args's claude flags-first rule.)
         "claude" => &["{prompt}"],
         // Positional prompt (interactive with the task pre-filled).
-        "gemini" | "codex" | "opencode" | "grok" | "amp" | "cursor" | "droid" | "fx" => {
-            &["{prompt}"]
-        }
+        "gemini" | "codex" | "opencode" | "grok" | "amp" | "cursor" | "droid" => &["{prompt}"],
         // Aider: non-interactive single message, auto-confirm edits.
         "aider" => &["--yes-always", "--message", "{prompt}"],
         // Goose: the `session` subcommand carries the prompt.
@@ -872,8 +869,6 @@ pub(crate) fn default_prompt_args(agent_type: &str) -> Option<Vec<String>> {
 ///   without submitting — the child parks at its ready prompt forever.
 /// - opencode: the default positional is a PROJECT PATH (`opencode [project]`),
 ///   so a prompt argv crashes it with ENAMETOOLONG; `opencode run` is one-shot.
-/// - fx 0.0.3: the interactive CLI accepts no positional prompt; `fx ask` is
-///   intentionally one-shot and cannot back a persistent orchestrated session.
 ///
 /// For these agents the spawn path launches the bare TUI and delivers the
 /// initial prompt through the pending-injection path (bracketed-paste + CR
@@ -882,7 +877,7 @@ pub(crate) fn default_prompt_args(agent_type: &str) -> Option<Vec<String>> {
 /// `opencode run`) are NOT an alternative here: they exit after the task,
 /// collapsing the persistent session an orchestrator needs to keep messaging.
 pub(crate) fn prompt_prefill_only(agent_type: &str) -> bool {
-    matches!(agent_type, "codex" | "opencode" | "fx")
+    matches!(agent_type, "codex" | "opencode")
 }
 
 /// Detect claude binary location (legacy, delegates to detect_agent_binary)
@@ -1094,7 +1089,7 @@ mod tests {
     fn only_claude_accepts_a_bare_prompt() {
         assert!(agent_accepts_bare_prompt("claude"));
         // Every other known agent CLI would exit with code 2 on a bare prompt.
-        for agent in ["codex", "gemini", "aider", "goose", "opencode", "amp", "fx"] {
+        for agent in ["codex", "gemini", "aider", "goose", "opencode", "amp"] {
             assert!(
                 !agent_accepts_bare_prompt(agent),
                 "{agent} must not be treated as accepting a bare prompt"
@@ -1106,7 +1101,7 @@ mod tests {
     fn default_prompt_args_cover_known_agents() {
         // Positional-prompt agents.
         for agent in [
-            "gemini", "codex", "opencode", "grok", "amp", "cursor", "droid", "fx",
+            "gemini", "codex", "opencode", "grok", "amp", "cursor", "droid",
         ] {
             assert_eq!(
                 default_prompt_args(agent),
@@ -1129,7 +1124,7 @@ mod tests {
             Some(vec!["session".to_string(), "{prompt}".to_string()])
         );
         // Every template must contain the placeholder so substitution works.
-        for agent in ["gemini", "codex", "aider", "goose", "fx"] {
+        for agent in ["gemini", "codex", "aider", "goose"] {
             assert!(
                 default_prompt_args(agent)
                     .unwrap()

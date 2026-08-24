@@ -73,7 +73,7 @@ export interface TerminalData {
 	currentTask: string | null; // Current agent task from status-line parsing (e.g. "Reading files")
 	activeSubTasks: number; // Count of running sub-agents/background tasks from ›› status line
 	isRemote: boolean; // Created via HTTP/MCP (not locally by the UI)
-	agentSessionId: string | null; // Discovered agent session ID for exact resume (claude, gemini, codex, grok, fx)
+	agentSessionId: string | null; // Discovered agent session ID for exact resume (claude, gemini, codex, grok)
 	tuicSession: string | null; // Stable tab UUID — injected as TUIC_SESSION env var, persists across restarts
 	suggestedActions: string[] | null; // Follow-up suggestions from suggest: token
 	suggestDismissed: boolean; // true after user dismissed/selected/typed — resets on shell-state:idle

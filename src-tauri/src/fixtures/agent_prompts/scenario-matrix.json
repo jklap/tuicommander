@@ -37,16 +37,6 @@
       "clear": []
     },
     {
-      "id": "fx-narrow-ask-startup",
-      "agent": "fx",
-      "source": "raw-fixture",
-      "fixture": "fx-0.0.3-narrow-ask.tcap",
-      "set": "ready",
-      "clear": ["submitted-line", "pty-exit"],
-      "terminal": { "cols": 62, "rows": 32 },
-      "permission_mode": "ask"
-    },
-    {
       "id": "claude-permission-approval",
       "agent": "claude",
       "source": "capture-template",

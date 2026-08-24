@@ -34,12 +34,10 @@ function applyDefaultRunConfig(agentType: AgentType, command: string, launchComm
 	if (launchParts) {
 		// Use the original launch binary + its args, with resume flags in between
 		const [launchBinary, ...launchArgs] = launchParts;
-		// fx persists model selection in the session and rejects launch-only
-		// options such as --model in its resume grammar.
-		return [launchBinary, ...resumeFlags, ...(agentType === "fx" ? [] : launchArgs)].join(" ");
+		return [launchBinary, ...resumeFlags, ...launchArgs].join(" ");
 	}
 	// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-	return [runConfig!.command, ...resumeFlags, ...(agentType === "fx" ? [] : runConfig!.args)].join(" ");
+	return [runConfig!.command, ...resumeFlags, ...runConfig!.args].join(" ");
 }
 
 /** Resolve the environment of the run config that produced a persisted launch command. */
@@ -125,7 +123,7 @@ export async function verifyAndBuildResumeCommand(
 	if (sessionId && cwd && disc) {
 		try {
 			// At restore time the agent process has exited, so agentPid is null.
-			// Preserve profile-root overrides such as CODEX_HOME or fx's HOME.
+			// Preserve profile-root overrides such as CODEX_HOME.
 			const exists = await rpc<boolean>("verify_agent_session", {
 				agentType,
 				sessionId,

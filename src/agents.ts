@@ -11,7 +11,6 @@ export type AgentType =
 	| "grok"
 	| "droid"
 	| "pi"
-	| "fx"
 	| "git"
 	| "api";
 
@@ -28,7 +27,6 @@ export const AGENT_TYPES: readonly AgentType[] = [
 	"grok",
 	"droid",
 	"pi",
-	"fx",
 	"git",
 	"api",
 ] as const;
@@ -314,28 +312,6 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 			prompt: [/\[y\/n\]/i],
 		},
 	},
-	fx: {
-		type: "fx",
-		name: "fx",
-		binary: "fx",
-		description: "Vercel Labs' native coding agent harness",
-		defaultHeadlessTemplate: 'fx ask --no-save "{prompt}"',
-		resumeCommand: "fx --resume last",
-		sessionDiscovery: { resumeWithId: (id) => `fx --resume ${id}` },
-		spawnArgs: (prompt, options = {}) => {
-			const args: string[] = [];
-			if (options.model) args.push("--model", options.model);
-			args.push(prompt);
-			return args;
-		},
-		outputFormat: "text",
-		detectPatterns: {
-			rateLimit: [/rate.?limit/i, /429/, /too many requests/i, /overloaded/i],
-			completion: [],
-			error: [/error:/i, /failed:/i],
-			prompt: [/\[y\/n\]/i, /select an option/i],
-		},
-	},
 	git: {
 		type: "git",
 		name: "Git",
@@ -425,7 +401,6 @@ export const MCP_SUPPORT: Record<AgentType, boolean> = {
 	// auto-install waits for the adapter's ~/.pi/agent/mcp.json; Install here is
 	// explicit, so it writes the file.
 	pi: true,
-	fx: true,
 	git: false,
 	api: false,
 };
@@ -448,8 +423,6 @@ export const HOOK_SUPPORT: Record<AgentType, boolean> = {
 	// pi exposes lifecycle events to extensions, but TUIC has no managed installer for
 	// them yet — its screen adapter covers busy/idle without instrumentation.
 	pi: false,
-	// fx has no TUIC-managed lifecycle hook installer; screen-state detection is used.
-	fx: false,
 	git: false,
 	api: false,
 };
@@ -467,7 +440,6 @@ export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string }> =
 	grok: { icon: "G", color: "#1a1a1a" },
 	droid: { icon: "D", color: "#f97316" },
 	pi: { icon: "π", color: "#c4a7e7" },
-	fx: { icon: "F", color: "#ffffff" },
 	git: { icon: "G", color: "#f05032" },
 	api: { icon: "⚡", color: "#06b6d4" },
 };

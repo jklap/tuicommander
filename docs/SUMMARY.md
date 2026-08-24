@@ -62,7 +62,6 @@
 - [Gemini CLI](./architecture/agents/gemini-cli.md)
 - [OpenCode](./architecture/agents/opencode.md)
 - [pi](./architecture/agents/pi.md)
-- [fx](./architecture/agents/fx.md)
 
 ---
 

@@ -2809,7 +2809,7 @@ mod tests {
                 "params": {
                     "protocolVersion": offered_version,
                     "capabilities": {},
-                    "clientInfo": { "name": "fx", "version": "0.0.3" }
+                    "clientInfo": { "name": "probe-client", "version": "1.0.0" }
                 }
             });
             let mut request = mcp_post("/mcp", &body);

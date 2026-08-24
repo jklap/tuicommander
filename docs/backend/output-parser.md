@@ -389,15 +389,6 @@ The `strip_ansi()` function pre-processes CUF (Cursor Forward, `\x1b[nC`) escape
 | Cline | Braille spinner + mode + optional timer | `⠙ Planning (45s · esc to interrupt)` |
 | Generic | `[Running]` prefix | `[Running] npm test` |
 
-fx lifecycle state is intentionally not added to this line-oriented status
-table. Its full-screen renderer keeps the composer visible while work is active,
-so `pty.rs` classifies the live bottom zone instead: captured `• Thinking (Ns)`
-means `Working`, while an exactly empty `┃` composer with no activity row means
-`Ready`. The screen adapter leaves decision prompts and partially typed input
-`Unknown`; fx's captured `Permission needed · Choose one` overlay is classified
-separately by the shared numbered-choice parser and becomes a confident
-awaiting-input state.
-
 ### Hook-Instrumented Session Suppression
 
 When native hook instrumentation is configured, heuristic `Question` events are
