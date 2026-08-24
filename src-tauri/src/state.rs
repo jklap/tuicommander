@@ -2353,6 +2353,34 @@ impl AppState {
             .filter(|session_id| self.sessions.contains_key(session_id))
     }
 
+    /// Whether a peer identity may be dropped when its MCP protocol session is
+    /// reaped for inactivity.
+    ///
+    /// The protocol session and the identity have different lifetimes, and the
+    /// reaper conflated them. Reaping is about a transport nobody has used for an
+    /// hour. The identity is the address other agents send to, and
+    /// `refresh_mcp_session` re-asserts it on the owner's next request — so an
+    /// agent that spends a long turn thinking, without calling a TUIC tool, had
+    /// its address deleted out from under it while it was still running.
+    ///
+    /// Two things keep an identity addressable:
+    ///
+    /// - it owns a live PTY. The agent is sitting right there mid-turn and will
+    ///   call `agent action=send` when the turn ends.
+    /// - a live session still records it as its parent. Dropping it strands that
+    ///   child's handoff permanently: re-registering a headerless caller mints a
+    ///   fresh UUID, and nothing tells the child what the new one is.
+    ///
+    /// Both conditions are bounded by live sessions, so retention cannot grow
+    /// without bound — a reaped identity with neither is genuinely unreachable.
+    pub(crate) fn peer_identity_is_reapable(&self, peer_id: &str) -> bool {
+        self.live_pty_for_peer(peer_id).is_none()
+            && !self
+                .session_parent
+                .iter()
+                .any(|entry| entry.value() == peer_id)
+    }
+
     /// Record the PTY now backing a `$TUIC_SESSION`. Called at spawn.
     pub(crate) fn bind_live_pty(&self, tuic_session: &str, session_id: &str) {
         self.live_pty_by_tuic_session
