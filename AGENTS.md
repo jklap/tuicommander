@@ -249,6 +249,17 @@ and three of them wait for an event that may never arrive:
 confident question: grok repaints while it waits, so "not on screen this tick"
 is not proof of an answer.
 
+**The mirror failure is a SET that never comes back.** A multi-question
+`AskUserQuestion` answers one sub-question at a time; each repaints its title and
+options while the `Enter to select` footer stays byte-identical. The changed-rows
+parser needs a row to *change*, so sub-questions 2+ produce no signal at all and
+the tab reads "working" while the agent waits. `rearm_awaiting_for_open_dialog`
+(`pty.rs`) closes it by reading that footer off the **full screen** as a presence
+level, not an edge, and re-arming only when the badge is off — one event per
+spurious clear, never one per repaint. Do not extend it to parse the title,
+options or the `⊠ … ✓ Submit` tab bar: those all move as the wizard advances,
+which is precisely why the footer is the key.
+
 **Legacy output-only `.raw` fixtures cannot reproduce a latched badge.** New
 `.tcap` captures include user input and can replay SET/CLEAR ordering, but the
 `Awaiting RETRACTION` block must still drive the real event-bus accumulator and

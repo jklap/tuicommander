@@ -1214,6 +1214,27 @@ fn parse_agent_session_conflict(clean: &str) -> Option<ParsedEvent> {
         .or_else(|| try_match(&SESSION_NOT_FOUND_RE, "not-found"))
 }
 
+/// The Ink dialog footer, if one is visible anywhere on the screen.
+///
+/// This is the same anchor `parse_question` matches, read as a **level** instead
+/// of an edge: as long as the row is on screen, an interactive dialog is open and
+/// the agent is blocked on the user. Deliberately no structure parsing — no
+/// title, no options, no wizard tab bar. Those all move between the sub-questions
+/// of a multi-question `AskUserQuestion`, which is exactly what made the
+/// changed-rows path miss them: the footer is the one row that stays byte-identical
+/// from the first sub-question to the last, so it is useless as a *change* signal
+/// and perfect as a *presence* signal.
+pub(crate) fn ink_dialog_footer(screen_rows: &[String]) -> Option<&str> {
+    lazy_static::lazy_static! {
+        static ref INK_FOOTER_RE: regex::Regex =
+            regex::Regex::new(r"^Enter to select").unwrap();
+    }
+    screen_rows.iter().find_map(|row| {
+        let trimmed = row.trim();
+        (INK_FOOTER_RE.is_match(trimmed) && !line_is_diff_or_code_context(row)).then_some(trimmed)
+    })
+}
+
 /// Question detection: most detection is handled by the silence-based detector
 /// in pty.rs (last line ending with `?` + 10s of silence = real question).
 ///
