@@ -3,6 +3,7 @@ import {
 	altSequenceFromCode,
 	createCompositionState,
 	DUP_KEYDOWN_WINDOW_MS,
+	isGlobalShortcutPassthrough,
 	isPointerInsideRect,
 	keyToSequence,
 	shouldReportMouseUp,
@@ -196,6 +197,39 @@ describe("keyToSequence", () => {
 		// without that guard this "." would be sent to the PTY and the event would
 		// never bubble to the global block-fold-toggle shortcut listener.
 		expect(keyToSequence(evt(".", { ctrlKey: true, shiftKey: true }))).toBe(".");
+	});
+});
+
+// Regression coverage for 4f99d716: CanvasTerminal's keydown handler must bail out for this
+// exact combo before ever reaching keyToSequence above, or the printable-character fallback
+// swallows it as a literal "." on Windows/Linux (where ctrlKey, not metaKey, is the modifier
+// and keyToSequence does not exclude it).
+describe("isGlobalShortcutPassthrough", () => {
+	const evt = (opts: Partial<KeyboardEvent>): KeyboardEvent =>
+		({ key: ".", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...opts }) as unknown as KeyboardEvent;
+
+	it("is true for Ctrl+Shift+. — the Windows/Linux global block-fold-toggle combo", () => {
+		expect(isGlobalShortcutPassthrough(evt({ ctrlKey: true, shiftKey: true }))).toBe(true);
+	});
+
+	it("is false when Alt is also held", () => {
+		expect(isGlobalShortcutPassthrough(evt({ ctrlKey: true, shiftKey: true, altKey: true }))).toBe(false);
+	});
+
+	it("is false for plain Ctrl+. (no Shift)", () => {
+		expect(isGlobalShortcutPassthrough(evt({ ctrlKey: true }))).toBe(false);
+	});
+
+	it("is false for plain Shift+. (no Ctrl)", () => {
+		expect(isGlobalShortcutPassthrough(evt({ shiftKey: true }))).toBe(false);
+	});
+
+	it("is false for Cmd+Shift+. — macOS relies on keyToSequence's own metaKey short-circuit instead", () => {
+		expect(isGlobalShortcutPassthrough(evt({ metaKey: true, shiftKey: true }))).toBe(false);
+	});
+
+	it("is false for a different key entirely, even with both modifiers held", () => {
+		expect(isGlobalShortcutPassthrough(evt({ key: "a", ctrlKey: true, shiftKey: true }))).toBe(false);
 	});
 });
 

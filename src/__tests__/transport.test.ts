@@ -73,6 +73,85 @@ function extractRegisteredTauriCommands(): Set<string> {
 	return new Set(commandList);
 }
 
+/**
+ * Splits COMMAND_TABLE's body into per-command source blocks, keyed by command name — lets
+ * route-parity checks search each command's OWN `map()` body for its path expression without
+ * false-matching a sibling command's `path:` field, or a NESTED object literal's key (e.g.
+ * `tool_filter: {` inside a request body) that happens to look like a top-level entry.
+ * Top-level command entries are always indented with exactly one tab; deeper nesting always
+ * has two or more, so anchoring on exactly one tab is what makes this precise.
+ */
+function extractCommandBlocks(): Map<string, string> {
+	const transportSource = readRepoFile("src/transport.ts");
+	const tableBody = extractBalancedObject(transportSource, "const COMMAND_TABLE");
+	const starts = Array.from(tableBody.matchAll(/^\t([a-zA-Z_][\w]*):\s*\{/gm), (m) => ({
+		name: m[1],
+		index: m.index ?? 0,
+	}));
+	const blocks = new Map<string, string>();
+	for (let i = 0; i < starts.length; i++) {
+		const end = i + 1 < starts.length ? starts[i + 1].index : tableBody.length;
+		blocks.set(starts[i].name, tableBody.slice(starts[i].index, end));
+	}
+	return blocks;
+}
+
+/**
+ * Best-effort static extraction of a command's HTTP path template, without evaluating any
+ * JS: the (overwhelming majority) direct-literal `path: "..."` / `path: \`...${x}...\`` form,
+ * falling back to the base literal of a local `const`/`let` the block later returns as `path`
+ * (a few GET endpoints build the querystring incrementally, e.g. `let diffUrl = \`...\`; ...;
+ * return { path: diffUrl }`). Returns `null` when neither form is found — the caller must
+ * decide whether to treat that as a real gap or a deliberately unresolved case.
+ */
+function extractPathTemplate(block: string): string | null {
+	const direct = block.match(/\bpath:\s*(`[^`]*`|"[^"]*")/);
+	if (direct) return direct[1];
+	const viaLocal = block.match(/(?:const|let)\s+\w+\s*=\s*(`[^`]*`|"[^"]*")/);
+	if (viaLocal) return viaLocal[1];
+	return null;
+}
+
+/** Normalizes a path template to a route "shape" comparable to an axum route: strips the
+ *  querystring and any leading base-URL scheme, collapses every `${...}` interpolation (or
+ *  axum `{name}`/`{*name}` param) to one `:param` placeholder, and drops the quote marks. */
+function normalizeRouteShape(raw: string): string {
+	const unquoted = raw.slice(1, -1);
+	// Params are collapsed BEFORE splitting on "?" for the querystring — some commands
+	// interpolate a `??` nullish-coalescing expression inside `${...}` (e.g. write_pty's
+	// `${args.sessionId ?? args.id}`), and that `?` is not a querystring separator.
+	const withParams = unquoted.replace(/\$\{[^}]*\}/g, ":param").replace(/\{\*?[^}]*\}/g, ":param");
+	return withParams.split("?")[0];
+}
+
+/**
+ * Every axum `.route("path", ...)` literal registered in mcp_http/mod.rs, normalized to the
+ * same `:param` shape as `normalizeRouteShape`. Handles `.nest("/tunnels", tunnel_routes())`
+ * (the one route-prefixing nest in this file — see the comment above `shared_routes()`) by
+ * additionally registering `tunnel_routes()`'s own routes under that prefix; every other
+ * `.route(...)` call is already reachable at its literal path with no further prefixing.
+ */
+function extractRegisteredRouteShapes(): Set<string> {
+	const modSource = readRepoFile("src-tauri/src/mcp_http/mod.rs");
+	const routeRe = /\.route\(\s*"([^"]*)"/g;
+	const shapes = new Set<string>();
+	for (const match of modSource.matchAll(routeRe)) {
+		shapes.add(normalizeRouteShape(`"${match[1]}"`));
+	}
+
+	const tunnelFnStart = modSource.indexOf("fn tunnel_routes(");
+	if (tunnelFnStart < 0) {
+		throw new Error("fn tunnel_routes( not found — nest-prefix handling below may be stale");
+	}
+	const tunnelBodyStart = modSource.indexOf("{", tunnelFnStart);
+	const tunnelBodyEnd = modSource.indexOf("\n}\n", tunnelBodyStart);
+	const tunnelBody = modSource.slice(tunnelBodyStart, tunnelBodyEnd);
+	for (const match of tunnelBody.matchAll(routeRe)) {
+		shapes.add(normalizeRouteShape(`"/tunnels${match[1]}"`));
+	}
+	return shapes;
+}
+
 /** Every .ts/.tsx under src/, excluding the test tree itself. */
 function collectFrontendSources(): { path: string; source: string }[] {
 	const root = join(process.cwd(), "src");
@@ -1585,6 +1664,112 @@ describe("transport", () => {
 				}
 				expect(mapped).toBe(false);
 			}
+		});
+	});
+
+	// `COMMAND_TABLE` claims an HTTP mapping exists for every command it lists, but nothing
+	// previously checked that the axum router in mcp_http/mod.rs actually registers the route
+	// each mapping points at — so a renamed/removed route on the Rust side, or a mapping that
+	// was written against a route that was never wired up, silently 404s for every browser/
+	// remote client while every existing test stays green.
+	//
+	// Writing this test surfaced 19 pre-existing gaps of exactly that shape (see
+	// KNOWN_HTTP_MAPPING_GAPS below) — most strikingly, every `/dictation/*` mapping points at
+	// `dictation_routes.rs`, a file whose handlers are never mounted: it's missing a
+	// `mod dictation_routes;` declaration in mcp_http/mod.rs entirely, and has been since the
+	// commit that added it. Whether the right fix is to wire these up or move them to
+	// INTENTIONALLY_UNMAPPED (native-only) is a product decision outside this test's scope, so
+	// they're captured explicitly here instead of silently passing or silently failing CI.
+	describe("HTTP route parity (COMMAND_TABLE path <-> registered axum route)", () => {
+		// Every command below maps to a path with NO matching `.route(...)` registration in
+		// mcp_http/mod.rs as of this writing. Each is a real gap, not a false positive from this
+		// test's normalization — verified by grepping mcp_http/*.rs for the literal path/handler
+		// name and finding nothing. Shrink this list (don't just delete failing cases) as each
+		// gap is actually resolved, one way or the other.
+		const KNOWN_HTTP_MAPPING_GAPS = new Set([
+			// dictation_routes.rs exists but is never `mod`-declared, so none of its handlers
+			// are reachable — the whole /dictation/* surface 404s over HTTP.
+			"get_dictation_status",
+			"get_model_info",
+			"download_whisper_model",
+			"delete_whisper_model",
+			"start_dictation",
+			"stop_dictation_and_transcribe",
+			"get_correction_map",
+			"set_correction_map",
+			"list_audio_devices",
+			"inject_text",
+			"get_dictation_config",
+			"set_dictation_config",
+			// No handler function or route registration exists for any of these at all.
+			"open_in_app",
+			"play_notification_sound",
+			"get_relay_status",
+			"check_update_channel",
+			"get_session_shell_family",
+			"run_setup_script",
+			"detect_all_agent_binaries",
+		]);
+
+		function checkRouteParity() {
+			const blocks = extractCommandBlocks();
+			const registeredShapes = extractRegisteredRouteShapes();
+			const unresolved: string[] = [];
+			const mismatched: string[] = [];
+			for (const [name, block] of blocks) {
+				const template = extractPathTemplate(block);
+				if (template === null) {
+					unresolved.push(name);
+					continue;
+				}
+				if (!registeredShapes.has(normalizeRouteShape(template))) {
+					mismatched.push(name);
+				}
+			}
+			return { unresolved, mismatched };
+		}
+
+		it("has at least the registered routes this test was written against (canary against the extraction regex going stale)", () => {
+			expect(extractRegisteredRouteShapes().size).toBeGreaterThan(250);
+		});
+
+		it("resolves a path for every command except the one that builds it via a ternary this test doesn't parse", () => {
+			// get_worktrees_dir's `path:` value is `rp ? \`...\` : "..."` — both branches
+			// normalize to the same registered route (verified by hand below), so it's a
+			// documented exception rather than a real extraction failure.
+			const { unresolved } = checkRouteParity();
+			expect(unresolved).toEqual(["get_worktrees_dir"]);
+		});
+
+		it("matches every mapped command's HTTP path to a registered route, except the documented gaps above", () => {
+			const { mismatched } = checkRouteParity();
+			expect(mismatched.filter((name) => !KNOWN_HTTP_MAPPING_GAPS.has(name)).sort()).toEqual([]);
+		});
+
+		it("keeps KNOWN_HTTP_MAPPING_GAPS exactly in sync with reality — shrink it as each gap is fixed", () => {
+			const { mismatched } = checkRouteParity();
+			expect(mismatched.sort()).toEqual(Array.from(KNOWN_HTTP_MAPPING_GAPS).sort());
+		});
+
+		// Targeted coverage for the two commands ae3da4bf added — no mapping test existed for
+		// either before this.
+		it("maps the two orphan-worktree commands ae3da4bf added to their registered routes", () => {
+			expect(mapCommandToHttp("remove_orphan_worktree", { repoPath: "/r", worktreePath: "/r/wt" })).toEqual({
+				method: "POST",
+				path: "/repo/remove-orphan",
+				body: { repoPath: "/r", worktreePath: "/r/wt" },
+				transform: expect.any(Function),
+			});
+			expect(mapCommandToHttp("delete_orphan_worktree", { repoPath: "/r", worktreePath: "/r/wt" })).toEqual({
+				method: "POST",
+				path: "/repo/delete-orphan",
+				body: { repoPath: "/r", worktreePath: "/r/wt" },
+			});
+		});
+
+		it("remove_orphan_worktree's transform extracts the archive path from the response (it now archives, not just removes)", () => {
+			const mapping = mapCommandToHttp("remove_orphan_worktree", { repoPath: "/r", worktreePath: "/r/wt" });
+			expect(mapping.transform?.({ archivePath: "/r/__archived/wt" })).toBe("/r/__archived/wt");
 		});
 	});
 
