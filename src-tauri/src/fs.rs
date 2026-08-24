@@ -3582,7 +3582,7 @@ mod tests {
     /// machine-dependent counts. Returns the guard — keep it alive.
     fn empty_repo_registry(cfg: &TempDir) -> impl Drop {
         let guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
-        crate::config::save_repositories(serde_json::json!({ "repos": {} })).unwrap();
+        crate::config::replace_repositories_for_test(serde_json::json!({ "repos": {} })).unwrap();
         guard
     }
 
@@ -3674,7 +3674,7 @@ mod tests {
 
         let indexed_path = indexed.path().to_string_lossy().to_string();
         let unvisited_path = never_visited.path().to_string_lossy().to_string();
-        crate::config::save_repositories(serde_json::json!({
+        crate::config::replace_repositories_for_test(serde_json::json!({
             "repos": { indexed_path.clone(): {}, unvisited_path.clone(): {} }
         }))
         .unwrap();
