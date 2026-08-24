@@ -156,6 +156,42 @@ export function sgrMotionButton(buttons: number): 0 | 1 | 2 | 3 {
 	return 3;
 }
 
+/**
+ * Whether a mouse gesture belongs to the app's mouse-reporting protocol (forwarded over
+ * the PTY) rather than TUICommander's own local selection. A gesture claimed as local at
+ * mousedown (`selecting: true`) stays local for its whole lifetime — re-checking mouse
+ * mode on every move/up event could otherwise silently re-forward mid-drag if the app
+ * flips its reporting mode, or leave selection/autoscroll state dangling if a mouseup
+ * got swallowed by that flip instead of running local teardown.
+ */
+export function shouldForwardMouseGesture(input: {
+	selecting: boolean;
+	mouseMode: number;
+	shiftKey: boolean;
+}): boolean {
+	return !input.selecting && input.mouseMode > 0 && !input.shiftKey;
+}
+
+/**
+ * SGR button code for a motion report, or `null` if this mode/button combination sends no
+ * report at all. Motion tracking (mode 3, `?1003h`) reports every move, including bare
+ * hover; drag-tracking (mode 2, `?1002h`) reports only while a button is held.
+ */
+export function motionReportButton(mouseMode: number, buttons: number): 0 | 1 | 2 | 3 | null {
+	if (mouseMode >= 3 || (mouseMode >= 2 && buttons > 0)) return sgrMotionButton(buttons);
+	return null;
+}
+
+/**
+ * Last selectable column of a line at the given canvas width — shared by triple-click and
+ * line-mode drag extension so both agree with `canvasToGrid`'s own `maxCol` (which
+ * subtracts `GUTTER_PX`; a prior ad-hoc version computed this without it, so triple-click
+ * and line-drag disagreed on where a line actually ended).
+ */
+export function lastGridCol(widthPx: number, cellWidthPx: number): number {
+	return Math.max(0, Math.floor((widthPx - GUTTER_PX) / cellWidthPx) - 1);
+}
+
 export function decideFrameGrid(prev: FrameGridPrev, frame: DecodedFrame, fallbackRows: number): FrameGridDecision {
 	const geomChanged = frame.screenRows !== prev.lastScreenRows || frame.screenCols !== prev.lastScreenCols;
 	const scrollChanged = frame.displayOffset !== prev.lastDisplayOffset || frame.historySize !== prev.lastHistorySize;

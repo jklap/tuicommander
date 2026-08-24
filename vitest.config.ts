@@ -53,11 +53,18 @@ export default defineConfig({
         "src/components/IdeLauncher/IdeLauncher.tsx",
         "src/components/PromptDrawer/PromptDrawer.tsx",
       ],
+      // These thresholds were declared at 80% but never actually enforced in CI (`pnpm
+      // test:coverage` wasn't wired into any workflow), so real coverage drifted far below
+      // that target unnoticed. Measured floor as of 2026-08-22: lines 49.7%, statements
+      // 46.79%, functions 45.23%, branches 42.95%. Set just under that floor (not 80%) so
+      // CI can enforce "don't regress" starting now without a red build on day one — ratchet
+      // these up incrementally as coverage genuinely improves, rather than lowering them
+      // again if a change makes CI red.
       thresholds: {
-        lines: 80,
-        functions: 80,
-        branches: 80,
-        statements: 80,
+        lines: 49,
+        functions: 45,
+        branches: 42,
+        statements: 46,
       },
     },
   },

@@ -75,6 +75,85 @@ function extractRegisteredTauriCommands(): Set<string> {
 	return new Set(commandList);
 }
 
+/**
+ * Splits COMMAND_TABLE's body into per-command source blocks, keyed by command name — lets
+ * route-parity checks search each command's OWN `map()` body for its path expression without
+ * false-matching a sibling command's `path:` field, or a NESTED object literal's key (e.g.
+ * `tool_filter: {` inside a request body) that happens to look like a top-level entry.
+ * Top-level command entries are always indented with exactly one tab; deeper nesting always
+ * has two or more, so anchoring on exactly one tab is what makes this precise.
+ */
+function extractCommandBlocks(): Map<string, string> {
+	const transportSource = readRepoFile("src/transport.ts");
+	const tableBody = extractBalancedObject(transportSource, "const COMMAND_TABLE");
+	const starts = Array.from(tableBody.matchAll(/^\t([a-zA-Z_][\w]*):\s*\{/gm), (m) => ({
+		name: m[1],
+		index: m.index ?? 0,
+	}));
+	const blocks = new Map<string, string>();
+	for (let i = 0; i < starts.length; i++) {
+		const end = i + 1 < starts.length ? starts[i + 1].index : tableBody.length;
+		blocks.set(starts[i].name, tableBody.slice(starts[i].index, end));
+	}
+	return blocks;
+}
+
+/**
+ * Best-effort static extraction of a command's HTTP path template, without evaluating any
+ * JS: the (overwhelming majority) direct-literal `path: "..."` / `path: \`...${x}...\`` form,
+ * falling back to the base literal of a local `const`/`let` the block later returns as `path`
+ * (a few GET endpoints build the querystring incrementally, e.g. `let diffUrl = \`...\`; ...;
+ * return { path: diffUrl }`). Returns `null` when neither form is found — the caller must
+ * decide whether to treat that as a real gap or a deliberately unresolved case.
+ */
+function extractPathTemplate(block: string): string | null {
+	const direct = block.match(/\bpath:\s*(`[^`]*`|"[^"]*")/);
+	if (direct) return direct[1];
+	const viaLocal = block.match(/(?:const|let)\s+\w+\s*=\s*(`[^`]*`|"[^"]*")/);
+	if (viaLocal) return viaLocal[1];
+	return null;
+}
+
+/** Normalizes a path template to a route "shape" comparable to an axum route: strips the
+ *  querystring and any leading base-URL scheme, collapses every `${...}` interpolation (or
+ *  axum `{name}`/`{*name}` param) to one `:param` placeholder, and drops the quote marks. */
+function normalizeRouteShape(raw: string): string {
+	const unquoted = raw.slice(1, -1);
+	// Params are collapsed BEFORE splitting on "?" for the querystring — some commands
+	// interpolate a `??` nullish-coalescing expression inside `${...}` (e.g. write_pty's
+	// `${args.sessionId ?? args.id}`), and that `?` is not a querystring separator.
+	const withParams = unquoted.replace(/\$\{[^}]*\}/g, ":param").replace(/\{\*?[^}]*\}/g, ":param");
+	return withParams.split("?")[0];
+}
+
+/**
+ * Every axum `.route("path", ...)` literal registered in mcp_http/mod.rs, normalized to the
+ * same `:param` shape as `normalizeRouteShape`. Handles `.nest("/tunnels", tunnel_routes())`
+ * (the one route-prefixing nest in this file — see the comment above `shared_routes()`) by
+ * additionally registering `tunnel_routes()`'s own routes under that prefix; every other
+ * `.route(...)` call is already reachable at its literal path with no further prefixing.
+ */
+function extractRegisteredRouteShapes(): Set<string> {
+	const modSource = readRepoFile("src-tauri/src/mcp_http/mod.rs");
+	const routeRe = /\.route\(\s*"([^"]*)"/g;
+	const shapes = new Set<string>();
+	for (const match of modSource.matchAll(routeRe)) {
+		shapes.add(normalizeRouteShape(`"${match[1]}"`));
+	}
+
+	const tunnelFnStart = modSource.indexOf("fn tunnel_routes(");
+	if (tunnelFnStart < 0) {
+		throw new Error("fn tunnel_routes( not found — nest-prefix handling below may be stale");
+	}
+	const tunnelBodyStart = modSource.indexOf("{", tunnelFnStart);
+	const tunnelBodyEnd = modSource.indexOf("\n}\n", tunnelBodyStart);
+	const tunnelBody = modSource.slice(tunnelBodyStart, tunnelBodyEnd);
+	for (const match of tunnelBody.matchAll(routeRe)) {
+		shapes.add(normalizeRouteShape(`"/tunnels${match[1]}"`));
+	}
+	return shapes;
+}
+
 /** Every .ts/.tsx under src/, excluding the test tree itself. */
 function collectFrontendSources(): { path: string; source: string }[] {
 	const root = join(process.cwd(), "src");

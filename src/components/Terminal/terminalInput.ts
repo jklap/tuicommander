@@ -81,6 +81,18 @@ const CTRL_PUNCT: Record<string, number> = {
  * consume a wrongly-sent CSI sequence's leading ESC as a bare Escape —
  * `vi-cmd-mode` — dropping the user into vi normal mode with no visual cue.
  */
+/**
+ * Whether a keydown is the Windows/Linux form of the global block-fold-toggle shortcut
+ * (`Ctrl+Shift+.`; `Cmd+Shift+.` on macOS is already short-circuited by `keyToSequence`'s
+ * own `metaKey` check). The terminal's own keydown handler must bail out for this combo
+ * before falling through to `keyToSequence` — otherwise the printable-character fallback
+ * swallows it as a literal "." keystroke and `stopPropagation` keeps it from ever
+ * bubbling to the document-level shortcut listener.
+ */
+export function isGlobalShortcutPassthrough(e: KeyboardEvent): boolean {
+	return e.ctrlKey && e.shiftKey && !e.altKey && e.key === ".";
+}
+
 export function keyToSequence(e: KeyboardEvent, appCursor = false): string | null {
 	if (e.metaKey) return null;
 	if (IGNORED_KEYS.has(e.key)) return null;

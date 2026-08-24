@@ -34,6 +34,59 @@ export function wordBoundsAt(row: DecodedRow, col: number): { left: number; righ
 	return { left, right };
 }
 
+/** Anchor captured at mousedown for a word/line-mode drag — the edge of the original
+ *  double/triple-click that must stay included no matter which way the drag goes. */
+export interface DragAnchor {
+	wordAnchor: { row: number; left: number; right: number } | null;
+	lineAnchorRow: number | null;
+}
+
+/** Live drag position, re-derived each frame by the caller (grid position, the word
+ *  bounds under it if any, and the last selectable column for line mode). */
+export interface DragPosition {
+	row: number;
+	col: number;
+	bounds: { left: number; right: number } | null;
+	maxCol: number;
+}
+
+/**
+ * Re-derives the selection start/end for a drag frame, given the mode set at mousedown
+ * and its anchor. Word/line mode union the live drag boundary with whichever edge of the
+ * anchor sits away from the drag direction, so the original double/triple-clicked
+ * word/line stays fully included regardless of drag direction — matching double-click-drag
+ * / triple-click-drag in every mainstream terminal. Falls back to plain cell-wise extension
+ * for "char" mode, or when the relevant anchor is missing (e.g. a double-click that landed
+ * on whitespace/punctuation never sets `wordAnchor`) — in which case `start` is left as
+ * whatever was set at mousedown and only `end` moves, exactly like a plain drag.
+ */
+export function extendSelectionDrag(
+	mode: SelectionMode,
+	anchor: DragAnchor,
+	drag: DragPosition,
+	currentStart: SelectionPoint,
+): { start: SelectionPoint; end: SelectionPoint } {
+	const { row: absRow, col } = drag;
+	if (mode === "word" && anchor.wordAnchor) {
+		const { wordAnchor } = anchor;
+		const dragLeft = drag.bounds?.left ?? col;
+		const dragRight = drag.bounds?.right ?? col;
+		const draggingForward = absRow > wordAnchor.row || (absRow === wordAnchor.row && dragLeft >= wordAnchor.left);
+		if (draggingForward) {
+			return { start: { row: wordAnchor.row, col: wordAnchor.left }, end: { row: absRow, col: dragRight } };
+		}
+		return { start: { row: absRow, col: dragLeft }, end: { row: wordAnchor.row, col: wordAnchor.right } };
+	}
+	if (mode === "line" && anchor.lineAnchorRow !== null) {
+		const lineAnchorRow = anchor.lineAnchorRow;
+		if (absRow >= lineAnchorRow) {
+			return { start: { row: lineAnchorRow, col: 0 }, end: { row: absRow, col: drag.maxCol } };
+		}
+		return { start: { row: absRow, col: 0 }, end: { row: lineAnchorRow, col: drag.maxCol } };
+	}
+	return { start: currentStart, end: { row: absRow, col } };
+}
+
 export interface SearchMatch {
 	row: number;
 	col_start: number;
