@@ -1054,3 +1054,25 @@ repo could reach it. Frontend-only — a browser reload picks it up, no rebuild.
   shows `[Reconcile] <id> ... → <repo>:<branch>`.
 - [ ] `cd` a terminal from one repo into another (OSC 7): the tab moves and no
   stale id is left behind in the old branch list.
+
+## Poisoned `repositories.json` guard
+
+Frontend-only (reload is enough). Reproduces the 2026-08-21 loss on purpose, so
+**back the real file up first** and do it with the app stopped.
+
+```bash
+D=~/Library/Application\ Support/com.tuic.commander
+cp "$D/repositories.json" "$D/repositories.mine.json"
+echo '{"mutationVersion":1,"repos":[],"groups":[]}' > "$D/repositories.json"
+```
+
+- [ ] Start the app: the repo list is empty AND the Errors badge carries
+  "repositories.json holds a mutation delta". No stack trace about
+  `Object.values`.
+- [ ] With the app still running, restore the backup over the poisoned file. The
+  restored file must still be intact a minute later — saves are blocked, so
+  nothing clobbers it. This is the step that failed during the incident.
+- [ ] Restart: the 38 repos are back and a normal mutation (add a repo, reorder)
+  saves again.
+- [ ] A genuinely empty file (`{}`) still starts a fresh install: empty list, no
+  error, and adding a repo persists.
