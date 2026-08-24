@@ -810,14 +810,51 @@ fn refresh_mcp_session(
 /// expose tools while the client is starting, then forwards the client's own
 /// initialize with that session ID. Minting a second ID here would make the
 /// live-owner guard correctly reject the same bridge as an identity takeover.
-fn initialize_session_id(state: &AppState, headers: &HeaderMap) -> String {
-    headers
+fn initialize_session_id(state: &AppState, headers: &HeaderMap) -> (String, InitializeKind) {
+    let presented = headers
         .get(MCP_SESSION_HEADER)
         .and_then(|value| value.to_str().ok())
-        .filter(|session_id| is_valid_uuid(session_id))
-        .filter(|session_id| state.mcp_sessions.contains_key(*session_id))
-        .map(str::to_string)
-        .unwrap_or_else(|| Uuid::new_v4().to_string())
+        .filter(|session_id| is_valid_uuid(session_id));
+    match presented {
+        Some(sid) if state.mcp_sessions.contains_key(sid) => {
+            (sid.to_string(), InitializeKind::Resumed)
+        }
+        // The client came back holding a session id we no longer have — reaped by
+        // the idle sweep, or lost with a restart. It gets a new one and never
+        // learns why. This is the moment an agent reports "TUICommander is back",
+        // so it is the one case that must not be silent.
+        Some(sid) => (
+            Uuid::new_v4().to_string(),
+            InitializeKind::Reconnected {
+                presented: sid.to_string(),
+            },
+        ),
+        None => (Uuid::new_v4().to_string(), InitializeKind::Fresh),
+    }
+}
+
+/// How a client arrived at `initialize`. Logged so a claim about the MCP
+/// connection dropping is checkable against the record instead of taken on trust:
+/// previously only the peer-binding takeover was logged, and only when a prior
+/// binding happened to exist, so an ordinary reconnect left no trace at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InitializeKind {
+    /// First contact: no session id presented.
+    Fresh,
+    /// Presented a session id we still hold — the same connection continuing.
+    Resumed,
+    /// Presented a session id we no longer hold. A new one was minted.
+    Reconnected { presented: String },
+}
+
+impl InitializeKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            InitializeKind::Fresh => "fresh",
+            InitializeKind::Resumed => "resumed",
+            InitializeKind::Reconnected { .. } => "reconnected",
+        }
+    }
 }
 
 /// Build server instructions for the MCP initialize response.
@@ -5014,7 +5051,7 @@ pub(super) async fn mcp_post(
 
     match method {
         "initialize" => {
-            let session_id = initialize_session_id(&state, &headers);
+            let (session_id, init_kind) = initialize_session_id(&state, &headers);
             let client_name = body["params"]["clientInfo"]["name"].as_str();
             let is_claude_code = detect_claude_code_client(client_name);
             let requires_meta_tools = client_requires_meta_tools(client_name);
@@ -5065,6 +5102,22 @@ pub(super) async fn mcp_post(
                 .get(TUIC_SESSION_HEADER)
                 .and_then(|v| v.to_str().ok());
             apply_initialize_identity(&state, &session_id, tuic_session_header);
+
+            // One record per handshake. `initialize` happens once per client
+            // connection, so this is not a hot path, and it is the only evidence
+            // that an agent's MCP connection actually dropped and came back.
+            tracing::info!(
+                source = "mcp_initialize",
+                event = init_kind.as_str(),
+                client = client_name.unwrap_or("unknown"),
+                mcp_session = %session_id,
+                tuic_session = tuic_session_header.unwrap_or(""),
+                presented_session = match &init_kind {
+                    InitializeKind::Reconnected { presented } => presented.as_str(),
+                    _ => "",
+                },
+                "MCP initialize"
+            );
 
             let effective_collapse = state.config.read().collapse_tools || requires_meta_tools;
             let instructions =
@@ -6989,6 +7042,57 @@ mod tests {
                 .unwrap_or(false),
             "reverse map must contain the mcp session for O(1) cleanup"
         );
+    }
+
+    /// A client that comes back holding a reaped session id used to be
+    /// indistinguishable from a first-time client: both silently received a fresh
+    /// UUID. That is precisely the moment an agent announces "TUICommander is
+    /// back", so the three arrivals must be told apart or the claim stays
+    /// unfalsifiable — the peer-binding takeover warn only fires when a prior
+    /// binding happened to exist, which a reaped session no longer has.
+    #[test]
+    fn initialize_tells_a_reconnect_apart_from_a_first_contact() {
+        let state = test_state();
+        let live = "11111111-1111-4111-8111-111111111111";
+        state.mcp_sessions.insert(
+            live.to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: false,
+                requires_meta_tools: false,
+                has_sse_stream: false,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+
+        let with_session = |sid: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(sid) = sid {
+                headers.insert(MCP_SESSION_HEADER, sid.parse().unwrap());
+            }
+            initialize_session_id(&state, &headers)
+        };
+
+        let (id, kind) = with_session(None);
+        assert_eq!(kind, InitializeKind::Fresh);
+        assert!(is_valid_uuid(&id), "a first contact still gets an id");
+
+        let (id, kind) = with_session(Some(live));
+        assert_eq!(kind, InitializeKind::Resumed, "same connection continuing");
+        assert_eq!(id, live, "a live session id must be kept, not re-minted");
+
+        let reaped = "22222222-2222-4222-8222-222222222222";
+        let (id, kind) = with_session(Some(reaped));
+        assert_eq!(
+            kind,
+            InitializeKind::Reconnected {
+                presented: reaped.to_string()
+            },
+            "a session id we no longer hold is a reconnect, and the log must name it"
+        );
+        assert_ne!(id, reaped, "the stale id is replaced");
+        assert_eq!(kind.as_str(), "reconnected");
     }
 
     #[test]

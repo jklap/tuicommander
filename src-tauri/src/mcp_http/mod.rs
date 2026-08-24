@@ -1562,6 +1562,37 @@ pub(crate) fn restart_after_server_settings_change(state: &Arc<AppState>, reason
 ///
 /// Both listeners share a single shutdown signal so `save_config` can restart
 /// the server cleanly.
+/// Drop the peer identities that a reaped MCP protocol session was carrying,
+/// and report `(removed, retained)`.
+///
+/// Split out of the reaper loop so the eviction rule can be tested without a
+/// one-hour timer. The rule itself is
+/// [`AppState::peer_identity_is_reapable`](crate::state::AppState::peer_identity_is_reapable):
+/// the transport is gone, but an identity someone can still reach — or still
+/// name as a parent — must outlive it.
+fn evict_peers_for_reaped_mcp_session(
+    state: &AppState,
+    mcp_sid: &str,
+) -> (Vec<String>, Vec<String>) {
+    let (removed, retained): (Vec<String>, Vec<String>) = state
+        .peer_agents
+        .iter()
+        .filter(|entry| entry.value().mcp_session_id == *mcp_sid)
+        .map(|entry| entry.key().clone())
+        .partition(|tuic| state.peer_identity_is_reapable(tuic));
+    for tuic in &removed {
+        state.peer_agents.remove(tuic);
+        state.orchestrator_peers.remove(tuic);
+        state.active_agent_waiters.remove(tuic);
+        let _ = state
+            .event_bus
+            .send(crate::state::AppEvent::PeerUnregistered {
+                tuic_session: tuic.clone(),
+            });
+    }
+    (removed, retained)
+}
+
 /// Start IPC + TCP listeners. Returns `true` if TCP bound successfully (or
 /// wasn't requested). Returns `false` only when `remote_enabled` is true and
 /// TCP bind failed on all port attempts.
@@ -1616,23 +1647,17 @@ pub async fn start_server(
                 for sid in &reaped {
                     tracing::warn!("MCP session reaped (idle ≥1h): {sid}");
                     reaper_state.mcp_sessions.remove(sid);
-                    // Clean up peer agents whose MCP session was reaped — emit events
-                    let removed: Vec<String> = reaper_state
-                        .peer_agents
-                        .iter()
-                        .filter(|e| e.value().mcp_session_id == *sid)
-                        .map(|e| e.key().clone())
-                        .collect();
-                    for tuic in &removed {
-                        reaper_state.peer_agents.remove(tuic);
-                        reaper_state.orchestrator_peers.remove(tuic);
-                        reaper_state.active_agent_waiters.remove(tuic);
-                        let _ =
-                            reaper_state
-                                .event_bus
-                                .send(crate::state::AppEvent::PeerUnregistered {
-                                    tuic_session: tuic.clone(),
-                                });
+                    // Clean up peer agents whose MCP session was reaped. An
+                    // identity that is still addressable outlives the transport
+                    // that carried it.
+                    let (_removed, retained) =
+                        evict_peers_for_reaped_mcp_session(&reaper_state, sid);
+                    if !retained.is_empty() {
+                        tracing::info!(
+                            "MCP session {sid} reaped, {} peer identity/identities kept addressable: {}",
+                            retained.len(),
+                            retained.join(", ")
+                        );
                     }
                 }
                 // Evict orphaned inboxes for peers that no longer exist
@@ -5575,5 +5600,82 @@ mod tests {
         assert_eq!(json["ok"], true);
 
         server.abort();
+    }
+
+    fn register_reaper_peer(state: &AppState, tuic: &str, mcp_sid: &str) {
+        state.peer_agents.insert(
+            tuic.to_string(),
+            crate::state::PeerAgent {
+                tuic_session: tuic.to_string(),
+                mcp_session_id: mcp_sid.to_string(),
+                name: "peer".to_string(),
+                project: None,
+                registered_at: 0,
+            },
+        );
+    }
+
+    /// An agent thinking for over an hour makes no MCP request, so its protocol
+    /// session is reaped while its PTY is still running. Deleting the identity
+    /// there is what made a child's `agent action=send` report the parent as no
+    /// longer registered — observed live on 2026-08-24.
+    #[cfg(unix)]
+    #[test]
+    fn reaped_mcp_session_keeps_an_identity_that_still_owns_a_pty() {
+        let state = crate::state::tests_support::make_test_app_state();
+        crate::state::tests_support::insert_dummy_session(&state, "pty-owner");
+        register_reaper_peer(&state, "pty-owner", "mcp-1");
+
+        let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-1");
+        assert!(removed.is_empty(), "a live PTY is still addressable");
+        assert_eq!(retained, vec!["pty-owner".to_string()]);
+        assert!(state.peer_agents.contains_key("pty-owner"));
+    }
+
+    /// The unrecoverable case. A headerless orchestrator owns no PTY, so nothing
+    /// re-creates its UUID: re-registering mints a fresh one and no child is told.
+    /// Dropping it strands every handoff aimed at it, permanently.
+    #[test]
+    fn reaped_mcp_session_keeps_an_identity_a_live_child_calls_parent() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_reaper_peer(&state, "orchestrator", "mcp-2");
+        state
+            .session_parent
+            .insert("child-session".to_string(), "orchestrator".to_string());
+
+        let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-2");
+        assert!(removed.is_empty(), "a named parent is still addressable");
+        assert_eq!(retained, vec!["orchestrator".to_string()]);
+    }
+
+    /// The retention is bounded: with no terminal and no child naming it, the
+    /// identity is genuinely unreachable and the reaper must still free it.
+    #[test]
+    fn reaped_mcp_session_drops_an_unreachable_identity() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_reaper_peer(&state, "ghost", "mcp-3");
+        state.orchestrator_peers.insert("ghost".to_string());
+        // A different session's parent must not keep this one alive.
+        state
+            .session_parent
+            .insert("child-session".to_string(), "somebody-else".to_string());
+
+        let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-3");
+        assert_eq!(removed, vec!["ghost".to_string()]);
+        assert!(retained.is_empty());
+        assert!(!state.peer_agents.contains_key("ghost"));
+        assert!(!state.orchestrator_peers.contains("ghost"));
+    }
+
+    /// Only the reaped session's peers are considered.
+    #[test]
+    fn reaping_one_mcp_session_leaves_another_session_peers_alone() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_reaper_peer(&state, "ghost", "mcp-4");
+        register_reaper_peer(&state, "bystander", "mcp-5");
+
+        let (removed, _) = evict_peers_for_reaped_mcp_session(&state, "mcp-4");
+        assert_eq!(removed, vec!["ghost".to_string()]);
+        assert!(state.peer_agents.contains_key("bystander"));
     }
 }

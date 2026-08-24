@@ -29,7 +29,7 @@ On startup, the server:
 2. If remote access is enabled, binds a TCP listener on the configured port
 3. Starts Axum HTTP server on a background tokio thread
 4. Enables CORS for browser mode
-5. Spawns MCP session reaper (evicts stale sessions after 1h TTL)
+5. Spawns MCP session reaper (evicts stale sessions after 1h TTL; see [Identity outlives its transport](#identity-outlives-its-transport))
 6. Spawns upstream health checker for proxied MCP servers
 
 ## Unix Socket Lifecycle (macOS/Linux)
@@ -176,6 +176,22 @@ session refreshed — a stale id (app restart, or a long-lived client like Claud
 that lost its session) auto-recovers instead of erroring. A caller that sends none is
 served anyway: most tools need no caller identity at all, so a plain `curl` against
 `POST /mcp` now works.
+
+**Every `initialize` is logged.** `source = "mcp_initialize"`, one record per
+handshake, with `event` naming how the client arrived:
+
+| `event` | Meaning |
+|---|---|
+| `fresh` | No session id presented — first contact |
+| `resumed` | Presented an id we still hold — the same connection continuing |
+| `reconnected` | Presented an id we no longer hold (reaped by the idle sweep, or lost with a restart). The stale id is in `presented_session`; a new one was minted |
+
+`reconnected` is the record behind an agent announcing "TUICommander is back".
+Before it existed, that arrival was indistinguishable from `fresh`: both silently
+received a new UUID, and the only nearby log — `Reclaimed stale MCP peer binding
+during initialize` — fires only when a prior peer binding still exists, which a
+reaped session no longer has. Claims about the connection dropping were therefore
+confirmable but never refutable.
 
 The identity-scoped actions (`agent action=register|send|inbox|wait`) still refuse
 without a protocol session — but each refuses on its own, with the concrete next step
@@ -906,7 +922,31 @@ This requires the client to be launched with `--dangerously-load-development-cha
 
 - Max message size: 64 KB
 - Inbox capacity: 100 messages per agent (FIFO eviction)
-- Peer registrations cleaned up on MCP session delete and TTL reap
+- Peer registrations cleaned up on MCP session delete and TTL reap, except where
+  the identity is still addressable — see below
+
+### Identity outlives its transport
+
+The 1h TTL reaper evicts an MCP protocol session nobody has used for an hour. A
+peer identity is a different thing: it is the address other agents `send` to,
+and `refresh_mcp_session` re-asserts it on the owner's next request. The reaper
+used to delete both together, which broke agents that were still running:
+`last_activity` only moves on an MCP request, so an agent that spends more than
+an hour on one turn without calling a TUIC tool had its address deleted while it
+was mid-turn. Its children's handoffs then failed with `Recipient '<uuid>' is not
+registered`, and for a headerless caller that failure is permanent — re-register
+mints a fresh UUID and nothing tells the child what it is.
+
+The reaper therefore keeps an identity that is still addressable:
+
+- it owns a live PTY (`live_pty_for_peer`), or
+- a live session still records it as its parent (`session_parent`).
+
+Both are bounded by live sessions, so retention cannot grow without bound; an
+identity with neither is genuinely unreachable and is still evicted. The
+retained ids are logged at `info` on each reap. The rule is
+`AppState::peer_identity_is_reapable`, applied by
+`evict_peers_for_reaped_mcp_session`.
 
 ## Authentication
 
