@@ -344,12 +344,7 @@ export function generateTweakCommentId(): string {
  * checkboxes in tables, where a single row can carry several. Without it the
  * leading list-item checkbox is rewritten, which is the only one a list line has.
  */
-export function toggleCheckbox(
-	source: string,
-	sourceLine: number,
-	mark: " " | "x" | "~",
-	sourceCol?: number,
-): string {
+export function toggleCheckbox(source: string, sourceLine: number, mark: " " | "x" | "~", sourceCol?: number): string {
 	const lines = source.split("\n");
 	if (sourceLine < 0 || sourceLine >= lines.length) return source;
 	const line = lines[sourceLine];

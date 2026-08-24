@@ -185,10 +185,15 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 		menu.openAt(pageX, pageY);
 	};
 
-	/** Resolve a path (absolute or relative) to repo + relPath */
+	/** Resolve a path (absolute or relative) to repo + relPath.
+	 *
+	 *  A relative path is resolved against THIS panel's repo when it has one;
+	 *  only an unscoped panel falls back to the active repo. Resolving against
+	 *  focus alone sent a scoped panel's own links into a foreign repo. */
 	const resolvePathForSdk = (path: string) => {
 		const repos = Object.keys(repositoriesStore.state.repositories);
-		return resolveTuicPath(path, repos, repositoriesStore.state.activeRepoPath);
+		const base = props.tab.repoPath ?? repositoriesStore.state.activeRepoPath;
+		return resolveTuicPath(path, repos, base);
 	};
 
 	/**

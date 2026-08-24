@@ -25,9 +25,8 @@ import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { mdTabsStore, type PluginPanelTab } from "../../stores/mdTabs";
 import { paneLayoutStore } from "../../stores/paneLayout";
-import { repositoriesStore } from "../../stores/repositories";
+import { currentBranchKey, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
-import { makeBranchKey } from "../../stores/tabManager";
 import { tabOrderingStore } from "../../stores/tabOrdering";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
@@ -423,14 +422,10 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		return ordered;
 	};
 
-	// Branch key for filtering non-terminal tabs
-	const activeBranchKey = () => {
-		const repoPath = repositoriesStore.state.activeRepoPath;
-		if (!repoPath) return null;
-		const repo = repositoriesStore.state.repositories[repoPath];
-		if (!repo?.activeBranch) return null;
-		return makeBranchKey(repoPath, repo.activeBranch);
-	};
+	// Branch key for filtering non-terminal tabs. A legitimate use of focus: this
+	// asks "what should be on screen for the repo the user is looking at", not
+	// "which repo owns this tab".
+	const activeBranchKey = () => currentBranchKey() ?? null;
 
 	const visibleDiffIds = () => diffTabsStore.getVisibleIds(activeBranchKey());
 	const visibleMdIds = () => mdTabsStore.getVisibleIds(activeBranchKey());

@@ -48,6 +48,20 @@ export interface TerminalData {
 	name: string;
 	nameIsCustom: boolean; // When true, OSC/status-line title changes are ignored
 	cwd: string | null;
+	/**
+	 * The registered repo that owns this terminal, resolved from `cwd`.
+	 *
+	 * The sidebar renders a terminal by its membership in
+	 * `repos[X].branches[Y].terminals[]`, which made that array the ONLY record of
+	 * a terminal's repo — so a wrong placement was unrecoverable and a dangling id
+	 * could never be reconciled. This field is the record; the arrays are a display
+	 * index derived from it.
+	 *
+	 * `null` means no registered repo owns the cwd. Such a terminal is parked in
+	 * the active repo so it stays visible, and `reconcileTerminalOwnership` moves it
+	 * home as soon as a repo claims the path.
+	 */
+	repoPath: string | null;
 	awaitingInput: AwaitingInputType;
 	awaitingInputConfident: boolean; // High-confidence detection — don't clear on idle→busy
 	activity: boolean;
@@ -125,7 +139,9 @@ type TerminalCreateData = Omit<
 	| "userPromptLines"
 	| "alias"
 	| "standby"
+	| "repoPath"
 > & {
+	repoPath?: string | null;
 	tuicSession?: string | null;
 	isRemote?: boolean;
 	nameIsCustom?: boolean;
@@ -413,6 +429,7 @@ function createTerminalsStore() {
 				userPromptLines: [],
 				alias: null,
 				standby: false,
+				repoPath: null,
 				...data,
 			});
 			if (data.sessionId) sessionToTerminal.set(data.sessionId, id);
@@ -458,6 +475,7 @@ function createTerminalsStore() {
 				userPromptLines: [],
 				alias: null,
 				standby: false,
+				repoPath: null,
 				...data,
 			});
 			if (data.sessionId) sessionToTerminal.set(data.sessionId, id);
@@ -601,6 +619,13 @@ function createTerminalsStore() {
 			if (prev) sessionToTerminal.delete(prev);
 			if (sessionId) sessionToTerminal.set(sessionId, id);
 			setState("terminals", id, "sessionId", sessionId);
+		},
+
+		/** Record the repo that owns this terminal (null = no registered repo does).
+		 *  Set from the resolver at assignment time; never from the focused repo. */
+		setRepoPath(id: string, repoPath: string | null): void {
+			if (!has(id)) return;
+			setState("terminals", id, "repoPath", repoPath);
 		},
 
 		/** Update last relevant user prompt */

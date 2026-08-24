@@ -1,5 +1,5 @@
-import { pathBasename, pathStartsWith } from "../utils/pathUtils";
-import { currentBranchKey, repositoriesStore } from "./repositories";
+import { pathBasename } from "../utils/pathUtils";
+import { branchKeyFor, resolveRepoPathFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
 
 // Zoom bounds mirror the terminal zoom (useTerminalLifecycle) for consistency.
@@ -111,22 +111,45 @@ export type MdTabData =
 	| CommandOverviewTab;
 
 /**
- * Resolve a caller-supplied path (repo root or PTY cwd) to a registered repo
- * path. Exact match first, then longest-prefix match so that nested cwds
- * (e.g. `/repo/src/foo`) still map back to the repo root (`/repo`).
- * Returns null when no registered repo owns the path.
+ * Resolve a caller-supplied path (repo root or PTY cwd) to a registered repo path.
+ *
+ * Kept as a named forwarder because callers here only ever want the repo, not the
+ * worktree branch. The matching itself lives in `utils/repoOwnership` — this used
+ * to be its own longest-prefix loop that ignored worktrees, so a session inside a
+ * linked worktree resolved to the wrong repo or to nothing at all.
+ *
+ * A function, not a `const` alias: an alias reads the repositories module the
+ * instant this one is imported, so any test that stubs that module — even a test
+ * that never touches a markdown tab — fails to load. Forwarding at call time
+ * means only the callers that actually resolve a path need it.
  */
-export function resolveRepoForCwd(cwd: string | null | undefined): string | null {
-	if (!cwd) return null;
-	const repos = Object.keys(repositoriesStore.state.repositories);
-	if (repos.includes(cwd)) return cwd;
-	let best: string | null = null;
-	for (const repo of repos) {
-		if (pathStartsWith(cwd, repo) && (best === null || repo.length > best.length)) {
-			best = repo;
-		}
-	}
-	return best;
+export function resolveRepoForCwd(path: string | null | undefined): string | null {
+	return resolveRepoPathFor(path);
+}
+
+/**
+ * Find an open file tab for the same file IN THE SAME REPO.
+ *
+ * `repoPath` is part of the identity on purpose. The old key was `fsRoot +
+ * filePath`, and `fsRoot` collapses to `""` for every plugin-opened tab, so two
+ * repos that both contain `README.md` (or a relative `plans/foo.md`) collided into
+ * a single tab. Whichever repo asked second got handed the FIRST repo's tab, with
+ * the first repo's content still in it.
+ */
+function findFileTab(
+	tabs: Record<string, MdTabData>,
+	repoPath: string,
+	filePath: string,
+	fsRoot?: string,
+): FileTab | undefined {
+	const effectiveRoot = fsRoot || repoPath;
+	return Object.values(tabs).find(
+		(tab): tab is FileTab =>
+			tab.type === "file" &&
+			tab.repoPath === repoPath &&
+			(tab as FileTab).fsRoot === effectiveRoot &&
+			tab.filePath === filePath,
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -189,18 +212,12 @@ function createMdTabsStore() {
 		/** Add a file-based markdown tab (or return existing if same file already open).
 		 *  `fsRoot` overrides the filesystem root for I/O (e.g. worktree path). */
 		add(repoPath: string, filePath: string, fsRoot?: string): string {
-			const effectiveRoot = fsRoot || repoPath;
-			const existing = Object.values(base.state.tabs).find(
-				(tab) => tab.type === "file" && (tab as FileTab).fsRoot === effectiveRoot && tab.filePath === filePath,
-			) as FileTab | undefined;
+			const existing = findFileTab(base.state.tabs, repoPath, filePath, fsRoot);
 			if (existing) {
-				const key = currentBranchKey();
-				if (existing.repoPath !== repoPath || existing.branchKey !== key) {
-					base._setState("tabs", existing.id, "repoPath" as keyof MdTabData, repoPath as MdTabData[keyof MdTabData]);
-					base._setState("tabs", existing.id, "branchKey" as keyof MdTabData, key as MdTabData[keyof MdTabData]);
-				}
+				// Deliberately does NOT re-stamp repoPath/branchKey. It used to, which
+				// meant reopening a file MOVED its tab into whichever repo had focus —
+				// the tab, and the content in it, migrated away from its own repo.
 				base.setActive(existing.id);
-
 				return existing.id;
 			}
 
@@ -212,8 +229,8 @@ function createMdTabsStore() {
 				repoPath,
 				filePath,
 				fileName,
-				branchKey: currentBranchKey(),
-				fsRoot: effectiveRoot,
+				branchKey: branchKeyFor(repoPath),
+				fsRoot: fsRoot || repoPath,
 			};
 			const tabId = base._addTab(tab);
 
@@ -223,11 +240,7 @@ function createMdTabsStore() {
 		/** Add a file-based markdown tab in the background (does not change activeId).
 		 *  Returns tab ID, or null if a tab for the same file is already open. */
 		addFileBackground(repoPath: string, filePath: string, fsRoot?: string): string | null {
-			const effectiveRoot = fsRoot || repoPath;
-			const existing = Object.values(base.state.tabs).find(
-				(tab) => tab.type === "file" && (tab as FileTab).fsRoot === effectiveRoot && tab.filePath === filePath,
-			) as FileTab | undefined;
-			if (existing) return null;
+			if (findFileTab(base.state.tabs, repoPath, filePath, fsRoot)) return null;
 
 			const id = base._nextId("md");
 			const fileName = pathBasename(filePath) || filePath;
@@ -237,8 +250,8 @@ function createMdTabsStore() {
 				repoPath,
 				filePath,
 				fileName,
-				branchKey: currentBranchKey(),
-				fsRoot: effectiveRoot,
+				branchKey: branchKeyFor(repoPath),
+				fsRoot: fsRoot || repoPath,
 				pinned: true,
 			};
 			base._addTabBackground(tab);
@@ -474,16 +487,18 @@ function createMdTabsStore() {
 		/** Add an HTML preview tab (or return existing if same file already open) */
 		addHtmlPreview(repoPath: string, filePath: string, fsRoot?: string): string {
 			const effectiveRoot = fsRoot || repoPath;
+			// Same identity rule as findFileTab: the repo is part of what makes this
+			// preview "the same preview". Without it a preview opened from one repo is
+			// handed back to another, which is how a preview full of one project's
+			// output turned up in a project that had nothing to do with it.
 			const existing = Object.values(base.state.tabs).find(
 				(tab) =>
-					tab.type === "html-preview" && (tab as HtmlPreviewTab).fsRoot === effectiveRoot && tab.filePath === filePath,
+					tab.type === "html-preview" &&
+					tab.repoPath === repoPath &&
+					(tab as HtmlPreviewTab).fsRoot === effectiveRoot &&
+					tab.filePath === filePath,
 			) as HtmlPreviewTab | undefined;
 			if (existing) {
-				const key = currentBranchKey();
-				if (existing.repoPath !== repoPath || existing.branchKey !== key) {
-					base._setState("tabs", existing.id, "repoPath" as keyof MdTabData, repoPath as MdTabData[keyof MdTabData]);
-					base._setState("tabs", existing.id, "branchKey" as keyof MdTabData, key as MdTabData[keyof MdTabData]);
-				}
 				base.setActive(existing.id);
 				return existing.id;
 			}
@@ -497,7 +512,7 @@ function createMdTabsStore() {
 				repoPath,
 				filePath,
 				fileName,
-				branchKey: currentBranchKey(),
+				branchKey: branchKeyFor(repoPath),
 				fsRoot: effectiveRoot,
 			};
 			return base._addTab(tab);
