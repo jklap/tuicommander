@@ -125,4 +125,3 @@ pub async fn set_global_hotkey(
 
     Ok(())
 }
-
