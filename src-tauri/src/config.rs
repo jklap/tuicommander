@@ -2403,6 +2403,343 @@ fn resolve_setup_script_from(
 
 // Repositories (opaque JSON — schema owned by frontend)
 
+const REPOSITORY_MUTATION_VERSION: u8 = 1;
+
+/// One optimistic mutation of an ID-keyed JSON record. `None` means the record
+/// did not exist (`before`) or must be removed (`after`). The expectation is
+/// checked while holding the cross-process file lock, so a stale client can
+/// never overwrite a concurrent edit to the same repository/group silently.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct KeyedRepositoryMutation {
+    id: String,
+    before: Option<serde_json::Value>,
+    after: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RepositoryFieldMutation {
+    before: serde_json::Value,
+    after: serde_json::Value,
+}
+
+/// Delta protocol carried inside the existing `save_repositories(config)`
+/// argument and `PUT /config/repositories` body. Keeping the existing command
+/// and route means desktop IPC and browser HTTP use the exact same contract.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RepositoryMutationBatch {
+    mutation_version: u8,
+    #[serde(default)]
+    repos: Vec<KeyedRepositoryMutation>,
+    #[serde(default)]
+    groups: Vec<KeyedRepositoryMutation>,
+    #[serde(default)]
+    repo_order: Option<RepositoryFieldMutation>,
+    #[serde(default)]
+    active_repo_path: Option<RepositoryFieldMutation>,
+    #[serde(default)]
+    group_order: Option<RepositoryFieldMutation>,
+}
+
+#[derive(Debug)]
+pub(crate) enum RepositorySaveError {
+    Conflict(String),
+    Invalid(String),
+    Io(String),
+}
+
+impl std::fmt::Display for RepositorySaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Conflict(message) => write!(f, "repository configuration conflict: {message}"),
+            Self::Invalid(message) => write!(f, "invalid repository mutation: {message}"),
+            Self::Io(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+fn json_option_eq(
+    current: Option<&serde_json::Value>,
+    expected: &Option<serde_json::Value>,
+) -> bool {
+    match (current, expected) {
+        (None, None) => true,
+        (Some(current), Some(expected)) => current == expected,
+        _ => false,
+    }
+}
+
+fn validate_keyed_value(
+    collection: &str,
+    id: &str,
+    value: &Option<serde_json::Value>,
+) -> Result<(), RepositorySaveError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let object = value.as_object().ok_or_else(|| {
+        RepositorySaveError::Invalid(format!("{collection} record '{id}' must be an object"))
+    })?;
+    let identity_field = if collection == "repos" { "path" } else { "id" };
+    if let Some(identity) = object.get(identity_field).and_then(|value| value.as_str())
+        && identity != id
+    {
+        return Err(RepositorySaveError::Invalid(format!(
+            "{collection} record '{id}' carries mismatched {identity_field} '{identity}'"
+        )));
+    }
+    Ok(())
+}
+
+fn apply_keyed_repository_mutations(
+    document: &mut serde_json::Map<String, serde_json::Value>,
+    collection: &str,
+    mutations: &[KeyedRepositoryMutation],
+) -> Result<bool, RepositorySaveError> {
+    if mutations.is_empty() {
+        return Ok(false);
+    }
+
+    let records = document
+        .entry(collection.to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| RepositorySaveError::Invalid(format!("'{collection}' must be an object")))?;
+    let mut seen = std::collections::HashSet::new();
+    let mut changed = false;
+
+    for mutation in mutations {
+        if mutation.id.is_empty() {
+            return Err(RepositorySaveError::Invalid(format!(
+                "{collection} record id must not be empty"
+            )));
+        }
+        if !seen.insert(mutation.id.as_str()) {
+            return Err(RepositorySaveError::Invalid(format!(
+                "duplicate {collection} mutation for '{}'",
+                mutation.id
+            )));
+        }
+        validate_keyed_value(collection, &mutation.id, &mutation.before)?;
+        validate_keyed_value(collection, &mutation.id, &mutation.after)?;
+
+        let current = records.get(&mutation.id);
+        if json_option_eq(current, &mutation.after) {
+            continue;
+        }
+        if !json_option_eq(current, &mutation.before) {
+            let kind = if collection == "repos" {
+                "repository"
+            } else {
+                "group"
+            };
+            return Err(RepositorySaveError::Conflict(format!(
+                "{kind} '{}' changed in another window; reload before retrying",
+                mutation.id
+            )));
+        }
+
+        match &mutation.after {
+            Some(after) => {
+                records.insert(mutation.id.clone(), after.clone());
+            }
+            None => {
+                records.remove(&mutation.id);
+            }
+        }
+        changed = true;
+    }
+
+    Ok(changed)
+}
+
+fn string_order(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<Vec<String>, RepositorySaveError> {
+    serde_json::from_value(value.clone()).map_err(|_| {
+        RepositorySaveError::Invalid(format!(
+            "'{field}' before/after values must be string arrays"
+        ))
+    })
+}
+
+fn filtered_order(order: &[String], keep: &std::collections::HashSet<&str>) -> Vec<String> {
+    order
+        .iter()
+        .filter(|id| keep.contains(id.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn reordered_relative_to(base: &[String], other: &[String]) -> bool {
+    let other_ids: std::collections::HashSet<&str> = other.iter().map(String::as_str).collect();
+    let base_ids: std::collections::HashSet<&str> = base.iter().map(String::as_str).collect();
+    filtered_order(base, &other_ids) != filtered_order(other, &base_ids)
+}
+
+/// Apply only membership changes from `before -> after` to an independently
+/// ordered list. New IDs are inserted beside the nearest surviving neighbour
+/// from `after`; if there is no common anchor they append deterministically.
+fn apply_order_membership_delta(result: &mut Vec<String>, before: &[String], after: &[String]) {
+    result.retain(|id| !before.contains(id) || after.contains(id));
+
+    for (index, id) in after.iter().enumerate() {
+        if before.contains(id) || result.contains(id) {
+            continue;
+        }
+
+        let previous = after[..index]
+            .iter()
+            .rev()
+            .find_map(|candidate| result.iter().position(|existing| existing == candidate));
+        if let Some(previous) = previous {
+            result.insert(previous + 1, id.clone());
+            continue;
+        }
+
+        let next = after[index + 1..]
+            .iter()
+            .find_map(|candidate| result.iter().position(|existing| existing == candidate));
+        if let Some(next) = next {
+            result.insert(next, id.clone());
+        } else {
+            result.push(id.clone());
+        }
+    }
+}
+
+/// Three-way merge for `repoOrder`/`groupOrder`. Independent additions and
+/// removals compose. Two clients that reorder the same pre-existing IDs must
+/// agree on their relative order; otherwise the caller receives a conflict.
+fn merge_repository_order(
+    field: &str,
+    before: &[String],
+    after: &[String],
+    current: &[String],
+) -> Result<Vec<String>, RepositorySaveError> {
+    if current == before || current == after {
+        return Ok(if current == before {
+            after.to_vec()
+        } else {
+            current.to_vec()
+        });
+    }
+
+    let client_reordered = reordered_relative_to(before, after);
+    let concurrent_reordered = reordered_relative_to(before, current);
+    if client_reordered && concurrent_reordered {
+        let common: std::collections::HashSet<&str> = before
+            .iter()
+            .filter(|id| after.contains(id) && current.contains(id))
+            .map(String::as_str)
+            .collect();
+        if filtered_order(after, &common) != filtered_order(current, &common) {
+            return Err(RepositorySaveError::Conflict(format!(
+                "{field} was reordered differently in another window; reload before retrying"
+            )));
+        }
+    }
+
+    let mut merged = if client_reordered && !concurrent_reordered {
+        let mut desired = after.to_vec();
+        apply_order_membership_delta(&mut desired, before, current);
+        desired
+    } else {
+        let mut latest = current.to_vec();
+        apply_order_membership_delta(&mut latest, before, after);
+        latest
+    };
+    // Old files may already contain duplicate order entries. Do not propagate
+    // them into a newly merged result, but preserve first-occurrence order.
+    let mut seen = std::collections::HashSet::new();
+    merged.retain(|id| seen.insert(id.clone()));
+    Ok(merged)
+}
+
+fn apply_order_mutation(
+    document: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    mutation: &Option<RepositoryFieldMutation>,
+) -> Result<bool, RepositorySaveError> {
+    let Some(mutation) = mutation else {
+        return Ok(false);
+    };
+    let before = string_order(&mutation.before, field)?;
+    let after = string_order(&mutation.after, field)?;
+    let current = document
+        .get(field)
+        .map(|value| string_order(value, field))
+        .transpose()?
+        .unwrap_or_default();
+    let merged = merge_repository_order(field, &before, &after, &current)?;
+    if merged == current {
+        return Ok(false);
+    }
+    document.insert(field.to_string(), serde_json::json!(merged));
+    Ok(true)
+}
+
+fn valid_active_repo_path(value: &serde_json::Value) -> bool {
+    value.is_null() || value.as_str().is_some()
+}
+
+fn apply_active_repository_mutation(
+    document: &mut serde_json::Map<String, serde_json::Value>,
+    mutation: &Option<RepositoryFieldMutation>,
+) -> Result<bool, RepositorySaveError> {
+    let Some(mutation) = mutation else {
+        return Ok(false);
+    };
+    if !valid_active_repo_path(&mutation.before) || !valid_active_repo_path(&mutation.after) {
+        return Err(RepositorySaveError::Invalid(
+            "'activeRepoPath' before/after values must be a string or null".to_string(),
+        ));
+    }
+    let current = document
+        .get("activeRepoPath")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    if current == mutation.after {
+        return Ok(false);
+    }
+    if current != mutation.before {
+        return Err(RepositorySaveError::Conflict(
+            "active repository changed in another window; reload before retrying".to_string(),
+        ));
+    }
+    document.insert("activeRepoPath".to_string(), mutation.after.clone());
+    Ok(true)
+}
+
+fn apply_repository_mutation_batch(
+    value: &mut serde_json::Value,
+    batch: &RepositoryMutationBatch,
+) -> Result<bool, RepositorySaveError> {
+    if batch.mutation_version != REPOSITORY_MUTATION_VERSION {
+        return Err(RepositorySaveError::Invalid(format!(
+            "unsupported mutationVersion {}",
+            batch.mutation_version
+        )));
+    }
+    if value.is_null() {
+        *value = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let document = value.as_object_mut().ok_or_else(|| {
+        RepositorySaveError::Invalid("repositories.json root must be an object".to_string())
+    })?;
+
+    let mut changed = false;
+    changed |= apply_keyed_repository_mutations(document, "repos", &batch.repos)?;
+    changed |= apply_keyed_repository_mutations(document, "groups", &batch.groups)?;
+    changed |= apply_order_mutation(document, "repoOrder", &batch.repo_order)?;
+    changed |= apply_active_repository_mutation(document, &batch.active_repo_path)?;
+    changed |= apply_order_mutation(document, "groupOrder", &batch.group_order)?;
+    Ok(changed)
+}
+
 fn repository_file() -> PathBuf {
     config_dir().join(REPOSITORIES_FILE)
 }
@@ -2412,11 +2749,39 @@ pub(crate) fn load_repositories() -> serde_json::Value {
     load_json_config_from_path(&repository_file())
 }
 
+pub(crate) fn save_repositories_request(
+    config: serde_json::Value,
+) -> Result<(), RepositorySaveError> {
+    let batch: RepositoryMutationBatch = serde_json::from_value(config).map_err(|error| {
+        RepositorySaveError::Invalid(format!("could not decode delta: {error}"))
+    })?;
+    let file: ConfigFile<serde_json::Value> = ConfigFile::at_path(repository_file());
+    let mut mutation_error = None;
+    let result =
+        file.update_with_strict(
+            |value| match apply_repository_mutation_batch(value, &batch) {
+                Ok(changed) => Ok(((), changed)),
+                Err(error) => {
+                    mutation_error = Some(error);
+                    Err("repository mutation rejected".to_string())
+                }
+            },
+        );
+    match (result, mutation_error) {
+        (Ok(()), _) => Ok(()),
+        (Err(_), Some(error)) => Err(error),
+        (Err(error), None) => Err(RepositorySaveError::Io(error)),
+    }
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repositories(config: serde_json::Value) -> Result<(), String> {
-    let file: ConfigFile<serde_json::Value> = ConfigFile::at_path(repository_file());
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    save_repositories_request(config).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+pub(crate) fn replace_repositories_for_test(config: serde_json::Value) -> Result<(), String> {
+    ConfigFile::<serde_json::Value>::at_path(repository_file()).save(&config)
 }
 
 // Pane layout (schema owned by frontend)
@@ -4707,6 +5072,221 @@ mod tests {
         );
     }
 
+    #[test]
+    #[serial_test::serial]
+    fn repository_delta_updates_one_id_without_losing_layout_or_other_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let repo_a = serde_json::json!({"path":"/a","displayName":"A","branches":{}});
+        let repo_b = serde_json::json!({"path":"/b","displayName":"B","branches":{}});
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/a": repo_a.clone(), "/b": repo_b.clone()},
+            "repoOrder": ["/a", "/b"],
+            "activeRepoPath": "/b",
+            "groups": {"g": {"id":"g","name":"Work","repoOrder":["/b"]}},
+            "groupOrder": ["g"],
+            "migrationMarker": {"keep": true}
+        }))
+        .expect("seed repositories");
+
+        let repo_a_updated = serde_json::json!({
+            "path":"/a",
+            "displayName":"Renamed A",
+            "branches":{}
+        });
+        save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{"id":"/a","before":repo_a,"after":repo_a_updated.clone()}],
+            "groups": []
+        }))
+        .expect("apply repository delta");
+
+        let saved = load_repositories();
+        assert_eq!(saved["repos"]["/a"], repo_a_updated);
+        assert_eq!(saved["repos"]["/b"], repo_b);
+        assert_eq!(saved["repoOrder"], serde_json::json!(["/a", "/b"]));
+        assert_eq!(saved["activeRepoPath"], serde_json::json!("/b"));
+        assert_eq!(saved["groups"]["g"]["name"], serde_json::json!("Work"));
+        assert_eq!(saved["groupOrder"], serde_json::json!(["g"]));
+        assert_eq!(saved["migrationMarker"], serde_json::json!({"keep":true}));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn repository_delta_rejects_a_stale_same_record_update_without_overwriting_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let original = serde_json::json!({"path":"/repo","displayName":"Original","branches":{}});
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/repo": original.clone()},
+            "repoOrder": ["/repo"]
+        }))
+        .expect("seed repositories");
+
+        let first = serde_json::json!({"path":"/repo","displayName":"First","branches":{}});
+        save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{"id":"/repo","before":original.clone(),"after":first.clone()}],
+            "groups": []
+        }))
+        .expect("first update");
+
+        let second = serde_json::json!({"path":"/repo","displayName":"Second","branches":{}});
+        let error = save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{"id":"/repo","before":original,"after":second}],
+            "groups": []
+        }))
+        .expect_err("stale update must conflict");
+
+        assert!(
+            error.contains("repository configuration conflict"),
+            "{error}"
+        );
+        assert!(error.contains("/repo"), "{error}");
+        assert_eq!(load_repositories()["repos"]["/repo"], first);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn independent_repository_additions_merge_their_order_membership() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {}, "repoOrder": [], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        for (path, name) in [("/a", "A"), ("/b", "B")] {
+            save_repositories(serde_json::json!({
+                "mutationVersion": 1,
+                "repos": [{
+                    "id": path,
+                    "before": null,
+                    "after": {"path":path,"displayName":name,"branches":{}}
+                }],
+                "groups": [],
+                "repoOrder": {"before":[],"after":[path]}
+            }))
+            .expect("independent add must compose");
+        }
+
+        let saved = load_repositories();
+        assert_eq!(saved["repos"].as_object().map(|repos| repos.len()), Some(2));
+        let order = saved["repoOrder"].as_array().expect("repoOrder array");
+        assert!(order.contains(&serde_json::json!("/a")));
+        assert!(order.contains(&serde_json::json!("/b")));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn independent_group_additions_merge_their_order_membership() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {}, "repoOrder": [], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        for (id, name) in [("a", "Alpha"), ("b", "Beta")] {
+            save_repositories(serde_json::json!({
+                "mutationVersion": 1,
+                "repos": [],
+                "groups": [{
+                    "id": id,
+                    "before": null,
+                    "after": {"id":id,"name":name,"color":"","collapsed":false,"repoOrder":[]}
+                }],
+                "groupOrder": {"before":[],"after":[id]}
+            }))
+            .expect("independent group add must compose");
+        }
+
+        let saved = load_repositories();
+        assert_eq!(
+            saved["groups"].as_object().map(|groups| groups.len()),
+            Some(2)
+        );
+        let order = saved["groupOrder"].as_array().expect("groupOrder array");
+        assert!(order.contains(&serde_json::json!("a")));
+        assert!(order.contains(&serde_json::json!("b")));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn group_order_and_active_selection_conflicts_are_explicit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let group = serde_json::json!({
+            "id":"g", "name":"Original", "color":"", "collapsed":false, "repoOrder":[]
+        });
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                "/a":{"path":"/a"},
+                "/b":{"path":"/b"},
+                "/c":{"path":"/c"}
+            },
+            "repoOrder": ["/a", "/b", "/c"],
+            "activeRepoPath": "/a",
+            "groups": {"g":group.clone()},
+            "groupOrder": ["g"]
+        }))
+        .expect("seed repositories");
+
+        let renamed = serde_json::json!({
+            "id":"g", "name":"Renamed", "color":"", "collapsed":false, "repoOrder":[]
+        });
+        save_repositories(serde_json::json!({
+            "mutationVersion":1,
+            "repos":[],
+            "groups":[{"id":"g","before":group.clone(),"after":renamed}]
+        }))
+        .expect("rename group");
+        let group_error = save_repositories(serde_json::json!({
+            "mutationVersion":1,
+            "repos":[],
+            "groups":[{
+                "id":"g",
+                "before":group,
+                "after":{"id":"g","name":"Original","color":"#fff","collapsed":false,"repoOrder":[]}
+            }]
+        }))
+        .expect_err("stale group update must conflict");
+        assert!(group_error.contains("group 'g'"), "{group_error}");
+
+        save_repositories(serde_json::json!({
+            "mutationVersion":1,
+            "repos":[],
+            "groups":[],
+            "activeRepoPath":{"before":"/a","after":"/b"}
+        }))
+        .expect("change active repository");
+        let active_error = save_repositories(serde_json::json!({
+            "mutationVersion":1,
+            "repos":[],
+            "groups":[],
+            "activeRepoPath":{"before":"/a","after":"/c"}
+        }))
+        .expect_err("stale active selection must conflict");
+        assert!(active_error.contains("active repository"), "{active_error}");
+
+        save_repositories(serde_json::json!({
+            "mutationVersion":1,
+            "repos":[],
+            "groups":[],
+            "repoOrder":{"before":["/a","/b","/c"],"after":["/b","/a","/c"]}
+        }))
+        .expect("first reorder");
+        let order_error = save_repositories(serde_json::json!({
+            "mutationVersion":1,
+            "repos":[],
+            "groups":[],
+            "repoOrder":{"before":["/a","/b","/c"],"after":["/a","/c","/b"]}
+        }))
+        .expect_err("incompatible reorder must conflict");
+        assert!(order_error.contains("repoOrder"), "{order_error}");
+    }
+
     /// Two-process harness entry point for
     /// `load_app_config_migration_survives_concurrent_cross_process_write` below. Under
     /// a normal test run (`TUIC_CONFIG_TEST_ROLE` unset) this is a no-op — its job is to
@@ -4759,6 +5339,31 @@ mod tests {
                     Ok(next)
                 })
                 .expect("commit child config delta");
+            }
+            "repo-delta-a" | "repo-delta-b" => {
+                let path = if role == "repo-delta-a" { "/a" } else { "/b" };
+                std::fs::write(config_dir().join(format!("{role}.ready")), b"ready")
+                    .expect("write repository child ready marker");
+                let release = config_dir().join("repo-delta.release");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !release.exists() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "timed out waiting for repository delta test release"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                save_repositories(serde_json::json!({
+                    "mutationVersion": 1,
+                    "repos": [{
+                        "id": path,
+                        "before": null,
+                        "after": {"path":path,"displayName":path,"branches":{}}
+                    }],
+                    "groups": [],
+                    "repoOrder": {"before":[],"after":[path]}
+                }))
+                .expect("commit child repository delta");
             }
             other => panic!("unknown TUIC_CONFIG_TEST_ROLE: {other}"),
         }
@@ -4885,6 +5490,62 @@ mod tests {
         .unwrap();
         assert_eq!(on_disk.font_size, 18, "font delta was lost");
         assert!(on_disk.collapse_tools, "collapse-tools delta was lost");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn repository_deltas_compose_across_two_processes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {}, "repoOrder": [], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut children = ["repo-delta-a", "repo-delta-b"].map(|role| {
+            std::process::Command::new(&exe)
+                .arg("two_process_child")
+                .env("TUIC_CONFIG_TEST_ROLE", role)
+                .env("TUIC_CONFIG_TEST_DIR", dir.path())
+                .spawn()
+                .unwrap_or_else(|error| panic!("spawn {role} child: {error}"))
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        for role in ["repo-delta-a", "repo-delta-b"] {
+            let ready = dir.path().join(format!("{role}.ready"));
+            while !ready.exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out waiting for {role} child"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        std::fs::write(dir.path().join("repo-delta.release"), b"release").unwrap();
+
+        for child in &mut children {
+            let status = child.wait().expect("wait for repository delta child");
+            assert!(
+                status.success(),
+                "repository delta child failed: {status:?}"
+            );
+        }
+
+        let saved = load_repositories();
+        assert!(
+            saved["repos"].get("/a").is_some(),
+            "process A's add was lost"
+        );
+        assert!(
+            saved["repos"].get("/b").is_some(),
+            "process B's add was lost"
+        );
+        let order = saved["repoOrder"].as_array().expect("repoOrder array");
+        assert_eq!(order.len(), 2);
+        assert!(order.contains(&serde_json::json!("/a")));
+        assert!(order.contains(&serde_json::json!("/b")));
     }
 
     #[test]

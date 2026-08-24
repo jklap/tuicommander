@@ -21,11 +21,11 @@ branches on `cfg!(debug_assertions)`. The single-instance lock is release-only
 alongside the installed app, and both read and write the exact same
 `config.json`, `repositories.json`, and every other file below. What makes that
 safe is the locking model in `ConfigFile<T>` (see Core Functions): a
-cross-process advisory file lock. Ordinary `AppConfig` writes and upstream MCP
-writes additionally apply caller deltas to the latest value while that lock is
-held, so independent edits from two processes compose instead of becoming
-ordered whole-document overwrites. `repositories.json` used to be the one
-exception, seeded into a separate `~/.tuicommander-dev/` directory on first
+cross-process advisory file lock. Ordinary `AppConfig`, upstream MCP, and
+repository writes additionally apply caller deltas to the latest value while
+that lock is held, so independent edits from two processes compose instead of
+becoming ordered whole-document overwrites. `repositories.json` used to be the
+one exception, seeded into a separate `~/.tuicommander-dev/` directory on first
 debug run; that seeding path is gone and it now lives here like everything
 else (see below).
 
@@ -55,11 +55,12 @@ cross-process advisory file lock (`std::fs::File::lock()` on a sibling
 now share one config dir. `save_checked` additionally compares a `Stamp`
 (mtime+len, captured at `load()`) against the file's current on-disk state and
 returns `ConfigWriteError::Conflict` instead of overwriting a change it never
-saw — used by most per-domain files (`notifications.json`, `ui-prefs.json`,
-`repo-settings.json`, `repositories.json`, etc.). Those callers capture the
+saw — used by most whole-document per-domain files (`notifications.json`,
+`ui-prefs.json`, `repo-settings.json`, etc.). Those callers capture the
 stamp immediately before saving, so this narrows only the backend write race;
 it is not a user-session conflict protocol. `config.json` (`AppConfig`) and
-`mcp-upstreams.json` use delta-under-lock instead. See
+`mcp-upstreams.json` use delta-under-lock instead. `repositories.json` uses the
+ID-keyed optimistic delta protocol documented below. See
 [`2026-08-08-config-deltas-under-lock.md`](../decisions/2026-08-08-config-deltas-under-lock.md).
 
 ## Config Files and Commands
@@ -396,14 +397,37 @@ Default values applied to new repositories when no per-repo override exists.
 
 ### Repositories (`repositories.json`)
 
-**Type:** `serde_json::Value` (flexible JSON, shape defined by frontend)
+**Type:** `serde_json::Value` (flexible persisted JSON, shape defined by frontend)
 
 Stored in the shared config directory like every other file (see Config
 Directory) — debug and release builds read and write the same
-`repositories.json`. Writes go through `ConfigFile::save_checked` (see Core
-Functions). Its stamp is captured inside the save command, so it protects the
-backend read-to-write interval only; unlike the delta-backed `config.json` and
-`mcp-upstreams.json` paths, it is not a cross-process UI-session merge protocol.
+`repositories.json`. Every write uses a versioned delta inside the existing
+`save_repositories(config)` argument:
+
+```json
+{
+  "mutationVersion": 1,
+  "repos": [{ "id": "/repo", "before": {}, "after": {} }],
+  "groups": [{ "id": "group-id", "before": null, "after": {} }],
+  "repoOrder": { "before": [], "after": ["/repo"] },
+  "activeRepoPath": { "before": null, "after": "/repo" },
+  "groupOrder": { "before": [], "after": ["group-id"] }
+}
+```
+
+`before` is the last value that client successfully loaded or persisted;
+`after` is its intended value, and `null` in an ID-keyed mutation means absence
+or deletion. The backend acquires the cross-process lock, strictly reloads the
+latest document, and applies each repository/group mutation by ID. Mutations
+to different IDs compose. Independent membership additions/removals in
+`repoOrder` and `groupOrder` are three-way merged; incompatible reorders
+conflict. Active-repository changes use the same `before`/`after` check.
+
+A stale mutation of the same repository, group, active selection, or order is
+rejected with a deterministic conflict instead of overwriting the newer value.
+IPC reports that error to the frontend, where it creates a user-visible Errors
+badge; HTTP returns `409 Conflict`. Malformed deltas return HTTP `400`. A
+versioned delta is required; unversioned whole-document bodies are rejected.
 
 `repositories.json` used to be the one file exempt from the (then-real)
 debug/release split: it was seeded into a separate `~/.tuicommander-dev/`

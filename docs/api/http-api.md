@@ -1061,7 +1061,14 @@ GET /config/repositories
 PUT /config/repositories
 ```
 
-Load/save the repositories list.
+`GET` loads the repositories document. Every `PUT` must send the same versioned
+`mutationVersion: 1` delta as desktop `save_repositories`: keyed
+`repos`/`groups` entries carry `{id,before,after}`, while `repoOrder`,
+`activeRepoPath`, and `groupOrder` optionally carry `{before,after}`. The
+backend applies the delta to the latest document under the cross-process lock.
+Different repository/group IDs and independent order membership changes
+compose; incompatible changes to the same record return `409 Conflict` and a
+malformed or unversioned delta returns `400 Bad Request`.
 
 ### Prompt Library
 

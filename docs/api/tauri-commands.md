@@ -171,7 +171,7 @@ the old default (or a 404 over HTTP). See
 | `load_repo_defaults` | -- | `RepoDefaultsConfig` | Load repo defaults |
 | `save_repo_defaults` | `config` | `()` | Save repo defaults |
 | `load_repositories` | -- | `JSON` | Load saved repositories |
-| `save_repositories` | `config` | `()` | Save repositories |
+| `save_repositories` | `config` (`mutationVersion: 1` keyed delta) | `()` | Apply repository/group/order/active-selection changes to the latest locked document; same-record conflicts are returned to the caller |
 | `load_prompt_library` | -- | `PromptLibraryConfig` | Load prompts |
 | `save_prompt_library` | `config` | `()` | Save prompts |
 | `load_notes` | -- | `JSON` | Load notes |

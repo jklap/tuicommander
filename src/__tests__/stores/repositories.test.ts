@@ -10,6 +10,20 @@ vi.mock("@tauri-apps/api/core", () => ({
 describe("repositoriesStore", () => {
 	let store: typeof import("../../stores/repositories").repositoriesStore;
 
+	function lastRepositoryMutation() {
+		const calls = mockInvoke.mock.calls.filter((call: unknown[]) => call[0] === "save_repositories");
+		const last = calls[calls.length - 1];
+		return (
+			last[1] as {
+				config: {
+					repos: Array<{ id: string; after: unknown }>;
+					groups: Array<{ id: string; after: unknown }>;
+					groupOrder?: { after: string[] };
+				};
+			}
+		).config;
+	}
+
 	beforeEach(async () => {
 		vi.resetModules();
 		vi.useFakeTimers();
@@ -56,9 +70,13 @@ describe("repositoriesStore", () => {
 				vi.advanceTimersByTime(500);
 				expect(mockInvoke).toHaveBeenCalledWith("save_repositories", {
 					config: expect.objectContaining({
-						repos: expect.objectContaining({
-							"/path/to/repo": expect.objectContaining({ displayName: "test" }),
-						}),
+						mutationVersion: 1,
+						repos: expect.arrayContaining([
+							expect.objectContaining({
+								id: "/path/to/repo",
+								after: expect.objectContaining({ displayName: "test" }),
+							}),
+						]),
 					}),
 				});
 			});
@@ -71,9 +89,10 @@ describe("repositoriesStore", () => {
 				store.addTerminalToBranch("/repo", "main", "term-1");
 				vi.advanceTimersByTime(500);
 				// Find the last save_repositories call
-				const calls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
-				const lastCall = calls[calls.length - 1];
-				expect(lastCall[1].config.repos["/repo"].branches["main"].terminals).toEqual([]);
+				const repo = lastRepositoryMutation().repos.find((mutation) => mutation.id === "/repo")?.after as {
+					branches: Record<string, { terminals: string[] }>;
+				};
+				expect(repo.branches.main.terminals).toEqual([]);
 			});
 		});
 	});
@@ -85,9 +104,10 @@ describe("repositoriesStore", () => {
 				store.setBranch("/repo", "main");
 				store.setCiAutoHeal("/repo", "main", { enabled: true, attempts: 1 });
 				vi.advanceTimersByTime(500);
-				const calls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
-				const last = calls[calls.length - 1];
-				expect(last[1].config.repos["/repo"].branches["main"].ciAutoHeal).toEqual({ enabled: true, attempts: 1 });
+				const repo = lastRepositoryMutation().repos.find((mutation) => mutation.id === "/repo")?.after as {
+					branches: Record<string, { ciAutoHeal: unknown }>;
+				};
+				expect(repo.branches.main.ciAutoHeal).toEqual({ enabled: true, attempts: 1 });
 			});
 		});
 
@@ -97,9 +117,10 @@ describe("repositoriesStore", () => {
 				store.setBranch("/repo", "main");
 				store.setCiAutoHeal("/repo", "main", { enabled: true, attempts: 2, healing: true });
 				vi.advanceTimersByTime(500);
-				const calls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
-				const last = calls[calls.length - 1];
-				expect(last[1].config.repos["/repo"].branches["main"].ciAutoHeal.healing).toBe(false);
+				const repo = lastRepositoryMutation().repos.find((mutation) => mutation.id === "/repo")?.after as {
+					branches: Record<string, { ciAutoHeal: { healing: boolean } }>;
+				};
+				expect(repo.branches.main.ciAutoHeal.healing).toBe(false);
 			});
 		});
 	});
@@ -129,6 +150,22 @@ describe("repositoriesStore", () => {
 				store.add({ path: "/path/to/repo", displayName: "test" });
 				store.setActive("/path/to/repo");
 				expect(store.state.activeRepoPath).toBe("/path/to/repo");
+			});
+		});
+
+		it("persists active selection as an expected field mutation", () => {
+			testInScope(() => {
+				store.add({ path: "/path/to/repo", displayName: "test" });
+				store.setActive("/path/to/repo");
+				vi.advanceTimersByTime(500);
+
+				const calls = mockInvoke.mock.calls.filter((call: unknown[]) => call[0] === "save_repositories");
+				const mutation = (
+					calls[0][1] as {
+						config: { activeRepoPath?: { before: string | null; after: string | null } };
+					}
+				).config.activeRepoPath;
+				expect(mutation).toEqual({ before: null, after: "/path/to/repo" });
 			});
 		});
 	});
@@ -563,6 +600,33 @@ describe("repositoriesStore", () => {
 				expect(localStorage.getItem("tui-commander-repos")).toBeNull();
 			});
 		});
+
+		it("keeps legacy repositories when the migration conflicts", async () => {
+			const staleData = {
+				"/repo": {
+					path: "/repo",
+					displayName: "test",
+					initials: "TE",
+					expanded: true,
+					collapsed: false,
+					parked: false,
+					branches: {},
+					activeBranch: null,
+				},
+			};
+			localStorage.setItem("tui-commander-repos", JSON.stringify(staleData));
+			mockInvoke.mockRejectedValueOnce(new Error("repository configuration conflict"));
+			mockInvoke.mockResolvedValueOnce({ repos: {} });
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(localStorage.getItem("tui-commander-repos")).not.toBeNull();
+				expect(errorSpy).toHaveBeenCalledWith("[store]", "Failed to migrate legacy repositories", expect.any(Error));
+			});
+
+			errorSpy.mockRestore();
+		});
 	});
 
 	describe("toggleCollapsed()", () => {
@@ -887,11 +951,10 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				const id = store.createGroup("Work")!;
 				vi.advanceTimersByTime(500);
-				const saveCalls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
-				const lastCall = saveCalls[saveCalls.length - 1];
-				expect(lastCall[1].config.groups).toBeDefined();
-				expect(lastCall[1].config.groups[id].name).toBe("Work");
-				expect(lastCall[1].config.groupOrder).toContain(id);
+				const mutation = lastRepositoryMutation();
+				const group = mutation.groups.find((entry) => entry.id === id)?.after as { name: string };
+				expect(group.name).toBe("Work");
+				expect(mutation.groupOrder?.after).toContain(id);
 			});
 		});
 	});
@@ -1188,9 +1251,10 @@ describe("repositoriesStore", () => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setPark("/repo", true);
 				vi.advanceTimersByTime(500);
-				const saveCalls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
-				const lastCall = saveCalls[saveCalls.length - 1];
-				expect(lastCall[1].config.repos["/repo"].parked).toBe(true);
+				const repo = lastRepositoryMutation().repos.find((mutation) => mutation.id === "/repo")?.after as {
+					parked: boolean;
+				};
+				expect(repo.parked).toBe(true);
 			});
 		});
 
@@ -1274,6 +1338,85 @@ describe("repositoriesStore", () => {
 
 				expect(mockInvoke).not.toHaveBeenCalled();
 			});
+		});
+
+		it("uses the last successful snapshot as the same-record expectation", async () => {
+			await testInScopeAsync(async () => {
+				store.add({ path: "/repo", displayName: "Original" });
+				await vi.advanceTimersByTimeAsync(500);
+
+				store.setDisplayName("/repo", "Renamed");
+				await vi.advanceTimersByTimeAsync(500);
+
+				const calls = mockInvoke.mock.calls.filter((call: unknown[]) => call[0] === "save_repositories");
+				const second = (
+					calls[1][1] as { config: { repos: Array<{ id: string; before: unknown; after: unknown }> } }
+				).config.repos.find((mutation) => mutation.id === "/repo");
+				expect(second?.before).toEqual(expect.objectContaining({ displayName: "Original" }));
+				expect(second?.after).toEqual(expect.objectContaining({ displayName: "Renamed" }));
+			});
+		});
+
+		it("surfaces a rejected repository mutation at error level", async () => {
+			mockInvoke.mockImplementation((command: string) => {
+				if (command === "save_repositories") {
+					return Promise.reject(new Error("repository configuration conflict: repository '/repo' changed"));
+				}
+				return Promise.resolve(undefined);
+			});
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				store.add({ path: "/repo", displayName: "Repo" });
+				await vi.advanceTimersByTimeAsync(500);
+				expect(errorSpy).toHaveBeenCalledWith(
+					"[store]",
+					"Repository changes were not saved",
+					expect.objectContaining({ message: expect.stringContaining("repository configuration conflict") }),
+				);
+			});
+
+			errorSpy.mockRestore();
+		});
+
+		it("does not discard a newer mutation queued behind a rejected save", async () => {
+			let rejectFirst!: (reason?: unknown) => void;
+			let saveCount = 0;
+			mockInvoke.mockImplementation((command: string) => {
+				if (command !== "save_repositories") return Promise.resolve(undefined);
+				saveCount += 1;
+				if (saveCount === 1) {
+					return new Promise((_, reject) => {
+						rejectFirst = reject;
+					});
+				}
+				return Promise.resolve(undefined);
+			});
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				store.add({ path: "/repo", displayName: "Original" });
+				await vi.advanceTimersByTimeAsync(500);
+				store.setDisplayName("/repo", "Queued");
+				await vi.advanceTimersByTimeAsync(500);
+				expect(saveCount).toBe(1);
+
+				rejectFirst(new Error("repository configuration conflict"));
+				await Promise.resolve();
+				await Promise.resolve();
+				await Promise.resolve();
+
+				const calls = mockInvoke.mock.calls.filter((call: unknown[]) => call[0] === "save_repositories");
+				expect(calls).toHaveLength(2);
+				const queued = (
+					calls[1][1] as {
+						config: { repos: Array<{ id: string; after: unknown }> };
+					}
+				).config.repos.find((mutation) => mutation.id === "/repo");
+				expect(queued?.after).toEqual(expect.objectContaining({ displayName: "Queued" }));
+			});
+
+			errorSpy.mockRestore();
 		});
 	});
 
