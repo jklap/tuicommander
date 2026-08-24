@@ -1573,6 +1573,23 @@ describe("transport", () => {
 	describe("rpc()", () => {
 		const originalFetch = globalThis.fetch;
 		const originalTauri = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+		const discoverArgs = {
+			agentType: "claude",
+			cwd: "/repo",
+			claimedIds: [],
+			agentPid: 123,
+			envOverrides: {},
+		};
+
+		function jsonResponse(body: string, status = 200, statusText = "OK") {
+			return {
+				ok: status >= 200 && status < 300,
+				status,
+				statusText,
+				headers: new Headers({ "content-type": "application/json" }),
+				text: vi.fn().mockResolvedValue(body),
+			};
+		}
 
 		beforeEach(() => {
 			// Ensure non-Tauri mode for HTTP tests
@@ -1594,7 +1611,7 @@ describe("transport", () => {
 			const mockResponse = {
 				ok: true,
 				headers: new Headers({ "content-type": "application/json" }),
-				json: vi.fn().mockResolvedValue({ sessions: [] }),
+				text: vi.fn().mockResolvedValue('{"sessions":[]}'),
 			};
 			globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
 
@@ -1603,6 +1620,47 @@ describe("transport", () => {
 			expect(globalThis.fetch).toHaveBeenCalledWith(
 				expect.stringContaining("/sessions"),
 				expect.objectContaining({ method: "GET" }),
+			);
+		});
+
+		it("returns a decoded JSON null response as null", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("null"));
+
+			await expect(rpc<string | null>("discover_agent_session", discoverArgs)).resolves.toBeNull();
+		});
+
+		it("preserves a decoded non-null JSON response", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse('"agent-session-1"'));
+
+			await expect(rpc<string | null>("discover_agent_session", discoverArgs)).resolves.toBe("agent-session-1");
+		});
+
+		it("rejects a zero-length JSON response with command context", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse(""));
+
+			await expect(rpc("discover_agent_session", discoverArgs)).rejects.toThrow(
+				"RPC discover_agent_session: empty response body",
+			);
+		});
+
+		it("rejects malformed JSON with command context", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("{"));
+
+			await expect(rpc("discover_agent_session", discoverArgs)).rejects.toThrow(
+				"RPC discover_agent_session: invalid JSON response",
+			);
+		});
+
+		it("rejects a non-success JSON response with command context", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("backend unavailable", 503, "Service Unavailable"));
+
+			await expect(rpc("discover_agent_session", discoverArgs)).rejects.toThrow(
+				"RPC discover_agent_session failed: 503 backend unavailable",
 			);
 		});
 
@@ -1624,7 +1682,7 @@ describe("transport", () => {
 				return settle.then(() => ({
 					ok: true,
 					headers: new Headers({ "content-type": "application/json" }),
-					json: vi.fn().mockResolvedValue({}),
+					text: vi.fn().mockResolvedValue("{}"),
 				}));
 			});
 			const writes = datas.map((data) => rpc("write_pty", { sessionId: "s1", data }));
@@ -1698,7 +1756,7 @@ describe("transport", () => {
 				return settle.then(() => ({
 					ok: true,
 					headers: new Headers({ "content-type": "application/json" }),
-					json: vi.fn().mockResolvedValue({}),
+					text: vi.fn().mockResolvedValue("{}"),
 				}));
 			});
 
@@ -1727,7 +1785,7 @@ describe("transport", () => {
 				return Promise.resolve({
 					ok: true,
 					headers: new Headers({ "content-type": "application/json" }),
-					json: vi.fn().mockResolvedValue({}),
+					text: vi.fn().mockResolvedValue("{}"),
 				});
 			});
 
@@ -1748,7 +1806,7 @@ describe("transport", () => {
 				return Promise.resolve({
 					ok: true,
 					headers: new Headers({ "content-type": "application/json" }),
-					json: vi.fn().mockResolvedValue({}),
+					text: vi.fn().mockResolvedValue("{}"),
 				});
 			});
 
@@ -1770,7 +1828,7 @@ describe("transport", () => {
 			const mockResponse = {
 				ok: true,
 				headers: new Headers({ "content-type": "application/json" }),
-				json: vi.fn().mockResolvedValue({ id: "sess-1" }),
+				text: vi.fn().mockResolvedValue('{"id":"sess-1"}'),
 			};
 			globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
 
@@ -1875,7 +1933,7 @@ describe("transport", () => {
 			const mockResponse = {
 				ok: true,
 				headers: new Headers({ "content-type": "application/json" }),
-				json: vi.fn().mockResolvedValue({ active_sessions: 2, max_sessions: 5 }),
+				text: vi.fn().mockResolvedValue('{"active_sessions":2,"max_sessions":5}'),
 			};
 			globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
 

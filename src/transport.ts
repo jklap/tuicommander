@@ -2217,10 +2217,18 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 		const buffer = await resp.arrayBuffer();
 		return (mapping.transform ? mapping.transform(buffer) : buffer) as T;
 	}
+	const text = await resp.text();
+	if (text.length === 0) {
+		throw new Error(`RPC ${command}: empty response body`);
+	}
 	if (contentType.includes("application/json")) {
-		data = await resp.json();
+		try {
+			data = JSON.parse(text);
+		} catch (error) {
+			const detail = error instanceof Error ? `: ${error.message}` : "";
+			throw new Error(`RPC ${command}: invalid JSON response${detail}`);
+		}
 	} else {
-		const text = await resp.text();
 		// Try parsing as JSON anyway (some endpoints may not set content-type)
 		try {
 			data = JSON.parse(text);
@@ -2232,7 +2240,7 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 	if (mapping.transform) {
 		return mapping.transform(data) as T;
 	}
-	if (data === null || data === undefined) {
+	if (data === undefined) {
 		throw new Error(`RPC ${command}: empty response body`);
 	}
 	return data as T;
