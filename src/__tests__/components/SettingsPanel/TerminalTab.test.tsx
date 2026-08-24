@@ -109,4 +109,28 @@ describe("TerminalTab placement", () => {
 		expect(savedConfigs()[0].shell).toBe("/bin/zsh");
 		expect(settingsStore.state.shell).toBe("/bin/zsh");
 	});
+
+	it("shows the link activation select with the current value and its three options", async () => {
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+		const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+		expect(linkSelect.value).toBe("click");
+		expect(Array.from(linkSelect.options).map((o) => o.value)).toEqual(["click", "modifier", "never"]);
+	});
+
+	it("persists a link activation change under terminal_link_activation", async () => {
+		vi.useFakeTimers();
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		mockInvoke.mockClear();
+		const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+		const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+		fireEvent.change(linkSelect, { target: { value: "modifier" } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.linkActivation).toBe("modifier");
+		expect(savedConfigs()).toHaveLength(1);
+		expect(savedConfigs()[0].terminal_link_activation).toBe("modifier");
+	});
 });

@@ -1,4 +1,5 @@
 import { createStore } from "solid-js/store";
+import type { LinkActivation } from "../components/Terminal/canvasTerminalLinks";
 import { setLocale } from "../i18n";
 import { invoke } from "../invoke";
 import type { IssueFilterMode } from "../types";
@@ -68,6 +69,7 @@ interface RustAppConfig {
 	scrollback_reflow?: boolean;
 	cursor_style?: string;
 	terminal_renderer?: string;
+	terminal_link_activation?: string;
 	show_block_timestamps?: boolean;
 	show_scrollbar_marks?: boolean;
 	show_block_marks?: boolean;
@@ -263,6 +265,13 @@ function validateTerminalRenderer(value: string | null): TerminalRenderer {
 	return value && (VALID_RENDERERS as readonly string[]).includes(value) ? (value as TerminalRenderer) : "webgl";
 }
 
+/** Valid link-activation values */
+const VALID_LINK_ACTIVATIONS: readonly LinkActivation[] = ["click", "modifier", "never"];
+
+function validateLinkActivation(value: string | null): LinkActivation {
+	return value && (VALID_LINK_ACTIVATIONS as readonly string[]).includes(value) ? (value as LinkActivation) : "click";
+}
+
 /** Split tab mode */
 export type SplitTabMode = "separate" | "unified";
 
@@ -313,6 +322,7 @@ interface SettingsStoreState {
 	scrollbackReflow: boolean;
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
+	linkActivation: LinkActivation;
 	showBlockTimestamps: boolean;
 	/** Master toggle for the scrollbar history ticks; the two below pick the categories. */
 	showScrollbarMarks: boolean;
@@ -375,6 +385,7 @@ function createSettingsStore() {
 		scrollbackReflow: true,
 		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
 		terminalRenderer: "webgl",
+		linkActivation: "click",
 		showBlockTimestamps: true,
 		showScrollbarMarks: true,
 		showBlockMarks: true,
@@ -446,6 +457,7 @@ function createSettingsStore() {
 		config.scrollback_reflow = state.scrollbackReflow;
 		config.cursor_style = state.cursorStyle;
 		config.terminal_renderer = state.terminalRenderer;
+		config.terminal_link_activation = state.linkActivation;
 		config.show_block_timestamps = state.showBlockTimestamps;
 		config.show_scrollbar_marks = state.showScrollbarMarks;
 		config.show_block_marks = state.showBlockMarks;
@@ -554,6 +566,7 @@ function createSettingsStore() {
 				const cs = config.cursor_style;
 				setState("cursorStyle", cs === "block" || cs === "underline" ? cs : "bar");
 				setState("terminalRenderer", validateTerminalRenderer(config.terminal_renderer || null));
+				setState("linkActivation", validateLinkActivation(config.terminal_link_activation ?? null));
 				setState("showBlockTimestamps", config.show_block_timestamps ?? true);
 				setState("showScrollbarMarks", config.show_scrollbar_marks ?? true);
 				setState("showBlockMarks", config.show_block_marks ?? true);
@@ -858,6 +871,11 @@ function createSettingsStore() {
 			save();
 		},
 
+		setLinkActivation(mode: LinkActivation): void {
+			setState("linkActivation", mode);
+			save();
+		},
+
 		setShowBlockMarks(enabled: boolean): void {
 			setState("showBlockMarks", enabled);
 			save();
@@ -956,5 +974,6 @@ registerDebugSnapshot("settings", () => {
 		preventSleepWhenBusy: s.preventSleepWhenBusy,
 		issueFilter: s.issueFilter,
 		terminalRenderer: s.terminalRenderer,
+		linkActivation: s.linkActivation,
 	};
 });

@@ -1,8 +1,10 @@
 import { type Component, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { t } from "../../../i18n";
+import { getModifierSymbol } from "../../../platform";
 import type { FontType } from "../../../stores/settings";
 import { FONT_FAMILIES, settingsStore } from "../../../stores/settings";
 import { getTerminalTheme, getThemeNames } from "../../../themes";
+import type { LinkActivation } from "../../Terminal/canvasTerminalLinks";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -380,6 +382,22 @@ export const TerminalTab: Component = () => {
 					)}
 				/>
 			</ExpertSetting>
+
+			<SettingSelect
+				label={t("terminal.label.linkActivation", "Open links on")}
+				value={settingsStore.state.linkActivation}
+				onChange={(v) => settingsStore.setLinkActivation(v as LinkActivation)}
+				options={[
+					{ value: "click", label: t("terminal.linkActivation.click", "Click") },
+					{ value: "modifier", label: `${getModifierSymbol()}Click` },
+					{ value: "never", label: t("terminal.linkActivation.never", "Never (right-click only)") },
+				]}
+				hint={t(
+					"terminal.hint.linkActivation",
+					"How links (URLs, file paths) in terminal output open. Click opens on a plain click; {mod}Click underlines a link only while {key} is held, and opens it on {mod}+click; Never disables click-to-open — right-click still offers Open/Copy link.",
+					{ mod: getModifierSymbol(), key: getModifierSymbol() === "⌘" ? "Cmd" : "Ctrl" },
+				)}
+			/>
 
 			<SettingToggle
 				checked={settingsStore.state.showBlockTimestamps}
