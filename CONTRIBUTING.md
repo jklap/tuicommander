@@ -30,7 +30,7 @@ cargo install cargo-nextest cargo-audit
 
 ## Quality Gates
 
-Every PR must pass these checks before review. CI enforces them automatically.
+Every PR must pass these checks before review — run them locally with `make check`. CI is configured to enforce them automatically but has not yet actually run on this repository; treat a green CI badge as aspirational until it has.
 
 ### Tests Are Required
 
@@ -128,7 +128,7 @@ Add user-visible changes under `[Unreleased]` in `CHANGELOG.md`, and add manual 
 | Errors | Handle errors explicitly. No `let _ =` on Results, no empty `catch {}`. |
 | Architecture | Business logic in Rust, not TypeScript. Frontend renders and handles interaction. |
 | Scope | PR does one thing. No drive-by refactors mixed with features. |
-| CI | All checks green. Don't merge with failures. |
+| CI | `make check` passes locally. Don't merge with failures. |
 
 ### Common Rejection Reasons
 
