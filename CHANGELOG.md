@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The browser Command Palette is usable from its toolbar button** — Browser mode now mounts a focused palette with a fail-closed action allowlist, HTTP filename/content search, empty-state handling, and search IDs that reject batches belonging to another window; desktop actions and shortcuts remain unchanged.
 - **Smart Prompt Auto-execute now controls drawer execution** — User-created prompts honor the setting when they are run from the drawer, inserting editable text without submitting when disabled and using the shared agent-aware `sendCommand()` path for exactly-once submission when enabled.
 - **Content-search highlights use JavaScript's UTF-16 coordinates** — Rust converts matcher byte ranges to zero-based, end-exclusive UTF-16 code-unit offsets before returning them, so highlights after accented characters, em dashes, and emoji select the intended text while ASCII ranges remain unchanged.
 - **Browser and PWA AI chats keep their history** — Conversation autosave, close-time persistence, reload initialization, history listing and opening, and deletion now use the shared IPC/HTTP transport instead of returning early outside Tauri. Browser clients therefore use the existing conversation routes with the same payloads as desktop, while stale asynchronous loads still cannot overwrite a newer local turn.

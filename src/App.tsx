@@ -983,10 +983,8 @@ const App: Component = () => {
 			{/* Prompt library drawer */}
 			<PromptDrawer />
 
-			{/* Command palette (Tauri only — many actions are Tauri-specific) */}
-			<Show when={isTauri()}>
-				<CommandPalette actions={actionEntries()} />
-			</Show>
+			{/* Browser mode uses the same palette with its HTTP-safe action subset. */}
+			<CommandPalette actions={actionEntries()} browserMode={!isTauri()} />
 
 			{/* Quick branch switcher */}
 			<BranchSwitcher
