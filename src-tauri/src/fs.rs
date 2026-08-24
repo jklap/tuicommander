@@ -51,9 +51,10 @@ pub struct ContentMatch {
     pub line_number: u32,
     /// Full line content (without trailing newline).
     pub line_text: String,
-    /// Byte offset of match start within `line_text`.
+    /// UTF-16 code-unit offset of match start within `line_text`.
+    /// This is the coordinate system used by JavaScript `String.slice`.
     pub match_start: u32,
-    /// Byte offset of match end (exclusive) within `line_text`.
+    /// UTF-16 code-unit offset of match end (exclusive) within `line_text`.
     pub match_end: u32,
     /// Absolute repo root path — set only by cross-repo search; absent for single-repo results.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -973,6 +974,26 @@ fn search_index_plan(
     })
 }
 
+/// Convert the byte offsets produced by grep into the UTF-16 code-unit offsets
+/// consumed by JavaScript `String.slice`. Rust `char` counts are not sufficient:
+/// a non-BMP scalar such as an emoji occupies one `char` but two UTF-16 units.
+fn utf16_match_offsets(line: &str, byte_start: usize, byte_end: usize) -> Option<(u32, u32)> {
+    if byte_start > byte_end
+        || byte_end > line.len()
+        || !line.is_char_boundary(byte_start)
+        || !line.is_char_boundary(byte_end)
+    {
+        return None;
+    }
+
+    let match_start = line[..byte_start].encode_utf16().count();
+    let match_end = match_start + line[byte_start..byte_end].encode_utf16().count();
+    Some((
+        u32::try_from(match_start).ok()?,
+        u32::try_from(match_end).ok()?,
+    ))
+}
+
 /// Both indexed and fallback search use this sink so cancellation, limits, and
 /// match offsets cannot drift between the two disk-grep paths.
 #[allow(clippy::too_many_arguments)]
@@ -1008,7 +1029,8 @@ fn grep_file_with_cancel(
                 .find(line.as_bytes())
                 .ok()
                 .flatten()
-                .map_or((0, 0), |m| (m.start() as u32, m.end() as u32));
+                .and_then(|m| utf16_match_offsets(line_trimmed, m.start(), m.end()))
+                .unwrap_or((0, 0));
 
             all_matches.push(ContentMatch {
                 path: relative.to_string(),
@@ -2623,6 +2645,67 @@ mod tests {
     }
 
     // --- search_content tests ---
+
+    #[test]
+    fn content_match_offsets_count_utf16_code_units() {
+        let cases = [
+            ("ascii needle", 6, 6, 6),
+            ("— needle", 4, 2, 2),
+            ("é needle", 3, 2, 2),
+            ("😀 needle", 5, 2, 3),
+        ];
+
+        for (line, byte_start, scalar_start, utf16_start) in cases {
+            assert_eq!(line[..byte_start].chars().count(), scalar_start);
+            assert_eq!(
+                utf16_match_offsets(line, byte_start, byte_start + "needle".len()),
+                Some((utf16_start, utf16_start + 6)),
+                "wrong UTF-16 range for {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn content_search_returns_utf16_offsets_for_ascii_and_unicode_prefixes() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("unicode.txt"),
+            "ascii needle\n— needle\né needle\n😀 needle\n",
+        )
+        .unwrap();
+
+        let result = search_content_impl(
+            dir.path().to_string_lossy().to_string(),
+            "needle".to_string(),
+            true,
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+
+        for (line, expected_start) in [
+            ("ascii needle", 6),
+            ("— needle", 2),
+            ("é needle", 2),
+            ("😀 needle", 3),
+        ] {
+            let found = result
+                .matches
+                .iter()
+                .find(|content_match| content_match.line_text == line)
+                .unwrap_or_else(|| panic!("missing match for {line:?}"));
+            assert_eq!(
+                found.match_start, expected_start,
+                "wrong start for {line:?}"
+            );
+            assert_eq!(
+                found.match_end,
+                expected_start + 6,
+                "wrong end for {line:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_search_content_basic() {

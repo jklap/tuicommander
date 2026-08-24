@@ -338,6 +338,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Options: case-sensitive, regex, whole-word
 - Results stream progressively and are grouped by file with match count per file
 - Each result row shows file path, line number, and highlighted match context
+- Match highlighting stays aligned after Unicode text, including non-BMP emoji
 - Click a result to open the file in the code editor at the matched line
 - Binary files and files larger than 1 MB are automatically skipped
 - Backed by `search_content` Tauri command; results delivered via `content-search-batch` events, each carrying the `search_id` of the panel that asked (the event is global and three panels listen)
