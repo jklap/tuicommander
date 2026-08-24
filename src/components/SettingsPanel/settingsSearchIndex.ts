@@ -207,6 +207,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.osc52_clipboard",
 	},
+	{ tab: "terminal", section: "Terminal", label: "Open links on", labelKey: "terminal.label.linkActivation" },
 	{
 		tab: "terminal",
 		section: "Terminal",

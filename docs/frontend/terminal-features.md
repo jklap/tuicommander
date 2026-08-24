@@ -111,11 +111,17 @@ correctly too.
 ### Copy on Select
 Auto-copies selected text to clipboard when text is selected in terminal. Configurable in settings (`copy_on_select`, default: on).
 
+### Link Activation
+How a detected link (URL, file path, `file://`, or OSC 8 hyperlink) opens is configurable via the **Open links on** Terminal setting (`terminal_link_activation`, default: `click`):
+- **Click** — a plain click opens the link.
+- **⌘Click / Ctrl+Click** — the underline is hidden until Cmd (macOS) or Ctrl (Windows/Linux) is held; holding it reveals the underline and pointer cursor, and modifier+click opens the link.
+- **Never** — click never opens a link; right-click's Open/Copy-link menu is the only way to activate one.
+
 ### URL Click
-Cmd+Click on URLs in terminal output opens them in the system browser. URL detection handled by the native terminal link parser.
+URLs in terminal output open in the system browser (via the allowlisted `openUrl` helper — `http`/`https`/`mailto` only). URL detection is regex-based.
 
 ### File Path Click
-Clickable file paths in terminal output (absolute and relative paths with known extensions). Opens in IDE or markdown viewer.
+Clickable file paths in terminal output (absolute and relative paths with known extensions, plus `file://` URLs) open in the in-app editor or markdown viewer. Verified against the filesystem before being underlined.
 
 ### Tab Features
 - **Middle-click** closes tab
