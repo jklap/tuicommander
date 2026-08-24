@@ -4,6 +4,7 @@ import { isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
+import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { filterMatchesToBlock } from "../../utils/blockSearchFilter";
 import { writeClipboard } from "../../utils/clipboard";
@@ -2080,6 +2081,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			await transport.onEvent("cwd", (payload) => {
 				const { cwd } = payload as { cwd: string };
 				terminalsStore.update(props.terminalId, { cwd });
+				// A cd out of one repo and into another changes the answer to "who owns
+				// this terminal?", and the sidebar renders that answer. Without this the
+				// cwd updated but the tab stayed filed under the repo it started in.
+				reconcileTerminalOwnership(props.terminalId);
 				props.onCwdChange?.(props.terminalId, cwd);
 			});
 			await transport.onEvent("osc133", (payload) => {

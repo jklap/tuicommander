@@ -127,4 +127,46 @@ describe("reconcileTerminalOwnership", () => {
 			expect(repositoriesStore.findOwnerForTerminal(id)?.branchName).toBe("main");
 		});
 	});
+
+	it("follows a terminal that cd'd into another repo", () => {
+		testInScope(() => {
+			addRepoWithBranch("/Gits/alpha", "main");
+			addRepoWithBranch("/Gits/beta", "trunk");
+			const id = terminalsStore.add(makeTerminal({ cwd: "/Gits/alpha/src" }));
+			repositoriesStore.addTerminalToBranch("/Gits/alpha", "main", id);
+			terminalsStore.setRepoPath(id, "/Gits/alpha");
+
+			// OSC 7 reports the new directory; the placement must follow it.
+			terminalsStore.update(id, { cwd: "/Gits/beta/src" });
+			reconcile(id);
+
+			expect(terminalsStore.get(id)?.repoPath).toBe("/Gits/beta");
+			expect(repositoriesStore.findOwnerForTerminal(id)).toEqual({
+				repoPath: "/Gits/beta",
+				branchName: "trunk",
+			});
+			// No stale id left behind in the repo it came from.
+			expect(repositoriesStore.get("/Gits/alpha")?.branches.main.terminals).not.toContain(id);
+		});
+	});
+
+	it("reconciles only the named terminal when given an id", () => {
+		testInScope(() => {
+			addRepoWithBranch("/Gits/alpha", "main");
+			addRepoWithBranch("/Gits/beta", "trunk");
+			// Both are misplaced, but a cd in one terminal is no reason to walk every
+			// other terminal against every repo — that runs on each OSC 7.
+			const moved = terminalsStore.add(makeTerminal({ cwd: "/Gits/beta/src" }));
+			const untouched = terminalsStore.add(makeTerminal({ cwd: "/Gits/beta/lib" }));
+			for (const id of [moved, untouched]) {
+				repositoriesStore.addTerminalToBranch("/Gits/alpha", "main", id);
+				terminalsStore.setRepoPath(id, "/Gits/alpha");
+			}
+
+			reconcile(moved);
+
+			expect(repositoriesStore.findOwnerForTerminal(moved)?.repoPath).toBe("/Gits/beta");
+			expect(repositoriesStore.findOwnerForTerminal(untouched)?.repoPath).toBe("/Gits/alpha");
+		});
+	});
 });

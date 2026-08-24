@@ -132,6 +132,58 @@ describe("initApp", () => {
 		expect(mdTabsStore.getVisibleIds(`${targetRepo}|main`)).toContain(activeTab!.id);
 	});
 
+	it("does not activate a background MCP file tab that belongs to another repo", async () => {
+		let uiTabCallback:
+			| ((event: {
+					payload: {
+						id: string;
+						title: string;
+						html: string;
+						pinned: boolean;
+						url: string;
+						focus: boolean;
+					};
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+
+		const sourceRepo = "/repos/investimenti";
+		const targetRepo = "/repos/aicheck";
+		for (const path of [sourceRepo, targetRepo]) {
+			repositoriesStore.add({ path, displayName: path.split("/").pop()! });
+			repositoriesStore.setBranch(path, "main", { name: "main", worktreePath: path });
+			repositoriesStore.setActiveBranch(path, "main");
+		}
+		repositoriesStore.setActive(sourceRepo);
+
+		const deps = createMockDeps();
+		await initApp(deps);
+		uiTabCallback!({
+			payload: {
+				id: "comparison",
+				title: "Comparison",
+				html: "",
+				pinned: false,
+				url: `tuic://open/${targetRepo}/reports/comparison.md`,
+				focus: false,
+			},
+		});
+
+		// `focus: false` deliberately does NOT switch repo, so activating the tab
+		// would leave its content on screen with its own tab button filtered out of
+		// the tab bar — the exact ghost the focused branch above exists to avoid.
+		expect(repositoriesStore.state.activeRepoPath).toBe(sourceRepo);
+		const tab = Object.values(mdTabsStore.state.tabs).find(
+			(t) => t.type === "file" && t.filePath === "reports/comparison.md",
+		);
+		expect(tab).toBeDefined();
+		expect(tab!.repoPath).toBe(targetRepo);
+		expect(mdTabsStore.getActive()?.id).not.toBe(tab!.id);
+	});
+
 	it("re-adopts surviving PTY sessions", async () => {
 		const deps = createMockDeps({
 			pty: {

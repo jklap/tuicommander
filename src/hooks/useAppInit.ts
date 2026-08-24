@@ -536,16 +536,26 @@ export async function initApp(deps: AppInitDeps) {
 					deps.setCurrentBranch(repo?.activeBranch ?? null);
 				}
 
+				// A background open must also stay in the background. Activating it
+				// produces the same ghost from the other direction: the repo was
+				// deliberately not switched, so an active tab in another repo has its
+				// own tab button filtered out of the bar.
+				const background = focus === false;
+
 				if (cmd === "open" && repoPath) {
-					mdTabsStore.add(repoPath, relPath);
+					if (background) mdTabsStore.addFileBackground(repoPath, relPath);
+					else mdTabsStore.add(repoPath, relPath);
 				} else if (cmd === "open" && isAbsolutePath(filePath)) {
-					editorTabsStore.add("__external__", filePath, undefined, { externalEditable: false });
+					editorTabsStore.add("__external__", filePath, undefined, { externalEditable: false, background });
 				} else if (cmd === "edit") {
 					const line = parseInt(parsed.searchParams.get("line") || "0", 10);
 					if (repoPath) {
-						editorTabsStore.add(repoPath, relPath, line || undefined);
+						editorTabsStore.add(repoPath, relPath, line || undefined, { background });
 					} else if (isAbsolutePath(filePath)) {
-						editorTabsStore.add("__external__", filePath, line || undefined, { externalEditable: true });
+						editorTabsStore.add("__external__", filePath, line || undefined, {
+							externalEditable: true,
+							background,
+						});
 					} else {
 						appLogger.warn("app", `tuic://edit relative path without active repo: ${filePath}`);
 					}
