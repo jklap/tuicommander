@@ -47,6 +47,7 @@ mod global_hotkey;
 pub(crate) mod grid_gate;
 pub(crate) mod improvement_scan;
 mod input_line_buffer;
+pub(crate) mod jsonc_edit;
 pub(crate) mod llm_api;
 pub(crate) mod mcp_http;
 #[allow(dead_code)] // Incremental build: wired in story 1196+ (OAuth flow/token/registry)
@@ -1852,6 +1853,8 @@ pub fn run() {
             agent_mcp::get_agent_mcp_status,
             agent_mcp::install_agent_mcp,
             agent_mcp::remove_agent_mcp,
+            agent_mcp::list_installed_mcp_integrations,
+            agent_mcp::remove_all_mcp_integrations,
             agent_mcp::get_agent_config_path,
             agent_mcp::get_mcp_bridge_info,
             prompt::extract_prompt_variables,

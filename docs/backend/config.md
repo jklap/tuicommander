@@ -217,15 +217,62 @@ auto-written entry would configure nothing.
 
 A target that already holds a `tuicommander` entry keeps getting path repairs
 even when presence no longer resolves, so a stale bridge path is never left
-behind. Both gates live in `auto_install_allowed`, which only the launch pass
+behind. All gates live in `auto_install_allowed`, which only the launch pass
 consults: Settings → Agents installs on demand through `ensure_spec_entry`
 directly, because pressing Install states that the target is there — that is an
 explicit request, not a guess.
 
+**Shared settings files need an explicit install.** Zed, Amp and Gemini keep
+their MCP server list inside the `settings.json` that also holds every other
+user preference, not a dedicated `mcp.json`. Those three carry
+`shared_settings_file: true` and the launch pass never creates or edits them:
+TUICommander being on the machine is not consent to rewrite the user's editor
+configuration. Settings → Agents installs them on request, and once installed
+they receive path repairs like any other target. `get_agent_mcp_status` returns
+the flag so the UI can say why the entry is missing.
+
+### Never Reserializing a Third-Party Config
+
 Configs that exist but do not parse are **never** overwritten (JSON, TOML and
-YAML alike): VS Code's `mcp.json` and opencode's config both allow comments,
-which `serde_json` rejects, and treating a parse failure as an empty document
-would replace the user's whole config with our single entry.
+YAML alike). Treating a parse failure as an empty document is what reduced a
+user's 400-line Zed `settings.json` to our single entry
+([#115](https://github.com/sstraus/tuicommander/issues/115)).
+
+JSON targets go further: they are never reserialized at all. `jsonc_edit`
+parses the document into a concrete syntax tree, splices exactly one member,
+and prints it back, so text outside that member is byte-identical. This matters
+three times over — `serde_json` rejects the comments and trailing commas Zed,
+VS Code and opencode all document as supported; `serde_json::Map` is a
+`BTreeMap`, so a round trip alphabetises the user's keys; and
+`to_string_pretty` discards their indentation.
+
+Only the documented dialect is accepted. Comments and trailing commas parse;
+single-quoted strings, unquoted keys and hexadecimal numbers do not, because a
+file using them is one the owning tool cannot read either — writing it back as
+if it were fine would be worse than refusing.
+
+Guard rails around the write:
+
+- The edited text is re-parsed and the member compared against what was
+  requested before anything reaches disk.
+- The first time we modify a file, its original is copied to
+  `<config dir>/mcp-backups/<agent>-<filename>.orig`. Written once and never
+  overwritten — the state worth keeping is the one from before TUICommander
+  ever touched it. It lives under our config directory rather than beside the
+  original, where the owning tool might try to load or sync it.
+- An edit that changes nothing skips the write entirely, so an idempotent pass
+  never moves the mtime of a file an editor is watching.
+
+### Removing Every Integration
+
+`remove_all_mcp_integrations` drops the `tuicommander` entry from every target
+that has one and adds them all to `disabled_mcp_agents` — without that the next
+launch reinstalls them and the action does nothing. `list_installed_mcp_integrations`
+backs the Settings → Agents panel that lists them. Uninstalling TUICommander
+otherwise leaves a dangling `tuic-bridge` path in each client it ever
+configured, and each one reports a broken MCP server on startup. One
+unparseable config does not abort the sweep: the rest are still cleaned and the
+failures are reported together.
 
 ### Upstream MCP Config (`mcp-upstreams.json`)
 

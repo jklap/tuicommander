@@ -142,6 +142,10 @@ tauri-plugin-opener = { version = "2", optional = true }
 # an unrelated build.
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+# Zed, VS Code and opencode all store their MCP servers in a JSONC document —
+# comments and trailing commas that serde_json rejects. We parse with ranges so
+# the writer can splice a single member instead of reserializing the file.
+jsonc-parser = { version = "0.33", features = ["cst", "serde", "serde_json"] }
 # Goose stores its MCP extensions in YAML. Deprecated upstream, but already in
 # the tree via gh-token, so the direct dependency adds nothing to the build.
 serde_yaml = "0.9"
