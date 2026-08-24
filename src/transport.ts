@@ -1896,7 +1896,6 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"unblock_sleep",
 	// Global hotkey registration — OS-level, host-only.
 	"set_global_hotkey",
-	"get_global_hotkey",
 	// Microphone permission — OS permission dialogs, host-only.
 	"check_microphone_permission",
 	"open_microphone_settings",
@@ -1941,7 +1940,6 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	// faithful HTTP contract yet.
 	"debug_agent_detection",
 	"set_ansi_colors",
-	"update_session_cwd",
 	// AI high-frequency streams are bridged by dedicated WebSockets:
 	// /ai/conversation/{session_id}/stream and /ai/chat/{chat_id}/stream.
 	"start_conversation",

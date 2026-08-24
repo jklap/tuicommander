@@ -3854,18 +3854,10 @@ impl VtLogBuffer {
         changed
     }
 
-    /// Update grid dimensions on terminal resize (shell-state-agnostic shim).
-    #[cfg(test)]
-    pub fn resize(&mut self, rows: u16, cols: u16) {
-        self.resize_with_shell_state(rows, cols, crate::pty::SHELL_NULL);
-    }
-
     /// Resize with reflow. The reflow_wrap flag on Row prevents stale
     /// natural wraps from merging — only shrink-produced wraps get merged.
     /// Alt screen and reflow_history=false disable reflow entirely.
-    // DEFERRED (2026-05-16) — shell_state param kept for call-site compat;
-    // may be needed if we reintroduce HistoryOnly for alt-screen-less TUIs.
-    pub fn resize_with_shell_state(&mut self, rows: u16, cols: u16, _shell_state: u8) {
+    pub fn resize(&mut self, rows: u16, cols: u16) {
         let prev = self.pty_cols;
         self.pty_cols = cols;
         if cols > self.max_cols {
