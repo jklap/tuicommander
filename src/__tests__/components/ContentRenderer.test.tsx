@@ -187,6 +187,64 @@ describe("ContentRenderer", () => {
 			expect(onToggle).toHaveBeenCalledWith(0, "x");
 		});
 
+		it("turns a whole-cell [x] in a table into a checkbox", () => {
+			const md = ["| Sel | Cmd |", "| --- | --- |", "| [x] | `/help` |", "| [ ] | `/stop` |"].join("\n");
+			const { container } = render(() => <ContentRenderer content={md} />);
+			const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+			expect(checkboxes.length).toBe(2);
+			expect(checkboxes[0].checked).toBe(true);
+			expect(checkboxes[1].checked).toBe(false);
+			// Line 2 / line 3, each at the column of its `[`.
+			expect(checkboxes[0].dataset.sourceLine).toBe("2");
+			expect(checkboxes[0].dataset.sourceCol).toBe("2");
+			expect(checkboxes[1].dataset.sourceLine).toBe("3");
+		});
+
+		it("reports the clicked table cell's column so a multi-checkbox row stays addressable", () => {
+			const onToggle = vi.fn();
+			const md = ["| A | B |", "| --- | --- |", "| [ ] | [x] |"].join("\n");
+			const { container } = render(() => <ContentRenderer content={md} onCheckboxToggle={onToggle} />);
+			const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+			expect(checkboxes.length).toBe(2);
+			fireEvent.click(checkboxes[1]);
+			// Second cell on line 2 → its own column, not the first cell's.
+			expect(onToggle).toHaveBeenCalledWith(2, "~", 8);
+		});
+
+		it("leaves [x] inside prose alone — only a whole cell becomes a checkbox", () => {
+			const md = ["| Sel | Note |", "| --- | --- |", "| [x] | change [ ] to [x] here |"].join("\n");
+			const { container } = render(() => <ContentRenderer content={md} />);
+			const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+			expect(checkboxes.length).toBe(1);
+			expect(checkboxes[0].dataset.sourceCol).toBe("2");
+		});
+
+		it("renders a [~] table cell as indeterminate", () => {
+			const md = ["| Sel |", "| --- |", "| [~] |"].join("\n");
+			const { container } = render(() => <ContentRenderer content={md} />);
+			const cb = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+			expect(cb?.hasAttribute("data-checkbox-indeterminate")).toBe(true);
+		});
+
+		it("ignores a table-shaped row inside a fenced code block", () => {
+			const md = ["```", "| [x] | fake |", "```", "", "| Sel |", "| --- |", "| [ ] |"].join("\n");
+			const { container } = render(() => <ContentRenderer content={md} />);
+			const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+			expect(checkboxes.length).toBe(1);
+			expect(checkboxes[0].dataset.sourceLine).toBe("6");
+		});
+
+		it("keeps list and table checkboxes on independent indexes", () => {
+			const md = ["- [ ] a list item", "", "| Sel |", "| --- |", "| [x] |"].join("\n");
+			const { container } = render(() => <ContentRenderer content={md} />);
+			const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+			expect(checkboxes.length).toBe(2);
+			expect(checkboxes[0].dataset.sourceLine).toBe("0");
+			expect(checkboxes[0].dataset.sourceCol).toBeUndefined();
+			expect(checkboxes[1].dataset.sourceLine).toBe("4");
+			expect(checkboxes[1].dataset.sourceCol).toBe("2");
+		});
+
 		it("renders [~] as indeterminate checkbox with sentinel attribute", () => {
 			const md = "- [ ] Normal\n- [~] In progress";
 			const { container } = render(() => <ContentRenderer content={md} />);

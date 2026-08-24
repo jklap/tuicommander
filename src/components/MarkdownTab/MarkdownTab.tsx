@@ -341,8 +341,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		}
 	};
 
-	const handleCheckboxToggle = async (sourceLine: number, mark: " " | "x" | "~") => {
-		const updated = toggleCheckbox(content(), sourceLine, mark);
+	const handleCheckboxToggle = async (sourceLine: number, mark: " " | "x" | "~", sourceCol?: number) => {
+		const updated = toggleCheckbox(content(), sourceLine, mark, sourceCol);
 		await writeTweakedSource(updated);
 	};
 
@@ -458,8 +458,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 					content={content()}
 					baseDir={baseDir()}
 					onLinkClick={handleMdLink}
-					onCheckboxToggle={(idx, mark) => {
-						void handleCheckboxToggle(idx, mark);
+					onCheckboxToggle={(idx, mark, col) => {
+						void handleCheckboxToggle(idx, mark, col);
 					}}
 					contentRef={(el) => {
 						contentRef = el;
