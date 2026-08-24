@@ -69,7 +69,7 @@ To debug the WebView in a release build, temporarily add `"devtools"` to the tau
 **Consequence for agents:** when your change touches Rust (`src-tauri/**`), it will NOT take effect in Boss's live `make dev` session. Do NOT assume it did. Instead:
 
 1. Make the Rust change as normal.
-2. **Create a story** capturing what changed and that it needs a rebuild (`/wiz:stories create` — title like "Rebuild: <what> (Rust change, needs make dev restart)").
+2. **Add an item to `to-test.md`** describing what to check after the rebuild. Never open a story for this — a story whose criteria are all post-restart checks can never close itself, so they pile up. `to-test.md` is the only tracker for anything a human must verify.
 3. **Tell Boss explicitly** that the Rust change is staged but requires a manual `make dev` restart (or `make build` for release) to load, and to run it when he's ready to lose the current session.
 
 Never silently ship a Rust edit expecting hot reload — it will look like your fix did nothing.
