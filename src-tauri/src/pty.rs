@@ -4196,6 +4196,38 @@ fn suppress_heuristic_question(hook_instrumented: bool, event: &ParsedEvent) -> 
     hook_instrumented && matches!(event, ParsedEvent::Question { .. })
 }
 
+/// Restore the awaiting badge while an Ink dialog is still open on screen.
+///
+/// The badge is `SessionState.awaiting_input`, driven by events; the dialog is a
+/// screen condition that outlives them. A multi-question `AskUserQuestion` is the
+/// case where the two part ways: answering sub-question 1 clears the badge, and
+/// sub-question 2 repaints its title and options but NOT the footer row — the one
+/// row `parse_clean_lines` needs to see change in order to fire again. The result
+/// is a tab reading "working" while the agent waits.
+///
+/// Presence of the footer is the entire signal. Nothing structural is read: title,
+/// option list and the `⊠ … ✓ Submit` tab bar all move as the wizard advances,
+/// while the footer is byte-identical throughout — useless as a change signal,
+/// exact as a presence one.
+///
+/// Returns an event only when the badge is actually off, so this is one event per
+/// spurious clear, never one per repaint. A live `choice_prompt` owns the awaiting
+/// state through its own resolve path and is left alone.
+fn rearm_awaiting_for_open_dialog(
+    screen: &[String],
+    hook_instrumented: bool,
+    awaiting_input: bool,
+    has_choice_prompt: bool,
+) -> Option<ParsedEvent> {
+    if hook_instrumented || awaiting_input || has_choice_prompt {
+        return None;
+    }
+    crate::output_parser::ink_dialog_footer(screen).map(|footer| ParsedEvent::Question {
+        prompt_text: footer.to_string(),
+        confident: true,
+    })
+}
+
 /// Per-session mutable state for processing PTY output chunks.
 /// Holds dedup state, parser, and session CWD for PlanFile resolution.
 /// Used by `spawn_reader_thread`.
@@ -5125,6 +5157,41 @@ impl ChunkProcessor {
                 .is_some_and(|last| !screen.iter().any(|row| row.contains(last)));
             if prompt_gone {
                 self.last_question_text = None;
+            }
+        }
+
+        // Re-arm awaiting while an Ink dialog is still on screen.
+        //
+        // `parse_clean_lines` only sees CHANGED rows, and the footer row is
+        // byte-identical across the sub-questions of a multi-question
+        // AskUserQuestion ("⊠ CLI.md · □ Exit codes · ✓ Submit"). Answering the
+        // first sub-question clears awaiting; the second one repaints its title
+        // and options but NOT the footer, so nothing ever set it again and the tab
+        // read "working" while the agent sat blocked on the user.
+        //
+        // Presence of the footer is the whole signal — no title, option or tab-bar
+        // parsing, none of which survives the wizard advancing. It re-arms only
+        // when the badge is actually off, so a repaint cannot storm: one event per
+        // spurious clear, never one per frame. Hook-instrumented sessions are
+        // excluded for the same reason `suppress_heuristic_question` excludes them
+        // — OSC 7770 owns their state.
+        //
+        // DEFERRED (2026-08-21) — hook-instrumented agents keep the same gap: a
+        // multi-question AskUserQuestion fires PreToolUse once, so sub-questions 2+
+        // have no hook signal either. Needs a capture with hooks ON to confirm
+        // before widening this to them.
+        if let Some(screen) = &screen_cache {
+            let (awaiting, has_choice) = state
+                .session_states
+                .get(session_id)
+                .map(|s| (s.awaiting_input, s.choice_prompt.is_some()))
+                .unwrap_or((false, false));
+            if let Some(evt) =
+                rearm_awaiting_for_open_dialog(screen, hook_instrumented, awaiting, has_choice)
+            {
+                // Clear the dedup: the badge is off, so this event must reach state.
+                self.last_question_text = None;
+                events.push(evt);
             }
         }
 
@@ -20740,6 +20807,132 @@ mod tests {
         let mut rx = state.event_bus.subscribe();
         emit_question_cleared_if_stale(&state, "s1");
         assert!(rx.try_recv().is_err(), "idle session must emit nothing");
+    }
+
+    /// A multi-question `AskUserQuestion` as Claude renders it: a tab bar of
+    /// sub-questions, the current one's title and options, and the Ink footer.
+    /// `answered` moves the ⊠ and swaps the body — everything except the footer.
+    fn askuserquestion_wizard_screen(answered: usize) -> Vec<String> {
+        let tabs = ["CLI.md", "Exit codes", "Provider row"];
+        let bar = tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| format!("{} {t}", if i < answered { "⊠" } else { "□" }))
+            .collect::<Vec<_>>()
+            .join("  ");
+        vec![
+            format!("←  {bar}  ✓ Submit  →"),
+            String::new(),
+            format!("Sub-question {}: what should step 14 send?", answered + 1),
+            String::new(),
+            format!("› 1. Option A for {}", tabs[answered.min(2)]),
+            format!("  2. Option B for {}", tabs[answered.min(2)]),
+            "  3. Type something.".to_string(),
+            String::new(),
+            "Enter to select · Tab/Arrow keys to navigate · Esc to cancel".to_string(),
+        ]
+    }
+
+    /// Regression, observed 2026-08-21 on a live Claude tab: a multi-question
+    /// AskUserQuestion was on screen waiting on Boss and the tab read "working".
+    ///
+    /// The first sub-question badges the tab. Answering it clears the badge — and
+    /// the second sub-question repaints its title and options while the footer row
+    /// stays byte-identical, so the changed-rows parser never fires again and no
+    /// clear path is at fault: the SET simply never came back. The re-arm is the
+    /// only thing standing between that and a tab that lies for the rest of the
+    /// wizard.
+    #[tokio::test(flavor = "current_thread", start_paused = false)]
+    async fn open_dialog_rearms_awaiting_after_a_sub_question_is_answered() {
+        let first = askuserquestion_wizard_screen(0);
+        let footer = crate::output_parser::ink_dialog_footer(&first)
+            .expect("precondition: the Ink footer anchors the dialog");
+
+        let state = accumulating_state("s1");
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: "s1".to_string(),
+            parsed: serde_json::json!({
+                "type": "question", "prompt_text": footer, "confident": true,
+            })
+            .into(),
+        });
+        assert!(
+            await_session(&state, "s1", |s| s.awaiting_input).await,
+            "the first sub-question must badge the tab"
+        );
+
+        // Boss answers it. Whatever cleared the badge — a typed line here — the
+        // wizard is still open on its next sub-question.
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: "s1".to_string(),
+            parsed: serde_json::json!({ "type": "user-input", "content": "1" }).into(),
+        });
+        assert!(
+            await_session(&state, "s1", |s| !s.awaiting_input).await,
+            "precondition: answering clears the badge"
+        );
+
+        let second = askuserquestion_wizard_screen(1);
+        assert_ne!(second[2], first[2], "the body moved on");
+        assert_eq!(
+            second.last(),
+            first.last(),
+            "…but the footer did not — this is why the changed-rows parser is blind"
+        );
+
+        let evt = rearm_awaiting_for_open_dialog(&second, false, false, false)
+            .expect("an open dialog with the badge off must re-arm");
+        let ParsedEvent::Question {
+            prompt_text,
+            confident,
+        } = &evt
+        else {
+            panic!("re-arm must be a Question, got {evt:?}");
+        };
+        assert_eq!(prompt_text, footer);
+        assert!(confident, "an Ink footer is not a guess");
+
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: "s1".to_string(),
+            parsed: serde_json::json!({
+                "type": "question", "prompt_text": prompt_text, "confident": confident,
+            })
+            .into(),
+        });
+        assert!(
+            await_session(&state, "s1", |s| s.awaiting_input).await,
+            "the tab must read awaiting again while the wizard is open"
+        );
+    }
+
+    /// The re-arm must not fire per repaint, must not fight OSC 7770, and must not
+    /// step on a live choice prompt — each of those was a separate storm in the
+    /// history of this file.
+    #[test]
+    fn rearm_stays_silent_unless_the_badge_is_actually_off() {
+        let screen = askuserquestion_wizard_screen(1);
+        assert!(
+            rearm_awaiting_for_open_dialog(&screen, false, true, false).is_none(),
+            "already awaiting — re-arming every repaint would storm"
+        );
+        assert!(
+            rearm_awaiting_for_open_dialog(&screen, true, false, false).is_none(),
+            "hook-instrumented sessions get awaiting from OSC 7770"
+        );
+        assert!(
+            rearm_awaiting_for_open_dialog(&screen, false, false, true).is_none(),
+            "a live choice prompt owns awaiting through its own resolve path"
+        );
+        let no_dialog = vec!["· Gallivanting… (15m 12s)".to_string(), "❯".to_string()];
+        assert!(
+            rearm_awaiting_for_open_dialog(&no_dialog, false, false, false).is_none(),
+            "no dialog on screen, no badge"
+        );
+        let quoted = vec!["+  Enter to select · Esc to cancel".to_string()];
+        assert!(
+            rearm_awaiting_for_open_dialog(&quoted, false, false, false).is_none(),
+            "a diff line quoting the footer is not a dialog"
+        );
     }
 
     #[test]
