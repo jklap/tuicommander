@@ -116,10 +116,10 @@ export function usePty() {
 		await rpc("write_pty", { sessionId, data });
 	}
 
-	/** Send a command to a PTY session with agent-aware Enter handling. */
-	async function sendCommand(sessionId: string, text: string, agentType?: string | null): Promise<void> {
+	/** Send or insert text through the central agent-aware command path. */
+	async function sendCommand(sessionId: string, text: string, agentType?: string | null, submit = true): Promise<void> {
 		const shellFamily = await getShellFamily(sessionId);
-		await sendCommandUtil((data) => write(sessionId, data), text, agentType, shellFamily);
+		await sendCommandUtil((data) => write(sessionId, data), text, agentType, shellFamily, submit);
 	}
 
 	/** Hand a command to the backend's idle gate instead of typing it now: it is

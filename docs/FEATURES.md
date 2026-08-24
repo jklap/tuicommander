@@ -1156,9 +1156,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 
 ### 10.8 Execution Modes
 
-- **Inject** (default): routes the resolved prompt text to the active terminal. The **Target** sub-option decides where:
-  - **Compose box** (default): fills the terminal's compose input for the user to review and send. Not idle-gated — a busy agent never blocks it, since nothing is sent until the user hits Enter.
-  - **Terminal**: sends straight to the agent's PTY. Checks agent idle state before sending (configurable via `requiresIdle`); when busy the prompt button is disabled. Honors **Auto-execute** — appends Enter for immediate send, or writes without Enter for review when off.
+- **Inject** (default): routes the resolved prompt text to the active terminal. **Auto-execute** decides whether the action submits. Submissions are idle-gated (configurable via `requiresIdle`) and use agent-aware Enter semantics. Review-only actions are not idle-gated; the **Target** sub-option places their editable text in the Compose box (default) or directly in the terminal input. If the Compose box is unavailable, the terminal input is the fallback.
 - **Shell script**: executes the prompt content directly as a shell script via `execute_shell_script` Tauri command. No agent involved — runs content as-is via `sh -c` (macOS/Linux) or `cmd /C` (Windows) in the repo directory. Output routed via `outputTarget`. 60-second timeout cap. No prerequisites (no terminal, agent, or API config needed)
 - **Headless**: runs a one-shot subprocess via `execute_headless_prompt` Tauri command. Requires a per-agent headless template configured in Settings → Agents (e.g. `claude -p "{prompt}"`). Output routed to clipboard or toast depending on `outputTarget`. Falls back to inject in PWA mode. 5-minute timeout cap
 
@@ -1177,6 +1175,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - All prompt management consolidated in the Cmd+Shift+K drawer (Settings tab removed)
 - Enable/disable individual prompts via toggle button on each row
 - Edit prompt: opens modal with name, description, content, variable dropdown, placement, execution mode, auto-execute, keyboard shortcut
+- A normal click or Enter follows the saved auto-execute setting; double-click and **Insert & Run** force one submission, while **Insert** always keeps the result editable
 - Variable insertion dropdown below content textarea: grouped by Git/GitHub/Terminal, click to insert `{variable}` at cursor
 - Create custom smart prompts with `+ New Prompt` button
 - Built-in prompts show a "Reset to Default" button when content is overridden
@@ -1884,7 +1883,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 20.10 Process Monitor
 - Reports CPU% and resident memory (RSS) for TUIC and every child process tree, each row attributed to the session that owns it
-- Agent lifecycle also classifies the owning process tree: meaningful background descendants keep `agent_state=working` while an input-ready terminal may remain `shell_state=idle`; persistent `mdkb`, `tuic-bridge`, and `node_repl` helper subtrees plus Claude's standalone timed `caffeinate -i -t <seconds>` assertion are excluded by executable name or authoritative argv path. A `caffeinate` invocation that wraps a command remains meaningful. A ready observation waits for a newer shared process snapshot, and polling stops once no probe or background work remains
+- Agent lifecycle also classifies the owning process tree: meaningful background descendants keep `agent_state=working` while an input-ready terminal may remain `shell_state=idle`; persistent `mdkb`, `tuic-bridge`, and `node_repl` helper subtrees plus Claude's standalone timed `caffeinate -i -t <seconds>` assertion are excluded by executable name or authoritative argv path. A `caffeinate` invocation that wraps a command remains meaningful. A descendant that started within 60s of the agent itself is also excluded whatever its name, which covers the daemons no list can anticipate — `codex-code-mode-host`, or an MCP server launched through `npm exec`; platforms that report no process age fall back to the name rule alone A ready observation waits for a newer shared process snapshot, and polling stops once no probe or background work remains
 - Unix: a single batched `ps -o pid,rss,%cpu` query across all PIDs (not one stat per process); Windows: per-process working-set size via the platform API
 - Three surfaces over the same data: MCP `session action=process_stats`, HTTP `GET /process/stats` (JSON `{ session_id, name, pid, rss_kb, cpu_pct }`), and `GET /process/monitor` (a self-contained HTML dashboard with no build step or external assets)
 - Frontend `ProcessManagerModal` opens the dashboard in-app

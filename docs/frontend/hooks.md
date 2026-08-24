@@ -37,6 +37,7 @@ Low-level PTY session management. Wraps Tauri PTY commands.
 | `createSession(config)` | Create PTY session, returns session ID |
 | `createSessionWithWorktree(ptyConfig, wtConfig)` | Create worktree + PTY |
 | `write(sessionId, data)` | Write to PTY |
+| `sendCommand(sessionId, text, agentType, submit?)` | Insert through the shared command path; optionally withhold Enter for review |
 | `resize(sessionId, rows, cols)` | Resize PTY |
 | `pause(sessionId)` | Pause reader thread |
 | `resume(sessionId)` | Resume reader thread |
@@ -46,6 +47,18 @@ Low-level PTY session management. Wraps Tauri PTY commands.
 | `listWorktrees()` | List managed worktrees |
 | `getWorktreesDir()` | Get worktrees directory |
 | `listActiveSessions()` | List all active sessions |
+
+---
+
+## useSmartPrompts
+
+**File:** `src/hooks/useSmartPrompts.ts`
+
+Resolves Smart Prompt variables and routes inject, shell, headless, and API
+execution. For inject mode, explicit Insert/Run choices take precedence over
+`autoExecute`; prompts without that persisted field retain their legacy target
+default. Only actions that will submit are idle-gated. PTY delivery always uses
+`usePty.sendCommand`, including review-only fallback with `submit=false`.
 
 ---
 
