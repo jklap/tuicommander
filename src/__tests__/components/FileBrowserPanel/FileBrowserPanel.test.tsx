@@ -358,3 +358,71 @@ describe("FileBrowserPanel streamed content search", () => {
 		expect(container.querySelectorAll(".contentMatch").length).toBe(1);
 	});
 });
+
+describe("FileBrowserPanel create file", () => {
+	/** Right-click a row and pick a context-menu item by label. */
+	const openContextMenuOn = (container: HTMLElement, name: string) => {
+		const label = Array.from(container.querySelectorAll(".entryName")).find((el) => el.textContent === name);
+		if (!label) throw new Error(`row not found: ${name}`);
+		fireEvent.contextMenu(label.parentElement as HTMLElement);
+	};
+
+	const clickMenuItem = (label: string) => {
+		const item = Array.from(document.querySelectorAll("*")).find(
+			(el) => el.children.length === 0 && el.textContent?.trim() === label,
+		);
+		if (!item) throw new Error(`menu item not found: ${label}`);
+		fireEvent.click(item);
+	};
+
+	it("creates a dotfile from the tree view too", async () => {
+		listings.set("/repo|.", [dir("src"), file("README.md")]);
+		listings.set("/repo|src", [file("main.ts", "src/main.ts")]);
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		clickTreeViewButton(container);
+		await waitFor(() => expect(queryByText("src")).not.toBeNull());
+		clickRow(container, "src");
+		await waitFor(() => expect(queryByText("main.ts")).not.toBeNull());
+
+		openContextMenuOn(container, "main.ts");
+		clickMenuItem("New File\u2026");
+		const input = document.querySelector("input[placeholder='File name']") as HTMLInputElement;
+		expect(input).not.toBeNull();
+		fireEvent.input(input, { target: { value: ".env" } });
+		const confirm = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Create");
+		fireEvent.click(confirm as HTMLButtonElement);
+
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("write_file", { repoPath: "/repo", file: "src/.env", content: "" }),
+		);
+		// And the new row must actually appear — creating it invisibly is the bug.
+		listings.set("/repo|src", [file("main.ts", "src/main.ts"), file(".env", "src/.env")]);
+		await waitFor(() => expect(queryByText(".env")).not.toBeNull(), { timeout: 2000 });
+	});
+
+	it("creates a dotfile typed into the New File dialog", async () => {
+		listings.set("/repo|.", [file("README.md")]);
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("README.md")).not.toBeNull());
+
+		openContextMenuOn(container, "README.md");
+		clickMenuItem("New File…");
+
+		const input = document.querySelector("input[placeholder='File name']") as HTMLInputElement;
+		expect(input).not.toBeNull();
+		fireEvent.input(input, { target: { value: ".env" } });
+
+		const confirm = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Create");
+		expect(confirm).toBeDefined();
+		expect(confirm?.disabled).toBe(false);
+		fireEvent.click(confirm as HTMLButtonElement);
+
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("write_file", { repoPath: "/repo", file: ".env", content: "" }),
+		);
+	});
+});
