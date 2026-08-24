@@ -126,11 +126,3 @@ pub async fn set_global_hotkey(
     Ok(())
 }
 
-/// Get the currently configured global hotkey combo.
-// DEFERRED (2026-05-14) — wire to settings UI alongside set_global_hotkey.
-// Getter needed so settings panel can display current hotkey on load.
-#[tauri::command]
-pub fn get_global_hotkey(app: tauri::AppHandle) -> Option<String> {
-    let state = app.state::<Arc<AppState>>();
-    state.config.read().global_hotkey.clone()
-}

@@ -8386,14 +8386,8 @@ pub(crate) fn resize_session_core(
     if *applied == (rows, cols) {
         return Ok(None);
     }
-    // Pass shell_state so reflow can be smarter: idle → All, busy → HistoryOnly.
-    let shell_state = state
-        .shell_states
-        .get(session_id)
-        .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
-        .unwrap_or(SHELL_NULL);
     // Resize the grid and capture a fresh full frame, holding the vt lock so no
-    // PTY chunk can land between the check and the resize. `resize_with_shell_state`
+    // PTY chunk can land between the check and the resize. `resize`
     // marks the grid fully damaged, so `serialize_dirty_rows` yields the whole
     // viewport. The caller must flush it: the reader thread only sends frames on
     // PTY data or the ticker, so a resize/zoom over idle or static content would
@@ -8406,7 +8400,7 @@ pub(crate) fn resize_session_core(
             if vt.grid_screen_lines() == rows as usize && vt.grid_columns() == cols as usize {
                 None
             } else {
-                vt.resize_with_shell_state(rows, cols, shell_state);
+                vt.resize(rows, cols);
                 Some(vt.serialize_dirty_rows())
             }
         }
@@ -9615,33 +9609,6 @@ pub(crate) struct ActiveSessionInfo {
     pty_description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<crate::state::SessionState>,
-}
-
-/// Update the working directory of a running PTY session.
-/// Called from the frontend when an OSC 7 escape sequence is detected,
-/// keeping the Rust-side cwd in sync for restart recovery.
-// DEFERRED (2026-05-14) — wire to frontend OSC 7 handler (handleTerminalCwdChange).
-// Without this, restart recovery uses stale launch-time cwd.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) fn update_session_cwd(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    cwd: String,
-) -> Result<(), String> {
-    let path = std::path::Path::new(&cwd);
-    if !path.is_absolute() {
-        return Err("cwd must be an absolute path".into());
-    }
-    if cwd.contains('\0') {
-        return Err("cwd must not contain null bytes".into());
-    }
-    let entry = state
-        .sessions
-        .get(&session_id)
-        .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    entry.lock().cwd = Some(cwd);
-    Ok(())
 }
 
 /// Set the display name of a PTY session (syncs tab title to backend for PWA visibility).
