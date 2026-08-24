@@ -70,6 +70,18 @@ const CTRL_PUNCT: Record<string, number> = {
 };
 
 /**
+ * Whether a keydown is the Windows/Linux form of the global block-fold-toggle shortcut
+ * (`Ctrl+Shift+.`; `Cmd+Shift+.` on macOS is already short-circuited by `keyToSequence`'s
+ * own `metaKey` check). The terminal's own keydown handler must bail out for this combo
+ * before falling through to `keyToSequence` — otherwise the printable-character fallback
+ * swallows it as a literal "." keystroke and `stopPropagation` keeps it from ever
+ * bubbling to the document-level shortcut listener.
+ */
+export function isGlobalShortcutPassthrough(e: KeyboardEvent): boolean {
+	return e.ctrlKey && e.shiftKey && !e.altKey && e.key === ".";
+}
+
+/**
  * Convert a KeyboardEvent to the terminal escape sequence string to send to the PTY.
  * Returns null if the key should not be handled (modifier-only, Meta/Cmd).
  *
