@@ -3806,6 +3806,23 @@ mod tests {
     // collapses a command back into a sync `fn`, these stop compiling.
 
     #[tokio::test]
+    async fn write_file_creates_a_dotfile_and_lists_it() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+        fs::write(dir.path().join(".gitignore"), ".env\n").unwrap();
+
+        write_file(repo_path.clone(), ".env".to_string(), String::new())
+            .await
+            .unwrap();
+
+        assert!(dir.path().join(".env").exists(), ".env was not created on disk");
+        let entries = list_directory_impl(repo_path, String::new()).unwrap();
+        let env = entries.iter().find(|e| e.name == ".env");
+        assert!(env.is_some(), "listing dropped .env: {:?}", entries.iter().map(|e| &e.name).collect::<Vec<_>>());
+        assert!(env.unwrap().is_ignored, "expected .env flagged ignored");
+    }
+
+    #[tokio::test]
     async fn write_file_command_is_awaitable_and_writes() {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();

@@ -1,4 +1,4 @@
-import { type Component, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, Show } from "solid-js";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { appLogger } from "../../stores/appLogger";
 import type { DirEntry } from "../../types/fs";
@@ -33,23 +33,37 @@ export const TreeNode: Component<TreeNodeProps> = (props) => {
 	const isExpanded = () => props.expandedDirs.has(props.entry.path);
 	const children = () => props.childrenCache.get(props.entry.path) ?? [];
 
+	/**
+	 * Load children whenever this node is expanded and the cache has no entry for
+	 * it — NOT only on the click that expanded it.
+	 *
+	 * Every invalidation depends on this. Dropping a cache key is how a mutation
+	 * (new file, delete, rename) and a `dir-changed` watcher event both ask the
+	 * subtree to reload; with the fetch living in the click handler instead, an
+	 * already-expanded folder had nothing to re-read it and either kept showing
+	 * stale rows or, once its key was deleted, rendered empty forever.
+	 */
+	let fetching = false;
+	createEffect(() => {
+		if (!props.entry.is_dir || !isExpanded()) return;
+		if (props.childrenCache.has(props.entry.path)) return;
+		if (fetching) return;
+		fetching = true;
+		setLoading(true);
+		fb.listDirectory(props.fsRoot, props.entry.path)
+			.then((entries) => props.onChildrenLoaded(props.entry.path, entries))
+			.catch((err) => {
+				appLogger.error("app", "Failed to list directory", { path: props.entry.path, error: err });
+			})
+			.finally(() => {
+				fetching = false;
+				setLoading(false);
+			});
+	});
+
 	const handleClick = () => {
 		if (props.entry.is_dir) {
-			const wasExpanded = isExpanded();
 			props.onToggleExpand(props.entry.path);
-			// Lazy-load children on first expand (check state BEFORE toggle)
-			if (!wasExpanded && !props.childrenCache.has(props.entry.path)) {
-				setLoading(true);
-				fb.listDirectory(props.fsRoot, props.entry.path)
-					.then((entries) => {
-						props.onChildrenLoaded(props.entry.path, entries);
-						setLoading(false);
-					})
-					.catch((err) => {
-						appLogger.error("app", "Failed to list directory", { path: props.entry.path, error: err });
-						setLoading(false);
-					});
-			}
 		} else {
 			props.onFileOpen(props.repoPath, props.entry.path);
 		}

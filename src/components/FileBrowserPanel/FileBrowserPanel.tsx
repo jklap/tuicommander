@@ -570,7 +570,22 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		return [...raw].sort((a, b) => (b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0) || b.modified_at - a.modified_at);
 	});
 
-	const refresh = () => setRefreshTrigger((n) => n + 1);
+	/**
+	 * Re-read the current directory after a mutation (create, delete, rename,
+	 * duplicate, paste).
+	 *
+	 * The tree cache is dropped too, and deliberately in full rather than for the
+	 * one affected parent: every mutation handler calls this, and a per-path
+	 * variant only works if all of them pass the right path — the flat list was
+	 * refreshing correctly while the tree kept serving stale children precisely
+	 * because the tree had no such call at all. Expanded nodes re-read themselves
+	 * (see TreeNode's effect), and a mutation is user-initiated and rare, so the
+	 * extra listings cost nothing measurable.
+	 */
+	const refresh = () => {
+		setTreeCache(new Map());
+		setRefreshTrigger((n) => n + 1);
+	};
 
 	const navigateInto = (entry: DirEntry) => {
 		changeSubdir(entry.path);
