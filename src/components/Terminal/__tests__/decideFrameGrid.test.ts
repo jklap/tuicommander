@@ -41,6 +41,7 @@ function makeFrame(opts: {
 		screenRows: opts.screenRows,
 		screenCols: opts.screenCols ?? 80,
 		rows: opts.rows,
+		needsFullFrame: false,
 	};
 }
 

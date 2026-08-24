@@ -1367,7 +1367,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		else ackFrame();
 		const timing = isFrameTimingEnabled();
 		const decodeT0 = timing ? performance.now() : 0;
-		const frame = decodeBinaryFrame(buffer);
+		// rowMap is the merge base for partial rows (see ROW_PARTIAL_FLAG): they
+		// carry only their damaged columns and take the rest of the line from what
+		// is already on screen.
+		const frame = decodeBinaryFrame(buffer, rowMap);
 		if (timing) recordFrameTiming(props.sessionId, "decode", performance.now() - decodeT0);
 		if (!frame) {
 			// The only way to land here is a buffer shorter than the 26-byte header:
@@ -1477,6 +1480,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			rowMap.set(row.index, row);
 			pendingDirtyRows.add(row.index);
 			scanRowForLinks(row.index);
+		}
+
+		// A partial row arrived for a line we do not hold — it was dropped rather
+		// than painted with holes, so pull the whole screen back. Self-limiting:
+		// terminal_request_frame forces full damage, and a full frame repopulates
+		// every row, so the next frame cannot land here again for the same reason.
+		if (frame.needsFullFrame) {
+			fullRepaintNeeded = true;
+			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 		}
 
 		// Every row in this frame just had its text replaced. A search match anchored

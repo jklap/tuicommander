@@ -22,6 +22,14 @@ export const ATTR_DEFAULT_BG = 0x80;
  *  wrapped `suggest:` block (#8fc7). */
 const ROW_WRAPPED_FLAG = 0x8000;
 
+/** Bit 14 of the wire `col_count`: this row carries only its damaged columns.
+ *  A `start_col: u16` follows the count and the payload is `count` cells from
+ *  that column; `decodeBinaryFrame` merges them into the row already on screen.
+ *  Mirrors `ROW_PARTIAL_FLAG` in src-tauri/src/terminal_grid.rs, which documents
+ *  why this is a flag and not a header version. A backend that predates it never
+ *  sets the bit, so this decoder keeps taking the whole-row path unchanged. */
+const ROW_PARTIAL_FLAG = 0x4000;
+
 export interface DecodedRow {
 	index: number;
 	count: number;
@@ -87,6 +95,10 @@ export interface DecodedFrame {
 	screenRows: number;
 	screenCols: number;
 	rows: DecodedRow[];
+	/** A ROW_PARTIAL_FLAG row arrived with no row on screen to merge into, so its
+	 *  untouched columns are unknown and it was dropped. The caller must pull a
+	 *  full frame rather than paint a row with holes in it. */
+	needsFullFrame: boolean;
 }
 
 /** Previous frame geometry/scroll state needed to decide what a new frame implies. */
@@ -313,8 +325,18 @@ export interface CellMetrics {
 	scaledCellHeight: number;
 }
 
-/** Decode a binary grid frame from the Rust backend into structured data. */
-export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
+/**
+ * Decode a binary grid frame from the Rust backend into structured data.
+ *
+ * `base` is the rows currently on screen, keyed by row index. It is only read for
+ * ROW_PARTIAL_FLAG rows, which carry just their damaged columns and need the rest
+ * of the line from somewhere. Every row this returns is full width, so callers
+ * downstream never learn that partial rows exist.
+ *
+ * Rows are rebuilt, never mutated: `rowTextCache` keys off row identity, and the
+ * row it is merging from may still be referenced by the scroll cache.
+ */
+export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number, DecodedRow>): DecodedFrame | null {
 	if (buffer.byteLength < HEADER_SIZE) return null;
 
 	const view = new DataView(buffer);
@@ -357,7 +379,16 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 	const focusReporting = (frameFlags & 0x40) !== 0;
 	const bracketedPaste = (frameFlags & 0x80) !== 0;
 
+	// DEFERRED (2026-08-20) — F29, pooling these four typed arrays across frames.
+	// It cannot be done as the audit describes: rows outlive the frame. They are
+	// retained by the scroll `rowCache` (bounded at ROW_CACHE_MAX) and used as
+	// `rowTextCache` WeakMap keys, so a reused buffer would alias a cached row onto
+	// a later frame's cells. The paint half of F29 is already done — gridRenderer
+	// batches font/fillStyle changes and caches every colour and font string — and
+	// its glyph-run batching was deliberately rejected there, because `cellWidth`
+	// is rounded and batched `fillText` runs accumulate sub-pixel cursor drift.
 	const rows: DecodedRow[] = [];
+	let needsFullFrame = false;
 	for (let r = 0; r < numRows; r++) {
 		if (offset + 4 > buffer.byteLength) break;
 		const rowIndex = view.getUint16(offset, true);
@@ -365,16 +396,36 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 		const rawColCount = view.getUint16(offset, true);
 		offset += 2;
 		const wrapped = (rawColCount & ROW_WRAPPED_FLAG) !== 0;
-		const colCount = rawColCount & ~ROW_WRAPPED_FLAG;
+		const partial = (rawColCount & ROW_PARTIAL_FLAG) !== 0;
+		const colCount = rawColCount & ~(ROW_WRAPPED_FLAG | ROW_PARTIAL_FLAG);
+		let startCol = 0;
+		if (partial) {
+			if (offset + 2 > buffer.byteLength) break;
+			startCol = view.getUint16(offset, true);
+			offset += 2;
+		}
 
-		const codepoints = new Uint32Array(colCount);
-		const fg = new Uint32Array(colCount);
-		const bg = new Uint32Array(colCount);
-		const attrs = new Uint8Array(colCount);
+		// A partial row describes an edit to the line already on screen. Without
+		// that line the untouched columns are unknown, so drop the row and let the
+		// caller pull a full frame — painting a half-known row would leave holes
+		// that nothing repairs until the next reconcile.
+		const previous = partial ? base?.get(rowIndex) : undefined;
+		if (partial && !previous) {
+			needsFullFrame = true;
+			offset += colCount * CELL_SIZE;
+			continue;
+		}
 
-		for (let c = 0; c < colCount; c++) {
+		const width = previous ? previous.count : colCount;
+		const codepoints = previous ? new Uint32Array(previous.codepoints) : new Uint32Array(colCount);
+		const fg = previous ? new Uint32Array(previous.fg) : new Uint32Array(colCount);
+		const bg = previous ? new Uint32Array(previous.bg) : new Uint32Array(colCount);
+		const attrs = previous ? new Uint8Array(previous.attrs) : new Uint8Array(colCount);
+
+		for (let i = 0; i < colCount; i++) {
 			if (offset + CELL_SIZE > buffer.byteLength) break;
-			codepoints[c] = view.getUint32(offset, true);
+			const c = startCol + i;
+			const cp = view.getUint32(offset, true);
 			offset += 4;
 			const fgR = view.getUint8(offset++);
 			const fgG = view.getUint8(offset++);
@@ -382,12 +433,18 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 			const bgR = view.getUint8(offset++);
 			const bgG = view.getUint8(offset++);
 			const bgB = view.getUint8(offset++);
-			attrs[c] = view.getUint8(offset++);
+			const a = view.getUint8(offset++);
+			// A resize can land a span past the row we are merging into. The next
+			// frame is full (geometry change forces full damage), so skipping is
+			// enough — but writing past the end would silently drop the cell.
+			if (c >= width) continue;
+			codepoints[c] = cp;
+			attrs[c] = a;
 			fg[c] = (fgR << 16) | (fgG << 8) | fgB;
 			bg[c] = (bgR << 16) | (bgG << 8) | bgB;
 		}
 
-		rows.push({ index: rowIndex, count: colCount, wrapped, codepoints, fg, bg, attrs });
+		rows.push({ index: rowIndex, count: width, wrapped, codepoints, fg, bg, attrs });
 	}
 
 	return {
@@ -409,6 +466,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 		screenRows,
 		screenCols,
 		rows,
+		needsFullFrame,
 	};
 }
 
@@ -453,7 +511,10 @@ export function decodeStyledRange(buffer: ArrayBuffer): StyledRange | null {
 		const rawColCount = view.getUint16(offset, true);
 		offset += 2;
 		const wrapped = (rawColCount & ROW_WRAPPED_FLAG) !== 0;
-		const colCount = rawColCount & ~ROW_WRAPPED_FLAG;
+		// Scrollback rows are always whole (see `serialize_styled_range`), but the
+		// count field is shared with the dirty-row format, so mask both flags —
+		// masking one and not the other is how a flag becomes a width of 16384.
+		const colCount = rawColCount & ~(ROW_WRAPPED_FLAG | ROW_PARTIAL_FLAG);
 		const codepoints = new Uint32Array(colCount);
 		const fg = new Uint32Array(colCount);
 		const bg = new Uint32Array(colCount);
