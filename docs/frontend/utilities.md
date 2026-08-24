@@ -42,6 +42,14 @@ Maps GitHub merge state and review decision to display labels with CSS classes. 
 
 ## Terminal Utilities
 
+### sendCommand.ts
+
+`sendCommand(writeFn, text, agentType, shellFamily, submit?)` is the single
+frontend path for terminal command insertion and submission. It applies
+platform-aware line clearing, bracketed paste for multi-line text, and the
+agent-specific delay before Enter. Passing `submit=false` keeps the text
+editable and does not write Enter.
+
 ### terminalFilter.ts
 
 ```typescript

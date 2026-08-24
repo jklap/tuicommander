@@ -73,8 +73,9 @@ export function clearShellFamilyCache(sessionId: string): void {
  *  @param shellFamily  Classification of the session's underlying shell.
  *  @param submit       When false, the text is typed but the trailing Enter is
  *                      withheld so the user reviews and executes it manually.
- *                      Used for suggestion chips carrying shell metacharacters
- *                      (spoofable via OSC 7770 from untrusted output). Default true.
+ *                      Used by reviewable Smart Prompts and by suggestion chips
+ *                      carrying shell metacharacters (spoofable via OSC 7770
+ *                      from untrusted output). Default true.
  */
 export async function sendCommand(
 	writeFn: (data: string) => Promise<void>,
