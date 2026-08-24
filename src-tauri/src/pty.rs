@@ -9484,7 +9484,30 @@ pub(crate) fn deepest_descendant_pid(root_pid: u32) -> Option<u32> {
 }
 
 /// Map a process name to a known agent type, or None for non-agent processes.
+///
+/// A versioned basename counts as the tool. grok 1.0.5 installs
+/// `~/.grok/bin/grok` as a symlink to `grok-1.0.5`, and `proc_pidpath` resolves
+/// the link, so the foreground process reads `grok-1.0.5`. Against an
+/// exact-match table that is None: the session gets no `agent_type`, so
+/// `has_ready_screen_adapter` is false and the OSC 133 busy bit set once by the
+/// long-lived `grok` command is never cleared — the tab stays working for the
+/// whole process. An agent that renames its binary per release must not be able
+/// to un-detect itself.
 pub(crate) fn classify_agent(process_name: &str) -> Option<&'static str> {
+    exact_agent_name(process_name).or_else(|| exact_agent_name(strip_version_suffix(process_name)))
+}
+
+/// Drop a trailing `-<version>` from an executable basename (`grok-1.0.5` →
+/// `grok`). The suffix must start with a digit, so a hyphenated tool name
+/// (`cursor-agent`) keeps its own identity.
+fn strip_version_suffix(name: &str) -> &str {
+    match name.rsplit_once('-') {
+        Some((base, suffix)) if suffix.starts_with(|c: char| c.is_ascii_digit()) => base,
+        _ => name,
+    }
+}
+
+fn exact_agent_name(process_name: &str) -> Option<&'static str> {
     match process_name {
         "claude" => Some("claude"),
         "gemini" => Some("gemini"),
@@ -10852,6 +10875,51 @@ mod tests {
         assert_eq!(classify_agent("node"), None);
         assert_eq!(classify_agent("python"), None);
         assert_eq!(classify_agent("vim"), None);
+    }
+
+    /// grok 1.0.5 ships `~/.grok/bin/grok` as a symlink to `grok-1.0.5`, and
+    /// `proc_pidpath` resolves the link. Missing the versioned basename left the
+    /// session with no `agent_type`, hence no ready-screen adapter, hence a tab
+    /// that never left BUSY.
+    #[test]
+    fn test_classify_agent_versioned_basename() {
+        assert_eq!(classify_agent("grok-1.0.5"), Some("grok"));
+        assert_eq!(classify_agent("claude-2.1.81"), Some("claude"));
+        assert_eq!(classify_agent("codex-0.116"), Some("codex"));
+        assert_eq!(
+            classify_agent_name_or_path("/Users/me/.grok/bin/grok-1.0.5"),
+            Some("grok")
+        );
+    }
+
+    /// The suffix must start with a digit, so a hyphenated tool name keeps its
+    /// own identity and an unrelated binary is not promoted to an agent.
+    #[test]
+    fn test_classify_agent_version_strip_does_not_overreach() {
+        assert_eq!(classify_agent("cursor-agent"), Some("cursor"));
+        assert_eq!(classify_agent("grok-wrapper"), None);
+        assert_eq!(classify_agent("not-grok"), None);
+        assert_eq!(classify_agent("postgres-16"), None);
+    }
+
+    /// The ready-screen adapter is the whole point of detecting the agent: grok
+    /// runs as one long-lived foreground command, so OSC 133 marks the shell busy
+    /// once and only the screen can take it back to idle.
+    #[test]
+    fn test_grok_minimal_screen_is_ready_once_classified() {
+        assert!(has_ready_screen_adapter(classify_agent("grok-1.0.5")));
+        // Captured live from `grok --minimal` 1.0.5: no composer box, no
+        // separators — a bare prompt glyph above the model status row.
+        let rows: Vec<String> = vec![
+            "Abbiamo scritto l’analisi completa in `grok-report.md`.".to_string(),
+            "minimal · /help".to_string(),
+            "\u{276F}".to_string(),
+            "Grok 4.6 (high) · always-approve · 186K / 500K (37%) · ctrl+o transcript".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("grok"), &rows),
+            AgentScreenActivity::Ready
+        );
     }
 
     // --- parse_osc7_cwd tests (story 1558-81bb) ---
