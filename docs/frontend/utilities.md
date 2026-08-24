@@ -66,6 +66,22 @@ findOrphanTerminals(terminalIds: string[], branchTerminalMap: Record<string, str
 
 Finds terminals that exist in the store but aren't associated with any branch. Used for cleanup.
 
+### ptyCapture.ts
+
+`ptyCaptureStore` drives the raw PTY capture tap from the UI: `isRecording(sessionId)`,
+`bytes(sessionId)`, `refresh()`, and `toggle(sessionId)`. It backs the **Capture Session**
+item in the tab context menu, which appears only while `isPerfDebug()` is on.
+
+The tap has to be armed *before* a reproduction — the per-session output ring holds only the
+last 8 KB, so a state-detection bug reported after the fact has already lost its evidence.
+That is why the control sits one click from the misbehaving tab instead of in a curl the
+reporter has to look up.
+
+The tap is one global switch that `POST /diagnostics/capture` and other windows can also
+flip, so `refresh()` runs on every context-menu open rather than trusting the last value this
+window wrote. Starting always opens a fresh file, so the byte count reported when stopping
+belongs to that recording alone.
+
 ## Path Utilities (`pathUtils.ts`)
 
 Cross-platform path helpers that handle both `/` (Unix) and `\` (Windows) separators. All path comparison and construction in the frontend MUST use these instead of raw string operations.

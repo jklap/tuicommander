@@ -262,6 +262,16 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { agent: string | null }).agent,
 		}),
 	},
+	get_pty_capture: {
+		map: () => ({ method: "GET", path: "/diagnostics/capture" }),
+	},
+	set_pty_capture: {
+		map: (args) => ({
+			method: "POST",
+			path: "/diagnostics/capture",
+			body: { enabled: args.enabled, session_id: args.sessionId ?? null },
+		}),
+	},
 	get_session_shell_family: {
 		map: (args) => ({
 			method: "GET",

@@ -1666,6 +1666,8 @@ pub fn run() {
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
             pty::debug_agent_detection,
+            pty_capture::get_pty_capture,
+            pty_capture::set_pty_capture,
             load_config,
             save_config,
             themes::list_themes,

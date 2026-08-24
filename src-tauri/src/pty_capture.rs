@@ -194,6 +194,37 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Vec<CaptureRecord>, String> {
     Ok(records)
 }
 
+/// Start or stop the tap on the canonical capture directory, and report the new
+/// state. Every entry point — `POST /diagnostics/capture` and the desktop tab
+/// menu — goes through here, so the two can never disagree about where a
+/// capture lands.
+pub(crate) fn set_enabled_in_config_dir(
+    enabled: bool,
+    session_filter: Option<String>,
+) -> serde_json::Value {
+    set_enabled(
+        enabled,
+        session_filter,
+        crate::config::config_dir().join("captures"),
+    );
+    status()
+}
+
+/// Toggle the tap from the desktop app. The HTTP twin is
+/// `mcp_http::log_routes::capture_set`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn set_pty_capture(enabled: bool, session_id: Option<String>) -> serde_json::Value {
+    set_enabled_in_config_dir(enabled, session_id)
+}
+
+/// Read the tap state from the desktop app. HTTP twin: `GET /diagnostics/capture`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn get_pty_capture() -> serde_json::Value {
+    status()
+}
+
 /// Current tap state, for `GET /diagnostics/capture`.
 pub(crate) fn status() -> serde_json::Value {
     let guard = STATE.lock();

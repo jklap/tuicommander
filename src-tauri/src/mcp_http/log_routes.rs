@@ -160,9 +160,10 @@ pub(crate) async fn capture_get() -> Json<serde_json::Value> {
 pub(crate) async fn capture_set(
     Json(body): Json<super::types::SetCaptureRequest>,
 ) -> Json<serde_json::Value> {
-    let dir = crate::config::config_dir().join("captures");
-    crate::pty_capture::set_enabled(body.enabled, body.session_id, dir);
-    Json(crate::pty_capture::status())
+    Json(crate::pty_capture::set_enabled_in_config_dir(
+        body.enabled,
+        body.session_id,
+    ))
 }
 
 // ---------------------------------------------------------------------------

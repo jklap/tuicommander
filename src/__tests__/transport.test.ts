@@ -307,6 +307,24 @@ describe("transport", () => {
 			expect(result.transform?.({ agent: null })).toBeNull();
 		});
 
+		it("maps get_pty_capture to GET /diagnostics/capture", () => {
+			const result = mapCommandToHttp("get_pty_capture", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/diagnostics/capture");
+		});
+
+		it("maps set_pty_capture to POST /diagnostics/capture with a session filter", () => {
+			const result = mapCommandToHttp("set_pty_capture", { enabled: true, sessionId: "abc" });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/diagnostics/capture");
+			expect(result.body).toEqual({ enabled: true, session_id: "abc" });
+		});
+
+		it("maps set_pty_capture without a session to an unfiltered tap", () => {
+			const result = mapCommandToHttp("set_pty_capture", { enabled: false });
+			expect(result.body).toEqual({ enabled: false, session_id: null });
+		});
+
 		it("maps get_orchestrator_stats to GET /stats", () => {
 			const result = mapCommandToHttp("get_orchestrator_stats", {});
 			expect(result.method).toBe("GET");
