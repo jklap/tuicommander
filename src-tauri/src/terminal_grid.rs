@@ -179,6 +179,29 @@ pub(crate) struct LogicalPrefix {
 /// the grid is the only place that knows.
 pub(crate) const ROW_WRAPPED_FLAG: u16 = 0x8000;
 
+/// Bit 14 of the wire `col_count`: this row carries only the columns alacritty
+/// reported as damaged, not the whole line. When set, a `start_col: u16` follows
+/// the count and the payload is `count` cells beginning at that column; the
+/// frontend merges them into the row it already holds.
+///
+/// Measured over 11 real captures (4810 ticker-grouped frames,
+/// `damage_overship_over_capture_corpus`): the whole-row format ships 2.44 cells
+/// per cell actually damaged on average, and 11.8x on the busiest agent session,
+/// because a spinner or an in-place TUI redraw touches a handful of columns and
+/// pays for the full width.
+///
+/// It is a flag rather than a format bump on purpose. Rust does not hot-reload in
+/// dev, so a rebuilt frontend routinely runs against yesterday's backend: an old
+/// backend simply never sets the bit and the new decoder takes the whole-row path
+/// it always took. A header change would have desynced that pairing outright —
+/// same reasoning as `ROW_WRAPPED_FLAG` above.
+///
+/// The staleness this can introduce is the one the canvas already tolerates:
+/// alacritty under-reports damage on in-place TUI redraws (see the `[dup]` heal in
+/// CanvasTerminal), so a periodic full-frame reconcile already exists and bounds a
+/// missed column to the same ~250ms-1s window it bounds a missed row.
+pub(crate) const ROW_PARTIAL_FLAG: u16 = 0x4000;
+
 const ATTR_BOLD: u8 = 0b0000_0001;
 const ATTR_ITALIC: u8 = 0b0000_0010;
 const ATTR_UNDERLINE: u8 = 0b0000_0100;
@@ -341,16 +364,22 @@ fn resolve_color(c: Color, colors: &Colors) -> Option<Rgb> {
 /// flag answers "does this row continue?", not "is this row a continuation?".
 /// The frontend walks forward from an anchor, which is the direction that
 /// matches.
+///
+/// `count` is how many cells the row actually carries — the full width on the
+/// whole-row path, the damaged span on a [`ROW_PARTIAL_FLAG`] row. The wrap probe
+/// always reads the row's real last cell, so a partial row that stops short of the
+/// right edge still reports the line's true wrap state.
 fn encode_col_count(
     grid: &alacritty_terminal::grid::Grid<Cell>,
     line: Line,
     num_cols: usize,
+    count: usize,
 ) -> u16 {
     let wrapped = num_cols > 0
         && grid[line][Column(num_cols - 1)]
             .flags
             .contains(Flags::WRAPLINE);
-    (num_cols as u16) | if wrapped { ROW_WRAPPED_FLAG } else { 0 }
+    (count as u16) | if wrapped { ROW_WRAPPED_FLAG } else { 0 }
 }
 
 /// Encode one grid cell into the 11-byte wire format shared by the dirty-row and
@@ -1655,9 +1684,14 @@ impl TerminalGrid {
     /// Header: [num_rows: u16] [cursor_row: u16] [cursor_col: u16] [cursor_visible: u8]
     ///         [display_offset: u32] [history_size: u32] [has_selection: u8]
     ///         [keyboard_flags: u8] [frame_flags: u8] [num_lines: u16] [num_cols: u16]
-    /// Per row: [row_index: u16] [col_count: u16] [cells...]
+    /// Per row: [row_index: u16] [col_count: u16] ([start_col: u16]) [cells...]
     /// Per cell: [char: u32 LE] [fg_r, fg_g, fg_b] [bg_r, bg_g, bg_b] [attrs: u8]
     /// ```
+    /// `col_count` carries two flags in its top bits: [`ROW_WRAPPED_FLAG`] (the
+    /// line continues onto the next display row) and [`ROW_PARTIAL_FLAG`]. Only
+    /// when the latter is set does `start_col` follow, and then the row carries
+    /// `col_count` cells starting at that column instead of the whole width —
+    /// the frontend merges them into the row it already holds.
     /// attrs: bit0=bold, bit1=italic, bit2=underline, bit3=strikeout,
     ///        bit4=dim, bit5=inverse, bit6=default_fg, bit7=default_bg
     /// keyboard_flags: bit0=disambiguate_esc_codes, bit1=report_event_types,
@@ -1718,13 +1752,35 @@ impl TerminalGrid {
             self.term.mark_fully_damaged();
         }
 
-        let dirty_lines: Vec<usize> = {
+        // REJECTED (2026-08-20) — F24, skipping the full damage above when only
+        // `history_size` grew. Measured and not worth it: over 11 real captures
+        // (4810 frames, `damage_overship_over_capture_corpus`) full frames are
+        // 0.4% of all frames, and that already counts resizes and scrollback moves
+        // as well as history growth. The audit's "every scrolled line forces a
+        // full-screen frame" does not hold on real workloads. Doing it needs the
+        // frame to carry a scroll delta the frontend applies before indexing rows,
+        // and getting that wrong scrambles text silently. Re-open only if a capture
+        // shows a full-frame rate high enough to pay for that risk.
+        //
+        // DEFERRED (2026-08-20) — F26, not holding the vt lock across this
+        // serialization. It is not a lock-placement fix: this method takes
+        // `&mut self` to reset damage and update the `last_frame_*` state, so
+        // releasing the lock means double-buffering the grid — and copying the grid
+        // costs about what the encode it unblocks costs. No measurement exists
+        // showing the contention is real; take one before paying for it.
+        //
+        // (line, left, right) — `right` inclusive. Keeping the column bounds is
+        // what lets a row ship only its damaged span (see `ROW_PARTIAL_FLAG`);
+        // discarding them cost 2.44x the cells on the measured corpus.
+        let dirty_lines: Vec<(usize, usize, usize)> = {
+            let last_col = num_cols.saturating_sub(1);
             let damage = self.term.damage();
             match damage {
-                TermDamage::Full => (0..num_lines).collect(),
-                TermDamage::Partial(iter) => {
-                    iter.map(|b| b.line).filter(|&l| l < num_lines).collect()
-                }
+                TermDamage::Full => (0..num_lines).map(|l| (l, 0, last_col)).collect(),
+                TermDamage::Partial(iter) => iter
+                    .filter(|b| b.line < num_lines)
+                    .map(|b| (b.line, b.left.min(last_col), b.right.min(last_col)))
+                    .collect(),
             }
         };
 
@@ -1795,12 +1851,25 @@ impl TerminalGrid {
 
         let grid = self.term.grid();
         let colors = self.term.colors();
-        for &row_idx in &dirty_lines {
+        for &(row_idx, left, right) in &dirty_lines {
             let line = Line(row_idx as i32 - display_offset as i32);
+            // A span shorter than the row saves 11 bytes per column dropped and
+            // costs 2 for `start_col`, so any narrowing at all is worth sending
+            // partial. An empty grid (num_cols == 0) has nothing to narrow.
+            let span = (right + 1).saturating_sub(left).min(num_cols);
+            let partial = span < num_cols;
             buf.extend_from_slice(&(row_idx as u16).to_le_bytes());
-            buf.extend_from_slice(&encode_col_count(grid, line, num_cols).to_le_bytes());
+            let count = encode_col_count(grid, line, num_cols, span);
+            buf.extend_from_slice(
+                &(count | if partial { ROW_PARTIAL_FLAG } else { 0 }).to_le_bytes(),
+            );
+            if partial {
+                buf.extend_from_slice(&(left as u16).to_le_bytes());
+            }
 
-            for col in 0..num_cols {
+            // Bounded by `num_cols`, not `right`, so a zero-column grid indexes
+            // nothing — the old `0..num_cols` loop was empty there too.
+            for col in left..num_cols.min(right + 1) {
                 encode_cell(&mut buf, &grid[line][Column(col)], colors);
             }
         }
@@ -1811,6 +1880,57 @@ impl TerminalGrid {
         self.last_frame_screen_lines = Some(num_lines);
         self.last_frame_columns = Some(num_cols);
         buf
+    }
+
+    /// Damage geometry for one frame, as `serialize_dirty_rows` would see it: the
+    /// rows it would ship, and how many of those rows' cells alacritty actually
+    /// reported as damaged. Consumes the damage the same way the serializer does,
+    /// so a replay alternating `process` and this call sees exactly the frames a
+    /// live ticker would.
+    ///
+    /// Exists to measure F23 (per-row column bounds are discarded at the
+    /// `TermDamage::Partial` match above) against real captures instead of
+    /// guessing at the win. `shipped / damaged` is the byte multiplier the current
+    /// whole-row format pays.
+    #[cfg(test)]
+    pub(crate) fn take_damage_geometry(&mut self) -> DamageGeometry {
+        let num_cols = self.term.grid().columns();
+        let num_lines = self.term.grid().screen_lines();
+        let display_offset = self.term.grid().display_offset();
+        let history_size = self.term.grid().history_size();
+
+        let viewport_changed = self.last_frame_display_offset != Some(display_offset)
+            || self.last_frame_history_size != Some(history_size)
+            || self.last_frame_screen_lines != Some(num_lines)
+            || self.last_frame_columns != Some(num_cols);
+        if viewport_changed {
+            self.term.mark_fully_damaged();
+        }
+
+        let (rows, damaged_cells) = match self.term.damage() {
+            TermDamage::Full => (num_lines, num_lines * num_cols),
+            TermDamage::Partial(iter) => {
+                iter.filter(|b| b.line < num_lines)
+                    .fold((0usize, 0usize), |(rows, cells), b| {
+                        // `right` is inclusive, and a damaged line always has
+                        // `left <= right`, so the span is at least one cell.
+                        (rows + 1, cells + (b.right - b.left + 1).min(num_cols))
+                    })
+            }
+        };
+
+        self.term.reset_damage();
+        self.last_frame_display_offset = Some(display_offset);
+        self.last_frame_history_size = Some(history_size);
+        self.last_frame_screen_lines = Some(num_lines);
+        self.last_frame_columns = Some(num_cols);
+
+        DamageGeometry {
+            rows,
+            damaged_cells,
+            shipped_cells: rows * num_cols,
+            full_frame: viewport_changed,
+        }
     }
 
     /// Serialize a range of styled rows by *eviction-stable absolute index*. Feeds
@@ -1859,7 +1979,10 @@ impl TerminalGrid {
         for rel in rows {
             let line = Line(rel as i32 - history_size as i32);
             buf.extend_from_slice(&((rel + history_base) as u32).to_le_bytes());
-            buf.extend_from_slice(&encode_col_count(grid, line, num_cols).to_le_bytes());
+            // Scrollback rows are always whole: this serializer answers "give me
+            // these rows", not "what changed", so there is no damage span and no
+            // prior row on the frontend to merge into.
+            buf.extend_from_slice(&encode_col_count(grid, line, num_cols, num_cols).to_le_bytes());
             for col in 0..num_cols {
                 encode_cell(&mut buf, &grid[line][Column(col)], colors);
             }
@@ -2036,6 +2159,20 @@ fn starts_list_item(trimmed: &str) -> bool {
     matches!(rest.strip_prefix(['.', ')']), Some(after) if after.starts_with(' '))
 }
 
+/// One frame's worth of damage geometry — see `take_damage_geometry`.
+#[cfg(test)]
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct DamageGeometry {
+    /// Rows the frame would carry.
+    pub rows: usize,
+    /// Cells alacritty reported as damaged across those rows.
+    pub damaged_cells: usize,
+    /// Cells the current whole-row wire format actually ships.
+    pub shipped_cells: usize,
+    /// The viewport moved, so the serializer forced full damage (F24's path).
+    pub full_frame: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2049,6 +2186,277 @@ mod tests {
 
     fn screen_contains(grid: &TerminalGrid, needle: &str) -> bool {
         grid.screen_text_rows().iter().any(|r| r.contains(needle))
+    }
+
+    // --- F23: how much does the whole-row wire format overship? ---
+
+    /// The grid ticker's period. Frames are taken on this boundary so a replay
+    /// batches the same chunks into the same frame a live session would.
+    const TICK_US: u64 = 16_000;
+
+    #[derive(Debug, Default)]
+    struct DamageTotals {
+        frames: usize,
+        full_frames: usize,
+        rows: usize,
+        damaged_cells: usize,
+        shipped_cells: usize,
+    }
+
+    impl DamageTotals {
+        fn add(&mut self, g: DamageGeometry) {
+            if g.rows == 0 {
+                return;
+            }
+            self.frames += 1;
+            self.full_frames += usize::from(g.full_frame);
+            self.rows += g.rows;
+            self.damaged_cells += g.damaged_cells;
+            self.shipped_cells += g.shipped_cells;
+        }
+
+        /// Cells shipped per cell actually damaged. 1.0 means the current format
+        /// wastes nothing; 10.0 means F23 would cut this workload's row payload
+        /// by 90%.
+        fn overship(&self) -> f64 {
+            if self.damaged_cells == 0 {
+                return 1.0;
+            }
+            self.shipped_cells as f64 / self.damaged_cells as f64
+        }
+    }
+
+    /// Replay a capture the way the grid ticker sees it: feed every output record
+    /// into the vt, and take a frame each time the capture's own clock crosses a
+    /// tick boundary. Input records are skipped — they never reach the vt.
+    ///
+    /// The tick grouping is what makes the result meaningful. Sampling per chunk
+    /// instead would split one repaint across several frames and report damage
+    /// far narrower than production ever sees.
+    fn replay_damage(bytes: &[u8], rows: u16, cols: u16) -> DamageTotals {
+        let records = crate::pty_capture::decode(bytes).expect("decodable capture");
+        let mut grid = TerminalGrid::new(rows, cols, 10_000);
+        let mut totals = DamageTotals::default();
+        let mut tick = 0u64;
+        for rec in records {
+            if rec.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            grid.process(&rec.data);
+            if rec.elapsed_us / TICK_US > tick {
+                tick = rec.elapsed_us / TICK_US;
+                totals.add(grid.take_damage_geometry());
+            }
+        }
+        totals.add(grid.take_damage_geometry());
+        totals
+    }
+
+    /// `take_damage_geometry` must agree with `serialize_dirty_rows` about which
+    /// rows a frame carries, or every number measured through it is fiction.
+    #[test]
+    fn damage_geometry_row_count_matches_the_serializer() {
+        let mut measured = TerminalGrid::new(10, 40, 100);
+        let mut serialized = TerminalGrid::new(10, 40, 100);
+
+        for chunk in [
+            b"\x1b[2Jhello".as_slice(),
+            b" world".as_slice(),
+            b"\r\nsecond line".as_slice(),
+        ] {
+            measured.process(chunk);
+            serialized.process(chunk);
+
+            let geometry = measured.take_damage_geometry();
+            let frame = serialized.serialize_dirty_rows();
+            let rows_in_frame = if frame.is_empty() {
+                0
+            } else {
+                u16::from_le_bytes([frame[0], frame[1]]) as usize
+            };
+
+            assert_eq!(
+                geometry.rows, rows_in_frame,
+                "geometry and serializer disagree on row count"
+            );
+            assert_eq!(
+                geometry.shipped_cells,
+                rows_in_frame * 40,
+                "the wire format ships whole rows"
+            );
+        }
+    }
+
+    /// The premise under F23: alacritty reports narrow column bounds when only a
+    /// few cells change, and the serializer throws them away. A spinner ticking
+    /// one glyph damages one column and ships forty.
+    #[test]
+    fn narrow_edits_report_narrow_column_damage() {
+        let mut grid = TerminalGrid::new(10, 40, 100);
+        grid.process(b"\x1b[2J\x1b[H");
+        let _ = grid.take_damage_geometry();
+
+        // Home, then overwrite a single cell — the shape of a spinner frame.
+        for glyph in [b"\x1b[H|", b"\x1b[H/", b"\x1b[H-"] {
+            grid.process(glyph);
+            let g = grid.take_damage_geometry();
+            assert_eq!(g.rows, 1, "one row damaged");
+            // Two, not one: the glyph lands on column 0 and the cursor ends on
+            // column 1, and alacritty damages the cell the cursor sits on. So the
+            // floor for any edit is the edit plus one cell — which is why F23's
+            // win is measured, not assumed.
+            assert_eq!(g.damaged_cells, 2, "the edit plus the cursor cell");
+            assert_eq!(g.shipped_cells, 40, "but a whole row is shipped");
+        }
+    }
+
+    /// Decode the first row header of a dirty-row frame: (row_index, count,
+    /// wrapped, start_col, cell_bytes).
+    fn first_row_header(frame: &[u8], num_cols: usize) -> (usize, usize, bool, usize, usize) {
+        const HEADER: usize = 26;
+        let row_index = u16::from_le_bytes([frame[HEADER], frame[HEADER + 1]]) as usize;
+        let raw = u16::from_le_bytes([frame[HEADER + 2], frame[HEADER + 3]]);
+        let wrapped = raw & ROW_WRAPPED_FLAG != 0;
+        let partial = raw & ROW_PARTIAL_FLAG != 0;
+        let count = (raw & !(ROW_WRAPPED_FLAG | ROW_PARTIAL_FLAG)) as usize;
+        let (start_col, consumed) = if partial {
+            (
+                u16::from_le_bytes([frame[HEADER + 4], frame[HEADER + 5]]) as usize,
+                6,
+            )
+        } else {
+            (0, 4)
+        };
+        assert!(
+            start_col + count <= num_cols,
+            "a row's span must fit the screen: start {start_col} + count {count} > {num_cols}"
+        );
+        (
+            row_index,
+            count,
+            wrapped,
+            start_col,
+            frame.len() - HEADER - consumed,
+        )
+    }
+
+    /// F23: a narrow edit must ship a narrow row. Without this the change is a
+    /// no-op that still compiles and still passes every whole-row test.
+    #[test]
+    fn a_narrow_edit_ships_only_the_damaged_span() {
+        let mut grid = TerminalGrid::new(10, 40, 100);
+        grid.process(b"\x1b[2J\x1b[H");
+        let _ = grid.serialize_dirty_rows();
+
+        // Jump to column 11 (1-based) and write. This frame is NOT the one under
+        // test: alacritty damages the cell the cursor left as well as the one it
+        // arrived at, so a jump spans everything between them. Serializing here
+        // absorbs that, leaving the cursor already in place.
+        grid.process(b"\x1b[1;11HX");
+        let jump = grid.serialize_dirty_rows();
+        let (_, jump_count, _, jump_start, _) = first_row_header(&jump, 40);
+        assert_eq!(
+            (jump_start, jump_count),
+            (0, 12),
+            "a cursor jump damages the whole path it travelled"
+        );
+
+        // Now the steady-state case: one more glyph where the cursor already is.
+        grid.process(b"Y");
+        let frame = grid.serialize_dirty_rows();
+        assert!(!frame.is_empty(), "the edit produced a frame");
+
+        let (row_index, count, _wrapped, start_col, cell_bytes) = first_row_header(&frame, 40);
+        assert_eq!(row_index, 0, "the edited row");
+        assert_eq!(start_col, 11, "the span starts at the edited column");
+        // The glyph plus the cell the cursor lands on — see
+        // `narrow_edits_report_narrow_column_damage`.
+        assert_eq!(count, 2, "only the damaged span is carried");
+        assert_eq!(cell_bytes, count * 11, "and only that many cells follow");
+        assert!(
+            frame.len() < 26 + 6 + 40 * 11,
+            "the frame is smaller than the whole-row format would produce"
+        );
+    }
+
+    /// The whole-row path must stay byte-identical, or an old frontend paired
+    /// with this backend decodes garbage.
+    #[test]
+    fn a_full_row_frame_carries_no_start_col() {
+        let mut grid = TerminalGrid::new(10, 40, 100);
+        // A fresh grid has never sent a frame, so the viewport check forces full
+        // damage — every row, full width.
+        grid.process(b"hello");
+        let frame = grid.serialize_dirty_rows();
+
+        let raw = u16::from_le_bytes([frame[28], frame[29]]);
+        assert_eq!(raw & ROW_PARTIAL_FLAG, 0, "full rows carry no partial flag");
+        assert_eq!(
+            (raw & !(ROW_WRAPPED_FLAG | ROW_PARTIAL_FLAG)) as usize,
+            40,
+            "and count is the full width"
+        );
+        assert_eq!(
+            frame.len(),
+            26 + 10 * (4 + 40 * 11),
+            "ten whole rows, four-byte row headers, no start_col anywhere"
+        );
+    }
+
+    /// Measure the overship ratio over a corpus of real `.tcap` captures.
+    ///
+    /// Ignored by default: the corpus is whatever the operator recorded through
+    /// `POST /diagnostics/capture`, and those files hold real session content, so
+    /// they are deliberately NOT committed. Point it at a capture directory and
+    /// run it when the F23 trade-off needs re-deciding:
+    ///
+    /// ```text
+    /// TUIC_DAMAGE_CORPUS="$HOME/Library/Application Support/com.tuic.commander/captures" \
+    ///   cargo test -p tuicommander damage_overship_over_capture_corpus -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a capture corpus; see TUIC_DAMAGE_CORPUS"]
+    fn damage_overship_over_capture_corpus() {
+        let Ok(dir) = std::env::var("TUIC_DAMAGE_CORPUS") else {
+            panic!("set TUIC_DAMAGE_CORPUS to a directory of .tcap captures");
+        };
+        let mut corpus = DamageTotals::default();
+        let mut files = 0usize;
+
+        for entry in std::fs::read_dir(&dir).expect("readable corpus directory") {
+            let path = entry.expect("readable entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("tcap") {
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("readable capture");
+            let totals = replay_damage(&bytes, 50, 200);
+            if totals.frames == 0 {
+                continue;
+            }
+            files += 1;
+            println!(
+                "{:<40} frames {:>5}  full {:>5}  rows/frame {:>6.1}  overship {:>6.2}x",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                totals.frames,
+                totals.full_frames,
+                totals.rows as f64 / totals.frames as f64,
+                totals.overship(),
+            );
+            corpus.frames += totals.frames;
+            corpus.full_frames += totals.full_frames;
+            corpus.rows += totals.rows;
+            corpus.damaged_cells += totals.damaged_cells;
+            corpus.shipped_cells += totals.shipped_cells;
+        }
+
+        assert!(files > 0, "corpus held no usable .tcap captures");
+        println!(
+            "\nCORPUS  files {files}  frames {}  full-frame {:.1}%  rows/frame {:.1}  overship {:.2}x",
+            corpus.frames,
+            100.0 * corpus.full_frames as f64 / corpus.frames as f64,
+            corpus.rows as f64 / corpus.frames as f64,
+            corpus.overship(),
+        );
     }
 
     #[test]
@@ -2557,7 +2965,7 @@ mod tests {
         for c in data.chunks(chunk) {
             while next_resize < resizes.len() && resizes[next_resize].0 <= fed {
                 let (_, r, w) = resizes[next_resize];
-                // Mirror production: VtLogBuffer::resize_with_shell_state uses
+                // Mirror production: VtLogBuffer::resize uses
                 // ReflowMode::All on the normal screen (None only for alt).
                 let mode = if grid.is_alternate_screen() {
                     ReflowMode::None
