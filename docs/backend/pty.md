@@ -482,12 +482,29 @@ PTY is quiet; it does not prove that the assigned task finished. An agent's
 Likewise, a visible ready composer may coexist with an autonomous background
 command. While a meaningful descendant of the agent is alive, session state
 reports `background_work=true` and keeps `agent_state=working`; `shell_state`
-remains `idle` because terminal input readiness is a separate fact. Persistent
+remains `idle` because terminal input readiness is a separate fact.
+
+A descendant is excluded from that judgement two ways. By name: the persistent
 integration helpers (`mdkb`, `tuic-bridge`, and `node_repl`) and Claude's
-standalone timed `caffeinate -i -t <seconds>` assertion do not count as work;
-Unix classification checks both `comm` and the authoritative argv path from
-unlimited-width `ps` output. A `caffeinate` invocation that wraps a command
-remains meaningful background work. Parent `idle` lifecycle mail is
+standalone timed `caffeinate -i -t <seconds>` assertion. Unix classification
+checks both `comm` and the authoritative argv path from unlimited-width `ps`
+output; a `caffeinate` invocation that wraps a command remains meaningful
+background work. And by age: a descendant that started within
+`AGENT_STARTUP_WINDOW_SECS` (60s) of the agent itself is session plumbing
+whatever it is called.
+
+The startup window exists because the name list cannot be completed.
+`codex-code-mode-host` arrived with Codex 0.149.0, and an MCP server started
+through `npm exec` reports as `npm` — a name that must keep meaning work,
+because a turn also runs npm. Measured on a live 14-session instance on
+2026-08-23, every agent owned at least one such daemon, so `background_work` was
+a constant `true` and no session could ever leave `working`. In the same
+snapshot every daemon appeared within 18s of its agent while work spawned by a
+turn was hundreds of seconds younger, which is the gap the window sits in.
+Ages come from the `etime` column of the shared `ps` snapshot. Where the
+platform cannot supply one — Windows `PROCESSENTRY32` carries no creation
+time — the window is skipped and the name list is the only rule, which errs
+toward reporting work rather than hiding it. Parent `idle` lifecycle mail is
 deferred until the real descendant exits, while confirmed-ready message
 delivery keeps using the terminal-readiness gate. The first confirmed-ready
 observation and every explicit agent IDLE marker arm a generation boundary:
