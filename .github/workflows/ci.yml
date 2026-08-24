@@ -79,8 +79,17 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
-      - name: Tests
-        run: pnpm exec vitest run --reporter=verbose
+      # Runs the same suite as `pnpm exec vitest run` plus coverage collection, enforcing
+      # the floor thresholds in vitest.config.ts (see that file's comment) — one pass
+      # instead of running the whole suite twice.
+      - name: Tests + coverage
+        run: pnpm exec vitest run --coverage --reporter=verbose
+
+      - name: Plugin tests
+        run: pnpm test:plugins
+
+      - name: Architecture cycles
+        run: pnpm architecture:cycles && pnpm architecture:cycles:test
 
   # Always runs: clippy + tests on Linux (fastest, catches most issues)
   rust:
