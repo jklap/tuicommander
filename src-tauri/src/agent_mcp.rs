@@ -8,6 +8,10 @@ pub(crate) struct AgentMcpStatus {
     pub(crate) supported: bool,
     pub(crate) installed: bool,
     pub(crate) config_path: Option<String>,
+    /// The bridge entry would go inside the target's general settings file, so
+    /// launch-time auto-install leaves it alone. The UI says so — otherwise a
+    /// Zed user waits forever for an integration that never arrives.
+    pub(crate) shared_settings_file: bool,
 }
 
 /// How an agent stores its MCP server list.
@@ -48,6 +52,17 @@ struct McpConfigSpec {
     /// support comes from an optional add-on: the file's presence is the only
     /// proof that the add-on is installed.
     requires_existing_config: bool,
+    /// The MCP server list lives inside the file that also holds every other
+    /// user preference — Zed, Amp and Gemini all keep it in their
+    /// `settings.json` rather than a dedicated `mcp.json`.
+    ///
+    /// Launch-time auto-install never creates or edits these. The edit itself is
+    /// surgical and validated, but TUICommander being on the machine is not
+    /// consent to rewrite the user's editor configuration (issue #115).
+    /// Settings > Agents installs on request, and a target we already
+    /// configured keeps getting path repairs — otherwise a moved bridge binary
+    /// would leave a dead entry behind with no way to notice.
+    shared_settings_file: bool,
 }
 
 /// Our MCP server entry injected into agent configs.
@@ -123,6 +138,7 @@ fn get_mcp_config_spec(agent_type: &str) -> Option<McpConfigSpec> {
         binaries,
         presence_dir: None,
         requires_existing_config: false,
+        shared_settings_file: false,
     };
     match agent_type {
         "claude" => Some(McpConfigSpec {
@@ -146,21 +162,30 @@ fn get_mcp_config_spec(agent_type: &str) -> Option<McpConfigSpec> {
             vec!["servers"],
             &["code"],
         )),
-        "zed" => Some(json(
-            h.join(".config/zed/settings.json"),
-            vec!["context_servers"],
-            &["zed"],
-        )),
-        "amp" => Some(json(
-            h.join(".config/amp/settings.json"),
-            vec!["amp", "mcpServers"],
-            &["amp"],
-        )),
-        "gemini" => Some(json(
-            h.join(".gemini/settings.json"),
-            vec!["mcpServers"],
-            &["gemini"],
-        )),
+        "zed" => Some(McpConfigSpec {
+            shared_settings_file: true,
+            ..json(
+                h.join(".config/zed/settings.json"),
+                vec!["context_servers"],
+                &["zed"],
+            )
+        }),
+        "amp" => Some(McpConfigSpec {
+            shared_settings_file: true,
+            ..json(
+                h.join(".config/amp/settings.json"),
+                vec!["amp", "mcpServers"],
+                &["amp"],
+            )
+        }),
+        "gemini" => Some(McpConfigSpec {
+            shared_settings_file: true,
+            ..json(
+                h.join(".gemini/settings.json"),
+                vec!["mcpServers"],
+                &["gemini"],
+            )
+        }),
         "droid" => Some(json(
             h.join(".factory/mcp.json"),
             vec!["mcpServers"],
@@ -237,7 +262,7 @@ fn dir_has_foreign_entry(dir: &std::path::Path, ours: Option<&std::ffi::OsStr>) 
             return false;
         }
         match ours {
-            // `write_json_file`/`write_toml_file` stage through `<stem>.tmp`;
+            // `write_text_file`/`write_toml_file` stage through `<stem>.tmp`;
             // a crashed write must not read back as a foreign file.
             Some(ours) => {
                 name != ours && std::path::Path::new(&name).extension() != Some("tmp".as_ref())
@@ -300,26 +325,6 @@ fn get_agent_settings_path(agent_type: &str) -> Option<PathBuf> {
     }
 }
 
-/// Navigate a JSON object by key path, creating intermediate objects as needed.
-/// Returns a mutable reference to the target object.
-fn navigate_or_create<'a>(
-    root: &'a mut serde_json::Value,
-    key_path: &[&str],
-) -> &'a mut serde_json::Value {
-    let mut current = root;
-    for key in key_path {
-        if !current.is_object() {
-            *current = serde_json::json!({});
-        }
-        current = current
-            .as_object_mut()
-            .unwrap()
-            .entry(*key)
-            .or_insert_with(|| serde_json::json!({}));
-    }
-    current
-}
-
 /// Navigate a JSON object by key path (read-only).
 fn navigate<'a>(root: &'a serde_json::Value, key_path: &[&str]) -> Option<&'a serde_json::Value> {
     let mut current = root;
@@ -357,34 +362,83 @@ fn detect_bridge_binary() -> String {
     BRIDGE_NAME.to_string()
 }
 
-/// Read a JSON file, returning an empty object when it doesn't exist.
+/// Read a JSON config file's raw text, returning an empty document when the file
+/// doesn't exist.
 ///
-/// Returns `None` when the file exists but cannot be read or parsed. Callers
-/// MUST NOT write in that case: VS Code's `mcp.json` and opencode's config both
-/// allow comments, which serde_json rejects, and treating a parse failure as an
-/// empty document replaces the user's entire config with our single entry.
-fn read_json_file(path: &std::path::Path) -> Option<serde_json::Value> {
+/// Returns `None` when the file exists but cannot be read. Callers MUST NOT
+/// write in that case — an unreadable file is not an empty one.
+fn read_json_text(path: &std::path::Path) -> Option<String> {
     if !path.exists() {
-        return Some(serde_json::json!({}));
+        return Some(String::new());
     }
-    let content = std::fs::read_to_string(path)
+    std::fs::read_to_string(path)
         .inspect_err(|e| tracing::error!(source = "mcp", path = %path.display(), "Failed to read config: {e}"))
-        .ok()?;
-    serde_json::from_str(&content)
-        .inspect_err(|e| tracing::error!(source = "mcp", path = %path.display(), "JSON parse error, leaving the file untouched: {e}"))
         .ok()
 }
 
-/// Write a JSON file atomically (temp + rename), preserving formatting.
-fn write_json_file(path: &std::path::Path, value: &serde_json::Value) -> Result<(), String> {
+/// Read a JSON config file into a value, for callers that only inspect it.
+///
+/// Parsed as JSONC: Zed, VS Code and opencode all document comments and
+/// trailing commas as supported, so `serde_json` would report a perfectly valid
+/// file as broken. Returns `None` when the file cannot be read or parsed, and
+/// callers MUST NOT write in that case — treating a parse failure as an empty
+/// document is what replaced a user's entire Zed configuration with our single
+/// entry (issue #115).
+fn read_json_file(path: &std::path::Path) -> Option<serde_json::Value> {
+    let text = read_json_text(path)?;
+    if text.trim().is_empty() {
+        return Some(serde_json::json!({}));
+    }
+    crate::jsonc_edit::parse(&text)
+        .inspect_err(|e| tracing::error!(source = "mcp", path = %path.display(), "{e} — leaving the file untouched"))
+        .ok()
+}
+
+/// Keep the target's own copy of a config file the first time we modify it.
+///
+/// Stored under TUIC's config directory rather than beside the original: a
+/// stray `settings.json.bak` next to `settings.json` is a file the owning tool
+/// may itself try to load, sync or complain about.
+///
+/// Written once and never overwritten. The state worth keeping is the one from
+/// before TUIC ever touched the file; a later snapshot of a file we already
+/// edited is worth much less, and rewriting it on every path repair would
+/// eventually erase the only pristine copy.
+fn backup_config_once(path: &std::path::Path, agent_label: &str, text: &str) {
+    if text.is_empty() {
+        return; // Nothing existed to preserve.
+    }
+    let dir = crate::config::config_dir().join("mcp-backups");
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "config".to_string());
+    let backup = dir.join(format!("{agent_label}-{name}.orig"));
+    if backup.exists() {
+        return;
+    }
+    let saved = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&backup, text));
+    match saved {
+        Ok(()) => {
+            tracing::info!(source = "mcp", agent = %agent_label, backup = %backup.display(), "Saved original config")
+        }
+        // A failed backup must not block the edit: the edit itself is surgical
+        // and validated, so the backup is a second line of defence, not the
+        // first.
+        Err(e) => {
+            tracing::warn!(source = "mcp", agent = %agent_label, "Could not save original config: {e}")
+        }
+    }
+}
+
+/// Write a config file atomically (temp + rename).
+fn write_text_file(path: &std::path::Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
     }
-    let json = serde_json::to_string_pretty(value)
-        .map_err(|e| format!("Failed to serialize JSON: {e}"))?;
     let temp = path.with_extension("tmp");
-    std::fs::write(&temp, &json).map_err(|e| format!("Failed to write temp file: {e}"))?;
+    std::fs::write(&temp, text).map_err(|e| format!("Failed to write temp file: {e}"))?;
     std::fs::rename(&temp, path).map_err(|e| {
         let _ = std::fs::remove_file(&temp);
         format!("Failed to rename temp file: {e}")
@@ -452,8 +506,12 @@ fn ensure_agent_mcp_entry(
     bridge_path: &str,
     agent_label: &str,
 ) -> bool {
-    let Some(mut root) = read_json_file(config_path) else {
+    let Some(text) = read_json_text(config_path) else {
         return false;
+    };
+    let root = match parse_existing(&text, config_path) {
+        Some(root) => root,
+        None => return false,
     };
     let existing_entry = navigate(&root, key_path)
         .and_then(|v| v.as_object())
@@ -472,14 +530,47 @@ fn ensure_agent_mcp_entry(
     }
 
     let entry_value = json_entry_value(format, bridge_path);
-    let servers = navigate_or_create(&mut root, key_path);
-    if let Some(obj) = servers.as_object_mut() {
-        obj.insert(TUIC_MCP_KEY.to_string(), entry_value);
-    } else {
-        *servers = serde_json::json!({ TUIC_MCP_KEY: entry_value });
-    }
+    let edited = match crate::jsonc_edit::upsert_member(&text, key_path, TUIC_MCP_KEY, &entry_value)
+    {
+        Ok(edited) => edited,
+        Err(e) => {
+            tracing::error!(source = "mcp", agent = %agent_label, path = %config_path.display(), "{e} — leaving the file untouched");
+            return false;
+        }
+    };
 
-    match write_json_file(config_path, &root) {
+    commit_json_edit(config_path, agent_label, &text, &edited)
+}
+
+/// Parse a config we are about to modify, rejecting anything we cannot read.
+///
+/// An empty or absent file becomes an empty object — that one is genuinely new.
+/// A file that exists but does not parse yields `None`, and every caller treats
+/// that as "do not write".
+fn parse_existing(text: &str, config_path: &std::path::Path) -> Option<serde_json::Value> {
+    if text.trim().is_empty() {
+        return Some(serde_json::json!({}));
+    }
+    crate::jsonc_edit::parse(text)
+        .inspect_err(|e| tracing::error!(source = "mcp", path = %config_path.display(), "{e} — leaving the file untouched"))
+        .ok()
+}
+
+/// Back up the original, then write the edited document.
+///
+/// Skips the write when the edit changed nothing, so an idempotent pass never
+/// touches the file's mtime — editors watch these files and reload on change.
+fn commit_json_edit(
+    config_path: &std::path::Path,
+    agent_label: &str,
+    original: &str,
+    edited: &str,
+) -> bool {
+    if edited == original {
+        return false;
+    }
+    backup_config_once(config_path, agent_label, original);
+    match write_text_file(config_path, edited) {
         Ok(()) => {
             tracing::debug!(source = "mcp", agent = %agent_label, path = %config_path.display(), "Config written");
             true
@@ -840,6 +931,12 @@ fn auto_install_allowed(spec: &McpConfigSpec, agent_label: &str) -> bool {
         tracing::debug!(source = "mcp", agent = %agent_label, "Skipping (no MCP add-on config)");
         return false;
     }
+    // The target's MCP list shares a file with the rest of the user's settings.
+    // We repair an entry we already own, but the first write waits for a click.
+    if spec.shared_settings_file && !has_bridge_entry(spec) {
+        tracing::debug!(source = "mcp", agent = %agent_label, "Skipping (shared settings file — install from Settings > Agents)");
+        return false;
+    }
     true
 }
 
@@ -903,6 +1000,7 @@ pub(crate) fn get_agent_mcp_status(agent_type: String) -> AgentMcpStatus {
             supported: false,
             installed: false,
             config_path: None,
+            shared_settings_file: false,
         };
     };
 
@@ -910,6 +1008,7 @@ pub(crate) fn get_agent_mcp_status(agent_type: String) -> AgentMcpStatus {
         supported: true,
         installed: has_bridge_entry(&spec),
         config_path: Some(spec.config_path.to_string_lossy().to_string()),
+        shared_settings_file: spec.shared_settings_file,
     }
 }
 
@@ -952,25 +1051,7 @@ pub(crate) fn remove_agent_mcp(
 ) -> Result<(), String> {
     let spec = get_mcp_config_spec(&agent_type)
         .ok_or_else(|| format!("Agent '{agent_type}' does not support MCP configuration"))?;
-
-    if let McpFormat::Toml { .. } = spec.format {
-        remove_toml_mcp_entry(&spec.config_path)?;
-    } else if spec.format == McpFormat::Yaml {
-        remove_yaml_mcp_entry(
-            &spec.config_path,
-            spec.key_path.first().copied().unwrap_or("extensions"),
-        )?;
-    } else if spec.config_path.exists() {
-        let mut root = read_json_file(&spec.config_path)
-            .ok_or_else(|| format!("Cannot parse {} — not modified", spec.config_path.display()))?;
-        let servers = navigate_or_create(&mut root, &spec.key_path);
-
-        if let Some(obj) = servers.as_object_mut() {
-            obj.remove(TUIC_MCP_KEY);
-        }
-
-        write_json_file(&spec.config_path, &root)?;
-    }
+    remove_spec_entry(&spec, &agent_type)?;
 
     // Add to disabled list so ensure_mcp_configs won't reinstall
     update_disabled_mcp_agents(state.inner(), |list| {
@@ -980,6 +1061,89 @@ pub(crate) fn remove_agent_mcp(
     });
 
     Ok(())
+}
+
+/// Drop the bridge entry from one target's config, dispatching on its format.
+fn remove_spec_entry(spec: &McpConfigSpec, agent_label: &str) -> Result<(), String> {
+    match spec.format {
+        McpFormat::Toml { .. } => remove_toml_mcp_entry(&spec.config_path),
+        McpFormat::Yaml => remove_yaml_mcp_entry(
+            &spec.config_path,
+            spec.key_path.first().copied().unwrap_or("extensions"),
+        ),
+        _ => {
+            if !spec.config_path.exists() {
+                return Ok(());
+            }
+            let text = read_json_text(&spec.config_path)
+                .ok_or_else(|| format!("Cannot read {}", spec.config_path.display()))?;
+            let edited = crate::jsonc_edit::remove_member(&text, &spec.key_path, TUIC_MCP_KEY)
+                .map_err(|e| format!("{e} in {} — not modified", spec.config_path.display()))?;
+            commit_json_edit(&spec.config_path, agent_label, &text, &edited);
+            Ok(())
+        }
+    }
+}
+
+/// Every target this machine has a bridge entry in.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn list_installed_mcp_integrations() -> Vec<String> {
+    SUPPORTED_AGENTS
+        .iter()
+        .filter(|agent| get_mcp_config_spec(agent).is_some_and(|spec| has_bridge_entry(&spec)))
+        .map(|agent| (*agent).to_string())
+        .collect()
+}
+
+/// Remove the bridge entry from every target that has one, and stop
+/// reinstalling them.
+///
+/// Uninstalling TUICommander leaves the bridge path dangling in every client it
+/// ever configured, and each one then reports a broken MCP server on startup
+/// (issue #115). Removing them one by one means knowing which clients TUIC
+/// picked, so this does the sweep.
+///
+/// Disabling is part of the action, not a side effect: without it the next
+/// launch reinstalls everything and the button does nothing.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn remove_all_mcp_integrations(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+) -> Result<Vec<String>, String> {
+    let mut removed = Vec::new();
+    let mut failures = Vec::new();
+    for agent in SUPPORTED_AGENTS {
+        let Some(spec) = get_mcp_config_spec(agent) else {
+            continue;
+        };
+        if !has_bridge_entry(&spec) {
+            continue;
+        }
+        match remove_spec_entry(&spec, agent) {
+            Ok(()) => removed.push((*agent).to_string()),
+            // One unparseable config must not abort the sweep — the remaining
+            // clients would keep their dangling entries.
+            Err(e) => {
+                tracing::error!(source = "mcp", agent, "Removal failed: {e}");
+                failures.push(format!("{agent}: {e}"));
+            }
+        }
+    }
+
+    let disable: Vec<String> = removed.clone();
+    update_disabled_mcp_agents(state.inner(), |list| {
+        for agent in disable {
+            if !list.contains(&agent) {
+                list.push(agent);
+            }
+        }
+    });
+
+    if failures.is_empty() {
+        Ok(removed)
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 /// Helper: mutate `disabled_mcp_agents` in BOTH the in-memory `AppState.config`
@@ -1048,6 +1212,13 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Seed a config file. Production no longer serializes whole documents —
+    /// it splices one member into text it never reformats — so building a
+    /// fixture is the only place a `Value` still becomes a file.
+    fn write_fixture(path: &std::path::Path, value: &serde_json::Value) {
+        std::fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+    }
+
     #[test]
     fn unsupported_agent_returns_not_supported() {
         let status = get_agent_mcp_status("aider".to_string());
@@ -1062,28 +1233,15 @@ mod tests {
         let config_path = dir.path().join("test-mcp.json");
 
         // Start with existing config that has another server
-        let initial = serde_json::json!({
-            "mcpServers": {
-                "other-server": { "command": "other-cmd" }
-            }
-        });
-        write_json_file(&config_path, &initial).unwrap();
+        let initial = r#"{ "mcpServers": { "other-server": { "command": "other-cmd" } } }"#;
+        std::fs::write(&config_path, initial).unwrap();
 
-        // Simulate install
-        let mut root = read_json_file(&config_path).unwrap();
-        let entry = TuicMcpEntry {
-            transport_type: "stdio".to_string(),
-            command: "/usr/local/bin/tui-mcp-bridge".to_string(),
-            args: vec![],
-            env: BTreeMap::new(),
-        };
-        let entry_value = serde_json::to_value(&entry).unwrap();
-        let servers = navigate_or_create(&mut root, &["mcpServers"]);
-        servers
-            .as_object_mut()
-            .unwrap()
-            .insert(TUIC_MCP_KEY.to_string(), entry_value);
-        write_json_file(&config_path, &root).unwrap();
+        let spec = spec_at(config_path.clone());
+        assert!(ensure_spec_entry(
+            &spec,
+            "/usr/local/bin/tui-mcp-bridge",
+            "test"
+        ));
 
         // Verify both entries exist
         let root = read_json_file(&config_path).unwrap();
@@ -1095,11 +1253,7 @@ mod tests {
         assert!(servers.contains_key("other-server"));
         assert_eq!(servers.len(), 2);
 
-        // Simulate remove
-        let mut root = read_json_file(&config_path).unwrap();
-        let servers = navigate_or_create(&mut root, &["mcpServers"]);
-        servers.as_object_mut().unwrap().remove(TUIC_MCP_KEY);
-        write_json_file(&config_path, &root).unwrap();
+        remove_spec_entry(&spec, "test").unwrap();
 
         // Verify only other-server remains
         let root = read_json_file(&config_path).unwrap();
@@ -1120,20 +1274,11 @@ mod tests {
         // File doesn't exist yet
         assert!(!config_path.exists());
 
-        let mut root = read_json_file(&config_path).unwrap();
-        let entry = TuicMcpEntry {
-            transport_type: "stdio".to_string(),
-            command: "tui-mcp-bridge".to_string(),
-            args: vec![],
-            env: BTreeMap::new(),
-        };
-        let entry_value = serde_json::to_value(&entry).unwrap();
-        let servers = navigate_or_create(&mut root, &["mcpServers"]);
-        servers
-            .as_object_mut()
-            .unwrap()
-            .insert(TUIC_MCP_KEY.to_string(), entry_value);
-        write_json_file(&config_path, &root).unwrap();
+        assert!(ensure_spec_entry(
+            &spec_at(config_path.clone()),
+            "tui-mcp-bridge",
+            "test"
+        ));
 
         // Verify file was created with correct content
         let root = read_json_file(&config_path).unwrap();
@@ -1158,16 +1303,15 @@ mod tests {
                 "someOtherSetting": true
             }
         });
-        write_json_file(&config_path, &initial).unwrap();
+        write_fixture(&config_path, &initial);
 
-        let mut root = read_json_file(&config_path).unwrap();
-        let entry = serde_json::json!({ "command": "tui-mcp-bridge" });
-        let servers = navigate_or_create(&mut root, &["amp", "mcpServers"]);
-        servers
-            .as_object_mut()
-            .unwrap()
-            .insert(TUIC_MCP_KEY.to_string(), entry);
-        write_json_file(&config_path, &root).unwrap();
+        assert!(ensure_agent_mcp_entry(
+            &config_path,
+            &["amp", "mcpServers"],
+            McpFormat::Json,
+            "tui-mcp-bridge",
+            "test",
+        ));
 
         let root = read_json_file(&config_path).unwrap();
         // Verify the nested structure
@@ -1181,16 +1325,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("does-not-exist.json");
 
-        // This should not create the file
-        if config_path.exists() {
-            let mut root = read_json_file(&config_path).unwrap();
-            let servers = navigate_or_create(&mut root, &["mcpServers"]);
-            if let Some(obj) = servers.as_object_mut() {
-                obj.remove(TUIC_MCP_KEY);
-            }
-            write_json_file(&config_path, &root).unwrap();
-        }
-        // File should still not exist
+        remove_spec_entry(&spec_at(config_path.clone()), "test").unwrap();
+
+        // Removal must never bring the file into existence.
         assert!(!config_path.exists());
     }
 
@@ -1372,7 +1509,7 @@ mod tests {
                 }
             }
         });
-        write_json_file(&config_path, &initial).unwrap();
+        write_fixture(&config_path, &initial);
 
         // Same command, but malformed fields → must rewrite
         let wrote = ensure_agent_mcp_entry(
@@ -1400,7 +1537,7 @@ mod tests {
                 "other-server": { "command": "other-cmd" }
             }
         });
-        write_json_file(&config_path, &initial).unwrap();
+        write_fixture(&config_path, &initial);
 
         ensure_agent_mcp_entry(
             &config_path,
@@ -1423,7 +1560,7 @@ mod tests {
         let config_path = dir.path().join("test.json");
 
         let initial = serde_json::json!({ "amp": { "setting": true } });
-        write_json_file(&config_path, &initial).unwrap();
+        write_fixture(&config_path, &initial);
 
         ensure_agent_mcp_entry(
             &config_path,
@@ -1757,6 +1894,7 @@ mod tests {
             binaries: &[],
             presence_dir: None,
             requires_existing_config: false,
+            shared_settings_file: false,
         }
     }
 
@@ -1839,25 +1977,180 @@ mod tests {
     // --- unparseable configs are never overwritten ---
 
     #[test]
-    fn json_with_comments_is_left_untouched() {
-        // VS Code's mcp.json and opencode's config both allow comments, which
-        // serde_json rejects. Treating that as an empty document would replace
-        // the user's whole config with our single entry.
+    fn json_with_comments_is_edited_not_rejected() {
+        // VS Code's mcp.json, Zed's settings.json and opencode's config all
+        // document comments as supported. Refusing to parse them meant the
+        // integration silently did nothing for those users.
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("mcp.json");
         let original = "// user comment\n{ \"servers\": { \"mine\": { \"command\": \"x\" } } }";
         std::fs::write(&config_path, original).unwrap();
 
-        assert!(read_json_file(&config_path).is_none());
-        let wrote = ensure_agent_mcp_entry(
+        assert!(read_json_file(&config_path).is_some());
+        assert!(ensure_agent_mcp_entry(
             &config_path,
             &["servers"],
             McpFormat::Json,
             "/bridge",
             "test",
-        );
-        assert!(!wrote);
+        ));
+
+        let written = std::fs::read_to_string(&config_path).unwrap();
+        assert!(written.starts_with("// user comment"), "{written}");
+        let root = read_json_file(&config_path).unwrap();
+        assert_eq!(root["servers"]["mine"]["command"], "x");
+        assert_eq!(root["servers"][TUIC_MCP_KEY]["command"], "/bridge");
+    }
+
+    #[test]
+    fn genuinely_broken_json_is_left_untouched() {
+        // The guard that must never regress: a file we cannot understand is one
+        // we do not write. Truncated mid-object, so no dialect parses it.
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("mcp.json");
+        let original = "{ \"servers\": { \"mine\": ";
+        std::fs::write(&config_path, original).unwrap();
+
+        assert!(read_json_file(&config_path).is_none());
+        assert!(!ensure_agent_mcp_entry(
+            &config_path,
+            &["servers"],
+            McpFormat::Json,
+            "/bridge",
+            "test",
+        ));
         assert_eq!(std::fs::read_to_string(&config_path).unwrap(), original);
+    }
+
+    /// Issue #115: a real Zed `settings.json` — JSONC, comments, trailing
+    /// commas, hand-tuned indentation — must come back with exactly one member
+    /// added and every other byte where the user left it.
+    #[test]
+    fn zed_settings_survive_an_install_intact() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("settings.json");
+        let original = r#"{
+  // Editor
+  "buffer_font_family": "Berkeley Mono",
+  "buffer_font_size": 14,
+  "theme": {
+    "mode": "system",
+    "dark": "One Dark",
+  },
+  /* Languages */
+  "languages": {
+    "Rust": { "tab_size": 4 },
+  },
+}"#;
+        std::fs::write(&config_path, original).unwrap();
+
+        assert!(ensure_agent_mcp_entry(
+            &config_path,
+            &["context_servers"],
+            McpFormat::Json,
+            "/usr/bin/tuic-bridge",
+            "zed",
+        ));
+
+        let written = std::fs::read_to_string(&config_path).unwrap();
+        // Every original line is still present, verbatim.
+        for line in original.lines().filter(|l| !l.trim().is_empty()) {
+            if line == "}" {
+                continue; // The closing brace moved down by the added member.
+            }
+            assert!(written.contains(line), "lost `{line}` in:\n{written}");
+        }
+        let root = read_json_file(&config_path).unwrap();
+        assert_eq!(
+            root["context_servers"][TUIC_MCP_KEY]["command"],
+            "/usr/bin/tuic-bridge"
+        );
+        assert_eq!(root["buffer_font_size"], 14);
+        assert_eq!(root["languages"]["Rust"]["tab_size"], 4);
+    }
+
+    #[test]
+    fn an_idempotent_pass_does_not_rewrite_the_file() {
+        // Editors watch these files; a no-op write still fires a reload.
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("mcp.json");
+        let spec = spec_at(config_path.clone());
+
+        assert!(ensure_spec_entry(&spec, "/bridge", "test"));
+        let first = std::fs::read_to_string(&config_path).unwrap();
+        assert!(!ensure_spec_entry(&spec, "/bridge", "test"));
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), first);
+    }
+
+    #[test]
+    fn removal_keeps_the_users_comments() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("settings.json");
+        let original = "{\n  // keep me\n  \"theme\": \"dark\",\n  \"mcpServers\": { \"tuicommander\": { \"command\": \"/bridge\" } }\n}";
+        std::fs::write(&config_path, original).unwrap();
+
+        let spec = spec_at(config_path.clone());
+        remove_spec_entry(&spec, "test").unwrap();
+
+        let written = std::fs::read_to_string(&config_path).unwrap();
+        assert!(written.contains("// keep me"), "{written}");
+        let root = read_json_file(&config_path).unwrap();
+        assert!(root["mcpServers"].get(TUIC_MCP_KEY).is_none());
+        assert_eq!(root["theme"], "dark");
+    }
+
+    // --- shared settings files need an explicit install ---
+
+    #[test]
+    fn a_shared_settings_file_is_not_written_at_launch() {
+        // Zed, Amp and Gemini keep their MCP list inside the settings document
+        // that holds every other user preference. Being on the machine is not
+        // consent to edit it.
+        let dir = TempDir::new().unwrap();
+        // A file the tool itself wrote, so presence is proven independently of
+        // our config — the gate under test must be the shared-file rule alone.
+        std::fs::write(dir.path().join("keymap.json"), "[]").unwrap();
+        let spec = McpConfigSpec {
+            shared_settings_file: true,
+            ..spec_at(dir.path().join("settings.json"))
+        };
+        // Presence is proven — the gate is the shared-file rule alone.
+        assert!(is_target_installed(&spec));
+        assert!(!auto_install_allowed(&spec, "zed"));
+    }
+
+    #[test]
+    fn a_shared_settings_file_we_already_own_keeps_getting_repairs() {
+        // Consent was given once; a moved bridge binary must not strand the
+        // entry the user asked for.
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("settings.json");
+        let spec = McpConfigSpec {
+            shared_settings_file: true,
+            ..spec_at(config_path.clone())
+        };
+        // The explicit-install path ignores the gate entirely.
+        assert!(ensure_spec_entry(&spec, "/old/bridge", "zed"));
+        assert!(auto_install_allowed(&spec, "zed"));
+
+        ensure_spec_entry(&spec, "/new/bridge", "zed");
+        let root = read_json_file(&config_path).unwrap();
+        assert_eq!(root["mcpServers"][TUIC_MCP_KEY]["command"], "/new/bridge");
+    }
+
+    #[test]
+    fn zed_amp_and_gemini_are_the_shared_settings_targets() {
+        for agent in ["zed", "amp", "gemini"] {
+            let spec = get_mcp_config_spec(agent).expect("supported");
+            assert!(spec.shared_settings_file, "{agent} shares a settings file");
+        }
+        for agent in ["cursor", "vscode", "windsurf", "droid", "claude"] {
+            let spec = get_mcp_config_spec(agent).expect("supported");
+            assert!(
+                !spec.shared_settings_file,
+                "{agent} has a dedicated MCP config"
+            );
+        }
     }
 
     #[test]

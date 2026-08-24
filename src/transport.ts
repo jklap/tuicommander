@@ -1966,6 +1966,8 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"get_agent_mcp_status",
 	"install_agent_mcp",
 	"remove_agent_mcp",
+	"list_installed_mcp_integrations",
+	"remove_all_mcp_integrations",
 	"get_agent_config_path",
 	"get_mcp_bridge_info",
 	// Shell-safe prompt processing needs a dedicated HTTP route; mapping it to

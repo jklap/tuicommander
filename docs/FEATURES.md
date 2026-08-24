@@ -714,7 +714,9 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Run configurations:** Named command templates per agent (binary, args, env vars)
 - **Default config:** One run config per agent marked as default for quick launching
 - **MCP bridge install:** One-click install/remove of `tui-mcp-bridge` into agent's native MCP config file
-- **Supported MCP agents:** Claude, Cursor, Windsurf, VS Code, Zed, Amp, Gemini, Codex, Grok, OpenCode, Droid, Goose, pi (through pi-mcp-adapter), fx
+- **Supported MCP agents:** Claude, Cursor, Windsurf, VS Code, Zed, Amp, Gemini, Codex, Grok, OpenCode, Droid, Goose, pi (through pi-mcp-adapter)
+- **Shared settings files are opt-in:** Zed, Amp and Gemini store MCP servers inside their general `settings.json`, so those three are never written automatically — the panel says so and the Install button does it on request
+- **Remove all MCP integrations:** Lists every client holding a bridge entry and clears them in one action, so uninstalling TUICommander does not leave a dangling `tuic-bridge` server behind
 - **Edit agent config:** Opens agent's own configuration file in the user's preferred IDE
 - **Context menu integration:** Right-click terminal > Agents submenu with per-agent run configurations
 - **Busy detection:** Agents submenu disabled when a process is already running in the active terminal
@@ -1321,7 +1323,7 @@ All data persisted to platform config directory via Rust:
 - Exposes terminal sessions, git operations, agent spawning
 - WebSocket streaming, Streamable HTTP transport
 - Used by Claude Code, Cursor, and other tools via MCP protocol
-- `tuic-bridge` ships as a Tauri sidecar; auto-installs MCP configs on first launch for Claude Code, Cursor, Windsurf, VS Code, Zed, Amp, Gemini, Codex, Grok, opencode, Droid, goose, pi and fx — but only for the ones actually installed on the machine (see [MCP auto-install](backend/config.md#mcp-bridge-auto-install))
+- `tuic-bridge` ships as a Tauri sidecar; auto-installs MCP configs on first launch for Claude Code, Cursor, Windsurf, VS Code, Codex, Grok, opencode, Droid, goose and pi — but only for the ones actually installed on the machine. Zed, Amp and Gemini keep MCP inside their general `settings.json` and wait for an explicit install. JSON configs are edited member-by-member, never reserialized, so comments, key order and indentation survive (see [MCP auto-install](backend/config.md#mcp-bridge-auto-install))
 - Local connections use Unix domain socket (`<config_dir>/mcp.sock`) on macOS/Linux or named pipe (`\\.\pipe\tuicommander-mcp`) on Windows; TCP port reserved for remote access only
 - Unix socket lifecycle is crash-safe: RAII guard removes the socket file on `Drop`; bind retries 3× (×100 ms) removing any stale file before each attempt; liveness check uses a real `connect()` probe so a dead socket from a crashed run never blocks MCP tool loading
 
