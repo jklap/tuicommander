@@ -137,6 +137,13 @@ GitHub authentication and token management:
 | **Issue Filter** | Which issues to show in the GitHub panel: Assigned (default), Created, Mentioned, All, or Disabled |
 | **Auto-show PR popover** | Automatically show PR detail popover when opening a branch with an active PR |
 | **Auto-delete on PR close** | Off (default), Ask, or Auto — controls branch cleanup when a PR is merged/closed |
+| **Hide Draft PRs** | Exclude draft pull requests from the Pull Requests list (default: off) |
+| **Hide Conflicting PRs** | Exclude pull requests with merge conflicts from the Pull Requests list (default: off) |
+| **Hide CI Failing PRs** | Exclude pull requests with failing CI checks from the Pull Requests list (default: off) |
+
+Each of the three PR-visibility filters above can be overridden per-repository (Settings →
+Repository → Worktree → PR Visibility) using the same **On / Use global / Off** tri-state control
+described under [Repository Settings](#repository-settings).
 
 Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring → `gh` CLI config → `gh auth token` subprocess.
 
@@ -265,6 +272,16 @@ Per-repository settings accessed via sidebar `⋯` → "Repo Settings".
 - **Base Branch** — Branch to create worktrees from (auto-detect, main, master, develop)
 - **Copy ignored files** — Copy .gitignored files to new worktrees
 - **Copy untracked files** — Copy untracked files to new worktrees
+- **Prompt on create**, **Delete branch on remove**, **Auto-archive merged** — override the
+  matching global worktree default for this repo (see [Worktrees](worktrees.md#worktree-settings))
+- **PR Visibility** — per-repo override of Hide Draft/Conflicting/CI-Failing PRs (see GitHub Tab
+  above)
+- **Terminal → Enable Cmd+1-9 terminal hotkeys** (macOS only) — per-repo override; global default
+  is always On
+
+Every on/off field in this list uses a three-position **On / Use global / Off** control rather
+than a plain checkbox, so "inherit the global setting" is always one of the three choices you can
+select directly — not just the state you land in until you touch the control once.
 
 ### Scripts Tab
 

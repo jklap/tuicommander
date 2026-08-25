@@ -9,6 +9,19 @@ vi.mock("@tauri-apps/api/core", () => ({
 	invoke: mockInvoke,
 }));
 
+/** Most recent invoke() call for `cmd` — targets ES2021 lib, so no Array.findLast. */
+function lastInvokeCall(cmd: string): unknown[] | undefined {
+	const calls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === cmd);
+	return calls[calls.length - 1];
+}
+
+/** Shape of one entry as posted/read over the `save_repo_settings`/`load_repo_settings`
+ *  wire boundary — snake_case, values loosely typed since a test only cares about a few
+ *  fields at a time and the point of these assertions is to catch key-name drift. */
+interface WireRepoEntry {
+	[key: string]: string | number | boolean | string[] | null | undefined;
+}
+
 // Mock repoDefaultsStore so getEffective tests are deterministic. It is a real
 // Solid store, not a plain object, so tests can observe which reads actually
 // subscribe to it.
@@ -109,6 +122,31 @@ describe("repoSettingsStore", () => {
 				});
 			});
 		});
+
+		it("persists in snake_case — the wire shape Rust's RepoSettingsEntry expects, not the camelCase store shape", () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				const call = lastInvokeCall("save_repo_settings");
+				const entry = (call![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				// Rust's #[serde(default)] silently drops any key it doesn't recognize —
+				// camelCase keys like `displayName` would vanish on save without failing
+				// loudly, which is exactly what happened before this wire layer existed.
+				expect(entry).toEqual(
+					expect.objectContaining({
+						path: "/repo",
+						display_name: "my-repo",
+						base_branch: null,
+						copy_ignored_files: null,
+						auto_fetch_interval_minutes: null,
+						pr_hide_drafts: null,
+						terminal_meta_hotkeys: null,
+						auto_consolidate_worktrees: false,
+					}),
+				);
+				expect(entry.displayName).toBeUndefined();
+				expect(entry.baseBranch).toBeUndefined();
+			});
+		});
 	});
 
 	describe("update()", () => {
@@ -133,6 +171,36 @@ describe("repoSettingsStore", () => {
 		it("ignores updates for unknown repos", () => {
 			testInScope(() => {
 				store.update("/unknown", { baseBranch: "main" }); // Should not throw
+			});
+		});
+
+		it("persists an override in snake_case", () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				store.update("/repo", { prHideDrafts: true, autoFetchIntervalMinutes: 15 });
+				const call = lastInvokeCall("save_repo_settings");
+				const entry = (call![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				expect(entry.pr_hide_drafts).toBe(true);
+				expect(entry.auto_fetch_interval_minutes).toBe(15);
+			});
+		});
+
+		it("persists and rehydrates mcpUpstreams — the only RepoSettings field with security consequences", () => {
+			// mcpUpstreams is a per-repo allowlist of which MCP upstream servers an agent
+			// may reach; null means "no restriction". Before the wire-conversion fix this
+			// field silently failed to persist like every other one, so a user's attempt
+			// to restrict a sensitive repo to a subset of upstreams (via mcpPopup.ts's
+			// toggleServerForProject, which mirrors the value here purely to keep this
+			// store's in-memory copy in sync — the actual write goes through the dedicated
+			// set_project_mcp_upstreams Rust command) would fail open back to "all
+			// servers allowed" the next time this store re-saved the whole map for any
+			// unrelated reason.
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				store.update("/repo", { mcpUpstreams: ["github"] });
+				const call = lastInvokeCall("save_repo_settings");
+				const entry = (call![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				expect(entry.mcp_upstreams).toEqual(["github"]);
 			});
 		});
 	});
@@ -209,6 +277,56 @@ describe("repoSettingsStore", () => {
 				setMockDefaults("archiveScript", "global-cleanup.sh");
 				const effective = store.getEffective("/repo");
 				expect(effective!.archiveScript).toBe("my-cleanup.sh");
+			});
+		});
+
+		// A tri-state field's persistence (toWire/fromWire) and its resolution
+		// (this function) are two separately-tested halves that never meet in
+		// the tests above — every getEffective() case here starts from an
+		// in-memory settings object, never from a value that actually went
+		// through the wire. These two round-trip through a real save→hydrate
+		// cycle, the same path a TriStateToggle's "Use global"/explicit-off
+		// choice takes in production.
+		it("a tri-state field left at null survives save→hydrate and resolves to the global default", async () => {
+			setMockDefaults("copyIgnoredFiles", true);
+
+			await testInScopeAsync(async () => {
+				store.getOrCreate("/repo", "my-repo");
+				// getOrCreate leaves copyIgnoredFiles at its null (inherit) default —
+				// capture exactly what was persisted for it.
+				const saved = lastInvokeCall("save_repo_settings");
+				const wire = (saved![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				expect(wire.copy_ignored_files).toBeNull();
+
+				// Fresh store, as if the app restarted: hydrate from exactly that wire payload.
+				mockInvoke.mockResolvedValueOnce({ repos: { "/repo": wire } });
+				await store.hydrate();
+
+				expect(store.get("/repo")?.copyIgnoredFiles).toBeNull();
+				expect(store.getEffective("/repo")?.copyIgnoredFiles).toBe(true);
+				// getEffectiveField shares the same resolver table as getEffective (see
+				// its own doc comment) — pinning both here is what would catch the two
+				// ever being wired to different resolution logic.
+				expect(store.getEffectiveField("/repo", "copyIgnoredFiles")).toBe(true);
+			});
+		});
+
+		it("a tri-state field explicitly set to false survives save→hydrate and resolves to false, not the global default", async () => {
+			setMockDefaults("copyIgnoredFiles", true);
+
+			await testInScopeAsync(async () => {
+				store.getOrCreate("/repo", "my-repo");
+				store.update("/repo", { copyIgnoredFiles: false });
+				const saved = lastInvokeCall("save_repo_settings");
+				const wire = (saved![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				expect(wire.copy_ignored_files).toBe(false);
+
+				mockInvoke.mockResolvedValueOnce({ repos: { "/repo": wire } });
+				await store.hydrate();
+
+				expect(store.get("/repo")?.copyIgnoredFiles).toBe(false);
+				expect(store.getEffective("/repo")?.copyIgnoredFiles).toBe(false);
+				expect(store.getEffectiveField("/repo", "copyIgnoredFiles")).toBe(false);
 			});
 		});
 
@@ -356,6 +474,19 @@ describe("repoSettingsStore", () => {
 				expect(store.get("/repo")?.color).toBe("#ff0000");
 			});
 		});
+
+		it("persists the reset (all overridable fields null) in snake_case", () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				store.update("/repo", { baseBranch: "main", prHideDrafts: true });
+				store.reset("/repo");
+				const call = lastInvokeCall("save_repo_settings");
+				const entry = (call![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				expect(entry.base_branch).toBeNull();
+				expect(entry.pr_hide_drafts).toBeNull();
+				expect(entry.display_name).toBe("my-repo");
+			});
+		});
 	});
 
 	describe("getAll()", () => {
@@ -392,6 +523,12 @@ describe("repoSettingsStore", () => {
 						prompt_on_create: false,
 						auto_fetch_interval_minutes: 15,
 						copy_ignored_files: null,
+						copy_untracked_files: null,
+						setup_script: null,
+						run_script: null,
+						pr_hide_drafts: true,
+						terminal_meta_hotkeys: false,
+						auto_consolidate_worktrees: true,
 						branch_labels: { my_feature: "My Feature" },
 					},
 				},
@@ -399,13 +536,17 @@ describe("repoSettingsStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(store.get("/repo")?.displayName).toBe("my-repo");
-				expect(store.get("/repo")?.baseBranch).toBe("main");
-				expect(store.get("/repo")?.promptOnCreate).toBe(false);
-				expect(store.get("/repo")?.autoFetchIntervalMinutes).toBe(15);
-				expect(store.get("/repo")?.copyIgnoredFiles).toBeNull();
+				const settings = store.get("/repo");
+				expect(settings?.displayName).toBe("my-repo");
+				expect(settings?.baseBranch).toBe("main");
+				expect(settings?.promptOnCreate).toBe(false);
+				expect(settings?.autoFetchIntervalMinutes).toBe(15);
+				expect(settings?.copyIgnoredFiles).toBeNull();
+				expect(settings?.prHideDrafts).toBe(true);
+				expect(settings?.terminalMetaHotkeys).toBe(false);
+				expect(settings?.autoConsolidateWorktrees).toBe(true);
 				// The map is keyed by branch name — those keys are user data.
-				expect(store.get("/repo")?.branchLabels).toEqual({ my_feature: "My Feature" });
+				expect(settings?.branchLabels).toEqual({ my_feature: "My Feature" });
 				expect(mockInvoke).toHaveBeenCalledWith("load_repo_settings");
 			});
 		});
@@ -455,7 +596,37 @@ describe("repoSettingsStore", () => {
 			});
 		});
 
-		it("migrates from localStorage on first run", async () => {
+		it("rehydrates mcpUpstreams from the wire shape", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				repos: {
+					"/repo": { path: "/repo", display_name: "my-repo", mcp_upstreams: ["github"] },
+				},
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.get("/repo")?.mcpUpstreams).toEqual(["github"]);
+			});
+		});
+
+		it("fills in defaults for fields absent from an older on-disk entry", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				repos: {
+					"/repo": { path: "/repo", display_name: "my-repo" },
+				},
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				const settings = store.get("/repo");
+				expect(settings?.baseBranch).toBeNull();
+				expect(settings?.color).toBe("");
+				expect(settings?.autoConsolidateWorktrees).toBe(false);
+				expect(settings?.branchLabels).toEqual({});
+			});
+		});
+
+		it("migrates from localStorage on first run, converting the legacy camelCase entries to the wire shape", async () => {
 			localStorage.setItem(
 				"tui-commander-repo-settings",
 				JSON.stringify({
@@ -473,6 +644,8 @@ describe("repoSettingsStore", () => {
 				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", {
 					config: { repos: { "/repo": { path: "/repo", display_name: "my-repo", base_branch: "main" } } },
 				});
+				const migratedEntry = lastSavedEntry("/repo");
+				expect(migratedEntry.displayName).toBeUndefined();
 			});
 		});
 	});
