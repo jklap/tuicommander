@@ -475,13 +475,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					// Intent/suggest row overlays handled by installRenderObserver
 					break;
 				}
-				case "suggest":
+				case "suggest": {
+					const t = terminalsStore.get(props.id);
+					const suggestEnabled = t?.agentType
+						? (agentConfigsStore.getSuggestFollowups(t.agentType) ?? settingsStore.state.suggestFollowups)
+						: settingsStore.state.suggestFollowups;
 					// Backend guarantees `suggest` events only arrive once the shell has
 					// transitioned to IDLE (see `drain_pending_suggest` in pty.rs, gated
 					// on `SHELL_IDLE`). No frontend buffering needed: if the user hasn't
 					// dismissed the previous cycle's chips, show the new set directly.
-					if (settingsStore.state.suggestFollowups && parsed.items?.length) {
-						const t = terminalsStore.get(props.id);
+					if (suggestEnabled && parsed.items?.length) {
 						if (t && !t.suggestDismissed) {
 							terminalsStore.setSuggestedActions(props.id, parsed.items);
 						} else if (t?.suggestDismissed) {
@@ -489,6 +492,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						}
 					}
 					break;
+				}
 				case "shell-state": {
 					if (parsed.state !== "idle") {
 						// Shell goes busy: clear stale suggest from previous cycle and reset

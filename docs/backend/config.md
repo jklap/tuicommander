@@ -151,6 +151,9 @@ cleartext copy does not survive on disk.
 | `ai_terminal_mcp_enabled` | `bool` | `false` | Expose `ai_terminal_*` tools to external MCP clients. Off by default — see [`mcp-http.md`](mcp-http.md#mcp-tools-ai_terminal_-external-agent-surface) |
 | `index_strategy` | `String` | `"active_and_switch"` | Content index pre-warm strategy: `"active_and_switch"`, `"active_only"`, `"all_sequential"` |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
+| `pr_hide_drafts` | `bool` | `false` | Exclude draft PRs from the Pull Requests list. Per-repo tri-state override: `RepoSettingsEntry.pr_hide_drafts` |
+| `pr_hide_conflicting` | `bool` | `false` | Exclude PRs with merge conflicts from the Pull Requests list. Per-repo tri-state override: `RepoSettingsEntry.pr_hide_conflicting` |
+| `pr_hide_ci_failing` | `bool` | `false` | Exclude PRs with failing CI checks from the Pull Requests list. Per-repo tri-state override: `RepoSettingsEntry.pr_hide_ci_failing` |
 | `auto_update_enabled` | `bool` | `true` | Automatically check for app updates on startup |
 | `auto_update_plugins_enabled` | `bool` | `true` | Automatically check for plugin updates on startup |
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
@@ -403,6 +406,17 @@ Per-repository fields:
 | `auto_fetch_interval_minutes` | `u32` | `0` | Auto-fetch interval in minutes (0 = disabled) |
 | `auto_delete_on_pr_close` | `AutoDeleteOnPrClose` | `"off"` | Auto-delete branch when PR merged/closed (`off`/`ask`/`auto`) |
 | `archive_script` | `String` | `""` | Script to run before archive/delete (non-zero exit blocks) |
+| `pr_hide_drafts` | `Option<bool>` | `null` | Tri-state override of the global `pr_hide_drafts` — `null` inherits, `Some(bool)` overrides |
+| `pr_hide_conflicting` | `Option<bool>` | `null` | Tri-state override of the global `pr_hide_conflicting` |
+| `pr_hide_ci_failing` | `Option<bool>` | `null` | Tri-state override of the global `pr_hide_ci_failing` |
+| `terminal_meta_hotkeys` | `Option<bool>` | `null` | Tri-state override of Cmd+1-9 terminal hotkeys (global default: `true` on macOS) |
+
+`#[serde(default)]` on every field above means an unrecognized JSON key is normally dropped
+without error — this is exactly how the frontend's camelCase/snake_case mismatch went unnoticed
+for a while. `RepoSettingsEntry` carries a flattened `extra: HashMap<String, serde_json::Value>`
+catch-all (never re-serialized) so an unrecognized key is captured instead of vanishing;
+`load_repo_settings()` logs a `tracing::warn!` naming the repo path and the exact unrecognized
+keys whenever `extra` is non-empty.
 
 **Commands:** `load_repo_settings()`, `save_repo_settings(config)`, `check_has_custom_settings(path)`
 

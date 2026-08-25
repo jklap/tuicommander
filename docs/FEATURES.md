@@ -1254,8 +1254,10 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 ### 11.4 Repository Settings (per-repo)
 - Display name
 - Worktree tab: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge action (each overridable from global defaults)
+- PR Visibility (hide draft/conflicting/CI-failing) and, on macOS, Cmd+1-9 terminal hotkeys — also per-repo overridable
 - Scripts tab: setup script (post-worktree), run script (`Cmd+R`), archive script (pre-archive/delete hook)
 - Repo-local config: `.tuic.json` in repo root provides team-shared settings. Three-tier precedence: `.tuic.json` > per-repo app settings > global defaults. **Scripts (setup, run, archive) are intentionally excluded from `.tuic.json` merging** — arbitrary script execution by a checked-in file poses a security risk; scripts are always sourced from the local per-repo app settings only
+- **Tri-state overrides:** every on/off field above (plus the per-agent "Show intent as tab title" / "Show suggested follow-ups" overrides in **11.7**) uses a shared `TriStateToggle` control with three directly-selectable positions — On, Use global default, Off — instead of a checkbox that can only ever hold a concrete value. Selecting "Use global default" writes `null` (or, for the per-agent overrides, `undefined`) so the setting tracks the global value going forward, without needing the panel's "Reset to Defaults" button.
 
 ### 11.5 Notifications
 - Master toggle, volume (0-100%)

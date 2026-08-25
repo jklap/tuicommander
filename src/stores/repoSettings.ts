@@ -165,9 +165,56 @@ interface RepoSettingsState {
 
 const LEGACY_STORAGE_KEY = "tui-commander-repo-settings";
 
+// ---------------------------------------------------------------------------
+// Wire layer — RepoSettings (camelCase, in-memory) <-> RepoSettingsEntry
+// (snake_case, Rust/on-disk). Every sibling store (repoDefaults.ts, settings.ts)
+// converts explicitly at its Tauri boundary; this store used to post/read the
+// camelCase store object verbatim, which `#[serde(default)]` on every Rust
+// field silently accepted and dropped every key it didn't recognize (#e767
+// tri-state work uncovered this — see repoSettings.test.ts "wire payload").
+// Conversion is mechanical (camelCase <-> snake_case) because that convention
+// holds for every field on both sides today; if that ever stops being true for
+// a given field, the round-trip test in repoSettings.test.ts will catch it.
+// ---------------------------------------------------------------------------
+
+function camelToSnake(key: string): string {
+	return key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+}
+
+function snakeToCamel(key: string): string {
+	return key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+}
+
+/** RepoSettings (camelCase) -> wire shape (snake_case) for `save_repo_settings` */
+function toWire(settings: RepoSettings): Record<string, unknown> {
+	const wire: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(settings)) {
+		wire[camelToSnake(key)] = value;
+	}
+	return wire;
+}
+
+/** Wire shape (snake_case, possibly missing newer fields) -> RepoSettings (camelCase) */
+function fromWire(wire: Record<string, unknown>): RepoSettings {
+	const camel: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(wire)) {
+		camel[snakeToCamel(key)] = value;
+	}
+	return {
+		path: "",
+		displayName: "",
+		color: "",
+		autoConsolidateWorktrees: false,
+		branchLabels: {},
+		...OVERRIDABLE_NULL_DEFAULTS,
+		...camel,
+	} as RepoSettings;
+}
+
 /** Persist settings to Rust backend (fire-and-forget) */
 function saveSettings(settings: Record<string, RepoSettings>): void {
-	invoke("save_repo_settings", { config: { repos: settings } }).catch((err) =>
+	const wireRepos = Object.fromEntries(Object.entries(settings).map(([path, s]) => [path, toWire(s)]));
+	invoke("save_repo_settings", { config: { repos: wireRepos } }).catch((err) =>
 		appLogger.error("config", "Failed to save repo settings", err),
 	);
 }
@@ -236,21 +283,27 @@ function createRepoSettingsStore() {
 		/** Load settings from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
 			try {
-				// One-time migration from localStorage
+				// One-time migration from localStorage. Legacy entries are already in the
+				// frontend's camelCase shape, so they need the same toWire() conversion as
+				// any other save.
 				const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
 				if (legacy) {
 					try {
-						const parsed = JSON.parse(legacy);
-						await invoke("save_repo_settings", { config: { repos: parsed } });
+						const parsed = JSON.parse(legacy) as Record<string, RepoSettings>;
+						const wireRepos = Object.fromEntries(
+							Object.entries(parsed).map(([path, settings]) => [path, toWire(settings)]),
+						);
+						await invoke("save_repo_settings", { config: { repos: wireRepos } });
 					} catch {
 						/* ignore corrupt legacy data */
 					}
 					localStorage.removeItem(LEGACY_STORAGE_KEY);
 				}
 
-				const loaded = await invoke<{ repos?: Record<string, RepoSettings> }>("load_repo_settings");
+				const loaded = await invoke<{ repos?: Record<string, Record<string, unknown>> }>("load_repo_settings");
 				if (loaded?.repos) {
-					setState("settings", loaded.repos);
+					const repos = Object.fromEntries(Object.entries(loaded.repos).map(([path, wire]) => [path, fromWire(wire)]));
+					setState("settings", repos);
 				}
 			} catch (err) {
 				appLogger.debug("config", "Failed to hydrate repo settings", err);

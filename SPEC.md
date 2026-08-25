@@ -398,6 +398,7 @@ Some frontend-only stores persist to localStorage:
 - [x] IDE launcher with app icons
 - [x] Configurable link click activation — Click / ⌘Click/Ctrl+Click / Never — for detected terminal links
 - [x] Rule-driven Smart Selection for double-click word boundaries, configurable character-list or regex-alternate boundaries, precision-scored rule matching, and per-rule actions surfaced in the right-click menu
+- [x] On / Use global default / Off tri-state control for every inheritable per-repo and per-agent boolean setting, replacing checkboxes that could only ever write a concrete value and never select "inherit" directly; fixed per-repo settings (and the global PR-visibility filters) silently failing to persist at all due to a camelCase/snake_case mismatch at the Tauri boundary
 
 ### Pending (P2)
 - [ ] Error handling strategy config
