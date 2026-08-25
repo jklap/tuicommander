@@ -66,8 +66,7 @@ Disable this per agent with **Settings → Agents → Native status signals** to
 
 Instead of inferring busy/idle/waiting from terminal output, TUICommander can drive an agent's status directly from the agent's **own hook system**.
 
-When enabled, TUIC writes small shell hooks into the agent's settings file that emit `OSC 7770;state=…` on each lifecycle event (busy on prompt/tool start, `awaiting` on an approval/question prompt, idle on stop). The session state then follows the hooks precisely, and the heuristic question-detection above is suppressed for that agent. Screen and ordinary silence cannot override a protocol-held turn. If its completion signal is lost, a stable Ready screen plus five minutes without PTY output recovers the session and writes a `protocol-stale` warning.
-
+When enabled, TUIC writes a small guarded shell command into the agent's settings file for each lifecycle event; the command invokes the bundled `tuic-hook` binary, which emits `OSC 7770;state=…` (busy on prompt/tool start, `awaiting` on an approval/question prompt, idle on stop) — plus, for Claude Code, free-text metadata (session id, working directory, transcript path, tool name, notification message) extracted natively from the hook's own JSON payload. The session state then follows the hooks precisely, and the heuristic question-detection above is suppressed for that agent. Screen and ordinary silence cannot override a protocol-held turn. If its completion signal is lost, a stable Ready screen plus five minutes without PTY output recovers the session and writes a `protocol-stale` warning.
 For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP server raises to ask you for input (`MCP server "…" requests your input`, with Accept/Decline). It arrives through Claude's `Elicitation` event and is retracted by `ElicitationResult`; no screen scraping is involved, because that dialog matches none of the question heuristics.
 
 **Ownership is safe and reversible.** Each managed hook carries a `# tuic-managed-hook` sentinel; enabling installs only TUIC's entries and disabling removes only them — your own (and wiz/mdkb) hooks in the same file are never touched. The toggle is the source of truth; the effect applies on the agent's **next launch** (hooks are read at startup).
@@ -81,7 +80,7 @@ For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP ser
 | OpenCode | `~/.config/opencode/plugin/tuic.ts` (Bun/TS plugin) | Supported |
 | Others (Aider, Amp, Cursor, Goose, Droid, pi) | — | No TUIC-managed hook system — stays heuristic |
 
-> **Platform note:** Hook instrumentation is **macOS/Linux only** — it resolves the controlling tty via `ps`/`/dev/tty`, which has no Windows equivalent. On Windows the toggle is hidden and agents keep heuristic detection (no regression).
+> **Platform note:** Hook instrumentation is currently offered on **macOS and Linux**. `tuic-hook` resolves the controlling tty natively rather than shelling out to `ps`, which removes the previous architectural blocker on Windows, but that path isn't validated there yet — on Windows the toggle stays hidden and agents keep heuristic detection (no regression).
 
 ## Usage Limit Tracking
 

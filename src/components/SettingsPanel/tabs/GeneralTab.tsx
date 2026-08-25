@@ -133,14 +133,6 @@ export const GeneralTab: Component = () => {
 				hint={t("general.hint.language", "Language of the TUICommander interface")}
 			/>
 
-			<SettingInput
-				label={t("general.label.shell", "Shell")}
-				value={settingsStore.state.shell ?? ""}
-				onInput={(v) => settingsStore.setShell(v)}
-				placeholder={t("general.placeholder.shell", "Default shell")}
-				hint={t("general.hint.shell", "Shell used in terminals (leave blank for system default)")}
-			/>
-
 			<Show when={isTauri() && cliStatus()}>
 				<h3>
 					{t("general.heading.cli", "TUIC CLI")}

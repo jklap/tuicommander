@@ -53,6 +53,8 @@ pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
 mod global_hotkey;
 pub(crate) mod grid_gate;
+#[cfg(feature = "desktop")]
+pub(crate) mod hook_binary;
 pub(crate) mod improvement_scan;
 mod input_line_buffer;
 pub(crate) mod jsonc_edit;
@@ -1675,6 +1677,18 @@ pub fn run() {
             // took the env vars; the keychain/`gh` part of the chain runs here,
             // off the window path and under its own timeout.
             crate::github_auth::spawn_deferred_token_resolution(Arc::clone(app_state));
+
+            // Refresh the tuic-hook stable copy hook commands are written
+            // against, and re-install any agent's hooks that have drifted
+            // from the current map (e.g. this app version fixed the `jq`
+            // dependency) — without this, an existing user who already
+            // toggled hook instrumentation on keeps the old shell-script
+            // hooks indefinitely, since nothing else re-triggers install.
+            #[cfg(feature = "desktop")]
+            {
+                hook_binary::ensure_current();
+                agent_hook_commands::reinstall_outdated_hooks();
+            }
 
             // Pre-warm content indices based on index_strategy setting:
             // - "active_only": only the active repo at boot

@@ -163,6 +163,12 @@ pub(crate) const PTY_SPAWN_ATTEMPTS: usize = 3;
 /// and arguments do not become valid after sleeping. Async entry points use the
 /// companion async wrapper so this bounded blocking backoff runs only on Tokio's
 /// blocking pool.
+///
+/// This is also the one place `TUIC_PTY_TTY` gets stamped onto the child's
+/// environment — every production caller opens its pty here, so it's the only
+/// point that has the master handle (and therefore `tty_name()`) available
+/// *and* is guaranteed to run after every caller's own `cmd.env(...)` calls,
+/// which happen inside `build_command()`.
 pub(crate) fn spawn_pty_pair_with_retry<F>(
     size: PtySize,
     build_command: F,
@@ -186,9 +192,30 @@ where
     )
     .map_err(|(attempt, error)| format!("Failed to open PTY (attempt {attempt}): {error}"))?;
 
+    let mut cmd = build_command();
+    // Claude Code (and the other agents this drives) spawns its hook
+    // subprocesses detached from any controlling terminal, so a hook cannot
+    // discover this tty by walking its own ancestry (see
+    // `crates/tuic-hook/src/tty.rs`). We created the pty and already know its
+    // device path — hand it over explicitly rather than make the hook guess.
+    // `tty_name()` is `#[cfg(unix)]`; hook instrumentation stays unvalidated
+    // on Windows regardless (see `tty.rs`'s own Windows fallback comment).
+    //
+    // Two known, currently-unhandled limitations, named here rather than
+    // rediscovered: (1) no multi-pane/tmux disambiguation — two agents in two
+    // tmux panes under one outer pty share one TUIC_PTY_TTY, with no way to
+    // attribute an emission to the right pane; (2) device-path staleness — an
+    // escaped daemonized grandchild can hold a stale TUIC_PTY_TTY after its
+    // pty closes, and the OS can reassign that device path to an unrelated
+    // later session. Both narrow and low-severity; see todo.md.
+    #[cfg(unix)]
+    if let Some(tty) = pair.master.tty_name() {
+        cmd.env("TUIC_PTY_TTY", tty.to_string_lossy().as_ref());
+    }
+
     let child = pair
         .slave
-        .spawn_command(build_command())
+        .spawn_command(cmd)
         .map_err(|error| format!("Failed to spawn shell: {error}"))?;
     Ok((pair, child))
 }
@@ -5051,6 +5078,32 @@ fn tuic_state_awaiting_event(
     }
 }
 
+/// Inverse of `tuic-hook`'s `payload::encode` (percent-encoding over the RFC
+/// 3986 unreserved set). Any `%XX` escape that isn't valid hex, or that would
+/// run past the end of the string, is left as a literal `%` rather than
+/// dropped or erroring — a hook must never be able to desync this parser, so
+/// a malformed escape degrades to "pass the bytes through," not a panic.
+/// Invalid UTF-8 after decoding degrades the same way, via lossy replacement.
+fn percent_decode_osc_payload(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 3 <= bytes.len()
+            && let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            out.push(byte);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Whether `agent_type`'s config enables native-hook instrumentation. Resolved
 /// once when the session's agent type becomes known (config changes apply on the
 /// next agent launch, matching when the hooks themselves take effect).
@@ -6046,6 +6099,35 @@ impl ChunkProcessor {
                             // payload value is intentionally never parsed here.
                             state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
                         }
+                        // `ccsession`/`cwd`/`transcript`/`tool`/`notify`: free-text
+                        // metadata `tuic-hook` extracted natively from a Claude Code
+                        // hook's stdin JSON (SessionStart/Pre/PostToolUse/
+                        // Notification). Percent-encoded on the wire since these
+                        // carry arbitrary text (paths, tool names, messages) that
+                        // could otherwise contain the OSC param delimiter (`;`) or
+                        // control bytes; decode once here and forward as a generic
+                        // `AgentMetadata` event for the frontend to pick up as
+                        // features consume it (none do yet — see `output_parser.rs`).
+                        "ccsession" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "session_id".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "cwd" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "cwd".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "transcript" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "transcript_path".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "tool" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "tool_name".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "notify" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "message".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
                         _ => {}
                     },
                     TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {}
