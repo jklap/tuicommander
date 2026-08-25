@@ -41,14 +41,6 @@ fn hook_settings_path(agent_type: &str) -> Option<PathBuf> {
                 .join("hooks.json"),
         ),
         "opencode" => Some(home.join(".config/opencode/plugin/tuic.ts")),
-        "pi" => Some(
-            std::env::var("PI_CODING_AGENT_DIR")
-                .ok()
-                .filter(|value| !value.is_empty())
-                .map(|value| PathBuf::from(crate::cli::expand_tilde(&value)))
-                .unwrap_or_else(|| home.join(".pi/agent"))
-                .join("extensions/tuic.ts"),
-        ),
         _ => None,
     }
 }
@@ -70,7 +62,7 @@ pub(crate) fn apply_at(
         "claude" | "gemini" => {
             let map = hook_map_for(agent_type).expect("merge agent has a hook map");
             if enabled {
-                agent_hook_installer::install(settings_path, &map, None)
+                agent_hook_installer::install(settings_path, &map)
             } else {
                 agent_hook_installer::uninstall(settings_path)
             }
@@ -95,11 +87,7 @@ pub(crate) fn apply_at(
                 if let Some(cfg) = &cfg {
                     crate::agent_hook_codex::set_features_hooks_flag(cfg, true)?;
                 }
-                agent_hook_installer::install(
-                    settings_path,
-                    &map,
-                    Some(crate::agent_hook::CODEX_HOOK_LABEL),
-                )?;
+                agent_hook_installer::install(settings_path, &map)?;
             } else {
                 agent_hook_installer::uninstall(settings_path)?;
                 if let Some(cfg) = &cfg {
@@ -113,13 +101,6 @@ pub(crate) fn apply_at(
                 crate::agent_hook_opencode::install_opencode_plugin(settings_path)
             } else {
                 crate::agent_hook_opencode::uninstall_opencode_plugin(settings_path)
-            }
-        }
-        "pi" => {
-            if enabled {
-                crate::agent_hook_pi::install_pi_extension(settings_path)
-            } else {
-                crate::agent_hook_pi::uninstall_pi_extension(settings_path)
             }
         }
         _ => Ok(()), // unsupported agent: flag persists, nothing to install
@@ -136,7 +117,6 @@ pub(crate) fn state_at(agent_type: &str, settings_path: &Path) -> InstallState {
         let hooks = agent_hook_installer::install_state(
             settings_path,
             &crate::agent_hook::codex_hook_map(),
-            Some(crate::agent_hook::CODEX_HOOK_LABEL),
         );
         let flag = codex_config_toml(settings_path)
             .map(|c| crate::agent_hook_codex::features_hooks_present(&c))
@@ -150,16 +130,13 @@ pub(crate) fn state_at(agent_type: &str, settings_path: &Path) -> InstallState {
     if agent_type == "opencode" {
         return crate::agent_hook_opencode::opencode_plugin_state(settings_path);
     }
-    if agent_type == "pi" {
-        return crate::agent_hook_pi::pi_extension_state(settings_path);
-    }
     let map = match agent_type {
         "claude" | "gemini" => hook_map_for(agent_type),
         "grok" => Some(crate::agent_hook::grok_hook_map()),
         _ => None,
     };
     match map {
-        Some(map) => agent_hook_installer::install_state(settings_path, &map, None),
+        Some(map) => agent_hook_installer::install_state(settings_path, &map),
         None => InstallState::NotInstalled,
     }
 }
@@ -184,22 +161,6 @@ pub(crate) async fn set_agent_hook_instrumentation(
     agent_type: String,
     enabled: bool,
 ) -> Result<(), String> {
-    set_agent_hook_instrumentation_on(
-        agent_type,
-        enabled,
-        !crate::agent_hook::hooks_supported_on_host(),
-    )
-    .await
-}
-
-async fn set_agent_hook_instrumentation_on(
-    agent_type: String,
-    enabled: bool,
-    unsupported_host: bool,
-) -> Result<(), String> {
-    if unsupported_host {
-        return Err("Agent hook installation is unsupported on this host (native Windows without the bundled tuic CLI)".into());
-    }
     if crate::agent_test::active() {
         return Err("Global agent hook changes are disabled in agent-test".into());
     }
@@ -224,13 +185,6 @@ async fn set_agent_hook_instrumentation_on(
 /// `notInstalled`, or `unsupported` for agents without a (wired) hook system.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_agent_hook_state(agent_type: String) -> String {
-    get_agent_hook_state_on(agent_type, !crate::agent_hook::hooks_supported_on_host()).await
-}
-
-async fn get_agent_hook_state_on(agent_type: String, unsupported_host: bool) -> String {
-    if unsupported_host {
-        return "unsupported".into();
-    }
     let _codex_guard = if agent_type == "codex" {
         Some(crate::agent_hook_codex_trust::INSTALL_LOCK.lock().await)
     } else {
@@ -263,19 +217,7 @@ pub(crate) fn set_agent_native_status_signals(
     agent_type: String,
     enabled: bool,
 ) -> Result<(), String> {
-    set_agent_native_status_signals_on(
-        agent_type,
-        enabled,
-        !crate::agent_hook::hooks_supported_on_host(),
-    )
-}
-
-fn set_agent_native_status_signals_on(
-    agent_type: String,
-    enabled: bool,
-    unsupported_host: bool,
-) -> Result<(), String> {
-    if unsupported_host || !matches!(agent_type.as_str(), "claude" | "codex") {
+    if !matches!(agent_type.as_str(), "claude" | "codex") {
         return Err(format!(
             "native status signals are unsupported for '{agent_type}'"
         ));
@@ -291,62 +233,84 @@ fn set_agent_native_status_signals_on(
     crate::config::save_agents_config(base, config)
 }
 
+/// Startup migration: re-install hooks for every agent that already has
+/// `hook_instrumentation` enabled but whose installed commands no longer
+/// match the current map (e.g. a version bump moved the shell-hook generator
+/// to `tuic-hook`). Without this, `apply_at` is only ever reachable from the
+/// Settings toggle — an existing user keeps whatever hooks they installed
+/// under an older app version indefinitely, never receiving a fix like the
+/// removal of `jq` from the failure path, until they happen to notice the
+/// "outdated" badge and re-toggle it themselves.
+///
+/// Only ever moves `Outdated → Installed`; never touches `NotInstalled` (the
+/// flag being enabled at all is the sole trigger) and is naturally idempotent
+/// on every subsequent startup once everything is current.
+///
+/// Skipped from a secondary instance (non-default `TUIC_APP_INSTANCE`, or a
+/// build running from a linked worktree): the generated commands embed this
+/// instance's own `<config_dir>/bin/tuic-hook` path, so a worktree/dev
+/// instance would otherwise rewrite the user's global agent settings to point
+/// at a copy that disappears with it — the same ownership rule
+/// `agent_mcp::launch_owns_agent_configs` applies to MCP config writes.
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))] // boot caller is desktop-only
+pub(crate) fn reinstall_outdated_hooks() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    if !crate::agent_mcp::launch_owns_agent_configs(&exe) {
+        tracing::info!(
+            source = "agent_hook_commands",
+            "Skipping outdated-hook migration from a secondary instance"
+        );
+        return;
+    }
+    reinstall_outdated_hooks_for(&crate::config::load_agents_config(), hook_settings_path);
+}
+
+/// Core of [`reinstall_outdated_hooks`], with the config and the
+/// settings-path resolver injected for testing (same convention as
+/// `apply_at`/`state_at` — `hook_settings_path` itself reads `dirs::home_dir()`
+/// and isn't mockable, so tests supply a closure over a tempdir instead).
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))] // boot caller is desktop-only
+fn reinstall_outdated_hooks_for(
+    cfg: &crate::config::AgentsConfig,
+    settings_path_for: impl Fn(&str) -> Option<PathBuf>,
+) {
+    for (agent_type, settings) in &cfg.agents {
+        if settings.hook_instrumentation != Some(true) {
+            continue;
+        }
+        let Some(path) = settings_path_for(agent_type) else {
+            continue;
+        };
+        if state_at(agent_type, &path) != InstallState::Outdated {
+            continue;
+        }
+        match apply_at(agent_type, &path, true) {
+            Ok(()) => tracing::info!(
+                source = "agent_hook_commands",
+                agent_type,
+                "re-installed outdated hooks on startup"
+            ),
+            Err(e) => tracing::warn!(
+                source = "agent_hook_commands",
+                agent_type,
+                error = %e,
+                "failed to re-install outdated hooks on startup"
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    // Catches: unsupported Windows installation persists a false preference or removes user hooks.
-    #[test]
-    fn windows_hook_toggle_preserves_preferences_and_files() {
-        let dir = TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
-        let _config = crate::config::set_config_dir_override(dir.path().to_path_buf());
-        persist_flag("claude", true).unwrap();
-        let before = std::fs::read(dir.path().join("agents.json")).unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        crate::agent_test::with_test_profile(dir.path(), || {
-            for agent in ["claude", "codex", "gemini", "grok", "opencode", "pi"] {
-                let settings = hook_settings_path(agent).unwrap();
-                std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
-                std::fs::write(&settings, b"user-owned").unwrap();
-                for enabled in [true, false] {
-                    let result = runtime.block_on(set_agent_hook_instrumentation_on(
-                        agent.into(),
-                        enabled,
-                        true,
-                    ));
-                    assert!(result.unwrap_err().contains("unsupported"));
-                    assert_eq!(
-                        runtime.block_on(get_agent_hook_state_on(agent.into(), true)),
-                        "unsupported"
-                    );
-                    assert_eq!(
-                        std::fs::read(dir.path().join("agents.json")).unwrap(),
-                        before
-                    );
-                    assert_eq!(std::fs::read(&settings).unwrap(), b"user-owned");
-                    if matches!(agent, "claude" | "codex") {
-                        assert!(
-                            set_agent_native_status_signals_on(agent.into(), enabled, true)
-                                .is_err()
-                        );
-                        assert_eq!(
-                            std::fs::read(dir.path().join("agents.json")).unwrap(),
-                            before
-                        );
-                    }
-                }
-            }
-        });
-    }
-
     #[test]
     fn agent_test_hook_toggle_refuses_before_persistence_and_shared_writes() {
         // Bug caught: a named instance still rewrites shared hooks and persists a lying flag.
-        for agent in ["claude", "gemini", "grok", "codex", "opencode", "pi"] {
+        for agent in ["claude", "gemini", "grok", "codex", "opencode"] {
             for enabled in [true, false] {
                 let dir = TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
                 let config = dir.path().join("instance");
@@ -372,15 +336,7 @@ mod tests {
                     );
                     assert_eq!(std::fs::read(&settings).unwrap(), before);
                     assert_eq!(std::fs::read(&codex_config).ok(), codex_before);
-                    // Windows supports hooks when the bundled `tuic.exe` sits
-                    // beside the binary, so the host answer decides, not the OS.
-                    assert!(result.unwrap_err().contains(
-                        if crate::agent_hook::hooks_supported_on_host() {
-                            "agent-test"
-                        } else {
-                            "unsupported"
-                        }
-                    ));
+                    assert!(result.unwrap_err().contains("agent-test"));
                 });
             }
         }
@@ -394,24 +350,6 @@ mod tests {
         assert_eq!(state_at("claude", &path), InstallState::Installed);
         apply_at("claude", &path, false).unwrap();
         assert_eq!(state_at("claude", &path), InstallState::NotInstalled);
-    }
-
-    #[test]
-    fn pi_hook_toggle_dispatches_to_the_marked_extension_installer() {
-        // Catches: Settings saves a Pi flag but never installs its extension.
-        let dir = TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
-        let path = dir.path().join("extensions/tuic.ts");
-        assert_eq!(state_at("pi", &path), InstallState::NotInstalled);
-        apply_at("pi", &path, true).unwrap();
-        assert_eq!(state_at("pi", &path), InstallState::Installed);
-        assert!(
-            std::fs::read_to_string(&path)
-                .unwrap()
-                .starts_with("/* tuic-managed-pi */\n")
-        );
-        apply_at("pi", &path, false).unwrap();
-        assert!(!path.exists());
-        assert_eq!(state_at("pi", &path), InstallState::NotInstalled);
     }
 
     #[test]
@@ -474,19 +412,16 @@ mod tests {
                 .and_then(|s| s.native_status_signals)
         };
 
-        set_agent_native_status_signals_on("claude".to_string(), false, false).unwrap();
+        set_agent_native_status_signals("claude".to_string(), false).unwrap();
         assert_eq!(flag(), Some(false));
         assert!(!get_agent_native_status_signals("claude".to_string()));
-        set_agent_native_status_signals_on("claude".to_string(), true, false).unwrap();
+        set_agent_native_status_signals("claude".to_string(), true).unwrap();
         assert_eq!(
             flag(),
             None,
             "on is the default, so it must be stored as absent"
         );
-        assert_eq!(
-            get_agent_native_status_signals("claude".to_string()),
-            crate::agent_hook::hooks_supported_on_host()
-        );
+        assert!(get_agent_native_status_signals("claude".to_string()));
     }
 
     #[test]
@@ -535,34 +470,15 @@ mod tests {
         let ours = dir.path().join("tuic.json");
         apply_at("grok", &ours, true).unwrap();
         let content = std::fs::read_to_string(&ours).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
-        // The installed command is the host's generated one: the guarded POSIX
-        // OSC hook, or `tuic.exe agent-state grok` on the Windows CLI transport.
-        let (_, _, command) = crate::agent_hook::grok_hook_map().remove(0);
-        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], command);
-        if crate::agent_hook::HookTransport::host() == Some(crate::agent_hook::HookTransport::Posix)
-        {
-            assert!(content.contains(r"7770;grok-hook="));
-            assert!(content.contains("TUIC_SESSION"));
-        }
+        assert!(content.contains("--state busy"));
+        assert!(content.contains("--state idle"));
+        assert!(content.contains("TUIC_SESSION"));
         assert!(content.contains("tuic-managed-hook"));
+        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert!(
             v["hooks"]["Stop"][0].get("matcher").is_none(),
             "lifecycle events must omit the matcher field (Grok rejects it)"
         );
-        assert_eq!(
-            v["hooks"]["Notification"][0]["matcher"],
-            "permission_prompt"
-        );
-        for event in [
-            "StopCancelled",
-            "StopFailure",
-            "PermissionDenied",
-            "PostToolUse",
-            "PostToolUseFailure",
-        ] {
-            assert!(v["hooks"][event].is_array(), "missing retraction: {event}");
-        }
     }
 
     #[test]
@@ -582,19 +498,7 @@ mod tests {
         assert_eq!(state_at("codex", &hooks), InstallState::ReviewRequired);
         let h = std::fs::read_to_string(&hooks).unwrap();
         assert!(h.contains("user-codex.sh"), "user Codex hook preserved");
-        // SessionStart drives busy: `state=busy` in the POSIX OSC hook, the
-        // `codex-session busy` arguments on the Windows CLI transport.
-        let (_, _, busy) = crate::agent_hook::codex_hook_map().remove(0);
-        assert!(busy.contains("busy"), "{busy}");
-        let v: serde_json::Value = serde_json::from_str(&h).unwrap();
-        assert!(
-            v["hooks"]["SessionStart"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|group| group["hooks"][0]["command"] == busy),
-            "{h}"
-        );
+        assert!(h.contains("--state busy"));
         assert!(crate::agent_hook_codex::features_hooks_present(&cfg));
         assert!(
             std::fs::read_to_string(&cfg)
@@ -623,94 +527,137 @@ mod tests {
         assert!(!crate::agent_hook_codex::features_hooks_present(&cfg));
     }
 
-    /// Every `(event, command, statusMessage)` of the TUIC-owned entries in a hooks file.
-    fn codex_tuic_entries(hooks: &Path) -> Vec<(String, Option<String>)> {
-        let root: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(hooks).unwrap()).unwrap();
-        let mut out = Vec::new();
-        for (event, groups) in root["hooks"].as_object().unwrap() {
-            for group in groups.as_array().unwrap() {
-                for hook in group["hooks"].as_array().unwrap() {
-                    if hook["command"]
-                        .as_str()
-                        .unwrap()
-                        .contains("tuic-managed-hook")
-                    {
-                        out.push((
-                            event.clone(),
-                            hook["statusMessage"].as_str().map(str::to_string),
-                        ));
-                    }
-                }
-            }
-        }
-        out
+    // -------------------------------------------------------------------
+    // reinstall_outdated_hooks_for (startup migration)
+    // -------------------------------------------------------------------
+
+    fn agents_config_with_flag(
+        agent_type: &str,
+        enabled: Option<bool>,
+    ) -> crate::config::AgentsConfig {
+        let mut cfg = crate::config::AgentsConfig::default();
+        cfg.agents.insert(
+            agent_type.to_string(),
+            crate::config::AgentSettings {
+                hook_instrumentation: enabled,
+                ..Default::default()
+            },
+        );
+        cfg
     }
 
     #[test]
-    fn agent_hook_codex_entries_carry_the_label_codex_lists_hooks_by() {
-        // Bug caught: Codex /hooks lists every TUIC entry as "Unnamed hook" (#2622-6809).
+    fn migration_reinstalls_an_outdated_enabled_agent() {
         let dir = TempDir::new().unwrap();
-        let hooks = dir.path().join("hooks.json");
+        let path = dir.path().join("settings.json");
+        // Simulate an old-format install by writing a stale sentineled command
+        // directly, bypassing apply_at (which would install the current map).
         std::fs::write(
-            &hooks,
-            br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-stop.sh"}]}]}}"#,
+            &path,
+            serde_json::json!({
+                "hooks": {
+                    "Stop": [{
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "echo old # tuic-managed-hook"}],
+                    }]
+                }
+            })
+            .to_string(),
         )
         .unwrap();
-        apply_at("codex", &hooks, true).unwrap();
-        let entries = codex_tuic_entries(&hooks);
-        assert_eq!(entries.len(), crate::agent_hook::codex_hook_map().len());
-        for (event, label) in &entries {
-            assert_eq!(label.as_deref(), Some("TUICommander session"), "{event}");
-        }
-        let text = std::fs::read_to_string(&hooks).unwrap();
+        assert_eq!(state_at("claude", &path), InstallState::Outdated);
+
+        let cfg = agents_config_with_flag("claude", Some(true));
+        reinstall_outdated_hooks_for(&cfg, |_| Some(path.clone()));
+
         assert_eq!(
-            text.matches("statusMessage").count(),
-            entries.len(),
-            "user hook untouched"
+            state_at("claude", &path),
+            InstallState::Installed,
+            "an outdated, enabled agent must be re-installed to the current map"
         );
     }
 
     #[test]
-    fn agent_hook_codex_legacy_install_is_outdated_and_upgrades_without_duplicates() {
-        // Bug caught: an existing label-less install reads Installed forever, or
-        // reinstalling appends a second set next to the old one.
+    fn migration_leaves_a_disabled_agent_alone() {
         let dir = TempDir::new().unwrap();
-        let hooks = dir.path().join("hooks.json");
-        apply_at("codex", &hooks, true).unwrap();
-        let mut root: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&hooks).unwrap()).unwrap();
-        for groups in root["hooks"].as_object_mut().unwrap().values_mut() {
-            for group in groups.as_array_mut().unwrap() {
-                for hook in group["hooks"].as_array_mut().unwrap() {
-                    hook.as_object_mut().unwrap().remove("statusMessage");
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "hooks": {
+                    "Stop": [{
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "echo old # tuic-managed-hook"}],
+                    }]
                 }
-            }
-        }
-        std::fs::write(&hooks, serde_json::to_vec(&root).unwrap()).unwrap();
-        assert_eq!(state_at("codex", &hooks), InstallState::Outdated);
+            })
+            .to_string(),
+        )
+        .unwrap();
 
-        apply_at("codex", &hooks, true).unwrap();
-        let entries = codex_tuic_entries(&hooks);
-        assert_eq!(entries.len(), crate::agent_hook::codex_hook_map().len());
-        assert!(
-            entries
-                .iter()
-                .all(|(_, l)| l.as_deref() == Some("TUICommander session"))
+        // hook_instrumentation explicitly false — must not be touched even
+        // though the file is Outdated.
+        let cfg = agents_config_with_flag("claude", Some(false));
+        reinstall_outdated_hooks_for(&cfg, |_| Some(path.clone()));
+
+        assert_eq!(
+            state_at("claude", &path),
+            InstallState::Outdated,
+            "a disabled agent's stale hooks must be left exactly as found"
         );
-        assert_eq!(state_at("codex", &hooks), InstallState::ReviewRequired);
     }
 
     #[test]
-    fn agent_hook_claude_entries_get_no_label() {
-        // Bug caught: the Codex label leaks into other agents' settings files.
+    fn migration_leaves_an_already_installed_agent_alone() {
         let dir = TempDir::new().unwrap();
-        let settings = dir.path().join("settings.json");
-        apply_at("claude", &settings, true).unwrap();
-        assert!(
-            !std::fs::read_to_string(&settings)
-                .unwrap()
-                .contains("statusMessage")
+        let path = dir.path().join("settings.json");
+        apply_at("claude", &path, true).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        let cfg = agents_config_with_flag("claude", Some(true));
+        reinstall_outdated_hooks_for(&cfg, |_| Some(path.clone()));
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            before, after,
+            "an already-current install must not be rewritten"
         );
+    }
+
+    #[test]
+    fn migration_skips_an_agent_with_no_flag_set_at_all() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "hooks": {
+                    "Stop": [{
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "echo old # tuic-managed-hook"}],
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let cfg = agents_config_with_flag("claude", None); // never toggled
+        reinstall_outdated_hooks_for(&cfg, |_| Some(path.clone()));
+
+        assert_eq!(
+            state_at("claude", &path),
+            InstallState::Outdated,
+            "an agent that was never enabled must not be touched"
+        );
+    }
+
+    #[test]
+    fn migration_is_a_noop_over_an_empty_config() {
+        // Must not panic / must not attempt any path resolution when no
+        // agent has ever been configured.
+        reinstall_outdated_hooks_for(&crate::config::AgentsConfig::default(), |_| {
+            panic!("settings_path_for must never be called with an empty config")
+        });
     }
 }
