@@ -7859,6 +7859,122 @@ fn a_working_spawn_is_built_once() {
     reap(child);
 }
 
+/// Read whatever a short-lived probe child writes to its pty, bounded so a
+/// misbehaving probe can never hang the test suite. Mirrors the spawn-
+/// thread + bounded-wait shape `tuic-hook`'s own `read_stdin_bounded` uses
+/// for the identical reason (`crates/tuic-hook/src/main.rs:226-260`): the
+/// read runs on a thread that is simply abandoned on timeout, never joined.
+#[cfg(unix)]
+// A handful of short lines from a test probe — not worth a bytecount
+// dependency for what's already a single-digit byte count per call.
+#[allow(clippy::naive_bytecount)]
+fn read_pty_output_bounded(
+    mut reader: Box<dyn std::io::Read + Send>,
+    expected_lines: usize,
+    timeout: std::time::Duration,
+) -> String {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let mut out = Vec::new();
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    out.extend_from_slice(&buf[..n]);
+                    // Stop as soon as the full expected payload has
+                    // arrived, rather than waiting on EOF — EOF depends
+                    // on every fd to the slave (including this test's
+                    // own) already being closed.
+                    if out.iter().filter(|&&b| b == b'\n').count() >= expected_lines {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = tx.send(out);
+    });
+    let bytes = rx.recv_timeout(timeout).unwrap_or_default();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// `bind_pty_identity` (:96) and `sanitize_pty_parent_env` (:72) are the two
+/// functions that mutate a spawned child's environment before the
+/// `TUIC_PTY_TTY` fix (F1) adds a third mutation to the same `CommandBuilder`
+/// in `spawn_pty_pair_with_retry`. Neither had any direct coverage —
+/// `bind_pty_identity`'s own doc comment describes an entire bug class it
+/// exists to prevent, unverified. This observes the *real* child environment
+/// through a live pty rather than inspecting the `CommandBuilder`, so it
+/// cannot pass on a build-string bug that never actually reaches the process.
+///
+/// Also covers the `TUIC_PTY_TTY` fix itself (F1): unlike the other two
+/// fields, this one isn't set inside `build_command()` — it's stamped by
+/// `spawn_pty_pair_with_retry` itself after the closure returns — so this
+/// is the only place that can observe it end-to-end. And an ordering
+/// regression guard: `TUIC_PTY_TTY` is injected *after* every caller's own
+/// `cmd.env(...)` calls, which is only safe because `CommandBuilder::env`
+/// is a keyed insert — confirms an unrelated caller-set var survives
+/// alongside it rather than the injection clobbering the whole map.
+#[cfg(unix)]
+#[test]
+fn bind_pty_identity_env_reaches_the_real_child() {
+    let state = crate::state::tests_support::make_test_app_state();
+
+    let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env("NO_COLOR", "1"); // sanitize_pty_parent_env must strip this
+        sanitize_pty_parent_env(&mut cmd);
+        bind_pty_identity(&state, &mut cmd, "probe-session", Some("probe-identity"));
+        // An unrelated caller-set var (mirrors spawn_config.env in
+        // create_pty) must survive the later TUIC_PTY_TTY injection.
+        cmd.env("TUIC_PROBE_UNRELATED", "caller-value");
+        cmd.arg("-c");
+        cmd.arg(
+            r#"printf '%s\n%s\n%s\n%s\n%s\n' "$TUIC_SESSION" "$TUIC_CONFIG_DIR" "${NO_COLOR-unset}" "$TUIC_PTY_TTY" "$TUIC_PROBE_UNRELATED""#,
+        );
+        cmd
+    })
+    .expect("sh must spawn");
+
+    let expected_tty = pair.master.tty_name();
+    let reader = pair.master.try_clone_reader().expect("clone reader");
+    // Our own copy of the slave must close so nothing but the child holds
+    // it open — the same ordering `create_pty` relies on in production.
+    drop(pair.slave);
+
+    let output = read_pty_output_bounded(reader, 5, std::time::Duration::from_secs(5));
+    let mut lines = output.lines();
+    assert_eq!(
+        lines.next(),
+        Some("probe-identity"),
+        "TUIC_SESSION must carry the caller's identity: {output:?}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some(crate::config::config_dir().to_string_lossy().as_ref()),
+        "TUIC_CONFIG_DIR must be set: {output:?}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("unset"),
+        "sanitize_pty_parent_env must strip NO_COLOR: {output:?}"
+    );
+    let expected_tty = expected_tty.expect("tty_name() must resolve for a freshly opened pty");
+    assert_eq!(
+        lines.next(),
+        Some(expected_tty.to_string_lossy().as_ref()),
+        "TUIC_PTY_TTY must carry this pty's own device path so a detached hook \
+         subprocess can find it without walking process ancestry: {output:?}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("caller-value"),
+        "injecting TUIC_PTY_TTY must not clobber an unrelated caller-set env var: {output:?}"
+    );
+
+    reap(child);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn async_spawn_wrapper_does_not_block_the_runtime_worker() {
     let started = std::time::Instant::now();
@@ -12169,9 +12285,9 @@ fn tuic_osc_toolfail_sets_turn_error_flag() {
 #[test]
 fn tuic_osc_toolfail_with_non_numeric_payload_still_sets_the_flag() {
     // The Rust dispatch never parses the payload — presence of the event
-    // is the whole signal (see agent_hook's post_tool_use_failure_hook_command
-    // doc comment) — so a malformed/non-numeric payload from a flaky jq
-    // extraction must not be silently dropped.
+    // is the whole signal (see tuic-hook's `DERIVATIONS`/`toolfail_from_exit_code`
+    // in crates/tuic-hook/src/main.rs) — so a malformed/non-numeric payload
+    // must not be silently dropped.
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-toolfail-garbage";
     agent_session(&state, session_id, SHELL_IDLE);
@@ -12189,6 +12305,103 @@ fn tuic_osc_toolfail_with_non_numeric_payload_still_sets_the_flag() {
         &state,
     );
     assert!(state.session_maps.turn_error_flags.get(session_id).is_some());
+}
+
+/// One test per new verb, table-driven: each must reach the event bus as
+/// `ParsedEvent::AgentMetadata` with the right `field` name and a
+/// correctly percent-decoded `value` — mirrors `tuic_osc_toolfail_sets_turn_error_flag`
+/// above, but asserting on the emitted event rather than a state side table,
+/// since `AgentMetadata` (unlike `toolfail`) has none.
+#[test]
+fn tuic_osc_metadata_verbs_decode_and_emit_agent_metadata() {
+    let cases = [
+        ("ccsession", "abc123", "session_id", "abc123"),
+        ("cwd", "%2FUsers%2Fme%2Fproject", "cwd", "/Users/me/project"),
+        (
+            "transcript",
+            "%2Ftmp%2Ft.jsonl",
+            "transcript_path",
+            "/tmp/t.jsonl",
+        ),
+        ("tool", "Bash", "tool_name", "Bash"),
+        (
+            "notify",
+            "needs%20your%20input%3B%20now",
+            "message",
+            "needs your input; now",
+        ),
+    ];
+
+    for (verb, wire_payload, expected_field, expected_value) in cases {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = format!("test-metadata-{verb}");
+        agent_session(&state, &session_id, SHELL_IDLE);
+        state.grid.vt_log_buffers.insert(
+            session_id.clone(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+        let silence = state.session_maps.silence_states.get(&session_id).unwrap().clone();
+        let mut processor = ChunkProcessor::new(None, None);
+
+        let mut rx = state.event_bus.subscribe();
+        processor.process_chunk(
+            &format!("\x1b]7770;{verb}={wire_payload}\x07"),
+            &silence,
+            &session_id,
+            &state,
+        );
+
+        let event = rx
+            .try_recv()
+            .unwrap_or_else(|_| panic!("event bus must receive a PtyParsed for verb {verb}"));
+        match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. } => {
+                assert_eq!(
+                    parsed.get("type").and_then(|v| v.as_str()),
+                    Some("agent-metadata"),
+                    "verb {verb}: wrong event type: {parsed}"
+                );
+                assert_eq!(
+                    parsed.get("field").and_then(|v| v.as_str()),
+                    Some(expected_field),
+                    "verb {verb}: wrong field: {parsed}"
+                );
+                assert_eq!(
+                    parsed.get("value").and_then(|v| v.as_str()),
+                    Some(expected_value),
+                    "verb {verb}: payload not decoded correctly: {parsed}"
+                );
+            }
+            other => panic!("verb {verb}: unexpected event variant: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn percent_decode_osc_payload_passes_through_plain_text() {
+    assert_eq!(percent_decode_osc_payload("Bash"), "Bash");
+}
+
+#[test]
+fn percent_decode_osc_payload_decodes_escapes() {
+    assert_eq!(
+        percent_decode_osc_payload("needs%20your%20input%3B%20now"),
+        "needs your input; now"
+    );
+}
+
+#[test]
+fn percent_decode_osc_payload_tolerates_a_trailing_lone_percent() {
+    // Must not panic on a truncated/malformed escape at the end of input —
+    // an OSC payload is attacker-adjacent (an agent's own hook stdin), so
+    // decoding must degrade gracefully, never panic.
+    assert_eq!(percent_decode_osc_payload("abc%"), "abc%");
+    assert_eq!(percent_decode_osc_payload("abc%2"), "abc%2");
+}
+
+#[test]
+fn percent_decode_osc_payload_tolerates_invalid_hex() {
+    assert_eq!(percent_decode_osc_payload("abc%ZZdef"), "abc%ZZdef");
 }
 
 #[test]
@@ -12980,6 +13193,50 @@ fn grok_minimal_capture_reaches_ready_and_declares_completion() {
         ),
         "the `suggest:` marker must survive the chrome trim — it is the only \
              thing that promotes grok from `idle` to `completed`"
+    );
+}
+
+/// Regression fixture for the tty-resolution fix (commit `4914bb42`):
+/// before it, a hook-instrumented Claude tab never emitted OSC 7770 at all
+/// because `tuic-hook` couldn't find a tty to write to (see
+/// `crates/tuic-hook/src/emit.rs`). Captured live via `POST
+/// /diagnostics/capture` from a real hook-instrumented `claude` turn
+/// (single `pwd` via the Bash tool, no failures) with the fix applied, then
+/// replayed here through the same `TerminalGrid` the PTY hot path uses.
+#[test]
+fn claude_hook_osc7770_turn_reaches_busy_then_idle() {
+    use crate::pty_capture::CaptureDirection;
+    use crate::terminal_grid::TerminalGrid;
+
+    let bytes = agent_prompt_fixture("claude-hook-osc7770-basic-turn.tcap");
+    let mut grid = TerminalGrid::new(40, 120, 2000);
+    let mut states = Vec::new();
+
+    for record in crate::pty_capture::decode(&bytes).expect("valid capture") {
+        if record.direction != CaptureDirection::Output {
+            continue;
+        }
+        grid.process(&record.data);
+        for event in grid.drain_events() {
+            if let crate::terminal_grid::TermEvent::Tuic { verb, payload, .. } = event
+                && verb == "state"
+            {
+                states.push(payload);
+            }
+        }
+    }
+
+    // Two `busy` events are real: the hook fires on both UserPromptSubmit
+    // and PreToolUse. What the tty-resolution regression actually broke was
+    // ALL of it — `emit()` returned early before a single byte reached the
+    // terminal, so this vec would be empty and `last() == idle` would never
+    // hold.
+    assert_eq!(
+        states,
+        vec!["busy".to_string(), "busy".to_string(), "idle".to_string()],
+        "the hook must resolve a tty and emit busy...busy...idle for this \
+         single-tool turn — silently finding zero states is exactly how the \
+         tty-resolution regression presented"
     );
 }
 
