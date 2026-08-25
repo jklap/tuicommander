@@ -449,4 +449,10 @@ export const TIPS: Tip[] = [
 			"Let Claude or Gemini report status through their own hooks for precise busy/idle/waiting state — enable per agent in Settings → Agents. TUIC installs and removes the hooks cleanly and never touches your own.",
 		shortcut: null,
 	},
+	{
+		feature: "Use Global Default",
+		description:
+			"Per-repo on/off settings have a third position between On and Off — click it to inherit the global default instead of overriding it, without resetting every other setting for that repo.",
+		shortcut: null,
+	},
 ];

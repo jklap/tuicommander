@@ -271,4 +271,97 @@ describe("agentConfigsStore", () => {
 			});
 		});
 	});
+
+	describe("intent_tab_title override", () => {
+		it("defaults to undefined (use the global setting)", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				expect(store.getIntentTabTitle("claude")).toBeUndefined();
+			});
+		});
+
+		it("sets and persists true", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				mockInvoke.mockClear();
+				await store.setIntentTabTitle("claude", true);
+				expect(store.getIntentTabTitle("claude")).toBe(true);
+				expect(mockInvoke).toHaveBeenCalledWith(
+					"save_agents_config",
+					expect.objectContaining({
+						config: expect.objectContaining({
+							agents: expect.objectContaining({ claude: expect.objectContaining({ intent_tab_title: true }) }),
+						}),
+					}),
+				);
+			});
+		});
+
+		it("sets and persists false", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				await store.setIntentTabTitle("claude", false);
+				expect(store.getIntentTabTitle("claude")).toBe(false);
+			});
+		});
+
+		it("resets to undefined (inherit) when set to undefined — this is the tri-state 'use global' path", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				await store.setIntentTabTitle("claude", false);
+				expect(store.getIntentTabTitle("claude")).toBe(false);
+				await store.setIntentTabTitle("claude", undefined);
+				expect(store.getIntentTabTitle("claude")).toBeUndefined();
+			});
+		});
+	});
+
+	describe("suggest_followups override", () => {
+		it("defaults to undefined (use the global setting)", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				expect(store.getSuggestFollowups("claude")).toBeUndefined();
+			});
+		});
+
+		it("sets, persists, and can be reset to undefined", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				await store.setSuggestFollowups("claude", true);
+				expect(store.getSuggestFollowups("claude")).toBe(true);
+
+				mockInvoke.mockClear();
+				await store.setSuggestFollowups("claude", undefined);
+				expect(store.getSuggestFollowups("claude")).toBeUndefined();
+				// The saved payload is JSON round-tripped (clone()), which drops
+				// undefined-valued keys entirely rather than serializing them as null —
+				// so "reset to inherit" means the key is absent, not present-as-undefined.
+				const saved = mockInvoke.mock.calls[0][1] as {
+					config: { agents: Record<string, { suggest_followups?: boolean }> };
+				};
+				expect(saved.config.agents.claude).not.toHaveProperty("suggest_followups");
+			});
+		});
+	});
+
+	describe("auto-retry and hook instrumentation", () => {
+		it("isAutoRetryEnabled defaults to false and reflects setAutoRetry", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				expect(store.isAutoRetryEnabled("claude")).toBe(false);
+				await store.setAutoRetry("claude", true);
+				expect(store.isAutoRetryEnabled("claude")).toBe(true);
+			});
+		});
+
+		it("syncHookInstrumentation mirrors state without saving to disk", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				mockInvoke.mockClear();
+				store.syncHookInstrumentation("claude", true);
+				expect(store.getHookInstrumentation("claude")).toBe(true);
+				expect(mockInvoke).not.toHaveBeenCalled();
+			});
+		});
+	});
 });

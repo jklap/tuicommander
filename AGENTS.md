@@ -94,6 +94,12 @@ Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath
 
 All business logic in Rust. Frontend only renders and handles interaction — no data reshaping, computation, or process orchestration.
 
+## Tri-State Inheritable Settings
+
+Any per-repo or per-agent boolean setting that can inherit a global default (RepoWorktreeTab's file-handling/worktree/PR-visibility toggles, AgentsTab's per-agent overrides) is stored as `boolean | null`, `null` meaning "inherit," and rendered with the shared `TriStateToggle` (`src/components/shared/TriStateToggle.tsx`) — never a plain checkbox, which can only ever hold a concrete value and has no way to re-select "inherit" once touched.
+
+**Resolution is always `override ?? globalDefault`** (see `src/stores/repoSettings.ts`'s `resolvers` map, e.g. `copyIgnoredFiles: (s, local) => s.copyIgnoredFiles ?? local()?.copy_ignored_files ?? repoDefaultsStore.state.copyIgnoredFiles`). Never invert this order — resolving `globalDefault ?? override` silently makes every explicit "Off" override unreachable whenever the global default is `true`. Any new inheritable field must go through `RepoSettingsEntry`/`AgentConfig`'s `Option<bool>` (Rust) / `boolean | null` (TS) shape and a `resolvers` entry, not a bare `bool`/`boolean` — a bare boolean silently drops the "use global" state.
+
 ## IPC / HTTP Parity
 
 **Every Tauri IPC surface MUST have an HTTP/WS equivalent, and the two MUST stay consistent.** The desktop app talks over Tauri IPC; browser/PWA/remote clients talk over HTTP+SSE+WS. They are two transports for the *same* backend — never let them drift.
