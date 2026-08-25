@@ -748,12 +748,16 @@
 	"repoWorktree.orphanCleanup.off": "Keep (mark as detached)",
 	"repoWorktree.orphanCleanup.on": "Auto-remove",
 	"repoWorktree.orphanCleanup.useDefault": "Use global default ({default})",
+	"repoWorktree.label.prVisibility": "PR Visibility",
 	"repoWorktree.placeholder.displayName": "Custom name...",
 	"repoWorktree.toggle.autoArchiveMerged": "Auto-archive merged worktrees",
 	"repoWorktree.toggle.autoConsolidate": "Show all worktrees of this repo in one consolidated screen",
 	"repoWorktree.toggle.copyIgnoredFiles": "Copy ignored files",
 	"repoWorktree.toggle.copyUntrackedFiles": "Copy untracked files",
 	"repoWorktree.toggle.deleteBranchOnRemove": "Delete local branch when removing worktree",
+	"repoWorktree.toggle.prHideCiFailing": "Hide CI Failing PRs",
+	"repoWorktree.toggle.prHideConflicting": "Hide Conflicting PRs",
+	"repoWorktree.toggle.prHideDrafts": "Hide Draft PRs",
 	"repoWorktree.toggle.promptOnCreate": "Prompt for branch name during creation",
 	"repoWorktree.toggle.terminalMetaHotkeys": "Enable Cmd+1-9 terminal hotkeys",
 	"repoWorktree.worktreeStorage.appDir": "App config directory",
@@ -1087,5 +1091,9 @@
 	"toolbar.notifications": "notification(s)",
 	"toolbar.prUpdates": "PR UPDATES",
 	"toolbar.renameBranch": "Rename branch",
-	"toolbar.showSidebar": "Show Sidebar"
+	"toolbar.showSidebar": "Show Sidebar",
+	"triStateToggle.global": "Global",
+	"triStateToggle.off": "Off",
+	"triStateToggle.on": "On",
+	"triStateToggle.useGlobalDefault": "(Use global default: {value})"
 }

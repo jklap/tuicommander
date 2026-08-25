@@ -209,7 +209,7 @@ repository and worktree defaults.
 | **Disconnect** | Clear all GitHub tokens (keyring + env cache). Falls back to next available source. |
 | **Diagnostics** | Token source details, scope verification, API connectivity check |
 | **Auto-show PR popover** | Automatically display PR details when switching branches. Only shows for OPEN pull requests — CLOSED PRs are hidden, and MERGED PRs fade after 5 minutes of user activity. (**Pull Requests** section) |
-| **Hide Draft PRs / Hide Conflicting PRs / Hide CI Failing PRs** | Filter the pull requests the app shows |
+| **Hide Draft PRs / Hide Conflicting PRs / Hide CI Failing PRs** | Filter the pull requests the app shows. Each can be overridden per repository (**On / Use global / Off**, see [Repositories](#worktree-tab)) |
 | **Auto-Delete on PR Close** | Off (default), Ask, or Auto — controls branch cleanup when a PR is merged/closed |
 | **Show issues / Issue Filter** | Which issues to show in the GitHub panel: Assigned (default), Created, Mentioned, All, or Disabled (**Issues** section) |
 | **Repository Defaults** | Base branch, **Copy ignored files** and **Copy untracked files** (two separate toggles), setup/run/archive scripts applied to new repos |
@@ -417,6 +417,16 @@ Settings navigation, or from the sidebar `⋯` → "Repo Settings".
 - **Base Branch** — Branch to create worktrees from (auto-detect, main, master, develop)
 - **Copy ignored files** — Copy .gitignored files to new worktrees
 - **Copy untracked files** — Copy untracked files to new worktrees
+- **Prompt on create**, **Delete branch on remove**, **Auto-archive merged** — override the
+  matching global worktree default for this repo (see [Worktrees](worktrees.md#worktree-settings))
+- **PR Visibility** — per-repo override of Hide Draft/Conflicting/CI-Failing PRs (see
+  [Git & GitHub](#git--github) above)
+- **Terminal → Enable Cmd+1-9 terminal hotkeys** (macOS only) — per-repo override; global default
+  is always On
+
+Every on/off field in this list uses a three-position **On / Use global / Off** control rather
+than a plain checkbox, so "inherit the global setting" is always one of the three choices you can
+select directly — not just the state you land in until you touch the control once.
 
 ### Scripts Tab
 
