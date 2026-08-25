@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildScrollbarMarksHtml, type ScrollbarMarksInput } from "../../../components/Terminal/scrollbarMarks";
+import {
+	buildScrollbarMarksHtml,
+	type ScrollbarMarksInput,
+	shouldShowScrollbar,
+} from "../../../components/Terminal/scrollbarMarks";
 
 /** Colours are the only way to tell the four tick kinds apart in the output. */
 const FAILED = "#f85149";
@@ -103,4 +107,42 @@ it("rebases retained block and prompt ticks and drops evicted ticks", () => {
 	expect(html).toContain(`top:100px;background:${FAILED}`);
 	expect(html).toContain(`top:120px;background:${PROMPT}`);
 	expect(countOf(html, PROMPT)).toBe(1);
+});
+
+describe("shouldShowScrollbar", () => {
+	// Regression: a tab with no scrollback (historySize === 0) — the common case for a
+	// short Claude Code turn that never scrolled past one screen — used to hide the whole
+	// scrollbar track unconditionally, which hid any block/prompt marks on it too, even
+	// with real data and both toggles on.
+	const visBase = {
+		historySize: 0,
+		showBlockMarks: true,
+		showPromptMarks: true,
+		blocks: [{ promptLine: 3 }],
+		promptLines: [3],
+	};
+
+	it("is true when there's scrollable history, regardless of marks", () => {
+		expect(shouldShowScrollbar({ ...visBase, blocks: [], promptLines: [], historySize: 1 })).toBe(true);
+	});
+
+	it("is true with no history but a block mark present and its toggle on", () => {
+		expect(shouldShowScrollbar({ ...visBase, promptLines: [] })).toBe(true);
+	});
+
+	it("is true with no history but a prompt mark present and its toggle on", () => {
+		expect(shouldShowScrollbar({ ...visBase, blocks: [] })).toBe(true);
+	});
+
+	it("is false with no history and a block mark present but its toggle OFF", () => {
+		expect(shouldShowScrollbar({ ...visBase, showBlockMarks: false, promptLines: [] })).toBe(false);
+	});
+
+	it("is false with no history and a prompt mark present but its toggle OFF", () => {
+		expect(shouldShowScrollbar({ ...visBase, showPromptMarks: false, blocks: [] })).toBe(false);
+	});
+
+	it("is false with no history and nothing to mark", () => {
+		expect(shouldShowScrollbar({ ...visBase, blocks: [], promptLines: [] })).toBe(false);
+	});
 });
