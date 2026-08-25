@@ -37,6 +37,7 @@ import {
 	type ProfileChip,
 	splitRawArgs,
 } from "../../../utils/runConfigArgs";
+import { TriStateToggle } from "../../shared/TriStateToggle";
 import { AgentIcon } from "../../ui/AgentIcon";
 import { ExpertSetting } from "../ExpertSetting";
 import { MachineSelector } from "../MachineSelector";
@@ -723,7 +724,7 @@ const ClaudeUsageToggle: Component = () => {
 };
 
 /** Expandable agent row */
-const AgentRow: Component<{
+export const AgentRow: Component<{
 	agentType: AgentType;
 	detection: AgentAvailability | undefined;
 	onExpand?: (type: AgentType) => void;
@@ -1066,15 +1067,13 @@ const AgentRow: Component<{
 							configKey="agent_settings.intent_tab_title"
 							value={configStore.state.agents[props.agentType]?.intent_tab_title ?? null}
 						>
-							<div class={a.expandedSection}>
-								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-									<input
-										type="checkbox"
-										checked={configStore.getIntentTabTitle(props.agentType) ?? true}
-										onChange={(e) => configStore.setIntentTabTitle(props.agentType, e.currentTarget.checked)}
-									/>
-									<span>Track agent intent</span>
-								</label>
+							<div class={a.expandedSection} onClick={(e) => e.stopPropagation()}>
+								<TriStateToggle
+									value={configStore.getIntentTabTitle(props.agentType) ?? null}
+									onChange={(v) => configStore.setIntentTabTitle(props.agentType, v ?? undefined)}
+									label="Track agent intent"
+									inherited={true}
+								/>
 								<p class={s.hint}>
 									Ask the model to emit <code>intent:</code> markers at task start and phase changes. The current intent
 									appears in the terminal Context bar and may update the tab name. Turn off if parsing misbehaves on
@@ -1111,15 +1110,13 @@ const AgentRow: Component<{
 							configKey="agent_settings.suggest_followups"
 							value={configStore.state.agents[props.agentType]?.suggest_followups ?? null}
 						>
-							<div class={a.expandedSection}>
-								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-									<input
-										type="checkbox"
-										checked={configStore.getSuggestFollowups(props.agentType) ?? settingsStore.state.suggestFollowups}
-										onChange={(e) => configStore.setSuggestFollowups(props.agentType, e.currentTarget.checked)}
-									/>
-									<span>Show suggested follow-ups</span>
-								</label>
+							<div class={a.expandedSection} onClick={(e) => e.stopPropagation()}>
+								<TriStateToggle
+									value={configStore.getSuggestFollowups(props.agentType) ?? null}
+									onChange={(v) => configStore.setSuggestFollowups(props.agentType, v ?? undefined)}
+									label="Show suggested follow-ups"
+									inherited={settingsStore.state.suggestFollowups}
+								/>
 								<p class={s.hint}>
 									Emit <code>suggest:</code> markers for clickable follow-up actions
 								</p>

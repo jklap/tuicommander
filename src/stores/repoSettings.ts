@@ -58,11 +58,10 @@ export interface RepoSettings {
 	autoDeleteOnPrClose: AutoDeleteOnPrClose | null;
 	/** Allowlist of upstream MCP server names for this repo (null = all servers) */
 	mcpUpstreams: string[] | null;
-	// DEFERRED (2026-08-30) — `terminalMetaHotkeys` and the three `prHide*` fields
-	// below are override slots with no writer: no UI sets them, and `config.rs`
-	// has no matching field on `RepoSettingsEntry`, so a value set here would be
-	// dropped by the backend. Either wire them up or delete them; leaving them is
-	// what let the camelCase persistence bug hide.
+	// `terminalMetaHotkeys` and the three `prHide*` overrides below are written by
+	// RepoWorktreeTab's tri-state toggles and persisted by the matching
+	// `RepoSettingsEntry` fields in `config.rs` (`terminal_meta_hotkeys`,
+	// `pr_hide_*`); an unrecognised key there is logged, not silently dropped.
 	/** null = inherit from settingsStore (global) */
 	prHideDrafts: boolean | null;
 	/** null = inherit from settingsStore (global) */
