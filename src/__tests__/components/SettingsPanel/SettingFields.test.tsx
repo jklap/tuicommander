@@ -9,8 +9,8 @@ import {
 
 /**
  * `SettingFields.tsx` is the shared building block for every settings tab
- * (including `SelectionTab`'s "Enable smart selection" toggle and
- * "Double-click performs" / "Word boundaries" selects) but had no direct
+ * (including `SelectionTab`'s "Double-click performs" / "Word boundaries"
+ * selects) but had no direct
  * test file — it was only exercised incidentally through whichever tab
  * happened to render it. In particular `SettingSlider`'s `onCommit` (fired
  * on the DOM `change` event, distinct from the live-drag `onChange`/`onInput`)

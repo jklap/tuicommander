@@ -92,7 +92,6 @@ interface RustAppConfig {
 	cursor_style?: string;
 	terminal_renderer?: string;
 	terminal_link_activation?: string;
-	smart_selection_enabled?: boolean;
 	double_click_action?: string;
 	word_selection_mode?: string;
 	word_separators?: string;
@@ -331,7 +330,6 @@ interface SettingsStoreState {
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
 	linkActivation: LinkActivation;
-	smartSelectionEnabled: boolean;
 	doubleClickAction: DoubleClickAction;
 	wordSelectionMode: WordSelectionMode;
 	wordSeparators: string;
@@ -410,7 +408,6 @@ function createSettingsStore() {
 		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
 		terminalRenderer: "webgl",
 		linkActivation: "click",
-		smartSelectionEnabled: true,
 		doubleClickAction: "smart",
 		wordSelectionMode: "characters",
 		wordSeparators: DEFAULT_WORD_SEPARATORS,
@@ -500,7 +497,6 @@ function createSettingsStore() {
 		values.cursorStyle = cs === "block" || cs === "underline" ? cs : "bar";
 		values.terminalRenderer = validateTerminalRenderer(config.terminal_renderer || null);
 		values.linkActivation = validateLinkActivation(config.terminal_link_activation ?? null);
-		values.smartSelectionEnabled = config.smart_selection_enabled ?? true;
 		values.doubleClickAction = validateDoubleClickAction(config.double_click_action ?? null);
 		values.wordSelectionMode = validateWordSelectionMode(config.word_selection_mode ?? null);
 		values.wordSeparators = config.word_separators ?? DEFAULT_WORD_SEPARATORS;
@@ -576,7 +572,6 @@ function createSettingsStore() {
 			cursor_style: values.cursorStyle,
 			terminal_renderer: values.terminalRenderer,
 			terminal_link_activation: values.linkActivation,
-			smart_selection_enabled: values.smartSelectionEnabled,
 			double_click_action: values.doubleClickAction,
 			word_selection_mode: values.wordSelectionMode,
 			word_separators: values.wordSeparators,
@@ -1094,11 +1089,6 @@ function createSettingsStore() {
 			save();
 		},
 
-		setSmartSelectionEnabled(enabled: boolean): void {
-			setState("smartSelectionEnabled", enabled);
-			save();
-		},
-
 		setDoubleClickAction(action: DoubleClickAction): void {
 			setState("doubleClickAction", action);
 			save();
@@ -1227,7 +1217,6 @@ registerDebugSnapshot("settings", () => {
 		issueFilter: s.issueFilter,
 		terminalRenderer: s.terminalRenderer,
 		linkActivation: s.linkActivation,
-		smartSelectionEnabled: s.smartSelectionEnabled,
 		doubleClickAction: s.doubleClickAction,
 		wordSelectionMode: s.wordSelectionMode,
 		smartSelectionRuleCount: s.smartSelectionRules.length,
