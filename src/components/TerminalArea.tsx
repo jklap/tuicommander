@@ -7,7 +7,6 @@ import { mdTabsStore } from "../stores/mdTabs";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { repositoriesStore } from "../stores/repositories";
-import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
 import { shouldAutoSubmitSuggestion } from "../utils/sendCommand";
 import { sendTextToSession } from "../utils/sendToActiveTerminal";
@@ -260,10 +259,13 @@ export const TerminalArea: Component<TerminalAreaProps> = (props) => {
 				{/* Suggest follow-up actions overlay — inside #terminal-panes for correct centering.
              Timer lives in the overlay: 30s after becoming visible → auto-dismiss.
              Tab switch unmounts the overlay (cancelling the timer); returning remounts it (restarting the timer).
-             This way suggestions persist until the user actually sees them. */}
-				<Show when={settingsStore.state.suggestFollowups}>
-					<SuggestOverlayContainer />
-				</Show>
+             This way suggestions persist until the user actually sees them.
+             Always mounted, not gated on settingsStore.state.suggestFollowups here: Terminal.tsx's
+             "suggest" handler already resolves the effective per-agent-or-global enablement before
+             ever calling setSuggestedActions, and this container renders nothing when there's
+             nothing to show. Gating here too used to double-gate and block the case where a
+             per-agent override is ON while the global setting is OFF. */}
+				<SuggestOverlayContainer />
 
 				{/* Drop overlay for external file drag & drop */}
 				<Show when={isDragging()}>

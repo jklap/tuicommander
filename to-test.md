@@ -214,6 +214,209 @@ manual item covers only the rebuilt live Codex integration.
   precise non-retryable timeout; it must not require a `status`/`output` poll,
   leave `/clear` in the composer, or run it twice. Close only the throwaway
   session after observing the result.
+## Smart Selection rule export/import + native Save dialog for both Export toolbars (2026-08-28)
+
+Frontend-only change (no Rust touched) — `write_external_file` (the command the Save dialog
+writes through) and its HTTP/IPC parity already existed and are unmodified. Verified by 177
+passing vitest cases across the new/updated files (`smartSelectionExport.test.ts`,
+`jsonFileTransfer.test.ts`, `SelectionTab.transfer.test.tsx`, `SmartPromptsTab.transfer.test.tsx`,
+plus the untouched `PromptImportDialog.test.tsx`/`SelectionTab.test.tsx` passing unchanged after
+the `PromptImportDialog`→`ImportReviewDialog` generalization), `tsc --noEmit`, `biome check`, and
+`cargo nextest run --workspace` (5300 rust tests, unaffected). The native OS Save dialog itself
+cannot be driven by vitest, `agent-browser`, or Playwright (it's outside the WebView/DOM), so the
+actual file-picker UX needs a human pass in the real desktop app.
+
+- [ ] **[MANUAL]** Settings → Smart Prompts → Export…: confirm the OS Save dialog opens with a
+      suggested filename of `prompts-<scope>.json`, that saving actually writes the file to the
+      chosen location with valid JSON content, and that Cancel produces no toast and writes
+      nothing.
+- [ ] **[MANUAL]** Settings → Selection → Export…: same checks, filename
+      `smart-selection-rules-<scope>.json`.
+- [ ] **[MANUAL]** Save an export to a location outside your home folder (e.g. an external drive,
+      or `/tmp` on macOS/Linux) with an existing parent directory, and confirm it actually
+      **succeeds** — `write_external_file`'s `validate_external_write_path` (`fs.rs`) requires an
+      absolute path, rejects `..` traversal, and requires the parent to already exist, but is
+      **not** home-directory-restricted (confirmed via its own
+      `validate_external_write_accepts_path_outside_home` test — its doc comment claiming a
+      home-only allowlist is stale/incorrect, unrelated to this feature). Separately confirm that
+      picking a path whose parent directory does **not** exist produces a clear "Export failed"
+      toast rather than a silent no-op.
+- [ ] **[MANUAL]** Load the app in browser mode (per AGENTS.md's web-UI section) and confirm both
+      Export buttons fall back to a normal browser download (no native dialog, since `save()` is
+      Tauri-only) instead of failing silently.
+- [ ] **[MANUAL]** Settings → Selection: export "Modified only" after editing one built-in rule's
+      pattern, then "Restore built-in defaults", then Import that file — confirm the review
+      dialog's footnote about materializing built-ins into your configuration appears (only shown
+      when your stored rule list is currently empty), that a rule with a Run Command/Send Text
+      action shows the review warning and lands disabled after import, and that
+      `config.json`'s `smart_selection_rules` is populated correctly afterward.
+- [ ] **[MANUAL]** Repeat the above Save-dialog checks on Windows and Linux — only exercised on
+      macOS so far; the Tauri dialog plugin is cross-platform but its native picker chrome and
+      default-directory behavior differ per OS.
+
+## mDNS Tier A — Bonjour hostname in self-signed cert SAN + network picker (2026-08-27, **Rust change — needs `make dev` restart**)
+
+- [x] On macOS, Settings → Services & MCP's "Network Interface" picker includes an "mDNS — `<name>.local`" entry after the IP entries, is NOT auto-selected over the existing Wi-Fi/LAN entry, and is a real choosable `<option>` (selecting it resolves to the hostname value) _(verified: Playwright against a throwaway `make dev` test instance on :9877 — screenshot shows "mDNS — DJW0791KX5.local" both listed after "Wi-Fi / LAN (en0)"/"VPN (utun4)" and, once selected, rendered as the picker's chosen value with no layout/overflow issues)_
+- [ ] **[MANUAL]** Select the mDNS entry and confirm the resulting connect URL is `https://<name>.local:<port>/?token=...` and actually loads TUICommander in a browser on another device on the same LAN (mDNS resolution + cert accepted after the usual one-time browser warning) — the connect-URL logic itself is unit-tested (`resolve_connect_target`/`build_connect_url` are unchanged, generic host-string handling) and the served cert's SAN list was confirmed via `openssl` to include `DNS:<name>.local`, but actual mDNS resolution from a second physical device needs real hardware.
+- [ ] **[MANUAL]** After changing the Mac's local hostname (System Settings → General → Sharing → Local hostname) and waiting for the 60s self-signed recheck loop (or restarting), confirm the cert regenerates to cover the new name — the old `.local` name should stop being covered and the new one should appear in the SAN list (checkable via the SHA-256 fingerprint changing in Settings → Services → Self-Signed HTTPS, or `openssl s_client -connect <ip>:<port> -servername localhost </dev/null 2>/dev/null | openssl x509 -noout -text | grep -A2 "Subject Alternative Name"`).
+- [ ] **[HUMAN]** On Windows and on Linux (with and without Avahi running), confirm the network picker does NOT show an "mDNS" entry and `/system/local-ips` does not include one — `local_mdns_hostname()` is `#[cfg(target_os = "macos")]`-gated to return `None` on both platforms, but this has only been exercised by code inspection + the compile-time cfg, never run on real Windows/Linux hardware (Windows CI never builds/tests this crate per the native-hooks section above).
+
+## New Worktree dialog: fixed-height branch list + "Start from" click-select fix (2026-08-27)
+
+Frontend-only change (no Rust touched), verified by 64 passing vitest cases (3 of them
+regression tests confirmed to fail against the pre-fix code) plus `/code-review`, `biome`,
+and `tsc --noEmit` — all clean. Not verified visually because this worktree has no Rust
+build yet (no `src-tauri/target`) and a screenshot pass would require a full fresh build;
+deferred per the user's own call when asked. Escalation ladder: code inspection done, tests
+done, CLI/typecheck done — only the visual/browser step (rungs 4-5) is outstanding.
+
+- [ ] **[MANUAL]** In the "New Worktree" dialog, type a branch name character-by-character and
+      confirm the dialog's overall size stays visually constant as the number of matching
+      branches changes (was: the box visibly grew/shrank per keystroke —
+      `CreateWorktreeDialog.module.css`'s `.branchList` is now a fixed `height: 150px` instead of
+      `max-height`).
+- [ ] **[MANUAL]** Type a name that matches no existing branch and confirm the branch list shows
+      "No existing branches match" rather than a blank tinted box.
+- [ ] **[MANUAL]** Open the "Start from" base-ref dropdown, type a search query that filters out
+      an earlier-listed ref, then click a ref further down the (now-shorter) list: confirm it
+      populates the trigger and closes the list (was: silently did nothing the first time you
+      typed then clicked, only working after closing/reopening the dropdown once — see the
+      `<For>` index-staleness note added to `AGENTS.md`).
+- [ ] **[MANUAL]** Same as above but hover (don't click) the ref after filtering, then press Enter:
+      confirm it selects the hovered ref.
+
+## UI tweaks: tri-state switch restyle, worktree dialog resize, headless-agent select, Shell move (2026-08-28/29)
+
+Seven settings/UI fixes in one session: `TriStateToggle` restyled from a 3-segment
+radiogroup to a single cycling pill switch; `CreateWorktreeDialog`'s remaining
+resize-while-typing sources fixed — the base-ref row now stays mounted and disables
+instead of unmounting, while the status line/path preview/error message keep their
+original conditional-mount behavior but now live inside a fixed-min-height wrapper
+(`.previewFooter`) so the dialog's overall height stays constant regardless of
+which of the three is currently shown; the "Enable smart selection" toggle removed
+(Rust `smart_selection_enabled` field deleted); the Smart Selection rule Name field
+widened; the headless-agent `<select>` in Providers and Smart Prompts fixed to
+correctly display a persisted value once async agent detection resolves, plus a
+genuine save bug for named run-config selections in the Smart Prompts copy; and
+the Shell field moved from Settings → General to Settings → Terminal.
+
+A follow-up `/code-review` pass on this session's diff found and fixed four more
+issues before this landed: (1) `useSmartPrompts.ts`'s composite-value parser used
+`split(":", 2)`, which in JS truncates the full split's result array rather than
+doing a max-2-parts split — a run config named e.g. `"My:Config"` (nothing prevents
+a colon in a name) had its name silently mangled; fixed via `indexOf`/`slice`. (2)
+the path preview's "ellipsize at the start" CSS trick (`direction: rtl`) risked the
+Unicode Bidi Algorithm visually reordering digit runs in an otherwise-LTR path
+(e.g. `.../worktree-2026-08-28`); replaced with plain JS-side character-budget
+truncation, no bidi involved. (3) `.previewFooter`'s `min-height` had only ~6px of
+slack over the three rows' actual worst-case height with no test enforcing the
+number; bumped from 84px to 100px with a comment flagging it as unverified-by-test.
+(4) the headless-agent `<select>` markup was duplicated near-verbatim between
+`ProvidersTab.tsx` and `SmartPromptsTab.tsx` — extracted into a shared
+`HeadlessAgentSelect.tsx` (own test file, 6 tests) so a future fix can't apply to
+only one copy the way the composite-value guard bug originally did.
+
+Escalation ladder: code inspection done, tests done (6651/6651 vitest passing,
+including 9 regression tests individually confirmed to fail against each pre-fix
+file via `git stash`: 1 in `ProvidersTab.test.tsx`, 2 in
+`SmartPromptsTab.headlessAgent.test.tsx`, 5 in `CreateWorktreeDialog.test.tsx`, and
+1 in `useSmartPrompts.test.ts`), `cargo nextest run --workspace` (5300 passed),
+`clippy`, `rustfmt`, `biome`, `tsc --noEmit` all clean via `./scripts/check-gate.sh`
+— the only reported failures are the two pre-existing, documented ones
+(uninitialized `plugins/` submodule; `ChangelogModal.test.tsx`'s flaky leak marking
+its file failed with 0 real test failures inside it). The visual/browser step
+(rungs 4-5) was then completed too: Boss killed the process holding Vite's pinned
+port 1421, `make dev` ran clean for this worktree (fresh Rust build, so the
+`smart_selection_enabled` removal is included), and every item below except the
+last was verified live via `agent-browser` against `https://127.0.0.1:9877/` —
+screenshots in `.screenshots/ui-tweaks-verify/` (gitignored, not committed). The
+dev instance was shut down afterward and the port freed again.
+
+- [x] Settings → any repo → Worktree tab: confirm each on/off row (Copy ignored
+      files, Prompt for branch name, Hide Draft PRs, etc.) now renders as a single
+      30×16 pill switch matching the look of every plain `SettingToggle` elsewhere
+      in Settings, not three separate button segments. Click it and confirm it
+      cycles Use-global (dashed track, dimmed, knob centered) → On (accent, knob
+      right) → Off (grey, knob left) → back to Use-global, and that the "(Use
+      global default: X)" hint text still appears only in the Use-global position
+      _(verified: `aria-checked` read `mixed`/`true`/`false` at each step; a 4×
+      CSS-zoomed screenshot of "Prompt for branch name during creation" in the
+      Global position clearly shows the dashed border, dimmed opacity, and
+      centered knob — `.screenshots/ui-tweaks-verify/14-full-zoomed.png`)_.
+- [x] New Worktree dialog: type a name that becomes an exact match for an existing
+      branch (with 2+ base refs — used the real `export-smart-sel`/`wip`/etc.
+      branches in this repo) and confirm the "Start from" row stays visible but
+      grays out/disables instead of disappearing, and that the dialog's overall
+      height does not change at any point while typing
+      _(verified: typing "wip" — an existing branch — left the trigger present
+      with `disabled` set via `get attr aria-checked`/DOM inspection; the
+      Cancel/Create button row's y-position was identical across empty, existing-
+      match, and new-branch-name screenshots — `17`/`18`/`19` in the same dir)_.
+- [x] Settings → Selection: confirm "Enable smart selection" is gone, and that a
+      Smart Selection rule's Name field now visibly fills the row's width like the
+      Pattern field below it, instead of a narrow default-width box
+      _(verified: screenshot `03-selection-tab.png` shows only "Double-click
+      performs" under Behavior with the updated hint text; `07-name-field.png`
+      shows a newly-added rule's Name field spanning the full row width, matching
+      Pattern below it — test rule removed afterward)_.
+- [x] Settings → Providers → Headless Agent: pick "External API", close Settings,
+      reopen Settings → Providers: confirm it still reads "External API" (was:
+      silently reverted to "— Not configured —" on every reopen even though the
+      value was saved correctly). Repeat under Settings → Smart Prompts →
+      Headless Agent
+      _(verified: selected "External API" in Providers, closed/reopened Settings,
+      `get value` on the select read `api` and the option text read "External
+      API" — not reverted; Smart Prompts tab's copy of the select showed the same
+      persisted value without re-selecting anything, confirming the shared
+      `HeadlessAgentSelect` component and store. Reset back to "— Not configured
+      —" afterward)_.
+  - [ ] **[MANUAL]** The specific bug was about a *named agent binary* option
+        (e.g. "Claude Code") getting lost once agent detection resolves — not
+        reachable from this check, since agent binary detection is a no-op in
+        browser mode (`useAgentDetection.ts` returns early when `!isTauri()`),
+        so only the detection-independent "External API"/"— Not configured —"
+        options could be exercised here. The `selected`-per-option mechanism
+        this relies on is identical for every option kind and is covered by
+        `ProvidersTab.test.tsx`'s regression test (which mocks detection
+        resolving asynchronously and was confirmed to fail pre-fix), but an
+        actual installed agent binary + the real desktop (Tauri) app would
+        close this gap fully.
+- [x] Settings → Terminal: confirm a "Shell" field now appears as the first
+      section (above Rendering), and that Settings → General no longer has it.
+      Type a shell path, close and reopen Settings, confirm it persisted
+      _(verified: `02-terminal-tab.png` shows Shell as the first section above
+      Rendering; `01-after-settings-click.png` shows General without it; typed
+      `/bin/zsh`, closed/reopened Settings, field still read `/bin/zsh`. Cleared
+      back to empty afterward — confirmed via `config.json`'s `"shell": null`)_.
+- [x] New Worktree dialog with a long `worktreesDir` and a long typed branch name:
+      confirm the path preview truncates at the start with a single leading "…"
+      and no visual glitching (was CSS `direction: rtl`, replaced with plain JS
+      truncation)
+      _(verified: typed `totally-new-branch-name-test` with a deliberately long
+      `worktreesDir`; `eval`-read the `.pathPreview` element's `textContent` —
+      `"…mmander/worktrees/totally-new-branch-name-test/"`, a plain leading
+      ellipsis with no bidi reordering, matching the new JS-truncation logic
+      exactly)_.
+- [ ] **[MANUAL]** In the terminal, confirm quad-click (4 rapid clicks) and the
+      right-click smart-selection context menu still work exactly as before the
+      "Enable smart selection" toggle's removal — the Rust rebuild for this
+      verification pass *did* include the `smart_selection_enabled` field
+      removal, but checking this specific interaction needs an actual PTY session
+      with matchable content (a URL, a git SHA) and a multi-click gesture, which
+      wasn't set up during this pass; automated coverage
+      (`canvasTerminalSmartSelection.mount.test.ts`) already exercises both paths
+      post-fix and passes, but hasn't been double-checked against a live render.
+- [ ] **[MANUAL]** Same New Worktree dialog, but with all three footer rows
+      showing at once (type a name, then trigger a create error, e.g. an invalid
+      name, so status line + path preview + error all render together) — confirm
+      they don't visually overflow `.previewFooter`'s 100px reserved height (a
+      hand estimate with ~20px of slack, not derived from a real layout
+      measurement) and that the 48-character path-truncation budget doesn't cut
+      off mid-word in a way that looks wrong at the dialog's actual rendered
+      width/font (DOM `textContent`, which is what was checked in this pass, is
+      font/width-independent). This specific 3-rows-at-once combination wasn't
+      triggered during the verification pass above.
+
 ## DECCKM app-cursor keys, DECSCUSR cursor shape, and wide-glyph cursor width (2026-08-20)
 
 - [ ] **[MANUAL]** In a real `zsh` prompt with `bindkey -v` (vi mode) and a non-empty prompt line, press Home/End and arrow keys: cursor moves without dropping into vi normal mode (visible via the block cursor NOT appearing after Home/End).
@@ -594,6 +797,24 @@ Codex collaboration exposes `task_name`/`message` but no `pty_description`; the 
 display-only metadata from the original spawn prompt.
 
 - [ ] **After a `make dev` restart**: a Codex collaboration subagent shows its task description above the terminal.
+
+## Tri-state (On / Use global / Off) settings + repo-settings persistence fix (2026-08-25)
+
+- [x] `TriStateToggle` renders a three-segment `role="radiogroup"`/`role="radio"` control (Off / Global / On), marks the segment matching `value` as `aria-checked`, clicking a segment calls `onChange` with that segment's value, Left/Right (and Up/Down) arrows move-and-select with clamping at the ends, the "Use global default (…)" hint shows only while `value === null`, and it supports custom on/off labels _(verified: `src/__tests__/components/shared/TriStateToggle.test.tsx`, 8/8 pass)_
+- [x] **Review fix** — arrow-key navigation now moves DOM focus to the newly-selected segment, not just the logical selection. Without this, the `:focus-visible` outline stayed on the segment you started on while the highlighted/checked segment jumped elsewhere — a real desync between what looked focused and what was selected for keyboard users _(verified: `TriStateToggle.test.tsx` "moves DOM focus to the newly selected segment on arrow key")_
+- [x] **Review fix, dead code removed** — `SettingTriToggle` (a `SettingFields.tsx` wrapper) had zero real call sites; every actual tri-state row ended up using `TriStateToggle` directly instead (wrapped in whichever group class its own tab already used). Deleted it rather than leaving a second, unused way to render the control that a future developer could mistake for the wired-up one.
+- [x] **Review fix** — `AgentsTab.tsx`'s per-agent "Show suggested follow-ups" tri-state override persisted a value nothing read: `Terminal.tsx`'s `"suggest"` case gated only on the global `settingsStore.state.suggestFollowups`, never `agentConfigsStore.getSuggestFollowups(agentType)` — unlike its sibling `intent_tab_title`, which was already correctly AND-combined via `perAgentEnabled` at `Terminal.tsx:459`. Fixed by resolving `perAgentOverride ?? globalValue` before gating. Also removed a redundant outer `<Show when={settingsStore.state.suggestFollowups}>` around `<SuggestOverlayContainer />` in `TerminalArea.tsx` — it double-gated the same decision one level up and specifically blocked the "per-agent on while global off" direction, since the container already renders nothing when there's nothing to show. `Terminal.tsx`/`TerminalArea.tsx` are excluded from the coverage floor by existing project convention (`vitest.config.ts`: "Untestable without runtime: Tauri APIs, xterm.js, complex Tauri IPC") — same as the untested `intent_tab_title` sibling logic it now matches.
+- [x] **Review coverage gap, closed** — `mcpUpstreams` (a per-repo MCP-upstream-server allowlist; `null` = no restriction) round-trips through `toWire`/`fromWire` on both save and hydrate. It's the one `RepoSettings` field with real security consequences — a silent persistence failure here fails open to "no restriction" — and had no dedicated assertion despite being covered generically by the same fix _(verified: `repoSettings.test.ts`, 2 new cases)_
+- [x] `RepoWorktreeTab`'s nine inheritable booleans (copy ignored/untracked files, prompt on create, delete branch on remove, auto-archive merged, the three PR-visibility filters, and — macOS only — Cmd+1-9 terminal hotkeys) resolve against the right global default, selecting On/Off overrides it, and selecting "Global" writes `null` back _(verified: `src/__tests__/components/SettingsPanel/RepoWorktreeTab.test.tsx`, 14/14 pass)_
+- [x] `AgentsTab`'s per-agent `intent_tab_title`/`suggest_followups` overrides bridge the tri-state's `null` to the store's `undefined` inherit sentinel correctly in both directions _(verified: `src/__tests__/components/SettingsPanel/AgentsTab.perAgentOverrides.test.tsx`, 3/3 pass)_
+- [x] **Persistence bug fix** — `repoSettings.ts` now converts explicitly to/from the Rust `RepoSettingsEntry`'s snake_case wire shape instead of posting the camelCase store object verbatim (which `#[serde(default)]` silently dropped in full — confirmed against the live `repo-settings.json`, every field but `path` was empty). Save/update/reset/hydrate/localStorage-migration wire payloads are asserted directly against `mockInvoke` calls _(verified: `src/__tests__/stores/repoSettings.test.ts`, 33/33 pass)_; the new `RepoSettingsEntry` fields (`pr_hide_drafts`, `pr_hide_conflicting`, `pr_hide_ci_failing`, `terminal_meta_hotkeys`) and a full frontend-shaped JSON payload parse correctly on the Rust side _(verified: `src-tauri/src/config.rs` `repo_settings_*` tests, 6/6 pass)_. The global `pr_hide_drafts`/`pr_hide_conflicting`/`pr_hide_ci_failing` toggles had no backing `AppConfig` field at all and are now real fields, round-tripped in `app_config_round_trip` and defaulted in `app_config_serde_default_for_new_fields`.
+- [x] **Made the "silently dropped key" failure mode observable** — `RepoSettingsEntry` now has a flattened `extra: HashMap<String, serde_json::Value>` catch-all (never re-serialized) that captures any JSON key not matching a known field instead of `#[serde(default)]` dropping it with zero trace; `load_repo_settings()` logs `tracing::warn!(repo_path, unknown_keys, ...)` whenever `extra` is non-empty. A leftover-camelCase payload lands in `extra` rather than vanishing, and `extra` itself never gets written back into `repo-settings.json` _(verified: `src-tauri/src/config.rs` `repo_settings_entry_captures_unrecognized_keys_instead_of_silently_dropping_them` + `repo_settings_entry_extra_is_never_serialized_back`)_
+- [x] `agentConfigsStore.setIntentTabTitle`/`setSuggestFollowups` set/persist/reset-to-`undefined` correctly, and `isAutoRetryEnabled`/`syncHookInstrumentation` (the latter mirrors state without saving to disk) behave as documented — none of this had test coverage before _(verified: `src/__tests__/stores/agentConfigs.test.ts`, 27/27 pass)_
+- [ ] **Rust restart required** — `pr_hide_drafts`/`pr_hide_conflicting`/`pr_hide_ci_failing` are new `AppConfig` fields and `RepoSettingsEntry` gained four fields; per `AGENTS.md`, `make dev`'s `--no-watch` backend won't pick these up without a manual restart.
+- [ ] Manual, after the restart above: in a running app, open Settings → a repo → set "Hide Draft PRs" to On, "Copy ignored files" to Off, leave "Auto-archive merged" on "Use global". Read `<config dir>/repo-settings.json` directly and confirm `pr_hide_drafts: true`, `copy_ignored_files: false`, `auto_archive_merged: null`, and a non-empty `display_name` — restart the app and confirm the three segments come back in the same positions. Use a throwaway repo entry, not a real one — debug and release builds share this file (`AGENTS.md`).
+- [ ] Manual: with "Hide Draft PRs" On for one repo and the global setting Off, confirm drafts disappear from that repo's PR list only, and reappear when the row is set back to "Use global".
+- [ ] Manual: screenshot the tri-state control in both light and dark themes; keyboard-only pass (Tab into the group, Left/Right to move, screen reader announces role + checked state).
+- [ ] Manual: hand-edit one repo's entry in `<config dir>/repo-settings.json` to add a stray key (e.g. `"displayName": "leftover"` alongside the real `display_name`), restart the app, and check `GET http://localhost:9876/logs` for a warning naming that repo path and `displayName` as an unrecognized key. Confirm the stray key does not reappear in the file after the app saves that repo's settings again.
 
 ## Smart Selection (2026-08-24)
 
