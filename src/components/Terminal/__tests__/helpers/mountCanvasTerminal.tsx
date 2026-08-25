@@ -123,6 +123,8 @@ export interface FakeTransport extends TerminalTransport {
 	pushFrame: (data: ArrayBuffer) => void;
 	/** Every invoke() call the component made, in order. */
 	invokeCalls: { cmd: string; args: Record<string, unknown> }[];
+	/** Every ackFrame() call the component made, in order. */
+	ackCalls: number[];
 	/** Fire a named transport event (e.g. "cwd", "osc133", "output") to a
 	 *  handler registered via onEvent(), if any. */
 	emitEvent: (type: string, payload: unknown) => void;
@@ -140,9 +142,11 @@ export function createFakeTransport(): FakeTransport {
 	const eventHandlers = new Map<string, (payload: unknown) => void>();
 	const invokeHandlers = new Map<string, (args: Record<string, unknown>) => unknown>();
 	const invokeCalls: { cmd: string; args: Record<string, unknown> }[] = [];
+	const ackCalls: number[] = [];
 
 	return {
 		invokeCalls,
+		ackCalls,
 		async subscribe(onFrame) {
 			onFrameHandler = onFrame;
 		},
@@ -153,6 +157,9 @@ export function createFakeTransport(): FakeTransport {
 		async invoke(cmd, args) {
 			invokeCalls.push({ cmd, args });
 			return invokeHandlers.get(cmd)?.(args);
+		},
+		ackFrame(received) {
+			ackCalls.push(received);
 		},
 		async onEvent(type, handler) {
 			eventHandlers.set(type, handler);
