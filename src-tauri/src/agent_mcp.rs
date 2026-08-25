@@ -1733,7 +1733,7 @@ pub(crate) fn ensure_mcp_configs(disabled: &[String]) {
     );
 }
 
-fn launch_owns_agent_configs(exe: &std::path::Path) -> bool {
+pub(crate) fn launch_owns_agent_configs(exe: &std::path::Path) -> bool {
     if crate::agent_test::active() {
         return false;
     }
