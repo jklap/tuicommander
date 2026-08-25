@@ -36,7 +36,7 @@ flags exactly as they did before derivation existed.
 | `UserPromptSubmit` | `busy` | — | — |
 | `PreToolUse` | `busy` | `tool_name` | — |
 | `PostToolUse` | `busy` | `tool_name` | — |
-| `PostToolUseFailure` | *(none)* | `tool_name` | from `exit_code`, default `1` |
+| `PostToolUseFailure` | *(none)* | `tool_name` | from `exit_code` if present, else sentinel `1` — suppressed entirely if `is_interrupt` is `true` |
 | `Notification` | `awaiting` | `message` | — |
 | `Stop` | `idle` | — | — |
 | `StopFailure` | `idle` | — | fixed `1` |
@@ -90,7 +90,8 @@ A JSON object, read in full on every fire (bounded to 1 MiB — see
 | `session_id`, `cwd`, `transcript_path` | `SessionStart`'s scrape (or `--emit-session`). |
 | `tool_name` | `PreToolUse`/`PostToolUse`/`PostToolUseFailure`'s scrape (or `--emit-tool`). |
 | `message` | `Notification`'s scrape (or `--emit-notify`). |
-| `exit_code` | `PostToolUseFailure`'s `toolfail` derivation (or `--toolfail-from-stdin`). Accepts a JSON number or a numeric string. |
+| `exit_code` | `PostToolUseFailure`'s `toolfail` derivation (or `--toolfail-from-stdin`). Accepts a JSON number or a numeric string. Claude Code's real `PostToolUseFailure` payload doesn't send this field at all (its schema is `tool_name`, `tool_input`, `tool_use_id`, `error`, `is_interrupt?`, `duration_ms?`) — in practice this always falls back to the sentinel `1`, unless `is_interrupt` is `true` (see below). |
+| `is_interrupt` | `PostToolUseFailure`: if `true` (a tool call cancelled via Esc, not a real failure), suppresses the `toolfail` emission entirely rather than falling back to the sentinel. |
 
 Missing, empty-string, or malformed fields are all treated as absent — "omit this
 verb" for free-text fields, "fall back to the sentinel `1`" for `exit_code`. Malformed

@@ -393,7 +393,7 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
       <div class="evt-top"><span class="name">PostToolUseFailure</span><span class="pill warn">toolfail</span></div>
       <div class="evt-grid">
         <div class="evt-field"><h4>Matcher</h4><div class="val">— (every tool)</div></div>
-        <div class="evt-field"><h4>Extracts</h4><div class="val">exit_code (default "1" if absent/malformed)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">exit_code (default "1" if absent/malformed &mdash; Claude Code's real payload doesn't send this field at all, so this is always the fallback in practice); suppressed entirely if is_interrupt is true</div></div>
         <div class="evt-field"><h4>Verbs emitted</h4><div class="val"><span class="pill verb">toolfail=&lt;code&gt;</span></div></div>
         <div class="evt-field"><h4>Drives</h4><div class="val"><code>turn_error_flags</code> → red scrollbar tick, read-and-cleared at the next busy→idle edge.</div></div>
       </div>
@@ -529,7 +529,9 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
     <div class="reason">
       <h4>Success/failure hooks are mutually exclusive branches, not a sequence</h4>
       <p><code>PostToolUse</code> fires only on success and carries no error field at all;
-      <code>PostToolUseFailure</code> fires only on failure and carries <code>exit_code</code>. They
+      <code>PostToolUseFailure</code> fires only on failure and carries <code>error</code> and
+      <code>is_interrupt</code> (not <code>exit_code</code> &mdash; that field isn't in its real
+      schema). They
       are two branches of one lifecycle point, never both for the same tool call — same for
       <code>Stop</code>/<code>StopFailure</code>. Treating them as sequential (checking one, then the
       other) would double-count or miss a transition.</p>
