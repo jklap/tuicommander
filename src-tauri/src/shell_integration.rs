@@ -2,7 +2,22 @@
 //!
 //! Injects shell hooks (precmd/preexec for zsh, PROMPT_COMMAND/DEBUG trap for bash)
 //! that emit FinalTerm/iTerm2-compatible OSC 133 markers:
-//!   A = prompt start, C = pre-execution, D = command finished (with exit code)
+//!   A = prompt start, B = command start, C = pre-execution, D = command
+//!   finished (with exit code)
+//!
+//! `B` fires immediately after `A`, inside the same precmd hook — not
+//! embedded in the prompt string itself the way some shell-integration
+//! implementations place it (right where the visible prompt decoration ends
+//! and the input area begins). That would require rewriting the user's
+//! PROMPT/PS1, which risks breaking their existing prompt theme
+//! (powerlevel10k, starship, …) — a worse regression than the approximation
+//! here. Since nothing is printed between A and B, they land on the same
+//! buffer line; for a typical single-line command that's also the line C
+//! and (usually) D land on too, so `CommandBlock.commandLine` /
+//! `.executionLine` end up equal — which `getBufferLines`'s inclusive-
+//! inclusive range handles correctly (reads exactly that one line). A
+//! genuinely multi-line typed command (rare) would have `commandLine` point
+//! at the prompt line rather than where typing began; accepted.
 //!
 //! Injection strategy per shell:
 //!   zsh  — ZDOTDIR trick: point ZDOTDIR at a wrapper dir whose .zshenv sources
@@ -21,6 +36,7 @@ __tuic_precmd() {
     unset __tuic_cmd
   fi
   printf '\e]133;A\a'
+  printf '\e]133;B\a'
 }
 __tuic_preexec() {
   printf '\e]133;C\a'
@@ -55,6 +71,7 @@ __tuic_precmd() {
     unset __tuic_cmd
   fi
   printf '\e]133;A\a'
+  printf '\e]133;B\a'
   __tuic_preexec_ready=1
 }
 __tuic_preexec_trap() {
@@ -95,6 +112,7 @@ function __tuic_prompt --on-event fish_prompt
     set -e __tuic_cmd
   end
   printf '\e]133;A\a'
+  printf '\e]133;B\a'
 end
 function __tuic_preexec --on-event fish_preexec
   printf '\e]133;C\a'
@@ -250,4 +268,147 @@ fn zdotdir_path_str(p: &Path) -> String {
 
 fn script_path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // This file had zero tests before this: the A/C/D emissions had never been
+    // asserted, in either shell-syntax-validity or byte-content terms, which is
+    // exactly why B could be added here with real confidence that A/C/D still
+    // work — the baseline below is asserted first, on the same script text.
+
+    #[test]
+    fn zsh_emits_all_four_markers() {
+        assert!(ZSH_INTEGRATION.contains(r"printf '\e]133;A\a'"));
+        assert!(ZSH_INTEGRATION.contains(r"printf '\e]133;B\a'"));
+        assert!(ZSH_INTEGRATION.contains(r"printf '\e]133;C\a'"));
+        assert!(ZSH_INTEGRATION.contains(r#"printf '\e]133;D;%d\a' "$ec""#));
+        // B must come after A within precmd, not before — it marks the start of
+        // input, which can't precede the prompt that introduces it.
+        let a_pos = ZSH_INTEGRATION.find(r"printf '\e]133;A\a'").unwrap();
+        let b_pos = ZSH_INTEGRATION.find(r"printf '\e]133;B\a'").unwrap();
+        assert!(b_pos > a_pos, "B must be emitted after A");
+    }
+
+    #[test]
+    fn bash_emits_all_four_markers() {
+        assert!(BASH_INTEGRATION.contains(r"printf '\e]133;A\a'"));
+        assert!(BASH_INTEGRATION.contains(r"printf '\e]133;B\a'"));
+        assert!(BASH_INTEGRATION.contains(r"printf '\e]133;C\a'"));
+        assert!(BASH_INTEGRATION.contains(r#"printf '\e]133;D;%d\a' "$ec""#));
+        let a_pos = BASH_INTEGRATION.find(r"printf '\e]133;A\a'").unwrap();
+        let b_pos = BASH_INTEGRATION.find(r"printf '\e]133;B\a'").unwrap();
+        assert!(b_pos > a_pos, "B must be emitted after A");
+    }
+
+    #[test]
+    fn fish_emits_all_four_markers() {
+        assert!(FISH_INTEGRATION.contains(r"printf '\e]133;A\a'"));
+        assert!(FISH_INTEGRATION.contains(r"printf '\e]133;B\a'"));
+        assert!(FISH_INTEGRATION.contains(r"printf '\e]133;C\a'"));
+        assert!(FISH_INTEGRATION.contains(r"printf '\e]133;D;%d\a' $ec"));
+        let a_pos = FISH_INTEGRATION.find(r"printf '\e]133;A\a'").unwrap();
+        let b_pos = FISH_INTEGRATION.find(r"printf '\e]133;B\a'").unwrap();
+        assert!(b_pos > a_pos, "B must be emitted after A");
+    }
+
+    #[test]
+    fn every_shell_script_is_syntactically_valid() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        for (shell, script) in [
+            ("bash", BASH_INTEGRATION),
+            ("zsh", ZSH_INTEGRATION),
+            // fish uses `fish --no-execute` (its own syntax-check flag, not -n);
+            // skipped below if the binary isn't installed (not on CI's Ubuntu
+            // runners) rather than silently passing or failing the whole test.
+        ] {
+            let Ok(mut child) = Command::new(shell)
+                .arg("-n")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+            else {
+                continue; // shell not installed on this machine — not a syntax failure
+            };
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(script.as_bytes())
+                .unwrap();
+            let out = child.wait_with_output().unwrap();
+            assert!(
+                out.status.success(),
+                "{shell} -n rejected the integration script: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        if let Ok(mut child) = Command::new("fish")
+            .arg("--no-execute")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(FISH_INTEGRATION.as_bytes())
+                .unwrap();
+            let out = child.wait_with_output().unwrap();
+            assert!(
+                out.status.success(),
+                "fish --no-execute rejected the integration script: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    /// Real behavioral confidence for one shell (bash — present on the CI
+    /// runners this crate actually tests on), rather than string content
+    /// alone: sources the script, then drives a real precmd → preexec →
+    /// precmd cycle exactly as an interactive session would, and asserts the
+    /// real printf byte sequence, including the exit code plumbed through D.
+    #[test]
+    fn bash_precmd_preexec_cycle_emits_the_real_byte_sequence() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let script = format!(
+            "{BASH_INTEGRATION}\n\
+             __tuic_precmd\n\
+             __tuic_preexec_trap\n\
+             ( exit 7 )\n\
+             __tuic_precmd\n"
+        );
+        let mut child = Command::new("bash")
+            .arg("--noprofile")
+            .arg("--norc")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn bash");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().expect("bash exits");
+        assert!(out.status.success());
+        let got = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            got,
+            "\u{1b}]133;A\u{07}\u{1b}]133;B\u{07}\u{1b}]133;C\u{07}\u{1b}]133;D;7\u{07}\u{1b}]133;A\u{07}\u{1b}]133;B\u{07}",
+            "first precmd: A,B (no prior command); preexec: C; second precmd: D;7 (real exit code), then A,B for the next prompt"
+        );
+    }
 }
