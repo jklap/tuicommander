@@ -60,7 +60,7 @@ A live preview reflects these as you change them.
 | **Show block timestamps** | `boolean` | `true` | Enable the hold-`Ctrl+Cmd` relative-time overlay on command blocks |
 | **Show block marks** | `boolean` | `true` | Draw command-block boundary tick marks (blue/red) on the terminal scrollbar |
 | **Show prompt marks** | `boolean` | `true` | Draw a green tick mark on the scrollbar for each line where you submitted a prompt |
-| **Enable block folding** | `boolean` | `true` | Allow collapsing a command block's output with `Cmd+Shift+.` or a gutter click |
+| **Enable block folding** | `boolean` | `true` | Allow collapsing a command block's output with `Cmd+Shift+.` — gutter click selects the block's output instead, it does not fold |
 
 See [Command Blocks](terminals.md#command-blocks) for what each of these controls.
 

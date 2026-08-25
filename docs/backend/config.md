@@ -171,7 +171,7 @@ cleartext copy does not survive on disk.
 | `show_block_timestamps` | `bool` | `true` | Show the hold-`Ctrl+Cmd` relative-time overlay on command blocks |
 | `show_block_marks` | `bool` | `true` | Draw command-block boundary tick marks (blue/red) on the terminal scrollbar |
 | `show_prompt_marks` | `bool` | `true` | Draw a tick mark on the terminal scrollbar for each line where the user submitted a prompt |
-| `block_folding_enabled` | `bool` | `true` | Allow collapsing a command block's output (`Cmd+Shift+.` or gutter click) |
+| `block_folding_enabled` | `bool` | `true` | Allow collapsing a command block's output (`Cmd+Shift+.`) — gutter click selects the block's output instead, it does not fold |
 
 **Commands:** `load_app_config()`, `save_app_config(config)`
 

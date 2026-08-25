@@ -692,7 +692,8 @@ pub(crate) struct AppConfig {
     /// Draw a tick mark on the terminal scrollbar for each line where the user submitted a prompt.
     #[serde(default = "default_true")]
     pub(crate) show_prompt_marks: bool,
-    /// Allow collapsing a command block's output (Cmd+Shift+. or gutter click).
+    /// Allow collapsing a command block's output (Cmd+Shift+.). Gutter click
+    /// selects the block's output instead — it does not fold.
     #[serde(default = "default_true")]
     pub(crate) block_folding_enabled: bool,
     /// Expose `ai_terminal_*` tools to external MCP. Default off: they need a
