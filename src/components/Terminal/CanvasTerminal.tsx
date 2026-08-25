@@ -65,7 +65,7 @@ import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } fr
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
-import { buildScrollbarMarksHtml } from "./scrollbarMarks";
+import { buildScrollbarMarksHtml, shouldShowScrollbar } from "./scrollbarMarks";
 import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./suggestOverlay";
 import {
 	altSequenceFromCode,
@@ -912,21 +912,37 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// canvasRef.clientHeight read (layout-forcing).
 		const visible = lastResizeRows || 24;
 
-		if (frame.historySize === 0) {
+		const term = terminalsStore.get(props.terminalId);
+		const showScrollbar = shouldShowScrollbar({
+			historySize: frame.historySize,
+			showBlockMarks: settingsStore.state.showBlockMarks,
+			showPromptMarks: settingsStore.state.showPromptMarks,
+			blocks: term?.commandBlocks ?? [],
+			promptLines: term?.userPromptLines ?? [],
+		});
+		if (!showScrollbar) {
 			scrollbarRef.style.display = "none";
 			return;
 		}
 		scrollbarRef.style.display = "block";
 
-		// Track height comes from the resize-time cache, not scrollbarRef.clientHeight.
-		const trackH = scrollbarTrackHeight;
-		const thumbRatio = Math.min(1, visible / total);
-		const thumbHeight = Math.max(20, trackH * thumbRatio);
-		const scrollRange = trackH - thumbHeight;
-		const scrollPos = frame.historySize > 0 ? (1 - frame.displayOffset / frame.historySize) * scrollRange : scrollRange;
+		if (frame.historySize === 0) {
+			// Nothing to scroll, but there are marks to show: collapse the thumb to
+			// fill the track (no drag affordance) rather than sizing it as if there
+			// were scrollable content.
+			scrollThumbRef.style.height = "100%";
+			scrollThumbRef.style.transform = "translateY(0px)";
+		} else {
+			// Track height comes from the resize-time cache, not scrollbarRef.clientHeight.
+			const trackH = scrollbarTrackHeight;
+			const thumbRatio = Math.min(1, visible / total);
+			const thumbHeight = Math.max(20, trackH * thumbRatio);
+			const scrollRange = trackH - thumbHeight;
+			const scrollPos = (1 - frame.displayOffset / frame.historySize) * scrollRange;
 
-		scrollThumbRef.style.height = `${thumbHeight}px`;
-		scrollThumbRef.style.transform = `translateY(${scrollPos}px)`;
+			scrollThumbRef.style.height = `${thumbHeight}px`;
+			scrollThumbRef.style.transform = `translateY(${scrollPos}px)`;
+		}
 
 		paintScrollbarMarks(total);
 	}
@@ -3559,6 +3575,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			{/* Scrollbar */}
 			<div
 				ref={scrollbarRef!}
+				data-testid="terminal-scrollbar"
 				style={{
 					position: "absolute",
 					top: "0",
