@@ -212,8 +212,7 @@ Controls double/quad-click word and smart selection in the terminal — see [Sma
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| **Enable smart selection** | On | Try the rule list below before falling back to plain word-boundary selection. Word-boundary customization still applies when this is off. |
-| **Double-click performs** | Smart | **Word** expands to the character-class boundary below. **Smart** tries the rule list first, falling back to word selection when nothing matches. Quad-click (4 rapid clicks) always tries smart selection, regardless of this setting. |
+| **Double-click performs** | Smart | **Word** expands to the character-class boundary below. **Smart** tries the rule list first, falling back to word selection when nothing matches. There is no master on/off switch — quad-click (4 rapid clicks) and the right-click smart-selection menu always try the rule list, regardless of this setting. |
 | **Word boundaries** | Character list | **Character list**: a literal set of characters that break a word. **Regular expression**: `\|`-joined alternates — the longest match at each position joins onto the adjacent word, e.g. adding `https://` lets a double-click on a URL's host include the scheme. |
 | **Word separators** | `` " \"'`(){}[]<>\|;:,.!?@#$%^&*~=+/\\" `` | (Character-list mode) Characters that break a word for double-click selection. Whitespace and control characters are always separators regardless of this list. A "Restore default separators" button resets it. |
 | **Word pattern** | empty | (Regex mode) `\|`-joined alternates. Plain letters/digits/underscore are always word characters; alternates here join punctuation-containing spans onto them. Invalid alternates are flagged inline and skipped. |
@@ -247,7 +246,7 @@ repository and worktree defaults.
 | **Disconnect** | Clear all GitHub tokens (keyring + env cache). Falls back to next available source. |
 | **Diagnostics** | Token source details, scope verification, API connectivity check |
 | **Auto-show PR popover** | Automatically display PR details when switching branches. Only shows for OPEN pull requests — CLOSED PRs are hidden, and MERGED PRs fade after 5 minutes of user activity. (**Pull Requests** section) |
-| **Hide Draft PRs / Hide Conflicting PRs / Hide CI Failing PRs** | Filter the pull requests the app shows |
+| **Hide Draft PRs / Hide Conflicting PRs / Hide CI Failing PRs** | Filter the pull requests the app shows. Each can be overridden per repository (**On / Use global / Off**, see [Repositories](#worktree-tab)) |
 | **Auto-Delete on PR Close** | Off (default), Ask, or Auto — controls branch cleanup when a PR is merged/closed |
 | **Show issues / Issue Filter** | Which issues to show in the GitHub panel: Assigned (default), Created, Mentioned, All, or Disabled (**Issues** section) |
 | **Repository Defaults** | Base branch, **Copy ignored files** and **Copy untracked files** (two separate toggles), setup/run/archive scripts applied to new repos |
@@ -493,6 +492,16 @@ Settings navigation, or from the sidebar `⋯` → "Repo Settings".
 - **Base Branch** — Branch to create worktrees from (auto-detect, main, master, develop)
 - **Copy ignored files** — Copy .gitignored files to new worktrees
 - **Copy untracked files** — Copy untracked files to new worktrees
+- **Prompt on create**, **Delete branch on remove**, **Auto-archive merged** — override the
+  matching global worktree default for this repo (see [Worktrees](worktrees.md#worktree-settings))
+- **PR Visibility** — per-repo override of Hide Draft/Conflicting/CI-Failing PRs (see
+  [Git & GitHub](#git--github) above)
+- **Terminal → Enable Cmd+1-9 terminal hotkeys** (macOS only) — per-repo override; global default
+  is always On
+
+Every on/off field in this list uses a three-position **On / Use global / Off** control rather
+than a plain checkbox, so "inherit the global setting" is always one of the three choices you can
+select directly — not just the state you land in until you touch the control once.
 
 ### Scripts Tab
 

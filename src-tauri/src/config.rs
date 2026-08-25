@@ -1151,11 +1151,6 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates terminal link activation for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("enum" = ["click","modifier","never"]))]
     pub(crate) terminal_link_activation: String,
-    /// Master toggle for smart selection (regex-rule-driven double/quad-click
-    /// expansion + rule actions). Word-boundary customization (below) applies
-    /// regardless of this flag — only the rule engine is gated.
-    #[serde(default = "default_true")]
-    pub(crate) smart_selection_enabled: bool,
     /// What a plain double-click selects: "word" (today's character-class
     /// expansion) or "smart" (try the rule engine first, fall back to word).
     /// Quad-click always runs the rule engine regardless of this setting.
@@ -1500,7 +1495,6 @@ impl Default for AppConfig {
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
             terminal_link_activation: default_link_activation(),
-            smart_selection_enabled: true,
             double_click_action: default_double_click_action(),
             word_selection_mode: default_word_selection_mode(),
             word_separators: default_word_separators(),
@@ -1951,6 +1945,19 @@ pub(crate) struct RepoSettingsEntry {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates dev server url for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) dev_server_url: Option<String>,
+    /// null = inherit global default (true on macOS). When false: left-Option
+    /// sends composition chars instead of meta sequences.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repository terminal meta hotkeys.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) terminal_meta_hotkeys: Option<bool>,
+    /// Catch-all for JSON keys that don't match any field above. `#[serde(default)]`
+    /// on every field means an unrecognized key is normally silently dropped — a
+    /// camelCase/snake_case mismatch at the frontend boundary (repoSettings.ts used to
+    /// post its store object verbatim) produced exactly that failure mode with no
+    /// error anywhere. `load_repo_settings()` logs a warning when this is non-empty.
+    /// Never re-serialized, so a stray key doesn't get written back into the file.
+    #[serde(flatten, skip_serializing)]
+    pub(crate) extra: HashMap<String, serde_json::Value>,
 }
 
 impl RepoSettingsEntry {
@@ -1979,6 +1986,7 @@ impl RepoSettingsEntry {
             || !self.branch_labels.is_empty()
             || self.auto_consolidate_worktrees
             || self.dev_server_url.is_some()
+            || self.terminal_meta_hotkeys.is_some()
     }
 }
 
@@ -3632,7 +3640,20 @@ pub(crate) fn save_ui_prefs(base: UIPrefsConfig, config: UIPrefsConfig) -> Resul
 // Repo settings
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_repo_settings() -> RepoSettingsMap {
-    load_json_config(REPO_SETTINGS_FILE)
+    let map: RepoSettingsMap = load_json_config(REPO_SETTINGS_FILE);
+    for (repo_path, entry) in &map.repos {
+        if !entry.extra.is_empty() {
+            let unknown_keys: Vec<&str> = entry.extra.keys().map(String::as_str).collect();
+            tracing::warn!(
+                repo_path = %repo_path,
+                ?unknown_keys,
+                "repo-settings.json entry has fields RepoSettingsEntry doesn't recognize \
+                 (dropped, not persisted back) — check for a camelCase/snake_case mismatch \
+                 at the frontend boundary"
+            );
+        }
+    }
+    map
 }
 
 pub(crate) fn save_repo_settings(
@@ -5721,8 +5742,8 @@ mod tests {
             tab_tree_enabled: true,
             chat_mute_intermediate_text: false,
             auto_show_pr_popover: true,
-            pr_hide_drafts: false,
-            pr_hide_conflicting: false,
+            pr_hide_drafts: true,
+            pr_hide_conflicting: true,
             pr_hide_ci_failing: false,
             prevent_sleep_when_busy: true,
             auto_update_enabled: false,
@@ -5752,7 +5773,6 @@ mod tests {
             cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
             terminal_link_activation: "modifier".to_string(),
-            smart_selection_enabled: false,
             double_click_action: "word".to_string(),
             word_selection_mode: "regex".to_string(),
             word_separators: "-_".to_string(),
@@ -5812,6 +5832,9 @@ mod tests {
         assert!(loaded.confirm_before_closing_tab);
         assert_eq!(loaded.max_tab_name_length, 40);
         assert_eq!(loaded.split_tab_mode, SplitTabMode::Unified);
+        assert!(loaded.pr_hide_drafts);
+        assert!(loaded.pr_hide_conflicting);
+        assert!(!loaded.pr_hide_ci_failing);
         assert!(loaded.prevent_sleep_when_busy);
         assert!(!loaded.auto_update_enabled);
         // The default is true, so false is the only value that proves a real round trip.
@@ -5842,7 +5865,6 @@ mod tests {
         assert!(!loaded.show_prompt_marks);
         assert!(!loaded.block_folding_enabled);
         assert_eq!(loaded.terminal_link_activation, "modifier");
-        assert!(!loaded.smart_selection_enabled);
         assert_eq!(loaded.double_click_action, "word");
         assert_eq!(loaded.word_selection_mode, "regex");
         assert_eq!(loaded.word_separators, "-_");
@@ -6045,6 +6067,9 @@ mod tests {
         assert!(!loaded.services.auth.lan_auth_bypass);
         assert!(loaded.intent_tab_title); // defaults to true
         assert!(loaded.suggest_followups); // defaults to true
+        assert!(!loaded.pr_hide_drafts); // GH #e767-tri-state: defaults to false
+        assert!(!loaded.pr_hide_conflicting);
+        assert!(!loaded.pr_hide_ci_failing);
         assert!(!loaded.experimental_features_enabled);
         // Every config.json written before these fields existed omits them, and
         // the frontend store hydrates each with `?? true` — the two sides must
@@ -6055,7 +6080,6 @@ mod tests {
         assert!(loaded.show_prompt_marks); // defaults to true
         assert!(loaded.block_folding_enabled);
         assert_eq!(loaded.terminal_link_activation, "click"); // defaults to "click"
-        assert!(loaded.smart_selection_enabled); // defaults to true
         assert_eq!(loaded.double_click_action, "smart"); // defaults to "smart"
         assert_eq!(loaded.word_selection_mode, "characters"); // defaults to "characters"
         assert_eq!(loaded.word_separators, " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\");
@@ -6677,10 +6701,12 @@ mod tests {
                 auto_fetch_interval_minutes: None,
                 auto_delete_on_pr_close: None,
                 mcp_upstreams: None,
-                pr_hide_drafts: None,
-                pr_hide_conflicting: None,
-                pr_hide_ci_failing: None,
                 branch_labels: HashMap::new(),
+                pr_hide_drafts: Some(true),
+                pr_hide_conflicting: None,
+                pr_hide_ci_failing: Some(false),
+                terminal_meta_hotkeys: Some(false),
+                extra: HashMap::new(),
             },
         );
         let loaded: RepoSettingsMap = round_trip_in_dir(dir.path(), "repo-settings.json", &map);
@@ -6691,9 +6717,132 @@ mod tests {
         assert_eq!(entry.copy_ignored_files, Some(true));
         assert_eq!(entry.copy_untracked_files, None);
         assert_eq!(entry.archive_script, Some("cleanup.sh".to_string()));
-        // The frontend owns several repo fields that never reached this struct and
-        // are therefore dropped on every save; consolidation must not join them.
         assert!(entry.auto_consolidate_worktrees);
+        assert_eq!(entry.pr_hide_drafts, Some(true));
+        assert_eq!(entry.pr_hide_conflicting, None);
+        assert_eq!(entry.pr_hide_ci_failing, Some(false));
+        assert_eq!(entry.terminal_meta_hotkeys, Some(false));
+    }
+
+    /// Regression for the camelCase/snake_case seam bug: the frontend's
+    /// `repoSettings.ts` used to post its store objects verbatim (camelCase keys)
+    /// to `save_repo_settings`, which this struct — snake_case, `#[serde(default)]`
+    /// on every field — silently accepted and dropped every unrecognized key.
+    /// This parses the exact snake_case shape the frontend's `toWire()` now
+    /// produces, so a future casing regression on either side fails loudly here
+    /// instead of silently in production.
+    #[test]
+    fn repo_settings_entry_parses_frontend_payload() {
+        let json = r#"{
+            "path": "/my/repo",
+            "display_name": "my-repo",
+            "base_branch": "main",
+            "copy_ignored_files": true,
+            "copy_untracked_files": false,
+            "setup_script": "npm install",
+            "run_script": "npm start",
+            "archive_script": "cleanup.sh",
+            "color": "red",
+            "worktree_storage": "app-dir",
+            "prompt_on_create": false,
+            "delete_branch_on_remove": true,
+            "auto_archive_merged": true,
+            "orphan_cleanup": "off",
+            "pr_merge_strategy": "rebase",
+            "after_merge": "ask",
+            "auto_fetch_interval_minutes": 15,
+            "auto_delete_on_pr_close": "auto",
+            "mcp_upstreams": ["github"],
+            "branch_labels": {"main": "Trunk"},
+            "auto_consolidate_worktrees": true,
+            "pr_hide_drafts": true,
+            "pr_hide_conflicting": false,
+            "pr_hide_ci_failing": true,
+            "terminal_meta_hotkeys": false
+        }"#;
+        let entry: RepoSettingsEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.path, "/my/repo");
+        assert_eq!(entry.display_name, "my-repo");
+        assert_eq!(entry.base_branch, Some("main".to_string()));
+        assert_eq!(entry.copy_ignored_files, Some(true));
+        assert_eq!(entry.copy_untracked_files, Some(false));
+        assert_eq!(entry.setup_script, Some("npm install".to_string()));
+        assert_eq!(entry.run_script, Some("npm start".to_string()));
+        assert_eq!(entry.archive_script, Some("cleanup.sh".to_string()));
+        assert_eq!(entry.color, "red");
+        assert_eq!(entry.worktree_storage, Some(WorktreeStorage::AppDir));
+        assert_eq!(entry.prompt_on_create, Some(false));
+        assert_eq!(entry.delete_branch_on_remove, Some(true));
+        assert_eq!(entry.auto_archive_merged, Some(true));
+        assert_eq!(entry.orphan_cleanup, Some(OrphanCleanup::Off));
+        assert_eq!(entry.pr_merge_strategy, Some(MergeStrategy::Rebase));
+        assert_eq!(entry.after_merge, Some(WorktreeAfterMerge::Ask));
+        assert_eq!(entry.auto_fetch_interval_minutes, Some(15));
+        assert_eq!(
+            entry.auto_delete_on_pr_close,
+            Some(AutoDeleteOnPrClose::Auto)
+        );
+        assert_eq!(entry.mcp_upstreams, Some(vec!["github".to_string()]));
+        assert_eq!(entry.branch_labels.get("main"), Some(&"Trunk".to_string()));
+        assert!(entry.auto_consolidate_worktrees);
+        assert_eq!(entry.pr_hide_drafts, Some(true));
+        assert_eq!(entry.pr_hide_conflicting, Some(false));
+        assert_eq!(entry.pr_hide_ci_failing, Some(true));
+        assert_eq!(entry.terminal_meta_hotkeys, Some(false));
+        assert!(entry.has_custom_settings());
+        assert!(
+            entry.extra.is_empty(),
+            "a payload matching every known field leaves nothing unrecognized"
+        );
+    }
+
+    /// Before the wire-conversion layer, unrecognized keys (e.g. leftover camelCase from
+    /// the pre-fix frontend) vanished with zero indication anywhere — no error, no log
+    /// line, nothing. The `extra` catch-all field on `RepoSettingsEntry` makes that
+    /// failure mode observable: any key that doesn't match a known field lands here
+    /// instead of disappearing silently, and `load_repo_settings()` logs a warning
+    /// naming them.
+    #[test]
+    fn repo_settings_entry_captures_unrecognized_keys_instead_of_silently_dropping_them() {
+        let json = r#"{
+            "path": "/my/repo",
+            "displayName": "leftover-camelCase-from-before-the-wire-fix",
+            "copyIgnoredFiles": true,
+            "base_branch": "main"
+        }"#;
+        let entry: RepoSettingsEntry = serde_json::from_str(json).unwrap();
+        // Known snake_case fields still parse correctly.
+        assert_eq!(entry.base_branch, Some("main".to_string()));
+        // The camelCase keys a pre-fix frontend would have sent are captured, not dropped.
+        assert_eq!(
+            entry.extra.get("displayName"),
+            Some(&serde_json::Value::String(
+                "leftover-camelCase-from-before-the-wire-fix".to_string()
+            ))
+        );
+        assert_eq!(
+            entry.extra.get("copyIgnoredFiles"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(entry.extra.len(), 2);
+    }
+
+    #[test]
+    fn repo_settings_entry_extra_is_never_serialized_back() {
+        let mut entry = RepoSettingsEntry {
+            path: "/my/repo".to_string(),
+            ..RepoSettingsEntry::default()
+        };
+        entry
+            .extra
+            .insert("stray_key".to_string(), serde_json::Value::Bool(true));
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(
+            !json.contains("stray_key"),
+            "extra must never round-trip back into the file — it exists only to make an \
+             unrecognized key observable via logging, not to preserve it"
+        );
     }
 
     #[test]
