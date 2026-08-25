@@ -329,6 +329,9 @@ cleartext copy does not survive on disk.
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Opts in to the AI Chat panel shell and SSH Tunnels. It has no sub-flags: `ai_chat_enabled`, `ai_triage_enabled` and `ai_watchers_enabled` went with the embedded AI engine (#784-0aec). A `config.json` written before that upgrade still carries them and still loads — `AppConfig` has no `deny_unknown_fields`, and `a_config_written_before_the_ai_engine_was_deleted_still_loads` holds that open |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
+| `pr_hide_drafts` | `bool` | `false` | Exclude draft PRs from the Pull Requests list. Per-repo tri-state override: `RepoSettingsEntry.pr_hide_drafts` |
+| `pr_hide_conflicting` | `bool` | `false` | Exclude PRs with merge conflicts from the Pull Requests list. Per-repo tri-state override: `RepoSettingsEntry.pr_hide_conflicting` |
+| `pr_hide_ci_failing` | `bool` | `false` | Exclude PRs with failing CI checks from the Pull Requests list. Per-repo tri-state override: `RepoSettingsEntry.pr_hide_ci_failing` |
 | `auto_update_enabled` | `bool` | `true` | Automatically check for app updates on startup |
 | `auto_update_plugins_enabled` | `bool` | `true` | Automatically check for plugin updates on startup |
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
@@ -613,6 +616,17 @@ Per-repository fields:
 | `auto_delete_on_pr_close` | `AutoDeleteOnPrClose` | `"off"` | Auto-delete branch when PR merged/closed (`off`/`ask`/`auto`) |
 | `archive_script` | `String` | `""` | Script to run before archive/delete (non-zero exit blocks) |
 | `dev_server_url` | `Option<String>` | `None` | URL opened by Design Mode for this repository; when unset, opens `about:blank`. Stored locally and excluded from `.tuic.json` and repository defaults |
+| `pr_hide_drafts` | `Option<bool>` | `null` | Tri-state override of the global `pr_hide_drafts` — `null` inherits, `Some(bool)` overrides |
+| `pr_hide_conflicting` | `Option<bool>` | `null` | Tri-state override of the global `pr_hide_conflicting` |
+| `pr_hide_ci_failing` | `Option<bool>` | `null` | Tri-state override of the global `pr_hide_ci_failing` |
+| `terminal_meta_hotkeys` | `Option<bool>` | `null` | Tri-state override of Cmd+1-9 terminal hotkeys (global default: `true` on macOS) |
+
+`#[serde(default)]` on every field above means an unrecognized JSON key is normally dropped
+without error — this is exactly how the frontend's camelCase/snake_case mismatch went unnoticed
+for a while. `RepoSettingsEntry` carries a flattened `extra: HashMap<String, serde_json::Value>`
+catch-all (never re-serialized) so an unrecognized key is captured instead of vanishing;
+`load_repo_settings()` logs a `tracing::warn!` naming the repo path and the exact unrecognized
+keys whenever `extra` is non-empty.
 
 **Commands:** `load_repo_settings()`, `save_repo_settings(base, config)`, `check_has_custom_settings(path)`
 
