@@ -10,6 +10,7 @@ members = [
     "crates/tuic-dictation",
     "crates/tuic-bridge",
     "crates/tuic-cli",
+    "crates/tuic-hook",
     "patches/alacritty_terminal",
     "patches/bm25",
     "patches/vte",

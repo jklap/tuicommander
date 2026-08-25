@@ -26,6 +26,7 @@ const targetDir = envTargetDir
 const sidecars = [
   { pkg: "tuic-bridge", bin: "tuic-bridge", crate: "crates/tuic-bridge" },
   { pkg: "tuic-cli", bin: "tuic", crate: "crates/tuic-cli" },
+  { pkg: "tuic-hook", bin: "tuic-hook", crate: "crates/tuic-hook" },
 ];
 
 // An empty or non-executable sidecar is a placeholder: shipping it gives an

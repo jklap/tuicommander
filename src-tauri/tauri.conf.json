@@ -68,7 +68,8 @@
     "createUpdaterArtifacts": true,
     "externalBin": [
       "binaries/tuic-bridge",
-      "binaries/tuic"
+      "binaries/tuic",
+      "binaries/tuic-hook"
     ],
     "fileAssociations": [
       {

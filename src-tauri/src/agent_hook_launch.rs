@@ -665,7 +665,14 @@ mod tests {
             3,
             "all same-event sources must remain loaded"
         );
-        assert!(commands[2].contains("7770;state=prompt"));
+        // TUIC's entry is the submit-prompt hook from `claude_hook_map`, whose
+        // `state=prompt` wire output is pinned against the real binary by
+        // `agent_hook::tests::golden_wire_output::every_spec_emits_exactly_its_wire_contract`.
+        let (_, _, submit) = claude_hook_map()
+            .into_iter()
+            .find(|(event, _, _)| *event == "UserPromptSubmit")
+            .expect("claude map has a UserPromptSubmit entry");
+        assert_eq!(commands[2], submit);
 
         for command in commands {
             let status = std::process::Command::new("/bin/sh")
