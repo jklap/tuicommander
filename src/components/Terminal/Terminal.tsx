@@ -579,12 +579,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					// Intent/suggest row overlays handled by installRenderObserver
 					break;
 				}
-				case "suggest":
+				case "suggest": {
+					const t = terminalsStore.get(props.id);
+					const suggestEnabled = t?.agentType
+						? (agentConfigsForRepo(props.cwd).getSuggestFollowups(t.agentType) ?? settingsStore.state.suggestFollowups)
+						: settingsStore.state.suggestFollowups;
 					// The backend publishes choices once the agent is ready, even
 					// while background descendants keep the shell busy. Completion
 					// remains separately gated; show this turn's choices directly.
-					if (settingsStore.state.suggestFollowups && parsed.items?.length) {
-						const t = terminalsStore.get(props.id);
+					if (suggestEnabled && parsed.items?.length) {
 						if (t && !t.suggestDismissed) {
 							terminalsStore.setSuggestedActions(props.id, parsed.items);
 						} else if (t?.suggestDismissed) {
@@ -592,6 +595,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						}
 					}
 					break;
+				}
 				case "shell-state": {
 					if (parsed.state !== "idle") {
 						// Shell goes busy: clear stale suggest from previous cycle and reset

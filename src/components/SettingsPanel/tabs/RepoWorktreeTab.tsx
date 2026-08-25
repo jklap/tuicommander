@@ -485,7 +485,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 						<label>{t("repoWorktree.label.terminal", "Terminal")}</label>
 
 						<BooleanOverride
-							data-setting-exclusion="transient.repositories.terminal_meta_hotkeys"
+							settingId="repositories.repos.{key}.terminal_meta_hotkeys"
 							label="Enable Cmd+1-9 terminal hotkeys"
 							value={props.settings.terminalMetaHotkeys}
 							fallback={true}

@@ -807,4 +807,10 @@ export const TIPS: Tip[] = [
 			"Choose a built-in template in a new automation draft after entering its repository and run config. Review it and save it paused before enabling runs.",
 		shortcut: null,
 	},
+	{
+		feature: "Use Global Default",
+		description:
+			"Per-repo and per-agent on/off settings offer \"Use global default\" next to On and Off — pick it to inherit the global value again without resetting every other override.",
+		shortcut: null,
+	},
 ];

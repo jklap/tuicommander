@@ -39,6 +39,9 @@ vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		getIds: () => ["terminal-1"],
 		get: () => ({ cwd: "/repo" }),
+		// The suggest overlay is now always mounted (per-agent overrides gate it in
+		// Terminal.tsx), so it reads the active terminal.
+		getActive: () => undefined,
 		isDetached: () => false,
 		state: { activeId: "terminal-1" },
 	},

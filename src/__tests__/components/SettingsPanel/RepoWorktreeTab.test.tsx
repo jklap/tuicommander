@@ -258,7 +258,7 @@ describe("RepoWorktreeTab", () => {
 		));
 		expect(getByText("Enable Cmd+1-9 terminal hotkeys")).toBeTruthy();
 		const select = container.querySelector(
-			'select[data-setting-exclusion="transient.repositories.terminal_meta_hotkeys"]',
+			'select[data-setting-id="repositories.repos.{key}.terminal_meta_hotkeys"]',
 		) as HTMLSelectElement;
 		expect(select.value).toBe("__inherit__");
 		expect(select.options[0].textContent).toBe("Use global default (On)"); // fallback true

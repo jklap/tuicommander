@@ -76,6 +76,17 @@ import {
 import { LaunchInstructionsEditor } from "./LaunchInstructionsEditor";
 import { LaunchModuleSettings } from "./LaunchModuleSettings";
 
+/** Per-agent nullable booleans keep an explicit "inherit" option (undefined in
+ *  the store), matching the repository tabs' `BooleanOverride`: a checkbox can
+ *  only write a concrete value and has no way back to the global default. */
+const INHERIT_OVERRIDE = "__inherit__";
+function overrideToValue(value: boolean | null | undefined): string {
+	return value == null ? INHERIT_OVERRIDE : String(value);
+}
+function overrideFromValue(value: string): boolean | undefined {
+	return value === INHERIT_OVERRIDE ? undefined : value === "true";
+}
+
 const ALL_AGENT_TYPES = AGENT_TYPES.filter((t): t is AgentType => t !== "git" && t !== "api");
 
 /** Agents with a launch-time instruction channel (Rust `launch_instructions::AGENTS`). */
@@ -865,7 +876,7 @@ const ClaudeUsageToggle: Component = () => {
 };
 
 /** Expandable agent row */
-const AgentRow: Component<{
+export const AgentRow: Component<{
 	agentType: AgentType;
 	detection: AgentAvailability | undefined;
 	onExpand?: (type: AgentType) => void;
@@ -1245,13 +1256,19 @@ const AgentRow: Component<{
 						>
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-									<input
-										data-setting-id="agents.agents.{key}.intent_tab_title"
-										type="checkbox"
-										checked={configStore.getIntentTabTitle(props.agentType) ?? true}
-										onChange={(e) => configStore.setIntentTabTitle(props.agentType, e.currentTarget.checked)}
-									/>
 									<span>Track agent intent</span>
+									<Select
+										data-setting-id="agents.agents.{key}.intent_tab_title"
+										compact
+										value={overrideToValue(configStore.getIntentTabTitle(props.agentType))}
+										onChange={(e) =>
+											configStore.setIntentTabTitle(props.agentType, overrideFromValue(e.currentTarget.value))
+										}
+									>
+										<option value={INHERIT_OVERRIDE}>Use global default (On)</option>
+										<option value="true">On</option>
+										<option value="false">Off</option>
+									</Select>
 								</label>
 								<p class={s.hint}>
 									Ask the model to emit <code>intent:</code> markers at task start and phase changes. The current intent
@@ -1292,13 +1309,21 @@ const AgentRow: Component<{
 						>
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-									<input
-										data-setting-id="agents.agents.{key}.suggest_followups"
-										type="checkbox"
-										checked={configStore.getSuggestFollowups(props.agentType) ?? settingsStore.state.suggestFollowups}
-										onChange={(e) => configStore.setSuggestFollowups(props.agentType, e.currentTarget.checked)}
-									/>
 									<span>Show suggested follow-ups</span>
+									<Select
+										data-setting-id="agents.agents.{key}.suggest_followups"
+										compact
+										value={overrideToValue(configStore.getSuggestFollowups(props.agentType))}
+										onChange={(e) =>
+											configStore.setSuggestFollowups(props.agentType, overrideFromValue(e.currentTarget.value))
+										}
+									>
+										<option value={INHERIT_OVERRIDE}>
+											Use global default ({settingsStore.state.suggestFollowups ? "On" : "Off"})
+										</option>
+										<option value="true">On</option>
+										<option value="false">Off</option>
+									</Select>
 								</label>
 								<p class={s.hint}>
 									Emit <code>suggest:</code> markers for clickable follow-up actions

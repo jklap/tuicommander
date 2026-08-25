@@ -9163,6 +9163,41 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "repositories.repos.{key}.terminal_meta_hotkeys": {
+      "id": "repositories.repos.{key}.terminal_meta_hotkeys",
+      "store": "repositories",
+      "owner": "instance",
+      "area": "repositories",
+      "group": "repos",
+      "order": 25,
+      "path": "/repos/{key}/terminal_meta_hotkeys",
+      "labelKey": "settings.catalogue.repositories.repos.{key}.terminal_meta_hotkeys.label",
+      "helpKey": "settings.catalogue.repositories.repos.{key}.terminal_meta_hotkeys.help",
+      "label": "terminal meta hotkeys",
+      "schema": {
+        "description": "null = inherit global default (true on macOS). When false: left-Option\nsends composition chars instead of meta sequences.",
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates repository terminal meta hotkeys.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "repositories.repos.{key}.worktree_storage": {
       "id": "repositories.repos.{key}.worktree_storage",
       "store": "repositories",

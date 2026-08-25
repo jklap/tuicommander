@@ -132,7 +132,12 @@ checks removal again. Failed removals remain available for a later attempt.
 
 ### Per-Repository Overrides (Settings → Repository → Worktree)
 
-Each setting can use the global default or be overridden for a specific repository.
+Each setting can use the global default or be overridden for a specific repository. On/off
+settings (Copy ignored files, Copy untracked files, Prompt on create, Delete branch on remove,
+Auto-archive merged, the PR-visibility filters, and — on macOS — the Cmd+1-9 terminal hotkeys) use
+a **Use global default / On / Off** dropdown instead of a plain checkbox, so "inherit the
+global setting" stays a selectable state rather than something you can only get back to by
+resetting the whole repo's overrides.
 
 ## Merge & Archive
 

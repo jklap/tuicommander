@@ -59,8 +59,9 @@ export interface RepoSettings {
 	autoDeleteOnPrClose: AutoDeleteOnPrClose | null;
 	/** Allowlist of upstream MCP server names for this repo (null = all servers) */
 	mcpUpstreams: string[] | null;
-	// DEFERRED (2026-08-30) — terminalMetaHotkeys remains transient: the Rust
-	// RepoSettingsEntry has no matching field. PR visibility overrides persist.
+	// `terminalMetaHotkeys` and the three `prHide*` overrides below persist through
+	// the matching `RepoSettingsEntry` fields in `config.rs` (`terminal_meta_hotkeys`,
+	// `pr_hide_*`); an unrecognised key there is logged, not silently dropped.
 	/** null = inherit from settingsStore (global) */
 	prHideDrafts: boolean | null;
 	/** null = inherit from settingsStore (global) */

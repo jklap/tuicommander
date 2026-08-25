@@ -1,6 +1,11 @@
 import { fireEvent, render } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
-import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../../../components/SettingsPanel/SettingFields";
+import {
+	SettingInput,
+	SettingSelect,
+	SettingSlider,
+	SettingToggle,
+} from "../../../components/SettingsPanel/SettingFields";
 
 /**
  * `SettingFields.tsx` is the shared building block for every settings tab
