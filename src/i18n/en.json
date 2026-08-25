@@ -1536,5 +1536,9 @@
 	"automations.chooseProfile": "Choose a saved profile",
 	"aiChat.repository": "Repository",
 	"aiChat.messagePlaceholder": "Write a message…",
-	"aiChat.contextUsage": "Ctx {percent}% · {used}/{size} · ~{free} free"
+	"aiChat.contextUsage": "Ctx {percent}% · {used}/{size} · ~{free} free",
+	"triStateToggle.global": "Global",
+	"triStateToggle.off": "Off",
+	"triStateToggle.on": "On",
+	"triStateToggle.useGlobalDefault": "(Use global default: {value})"
 }
