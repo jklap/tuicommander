@@ -429,11 +429,11 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
     let toolfail_code = if let Some(code) = &parsed.toolfail {
         Some(code.clone())
     } else if parsed.toolfail_from_stdin {
-        Some(toolfail_from_exit_code(stdin_json))
+        toolfail_from_exit_code(stdin_json)
     } else {
         match derivation.map(|d| &d.toolfail) {
             Some(DerivedToolfail::Fixed(v)) => Some(v.to_string()),
-            Some(DerivedToolfail::FromStdinExitCode) => Some(toolfail_from_exit_code(stdin_json)),
+            Some(DerivedToolfail::FromStdinExitCode) => toolfail_from_exit_code(stdin_json),
             _ => None,
         }
     };
@@ -464,11 +464,21 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
     toolfail.into_iter().chain(rest).collect()
 }
 
-fn toolfail_from_exit_code(stdin_json: &Value) -> String {
-    stdin_json
-        .get("exit_code")
-        .and_then(exit_code_as_string)
-        .unwrap_or_else(|| TOOLFAIL_FALLBACK.to_string())
+/// `None` suppresses the toolfail emission entirely — used for
+/// `is_interrupt: true` (a user-cancelled tool call via Esc, not a real
+/// failure; PostToolUseFailure's real schema carries this field, unlike
+/// `exit_code`, which it never sends — see `toolfail_from_exit_code`'s doc
+/// comment above its call sites).
+fn toolfail_from_exit_code(stdin_json: &Value) -> Option<String> {
+    if stdin_json.get("is_interrupt").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    Some(
+        stdin_json
+            .get("exit_code")
+            .and_then(exit_code_as_string)
+            .unwrap_or_else(|| TOOLFAIL_FALLBACK.to_string()),
+    )
 }
 
 fn str_field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
@@ -733,10 +743,17 @@ mod tests {
 
     #[test]
     fn derives_toolfail_and_tool_name_for_post_tool_use_failure_with_no_state() {
+        // Claude Code's real PostToolUseFailure schema (v2.1.245) is
+        // {tool_name, tool_input, tool_use_id, error, is_interrupt?,
+        // duration_ms?} — there is no `exit_code` field at all. This is the
+        // honest shape a real hook fire sends; the resulting fallback to
+        // TOOLFAIL_FALLBACK is the actual behavior in production, not the
+        // `exit_code: 42` a real Claude Code build never sends.
         let json = serde_json::json!({
             "hook_event_name": "PostToolUseFailure",
-            "exit_code": 42,
             "tool_name": "Bash",
+            "tool_use_id": "toolu_1",
+            "error": "command failed",
         });
         let pairs = build_emissions(&ParsedArgs::default(), &json);
         assert!(
@@ -745,11 +762,68 @@ mod tests {
         );
         assert_eq!(
             pairs.iter().find(|p| p.verb == "toolfail").unwrap().payload,
-            "42"
+            TOOLFAIL_FALLBACK,
+            "no exit_code in the real schema — falls back to the sentinel"
         );
         assert_eq!(
             pairs.iter().find(|p| p.verb == "tool").unwrap().payload,
             "Bash"
+        );
+    }
+
+    #[test]
+    fn post_tool_use_failure_with_is_interrupt_emits_no_toolfail() {
+        // A user pressing Esc during a tool call fires PostToolUseFailure
+        // with is_interrupt: true — that's a user-cancelled call, not a real
+        // failure, and must not paint a red gutter tick on the turn.
+        let json = serde_json::json!({
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "error": "interrupted",
+            "is_interrupt": true,
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        assert!(
+            !pairs.iter().any(|p| p.verb == "toolfail"),
+            "is_interrupt: true must suppress the toolfail emission entirely, got: {pairs:?}"
+        );
+        // The tool-name scrape is unaffected — still useful metadata.
+        assert_eq!(
+            pairs.iter().find(|p| p.verb == "tool").unwrap().payload,
+            "Bash"
+        );
+    }
+
+    #[test]
+    fn is_interrupt_false_or_absent_still_emits_toolfail() {
+        for json in [
+            serde_json::json!({"hook_event_name": "PostToolUseFailure", "is_interrupt": false}),
+            serde_json::json!({"hook_event_name": "PostToolUseFailure"}),
+        ] {
+            let pairs = build_emissions(&ParsedArgs::default(), &json);
+            assert!(
+                pairs.iter().any(|p| p.verb == "toolfail"),
+                "expected a toolfail emission for {json:?}, got: {pairs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_toolfail_from_stdin_flag_also_respects_is_interrupt() {
+        // --toolfail-from-stdin is the pre-derivation flag path, calling the
+        // same underlying extraction — still installed for real today (the
+        // user's live settings.json predates the derivation migration), so
+        // this path must get the same is_interrupt guard, not just the new
+        // DerivedToolfail::FromStdinExitCode path.
+        let json = serde_json::json!({"is_interrupt": true});
+        let parsed = ParsedArgs {
+            toolfail_from_stdin: true,
+            ..Default::default()
+        };
+        let pairs = build_emissions(&parsed, &json);
+        assert!(
+            !pairs.iter().any(|p| p.verb == "toolfail"),
+            "got: {pairs:?}"
         );
     }
 
