@@ -36,6 +36,29 @@ export function scrollbarMarksKey(input: ScrollbarMarksInput): string {
 	);
 }
 
+export interface ScrollbarVisibilityInput {
+	historySize: number;
+	showBlockMarks: boolean;
+	showPromptMarks: boolean;
+	blocks: readonly Pick<MarkBlock, "promptLine">[];
+	promptLines: readonly number[];
+}
+
+/**
+ * Whether the scrollbar track should be shown at all. Historically gated purely on
+ * `historySize > 0` (nothing to scroll ⇒ hide) — but marks are a "where did things happen"
+ * signal independent of scrolling, and a tab that never scrolled past one screen (the common
+ * case for a short Claude Code turn) would then never show a single tick, even with real
+ * blocks/prompts recorded and their toggles on. Shown whenever there's something to scroll
+ * OR something to mark; a plain terminal with neither keeps its prior no-scrollbar look.
+ */
+export function shouldShowScrollbar(input: ScrollbarVisibilityInput): boolean {
+	if (input.historySize > 0) return true;
+	const hasBlockMarks = input.showBlockMarks && input.blocks.length > 0;
+	const hasPromptMarks = input.showPromptMarks && input.promptLines.length > 0;
+	return hasBlockMarks || hasPromptMarks;
+}
+
 /**
  * Scrollbar tick markup for command blocks (blue/red), user-prompt lines (green), and search
  * matches (orange). Block ticks are drawn first, prompt ticks after (so they sit on top).

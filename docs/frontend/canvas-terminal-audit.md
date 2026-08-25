@@ -101,7 +101,7 @@ Primary and alternate grids can reuse identical numeric row coordinates while re
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Mouse wheel scroll | OK | Pixel-quantized (`canvasTerminalWheel.ts`); scrollback via coalesced `terminal_scroll_to_offset`, app-forwarded via `write_pty` SGR notches |
-| Scrollbar visibility | OK | Shows when `historySize > 0` |
+| Scrollbar visibility | OK | Shows when `historySize > 0`, or when there are block/prompt marks to display (`shouldShowScrollbar`, `canvasTerminalMarks.ts`) |
 | Scrollbar thumb drag | OK | Custom implementation |
 | Scrollbar track click-to-position | OK | |
 | Arrow Down snap-to-bottom | OK | When `displayOffset > 0` |
