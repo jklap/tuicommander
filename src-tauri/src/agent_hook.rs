@@ -764,13 +764,23 @@ mod tests {
                 .find(|(e, _, _)| *e == "PostToolUseFailure")
                 .expect("PostToolUseFailure entry present");
 
+            // Claude Code's real PostToolUseFailure schema (v2.1.245) is
+            // {tool_name, tool_input, tool_use_id, error, is_interrupt?,
+            // duration_ms?} — there is no `exit_code` field. This is the
+            // honest shape a real fire sends, not a synthetic one no real
+            // build ever produces.
             let (_, written) = run(
                 cmd,
                 true,
                 None,
-                Some(br#"{"hook_event_name":"PostToolUseFailure","exit_code":42}"#),
+                Some(br#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"command failed"}"#),
             );
-            assert_eq!(written, osc("toolfail", "42"));
+            assert_eq!(
+                written,
+                [osc("toolfail", "1"), osc("tool", "Bash")].concat(),
+                "no exit_code in the real schema — falls back to the sentinel exit code 1; \
+                 tool_name still scrapes independently"
+            );
 
             let (_, written) = run(
                 cmd,
@@ -797,6 +807,37 @@ mod tests {
 
             let (_, written) = run(cmd, true, None, None);
             assert!(written.is_empty(), "absent stdin must derive nothing");
+        }
+
+        #[test]
+        fn post_tool_use_failure_with_is_interrupt_writes_no_toolfail_on_the_real_wire() {
+            // A user pressing Esc during a tool call fires PostToolUseFailure
+            // with is_interrupt: true — a cancelled call, not a real failure.
+            // End-to-end through the real compiled binary + real shell.
+            let _binary = install_binary();
+            let map = claude_hook_map();
+            let (_, _, cmd) = map
+                .iter()
+                .find(|(e, _, _)| *e == "PostToolUseFailure")
+                .expect("PostToolUseFailure entry present");
+
+            let (code, written) = run(
+                cmd,
+                true,
+                None,
+                Some(br#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"interrupted","is_interrupt":true}"#),
+            );
+            assert_eq!(code, 0);
+            let written_str = String::from_utf8_lossy(&written);
+            assert!(
+                !written_str.contains("toolfail="),
+                "is_interrupt: true must write no toolfail bytes at all, got: {written_str:?}"
+            );
+            // The tool-name scrape is unaffected — still useful metadata.
+            assert!(
+                written.ends_with(&osc("tool", "Bash")),
+                "got: {written_str:?}"
+            );
         }
 
         #[test]
