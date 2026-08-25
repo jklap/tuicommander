@@ -1655,7 +1655,7 @@ pub(crate) fn ensure_mcp_configs(disabled: &[String]) {
     );
 }
 
-fn launch_owns_agent_configs(exe: &std::path::Path) -> bool {
+pub(crate) fn launch_owns_agent_configs(exe: &std::path::Path) -> bool {
     if std::env::var("TUIC_MCP_CONFIG_OWNER").as_deref() == Ok("1") {
         return true;
     }

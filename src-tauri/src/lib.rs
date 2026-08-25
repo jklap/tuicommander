@@ -73,6 +73,8 @@ mod global_hotkey;
 pub(crate) use tuic_terminal::grid_gate;
 pub(crate) mod grid_watch;
 pub(crate) mod grok_usage;
+#[cfg(feature = "desktop")]
+pub(crate) mod hook_binary;
 pub(crate) mod improvement_scan;
 pub(crate) use tuic_core::jsonc_edit;
 pub(crate) use tuic_terminal::input_line_buffer;
@@ -1914,6 +1916,18 @@ pub fn run() {
             // took the env vars; the keychain/`gh` part of the chain runs here,
             // off the window path and under its own timeout.
             crate::github_auth::spawn_deferred_token_resolution(Arc::clone(app_state));
+
+            // Refresh the tuic-hook stable copy hook commands are written
+            // against, and re-install any agent's hooks that have drifted
+            // from the current map (e.g. this app version fixed the `jq`
+            // dependency) — without this, an existing user who already
+            // toggled hook instrumentation on keeps the old shell-script
+            // hooks indefinitely, since nothing else re-triggers install.
+            #[cfg(feature = "desktop")]
+            {
+                hook_binary::ensure_current();
+                agent_hook_commands::reinstall_outdated_hooks();
+            }
 
             // Pre-warm content indices per the `index_strategy` setting. The
             // global semaphore in AppState (capacity 1) serialises the builds.
