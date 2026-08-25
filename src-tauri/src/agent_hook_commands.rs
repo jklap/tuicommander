@@ -167,6 +167,56 @@ pub(crate) fn get_agent_hook_state(agent_type: String) -> String {
     }
 }
 
+/// Startup migration: re-install hooks for every agent that already has
+/// `hook_instrumentation` enabled but whose installed commands no longer
+/// match the current map (e.g. a version bump moved the shell-hook generator
+/// to `tuic-hook`). Without this, `apply_at` is only ever reachable from the
+/// Settings toggle — an existing user keeps whatever hooks they installed
+/// under an older app version indefinitely, never receiving a fix like the
+/// removal of `jq` from the failure path, until they happen to notice the
+/// "outdated" badge and re-toggle it themselves.
+///
+/// Only ever moves `Outdated → Installed`; never touches `NotInstalled` (the
+/// flag being enabled at all is the sole trigger) and is naturally idempotent
+/// on every subsequent startup once everything is current.
+pub(crate) fn reinstall_outdated_hooks() {
+    reinstall_outdated_hooks_for(&crate::config::load_agents_config(), hook_settings_path);
+}
+
+/// Core of [`reinstall_outdated_hooks`], with the config and the
+/// settings-path resolver injected for testing (same convention as
+/// `apply_at`/`state_at` — `hook_settings_path` itself reads `dirs::home_dir()`
+/// and isn't mockable, so tests supply a closure over a tempdir instead).
+fn reinstall_outdated_hooks_for(
+    cfg: &crate::config::AgentsConfig,
+    settings_path_for: impl Fn(&str) -> Option<PathBuf>,
+) {
+    for (agent_type, settings) in &cfg.agents {
+        if settings.hook_instrumentation != Some(true) {
+            continue;
+        }
+        let Some(path) = settings_path_for(agent_type) else {
+            continue;
+        };
+        if state_at(agent_type, &path) != InstallState::Outdated {
+            continue;
+        }
+        match apply_at(agent_type, &path, true) {
+            Ok(()) => tracing::info!(
+                source = "agent_hook_commands",
+                agent_type,
+                "re-installed outdated hooks on startup"
+            ),
+            Err(e) => tracing::warn!(
+                source = "agent_hook_commands",
+                agent_type,
+                error = %e,
+                "failed to re-install outdated hooks on startup"
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,8 +300,8 @@ mod tests {
         let ours = dir.path().join("tuic.json");
         apply_at("grok", &ours, true).unwrap();
         let content = std::fs::read_to_string(&ours).unwrap();
-        assert!(content.contains(r"7770;state=busy"));
-        assert!(content.contains(r"7770;state=idle"));
+        assert!(content.contains("--state busy"));
+        assert!(content.contains("--state idle"));
         assert!(content.contains("TUIC_SESSION"));
         assert!(content.contains("tuic-managed-hook"));
         let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -278,7 +328,7 @@ mod tests {
         assert_eq!(state_at("codex", &hooks), InstallState::Installed);
         let h = std::fs::read_to_string(&hooks).unwrap();
         assert!(h.contains("user-codex.sh"), "user Codex hook preserved");
-        assert!(h.contains(r"7770;state=busy"));
+        assert!(h.contains("--state busy"));
         assert!(crate::agent_hook_codex::features_hooks_present(&cfg));
         assert!(
             std::fs::read_to_string(&cfg)
@@ -305,5 +355,139 @@ mod tests {
             "flag must clear too, else state stays Outdated forever"
         );
         assert!(!crate::agent_hook_codex::features_hooks_present(&cfg));
+    }
+
+    // -------------------------------------------------------------------
+    // reinstall_outdated_hooks_for (startup migration)
+    // -------------------------------------------------------------------
+
+    fn agents_config_with_flag(
+        agent_type: &str,
+        enabled: Option<bool>,
+    ) -> crate::config::AgentsConfig {
+        let mut cfg = crate::config::AgentsConfig::default();
+        cfg.agents.insert(
+            agent_type.to_string(),
+            crate::config::AgentSettings {
+                hook_instrumentation: enabled,
+                ..Default::default()
+            },
+        );
+        cfg
+    }
+
+    #[test]
+    fn migration_reinstalls_an_outdated_enabled_agent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        // Simulate an old-format install by writing a stale sentineled command
+        // directly, bypassing apply_at (which would install the current map).
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "hooks": {
+                    "Stop": [{
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "echo old # tuic-managed-hook"}],
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(state_at("claude", &path), InstallState::Outdated);
+
+        let cfg = agents_config_with_flag("claude", Some(true));
+        reinstall_outdated_hooks_for(&cfg, |_| Some(path.clone()));
+
+        assert_eq!(
+            state_at("claude", &path),
+            InstallState::Installed,
+            "an outdated, enabled agent must be re-installed to the current map"
+        );
+    }
+
+    #[test]
+    fn migration_leaves_a_disabled_agent_alone() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "hooks": {
+                    "Stop": [{
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "echo old # tuic-managed-hook"}],
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // hook_instrumentation explicitly false — must not be touched even
+        // though the file is Outdated.
+        let cfg = agents_config_with_flag("claude", Some(false));
+        reinstall_outdated_hooks_for(&cfg, |_| Some(path.clone()));
+
+        assert_eq!(
+            state_at("claude", &path),
+            InstallState::Outdated,
+            "a disabled agent's stale hooks must be left exactly as found"
+        );
+    }
+
+    #[test]
+    fn migration_leaves_an_already_installed_agent_alone() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        apply_at("claude", &path, true).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        let cfg = agents_config_with_flag("claude", Some(true));
+        reinstall_outdated_hooks_for(&cfg, |_| Some(path.clone()));
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            before, after,
+            "an already-current install must not be rewritten"
+        );
+    }
+
+    #[test]
+    fn migration_skips_an_agent_with_no_flag_set_at_all() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "hooks": {
+                    "Stop": [{
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "echo old # tuic-managed-hook"}],
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let cfg = agents_config_with_flag("claude", None); // never toggled
+        reinstall_outdated_hooks_for(&cfg, |_| Some(path.clone()));
+
+        assert_eq!(
+            state_at("claude", &path),
+            InstallState::Outdated,
+            "an agent that was never enabled must not be touched"
+        );
+    }
+
+    #[test]
+    fn migration_is_a_noop_over_an_empty_config() {
+        // Must not panic / must not attempt any path resolution when no
+        // agent has ever been configured.
+        reinstall_outdated_hooks_for(&crate::config::AgentsConfig::default(), |_| {
+            panic!("settings_path_for must never be called with an empty config")
+        });
     }
 }

@@ -77,6 +77,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - **Terminal font, cursor, and behavior settings moved into the new Terminal tab** — Terminal Font/Size/Weight, Cursor Style, and the live preview (previously in Appearance) and Copy on Select / OSC 52 clipboard writes / the PTY prompt bar toggle (previously in General) now live alongside the block settings in Settings > Terminal.
+- **`tuic-hook` now derives its behavior from Claude Code's own `hook_event_name`** — Previously every hook event's state/toolfail/metadata-scrape behavior was hardcoded as explicit `tuic-hook` flags baked into the installed hook command (`--state busy --emit-tool`, etc.), so adding or changing a verb meant editing `agent_hook.rs` and rewriting every user's `settings.json`. Now the binary reads `hook_event_name` from the hook's own stdin JSON and derives the same behavior itself; the installed commands for 8 of Claude's 9 hook events carry no flags at all (only the narrow `PreToolUse` awaiting-override survives as an explicit `--state`). The four legacy `--emit-*`/`--toolfail-from-stdin` flags still work as overrides/aliases for backward compatibility across the upgrade. Also added `tuic-hook --help`, and a committed `docs/backend/tuic-hook.md` / `hook-lifecycle.html` CLI reference — previously undocumented.
 
 ## [1.7.4] - 2026-08-12
 

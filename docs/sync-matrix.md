@@ -51,6 +51,26 @@ When modifying PTY behavior, output parsing, shell state, or terminal UI:
 | `docs/api/tauri-commands.md` | PTY commands (create_pty, write_pty, resize_pty, etc.) |
 | `docs/backend/alacritty-integration.md` | Alacritty patch inventory, upstream API usage, update procedure |
 
+### Terminal Escape Sequences & Emulator Patches
+When adding or changing a recognized escape sequence, terminal mode, mouse/key encoding, SGR
+attribute, or emulator patch. (For OSC 7770 verbs specifically, see **Native hook
+instrumentation** above — this section covers the sequence grammar, that one covers the hook
+event map.)
+
+| File | What to update |
+|------|----------------|
+| `tuic-escape-sequences.html` | Protocol reference (tracked) — recognized-sequence tables, "Explicitly not handled" lists, Deliberate Deviations |
+| `src-tauri/patches/vte/src/ansi.rs` | `Performer::osc_dispatch` OSC arms, `PrivateMode::new` mode arms, CSI dispatch, `attrs_from_sgr_parameters` |
+| `src-tauri/patches/alacritty_terminal/src/term/{mod,cell}.rs` | `Handler` impls (OSC 133, clipboard, keyboard modes), `Cell::erase_blank` |
+| `src-tauri/src/terminal_grid.rs` | `TermEvent` mapping, `extract_semantic_zones`, emulator `Config` flags (e.g. `kitty_keyboard`) |
+| `src-tauri/src/output_parser.rs` | Raw-stream regexes that bypass vte (`parse_osc94`, `parse_osc777_notifies`) |
+| `src-tauri/src/state.rs` | `strip_kitty_sequences`, `KittyKeyboardState` |
+| `src-tauri/src/input_line_buffer.rs` | Input-side key decoding and private-marker report filtering |
+| `src/components/Terminal/canvasTerminalUtils.ts` | Mouse report encoding (`sgrMotionButton`, `motionReportButton`) |
+| `src/components/Terminal/canvasTerminalWheel.ts` | Wheel notch quantization |
+| `src/components/Terminal/canvasTerminalLinks.ts` | Link-gesture suppression of mouse reports |
+| `docs/backend/alacritty-integration.md` | Patch inventory and the canonical OSC 7770 verb table |
+
 ### Keyboard Shortcuts & Actions
 When adding or changing shortcuts:
 
@@ -133,6 +153,27 @@ When changing an awaiting/idle/busy signal — a parser, the hook suppression, o
 | `src-tauri/src/pty.rs` tests | A case in the `Awaiting-signal fixtures` block replaying that capture |
 | `src-tauri/src/pty.rs` tests | A case in the `Awaiting RETRACTION` block when the failure is a state that never clears — fixtures assert emitted events and cannot express a MISSING one |
 | `AGENTS.md` | "Agent state detection" section (signal table, capture workflow, retraction) |
+
+### Native hook instrumentation (OSC 7770, `tuic-hook`)
+When changing an agent's hook event map, adding/removing an OSC 7770 verb, or touching the
+`tuic-hook` binary that emits them:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/agent_hook.rs` | Per-agent event→command maps (`claude_hook_map`, `gemini_hook_map`, …) and the shared `hook_binary_command` generator |
+| `src-tauri/crates/tuic-hook/src/main.rs` | argv parsing, stdin JSON extraction, the `DERIVATIONS` event→behavior table, the `toolfail`-before-`state` ordering guarantee |
+| `src-tauri/crates/tuic-hook/src/tty.rs` | Native controlling-tty resolution (Linux `/proc` fd readlink, macOS `proc_pidinfo`) |
+| `src-tauri/crates/tuic-hook/src/payload.rs` | Percent-encoding scheme for free-text verb payloads |
+| `src-tauri/src/agent_hook_installer.rs` | Settings-file merge/prune — sentinel-keyed, agnostic to command content; should rarely need changes |
+| `src-tauri/src/agent_hook_commands.rs` | Per-agent settings paths, `apply_at`/`state_at`, `reinstall_outdated_hooks` startup migration |
+| `src-tauri/src/hook_binary.rs` | Stable-copy location and version-drift refresh (`ensure_current`) |
+| `src-tauri/src/pty.rs` | The `TermEvent::Tuic` verb switch — decode a new verb here, mirroring `percent_decode_osc_payload` for free text |
+| `src-tauri/src/output_parser.rs` | `ParsedEvent::AgentMetadata` (or a new variant, for a verb that isn't free-text metadata) |
+| `docs/backend/alacritty-integration.md` | OSC 7770 verb table |
+| `docs/backend/tuic-hook.md` | CLI reference, derivation table, stdin fields, env vars, exit-code contract |
+| `docs/user-guide/ai-agents.md` | "Native Hook Instrumentation" user-facing section |
+| `docs/FEATURES.md` | Section 1.19 (red-tick tier description) |
+| `hook-lifecycle.html` (repo root, tracked) | Full event→verb→feature lifecycle diagram, CLI surface, and rationale |
 
 ### MCP Tool Surface (native tools, upstream proxy, meta-tools)
 When changing the tool list, tool handlers, `disabled_native_tools`, upstream allow/deny filters, or the Speakeasy meta-tools:
@@ -396,6 +437,8 @@ When adding, renaming or moving a docs page:
 | Path | Purpose |
 |------|---------|
 | **Root** | |
+| `tuic-escape-sequences.html` | Terminal protocol reference (OSC/CSI/SGR/modes, both directions) |
+| `hook-lifecycle.html` | Native hook instrumentation reference — event→wire→feature pipeline, CLI surface, per-agent event tables, rationale |
 | `SPEC.md` | Feature specification, architecture, version |
 | `CHANGELOG.md` | Release history (Keep a Changelog format) |
 | `AGENTS.md` | Project rules, compact reference |

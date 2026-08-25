@@ -1,0 +1,22 @@
+[package]
+name = "tuic-hook"
+version.workspace = true
+description = "Native-agent hook emitter for TUICommander — replaces the embedded shell one-liners installed into Claude/Gemini/Grok/Codex settings files"
+authors = ["Stefano Straus <github.com/sstraus>"]
+edition = "2024"
+
+[[bin]]
+name = "tuic-hook"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

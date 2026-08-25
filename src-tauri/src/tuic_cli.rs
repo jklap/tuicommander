@@ -215,11 +215,29 @@ fn sidecar_name() -> &'static str {
 /// packaged build and fell through to the dev path, which only exists on the
 /// build machine (the root cause of issue #52).
 fn resolve_sidecar_path() -> Result<String, String> {
-    let name = sidecar_name();
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    resolve_sidecar_path_from(
+        std::env::current_exe().ok().as_deref(),
+        manifest,
+        sidecar_name(),
+    )
+}
 
+/// Core of [`resolve_sidecar_path`], with the running exe's path and the
+/// workspace manifest dir injected so the fallback chain can be exercised
+/// without depending on the real build environment (path-injected for
+/// testing, same convention as `agent_hook_commands::apply_at`).
+///
+/// Generic over `name`: also used by `hook_binary` to locate the `tuic-hook`
+/// sidecar, which is bundled and versioned exactly like this one.
+pub(crate) fn resolve_sidecar_path_from(
+    current_exe: Option<&std::path::Path>,
+    manifest_dir: &std::path::Path,
+    name: &str,
+) -> Result<String, String> {
     // Release: sidecar bundled alongside the main executable.
     // Dev (`cargo tauri dev`/`build`): also next to the built app under target/.
-    if let Ok(exe) = std::env::current_exe()
+    if let Some(exe) = current_exe
         && let Some(dir) = exe.parent()
     {
         let candidate = dir.join(name);
@@ -229,9 +247,8 @@ fn resolve_sidecar_path() -> Result<String, String> {
     }
 
     // Dev fallback: workspace target directory (build:sidecar output).
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for profile in ["debug", "release"] {
-        let dev_binary = manifest.join(format!("target/{profile}")).join(name);
+        let dev_binary = manifest_dir.join(format!("target/{profile}")).join(name);
         if dev_binary.exists() {
             return Ok(dev_binary.to_string_lossy().to_string());
         }
@@ -242,7 +259,10 @@ fn resolve_sidecar_path() -> Result<String, String> {
 
 /// Run `<path> --version` and return its trimmed stdout (e.g. "tuic 1.1.0").
 /// Returns None if the binary can't be executed or exits non-zero.
-fn cli_version(path: &str) -> Option<String> {
+///
+/// Generic over which binary: also used by `hook_binary` for the `tuic-hook`
+/// sidecar's own `--version` output (`tuic-hook 1.7.4-...`).
+pub(crate) fn cli_version(path: &str) -> Option<String> {
     let output = std::process::Command::new(path)
         .arg("--version")
         .output()
@@ -262,7 +282,16 @@ fn check_version_match(installed_path: &str) -> bool {
     let Ok(sidecar_path) = resolve_sidecar_path() else {
         return false;
     };
-    match (cli_version(installed_path), cli_version(&sidecar_path)) {
+    version_match(cli_version(installed_path), cli_version(&sidecar_path))
+}
+
+/// Pure comparison core of [`check_version_match`]: if either version string
+/// is unavailable, treat it as a mismatch (never a match by default).
+///
+/// Generic: also used by `hook_binary` to compare the `tuic-hook` sidecar
+/// against its installed stable copy.
+pub(crate) fn version_match(installed: Option<String>, sidecar: Option<String>) -> bool {
+    match (installed, sidecar) {
         (Some(installed), Some(sidecar)) => installed == sidecar,
         _ => false,
     }
@@ -428,5 +457,142 @@ mod tests {
         assert_eq!(name, "tuic.exe");
         #[cfg(not(target_os = "windows"))]
         assert_eq!(name, "tuic");
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_sidecar_path_from: the fallback chain, exercised without
+    // depending on the real build environment.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_sidecar_path_prefers_the_exe_sibling() {
+        let exe_dir = tempfile::tempdir().expect("exe dir");
+        let manifest_dir = tempfile::tempdir().expect("manifest dir");
+        let name = "tuic-fake";
+        std::fs::write(exe_dir.path().join(name), b"").expect("write fake sidecar");
+        // Also place one under the manifest fallback, to prove the exe
+        // sibling wins even when a fallback candidate also exists.
+        std::fs::create_dir_all(manifest_dir.path().join("target/debug")).unwrap();
+        std::fs::write(manifest_dir.path().join("target/debug").join(name), b"").unwrap();
+
+        let fake_exe = exe_dir.path().join("tuicommander");
+        let found = resolve_sidecar_path_from(Some(&fake_exe), manifest_dir.path(), name)
+            .expect("must find the exe-sibling sidecar");
+        assert_eq!(found, exe_dir.path().join(name).to_string_lossy());
+    }
+
+    #[test]
+    fn resolve_sidecar_path_falls_back_to_manifest_debug_dir() {
+        let exe_dir = tempfile::tempdir().expect("exe dir"); // no sidecar here
+        let manifest_dir = tempfile::tempdir().expect("manifest dir");
+        let name = "tuic-fake";
+        std::fs::create_dir_all(manifest_dir.path().join("target/debug")).unwrap();
+        std::fs::write(manifest_dir.path().join("target/debug").join(name), b"").unwrap();
+
+        let fake_exe = exe_dir.path().join("tuicommander");
+        let found = resolve_sidecar_path_from(Some(&fake_exe), manifest_dir.path(), name)
+            .expect("must fall back to the dev debug dir");
+        assert_eq!(
+            found,
+            manifest_dir
+                .path()
+                .join("target/debug")
+                .join(name)
+                .to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn resolve_sidecar_path_falls_back_to_manifest_release_dir_when_no_debug() {
+        let manifest_dir = tempfile::tempdir().expect("manifest dir");
+        let name = "tuic-fake";
+        std::fs::create_dir_all(manifest_dir.path().join("target/release")).unwrap();
+        std::fs::write(manifest_dir.path().join("target/release").join(name), b"").unwrap();
+
+        // current_exe entirely absent (as if std::env::current_exe() failed).
+        let found = resolve_sidecar_path_from(None, manifest_dir.path(), name)
+            .expect("must fall back to the dev release dir");
+        assert_eq!(
+            found,
+            manifest_dir
+                .path()
+                .join("target/release")
+                .join(name)
+                .to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn resolve_sidecar_path_errs_when_nothing_found_anywhere() {
+        let exe_dir = tempfile::tempdir().expect("exe dir");
+        let manifest_dir = tempfile::tempdir().expect("manifest dir");
+        let fake_exe = exe_dir.path().join("tuicommander");
+        let err = resolve_sidecar_path_from(Some(&fake_exe), manifest_dir.path(), "tuic-fake")
+            .expect_err("must error when the sidecar exists nowhere");
+        assert!(err.contains("tuic CLI binary not found"));
+    }
+
+    // -----------------------------------------------------------------------
+    // version_match / cli_version
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn version_match_requires_both_versions_present_and_equal() {
+        assert!(version_match(
+            Some("tuic 1.2.3".into()),
+            Some("tuic 1.2.3".into())
+        ));
+        assert!(!version_match(
+            Some("tuic 1.2.3".into()),
+            Some("tuic 1.2.4".into())
+        ));
+        assert!(!version_match(None, Some("tuic 1.2.3".into())));
+        assert!(!version_match(Some("tuic 1.2.3".into()), None));
+        assert!(!version_match(None, None));
+    }
+
+    /// Write an executable shell script to `dir` that prints `stdout` and
+    /// exits `code`.
+    #[cfg(unix)]
+    fn write_fake_binary(dir: &std::path::Path, name: &str, stdout: &str, code: i32) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\nprintf '%s' \"{stdout}\"\nexit {code}\n"),
+        )
+        .expect("write fake binary");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake binary");
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cli_version_returns_trimmed_stdout_on_success() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = write_fake_binary(dir.path(), "fake-tuic", "tuic 9.9.9\n", 0);
+        assert_eq!(cli_version(&path), Some("tuic 9.9.9".to_string()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cli_version_is_none_on_nonzero_exit() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = write_fake_binary(dir.path(), "fake-tuic", "tuic 9.9.9\n", 1);
+        assert_eq!(cli_version(&path), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cli_version_is_none_on_empty_stdout() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = write_fake_binary(dir.path(), "fake-tuic", "", 0);
+        assert_eq!(cli_version(&path), None);
+    }
+
+    #[test]
+    fn cli_version_is_none_when_binary_does_not_exist() {
+        assert_eq!(cli_version("/no/such/binary/here"), None);
     }
 }

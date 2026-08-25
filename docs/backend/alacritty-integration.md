@@ -45,6 +45,22 @@ In-band signalling via the PTY stream. Never written to the grid (consumed by VT
 | `state` | `idle`, `busy`, or `awaiting` | `idle`/`busy`: immediate shell state transition (bypasses silence timer). `awaiting`: emits a confident `Question` (sets `awaiting_input`); `busy` also clears a prior `awaiting`. Driven by native agent hooks (see AI Agents → Native Hook Instrumentation). Unknown payloads are ignored. |
 | `suggest` | `A\|B\|C` (pipe-separated) | Emits `ParsedEvent::Suggest` — never hits the grid, no conceal needed. |
 | `intent` | `text` or `text (Title)` | Emits `ParsedEvent::Intent` with optional tab title. |
+| `block` | `start`, `end`, or `end;<exit_code>` | Emits `ParsedEvent::AgentBlock` — the turn-level command block boundary for hook-instrumented sessions (see `handle_tuic_state`, which derives `start`/`end` from the `state` busy/idle edge rather than a hook emitting `block` directly). |
+| `toolfail` | any (payload is a presence signal, never parsed) | Sets `turn_error_flags` for the session — read and cleared at the next busy→idle edge to flag the command block failed (red tick). From Claude's `PostToolUseFailure`/`StopFailure` hooks. |
+| `ccsession` | percent-encoded session id | Emits `ParsedEvent::AgentMetadata { field: "session_id", .. }`. From Claude's `SessionStart` hook. |
+| `cwd` | percent-encoded path | Emits `ParsedEvent::AgentMetadata { field: "cwd", .. }`. From Claude's `SessionStart` hook. |
+| `transcript` | percent-encoded path | Emits `ParsedEvent::AgentMetadata { field: "transcript_path", .. }`. From Claude's `SessionStart` hook. |
+| `tool` | percent-encoded tool name | Emits `ParsedEvent::AgentMetadata { field: "tool_name", .. }`. From Claude's `PreToolUse`/`PostToolUse` hooks. |
+| `notify` | percent-encoded message | Emits `ParsedEvent::AgentMetadata { field: "message", .. }`. From Claude's `Notification` hook. |
+
+`ccsession`/`cwd`/`transcript`/`tool`/`notify` payloads are percent-encoded (RFC 3986 unreserved
+set) by the `tuic-hook` binary before they reach the wire — free text could otherwise contain the
+`;` param delimiter or control bytes, either of which would desync this parser. Decoded on receipt
+by `pty::percent_decode_osc_payload`.
+
+Which verbs a given Claude hook fire emits is derived by `tuic-hook` itself from the hook payload's
+`hook_event_name` field, not baked into the installed hook command — see
+`docs/backend/tuic-hook.md` for the full derivation table and CLI reference.
 
 **Advantages over text-based detection:**
 - Zero cross-chunk issues (OSC has delimiter-based framing in VTE)

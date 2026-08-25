@@ -46,6 +46,20 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] **[MANUAL]** Run a full-width character (e.g. `echo 界` or a Nerd Font icon) under the cursor in a real pane: the block/underline cursor visibly covers both columns instead of only the leading half.
 - [ ] **[MANUAL]** `\x1b[2 q` (steady block) in a live shell: cursor stops blinking and stays solid; `\x1b[1 q` (blink block) restores blinking.
 
+## Native agent hooks — tuic-hook binary (2026-08, **Rust change — needs `make dev` restart**)
+
+- [ ] **[HUMAN]** Enable Claude Code hook instrumentation for a repo (Settings → Agents), restart with `make dev`, run a real Claude Code turn that calls a tool (e.g. `Bash: pwd`) and confirm: tab shows busy while the agent works, idle when done, no red gutter tick on success.
+- [ ] **[HUMAN]** Force a real tool failure (e.g. ask Claude to run a nonexistent binary) and confirm the command block gets a red tick (`PostToolUseFailure` → `toolfail`), then confirm pressing Esc mid-tool-call does NOT paint a red tick (is_interrupt suppression).
+- [ ] **[HUMAN]** Trigger a Claude `AskUserQuestion`/`ExitPlanMode` prompt and confirm the tab shows "awaiting", not "busy".
+- [ ] **[HUMAN]** Trigger an MCP `elicitation/create` prompt (an MCP server tool asking for input mid-call) and confirm the tab shows "awaiting" and clears back to busy once answered.
+- [ ] **[HUMAN]** After a `make dev` restart, start a real Claude Code session with hook instrumentation enabled and confirm the tab actually transitions busy→idle on a tool call (this is the regression `4914bb42` fixes — before it, `tuic-hook` found no tty to write to for a Claude-spawned hook subprocess).
+- [ ] **[HUMAN]** After a `make dev` restart following a `tuic-hook` version bump, confirm via `curl http://localhost:9876/logs?source=agent_hook_commands` that startup logs show hooks were re-installed for any agent that already had instrumentation enabled with an old binary.
+- [ ] **[HUMAN]** Run a Claude Code session under Windows/WSL and confirm `tuic-hook` resolves the tty and emits OSC 7770 correctly — Windows CI never compiles or tests this crate (`ci.yml` explicitly skips the build/test steps there), and it has never been manually verified on real Windows either.
+
+## MCP marker/peer-message framing rewrite (2026-08-26, **Rust change — needs `make dev` restart**)
+
+- [ ] **[MANUAL/MCP]** After restart, spawn a real Task-tool subagent from a worktree-creation flow and confirm it does NOT emit `intent:`/`suggest:`/`ack` markers — the delegated hint tells it not to, but no automated check can observe a live model's actual behavior. This is the closest reachable proxy for "agents stop flagging markers as injection"; a full live-verification run needs a human or an MCP-driven agent session to actually converse with a fresh Claude Code / Codex / Gemini session.
+
 ## Background-color-erase reverse-video fix (2026-08-21/27, **Rust change — needs `make dev` restart**)
 
 - [ ] **[VISUAL]** In a real terminal, run something that enters standout mode and prints a highlighted status line then scrolls (e.g. `tput smso; echo "status"; tput sgr0` in a loop that pushes it up through several more lines of plain output). Confirm the reverse bar stays scoped to the original highlighted line and does NOT reappear on later blank rows scrolled into view.

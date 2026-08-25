@@ -129,6 +129,20 @@ jobs:
           target=$(rustc --print host-tuple)
           touch "src-tauri/binaries/tuic-bridge-${target}"
           touch "src-tauri/binaries/tuic-${target}"
+          touch "src-tauri/binaries/tuic-hook-${target}"
+
+      # Unlike the tuic/tuic-bridge stubs above (never executed in CI), the
+      # agent_hook.rs golden wire-output tests run the *real* tuic-hook
+      # binary against a fake config dir (see agent_hook.rs's
+      # golden_wire_output::find_real_binary, which resolves it from
+      # src-tauri/target/debug/tuic-hook — this build populates exactly
+      # that path). tuic-hook has almost no dependencies, so this is fast.
+      - name: Build tuic-hook (needed by agent_hook.rs tests)
+        working-directory: src-tauri
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo build --package tuic-hook
 
       - name: Clippy
         working-directory: src-tauri
@@ -287,11 +301,28 @@ jobs:
           target=$(rustc --print host-tuple)
           touch "src-tauri/binaries/tuic-bridge-${target}"
           touch "src-tauri/binaries/tuic-${target}"
+          touch "src-tauri/binaries/tuic-hook-${target}"
           # Windows needs .exe extension for sidecar resolution
           if [[ "$target" == *windows* ]]; then
             touch "src-tauri/binaries/tuic-bridge-${target}.exe"
             touch "src-tauri/binaries/tuic-${target}.exe"
+            touch "src-tauri/binaries/tuic-hook-${target}.exe"
           fi
+
+      # Only where the Tests step below actually runs (Windows tests are
+      # skipped) — unlike the tuic/tuic-bridge stubs above (never executed
+      # in CI), agent_hook.rs's golden wire-output tests run the *real*
+      # tuic-hook binary against a fake config dir (see
+      # golden_wire_output::find_real_binary in agent_hook.rs, which
+      # resolves it from src-tauri/target/debug/tuic-hook — this build
+      # populates exactly that path). Almost no dependencies, so it's fast.
+      - name: Build tuic-hook (needed by agent_hook.rs tests)
+        if: matrix.platform != 'windows-latest'
+        working-directory: src-tauri
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo build --package tuic-hook
 
       - name: Clippy
         working-directory: src-tauri

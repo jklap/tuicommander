@@ -82,6 +82,7 @@
 - [MCP Proxy Hub](./backend/mcp-proxy.md)
 - [Voice Dictation](./backend/dictation.md)
 - [Alacritty Integration](./backend/alacritty-integration.md)
+- [tuic-hook](./backend/tuic-hook.md)
 - [VT100-to-PWA Protocol](./backend/vt100-PWA.md)
 
 ---

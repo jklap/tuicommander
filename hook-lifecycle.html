@@ -1,0 +1,587 @@
+<title>TUICommander Hook Lifecycle</title>
+<meta name="description" content="How TUICommander drives agent busy/idle/awaiting state from each agent's own hook system — every Claude Code hook event, what tuic-hook extracts from it, what OSC 7770 verb reaches the wire, and what feature inside TUICommander consumes it.">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@500;600;700&family=Literata:ital,opsz,wght@0,14..72,400;0,14..72,500;0,14..72,600;1,14..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --bg:#e8e5dc;
+  --surface:#dcd8cb;
+  --surface-2:#f1eee5;
+  --ink:#20241f;
+  --ink-muted:#5b594c;
+  --rule:#b9b3a0;
+  --accent-event:#a35a0a;
+  --accent-verb:#286966;
+  --accent-feature:#6b4a8a;
+  --accent-warn:#8a3b2e;
+  --shadow: 0 1px 0 rgba(32,36,31,0.06);
+  --font-display:'Big Shoulders', 'Arial Narrow', sans-serif;
+  --font-body:'Literata', Georgia, 'Times New Roman', serif;
+  --font-mono:'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15181a;
+    --surface:#1d2023;
+    --surface-2:#101214;
+    --ink:#e8e4d6;
+    --ink-muted:#9c9887;
+    --rule:#33362f;
+    --accent-event:#e2953f;
+    --accent-verb:#59a6a0;
+    --accent-feature:#b28fd1;
+    --accent-warn:#c15b47;
+    --shadow: 0 1px 0 rgba(0,0,0,0.4);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15181a;
+  --surface:#1d2023;
+  --surface-2:#101214;
+  --ink:#e8e4d6;
+  --ink-muted:#9c9887;
+  --rule:#33362f;
+  --accent-event:#e2953f;
+  --accent-verb:#59a6a0;
+  --accent-feature:#b28fd1;
+  --accent-warn:#c15b47;
+  --shadow: 0 1px 0 rgba(0,0,0,0.4);
+}
+
+*{ box-sizing:border-box; }
+html{ -webkit-text-size-adjust:100%; }
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--font-body);
+  font-size:16px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{ background:var(--accent-event); color:var(--surface-2); }
+
+a{ color:var(--accent-verb); text-decoration-thickness:1px; }
+a:focus-visible, button:focus-visible, summary:focus-visible{
+  outline:2px solid var(--accent-event);
+  outline-offset:2px;
+  border-radius:2px;
+}
+
+code, .mono{ font-family:var(--font-mono); }
+
+.wrap{ max-width:960px; margin:0 auto; padding:0 24px 96px; }
+
+/* ---------- nameplate ---------- */
+.nameplate{ border-bottom:1px solid var(--rule); padding:56px 0 28px; }
+.nameplate .eyebrow{
+  font-family:var(--font-mono); font-size:12.5px; letter-spacing:0.14em;
+  text-transform:uppercase; color:var(--accent-event);
+  display:flex; align-items:center; gap:10px;
+}
+.nameplate .eyebrow::before{ content:""; width:7px; height:7px; background:var(--accent-event); display:inline-block; }
+.nameplate h1{
+  font-family:var(--font-display); font-weight:700;
+  font-size:clamp(2.4rem, 5vw, 3.6rem); letter-spacing:0.01em;
+  text-transform:uppercase; line-height:0.98; margin:10px 0 14px; text-wrap:balance;
+}
+.nameplate p{ max-width:66ch; color:var(--ink-muted); font-size:1.05rem; margin:0; }
+.nameplate .src{ margin-top:18px; font-family:var(--font-mono); font-size:12.5px; color:var(--ink-muted); }
+.nameplate .src code{ color:var(--ink); }
+
+/* ---------- quick nav ---------- */
+.quicknav{
+  position:sticky; top:0; z-index:5; background:var(--bg);
+  border-bottom:1px solid var(--rule); margin:0 -24px 40px; padding:0 24px;
+}
+.quicknav ul{
+  display:flex; flex-wrap:wrap; gap:2px 18px; list-style:none; margin:0; padding:12px 0;
+  font-family:var(--font-mono); font-size:12.5px;
+}
+.quicknav a{ color:var(--ink-muted); text-decoration:none; text-transform:uppercase; letter-spacing:0.06em; }
+.quicknav a:hover{ color:var(--accent-event); }
+
+/* ---------- pipeline diagram ---------- */
+.pipeline{ margin:8px 0 56px; }
+.pipeline-scroll{ overflow-x:auto; padding-bottom:6px; }
+.pipeline svg{ display:block; min-width:900px; }
+.pipeline text{ font-family:var(--font-mono); }
+.pipeline .stage-label{ font-size:10.5px; letter-spacing:0.06em; text-transform:uppercase; fill:var(--ink-muted); }
+.pipeline .stage-title{ font-size:13px; font-weight:600; fill:var(--ink); }
+.pipeline .arrow{ stroke:var(--rule); stroke-width:1.5; fill:none; }
+.pipeline .arrowhead{ fill:var(--rule); }
+.pipeline .box{ fill:var(--surface); stroke:var(--rule); stroke-width:1; }
+.pipeline .box.event{ stroke:var(--accent-event); }
+.pipeline .box.verb{ stroke:var(--accent-verb); }
+.pipeline .box.feature{ stroke:var(--accent-feature); }
+
+/* ---------- module cards ---------- */
+.module{ margin-bottom:56px; }
+.module-head{
+  display:flex; align-items:baseline; gap:14px;
+  border-bottom:2px solid var(--ink); padding-bottom:8px; margin-bottom:6px;
+}
+.module-head h2{
+  font-family:var(--font-display); font-weight:700; font-size:1.7rem;
+  text-transform:uppercase; letter-spacing:0.01em; margin:0;
+}
+.module-head .count{ font-family:var(--font-mono); color:var(--ink-muted); font-size:13px; }
+.module > .dek{ color:var(--ink-muted); max-width:70ch; margin:10px 0 28px; }
+
+.pill{
+  display:inline-block; font-family:var(--font-mono); font-size:10.5px;
+  letter-spacing:0.05em; text-transform:uppercase;
+  padding:2px 7px; border-radius:3px; border:1px solid currentColor; line-height:1.6;
+}
+.pill.event{ color:var(--accent-event); }
+.pill.verb{ color:var(--accent-verb); }
+.pill.feature{ color:var(--accent-feature); }
+.pill.warn{ color:var(--accent-warn); }
+
+/* event entries */
+.evt{ border:1px solid var(--rule); background:var(--surface); padding:20px 22px; margin-bottom:14px; box-shadow:var(--shadow); }
+.evt-top{ display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:10px; flex-wrap:wrap; }
+.evt-top .name{ font-family:var(--font-mono); font-weight:600; font-size:1.05rem; }
+.evt-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px; margin-top:14px; }
+.evt-field{ }
+.evt-field h4{
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase;
+  color:var(--ink-muted); margin:0 0 6px; font-weight:500;
+}
+.evt-field .val{ font-family:var(--font-mono); font-size:13.5px; overflow-wrap:break-word; word-break:break-word; }
+.evt-field .val.arrow-chain{ display:flex; flex-direction:column; gap:3px; }
+.evt p.note{ color:var(--ink-muted); font-size:0.92rem; margin:14px 0 0; max-width:70ch; }
+
+/* comparison table */
+.tablewrap{ overflow-x:auto; margin:8px 0 12px; }
+table{ border-collapse:collapse; width:100%; font-size:14px; }
+th, td{ border:1px solid var(--rule); padding:9px 12px; text-align:left; vertical-align:top; }
+th{
+  background:var(--surface-2); font-family:var(--font-mono); font-size:11px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--ink-muted); font-weight:500;
+}
+td code{ font-size:13px; }
+tr:nth-child(even) td{ background:var(--surface-2); }
+
+/* why-shaped-this-way cards */
+.reason{ border-left:3px solid var(--accent-warn); background:var(--surface); padding:16px 20px; margin-bottom:14px; }
+.reason h4{ margin:0 0 8px; font-family:var(--font-display); font-weight:600; font-size:1.05rem; text-transform:uppercase; letter-spacing:0.01em; }
+.reason p{ margin:0; color:var(--ink); }
+.reason p + p{ margin-top:8px; }
+
+/* ownership section */
+.badges{ display:flex; gap:10px; flex-wrap:wrap; margin:16px 0; }
+.badge{
+  font-family:var(--font-mono); font-size:12px; padding:6px 12px; border:1px solid var(--rule);
+  background:var(--surface-2); display:flex; align-items:center; gap:8px;
+}
+.badge .dot{ width:8px; height:8px; border-radius:50%; }
+.badge.installed .dot{ background:#4a8f5c; }
+.badge.outdated .dot{ background:var(--accent-warn); }
+.badge.notinstalled .dot{ background:var(--ink-muted); }
+
+footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; color:var(--ink-muted); font-size:13px; }
+
+@media (prefers-reduced-motion: reduce){ *{ scroll-behavior:auto !important; } }
+</style>
+
+<div class="wrap">
+
+  <div class="nameplate">
+    <div class="eyebrow">Reference</div>
+    <h1>Hook Lifecycle</h1>
+    <p>How TUICommander drives an agent's busy / idle / awaiting state from the agent's own hook
+    system — every event, what gets extracted from it, what reaches the wire, and what feature
+    inside TUICommander consumes it on the other end.</p>
+    <div class="src">Tracked alongside <code>src-tauri/src/agent_hook.rs</code> and
+    <code>src-tauri/crates/tuic-hook/</code>, following the same convention as
+    <code>tuic-escape-sequences.html</code>. See also <code>docs/backend/tuic-hook.md</code> for the
+    developer-doc version of the CLI reference below.</div>
+  </div>
+
+  <div class="quicknav">
+    <ul>
+      <li><a href="#pipeline">Pipeline</a></li>
+      <li><a href="#cli">CLI surface</a></li>
+      <li><a href="#claude">Claude events</a></li>
+      <li><a href="#agents">Other agents</a></li>
+      <li><a href="#why">Why it's shaped this way</a></li>
+      <li><a href="#ownership">Ownership &amp; install</a></li>
+    </ul>
+  </div>
+
+  <section class="pipeline" id="pipeline">
+    <div class="module-head"><h2>The Chain</h2><span class="count">event → wire → feature</span></div>
+    <p class="dek">One path, six stages. Every hook — Claude, Gemini, Grok, Codex — travels the same
+    chain; only the map at stage 2 and the payload at stage 3 differ per agent.</p>
+    <div class="pipeline-scroll">
+      <svg viewBox="0 0 1180 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Hook lifecycle pipeline: Claude Code fires a hook event, agent_hook.rs looks up the guarded shell command, tuic-hook resolves the tty and emits OSC 7770 verb equals payload, TUICommander's PTY reader decodes it in the verb switch, and the matching feature consumes it.">
+        <!-- stage boxes -->
+        <g>
+          <rect class="box event" x="10" y="60" width="170" height="90" rx="2"/>
+          <text class="stage-label" x="24" y="80">1 · claude code</text>
+          <text class="stage-title" x="24" y="102">Hook event fires</text>
+          <text class="stage-title" x="24" y="120" fill="var(--ink-muted)" font-size="12">PreToolUse, Stop, …</text>
+          <text class="stage-title" x="24" y="138" fill="var(--ink-muted)" font-size="12">stdin: JSON payload</text>
+        </g>
+        <path class="arrow" d="M180 105 H 218" marker-end="url(#arrow)"/>
+
+        <g>
+          <rect class="box" x="222" y="60" width="170" height="90" rx="2"/>
+          <text class="stage-label" x="236" y="80">2 · agent_hook.rs</text>
+          <text class="stage-title" x="236" y="102">Guarded command</text>
+          <text class="stage-title" x="236" y="120" fill="var(--ink-muted)" font-size="12">TUIC_SESSION + [-x $B]</text>
+          <text class="stage-title" x="236" y="138" fill="var(--ink-muted)" font-size="12">invokes tuic-hook</text>
+        </g>
+        <path class="arrow" d="M392 105 H 430" marker-end="url(#arrow)"/>
+
+        <g>
+          <rect class="box" x="434" y="60" width="170" height="90" rx="2"/>
+          <text class="stage-label" x="448" y="80">3 · tuic-hook</text>
+          <text class="stage-title" x="448" y="102">Resolve tty, parse</text>
+          <text class="stage-title" x="448" y="120" fill="var(--ink-muted)" font-size="12">native tty lookup</text>
+          <text class="stage-title" x="448" y="138" fill="var(--ink-muted)" font-size="12">serde_json extraction</text>
+        </g>
+        <path class="arrow" d="M604 105 H 642" marker-end="url(#arrow)"/>
+
+        <g>
+          <rect class="box verb" x="646" y="60" width="170" height="90" rx="2"/>
+          <text class="stage-label" x="660" y="80">4 · osc 7770</text>
+          <text class="stage-title" x="660" y="102">verb=payload</text>
+          <text class="stage-title" x="660" y="120" fill="var(--ink-muted)" font-size="12">written to the tty</text>
+          <text class="stage-title" x="660" y="138" fill="var(--ink-muted)" font-size="12">percent-encoded text</text>
+        </g>
+        <path class="arrow" d="M816 105 H 854" marker-end="url(#arrow)"/>
+
+        <g>
+          <rect class="box" x="858" y="60" width="170" height="90" rx="2"/>
+          <text class="stage-label" x="872" y="80">5 · pty.rs</text>
+          <text class="stage-title" x="872" y="102">Verb switch</text>
+          <text class="stage-title" x="872" y="120" fill="var(--ink-muted)" font-size="12">TermEvent::Tuic</text>
+          <text class="stage-title" x="872" y="138" fill="var(--ink-muted)" font-size="12">decode + dispatch</text>
+        </g>
+        <path class="arrow" d="M1028 105 H 1066" marker-end="url(#arrow)"/>
+
+        <g>
+          <rect class="box feature" x="1070" y="60" width="100" height="90" rx="2"/>
+          <text class="stage-label" x="1082" y="80">6 · feature</text>
+          <text class="stage-title" x="1082" y="102" font-size="12">block ticks,</text>
+          <text class="stage-title" x="1082" y="118" font-size="12">badges,</text>
+          <text class="stage-title" x="1082" y="134" font-size="12">metadata</text>
+        </g>
+
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path class="arrowhead" d="M0 0 L10 5 L0 10 z"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <p class="note">Two things happen twice on purpose: the <code>TUIC_SESSION</code> check runs both
+    in the shell guard (stage 2, so an ordinary terminal never even spawns the binary) and inside
+    <code>tuic-hook</code> itself (stage 3, for correctness under direct invocation). And the tty
+    written in stage 4 is resolved <em>natively</em> in stage 3 — no <code>ps</code>, validated
+    against a real PTY by comparing its output to the shell's own <code>tty</code> builtin.</p>
+  </section>
+
+  <section class="module" id="cli">
+    <div class="module-head"><h2>The CLI Surface</h2><span class="count">7 flags, 3 env vars</span></div>
+    <p class="dek">By default, stage 3 of the pipeline above is driven by <code>hook_event_name</code>
+    alone — the Claude Code events table below <em>is</em> the derivation table
+    (<code>DERIVATIONS</code> in <code>crates/tuic-hook/src/main.rs</code>). Every flag here
+    overrides its derived counterpart rather than replacing derivation outright; none are required
+    for a plain Claude Code hook. Gemini/Grok/Codex (further down) haven't been verified to send
+    <code>hook_event_name</code> in the same shape, so their maps still pass <code>--state</code>
+    explicitly, exactly as before derivation existed.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Flag</th><th>Overrides</th></tr></thead>
+        <tbody>
+          <tr><td><code>--state &lt;busy|awaiting|idle&gt;</code></td><td>The derived state, if any.</td></tr>
+          <tr><td><code>--toolfail &lt;code&gt;</code></td><td>The derived <code>toolfail</code>, with a fixed value.</td></tr>
+          <tr><td><code>--toolfail-from-stdin</code></td><td>The derived <code>toolfail</code>, extracting <code>exit_code</code> itself (legacy alias — kept for a binary/settings version mismatch during rollout).</td></tr>
+          <tr><td><code>--emit-session</code></td><td>Forces the session_id/cwd/transcript_path scrape (legacy alias).</td></tr>
+          <tr><td><code>--emit-tool</code></td><td>Forces the tool_name scrape (legacy alias).</td></tr>
+          <tr><td><code>--emit-notify</code></td><td>Forces the message scrape (legacy alias).</td></tr>
+          <tr><td><code>--version</code> / <code>--help</code></td><td>Bypasses the <code>TUIC_SESSION</code> gate entirely; prints and exits.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="color:var(--ink-muted); margin:16px 0 8px;">Environment:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Variable</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>TUIC_SESSION</code></td><td>Must be set and non-empty, or every flag above is a no-op.</td></tr>
+          <tr><td><code>TUIC_HOOK_TTY</code></td><td>Overrides the resolved tty write target — test seam only.</td></tr>
+          <tr><td><code>TUIC_HOOK_DEBUG</code></td><td>If set, prints the resolved tty path to stderr.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Unrecognized flags, flags missing their value, and an unrecognized
+    <code>hook_event_name</code> are all silently ignored, never errors — a stale binary meeting a
+    future flag or event must degrade gracefully, not fail the hook. Reading stdin is no longer
+    conditional on which flags are passed: every fire reads it now (bounded, 1&nbsp;MiB — generous
+    on purpose, since a failed tool call's captured output can be large, and a payload that fails
+    to parse now costs the whole fire's derivation, not just one field), since knowing
+    <code>hook_event_name</code> requires it — measured at roughly half a millisecond of added
+    cost per fire, dominated by process-spawn overhead rather than the read itself. The read runs
+    on a background thread with a 500&nbsp;ms budget, so a caller whose stdin-closing behavior is
+    unverified (Gemini/Grok/Codex never touched stdin at all before derivation existed) can never
+    hang it; the same thread keeps draining anything written past the 1&nbsp;MiB cap afterward, so
+    a larger caller write never blocks on a full pipe either.</p>
+  </section>
+
+  <section class="module" id="claude">
+    <div class="module-head"><h2>Claude Code Events</h2><span class="count">9 hooks</span></div>
+    <p class="dek">Every event in <code>claude_hook_map()</code>, in lifecycle order. "Extracts"
+    lists what <code>tuic-hook</code> pulls from the event's stdin JSON; a dash means the event
+    carries no payload TUIC reads. All of it below is now <em>derived</em> from
+    <code>hook_event_name</code> by the binary itself, not baked into the installed command's
+    argv — the one exception is <code>PreToolUse</code>'s explicit <code>--state awaiting</code>
+    override, called out where it appears.</p>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">SessionStart</span><span class="pill event">busy</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">— (all)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">session_id, cwd, transcript_path</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val arrow-chain">
+          <span class="pill verb">ccsession</span><span class="pill verb">cwd</span>
+          <span class="pill verb">transcript</span><span class="pill verb">state=busy</span>
+        </div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val"><span class="pill feature">AgentMetadata</span> — open for a future authoritative session binding / transcript-history feature; no consumer yet.</div></div>
+      </div>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">UserPromptSubmit</span><span class="pill event">busy</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">— (all)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">—</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val"><span class="pill verb">state=busy</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val"><code>handle_tuic_state</code> → shell busy + turn-block start; green tick if the submitted line was ≥10 words.</div></div>
+      </div>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">PreToolUse</span><span class="pill event">awaiting</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">AskUserQuestion&#124;ExitPlanMode</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">tool_name</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val arrow-chain"><span class="pill verb">tool</span><span class="pill verb">state=awaiting</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val">Question overlay (<code>awaiting_input</code>) + <code>AgentMetadata{tool_name}</code>.</div></div>
+      </div>
+      <p class="note">Narrow matcher only — see <a href="#why-broad">why there's no broad entry</a>.
+      The bare event derives "busy" (correct for Grok's broad, unmatched <code>PreToolUse</code>);
+      this entry carries an explicit <code>--state awaiting</code> override, since that's what the
+      matcher means specifically here. <code>tool_name</code> scraping is still derived, not a flag.</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">PostToolUse</span><span class="pill event">busy</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">AskUserQuestion&#124;ExitPlanMode</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">tool_name</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val arrow-chain"><span class="pill verb">tool</span><span class="pill verb">state=busy</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val">Clears the awaiting overlay; back to busy.</div></div>
+      </div>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">PostToolUseFailure</span><span class="pill warn">toolfail</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">— (every tool)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">exit_code (default "1" if absent/malformed)</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val"><span class="pill verb">toolfail=&lt;code&gt;</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val"><code>turn_error_flags</code> → red scrollbar tick, read-and-cleared at the next busy→idle edge.</div></div>
+      </div>
+      <p class="note"><strong>The headline fix.</strong> Used to require <code>jq</code> on <code>PATH</code>
+      to read this payload at all — absent, the whole hook silently no-op'd and red ticks fell back
+      to text-pattern matching. <code>tuic-hook</code> parses the JSON itself, deriving the
+      <code>toolfail</code> extraction from <code>hook_event_name</code> rather than an explicit
+      <code>--toolfail-from-stdin</code> flag. Trade-off: if the payload itself is unparseable, this
+      fire can't be identified as <code>PostToolUseFailure</code> at all, so nothing is emitted — the
+      old explicit flag guaranteed a <code>toolfail=1</code> fallback even then. Accepted because this
+      JSON is Claude Code's own generated payload, not user input.</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">Notification</span><span class="pill event">awaiting</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">— (all)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">message</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val arrow-chain"><span class="pill verb">notify</span><span class="pill verb">state=awaiting</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val">Question overlay + <code>AgentMetadata{message}</code> — precise awaiting reason, open for a future prompt-text upgrade.</div></div>
+      </div>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">Stop</span><span class="pill event">idle</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">— (all)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">—</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val"><span class="pill verb">state=idle</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val">Shell idle + turn-block end.</div></div>
+      </div>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">StopFailure</span><span class="pill warn">toolfail + idle</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">— (all)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">— (fixed sentinel "1")</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val arrow-chain"><span class="pill verb">toolfail=1</span><span class="pill verb">state=idle</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val">Both a red tick <em>and</em> idle from one event — see <a href="#why-order">ordering below</a>.</div></div>
+      </div>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">SessionEnd</span><span class="pill event">idle</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">— (all)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">—</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val"><span class="pill verb">state=idle</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val">Badge clears if the session ends outside a Stop.</div></div>
+      </div>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">Elicitation</span><span class="pill event">awaiting</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">— (all)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">—</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val"><span class="pill verb">state=awaiting</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val">An MCP server's <code>elicitation/create</code> mid-call prompt — same awaiting badge as a `Notification`.</div></div>
+      </div>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">ElicitationResult</span><span class="pill event">busy</span></div>
+      <div class="evt-grid">
+        <div class="evt-field"><h4>Matcher</h4><div class="val">— (all)</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">—</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val"><span class="pill verb">state=busy</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val">Retracts the awaiting badge once the elicitation prompt is answered, back to busy.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="module" id="agents">
+    <div class="module-head"><h2>The Other Three Agents</h2><span class="count">shared emit path</span></div>
+    <p class="dek">Gemini, Grok, and Codex share <code>tuic-hook</code> and the OSC 7770 wire format
+    with Claude, but their own maps are turn-level only — no payload extraction, no
+    <code>toolfail</code>. OpenCode is a separate Bun/TS plugin (own file, own emitter) and isn't
+    part of this table.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Agent</th><th>Settings location</th><th>Events → state</th><th>Awaiting source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Gemini</td>
+            <td><code>~/.gemini/settings.json</code></td>
+            <td><code>BeforeAgent</code>/<code>BeforeTool</code> → busy · <code>AfterAgent</code> → idle</td>
+            <td><code>Notification</code> → awaiting</td>
+          </tr>
+          <tr>
+            <td>Grok</td>
+            <td><code>~/.grok/hooks/tuic.json</code> (own file)</td>
+            <td><code>UserPromptSubmit</code>/<code>PreToolUse</code> → busy · <code>Stop</code> → idle</td>
+            <td>none — falls back to the OSC-0 title heuristic</td>
+          </tr>
+          <tr>
+            <td>Codex</td>
+            <td><code>~/.codex/hooks.json</code> + <code>config.toml</code> flag</td>
+            <td><code>SessionStart</code>/<code>UserPromptSubmit</code> → busy · <code>Stop</code> → idle</td>
+            <td>none — no <code>SessionEnd</code> either; badge clears via <code>Stop</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="module" id="why">
+    <div class="module-head"><h2>Why It's Shaped This Way</h2><span class="count">4 decisions</span></div>
+    <p class="dek">Non-obvious choices, previously buried in code comments and defended only by a
+    test name. Each one broke something the first time it was gotten wrong.</p>
+
+    <div class="reason" id="why-broad">
+      <h4>No broad, empty-matcher <code>PreToolUse</code> entry</h4>
+      <p>An early version fired a bare <code>busy</code> on every <code>PreToolUse</code>, regardless
+      of tool. It was redundant with <code>UserPromptSubmit</code>'s single busy call for the
+      turn-level busy/idle atomic, and it was the root cause of the green-tick scrollbar marker
+      firing once per tool call instead of once per prompt. The narrow
+      <code>AskUserQuestion&#124;ExitPlanMode</code> matcher is deliberate and is guarded by a test
+      (<code>claude_map_has_no_broad_pretooluse_busy_entry</code>) specifically so it doesn't come back.</p>
+    </div>
+
+    <div class="reason" id="why-order">
+      <h4><code>toolfail</code> always precedes <code>state</code> on the wire</h4>
+      <p><code>handle_tuic_state</code> reads-and-clears <code>turn_error_flags</code> at the exact
+      moment it processes a <code>state=idle</code> transition. If <code>toolfail</code> arrived
+      after <code>state=idle</code> on the wire, the flag it sets would be read one turn too late —
+      or never, if the next turn ends cleanly. <code>tuic-hook</code>'s <code>build_emissions</code>
+      partitions <code>toolfail</code> to the front of the emission list regardless of argv order, so
+      this can't regress by accident.</p>
+    </div>
+
+    <div class="reason">
+      <h4>Success/failure hooks are mutually exclusive branches, not a sequence</h4>
+      <p><code>PostToolUse</code> fires only on success and carries no error field at all;
+      <code>PostToolUseFailure</code> fires only on failure and carries <code>exit_code</code>. They
+      are two branches of one lifecycle point, never both for the same tool call — same for
+      <code>Stop</code>/<code>StopFailure</code>. Treating them as sequential (checking one, then the
+      other) would double-count or miss a transition.</p>
+    </div>
+
+    <div class="reason">
+      <h4>The shell guard exists twice, and neither copy is redundant</h4>
+      <p><code>[ -n "$TUIC_SESSION" ]</code> in the installed command avoids spawning
+      <code>tuic-hook</code> at all in an ordinary terminal — worth roughly 4ms per fire on its own.
+      The identical check inside the binary's <code>main()</code> exists for direct invocation
+      (testing, debugging, a future caller that isn't the installed hook command) — dropping either
+      copy re-opens a real gap the other doesn't cover.</p>
+    </div>
+  </section>
+
+  <section class="module" id="ownership">
+    <div class="module-head"><h2>Ownership &amp; Install Mechanics</h2><span class="count">3 strategies</span></div>
+    <p class="dek">All decided by <code>agent_hook_installer.rs</code>, which is sentinel-keyed and
+    therefore agnostic to what a command actually contains.</p>
+
+    <div class="evt-grid" style="margin-bottom:20px;">
+      <div class="evt-field">
+        <h4>Merge</h4>
+        <div class="val" style="font-family:var(--font-body); font-size:0.95rem;">Claude, Gemini, Codex. Prune-then-append into a shared <code>settings.json</code> — every non-sentineled entry (user or wiz hooks) survives untouched.</div>
+      </div>
+      <div class="evt-field">
+        <h4>Own file</h4>
+        <div class="val" style="font-family:var(--font-body); font-size:0.95rem;">Grok. TUIC owns the whole file; install writes it, uninstall deletes it, siblings in the directory are never touched.</div>
+      </div>
+      <div class="evt-field">
+        <h4>Own file + TOML flag</h4>
+        <div class="val" style="font-family:var(--font-body); font-size:0.95rem;">Codex additionally needs <code>[features] hooks = true</code> in <code>config.toml</code>, toggled symmetrically with the hooks file so neither can strand the other.</div>
+      </div>
+    </div>
+
+    <p style="color:var(--ink-muted); margin-bottom:8px;">The Settings badge, from <code>InstallState</code>:</p>
+    <div class="badges">
+      <div class="badge installed"><span class="dot"></span>installed — byte-identical to the current map</div>
+      <div class="badge outdated"><span class="dot"></span>outdated — sentineled commands present, differ from the current map</div>
+      <div class="badge notinstalled"><span class="dot"></span>not installed — no sentineled commands found</div>
+    </div>
+    <p class="note">A startup migration (<code>reinstall_outdated_hooks</code>) re-installs any agent
+    that is enabled but <code>Outdated</code> — without it, a user who enabled hooks under an older
+    TUICommander version would keep the old shell-only commands (and the <code>jq</code> dependency)
+    indefinitely, since nothing besides the Settings toggle used to trigger a re-install.</p>
+  </section>
+
+  <footer>
+    Reflects <code>src-tauri/src/agent_hook.rs</code>, <code>agent_hook_installer.rs</code>,
+    <code>agent_hook_commands.rs</code>, <code>hook_binary.rs</code>, <code>pty.rs</code>'s OSC 7770
+    verb switch, and <code>src-tauri/crates/tuic-hook/</code>. Tracked by git — keep in sync per
+    <code>docs/sync-matrix.md</code>'s "Native hook instrumentation" row.
+  </footer>
+
+</div>

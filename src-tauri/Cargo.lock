@@ -8790,6 +8790,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuic-hook"
+version = "1.7.4"
+dependencies = [
+ "libc",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "tuicommander"
 version = "1.7.5"
 dependencies = [

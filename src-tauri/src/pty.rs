@@ -4373,6 +4373,32 @@ fn tuic_state_awaiting_event(
     }
 }
 
+/// Inverse of `tuic-hook`'s `payload::encode` (percent-encoding over the RFC
+/// 3986 unreserved set). Any `%XX` escape that isn't valid hex, or that would
+/// run past the end of the string, is left as a literal `%` rather than
+/// dropped or erroring — a hook must never be able to desync this parser, so
+/// a malformed escape degrades to "pass the bytes through," not a panic.
+/// Invalid UTF-8 after decoding degrades the same way, via lossy replacement.
+fn percent_decode_osc_payload(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 3 <= bytes.len()
+            && let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            out.push(byte);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Whether `agent_type`'s config enables native-hook instrumentation. Resolved
 /// once when the session's agent type becomes known (config changes apply on the
 /// next agent launch, matching when the hooks themselves take effect).
@@ -5310,6 +5336,35 @@ impl ChunkProcessor {
                             // payload value is intentionally never parsed here.
                             state.turn_error_flags.insert(session_id.to_string(), ());
                         }
+                        // `ccsession`/`cwd`/`transcript`/`tool`/`notify`: free-text
+                        // metadata `tuic-hook` extracted natively from a Claude Code
+                        // hook's stdin JSON (SessionStart/Pre/PostToolUse/
+                        // Notification). Percent-encoded on the wire since these
+                        // carry arbitrary text (paths, tool names, messages) that
+                        // could otherwise contain the OSC param delimiter (`;`) or
+                        // control bytes; decode once here and forward as a generic
+                        // `AgentMetadata` event for the frontend to pick up as
+                        // features consume it (none do yet — see `output_parser.rs`).
+                        "ccsession" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "session_id".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "cwd" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "cwd".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "transcript" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "transcript_path".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "tool" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "tool_name".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "notify" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "message".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
                         _ => {}
                     },
                     TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {}
@@ -21497,9 +21552,9 @@ mod tests {
     #[test]
     fn tuic_osc_toolfail_with_non_numeric_payload_still_sets_the_flag() {
         // The Rust dispatch never parses the payload — presence of the event
-        // is the whole signal (see agent_hook's post_tool_use_failure_hook_command
-        // doc comment) — so a malformed/non-numeric payload from a flaky jq
-        // extraction must not be silently dropped.
+        // is the whole signal (see tuic-hook's `DERIVATIONS`/`toolfail_from_exit_code`
+        // in crates/tuic-hook/src/main.rs) — so a malformed/non-numeric payload
+        // must not be silently dropped.
         let state = crate::state::tests_support::make_test_app_state();
         let session_id = "test-toolfail-garbage";
         agent_session(&state, session_id, SHELL_IDLE);
@@ -21517,6 +21572,103 @@ mod tests {
             &state,
         );
         assert!(state.turn_error_flags.get(session_id).is_some());
+    }
+
+    /// One test per new verb, table-driven: each must reach the event bus as
+    /// `ParsedEvent::AgentMetadata` with the right `field` name and a
+    /// correctly percent-decoded `value` — mirrors `tuic_osc_toolfail_sets_turn_error_flag`
+    /// above, but asserting on the emitted event rather than a state side table,
+    /// since `AgentMetadata` (unlike `toolfail`) has none.
+    #[test]
+    fn tuic_osc_metadata_verbs_decode_and_emit_agent_metadata() {
+        let cases = [
+            ("ccsession", "abc123", "session_id", "abc123"),
+            ("cwd", "%2FUsers%2Fme%2Fproject", "cwd", "/Users/me/project"),
+            (
+                "transcript",
+                "%2Ftmp%2Ft.jsonl",
+                "transcript_path",
+                "/tmp/t.jsonl",
+            ),
+            ("tool", "Bash", "tool_name", "Bash"),
+            (
+                "notify",
+                "needs%20your%20input%3B%20now",
+                "message",
+                "needs your input; now",
+            ),
+        ];
+
+        for (verb, wire_payload, expected_field, expected_value) in cases {
+            let state = crate::state::tests_support::make_test_app_state();
+            let session_id = format!("test-metadata-{verb}");
+            agent_session(&state, &session_id, SHELL_IDLE);
+            state.vt_log_buffers.insert(
+                session_id.clone(),
+                Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+            );
+            let silence = state.silence_states.get(&session_id).unwrap().clone();
+            let mut processor = ChunkProcessor::new(None, None);
+
+            let mut rx = state.event_bus.subscribe();
+            processor.process_chunk(
+                &format!("\x1b]7770;{verb}={wire_payload}\x07"),
+                &silence,
+                &session_id,
+                &state,
+            );
+
+            let event = rx
+                .try_recv()
+                .unwrap_or_else(|_| panic!("event bus must receive a PtyParsed for verb {verb}"));
+            match event {
+                crate::state::AppEvent::PtyParsed { parsed, .. } => {
+                    assert_eq!(
+                        parsed.get("type").and_then(|v| v.as_str()),
+                        Some("agent-metadata"),
+                        "verb {verb}: wrong event type: {parsed}"
+                    );
+                    assert_eq!(
+                        parsed.get("field").and_then(|v| v.as_str()),
+                        Some(expected_field),
+                        "verb {verb}: wrong field: {parsed}"
+                    );
+                    assert_eq!(
+                        parsed.get("value").and_then(|v| v.as_str()),
+                        Some(expected_value),
+                        "verb {verb}: payload not decoded correctly: {parsed}"
+                    );
+                }
+                other => panic!("verb {verb}: unexpected event variant: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn percent_decode_osc_payload_passes_through_plain_text() {
+        assert_eq!(percent_decode_osc_payload("Bash"), "Bash");
+    }
+
+    #[test]
+    fn percent_decode_osc_payload_decodes_escapes() {
+        assert_eq!(
+            percent_decode_osc_payload("needs%20your%20input%3B%20now"),
+            "needs your input; now"
+        );
+    }
+
+    #[test]
+    fn percent_decode_osc_payload_tolerates_a_trailing_lone_percent() {
+        // Must not panic on a truncated/malformed escape at the end of input —
+        // an OSC payload is attacker-adjacent (an agent's own hook stdin), so
+        // decoding must degrade gracefully, never panic.
+        assert_eq!(percent_decode_osc_payload("abc%"), "abc%");
+        assert_eq!(percent_decode_osc_payload("abc%2"), "abc%2");
+    }
+
+    #[test]
+    fn percent_decode_osc_payload_tolerates_invalid_hex() {
+        assert_eq!(percent_decode_osc_payload("abc%ZZdef"), "abc%ZZdef");
     }
 
     #[test]
