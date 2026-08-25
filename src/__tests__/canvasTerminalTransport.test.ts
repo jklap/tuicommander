@@ -198,6 +198,21 @@ describe("canvasTerminalTransport", () => {
 
 			expect(invoke).not.toHaveBeenCalledWith("unsubscribe_terminal_grid", expect.anything());
 		});
+
+		// This is now the ONLY osc133 subscription in desktop mode — Terminal.tsx used to
+		// register a second, separate `pty-osc133-<sid>` listener that double-dispatched
+		// every real marker to terminalsStore.handleOsc133 (a duplicated "D" pushed the
+		// completed block twice). That listener was removed; this pins the one that remains.
+		it("registers exactly one osc133 listener, on pty-osc133-<sessionId>", async () => {
+			const { listen } = await import("@tauri-apps/api/event");
+			const transport = new TauriTransport("session-1");
+			const handler = vi.fn();
+			await transport.subscribe(vi.fn());
+			await transport.onEvent("osc133", handler);
+
+			const osc133Calls = vi.mocked(listen).mock.calls.filter(([name]) => name === "pty-osc133-session-1");
+			expect(osc133Calls).toHaveLength(1);
+		});
 	});
 
 	describe("WsTransport", () => {
