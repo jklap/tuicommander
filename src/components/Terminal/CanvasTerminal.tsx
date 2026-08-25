@@ -88,7 +88,7 @@ import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } fr
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
-import { buildScrollbarMarksHtml } from "./scrollbarMarks";
+import { buildScrollbarMarksHtml, shouldShowScrollbar } from "./scrollbarMarks";
 import { scrollbarThumb } from "./scrollbarThumb";
 import {
 	ANSWER_MARKER_RE,
@@ -1018,12 +1018,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!scrollbarRef || !scrollThumbRef) return;
 		const total = frame.historySize + (frame.screenRows || lastResizeRows || 24);
 
-		if (frame.historySize === 0) {
+		const term = terminalsStore.get(props.terminalId);
+		const showScrollbar = shouldShowScrollbar({
+			historySize: frame.historySize,
+			// Same gating as paintScrollbarMarks: `showScrollbarMarks` is the master toggle.
+			showBlockMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showBlockMarks,
+			showPromptMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showPromptMarks,
+			blocks: term?.commandBlocks ?? [],
+			promptLines: term?.userPromptLines ?? [],
+		});
+		if (!showScrollbar) {
 			scrollbarRef.style.display = "none";
 			return;
 		}
 		scrollbarRef.style.display = "block";
 
+		// With zero history, scrollbarThumb() already sizes the thumb to the full
+		// track (ratio 1, top 0) — no drag affordance, just the marks.
 		const thumb = thumbFor(frame);
 		scrollThumbRef.style.height = `${thumb.height}px`;
 		scrollThumbRef.style.transform = `translateY(${thumb.top}px)`;
@@ -3942,6 +3953,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			{/* Scrollbar */}
 			<div
 				ref={scrollbarRef!}
+				data-testid="terminal-scrollbar"
 				style={{
 					position: "absolute",
 					top: "0",
