@@ -66,6 +66,7 @@ src-tauri/target/
 
 # Sidecar binaries (built during cargo tauri build)
 src-tauri/binaries/tuic-bridge-*
+src-tauri/binaries/tuic-hook-*
 docs/research/
 docs/solutions/
 docs/book

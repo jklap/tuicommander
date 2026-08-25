@@ -159,6 +159,21 @@ pub enum ParsedEvent {
         /// "in-use" (session id already locked) or "not-found" (session id not resumable)
         kind: String,
     },
+    /// Free-text metadata extracted natively (by `tuic-hook`) from a Claude
+    /// Code hook's stdin JSON payload — `session_id`/`cwd`/`transcript_path`
+    /// (from `SessionStart`), `tool_name` (from `Pre`/`PostToolUse`), or
+    /// `message` (from `Notification`). Percent-decoded by the time this
+    /// reaches here (see `pty::percent_decode_osc_payload`); the shell-hook
+    /// era had no way to extract or safely transmit any of this. This is a
+    /// generic carrier rather than one variant per field so new fields don't
+    /// need a frontend contract change to land — `field` is a stable,
+    /// forward-open string key, not yet consumed by any UI feature.
+    #[serde(rename = "agent-metadata")]
+    AgentMetadata {
+        /// One of: "session_id" | "cwd" | "transcript_path" | "tool_name" | "message"
+        field: String,
+        value: String,
+    },
 }
 
 /// Payload for ParsedEvent::ChoicePrompt. Separate struct so it can be reused
