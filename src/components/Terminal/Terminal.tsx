@@ -680,13 +680,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				return;
 			}
 
-			// No `pty-osc133` listener here: CanvasTerminal subscribes to the same
-			// event through the transport, and is the only subscriber.
-			// A second desktop delivery would reach a sink that is not idempotent
-			// for the `A` marker — `handleOsc133` finalizes the block the first
-			// delivery had just installed, inventing one empty command block per
-			// prompt. `agent-block` above still feeds the same sink, but that is a
-			// different source for agents with no shell integration, not a copy.
+			// No OSC 133 listener here: shell integration markers are handled by
+			// CanvasTerminal's own subscription through the transport
+			// (canvasTerminalTransport.ts), which is transport-agnostic (works over
+			// WS too) and the sole subscriber. A second desktop-only listener on that
+			// same event used to double-dispatch every real marker to
+			// terminalsStore.handleOsc133 — that sink is not idempotent for the `A`
+			// marker: a duplicated "A" finalized then re-opened the active block, and
+			// a duplicated "D" pushed the completed block twice. `agent-block` above
+			// still feeds the same sink, but that is a different source for agents
+			// with no shell integration, not a copy.
 
 			// Listen for OSC 0/2 title changes from Rust (native renderer)
 			unlistenTitle = await listen<string>(`pty-title-${targetSessionId}`, (event) => {
