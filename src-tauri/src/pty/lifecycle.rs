@@ -224,6 +224,12 @@ pub(crate) const PTY_SPAWN_ATTEMPTS: usize = 3;
 /// and arguments do not become valid after sleeping. Async entry points use the
 /// companion async wrapper so this bounded blocking backoff runs only on Tokio's
 /// blocking pool.
+///
+/// This is also the one place `TUIC_PTY_TTY` gets stamped onto the child's
+/// environment — every production caller opens its pty here, so it's the only
+/// point that has the master handle (and therefore `tty_name()`) available
+/// *and* is guaranteed to run after every caller's own `cmd.env(...)` calls,
+/// which happen inside `build_command()`.
 pub(crate) fn spawn_pty_pair_with_retry<F>(
     size: PtySize,
     build_command: F,
@@ -247,9 +253,30 @@ where
     )
     .map_err(|(attempt, error)| format!("Failed to open PTY (attempt {attempt}): {error}"))?;
 
+    let mut cmd = build_command();
+    // Claude Code (and the other agents this drives) spawns its hook
+    // subprocesses detached from any controlling terminal, so a hook cannot
+    // discover this tty by walking its own ancestry (see
+    // `crates/tuic-hook/src/tty.rs`). We created the pty and already know its
+    // device path — hand it over explicitly rather than make the hook guess.
+    // `tty_name()` is `#[cfg(unix)]`; hook instrumentation stays unvalidated
+    // on Windows regardless (see `tty.rs`'s own Windows fallback comment).
+    //
+    // Two known, currently-unhandled limitations, named here rather than
+    // rediscovered: (1) no multi-pane/tmux disambiguation — two agents in two
+    // tmux panes under one outer pty share one TUIC_PTY_TTY, with no way to
+    // attribute an emission to the right pane; (2) device-path staleness — an
+    // escaped daemonized grandchild can hold a stale TUIC_PTY_TTY after its
+    // pty closes, and the OS can reassign that device path to an unrelated
+    // later session. Both narrow and low-severity; see todo.md.
+    #[cfg(unix)]
+    if let Some(tty) = pair.master.tty_name() {
+        cmd.env("TUIC_PTY_TTY", tty.to_string_lossy().as_ref());
+    }
+
     let child = pair
         .slave
-        .spawn_command(build_command())
+        .spawn_command(cmd)
         .map_err(|error| format!("Failed to spawn shell: {error}"))?;
     Ok((pair, child))
 }
