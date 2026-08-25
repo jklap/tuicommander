@@ -11,11 +11,14 @@ fn codex_hook_command_transports_recorded_payload_and_inert_outside_tuic() {
     let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let output = scratch.path().join("native-frames");
     let native = include_str!("fixtures/chat_view/codex/session-start.json");
-    let command = codex_hook_map()
-        .into_iter()
-        .find(|entry| entry.0 == "SessionStart")
-        .unwrap()
-        .2;
+    // The shell flavour (builds without the sidecar); the binary flavour is
+    // held to the same bytes by `golden_wire_output::codex_identity_matches_the_shell_flavour_byte_for_byte`.
+    let command = shell_spec_command(
+        CODEX_HOOKS
+            .iter()
+            .find(|spec| spec.event == "SessionStart")
+            .unwrap(),
+    );
     // Only redirect the existing tty destination to capture producer bytes.
     let command = command.replace(tty_resolve(), &format!("__t='{}'", output.display()));
     let mut child = Command::new("sh")
