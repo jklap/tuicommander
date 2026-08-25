@@ -91,6 +91,9 @@ jobs:
       - name: Architecture cycles
         run: pnpm architecture:cycles && pnpm architecture:cycles:test
 
+      - name: No literal NUL bytes in source
+        run: pnpm check:no-nul-bytes && pnpm check:no-nul-bytes:test
+
   # Always runs: clippy + tests on Linux (fastest, catches most issues)
   rust:
     name: Rust (Linux-x64)
