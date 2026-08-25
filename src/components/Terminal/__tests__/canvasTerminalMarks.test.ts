@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { type MarkBlock, type ScrollbarMarksInput, scrollbarMarksHtml, scrollbarMarksKey } from "../canvasTerminalMarks";
+import {
+	type MarkBlock,
+	type ScrollbarMarksInput,
+	scrollbarMarksHtml,
+	scrollbarMarksKey,
+	shouldShowScrollbar,
+} from "../canvasTerminalMarks";
 
 function block(overrides: Partial<MarkBlock> = {}): MarkBlock {
 	return { promptLine: 10, endLine: 20, exitCode: null, ...overrides };
@@ -110,5 +116,33 @@ describe("scrollbarMarksHtml", () => {
 			200,
 		);
 		expect(html).toBe("");
+	});
+});
+
+describe("shouldShowScrollbar", () => {
+	// Regression: a tab with no scrollback (historySize === 0) — the common case for a
+	// short Claude Code turn that never scrolled past one screen — used to hide the whole
+	// scrollbar track unconditionally, which hid any block/prompt marks on it too, even
+	// with real data and both toggles on.
+	it("is true when there's scrollable history, regardless of marks", () => {
+		expect(shouldShowScrollbar({ ...baseInput({ blocks: [], promptLines: [] }), historySize: 1 })).toBe(true);
+	});
+
+	it("is true with no history but a block mark present and its toggle on", () => {
+		expect(shouldShowScrollbar({ ...baseInput({ showBlockMarks: true, promptLines: [] }), historySize: 0 })).toBe(true);
+	});
+
+	it("is true with no history but a prompt mark present and its toggle on", () => {
+		expect(shouldShowScrollbar({ ...baseInput({ showPromptMarks: true, blocks: [] }), historySize: 0 })).toBe(true);
+	});
+
+	it("is false with no history and a block mark present but its toggle OFF", () => {
+		expect(shouldShowScrollbar({ ...baseInput({ showBlockMarks: false, promptLines: [] }), historySize: 0 })).toBe(
+			false,
+		);
+	});
+
+	it("is false with no history and no marks at all — preserves the plain-terminal look", () => {
+		expect(shouldShowScrollbar({ ...baseInput({ blocks: [], promptLines: [] }), historySize: 0 })).toBe(false);
 	});
 });
