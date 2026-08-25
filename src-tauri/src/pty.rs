@@ -1022,6 +1022,32 @@ fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
     }
 }
 
+/// Inverse of `tuic-hook`'s `payload::encode` (percent-encoding over the RFC
+/// 3986 unreserved set). Any `%XX` escape that isn't valid hex, or that would
+/// run past the end of the string, is left as a literal `%` rather than
+/// dropped or erroring — a hook must never be able to desync this parser, so
+/// a malformed escape degrades to "pass the bytes through," not a panic.
+/// Invalid UTF-8 after decoding degrades the same way, via lossy replacement.
+fn percent_decode_osc_payload(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 3 <= bytes.len()
+            && let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            out.push(byte);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Whether `agent_type`'s config enables native-hook instrumentation. Resolved
 /// once when the session's agent type becomes known (config changes apply on the
 /// next agent launch, matching when the hooks themselves take effect).
@@ -2419,6 +2445,35 @@ impl ChunkProcessor {
                                 .turn_error_flags
                                 .insert(session_id.to_string(), ());
                         }
+                        // `ccsession`/`cwd`/`transcript`/`tool`/`notify`: free-text
+                        // metadata `tuic-hook` extracted natively from a Claude Code
+                        // hook's stdin JSON (SessionStart/Pre/PostToolUse/
+                        // Notification). Percent-encoded on the wire since these
+                        // carry arbitrary text (paths, tool names, messages) that
+                        // could otherwise contain the OSC param delimiter (`;`) or
+                        // control bytes; decode once here and forward as a generic
+                        // `AgentMetadata` event for the frontend to pick up as
+                        // features consume it (none do yet — see `output_parser.rs`).
+                        "ccsession" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "session_id".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "cwd" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "cwd".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "transcript" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "transcript_path".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "tool" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "tool_name".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
+                        "notify" => tuic_events.push(ParsedEvent::AgentMetadata {
+                            field: "message".to_string(),
+                            value: percent_decode_osc_payload(&payload),
+                        }),
                         _ => {}
                     },
                     TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {}

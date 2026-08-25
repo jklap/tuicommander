@@ -9517,6 +9517,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuic-hook"
+version = "2.0.0-beta.1"
+dependencies = [
+ "libc",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+]
+
+[[package]]
 name = "tuic-ipc"
 version = "2.0.0-beta.1"
 dependencies = [

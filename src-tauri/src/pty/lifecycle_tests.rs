@@ -1600,6 +1600,122 @@ fn a_working_spawn_is_built_once() {
     reap(child);
 }
 
+/// Read whatever a short-lived probe child writes to its pty, bounded so a
+/// misbehaving probe can never hang the test suite. Mirrors the spawn-
+/// thread + bounded-wait shape `tuic-hook`'s own `read_stdin_bounded` uses
+/// for the identical reason (`crates/tuic-hook/src/main.rs:226-260`): the
+/// read runs on a thread that is simply abandoned on timeout, never joined.
+#[cfg(unix)]
+// A handful of short lines from a test probe — not worth a bytecount
+// dependency for what's already a single-digit byte count per call.
+#[allow(clippy::naive_bytecount)]
+fn read_pty_output_bounded(
+    mut reader: Box<dyn std::io::Read + Send>,
+    expected_lines: usize,
+    timeout: std::time::Duration,
+) -> String {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let mut out = Vec::new();
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    out.extend_from_slice(&buf[..n]);
+                    // Stop as soon as the full expected payload has
+                    // arrived, rather than waiting on EOF — EOF depends
+                    // on every fd to the slave (including this test's
+                    // own) already being closed.
+                    if out.iter().filter(|&&b| b == b'\n').count() >= expected_lines {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = tx.send(out);
+    });
+    let bytes = rx.recv_timeout(timeout).unwrap_or_default();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// `bind_pty_identity` (:96) and `sanitize_pty_parent_env` (:72) are the two
+/// functions that mutate a spawned child's environment before the
+/// `TUIC_PTY_TTY` fix (F1) adds a third mutation to the same `CommandBuilder`
+/// in `spawn_pty_pair_with_retry`. Neither had any direct coverage —
+/// `bind_pty_identity`'s own doc comment describes an entire bug class it
+/// exists to prevent, unverified. This observes the *real* child environment
+/// through a live pty rather than inspecting the `CommandBuilder`, so it
+/// cannot pass on a build-string bug that never actually reaches the process.
+///
+/// Also covers the `TUIC_PTY_TTY` fix itself (F1): unlike the other two
+/// fields, this one isn't set inside `build_command()` — it's stamped by
+/// `spawn_pty_pair_with_retry` itself after the closure returns — so this
+/// is the only place that can observe it end-to-end. And an ordering
+/// regression guard: `TUIC_PTY_TTY` is injected *after* every caller's own
+/// `cmd.env(...)` calls, which is only safe because `CommandBuilder::env`
+/// is a keyed insert — confirms an unrelated caller-set var survives
+/// alongside it rather than the injection clobbering the whole map.
+#[cfg(unix)]
+#[test]
+fn bind_pty_identity_env_reaches_the_real_child() {
+    let state = crate::state::tests_support::make_test_app_state();
+
+    let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env("NO_COLOR", "1"); // sanitize_pty_parent_env must strip this
+        sanitize_pty_parent_env(&mut cmd);
+        bind_pty_identity(&state, &mut cmd, "probe-session", Some("probe-identity"));
+        // An unrelated caller-set var (mirrors spawn_config.env in
+        // create_pty) must survive the later TUIC_PTY_TTY injection.
+        cmd.env("TUIC_PROBE_UNRELATED", "caller-value");
+        cmd.arg("-c");
+        cmd.arg(
+            r#"printf '%s\n%s\n%s\n%s\n%s\n' "$TUIC_SESSION" "$TUIC_CONFIG_DIR" "${NO_COLOR-unset}" "$TUIC_PTY_TTY" "$TUIC_PROBE_UNRELATED""#,
+        );
+        cmd
+    })
+    .expect("sh must spawn");
+
+    let expected_tty = pair.master.tty_name();
+    let reader = pair.master.try_clone_reader().expect("clone reader");
+    // Our own copy of the slave must close so nothing but the child holds
+    // it open — the same ordering `create_pty` relies on in production.
+    drop(pair.slave);
+
+    let output = read_pty_output_bounded(reader, 5, std::time::Duration::from_secs(5));
+    let mut lines = output.lines();
+    assert_eq!(
+        lines.next(),
+        Some("probe-identity"),
+        "TUIC_SESSION must carry the caller's identity: {output:?}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some(crate::config::config_dir().to_string_lossy().as_ref()),
+        "TUIC_CONFIG_DIR must be set: {output:?}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("unset"),
+        "sanitize_pty_parent_env must strip NO_COLOR: {output:?}"
+    );
+    let expected_tty = expected_tty.expect("tty_name() must resolve for a freshly opened pty");
+    assert_eq!(
+        lines.next(),
+        Some(expected_tty.to_string_lossy().as_ref()),
+        "TUIC_PTY_TTY must carry this pty's own device path so a detached hook \
+         subprocess can find it without walking process ancestry: {output:?}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("caller-value"),
+        "injecting TUIC_PTY_TTY must not clobber an unrelated caller-set env var: {output:?}"
+    );
+
+    reap(child);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn async_spawn_wrapper_does_not_block_the_runtime_worker() {
     let started = std::time::Instant::now();
