@@ -21,6 +21,7 @@
     "notices": "node scripts/third-party-notices.mjs",
     "notices:check": "node scripts/third-party-notices.mjs --check",
     "test:plugins": "node scripts/run-plugin-tests.mjs",
+    "test:plugins:test": "node scripts/run-plugin-tests.mjs --self-test",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
