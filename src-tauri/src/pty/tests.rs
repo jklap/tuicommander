@@ -2414,6 +2414,65 @@ fn test_codex_v0_146_status_row_with_git_branch_does_not_change_detection() {
     assert!(!crate::chrome::is_working_status_row(STATUS_ROW));
 }
 
+#[test]
+fn osc133_b_is_a_noop() {
+    // 'B' (command start) is new, real production traffic as of
+    // shell_integration.rs emitting 133;B — it falls into handle_osc133_event's
+    // `_ => {}` catch-all, correctly, but nothing pinned that before this test.
+    // A future edit that accidentally gives 'B' a state effect (or drops it
+    // before the Osc133Event forwarding, which happens unconditionally for
+    // every marker right after this call) should fail here.
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-osc133-b";
+    state.session_maps.shell_states.insert(
+        session_id.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+    );
+    state.session_maps
+        .shell_state_since_ms
+        .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
+    state.session_maps
+        .has_osc133_integration
+        .insert(session_id.to_string(), ());
+
+    let mut rx = state.event_bus.subscribe();
+    let mut proc = ChunkProcessor::new(None, None);
+
+    // Establish a pending command via C first, so a wrongly-implemented 'B'
+    // has state it could plausibly (and wrongly) clear or overwrite.
+    proc.handle_osc133_event('C', "", session_id, &state);
+    let _ = rx.try_recv(); // drain C's own busy-transition event, not under test
+    proc.handle_osc133_event('B', "", session_id, &state);
+
+    let current = state
+        .session_maps
+        .shell_states
+        .get(session_id)
+        .map(|s| s.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap();
+    assert_eq!(current, SHELL_BUSY, "B must not change shell state");
+    assert!(
+        rx.try_recv().is_err(),
+        "B must not emit a shell-state event onto the bus"
+    );
+    assert!(
+        proc.pending_command.is_some(),
+        "B must not clear the pending command C started"
+    );
+
+    proc.handle_osc133_event('D', "0", session_id, &state);
+    let recorded = state
+        .ai
+        .session_knowledge
+        .get(session_id)
+        .map(|k| k.lock().commands.len())
+        .unwrap_or(0);
+    assert_eq!(
+        recorded, 1,
+        "the C→B→D sequence should still record exactly one outcome — B is transparent"
+    );
+}
+
 /// The rank decision behind every `*_recovers_long_lived_shell_busy` test
 /// (#745-8ff1), pinned directly so the next person to change it fails a test
 /// rather than a review.
