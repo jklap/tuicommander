@@ -59,7 +59,6 @@ policy. Each site still owns its justified command/env/dimension assembly.
 | `pause_pty(session_id)` | Pause the reader thread (stops output emission). |
 | `resume_pty(session_id)` | Resume the reader thread. |
 | `close_pty(session_id, cleanup_worktree)` | Close PTY and optionally remove worktree. |
-| `update_session_cwd(session_id, cwd)` | Update session's working directory (called from frontend on OSC 7). |
 
 ### Monitoring
 
@@ -334,9 +333,9 @@ Each session gets its own `VtLogBuffer` stored in `AppState.vt_log_buffers: Dash
 
 Shells that emit OSC 7 (`\x1b]7;file://hostname/path\x07`) report the current working directory after each command. TUICommander uses this to keep the Rust-side `PtySession.cwd` in sync:
 
-1. **Frontend handler:** `terminal.parser.registerOscHandler(7, ...)` in `Terminal.tsx` parses the `file://` URL via `parseOsc7Url()`.
-2. **Store update:** The parsed path is written to `terminalsStore` so the UI reflects the current directory.
-3. **IPC persist:** The frontend calls `update_session_cwd(sessionId, cwd)` to update `PtySession.cwd` on the Rust side.
+1. **Backend handler:** the VT parser surfaces `TermEvent::Osc7(url)`, and `parse_osc7_cwd()` decodes the `file://` URL (`pty.rs`).
+2. **Session update:** `PtySession.cwd` is written on the Rust side directly — the frontend is not in this path and has no IPC command to call.
+3. **Push to clients:** the new cwd is dual-emitted as `pty-cwd-{session_id}` (desktop) and `AppEvent::PtyCwd` (bus → SSE/WS), both carrying `{ cwd }` so `CanvasTerminal` needs no per-transport branch. The frontend updates `terminalsStore` from that event and re-runs `reconcileTerminalOwnership`.
 4. **Restart recovery:** The persisted cwd is used during session restore so reopened terminals start in the correct directory.
 5. **Worktree reassignment:** When the cwd changes to a path inside a different worktree, the terminal tab is reassigned to the corresponding branch in the sidebar.
 
