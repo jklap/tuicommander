@@ -2,9 +2,12 @@
 //!
 //! Each supported agent (Claude, Gemini, …) drives its busy/idle/awaiting state
 //! by running a small shell hook that posts `OSC 7770;state=…` frames to the
-//! local TUIC socket (`post_frames`), with its controlling tty as the fallback. This module generates those hook commands and the per-agent event→state
-//! maps the installer (see `agent_hook_installer`) writes into the agent's
-//! settings file.
+//! local TUIC socket (`post_frames`), with its controlling tty as the fallback.
+//! Claude also emits `OSC 7770;toolfail=…` on failure-path hook events
+//! (`PostToolUseFailure`/`StopFailure`) to flag the turn-level command block's
+//! exit code (see `state.rs::turn_error_flags`). This module generates those
+//! hook commands and the per-agent event→state maps the installer (see
+//! `agent_hook_installer`) writes into the agent's settings file.
 //!
 //! The command is inert outside TUIC (guarded on `TUIC_SESSION`), resolves the
 //! controlling tty from a context where stdout is captured by the agent
@@ -94,6 +97,28 @@ fn claude_hook(transport: &HookTransport, state: Option<&str>) -> String {
     }
 }
 
+/// `PostToolUseFailure`: receipt plus the `toolfail` flag on the POSIX transport.
+///
+/// DEFERRED (2026-11-17) — the Windows `agent-state` CLI has no `toolfail` verb,
+/// so a Windows host keeps the plain receipt and the turn-level command block
+/// falls back to the `ToolError`/`ApiError` text-pattern tier there. Add the verb
+/// to `tuic-cli` when a Windows host needs the hook-driven flag.
+fn claude_failure_hook(transport: &HookTransport) -> String {
+    match transport {
+        HookTransport::Posix => claude_failure_hook_command(),
+        HookTransport::Cli(_) => claude_hook(transport, None),
+    }
+}
+
+/// `StopFailure`: idle, preceded by the `toolfail` flag on the POSIX transport
+/// (same Windows `DEFERRED (2026-11-17)` as `claude_failure_hook`).
+fn stop_failure_hook(transport: &HookTransport) -> String {
+    match transport {
+        HookTransport::Posix => hook_command_multi(&[("state", "idle"), ("toolfail", "1")]),
+        HookTransport::Cli(_) => state_hook(transport, "idle"),
+    }
+}
+
 /// Resolve the controlling tty into `$__t`, even when the caller's stdout is
 /// captured (hooks have no controlling tty of their own — read the parent's).
 pub(crate) fn tty_resolve() -> &'static str {
@@ -105,10 +130,30 @@ pub(crate) fn tty_resolve() -> &'static str {
 /// "user submitted a prompt here" mark; only the submit-prompt hooks use it. Inert outside TUIC, always
 /// exits 0, ends with the ownership sentinel.
 pub(crate) fn hook_command(state: &str) -> String {
-    hook_shell(
-        &format!(r"__f=$(printf '\033]7770;state={state}\033\\')"),
-        TTY_FRAMES,
-    )
+    hook_command_multi(&[("state", state)])
+}
+
+/// Like `hook_command`, but emits multiple OSC 7770 `verb=payload` frames in
+/// one posted body. Needed where a single CC hook event must drive two
+/// independent signals — e.g. `StopFailure` must both transition the session to
+/// idle (like `Stop`) *and* flag the turn as failed (like `PostToolUseFailure`),
+/// which a bare `state=idle` can't distinguish from an ordinary `Stop`.
+fn hook_command_multi(pairs: &[(&str, &str)]) -> String {
+    // Defensive ordering, not just caller discipline: `handle_tuic_state`
+    // (pty.rs) reads-and-clears `turn_error_flags` at the exact moment it
+    // processes a `state=idle` event, so any `toolfail` pair in the same
+    // call MUST be emitted first — regardless of what order the caller
+    // listed the pairs in. Without this, a future edit that lists
+    // `("state", "idle")` before `("toolfail", ...)` would compile, pass a
+    // casual review, and silently lose the failure flag for that hook.
+    let (toolfail, rest): (Vec<_>, Vec<_>) =
+        pairs.iter().partition(|(verb, _)| *verb == "toolfail");
+    let frames: String = toolfail
+        .into_iter()
+        .chain(rest)
+        .map(|(verb, payload)| format!(r"\033]7770;{verb}={payload}\033\\"))
+        .collect();
+    hook_shell(&format!("__f=$(printf '{frames}')"), TTY_FRAMES)
 }
 
 /// Write the frames in `$__f` to the tty `$__t` (the fallback channel).
@@ -158,6 +203,21 @@ fn claude_hook_command(state: Option<&str>) -> String {
     let coarse = state
         .map(|state| format!("\\033]7770;state={state}\\033\\\\"))
         .unwrap_or_default();
+    claude_receipt_command(&coarse)
+}
+
+/// The `PostToolUseFailure` hook: the permission-ownership receipt of
+/// `claude_hook_command`, followed by `OSC 7770;toolfail=1`. On tool failure
+/// only, CC pipes the failure payload on stdin — unlike `PostToolUse`, which
+/// fires only on success (the two are mutually-exclusive branches of one
+/// lifecycle point). Presence of the `toolfail` event is the whole signal, so
+/// its payload is a constant and nothing is parsed out of stdin (see
+/// `state.rs::turn_error_flags`).
+fn claude_failure_hook_command() -> String {
+    claude_receipt_command("\\033]7770;toolfail=1\\033\\\\")
+}
+
+fn claude_receipt_command(coarse: &str) -> String {
     hook_shell(
         &format!(
             r#"__p=$(base64 | tr -d '\r\n');__f=$(printf '\033]7770;claude-hook=%s:%s:%s\033\\\033]7770;claude-hook=%s:%s:\033\\{coarse}' "$TUIC_SESSION" "$$" "$__p" "$TUIC_SESSION" "$$")"#
@@ -201,11 +261,11 @@ pub(crate) fn claude_hook_map_on(t: &HookTransport) -> Vec<HookEntry> {
         ("PermissionRequest", "", claude_hook(t, None)),
         ("Notification", "permission_prompt", claude_hook(t, None)),
         ("PostToolUse", "", claude_hook(t, None)),
-        ("PostToolUseFailure", "", claude_hook(t, None)),
+        ("PostToolUseFailure", "", claude_failure_hook(t)),
         ("Elicitation", "", claude_hook(t, Some("awaiting"))),
         ("ElicitationResult", "", claude_hook(t, Some("busy"))),
         ("Stop", "", state_hook(t, "idle")),
-        ("StopFailure", "", state_hook(t, "idle")),
+        ("StopFailure", "", stop_failure_hook(t)),
         ("SessionEnd", "", state_hook(t, "idle")),
     ]
 }
@@ -419,6 +479,104 @@ mod tests {
         assert!(set.contains("state=awaiting"), "{set}");
         let clear = find("ElicitationResult").expect("answered elicitation must clear awaiting");
         assert!(clear.contains("state=busy"), "{clear}");
+    }
+
+    #[test]
+    fn claude_map_has_stop_failure_driving_idle_and_toolfail() {
+        // PostToolUse/PostToolUseFailure and Stop/StopFailure are
+        // mutually-exclusive success/failure branches of the same lifecycle
+        // point, not sequential hooks — a turn ending via StopFailure would
+        // never reach idle without this (only Stop drove `state=idle` before).
+        let map = claude_hook_map();
+        let (_, _, cmd) = map
+            .iter()
+            .find(|(e, _, _)| *e == "StopFailure")
+            .expect("claude map must have a StopFailure entry");
+        assert!(
+            cmd.contains("state=idle"),
+            "StopFailure must still reach idle: {cmd}"
+        );
+        assert!(
+            cmd.contains("toolfail=1"),
+            "StopFailure must flag the turn failed: {cmd}"
+        );
+        // Order matters: handle_tuic_state reads-and-clears turn_error_flags
+        // at the exact moment it processes the idle transition, so toolfail
+        // must already be set by then — emitting it after state=idle would
+        // silently lose the failure flag for every StopFailure turn.
+        let toolfail_pos = cmd.find("toolfail=1").expect("toolfail present");
+        let state_idle_pos = cmd.find("state=idle").expect("state=idle present");
+        assert!(
+            toolfail_pos < state_idle_pos,
+            "toolfail must be emitted before state=idle: {cmd}"
+        );
+    }
+
+    #[test]
+    fn claude_map_has_post_tool_use_failure_entry() {
+        let map = claude_hook_map();
+        let (_, matcher, cmd) = map
+            .iter()
+            .find(|(e, _, _)| *e == "PostToolUseFailure")
+            .expect("claude map must have a PostToolUseFailure entry");
+        assert!(matcher.is_empty(), "must match every tool, not a subset");
+        assert!(
+            cmd.contains("toolfail="),
+            "must emit the toolfail verb: {cmd}"
+        );
+        assert!(
+            cmd.contains("claude-hook="),
+            "must keep the permission-ownership receipt: {cmd}"
+        );
+    }
+
+    #[test]
+    fn claude_failure_hook_command_keeps_the_receipt_and_flags_the_failure() {
+        let cmd = claude_failure_hook_command();
+        assert!(
+            cmd.contains("base64"),
+            "must still read stdin for the receipt: {cmd}"
+        );
+        assert!(
+            cmd.contains(r"\033]7770;toolfail=1\033"),
+            "must emit the toolfail flag after the receipt: {cmd}"
+        );
+        assert!(
+            !cmd.contains("jq"),
+            "the payload is never parsed, so jq must not gate the flag: {cmd}"
+        );
+        assert!(cmd.contains("|| true"), "must never block the agent: {cmd}");
+        assert!(cmd.trim_end().ends_with(SENTINEL));
+    }
+
+    #[test]
+    fn hook_command_multi_emits_every_pair_via_one_tty_resolve() {
+        let cmd = hook_command_multi(&[("state", "idle"), ("toolfail", "1")]);
+        assert!(cmd.contains(r"\033]7770;state=idle\033"));
+        assert!(cmd.contains(r"\033]7770;toolfail=1\033"));
+        assert_eq!(
+            cmd.matches(r#"ps -o tty= -p "$PPID""#).count(),
+            1,
+            "tty must be resolved once and reused, not per pair: {cmd}"
+        );
+    }
+
+    #[test]
+    fn hook_command_multi_always_orders_toolfail_before_state_regardless_of_input_order() {
+        // Defensive, not just a caller convention: turn_error_flags is
+        // read-and-cleared at the exact moment state=idle is processed, so
+        // toolfail must be on the wire first no matter how the caller listed
+        // the pairs.
+        let listed_state_first = hook_command_multi(&[("state", "idle"), ("toolfail", "1")]);
+        let listed_toolfail_first = hook_command_multi(&[("toolfail", "1"), ("state", "idle")]);
+        for cmd in [&listed_state_first, &listed_toolfail_first] {
+            let toolfail_pos = cmd.find("toolfail=1").expect("toolfail present");
+            let state_idle_pos = cmd.find("state=idle").expect("state=idle present");
+            assert!(
+                toolfail_pos < state_idle_pos,
+                "toolfail must always precede state=idle, regardless of input order: {cmd}"
+            );
+        }
     }
 
     #[test]
