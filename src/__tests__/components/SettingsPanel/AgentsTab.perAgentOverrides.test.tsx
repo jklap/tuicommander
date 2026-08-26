@@ -54,7 +54,7 @@ describe("AgentRow per-agent tri-state overrides", () => {
 		));
 
 		fireEvent.click(result.getByRole("button"));
-		await waitFor(() => expect(result.getByText("Show intent as tab title")).toBeTruthy());
+		await waitFor(() => expect(result.getByText("Track agent intent")).toBeTruthy());
 		return { ...result, store };
 	}
 
@@ -67,9 +67,7 @@ describe("AgentRow per-agent tri-state overrides", () => {
 
 	it("renders both rows defaulted to 'use global' when the agent has no override", async () => {
 		const { container } = await renderExpandedRow();
-		expect(triSegment(triGroup(container, "Show intent as tab title"), "global").getAttribute("aria-checked")).toBe(
-			"true",
-		);
+		expect(triSegment(triGroup(container, "Track agent intent"), "global").getAttribute("aria-checked")).toBe("true");
 		expect(triSegment(triGroup(container, "Show suggested follow-ups"), "global").getAttribute("aria-checked")).toBe(
 			"true",
 		);
@@ -77,7 +75,7 @@ describe("AgentRow per-agent tri-state overrides", () => {
 
 	it("selecting On/Off for intent_tab_title persists a concrete boolean, not undefined", async () => {
 		const { container, store } = await renderExpandedRow();
-		fireEvent.click(triSegment(triGroup(container, "Show intent as tab title"), "off"));
+		fireEvent.click(triSegment(triGroup(container, "Track agent intent"), "off"));
 		expect(store.getIntentTabTitle("claude")).toBe(false);
 	});
 
