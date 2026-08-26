@@ -2379,6 +2379,38 @@ mod tests {
         );
     }
 
+    /// Overwriting one half of a fullwidth pair rewrites the OTHER half — the
+    /// terminal calls `clear_wide()` on it, which resets its character to a space.
+    /// The whole-row format shipped that cell as a side effect of re-encoding every
+    /// column; the partial-row format only ships the damaged span, so if the
+    /// neighbour never enters damage tracking the client keeps rendering the stale
+    /// half and a ghost `中` survives next to the character that replaced its spacer.
+    #[test]
+    fn breaking_up_a_wide_char_ships_both_halves() {
+        let mut grid = TerminalGrid::new(10, 40, 100);
+        grid.process(b"\x1b[2J\x1b[H");
+        let _ = grid.serialize_dirty_rows();
+
+        // 中 occupies columns 4 and 5 (the second is a WIDE_CHAR_SPACER).
+        grid.process("\x1b[1;5H中".as_bytes());
+        let _ = grid.serialize_dirty_rows();
+
+        // Land the cursor directly on the spacer and overwrite it. Column 4 is not
+        // on the cursor's path (it moves from 6 to 5), so only the fix puts it in
+        // the damaged span.
+        grid.process(b"\x1b[1;6HX");
+        let frame = grid.serialize_dirty_rows();
+        assert!(!frame.is_empty(), "the edit produced a frame");
+
+        let (row_index, count, _wrapped, start_col, _) = first_row_header(&frame, 40);
+        assert_eq!(row_index, 0, "the edited row");
+        assert!(
+            start_col <= 4 && start_col + count > 4,
+            "the wide char's leading column must be shipped, got span [{start_col}, {})",
+            start_col + count
+        );
+    }
+
     /// The whole-row path must stay byte-identical, or an old frontend paired
     /// with this backend decodes garbage.
     #[test]

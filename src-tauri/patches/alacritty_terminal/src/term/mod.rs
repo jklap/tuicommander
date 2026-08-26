@@ -1221,6 +1221,11 @@ impl<T> Term<T> {
 
         let mut cursor_cell = self.grid.cursor_cell();
 
+        // The other half of a fullwidth pair, when this write breaks one up. It is a
+        // cell we mutate but the cursor never visits, so it needs damaging explicitly:
+        // see the note at the `damage_line` call below.
+        let mut wide_pair_neighbour: Option<usize> = None;
+
         // Clear all related cells when overwriting a fullwidth cell.
         if cursor_cell
             .flags
@@ -1233,8 +1238,10 @@ impl<T> Term<T> {
                 self.grid[point.line][point.column + 1]
                     .flags
                     .remove(Flags::WIDE_CHAR_SPACER);
+                wide_pair_neighbour = Some(point.column.0 + 1);
             } else if point.column > 0 {
                 self.grid[point.line][point.column - 1].clear_wide();
+                wide_pair_neighbour = Some(point.column.0 - 1);
             }
 
             // Remove leading spacers.
@@ -1263,9 +1270,21 @@ impl<T> Term<T> {
         // single `damage_line` choke point so BOTH consumers see it. For the
         // render consumer this is at worst a no-op over-damage of a line whose
         // content just changed (and thus needs redrawing anyway).
+        //
+        // The neighbour of a broken-up fullwidth pair must go through the same choke
+        // point. `clear_wide()` rewrites that cell's character to a space, and clearing
+        // `WIDE_CHAR_SPACER` changes what `encode_cell` emits for it — both are visible
+        // changes to a column the cursor never occupies. Since frames ship only the
+        // damaged span, an undamaged neighbour is simply never sent, and the client
+        // keeps rendering the stale half of the pair (a ghost `中` beside the character
+        // that replaced its spacer) until something forces a full-row reship.
         let line = self.grid.cursor.point.line.0 as usize;
         let col = self.grid.cursor.point.column.0;
-        self.damage.damage_line(line, col, col);
+        let (left, right) = match wide_pair_neighbour {
+            Some(neighbour) => (col.min(neighbour), col.max(neighbour)),
+            None => (col, col),
+        };
+        self.damage.damage_line(line, left, right);
     }
 
     #[inline]
