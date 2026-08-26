@@ -2273,6 +2273,16 @@ const AGENT_STARTUP_WINDOW_SECS: u64 = 60;
 // it needs per-session memory of pids already judged plumbing, which is state
 // this pure function does not have — do not reach for a wider window instead,
 // that is the same name-list mistake measured in seconds.
+//
+// DEFERRED (2026-08-25) — the mirror blind spot: real work spawned inside the
+// agent's own first 60s is classified as plumbing, and the difference of two
+// ages is constant, so the misclassification lasts that process's whole life.
+// It bites a fast first turn that declares completion while a build it started
+// keeps running — the session then reads idle. Do NOT "fix" it by skipping the
+// window while the agent is young: every integration daemon comes up in the
+// first 18s, so that trades this narrow false-idle for a guaranteed
+// false-working minute on every session ever opened. Same per-session pid
+// memory as above is the real fix.
 fn started_with_agent(descendant: &ProcessTreeEntry, agent_age_seconds: Option<u64>) -> bool {
     let (Some(agent_age), Some(descendant_age)) = (agent_age_seconds, descendant.age_seconds)
     else {
@@ -4213,13 +4223,22 @@ fn suppress_heuristic_question(hook_instrumented: bool, event: &ParsedEvent) -> 
 /// Returns an event only when the badge is actually off, so this is one event per
 /// spurious clear, never one per repaint. A live `choice_prompt` owns the awaiting
 /// state through its own resolve path and is left alone.
+///
+/// `question_this_tick` is the same rule read one step earlier. `awaiting_input`
+/// comes from `SessionState`, which this tick's events have not reached yet, so on
+/// the FIRST sub-question — the footer row genuinely changed, `parse_clean_lines`
+/// parsed the real question, badge still off — both fire. Two `Question` events
+/// land, and the accumulator keeps the LAST `prompt_text`: the tab then shows
+/// `⊠ … ✓ Submit` where the question should be. Not exotic, this is every
+/// non-hook `AskUserQuestion`'s opening frame.
 fn rearm_awaiting_for_open_dialog(
     screen: &[String],
     hook_instrumented: bool,
     awaiting_input: bool,
     has_choice_prompt: bool,
+    question_this_tick: bool,
 ) -> Option<ParsedEvent> {
-    if hook_instrumented || awaiting_input || has_choice_prompt {
+    if hook_instrumented || awaiting_input || has_choice_prompt || question_this_tick {
         return None;
     }
     crate::output_parser::ink_dialog_footer(screen).map(|footer| ParsedEvent::Question {
@@ -5186,9 +5205,16 @@ impl ChunkProcessor {
                 .get(session_id)
                 .map(|s| (s.awaiting_input, s.choice_prompt.is_some()))
                 .unwrap_or((false, false));
-            if let Some(evt) =
-                rearm_awaiting_for_open_dialog(screen, hook_instrumented, awaiting, has_choice)
-            {
+            let question_this_tick = events
+                .iter()
+                .any(|e| matches!(e, ParsedEvent::Question { .. }));
+            if let Some(evt) = rearm_awaiting_for_open_dialog(
+                screen,
+                hook_instrumented,
+                awaiting,
+                has_choice,
+                question_this_tick,
+            ) {
                 // Clear the dedup: the badge is off, so this event must reach state.
                 self.last_question_text = None;
                 events.push(evt);
@@ -5637,6 +5663,29 @@ fn flush_eof(
     esc_remaining
 }
 
+/// Drop every trace of a peer identity nobody can reach any more, and tell
+/// subscribers the address is gone.
+///
+/// Two callers below retire an identity for different reasons — the PTY backing
+/// it died, or the last child naming it as parent did — and both must clear the
+/// same maps. Keeping one list here is the same discipline
+/// [`remove_live_session_state`] enforces for per-session state: a new
+/// peer-keyed map belongs in this function and nowhere else.
+fn retire_peer_identity(state: &AppState, tuic_session: &str) {
+    state.peer_agents.remove(tuic_session);
+    state.orchestrator_peers.remove(tuic_session);
+    state.agent_inbox.remove(tuic_session);
+    state.agent_inbox_evictions.remove(tuic_session);
+    state.agent_read_cursor.remove(tuic_session);
+    state.active_agent_waiters.remove(tuic_session);
+    state.pending_injections.remove(tuic_session);
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::PeerUnregistered {
+            tuic_session: tuic_session.to_string(),
+        });
+}
+
 /// Per-session state owned by the running process: streams, input, shell status,
 /// and the swarm identities the PTY was backing. Reaped the moment the process
 /// dies, whether or not a readable tombstone outlives it.
@@ -5678,18 +5727,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // never matched it, and its registration outlived the terminal for the whole
     // process lifetime. Retire the identities this PTY was backing as well.
     for orphaned in state.unbind_live_pty(session_id) {
-        state.peer_agents.remove(&orphaned);
-        state.orchestrator_peers.remove(&orphaned);
-        state.agent_inbox.remove(&orphaned);
-        state.agent_inbox_evictions.remove(&orphaned);
-        state.agent_read_cursor.remove(&orphaned);
-        state.active_agent_waiters.remove(&orphaned);
-        state.pending_injections.remove(&orphaned);
-        let _ = state
-            .event_bus
-            .send(crate::state::AppEvent::PeerUnregistered {
-                tuic_session: orphaned,
-            });
+        retire_peer_identity(state, &orphaned);
     }
     state.pending_injections.remove(session_id);
     state.pending_initial_prompts.remove(session_id);
@@ -5702,6 +5740,20 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     state.agent_read_cursor.remove(session_id);
     #[cfg(unix)]
     state.standby_sessions.remove(session_id);
+    // DEFERRED (2026-08-25) — a parent identity retained ONLY because this child
+    // named it (`peer_identity_is_reapable`) is never re-examined once the child
+    // goes: the reaper walks the peers of the MCP session it is collecting, and the
+    // parent's was collected long ago. The address then survives for the life of
+    // the process as the phantom `retire_repaired_phantom_identity` describes —
+    // advertised by `list_peers`, swallowing every message sent to it.
+    //
+    // Retiring it HERE was tried and is wrong twice over: `mark_session_exited` has
+    // just pushed this child's `state_change` into that inbox, and a headerless
+    // orchestrator can still reclaim the identity later with `register
+    // replaces=<old_uuid>` to collect exactly that mail. Both make "no live PTY, no
+    // live MCP session, no child" too weak a test for deletion. The real fix is a
+    // periodic sweep over ALL peers with a mail-retention rule, which is a policy
+    // decision, not a cleanup tweak.
     state.session_parent.remove(session_id);
     // mcp_to_session maps mcp_session_id → tuic_session. The reverse index
     // session_to_mcp lets us drop O(k) entries (k = mcp sessions for this
@@ -21184,7 +21236,7 @@ mod tests {
             "…but the footer did not — this is why the changed-rows parser is blind"
         );
 
-        let evt = rearm_awaiting_for_open_dialog(&second, false, false, false)
+        let evt = rearm_awaiting_for_open_dialog(&second, false, false, false, false)
             .expect("an open dialog with the badge off must re-arm");
         let ParsedEvent::Question {
             prompt_text,
@@ -21216,26 +21268,46 @@ mod tests {
     fn rearm_stays_silent_unless_the_badge_is_actually_off() {
         let screen = askuserquestion_wizard_screen(1);
         assert!(
-            rearm_awaiting_for_open_dialog(&screen, false, true, false).is_none(),
+            rearm_awaiting_for_open_dialog(&screen, false, true, false, false).is_none(),
             "already awaiting — re-arming every repaint would storm"
         );
         assert!(
-            rearm_awaiting_for_open_dialog(&screen, true, false, false).is_none(),
+            rearm_awaiting_for_open_dialog(&screen, true, false, false, false).is_none(),
             "hook-instrumented sessions get awaiting from OSC 7770"
         );
         assert!(
-            rearm_awaiting_for_open_dialog(&screen, false, false, true).is_none(),
+            rearm_awaiting_for_open_dialog(&screen, false, false, true, false).is_none(),
             "a live choice prompt owns awaiting through its own resolve path"
         );
         let no_dialog = vec!["· Gallivanting… (15m 12s)".to_string(), "❯".to_string()];
         assert!(
-            rearm_awaiting_for_open_dialog(&no_dialog, false, false, false).is_none(),
+            rearm_awaiting_for_open_dialog(&no_dialog, false, false, false, false).is_none(),
             "no dialog on screen, no badge"
         );
         let quoted = vec!["+  Enter to select · Esc to cancel".to_string()];
         assert!(
-            rearm_awaiting_for_open_dialog(&quoted, false, false, false).is_none(),
+            rearm_awaiting_for_open_dialog(&quoted, false, false, false, false).is_none(),
             "a diff line quoting the footer is not a dialog"
+        );
+    }
+
+    /// The opening frame of a non-hook `AskUserQuestion`: the footer row genuinely
+    /// changed, so `parse_clean_lines` already parsed the real question this tick.
+    /// `SessionState.awaiting_input` is still false — this tick's events have not
+    /// reached it — so the badge guard alone lets the re-arm fire as well. The
+    /// accumulator keeps the LAST `prompt_text`, so the second event replaces the
+    /// question with the footer and the tab reads `⊠ … ✓ Submit`. It also resets
+    /// `last_question_text`, so the real question re-emits on the next repaint.
+    #[test]
+    fn rearm_yields_to_a_question_already_parsed_in_the_same_tick() {
+        let screen = askuserquestion_wizard_screen(0);
+        assert!(
+            rearm_awaiting_for_open_dialog(&screen, false, false, false, false).is_some(),
+            "precondition: this screen re-arms when nothing else spoke"
+        );
+        assert!(
+            rearm_awaiting_for_open_dialog(&screen, false, false, false, true).is_none(),
+            "the parsed question is the better text; the footer must not overwrite it"
         );
     }
 
