@@ -4375,6 +4375,75 @@ mod tests {
         (dir, path)
     }
 
+    // --- get_repo_structure_impl / in_progress_worktrees wiring ---
+
+    #[tokio::test]
+    async fn repo_structure_surfaces_a_busy_worktree() {
+        // Regression guard for the `in_progress_worktrees` field: it's easy to
+        // rebuild get_repo_structure_impl (e.g. around a cached/joined worktree
+        // read) and forget to carry this field through, since nothing else in
+        // the function signature would catch the omission — the frontend types
+        // it as required but its own tests mock the response.
+        let (_dir, repo_path) = setup_test_repo_with_commit();
+        let wt_path = repo_path.join("wt-busy");
+        std::process::Command::new("git")
+            .current_dir(&repo_path)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "busy-branch",
+                &wt_path.to_string_lossy(),
+            ])
+            .output()
+            .expect("git worktree add");
+
+        // Mark the linked worktree as mid-rebase, the same way
+        // `has_operation_in_progress` detects it: its `.git` file points at
+        // the admin dir under the main repo's `.git/worktrees/<name>`.
+        let gitfile =
+            std::fs::read_to_string(wt_path.join(".git")).expect("read worktree .git file");
+        let admin = gitfile
+            .trim()
+            .strip_prefix("gitdir:")
+            .expect("gitdir: prefix")
+            .trim();
+        std::fs::create_dir_all(Path::new(admin).join("rebase-merge"))
+            .expect("create rebase-merge marker");
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let structure = get_repo_structure_impl(&state, repo_path.to_string_lossy().to_string())
+            .await
+            .expect("get_repo_structure_impl");
+
+        let wt_real = wt_path
+            .canonicalize()
+            .unwrap_or(wt_path)
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            structure.in_progress_worktrees.contains(&wt_real),
+            "busy worktree must be reported in_progress, got {:?}",
+            structure.in_progress_worktrees
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_structure_reports_no_in_progress_worktrees_when_none_are_busy() {
+        let (_dir, repo_path) = setup_test_repo_with_commit();
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let structure = get_repo_structure_impl(&state, repo_path.to_string_lossy().to_string())
+            .await
+            .expect("get_repo_structure_impl");
+
+        assert!(
+            structure.in_progress_worktrees.is_empty(),
+            "got {:?}",
+            structure.in_progress_worktrees
+        );
+    }
+
     #[tokio::test]
     async fn stage_files_adds_to_index() {
         let (_dir, path) = setup_test_repo_with_commit();
