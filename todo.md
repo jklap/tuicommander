@@ -145,3 +145,25 @@ listed here.
 - **Estimated complexity:** S–M.
 - **Recommended priority:** P3 (documented, tested, no live impact today).
 
+### `TUIC_PTY_TTY` has no multi-pane disambiguation or device-path-staleness handling
+- **Problem/opportunity:** `TUIC_PTY_TTY` (stamped in
+  `pty.rs::spawn_pty_pair_with_retry`, the sole injection point) is the primary
+  mechanism `tuic-hook` uses to resolve which pty to write its OSC 7770 signal to. Two
+  residual risks were surfaced during its security review and never tracked: (1) no
+  multi-pane disambiguation — two agents running in two tmux/screen panes under one
+  outer pty share a single `TUIC_PTY_TTY`, with no way to attribute an emission to the
+  right pane; (2) device-path staleness — an escaped, daemonized grandchild process can
+  hold a stale `TUIC_PTY_TTY` after its own pty closes, and the OS can reassign that
+  device path to an unrelated later session.
+- **Proposed solution:** Not designed yet. A multi-pane fix likely needs a
+  pane-qualified identifier rather than a bare device path; the staleness case likely
+  needs the receiving TerminalGrid to validate the writer still corresponds to a live,
+  owned session rather than trusting the device path alone.
+- **Expected benefits:** Removes two named-but-unhandled correctness edge cases in a
+  mechanism every hook-instrumented agent session depends on.
+- **Trade-offs:** Both are narrow and low-severity today (no report of either actually
+  firing); designing a fix before a concrete failure is observed risks solving the wrong
+  shape of problem.
+- **Estimated complexity:** M (needs design work, not just a patch).
+- **Recommended priority:** P3.
+

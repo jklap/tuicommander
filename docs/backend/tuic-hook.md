@@ -3,8 +3,11 @@
 `tuic-hook` is the native sidecar TUICommander installs into an AI coding agent's own
 hook configuration (Claude Code, Gemini, Grok, Codex) to drive that agent's
 busy/idle/awaiting state and turn-failure flagging inside TUICommander. It emits
-`OSC 7770;verb=payload` escapes to the calling agent's controlling tty; TUICommander
-reads them back off its own PTY byte stream (see
+`OSC 7770;verb=payload` escapes to the pty TUICommander created for the calling
+agent's session — via `TUIC_PTY_TTY`, stamped onto every child TUICommander spawns
+(`src-tauri/src/pty.rs::spawn_pty_pair_with_retry`), with an ancestor-walk fallback
+for agents TUICommander didn't spawn. TUICommander reads the emissions back off its
+own PTY byte stream (see
 [Alacritty Integration → OSC 7770](./alacritty-integration.md#osc-7770--tuic-protocol)
 for the wire-level verb table and consumer side).
 
@@ -128,8 +131,13 @@ hook event, including ones that used to skip stdin entirely.
 | Variable | Purpose |
 |---|---|
 | `TUIC_SESSION` | Must be set and non-empty, or every flag is a no-op (checked here, and redundantly in the installed shell command's guard — see `agent_hook.rs`). |
+| `TUIC_PTY_TTY` | The pty device path TUICommander stamps onto every child it spawns (`src-tauri/src/pty.rs::spawn_pty_pair_with_retry`). Primary resolution mechanism — TUICommander already knows the device, so there's nothing to infer. Wins over the ancestor walk below. |
 | `TUIC_HOOK_TTY` | Overrides the resolved tty write target. Test seam only; never set in production. |
 | `TUIC_HOOK_DEBUG` | If set to a non-empty value, prints the resolved tty path to stderr. |
+
+Without `TUIC_PTY_TTY` (an agent TUICommander didn't spawn, or an old binary), `tuic-hook`
+falls back to walking process ancestors for the first one with a controlling tty
+(`src-tauri/crates/tuic-hook/src/tty.rs`), then to `/dev/tty`.
 
 ## Wire format
 

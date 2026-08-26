@@ -286,7 +286,7 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
   </section>
 
   <section class="module" id="cli">
-    <div class="module-head"><h2>The CLI Surface</h2><span class="count">7 flags, 3 env vars</span></div>
+    <div class="module-head"><h2>The CLI Surface</h2><span class="count">7 flags, 4 env vars</span></div>
     <p class="dek">By default, stage 3 of the pipeline above is driven by <code>hook_event_name</code>
     alone — the Claude Code events table below <em>is</em> the derivation table
     (<code>DERIVATIONS</code> in <code>crates/tuic-hook/src/main.rs</code>). Every flag here
@@ -314,7 +314,8 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
         <thead><tr><th>Variable</th><th>Purpose</th></tr></thead>
         <tbody>
           <tr><td><code>TUIC_SESSION</code></td><td>Must be set and non-empty, or every flag above is a no-op.</td></tr>
-          <tr><td><code>TUIC_HOOK_TTY</code></td><td>Overrides the resolved tty write target — test seam only.</td></tr>
+          <tr><td><code>TUIC_PTY_TTY</code></td><td>Primary tty-resolution mechanism — stamped by TUICommander onto every pty it spawns (<code>spawn_pty_pair_with_retry</code>), so a hook subprocess writes straight back to the pty TUICommander already knows about instead of relying only on an ancestor-process walk.</td></tr>
+          <tr><td><code>TUIC_HOOK_TTY</code></td><td>Overrides the resolved tty write target (including <code>TUIC_PTY_TTY</code>) — test seam only.</td></tr>
           <tr><td><code>TUIC_HOOK_DEBUG</code></td><td>If set, prints the resolved tty path to stderr.</td></tr>
         </tbody>
       </table>
