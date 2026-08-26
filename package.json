@@ -19,6 +19,7 @@
     "build:sidecar": "node src-tauri/build-sidecar.mjs",
     "test": "vitest",
     "test:plugins": "node scripts/run-plugin-tests.mjs",
+    "test:plugins:test": "node scripts/run-plugin-tests.mjs --self-test",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
