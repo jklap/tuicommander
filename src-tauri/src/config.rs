@@ -1736,50 +1736,6 @@ fn test_load_app_config_delay() {
     }
 }
 
-/// A cheap fingerprint of a config file's on-disk state, used to detect whether it
-/// changed between a `load()` and a later `save_checked()`. `(mtime, len)` rather than
-/// a content hash: one `stat(2)`, no read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Stamp {
-    Missing,
-    Present {
-        mtime: std::time::SystemTime,
-        len: u64,
-    },
-}
-
-impl Stamp {
-    fn of(path: &std::path::Path) -> Self {
-        match std::fs::metadata(path) {
-            Ok(meta) => Stamp::Present {
-                mtime: meta.modified().unwrap_or(std::time::UNIX_EPOCH),
-                len: meta.len(),
-            },
-            Err(_) => Stamp::Missing,
-        }
-    }
-}
-
-/// Error from a stamp-checked config write.
-#[derive(Debug)]
-pub(crate) enum ConfigWriteError {
-    /// The on-disk file changed since the caller's `Stamp` was captured — the write was
-    /// refused instead of silently clobbering whatever produced that change.
-    Conflict,
-    Io(String),
-}
-
-impl std::fmt::Display for ConfigWriteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfigWriteError::Conflict => {
-                write!(f, "config file changed on disk since it was last read")
-            }
-            ConfigWriteError::Io(e) => write!(f, "{e}"),
-        }
-    }
-}
-
 /// A cross-process-safe on-disk config file.
 ///
 /// Two independent locks protect every write:
@@ -1847,14 +1803,6 @@ where
         persist_atomic(&self.path, json.as_bytes())
     }
 
-    /// Read the current value and a `Stamp` of the file it came from, captured from the
-    /// same `stat` call used to decide existence — so the stamp can never drift from
-    /// the content it describes.
-    pub(crate) fn load(&self) -> (T, Stamp) {
-        let stamp = Stamp::of(&self.path);
-        (load_json_config_from_path(&self.path), stamp)
-    }
-
     /// Read-modify-write under both locks. `mutate` receives a value freshly re-read
     /// from disk *inside* the file lock — any value the caller loaded earlier is
     /// discarded — so the closure always mutates the latest on-disk state, never a
@@ -1900,25 +1848,6 @@ where
             self.write_atomic(&value)?;
         }
         Ok(result)
-    }
-
-    /// Write `value` only if the on-disk file still matches `stamp` — otherwise return
-    /// `Conflict` instead of overwriting whatever produced the change in between. This
-    /// only protects against a race window as wide as the caller's own `load()`-to-
-    /// `save_checked()` span, not a UI session that loaded the value long before.
-    //
-    // This is deliberately limited to whole-document domains whose command captures a
-    // stamp immediately before saving. It narrows the backend race but is not a
-    // UI-session conflict protocol and must not be extended into one. Ordinary
-    // AppConfig and upstream MCP writes instead apply semantic deltas under the file
-    // lock; see docs/decisions/2026-08-08-config-deltas-under-lock.md.
-    pub(crate) fn save_checked(&self, value: &T, stamp: Stamp) -> Result<(), ConfigWriteError> {
-        let _guard = CONFIG_WRITE_LOCK.lock();
-        let _file_lock = self.acquire_file_lock().map_err(ConfigWriteError::Io)?;
-        if Stamp::of(&self.path) != stamp {
-            return Err(ConfigWriteError::Conflict);
-        }
-        self.write_atomic(value).map_err(ConfigWriteError::Io)
     }
 
     /// Write `value` unconditionally, taking only the cross-process file lock — no
@@ -2161,8 +2090,7 @@ pub(crate) fn load_notification_config() -> NotificationConfig {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_notification_config(config: NotificationConfig) -> Result<(), String> {
     let file: ConfigFile<NotificationConfig> = ConfigFile::new(NOTIFICATION_CONFIG_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    file.save(&config)
 }
 
 // UI prefs
@@ -2174,8 +2102,7 @@ pub(crate) fn load_ui_prefs() -> UIPrefsConfig {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_ui_prefs(config: UIPrefsConfig) -> Result<(), String> {
     let file: ConfigFile<UIPrefsConfig> = ConfigFile::new(UI_PREFS_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    file.save(&config)
 }
 
 // Repo settings
@@ -2187,8 +2114,7 @@ pub(crate) fn load_repo_settings() -> RepoSettingsMap {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repo_settings(config: RepoSettingsMap) -> Result<(), String> {
     let file: ConfigFile<RepoSettingsMap> = ConfigFile::new(REPO_SETTINGS_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    file.save(&config)
 }
 
 /// Set or clear a human-readable label for a branch/worktree within a repo.
@@ -2371,8 +2297,7 @@ pub(crate) fn load_repo_defaults() -> RepoDefaultsConfig {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repo_defaults(config: RepoDefaultsConfig) -> Result<(), String> {
     let file: ConfigFile<RepoDefaultsConfig> = ConfigFile::new(REPO_DEFAULTS_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    file.save(&config)
 }
 
 /// Resolve the effective setup script for a repo using the three-tier hierarchy:
@@ -2793,8 +2718,7 @@ pub(crate) fn load_pane_layout() -> serde_json::Value {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_pane_layout(layout: serde_json::Value) -> Result<(), String> {
     let file: ConfigFile<serde_json::Value> = ConfigFile::new(PANE_LAYOUT_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&layout, stamp).map_err(|e| e.to_string())
+    file.save(&layout)
 }
 
 // Prompt library
@@ -2806,8 +2730,7 @@ pub(crate) fn load_prompt_library() -> PromptLibraryConfig {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_prompt_library(config: PromptLibraryConfig) -> Result<(), String> {
     let file: ConfigFile<PromptLibraryConfig> = ConfigFile::new(PROMPT_LIBRARY_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    file.save(&config)
 }
 
 // Notes (opaque JSON — schema owned by frontend)
@@ -2823,8 +2746,7 @@ pub(crate) fn load_notes() -> Result<serde_json::Value, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_notes(config: serde_json::Value) -> Result<(), String> {
     let file: ConfigFile<serde_json::Value> = ConfigFile::new(NOTES_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    file.save(&config)
 }
 
 // Activity center (opaque JSON — schema owned by frontend)
@@ -2836,8 +2758,7 @@ pub(crate) fn load_activity() -> serde_json::Value {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_activity(items: serde_json::Value) -> Result<(), String> {
     let file: ConfigFile<serde_json::Value> = ConfigFile::new(ACTIVITY_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&items, stamp).map_err(|e| e.to_string())
+    file.save(&items)
 }
 
 // Keybindings (opaque JSON — schema owned by frontend)
@@ -2849,8 +2770,7 @@ pub(crate) fn load_keybindings() -> serde_json::Value {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_keybindings(config: serde_json::Value) -> Result<(), String> {
     let file: ConfigFile<serde_json::Value> = ConfigFile::new(KEYBINDINGS_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    file.save(&config)
 }
 
 // Agents config
@@ -2862,8 +2782,7 @@ pub(crate) fn load_agents_config() -> AgentsConfig {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_agents_config(config: AgentsConfig) -> Result<(), String> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    file.save(&config)
 }
 
 // AI prompts
@@ -2875,8 +2794,7 @@ pub(crate) fn load_ai_prompts() -> AiPromptsConfig {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_ai_prompts(config: AiPromptsConfig) -> Result<(), String> {
     let file: ConfigFile<AiPromptsConfig> = ConfigFile::new(AI_PROMPTS_FILE);
-    let (_, stamp) = file.load();
-    file.save_checked(&config, stamp).map_err(|e| e.to_string())
+    file.save(&config)
 }
 
 // ---------------------------------------------------------------------------
@@ -5803,7 +5721,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // ConfigFile<T> — cross-process-safe load/update/save_checked
+    // ConfigFile<T> — cross-process-safe update/save
     // -----------------------------------------------------------------
 
     #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -5840,7 +5758,7 @@ mod tests {
         t2.join().unwrap();
 
         let file: ConfigFile<CounterDoc> = ConfigFile::new("counters.json");
-        let (doc, _stamp) = file.load();
+        let doc: CounterDoc = load_json_config_from_path(&file.path);
         assert_eq!(
             doc.counters.get("a"),
             Some(&1),
@@ -5868,71 +5786,22 @@ mod tests {
         );
     }
 
+    /// The uncontended half of the contract above: a document another writer replaced
+    /// since this caller last read it is overwritten, not refused. Whole-document saves
+    /// are last-writer-wins by definition — the caller discards what `load()` returned.
     #[test]
     #[serial_test::serial]
-    fn save_checked_rejects_a_write_when_the_file_changed_underneath() {
+    fn a_whole_document_save_overwrites_a_document_replaced_since_the_last_read() {
         let dir = TempDir::new().expect("temp dir");
         let _guard = set_config_dir_override(dir.path().to_path_buf());
-        let file: ConfigFile<CounterDoc> = ConfigFile::new("doc.json");
 
-        let mut initial = CounterDoc::default();
-        initial.counters.insert("x".to_string(), 1);
-        file.save(&initial).unwrap();
+        save_activity(serde_json::json!([{ "id": 1 }])).expect("seed write");
+        ConfigFile::<serde_json::Value>::new(ACTIVITY_FILE)
+            .save(&serde_json::json!([{ "id": 2 }]))
+            .expect("interloper write");
 
-        let (loaded, stamp) = file.load();
-        assert_eq!(loaded, initial);
-
-        // Someone else writes to the file in between the caller's load and save.
-        let mut interloper = CounterDoc::default();
-        interloper.counters.insert("x".to_string(), 999);
-        file.save(&interloper).unwrap();
-
-        let mut attempted = loaded;
-        attempted.counters.insert("y".to_string(), 2);
-        let result = file.save_checked(&attempted, stamp);
-        assert!(
-            matches!(result, Err(ConfigWriteError::Conflict)),
-            "expected Conflict, got {result:?}"
-        );
-
-        let (on_disk, _) = file.load();
-        assert_eq!(
-            on_disk, interloper,
-            "a rejected save_checked must not overwrite the interloper's write"
-        );
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn save_checked_succeeds_when_the_stamp_still_matches() {
-        let dir = TempDir::new().expect("temp dir");
-        let _guard = set_config_dir_override(dir.path().to_path_buf());
-        let file: ConfigFile<CounterDoc> = ConfigFile::new("doc.json");
-
-        let initial = CounterDoc::default();
-        file.save(&initial).unwrap();
-        let (loaded, stamp) = file.load();
-
-        let mut updated = loaded;
-        updated.counters.insert("z".to_string(), 5);
-        file.save_checked(&updated, stamp)
-            .expect("stamp still matches, save must succeed");
-
-        let (on_disk, _) = file.load();
-        assert_eq!(on_disk, updated);
-    }
-
-    #[test]
-    fn stamp_differs_before_and_after_an_external_write() {
-        let dir = TempDir::new().expect("temp dir");
-        let path = dir.path().join("doc.json");
-        fs::write(&path, "{}").unwrap();
-        let before = Stamp::of(&path);
-
-        fs::write(&path, "{\"a\":1}").unwrap();
-        let after = Stamp::of(&path);
-
-        assert_ne!(before, after);
+        save_activity(serde_json::json!([{ "id": 3 }])).expect("must not be refused");
+        assert_eq!(load_activity(), serde_json::json!([{ "id": 3 }]));
     }
 
     #[test]
