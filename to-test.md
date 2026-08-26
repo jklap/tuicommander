@@ -35,6 +35,38 @@ no items left goes too. What stays open must carry its own stated reason.
 > loaded. That skew already cost the repo list once (first section below). The
 > 08-21 sections stay open until a `make dev` restart.
 
+## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
+
+`drag::Image` has no "no image" variant, so an unresolvable `icons/drag-file.png`
+was `ImageNotFound` and killed the whole drag session — a cosmetic asset was
+load-bearing. The icon is now compiled in (`include_bytes!`) and used whenever the
+resolved path is not a real file.
+
+- [ ] Drag a file from the file browser onto a terminal tab, onto the editor pane,
+  and out to Finder. All three must start a real OS drag.
+- [ ] Confirm `GET http://localhost:9876/logs` shows no `Native drag failed` /
+  `drag image not found` warning afterwards.
+- [ ] Drag a file onto another folder **inside** the tree — the internal move must
+  still work (it never went through the icon path, so this is a no-regression check).
+
+## Config saves stop being refused, and a broken wide char stops ghosting (2026-08-25, **Rust change — needs `make dev` restart**)
+
+Three backend fixes from the 5-day regression review. All three are invisible until
+the running binary is replaced.
+
+- [ ] `save_checked` and its stamp guard are gone: every whole-document save
+  (`save_activity`, `save_ui_prefs`, `save_notes`, …) is now plain last-writer-wins.
+  Exercise the app normally for an hour and confirm `GET http://localhost:9876/logs`
+  shows **no** `config write refused` / stamp-mismatch lines — before the fix these
+  dropped ~30 activity items in 2.5h while protecting nothing.
+- [ ] Print a fullwidth char and overwrite half of it (`printf '\e[1;5H中'` then
+  `printf '\e[1;6HX'` in a terminal tab). The leading half must not survive as a
+  ghost `中` beside the `X` — the damaged span now covers both cells of the pair.
+  Scroll away and back to confirm it is not just hidden by a later full-row reship.
+- [ ] Answer the FIRST sub-question of a multi-question `AskUserQuestion` on a
+  non-hook agent (grok/codex) and confirm the tab's hover text shows the real
+  question, not the `⊠ … ✓ Submit` footer row.
+
 ## "Capture Session" in the tab context menu (2026-08-22, **Rust change — needs `make dev` restart**)
 
 New `get_pty_capture` / `set_pty_capture` commands plus a **Capture Session** item in the
@@ -1113,3 +1145,26 @@ echo '{"mutationVersion":1,"repos":[],"groups":[]}' > "$D/repositories.json"
   saves again.
 - [ ] A genuinely empty file (`{}`) still starts a fresh install: empty list, no
   error, and adding a repo persists.
+
+## mdkb code intelligence — after `make dev` restart AND a fresh mdkb install
+
+Rust change: needs a TUIC restart. It ALSO needs an mdkb newer than 3.7.17 —
+`code_graph` only carries the machine-readable `symbols` field from the commit
+added alongside this fix. Build and install mdkb first (`cargo build --release`
+in the mdkb repo, then put the binary in a trusted dir), otherwise find-references
+fails with "code_graph response has no 'symbols'".
+
+- [ ] **Find references** (Shift+F12 on a symbol in the code editor) lists the
+  callers. Before this fix it silently returned an empty list, always — mdkb
+  answers `code_graph` with prose and TUIC was parsing it as JSON.
+- [ ] Clicking a reference opens the caller **on the right line**, not one line
+  above it. mdkb ranges are 0-based; TUIC now shifts them.
+- [ ] **Outline panel**: clicking a symbol lands on its own line, not the line
+  before. Check a symbol on line 1 of a file too — it used to clamp to line 1
+  either way, hiding the off-by-one.
+- [ ] **Cmd+Click go-to-definition** in the editor lands on the right line.
+- [ ] Outline nesting: methods inside a type are indented one level, top-level
+  functions are not. (Previously everything with any scope got the same indent.)
+- [ ] With the OLD mdkb still installed, find-references shows no results and
+  logs `mdkb_references failed: ... no 'symbols'` — it must NOT look like a
+  symbol with zero callers. Check `GET http://localhost:9876/logs`.
