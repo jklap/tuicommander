@@ -8795,6 +8795,7 @@ version = "1.7.4"
 dependencies = [
  "libc",
  "serde_json",
+ "serial_test",
  "tempfile",
 ]
 
