@@ -234,7 +234,9 @@ export interface DecodedFrame {
 	cursorRow: number;
 	cursorCol: number;
 	cursorVisible: boolean;
-	cursorShape: "block" | "underline" | "beam";
+	/** "default" means the app has not requested a shape via DECSCUSR — the
+	 *  caller should fall back to the user's cursor-style setting. */
+	cursorShape: "block" | "underline" | "beam" | "default";
 	displayOffset: number;
 	historySize: number;
 	/** Lines evicted from the history top so far (monotonic within a resize era).
@@ -247,6 +249,14 @@ export interface DecodedFrame {
 	 *  enter/exit, so the absolute-row cache MUST be dropped when this flips —
 	 *  otherwise a primary-screen row can alias onto an alt row at the same key. */
 	altScreen: boolean;
+	/** DECCKM (application cursor keys) active. When true, unmodified
+	 *  arrows/Home/End must be sent as SS3 (`\x1bO{A,B,C,D,H,F}`) instead of
+	 *  CSI (`\x1b[{A,B,C,D,H,F}`). */
+	appCursor: boolean;
+	/** The app requested a steady (non-blinking) cursor via DECSCUSR (an even
+	 *  Ps, e.g. `\x1b[2 q`). False also covers "no DECSCUSR seen" — today's
+	 *  default is to blink a focused cursor. */
+	cursorSteady: boolean;
 	bell: boolean;
 	mouseMode: 0 | 1 | 2 | 3;
 	sgrMouse: boolean;
@@ -299,6 +309,21 @@ export interface FrameGridDecision {
  * (frame.screenRows === 0): onFrame passes lastResizeRows. The backend always sets
  * frame.screenRows in practice, so the fallback only differs on degenerate frames.
  */
+/**
+ * Map a DOM `MouseEvent.buttons` bitmask to an SGR mouse-report button code
+ * for a *motion* report (xterm `?1002h`/`?1003h`): 0=left, 1=middle, 2=right,
+ * 3="no button" — the code reserved for a bare hover. An app tracking its own
+ * click-drag from motion reports (e.g. Claude Code's own text selection)
+ * needs the actually-held button here to tell a drag from a hover; reporting
+ * 3 unconditionally makes every drag look like a hover with nothing pressed.
+ */
+export function sgrMotionButton(buttons: number): 0 | 1 | 2 | 3 {
+	if (buttons & 1) return 0;
+	if (buttons & 4) return 1;
+	if (buttons & 2) return 2;
+	return 3;
+}
+
 export function decideFrameGrid(prev: FrameGridPrev, frame: DecodedFrame, fallbackRows: number): FrameGridDecision {
 	const geomChanged = frame.screenRows !== prev.lastScreenRows || frame.screenCols !== prev.lastScreenCols;
 	const previousViewportTop = prev.lastHistoryBase + prev.lastHistorySize - prev.lastDisplayOffset;
@@ -601,14 +626,17 @@ export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number
 	offset += 2;
 	const historyBase = view.getUint32(offset, true);
 	offset += 4;
-	// bit5 of keyboard_flags is the alt-screen state, not a keyboard flag — it
-	// rides there because frame_flags is full (see serialize_dirty_rows).
+	// bits 5-7 of keyboard_flags ride along as alt-screen / app-cursor /
+	// cursor-steady state, not keyboard flags — they land here because
+	// frame_flags is full (see serialize_dirty_rows).
 	const altScreen = (rawKeyboardFlags & 0x20) !== 0;
+	const appCursor = (rawKeyboardFlags & 0x40) !== 0;
+	const cursorSteady = (rawKeyboardFlags & 0x80) !== 0;
 	const keyboardFlags = rawKeyboardFlags & 0x1f;
 	const bell = (frameFlags & 0x01) !== 0;
 	const cursorShapeRaw = (frameFlags >> 1) & 0x03;
-	const cursorShape: "block" | "underline" | "beam" =
-		cursorShapeRaw === 2 ? "beam" : cursorShapeRaw === 1 ? "underline" : "block";
+	const cursorShape: "block" | "underline" | "beam" | "default" =
+		cursorShapeRaw === 3 ? "default" : cursorShapeRaw === 2 ? "beam" : cursorShapeRaw === 1 ? "underline" : "block";
 	const mouseMode = ((frameFlags >> 3) & 0x03) as 0 | 1 | 2 | 3;
 	const sgrMouse = (frameFlags & 0x20) !== 0;
 	const focusReporting = (frameFlags & 0x40) !== 0;
@@ -735,6 +763,8 @@ export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number
 		hasSelection,
 		keyboardFlags,
 		altScreen,
+		appCursor,
+		cursorSteady,
 		bell,
 		mouseMode,
 		sgrMouse,
@@ -849,6 +879,27 @@ export function snapLineHeight(fontSize: number, target: number = 1.2): number {
 
 export type CursorShape = "block" | "beam" | "underline";
 
+/**
+ * Resolve the shape to paint from the frame's DECSCUSR state and the user's
+ * cursor-style setting. An app-requested shape (including an explicit "block")
+ * always wins — matching iTerm2/Alacritty/kitty/WezTerm — and is what makes a
+ * vi normal-mode block cursor visible. "default" means the app never sent
+ * DECSCUSR, so the user's setting applies.
+ */
+export function resolveCursorShape(frameShape: DecodedFrame["cursorShape"], settingShape: CursorShape): CursorShape {
+	return frameShape === "default" ? settingShape : frameShape;
+}
+
+/**
+ * Whether the cursor should be painted on this tick, given the blink phase
+ * and whether the app requested a steady (non-blinking) cursor via DECSCUSR.
+ * A steady request always paints — it opts out of the blink cycle entirely,
+ * rather than just starting from a different phase.
+ */
+export function shouldPaintCursor(cursorBlinkOn: boolean, cursorSteady: boolean): boolean {
+	return cursorSteady || cursorBlinkOn;
+}
+
 export interface CursorRect {
 	x: number;
 	y: number;
@@ -856,18 +907,46 @@ export interface CursorRect {
 	h: number;
 }
 
-/** Compute the pixel rectangle for a cursor at the given grid position. */
-export function computeCursorRect(shape: CursorShape, row: number, col: number, m: CellMetrics): CursorRect {
+/**
+ * Compute the pixel rectangle for a cursor at the given grid position.
+ *
+ * `spanCols` widens a block/underline cursor to cover a wide glyph (CJK,
+ * emoji, …) that bleeds into the next cell — the wire protocol carries no
+ * "is this cell wide" flag (the spacer cell it occupies is indistinguishable
+ * from a genuinely empty cell), so the caller determines width by measuring
+ * the actual glyph (see `isWideCursorGlyph`) rather than from frame data. A
+ * beam cursor stays a fixed-width insertion marker regardless, matching how
+ * other terminals render it.
+ */
+export function computeCursorRect(
+	shape: CursorShape,
+	row: number,
+	col: number,
+	m: CellMetrics,
+	spanCols: 1 | 2 = 1,
+): CursorRect {
 	const x = col * m.cellWidth;
 	const y = row * m.cellHeight;
 	switch (shape) {
 		case "block":
-			return { x, y, w: m.cellWidth, h: m.cellHeight };
+			return { x, y, w: m.cellWidth * spanCols, h: m.cellHeight };
 		case "beam":
 			return { x, y, w: 2, h: m.cellHeight };
 		case "underline":
-			return { x, y: y + m.cellHeight - 2, w: m.cellWidth, h: 2 };
+			return { x, y: y + m.cellHeight - 2, w: m.cellWidth * spanCols, h: 2 };
 	}
+}
+
+/**
+ * Whether a glyph measured at `measuredWidthPx` occupies two grid columns
+ * rather than one, given the terminal's cell width. Driven by an actual
+ * canvas `measureText` result (not a Unicode East-Asian-Width table) because
+ * that is what the renderer already does to lay the glyph out — it stays
+ * correct for exactly the same set of characters the renderer treats as wide,
+ * with no separate width table to keep in sync.
+ */
+export function isWideCursorGlyph(measuredWidthPx: number, cellWidth: number): boolean {
+	return measuredWidthPx > cellWidth * 1.5;
 }
 
 /**
