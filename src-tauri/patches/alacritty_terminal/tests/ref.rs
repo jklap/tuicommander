@@ -133,14 +133,45 @@ fn ref_test(dir: &Path) {
             return;
         }
 
-        for i in 0..grid.total_lines() {
-            for j in 0..grid.columns() {
-                let cell = &term_grid[Line(i as i32)][Column(j)];
-                let original_cell = &grid[Line(i as i32)][Column(j)];
-                if original_cell != cell {
-                    println!("[{i}][{j}] {original_cell:?} => {cell:?}",);
+        if grid.total_lines() != term_grid.total_lines() {
+            println!(
+                "Dimensions differ: expected total_lines={} vs. actual total_lines={} \
+                 (columns expected={} actual={}) — replay produced a different scrollback/reflow \
+                 size than the fixture, so the per-cell diff below only covers the overlap.",
+                grid.total_lines(),
+                term_grid.total_lines(),
+                grid.columns(),
+                term_grid.columns(),
+            );
+        }
+
+        let lines = grid.total_lines().min(term_grid.total_lines());
+        let columns = grid.columns().min(term_grid.columns());
+        // Some checked-in fixtures carry a `raw.visible_lines` one (or more)
+        // short of their own `total_lines`/`lines` — harmless for the
+        // `PartialEq` comparison above (which never indexes by `Line`), but
+        // `Index<Line>` enforces `requested < visible_lines` via a
+        // `debug_assert`, so indexing a fixture at its own recorded
+        // `total_lines` can panic. This is diagnostic best-effort output for
+        // an already-failing test, not the failure itself (that's the
+        // `assert_eq!` below), so swallow the panic rather than let it hide
+        // the real one under a `compute_index` message and location.
+        let diffed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for i in 0..lines {
+                for j in 0..columns {
+                    let cell = &term_grid[Line(i as i32)][Column(j)];
+                    let original_cell = &grid[Line(i as i32)][Column(j)];
+                    if original_cell != cell {
+                        println!("[{i}][{j}] {original_cell:?} => {cell:?}",);
+                    }
                 }
             }
+        }));
+        if diffed.is_err() {
+            println!(
+                "Per-cell diff aborted: indexing one of the grids panicked (likely the \
+                 `visible_lines`-vs-`total_lines` fixture quirk noted above)."
+            );
         }
 
         panic!("Ref test failed; grid doesn't match");

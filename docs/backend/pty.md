@@ -267,6 +267,7 @@ For a managed Claude child with workspace trust acceptance enabled, the rendered
 
 The same per-session policy (`managed_first_run`) covers every managed child: an `agent spawn` child and a workflow-launched agent use one spawn path. A managed Claude child also answers the external `CLAUDE.md` imports dialog with its default **No, disable external imports** (Enter), once. A first-run dialog that TUIC does not answer (its `Enter to confirm · Esc to cancel` footer is the last row, and it is not a known dialog with its default selection, or trust acceptance is off) sets `awaiting_input` with the dialog text. The parent receives the usual `awaiting_input` notice with that text, and a workflow run shows its awaiting-input incident. Recorded in `claude-first-run-3017.tcap` (Claude Code 2.1.322).
 
+**Cursor-up clamping** — there is no reader-thread-level clamp on `ESC[nA` (cursor up) / `ESC[nF` (cursor previous line) sequences; a `clamp_cursor_up()` function used to fill that role but no longer exists. Cursor bounds are enforced by the terminal grid itself (`alacritty_terminal`'s `Term::move_up`/`move_up_and_cr`, driven from `terminal_grid.rs`), which clamps to the screen's top line.
 
 **Pause behavior:** When `paused` flag is set (`AtomicBool`), the reader thread sleeps in 10 ms slices instead of reading. This prevents output flooding during background operations.
 
