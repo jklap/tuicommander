@@ -19,6 +19,11 @@ const selfTest = process.argv.includes("--self-test");
 
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".rs"];
 
+// `src-tauri/src` alone misses the OTHER three Cargo workspace crates under
+// `src-tauri/crates/*/src` (tuic-hook, tuic-cli, tuic-bridge) — found missing
+// during a review of the tuic-hook work this checker was meant to protect.
+const REAL_ROOTS = ["src", "src-tauri/src", "src-tauri/crates"];
+
 function listTrackedFiles(roots, cwd) {
 	const result = spawnSync("git", ["ls-files", "-z", "--", ...roots], { cwd, encoding: "utf8" });
 	if (result.status !== 0) {
@@ -68,17 +73,31 @@ if (selfTest) {
 		}
 
 		process.stdout.write("NUL-byte checker: clean fixture passes, literal-NUL fixture is caught, binary assets are skipped\n");
+
+		// The generic-filter assertions above run against a throwaway fixture repo,
+		// so they'd stay green even if REAL_ROOTS regressed back to missing
+		// src-tauri/crates entirely — check the real constant against the real repo.
+		const realCrateFiles = listTrackedFiles(REAL_ROOTS, process.cwd()).filter((f) =>
+			f.startsWith("src-tauri/crates/"),
+		);
+		if (realCrateFiles.length === 0) {
+			throw new Error(
+				"REAL_ROOTS found zero files under src-tauri/crates/ in the real repo — " +
+					"the other three Cargo workspace crates (tuic-hook, tuic-cli, tuic-bridge) would be unscanned",
+			);
+		}
+		process.stdout.write(`NUL-byte checker: REAL_ROOTS covers ${realCrateFiles.length} file(s) under src-tauri/crates/\n`);
 	} finally {
 		fs.rmSync(fixtureRoot, { recursive: true, force: true });
 	}
 	process.exit(0);
 }
 
-const offenders = findNulFiles(["src", "src-tauri/src"], process.cwd());
+const offenders = findNulFiles(REAL_ROOTS, process.cwd());
 if (offenders.length > 0) {
 	process.stderr.write("Found literal NUL byte(s) in tracked source file(s):\n");
 	for (const file of offenders) process.stderr.write(`  ${file}\n`);
 	process.stderr.write("Replace the raw NUL with a \\u0000 / \\x00 escape — same runtime value, readable as text.\n");
 	process.exit(1);
 }
-process.stdout.write(`NUL-byte checker: ${offenders.length} offenders in tracked src/**, src-tauri/src/** source files\n`);
+process.stdout.write(`NUL-byte checker: ${offenders.length} offenders in tracked src/**, src-tauri/src/**, src-tauri/crates/** source files\n`);
