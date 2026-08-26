@@ -279,7 +279,7 @@ describe("repoSettingsStore", () => {
 		// cycle, the same path a TriStateToggle's "Use global"/explicit-off
 		// choice takes in production.
 		it("a tri-state field left at null survives save→hydrate and resolves to the global default", async () => {
-			mockDefaults.copyIgnoredFiles = true;
+			setMockDefaults("copyIgnoredFiles", true);
 
 			await testInScopeAsync(async () => {
 				store.getOrCreate("/repo", "my-repo");
@@ -295,11 +295,15 @@ describe("repoSettingsStore", () => {
 
 				expect(store.get("/repo")?.copyIgnoredFiles).toBeNull();
 				expect(store.getEffective("/repo")?.copyIgnoredFiles).toBe(true);
+				// getEffectiveField shares the same resolver table as getEffective (see
+				// its own doc comment) — pinning both here is what would catch the two
+				// ever being wired to different resolution logic.
+				expect(store.getEffectiveField("/repo", "copyIgnoredFiles")).toBe(true);
 			});
 		});
 
 		it("a tri-state field explicitly set to false survives save→hydrate and resolves to false, not the global default", async () => {
-			mockDefaults.copyIgnoredFiles = true;
+			setMockDefaults("copyIgnoredFiles", true);
 
 			await testInScopeAsync(async () => {
 				store.getOrCreate("/repo", "my-repo");
@@ -313,6 +317,7 @@ describe("repoSettingsStore", () => {
 
 				expect(store.get("/repo")?.copyIgnoredFiles).toBe(false);
 				expect(store.getEffective("/repo")?.copyIgnoredFiles).toBe(false);
+				expect(store.getEffectiveField("/repo", "copyIgnoredFiles")).toBe(false);
 			});
 		});
 

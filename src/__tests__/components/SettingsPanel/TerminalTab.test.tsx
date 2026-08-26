@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 import { fireEvent, render } from "@solidjs/testing-library";
+import { resetPlatformCache } from "../../../platform";
 
 const {
 	mockSetShowBlockTimestamps,
@@ -104,13 +105,14 @@ describe("TerminalTab", () => {
 		expect(mockSetShowLastPrompt).toHaveBeenCalledWith(true);
 	});
 
-	it('labels the showLastPrompt toggle "Show PTY prompt bar"', () => {
+	it('labels the showLastPrompt toggle "Show agent context bar"', () => {
 		// Every other assertion in this file is index/checked-state based and
 		// would pass unchanged if this literal (not run through t(), unlike its
 		// neighbors) silently reverted during a merge — see efab3cbe, which
-		// moved this control from GeneralTab into this file.
+		// moved this control from GeneralTab into this file, and 02e9629d
+		// (main), which renamed it from "Show PTY prompt bar" here.
 		const { container } = render(() => <TerminalTab />);
-		expect(container.textContent).toContain("Show PTY prompt bar");
+		expect(container.textContent).toContain("Show agent context bar");
 	});
 
 	it("calls setShowBlockTimestamps when its toggle changes", () => {
@@ -185,10 +187,15 @@ describe("TerminalTab", () => {
 
 		afterEach(() => {
 			if (originalPlatform) Object.defineProperty(navigator, "platform", originalPlatform);
+			resetPlatformCache();
 		});
 
 		function setPlatform(value: string) {
 			Object.defineProperty(navigator, "platform", { value, configurable: true });
+			// The component reads isMacOS(), which memoizes detectPlatform() —
+			// without this, whichever platform an earlier test in this file (or an
+			// earlier file in the same worker) set first sticks for every render.
+			resetPlatformCache();
 		}
 
 		it("labels the modifier option ⌘Click and says Cmd in the hint on macOS", () => {
