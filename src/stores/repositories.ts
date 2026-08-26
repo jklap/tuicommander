@@ -1,5 +1,6 @@
 import { batch } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import { AGENT_TYPES } from "../agents";
 import { invoke } from "../invoke";
 import type { SavedTerminal } from "../types";
 import { pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
@@ -260,6 +261,63 @@ function isMutationDeltaDocument(loaded: unknown): boolean {
 const DELTA_DOCUMENT_MESSAGE =
 	"repositories.json holds a mutation delta, not a repository document — a backend too old for the delta protocol wrote it wholesale. Refusing to hydrate, and saves stay blocked. Stop the app, restore a backup, then restart the backend.";
 
+/** The backend rejects a keyed mutation whose `before` no longer matches disk. */
+function isRepositoryConflict(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.includes("repository configuration conflict");
+}
+
+type LoadedRepositoryDocument = {
+	repos?: Record<string, RepositoryState>;
+	repoOrder?: string[];
+	activeRepoPath?: string | null;
+	groups?: Record<string, RepoGroup>;
+	groupOrder?: string[];
+};
+
+/** Re-read the persisted document. Returns null for a delta document, which must
+ * never be treated as repository state (see `isMutationDeltaDocument`). */
+async function loadPersistedSnapshot(): Promise<RepositorySnapshot | null> {
+	const loaded = await invoke<LoadedRepositoryDocument>("load_repositories");
+	if (isMutationDeltaDocument(loaded)) {
+		appLogger.error("store", DELTA_DOCUMENT_MESSAGE);
+		return null;
+	}
+	return snapshotFromLoaded(loaded);
+}
+
+function rebaseKeyed<T extends RepositoryState | RepoGroup>(
+	mutations: KeyedRepositoryMutation[],
+	records: Record<string, T>,
+): KeyedRepositoryMutation[] {
+	return mutations
+		.map((mutation) => ({ ...mutation, before: records[mutation.id] ?? null }))
+		.filter((mutation) => !jsonEqual(mutation.before, mutation.after));
+}
+
+/** Re-express a rejected batch against the document currently on disk: every
+ * `after` is kept (this client's intent) and every `before` is taken from disk.
+ * Only the records this client meant to change are touched — resetting the whole
+ * baseline instead would make the next diff revert whatever another writer changed
+ * in the meantime, because this client's in-memory copy of those records is stale. */
+function rebaseMutationBatch(batch: RepositoryMutationBatch, fresh: RepositorySnapshot): RepositoryMutationBatch {
+	const rebased: RepositoryMutationBatch = {
+		mutationVersion: 1,
+		repos: rebaseKeyed(batch.repos, fresh.repos),
+		groups: rebaseKeyed(batch.groups, fresh.groups),
+	};
+	if (batch.repoOrder && !jsonEqual(fresh.repoOrder, batch.repoOrder.after)) {
+		rebased.repoOrder = { before: fresh.repoOrder, after: batch.repoOrder.after };
+	}
+	if (batch.activeRepoPath && fresh.activeRepoPath !== batch.activeRepoPath.after) {
+		rebased.activeRepoPath = { before: fresh.activeRepoPath, after: batch.activeRepoPath.after };
+	}
+	if (batch.groupOrder && !jsonEqual(fresh.groupOrder, batch.groupOrder.after)) {
+		rebased.groupOrder = { before: fresh.groupOrder, after: batch.groupOrder.after };
+	}
+	return rebased;
+}
+
 /** Guard: prevent saves before hydrate completes to avoid nuking persisted data */
 let hydrated = false;
 
@@ -282,10 +340,7 @@ function drainRepositorySaveQueue(): void {
 	}
 
 	saveInFlight = true;
-	invoke("save_repositories", { config: mutation })
-		.then(() => {
-			persistedSnapshot = next;
-		})
+	persistRepositoryMutation(mutation, next)
 		.catch((err: unknown) => {
 			// An error-level entry increments the visible Errors badge. In particular,
 			// same-record conflicts must never remain a debug-only lost mutation.
@@ -298,6 +353,41 @@ function drainRepositorySaveQueue(): void {
 			saveInFlight = false;
 			if (queuedSnapshot) drainRepositorySaveQueue();
 		});
+}
+
+/**
+ * Persist one mutation batch, recovering from a compare-and-swap rejection.
+ *
+ * `persistedSnapshot` is the baseline every later diff is computed from. Leaving it
+ * stale after a rejection wedged the client permanently: the next save diffed against
+ * a document disk had already moved past, so it was rejected too — for every repo, not
+ * just the conflicting one, for the life of the session. One backend serves several
+ * clients (desktop WebView, browser, PWA) and a successful save broadcasts nothing, so
+ * a stale baseline is routine, not exotic.
+ */
+async function persistRepositoryMutation(mutation: RepositoryMutationBatch, next: RepositorySnapshot): Promise<void> {
+	try {
+		await invoke("save_repositories", { config: mutation });
+	} catch (err) {
+		if (!isRepositoryConflict(err)) throw err;
+		const fresh = await loadPersistedSnapshot();
+		if (!fresh) throw err;
+		const rebased = rebaseMutationBatch(mutation, fresh);
+		// An empty rebase means disk already holds what we wanted; nothing left to write.
+		if (hasRepositoryMutations(rebased)) {
+			await invoke("save_repositories", { config: rebased });
+		}
+	}
+	// `next`, not the document just read. The baseline must stay in step with this
+	// client's own in-memory state: a record another writer changed is equally stale
+	// in both, so it yields no mutation and their write survives. Adopting disk here
+	// would instead make the next diff revert it.
+	//
+	// DEFERRED (2026-08-25) — a record edited concurrently by two clients resolves
+	// last-writer-wins. Proper merging needs the backend to broadcast a
+	// `repositories-changed` event so clients converge before they collide; that is a
+	// bigger change than un-wedging the save path and is tracked separately.
+	persistedSnapshot = next;
 }
 
 /** Persist repos to Rust backend (fire-and-forget, terminals excluded) */
@@ -446,6 +536,17 @@ function createRepositoriesStore() {
 							branch.hadTerminals = !!branch.savedTerminals?.length;
 							if (branch.savedTerminals === undefined) {
 								branch.savedTerminals = [];
+							}
+							// A build that drops an agent leaves its name behind on disk — `fx`
+							// was first-class for five days before being reverted. `AGENT_DISPLAY`
+							// and `AGENTS` are exhaustive `Record<AgentType, …>` indexed without an
+							// existence check, so a stale name throws inside a render that no
+							// ErrorBoundary covers. Drop it once here rather than making every
+							// index site defend itself.
+							for (const saved of branch.savedTerminals) {
+								if (saved.agentType !== null && !AGENT_TYPES.includes(saved.agentType)) {
+									saved.agentType = null;
+								}
 							}
 							if (branch.isMerged === undefined) {
 								branch.isMerged = false;
