@@ -77,7 +77,16 @@ mod tests {
     // below points at its own fresh tempfile so cases can't read back
     // another case's bytes even if this function's own env mutations were
     // somehow interleaved with a concurrent test elsewhere in the crate.
+    //
+    // `#[serial_test::serial]` (bare, no key — the crate's one shared group)
+    // makes that "somehow" impossible rather than just unlikely: every
+    // TUIC_HOOK_TTY-touching test in this binary (this fn, the one below, and
+    // `tty::tests::tuic_hook_tty_env_seam`) carries the same attribute, so
+    // cargo test's default parallel threads can't interleave any of them.
+    // Without it, correctness depended entirely on nextest's one-process-
+    // per-test default (`.config/nextest.toml`) rather than anything in code.
     #[test]
+    #[serial_test::serial]
     fn emit_writes_expected_bytes_via_the_tty_seam() {
         let dir = std::env::temp_dir();
 
@@ -143,6 +152,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn emit_is_a_silent_noop_when_the_tty_cannot_be_opened() {
         // A target that does not exist: OpenOptions::open (no .create(true))
         // fails, and emit() must swallow that rather than panicking.
