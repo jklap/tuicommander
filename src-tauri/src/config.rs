@@ -1156,6 +1156,16 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show scrollbar marks for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) show_scrollbar_marks: bool,
+    /// Draw command-block boundary tick marks (blue/red) on the terminal scrollbar.
+    /// Frontend-gated.
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show block marks for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) show_block_marks: bool,
+    /// Draw a tick mark on the terminal scrollbar for each line where the user
+    /// submitted a prompt. Frontend-gated.
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show prompt marks for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) show_prompt_marks: bool,
     /// Let the block-fold shortcut collapse a command block's output.
     /// Frontend-gated.
     #[serde(default = "default_true")]
@@ -1382,6 +1392,8 @@ impl Default for AppConfig {
             terminal_renderer: default_terminal_renderer(),
             show_block_timestamps: true,
             show_scrollbar_marks: true,
+            show_block_marks: true,
+            show_prompt_marks: true,
             block_folding_enabled: true,
             index_strategy: default_index_strategy(),
             index_memory_budget_mb: default_index_memory_budget_mb(),
@@ -5657,6 +5669,8 @@ mod tests {
             // tell a real round trip from serde handing back the default.
             show_block_timestamps: false,
             show_scrollbar_marks: false,
+            show_block_marks: false,
+            show_prompt_marks: false,
             block_folding_enabled: false,
             auto_update_plugins_enabled: false,
             defer_update_relaunch: false,
@@ -5719,6 +5733,8 @@ mod tests {
         // back to the default on the next load.
         assert!(!loaded.show_block_timestamps);
         assert!(!loaded.show_scrollbar_marks);
+        assert!(!loaded.show_block_marks);
+        assert!(!loaded.show_prompt_marks);
         assert!(!loaded.block_folding_enabled);
     }
 
@@ -5915,7 +5931,35 @@ mod tests {
         // agree or the Settings toggles read one value and the terminal another.
         assert!(loaded.show_block_timestamps);
         assert!(loaded.show_scrollbar_marks);
+        assert!(loaded.show_block_marks); // defaults to true
+        assert!(loaded.show_prompt_marks); // defaults to true
         assert!(loaded.block_folding_enabled);
+    }
+
+    /// `docs/backend/config.md` promises a row for every top-level `AppConfig` field. Mirrors
+    /// `keyboardShortcutsDoc.test.ts`'s enforcement of the keyboard-shortcuts doc: adding a field
+    /// without a doc row turns this suite red instead of silently going undocumented.
+    #[test]
+    fn config_doc_lists_every_top_level_field() {
+        let doc = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/backend/config.md"),
+        )
+        .expect("read docs/backend/config.md");
+
+        let value = serde_json::to_value(AppConfig::default()).expect("serialize AppConfig");
+        let fields = value
+            .as_object()
+            .expect("AppConfig serializes to an object");
+
+        let undocumented: Vec<&str> = fields
+            .keys()
+            .map(String::as_str)
+            .filter(|f| !doc.contains(&format!("`{f}`")))
+            .collect();
+        assert!(
+            undocumented.is_empty(),
+            "fields missing a doc row in docs/backend/config.md: {undocumented:?}"
+        );
     }
 
     #[test]

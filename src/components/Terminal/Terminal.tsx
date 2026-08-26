@@ -49,7 +49,7 @@ import { LastPromptBar } from "./LastPromptBar";
 import { trackQuestionReminder } from "./questionReminder";
 import s from "./Terminal.module.css";
 import { ChatViewFallbackBanner, TerminalChatView, ViewModeToggle } from "./TerminalChatView";
-import { TerminalSearch } from "./TerminalSearch";
+import { TerminalSearch, type TerminalSearchRef } from "./TerminalSearch";
 import {
 	REATTACH_PHASE_INITIAL,
 	type ReattachPhase,
@@ -97,7 +97,7 @@ type ParsedEvent =
 	| { type: "active-subtasks"; count: number; task_type: string }
 	| { type: "shell-state"; state: "busy" | "idle" }
 	| { type: "agent-session-conflict"; matched_text: string; kind: "in-use" | "not-found" }
-	| { type: "agent-block"; action: "start" | "end"; line: number; exit_code?: number };
+	| { type: "agent-block"; action: "start" | "end"; line: number; exit_code?: number; prompt_text?: string | null };
 
 export interface TerminalProps {
 	id: string;
@@ -212,6 +212,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const [spawnError, setSpawnError] = createSignal<string | null>(null);
 
 	const [canvasTerminalRef, setCanvasTerminalRef] = createSignal<CanvasTerminalRef | undefined>();
+	const [terminalSearchRef, setTerminalSearchRef] = createSignal<TerminalSearchRef | undefined>();
 	let pendingCanvasFocus = false;
 	let chatSearchRef: TranscriptSearchRef | undefined;
 
@@ -691,7 +692,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					break;
 				case "agent-block": {
 					if (parsed.action === "start") {
-						terminalsStore.handleOsc133(props.id, "A", parsed.line);
+						terminalsStore.handleOsc133(props.id, "A", parsed.line, undefined, parsed.prompt_text ?? null);
 					} else if (parsed.action === "end") {
 						terminalsStore.handleOsc133(props.id, "D", parsed.line, parsed.exit_code ?? undefined);
 					}
@@ -814,13 +815,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				return;
 			}
 
-			// No `pty-osc133` listener here: CanvasTerminal subscribes to the same
-			// event through the transport, and is the only subscriber.
-			// A second desktop delivery would reach a sink that is not idempotent
-			// for the `A` marker — `handleOsc133` finalizes the block the first
-			// delivery had just installed, inventing one empty command block per
-			// prompt. `agent-block` above still feeds the same sink, but that is a
-			// different source for agents with no shell integration, not a copy.
+			// No OSC 133 listener here: shell integration markers are handled by
+			// CanvasTerminal's own subscription through the transport
+			// (canvasTerminalTransport.ts), which is transport-agnostic (works over
+			// WS too) and the sole subscriber. A second desktop-only listener on that
+			// same event used to double-dispatch every real marker to
+			// terminalsStore.handleOsc133 — that sink is not idempotent for the `A`
+			// marker: a duplicated "A" finalized then re-opened the active block, and
+			// a duplicated "D" pushed the completed block twice. `agent-block` above
+			// still feeds the same sink, but that is a different source for agents
+			// with no shell integration, not a copy.
 
 			// Listen for OSC 52 clipboard store from Rust (native renderer).
 			// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log
@@ -1222,6 +1226,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		scrollToLine: (lineIndex: number) => {
 			if (sessionId) invoke("terminal_scroll_to", { sessionId, line: lineIndex }).catch(() => {});
 		},
+		scrollToBlock: (direction: "previous" | "next") => canvasTerminalRef()?.scrollToBlock(direction),
+		toggleBlockFold: () => canvasTerminalRef()?.toggleBlockFoldAtViewport(),
 		scrollToTop: () => {
 			if (sessionId) {
 				invoke("terminal_scroll_info", { sessionId })
@@ -1259,6 +1265,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			return invoke("terminal_get_lines", { sessionId, start: startLine, end: endLine }) as Promise<string[]>;
 		},
 		paste: (text: string) => canvasTerminalRef()?.paste(text),
+		toggleSearchBlockScope: () => terminalSearchRef()?.toggleBlockScope(),
 	};
 
 	onMount(() => {
@@ -1384,6 +1391,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					closeSearchBar();
 					canvasTerminalRef()?.focus();
 				}}
+				onRef={setTerminalSearchRef}
 			/>
 			<ViewModeToggle terminalId={props.id} onWheel={handleToggleWheel} />
 			<ChatViewFallbackBanner terminalId={props.id} />

@@ -10,6 +10,8 @@ import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { isTauri } from "../../transport";
 import { getSessionConnection } from "../../transportRuntime";
+import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
+import { pickBlock } from "../../utils/blockNav";
 import { filterMatchesToBlock } from "../../utils/blockSearchFilter";
 import { writeClipboard } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
@@ -111,7 +113,7 @@ import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } fr
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
-import { buildScrollbarMarksHtml } from "./scrollbarMarks";
+import { buildScrollbarMarksHtml, shouldShowScrollbar } from "./scrollbarMarks";
 import {
 	ANSWER_MARKER_RE,
 	answerOverlayKey,
@@ -147,6 +149,10 @@ export interface CanvasTerminalRef {
 	paste: (text: string) => void;
 	/** Run a wheel event that landed outside the canvas (the CLI | Chat switch) through the canvas's own wheel path. */
 	wheel: (e: WheelEvent) => void;
+	/** Scroll the viewport to the nearest command block boundary in `direction`. */
+	scrollToBlock: (direction: "previous" | "next") => void;
+	/** Toggle fold on the command block nearest the viewport's vertical center. */
+	toggleBlockFoldAtViewport: () => void;
 }
 
 export interface CanvasTerminalProps {
@@ -940,11 +946,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (painted.has(promptLine)) continue;
 			painted.add(promptLine);
 			const block = term.commandBlocks.find((b) => b.promptLine === promptLine);
-			if (!block?.endLine) continue;
-			const foldStart = (block.executionLine ?? block.promptLine) + 1;
-			const foldEnd = block.endLine;
-			const foldedCount = foldEnd - foldStart;
-			if (foldedCount <= 0) continue;
+			if (!block) continue;
+			const range = foldRange(block);
+			if (!range) continue;
+			const { foldStart, foldedCount } = range;
+			const foldEnd = foldStart + foldedCount;
 			const startVp = paintAbsRowToViewport(foldStart - (currentFrame?.historyBase ?? 0));
 			if (startVp === null) continue;
 			const endVp = paintAbsRowToViewport(foldEnd - 1 - (currentFrame?.historyBase ?? 0));
@@ -1000,15 +1006,32 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!scrollbarRef || !scrollThumbRef) return;
 		const total = frame.historySize + (frame.screenRows || lastResizeRows || 24);
 
-		if (frame.historySize === 0) {
+		const term = terminalsStore.get(props.terminalId);
+		const showScrollbar = shouldShowScrollbar({
+			historySize: frame.historySize,
+			// Same gating as paintScrollbarMarks: `showScrollbarMarks` is the master toggle.
+			showBlockMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showBlockMarks,
+			showPromptMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showPromptMarks,
+			blocks: term?.commandBlocks ?? [],
+			promptLines: term?.userPromptLines ?? [],
+		});
+		if (!showScrollbar) {
 			scrollbarRef.style.display = "none";
 			return;
 		}
 		scrollbarRef.style.display = "block";
 
-		const thumb = thumbFor(scrollbarTrackHeight, lastResizeRows, frame);
-		scrollThumbRef.style.height = `${thumb.height}px`;
-		scrollThumbRef.style.transform = `translateY(${thumb.top}px)`;
+		if (frame.historySize === 0) {
+			// Nothing to scroll, but there are marks to show: collapse the thumb to
+			// fill the track (no drag affordance) rather than sizing it from the
+			// cached track height as if there were scrollable content.
+			scrollThumbRef.style.height = "100%";
+			scrollThumbRef.style.transform = "translateY(0px)";
+		} else {
+			const thumb = thumbFor(scrollbarTrackHeight, lastResizeRows, frame);
+			scrollThumbRef.style.height = `${thumb.height}px`;
+			scrollThumbRef.style.transform = `translateY(${thumb.top}px)`;
+		}
 
 		paintScrollbarMarks(total);
 	}
@@ -1018,6 +1041,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	createEffect(() => {
 		settingsStore.state.showScrollbarMarks;
+		settingsStore.state.showBlockMarks;
+		settingsStore.state.showPromptMarks;
 		untrack(() => {
 			if (currentFrame) updateScrollbar(currentFrame);
 		});
@@ -1025,32 +1050,51 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function paintScrollbarMarks(totalRows: number) {
 		if (!scrollbarRef) return;
+		const term = terminalsStore.get(props.terminalId);
+		if (!term) return;
+
+		// The mark settings gate the HISTORY markers only — block boundaries and
+		// user-prompt ticks — not the search hits below. Command history is a display
+		// preference; a search hit is the live result of something the user just did,
+		// and a Cmd+F that silently draws nothing because of a terminal display
+		// setting is not a preference being honoured, it is a broken search.
+		//
+		// Gated on the two PERSISTED per-category settings, not the transient
+		// Ctrl+Cmd hold (blockTimestampsVisible) — marks stay visible without
+		// holding the modifier. Folded into the paint inputs rather than returned
+		// on early, which also fixes turning a setting OFF: an early return above
+		// the key computation left the last-painted marks on screen forever,
+		// because the repaint that would clear them never ran. `showScrollbarMarks`
+		// stays the master toggle main's Terminal settings tab exposes.
+		const marksOn = settingsStore.state.showScrollbarMarks;
+		const showBlockMarks = marksOn && settingsStore.state.showBlockMarks;
+		const showPromptMarks = marksOn && settingsStore.state.showPromptMarks;
+		const blocks = term.commandBlocks;
+		const promptLines = term.userPromptLines;
+		const historyBase = currentFrame?.historyBase ?? 0;
+		const searchCount = search.matches.length;
+		const lastBlock = blocks.at(-1);
+		const lastPrompt = promptLines.at(-1);
+
+		// Each toggle's contribution to the key collapses to a fixed placeholder
+		// when that category is hidden, so the key doesn't churn on invisible
+		// changes — but the toggle flip itself always changes the count term
+		// (real count vs. 0), so re-enabling always invalidates the memo even if
+		// blocks/prompts/totalRows are otherwise unchanged since it was hidden.
+		const key =
+			`b${showBlockMarks ? blocks.length : 0}:${showBlockMarks ? (lastBlock?.promptLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.endLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.exitCode ?? "") : ""}` +
+			`:p${showPromptMarks ? promptLines.length : 0}:${showPromptMarks ? (lastPrompt ?? "") : ""}` +
+			`:t${totalRows}:h${historyBase}` +
+			`:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
+		if (key === lastScrollbarMarksKey) return;
+		lastScrollbarMarksKey = key;
+
 		if (!scrollbarMarksContainer) {
 			scrollbarMarksContainer = document.createElement("div");
 			scrollbarMarksContainer.style.cssText =
 				"position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none";
 			scrollbarRef.appendChild(scrollbarMarksContainer);
 		}
-		const term = terminalsStore.get(props.terminalId);
-		if (!term) return;
-		const blocks = term.commandBlocks;
-		const promptLines = term.userPromptLines;
-		const historyBase = currentFrame?.historyBase ?? 0;
-		const searchCount = search.matches.length;
-		// `showScrollbarMarks` gates the HISTORY markers only — block boundaries and
-		// user-prompt ticks — not the search hits below. Command history is a display
-		// preference; a search hit is the live result of something the user just did,
-		// and a Cmd+F that silently draws nothing because of a terminal display
-		// setting is not a preference being honoured, it is a broken search.
-		//
-		// It is folded into `showBlocks` rather than returned on early, which also
-		// fixes turning the setting OFF: an early return above the key computation
-		// left the last-painted marks on screen forever, because the repaint that
-		// would clear them never ran.
-		const showBlocks = blockTimestampsVisible && settingsStore.state.showScrollbarMarks;
-		const key = `${showBlocks ? blocks.length : 0}:${showBlocks ? promptLines.length : 0}:${totalRows}:${historyBase}:${showBlocks ? (blocks.at(-1)?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
-		if (key === lastScrollbarMarksKey) return;
-		lastScrollbarMarksKey = key;
 
 		scrollbarMarksContainer.innerHTML = buildScrollbarMarksHtml({
 			blocks,
@@ -1059,7 +1103,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			matchRows: search.matches.map((m) => m.row),
 			totalRows,
 			trackH: scrollbarTrackHeight,
-			showBlocks,
+			showBlockMarks,
+			showPromptMarks,
 		});
 	}
 
@@ -2812,73 +2857,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				return;
 			}
 
-			// Cmd+Up/Down (macOS) or Ctrl+Up/Down (Win/Linux): navigate between command blocks (OSC 133)
-			if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-				const term = terminalsStore.get(props.terminalId);
-				if (term) {
-					const blocks = term.commandBlocks;
-					const active = term.activeBlock;
-					const allPromptLines = blocks
-						.map((b) => b.promptLine)
-						.concat(active ? [active.promptLine] : [])
-						.filter((line) => line >= (currentFrame?.historyBase ?? 0));
-					if (allPromptLines.length > 0 && currentFrame) {
-						const currentViewLine = currentFrame.historyBase + currentFrame.historySize - currentFrame.displayOffset;
-						let targetLine: number | undefined;
-						if (e.key === "ArrowUp") {
-							for (let i = allPromptLines.length - 1; i >= 0; i--) {
-								if (allPromptLines[i] < currentViewLine) {
-									targetLine = allPromptLines[i];
-									break;
-								}
-							}
-						} else {
-							for (let i = 0; i < allPromptLines.length; i++) {
-								if (allPromptLines[i] > currentViewLine) {
-									targetLine = allPromptLines[i];
-									break;
-								}
-							}
-						}
-						if (targetLine !== undefined) {
-							invokeRef?.("terminal_scroll_to", {
-								sessionId: props.sessionId,
-								line: targetLine - currentFrame.historyBase,
-							}).catch(ipcErr("terminal_scroll_to"));
-						}
-						e.preventDefault();
-						return;
-					}
-				}
-			}
-
-			// Cmd+Shift+. (macOS) or Ctrl+Shift+. (Win/Linux): toggle fold on current block
-			if (
-				(e.metaKey || e.ctrlKey) &&
-				e.shiftKey &&
-				e.key === "." &&
-				!e.altKey &&
-				settingsStore.state.blockFoldingEnabled
-			) {
-				const term = terminalsStore.get(props.terminalId);
-				if (term && currentFrame) {
-					const viewTop = currentFrame.historyBase + currentFrame.historySize - currentFrame.displayOffset;
-					const blocks = [...term.commandBlocks, term.activeBlock].filter(
-						Boolean,
-					) as import("../../stores/terminals").CommandBlock[];
-					const current = blocks.find(
-						(b) => b.promptLine <= viewTop + (lastResizeRows >> 1) && (b.endLine ?? Infinity) >= viewTop,
-					);
-					if (current) {
-						terminalsStore.toggleBlockFold(props.terminalId, current.promptLine);
-						fullRepaintNeeded = true;
-						if (metrics()) paintFrame(currentFrame, metrics()!);
-					}
-				}
-				e.preventDefault();
-				return;
-			}
-
 			// Force re-render: clear accumulated buffer and request fresh frame from Rust
 			if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "l" && !e.altKey) {
 				e.preventDefault();
@@ -3172,7 +3150,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						const allBlocks = [...term.commandBlocks, term.activeBlock].filter(
 							Boolean,
 						) as import("../../stores/terminals").CommandBlock[];
-						const block = allBlocks.find((b) => b.promptLine <= absRow && (b.endLine ?? Infinity) >= absRow);
+						const block = findBlockAtViewport(allBlocks, absRow, 0);
 						if (block) {
 							const startRow = Math.max(historyBase, (block.executionLine ?? block.promptLine) + 1);
 							const endRow = (block.endLine ?? absRow) - 1;
@@ -3654,9 +3632,58 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			transport?.unsubscribe();
 		}
 
+		function scrollToBlock(direction: "previous" | "next") {
+			const term = terminalsStore.get(props.terminalId);
+			if (!term || !currentFrame) return;
+			const blocks = term.commandBlocks;
+			const active = term.activeBlock;
+			// Block lines are eviction-stable all-time rows; anything below
+			// `historyBase` has been evicted and can no longer be scrolled to.
+			const historyBase = currentFrame.historyBase;
+			const allPromptLines = blocks
+				.map((b) => b.promptLine)
+				.concat(active ? [active.promptLine] : [])
+				.filter((line) => line >= historyBase);
+			if (allPromptLines.length === 0) return;
+			const currentViewLine = historyBase + currentFrame.historySize - currentFrame.displayOffset;
+			const targetLine = pickBlock(allPromptLines, currentViewLine, direction);
+			if (targetLine === undefined) {
+				// No further block ahead: land at the live tail, matching the old
+				// behavior of falling back to scrollToBottom() on "next".
+				if (direction === "next" && currentFrame.displayOffset > 0) {
+					invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -currentFrame.displayOffset }).catch(
+						ipcErr("terminal_scroll"),
+					);
+				}
+				return;
+			}
+			invokeRef?.("terminal_scroll_to", {
+				sessionId: props.sessionId,
+				line: targetLine - historyBase,
+			}).catch(ipcErr("terminal_scroll_to"));
+		}
+
+		function toggleBlockFoldAtViewport() {
+			if (!settingsStore.state.blockFoldingEnabled) return;
+			const term = terminalsStore.get(props.terminalId);
+			if (!term || !currentFrame) return;
+			const viewTop = currentFrame.historyBase + currentFrame.historySize - currentFrame.displayOffset;
+			const blocks = [...term.commandBlocks, term.activeBlock].filter(
+				Boolean,
+			) as import("../../stores/terminals").CommandBlock[];
+			const current = findBlockAtViewport(blocks, viewTop, lastResizeRows >> 1);
+			if (!current) return;
+			terminalsStore.toggleBlockFold(props.terminalId, current.promptLine);
+			fullRepaintNeeded = true;
+			const m = metrics();
+			if (currentFrame && m) paintFrame(currentFrame, m);
+		}
+
 		props.onRef?.({
 			wheel: handleWheel,
 			focus: () => keyInputRef.focus({ preventScroll: true }),
+			scrollToBlock,
+			toggleBlockFoldAtViewport,
 			getSelectionText: () => stripAnswerMarkers(selection.cachedText),
 			refresh: () => {
 				rowMap.clear();
@@ -3773,6 +3800,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		gridRenderer?.invalidateCaches();
 		fullRepaintNeeded = true;
 		remeasure();
+	});
+
+	// Force an immediate scrollbar-marks repaint on toggle — paintScrollbarMarks
+	// is otherwise only invoked from the frame-decode/scroll path, so without
+	// this, flipping a setting wouldn't take visible effect until the next
+	// unrelated repaint. If a future mark type gets its own setting, it needs
+	// tracking here too, alongside its own placeholder branch in
+	// paintScrollbarMarks's memo key below — the two must stay in sync.
+	createEffect(() => {
+		settingsStore.state.showScrollbarMarks;
+		settingsStore.state.showBlockMarks;
+		settingsStore.state.showPromptMarks;
+		if (!alive || !currentFrame) return;
+		updateScrollbar(currentFrame);
 	});
 
 	async function copySelection() {
@@ -4034,6 +4075,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			{/* Scrollbar */}
 			<div
 				ref={scrollbarRef!}
+				data-testid="terminal-scrollbar"
 				style={{
 					position: "absolute",
 					top: "0",
@@ -4046,6 +4088,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			>
 				<div
 					ref={scrollThumbRef!}
+					data-testid="terminal-scrollbar-thumb"
 					onMouseEnter={(e) => {
 						// Darker, subtle hover like the old terminal scrollbar (#cccccc @0.3),
 						// not the bright --fg-muted.

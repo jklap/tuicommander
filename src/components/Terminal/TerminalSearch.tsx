@@ -1,7 +1,11 @@
-import { type Component, createEffect, createSignal } from "solid-js";
+import { type Component, createEffect, createSignal, onMount } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { SearchBar } from "../shared/SearchBar";
 import type { CanvasTerminalRef } from "./CanvasTerminal";
+
+export interface TerminalSearchRef {
+	toggleBlockScope: () => void;
+}
 
 export interface TerminalSearchProps {
 	visible: boolean;
@@ -9,6 +13,7 @@ export interface TerminalSearchProps {
 	focusToken?: number;
 	canvasRef?: CanvasTerminalRef | undefined;
 	onClose: () => void;
+	onRef?: (ref: TerminalSearchRef) => void;
 }
 
 export const TerminalSearch: Component<TerminalSearchProps> = (props) => {
@@ -74,6 +79,10 @@ export const TerminalSearch: Component<TerminalSearchProps> = (props) => {
 				});
 		}
 	};
+
+	onMount(() => {
+		props.onRef?.({ toggleBlockScope: handleToggleBlockScope });
+	});
 
 	return (
 		<SearchBar
