@@ -2,6 +2,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { batch, createSignal } from "solid-js";
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
+import { diffTabsStore } from "../stores/diffTabs";
+import { editorTabsStore } from "../stores/editorTabs";
+import { clearForRepo as clearFocusForRepo } from "../stores/focusRegistry";
+import { mdTabsStore } from "../stores/mdTabs";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { repositoriesStore } from "../stores/repositories";
 import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
@@ -199,6 +203,23 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				await deps.closeTerminal(termId, true);
 			}
 		}
+
+		// The repo's file-backed tabs go with it. Left behind they become
+		// unreachable rather than harmless: getVisibleIds filters on a branch key
+		// that no longer resolves, so the tab is invisible AND immortal, and every
+		// removal leaks another set. closeTerminal is the one path that closes a tab
+		// completely — store entry, pane slot, next selection — so reuse it instead
+		// of re-deriving that cleanup here. No `skipConfirm`: removing a repo from
+		// the sidebar deletes nothing on disk, so a dirty editor still gets its save
+		// prompt rather than losing the edit silently.
+		for (const tab of [
+			...editorTabsStore.getForRepo(repoPath),
+			...diffTabsStore.getForRepo(repoPath),
+			...mdTabsStore.getForRepo(repoPath),
+		]) {
+			await deps.closeTerminal(tab.id);
+		}
+		clearFocusForRepo(repoPath);
 
 		invoke("stop_repo_watcher", { repoPath }).catch((err) =>
 			appLogger.warn("app", `RepoWatcher failed to stop for ${repoPath}`, err),
