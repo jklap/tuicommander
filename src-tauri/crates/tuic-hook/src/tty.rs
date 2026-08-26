@@ -154,8 +154,11 @@ mod tests {
     // Both cases live in one test (rather than two `#[test]` fns) because
     // they mutate the same process-global env var and the test harness runs
     // tests in parallel within a binary — two fns would race each other's
-    // set/remove.
+    // set/remove. `#[serial_test::serial]` (bare, no key) additionally
+    // serializes against `emit::tests`' two TUIC_HOOK_TTY-touching tests,
+    // which mutate the same env var from a different module in this binary.
     #[test]
+    #[serial_test::serial]
     fn tuic_hook_tty_env_seam() {
         // SAFETY: test-only, sequential within this fn, restored after each case.
         unsafe { std::env::set_var("TUIC_HOOK_TTY", "/tmp/does-not-need-to-exist") };
