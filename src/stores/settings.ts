@@ -84,6 +84,8 @@ interface RustAppConfig {
 	terminal_renderer?: string;
 	show_block_timestamps?: boolean;
 	show_scrollbar_marks?: boolean;
+	show_block_marks?: boolean;
+	show_prompt_marks?: boolean;
 	block_folding_enabled?: boolean;
 	index_strategy?: string;
 	index_memory_budget_mb?: number;
@@ -280,7 +282,10 @@ interface SettingsStoreState {
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
 	showBlockTimestamps: boolean;
+	/** Master toggle for the scrollbar history ticks; the two below pick the categories. */
 	showScrollbarMarks: boolean;
+	showBlockMarks: boolean;
+	showPromptMarks: boolean;
 	blockFoldingEnabled: boolean;
 	indexStrategy: "disabled" | "active_only" | "active_and_switch" | "all_sequential";
 	standbyTimeoutMinutes: number;
@@ -350,6 +355,8 @@ function createSettingsStore() {
 		terminalRenderer: "webgl",
 		showBlockTimestamps: true,
 		showScrollbarMarks: true,
+		showBlockMarks: true,
+		showPromptMarks: true,
 		blockFoldingEnabled: true,
 		indexStrategy: "active_and_switch",
 		standbyTimeoutMinutes: 5,
@@ -431,6 +438,8 @@ function createSettingsStore() {
 		values.terminalRenderer = validateTerminalRenderer(config.terminal_renderer || null);
 		values.showBlockTimestamps = config.show_block_timestamps ?? true;
 		values.showScrollbarMarks = config.show_scrollbar_marks ?? true;
+		values.showBlockMarks = config.show_block_marks ?? true;
+		values.showPromptMarks = config.show_prompt_marks ?? true;
 		values.blockFoldingEnabled = config.block_folding_enabled ?? true;
 		values.indexStrategy = (config.index_strategy as SettingsStoreState["indexStrategy"]) ?? "active_and_switch";
 		values.standbyTimeoutMinutes = config.standby_timeout_minutes ?? 5;
@@ -498,6 +507,8 @@ function createSettingsStore() {
 			terminal_renderer: values.terminalRenderer,
 			show_block_timestamps: values.showBlockTimestamps,
 			show_scrollbar_marks: values.showScrollbarMarks,
+			show_block_marks: values.showBlockMarks,
+			show_prompt_marks: values.showPromptMarks,
 			block_folding_enabled: values.blockFoldingEnabled,
 			index_strategy: values.indexStrategy,
 			index_memory_budget_mb: values.indexMemoryBudgetMb,
@@ -998,6 +1009,16 @@ function createSettingsStore() {
 
 		setTerminalRenderer(renderer: TerminalRenderer): void {
 			setState("terminalRenderer", renderer);
+			save();
+		},
+
+		setShowBlockMarks(enabled: boolean): void {
+			setState("showBlockMarks", enabled);
+			save();
+		},
+
+		setShowPromptMarks(enabled: boolean): void {
+			setState("showPromptMarks", enabled);
 			save();
 		},
 

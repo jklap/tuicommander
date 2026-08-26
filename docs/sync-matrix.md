@@ -2,6 +2,8 @@
 
 Every code change that affects user-visible behavior, APIs, or configuration MUST update the corresponding documentation files. This matrix maps codebase areas to their docs.
 
+**When a claim about the same mechanism appears in more than one doc** (e.g. the same feature described in both `docs/FEATURES.md` and a `docs/user-guide/*.md` page), grep for the distinguishing term across every sync-matrix-mapped doc before considering a fix complete — fixing one copy and missing a sibling copy leaves the docs contradicting each other. This happened for real: a dependency removal was fixed in `docs/FEATURES.md` but left stale in `docs/user-guide/terminals.md` and `CHANGELOG.md`, and survived two subsequent "fix stale claims" passes over the same doc before being caught.
+
 ## New Feature Checklist
 
 - [ ] Feature works correctly

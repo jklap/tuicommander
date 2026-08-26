@@ -243,7 +243,16 @@ it.each([false, true])("repaints scrollbar history marks immediately when enable
 	const id = terminalsStore.add(makeTerminal());
 	terminalsStore.update(id, {
 		commandBlocks: [
-			{ promptLine: 10, commandLine: 10, executionLine: 11, endLine: 20, exitCode: 1, startedAt: 0, endedAt: 1 },
+			{
+				promptLine: 10,
+				commandLine: 10,
+				executionLine: 11,
+				endLine: 20,
+				exitCode: 1,
+				startedAt: 0,
+				endedAt: 1,
+				promptText: null,
+			},
 		],
 		userPromptLines: [30],
 	});
