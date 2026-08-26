@@ -23,7 +23,6 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `get_session_metrics` | -- | `JSON` | Spawn/fail/byte counts |
 | `list_active_sessions` | -- | `Vec<ActiveSessionInfo>` | List all sessions with `display_name_is_custom`, `is_remote`, and the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`, `queued_commands`) returned by `GET /sessions` |
 | `list_worktrees` | -- | `Vec<JSON>` | List managed worktrees |
-| `update_session_cwd` | `session_id, cwd` | `()` | Update session working directory (from OSC 7) |
 | `get_session_foreground_process` | `session_id` | `JSON` | Get foreground process info |
 | `get_kitty_flags` | `session_id` | `u32` | Get Kitty keyboard protocol flags for session |
 | `get_last_prompt` | `session_id` | `Option<String>` | Get last user-typed prompt from input line buffer |
@@ -495,8 +494,30 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 | `mdkb_outline` | `repo_path, file_path` | `Vec<OutlineSymbol>` | Get symbol outline (functions, types) for a file |
 | `mdkb_goto_definition` | `repo_path, file_path, line, col?` | `DefinitionLocation?` | Find definition of symbol at position |
 | `mdkb_references` | `repo_path, symbol_name` | `Vec<ReferenceLocation>` | Find all callers of a symbol via code_graph |
+| `mdkb_code_find` | `repo_path, name, kind?` | `Vec<OutlineSymbol>` | Exact symbol lookup by name, optionally filtered by kind |
 | `install_mdkb` | — | `String` | Download and install mdkb binary |
 | `uninstall_mdkb` | — | `()` | Remove mdkb binary (errors for homebrew/cargo installs) |
+
+**Line numbers are 1-based on this boundary.** mdkb stores symbol ranges 0-based
+but takes a 1-based `line` as *input* to `symbol_at_position`. `mdkb_commands::editor_line`
+shifts every response so `line`/`line_start`/`line_end` reaching the frontend
+match CodeMirror's `doc.line(n)`. Request args (`mdkb_goto_definition`'s `line`)
+are already 1-based and pass through unchanged.
+
+**Each mdkb method has a different response shape** — do not assume "a JSON array
+of symbols":
+
+| mdkb hook method | `result` shape |
+|---|---|
+| `symbols_in_file` | `text` = stringified **bare array** |
+| `symbol_at_position` | `text` = stringified **object**, or the literal `"null"` |
+| `code_find` | `text` = stringified **envelope** `{total, showing, symbols}` |
+| `code_graph` | `text` = **prose for agents**; the symbols are a separate `symbols` array on `result` |
+
+`code_graph`'s `symbols` field was added after mdkb 3.7.17. Against an older
+daemon the field is absent and the call fails loudly — "no callers" is `symbols: []`,
+so an absent field can only mean a stale daemon and must never be reported as an
+empty result.
 
 ## Plugin CLI Execution (`plugin_exec.rs`)
 
@@ -553,8 +574,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `set_global_hotkey` | `combo: Option<String>` | `()` | Set or clear the OS-level global hotkey |
-| `get_global_hotkey` | — | `Option<String>` | Get the currently configured global hotkey |
+| `set_global_hotkey` | `combo: Option<String>` | `()` | Set or clear the OS-level global hotkey. There is no getter: the current combo is the `global_hotkey` field of `AppConfig`, read through `load_config`. |
 
 ## App Logger (`app_logger.rs`)
 
