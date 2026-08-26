@@ -86,7 +86,11 @@ jobs:
         run: pnpm exec vitest run --coverage --reporter=verbose
 
       - name: Plugin tests
-        run: pnpm test:plugins
+        # Self-test first: it always passes today (exercises its own fixtures),
+        # so it can't mask a self-test regression behind the real check's
+        # expected failure below (the plugins submodule currently has zero
+        # tests, so `test:plugins` failing here is the known, tracked state).
+        run: pnpm test:plugins:test && pnpm test:plugins
 
       - name: Architecture cycles
         run: pnpm architecture:cycles && pnpm architecture:cycles:test
