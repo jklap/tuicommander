@@ -61,6 +61,12 @@ function scrollbarEl(container: HTMLElement): HTMLElement {
 	return el as HTMLElement;
 }
 
+function thumbEl(container: HTMLElement): HTMLElement {
+	const el = container.querySelector('[data-testid="terminal-scrollbar-thumb"]');
+	if (!el) throw new Error("no [data-testid=terminal-scrollbar-thumb] found");
+	return el as HTMLElement;
+}
+
 describe("scrollbar track visibility with zero scrollback", () => {
 	it("shows the track (and paints marks) with a real block, zero history, toggle on", async () => {
 		terminalsStore.register("scrollbar-marks-t1", makeTerminal({ sessionId: "s1" }));
@@ -82,6 +88,11 @@ describe("scrollbar track visibility with zero scrollback", () => {
 		const mounted = await mountCanvasTerminal({ sessionId: "s1", terminalId: "scrollbar-marks-t1" });
 		fakeTransport.current!.pushFrame(buildTextFrame(["a", "b", "c", "d"], 40, { historySize: 0 }));
 		await waitFor(() => expect(scrollbarEl(mounted.container).style.display).toBe("block"));
+		// Nothing to scroll, so the thumb must collapse to fill the track (no drag
+		// affordance) rather than running the normal thumbHeight/scrollPos math,
+		// which assumes real scrollable content and would divide against it.
+		expect(thumbEl(mounted.container).style.height).toBe("100%");
+		expect(thumbEl(mounted.container).style.transform).toBe("translateY(0px)");
 
 		await mounted.dispose();
 	});
@@ -93,6 +104,8 @@ describe("scrollbar track visibility with zero scrollback", () => {
 		const mounted = await mountCanvasTerminal({ sessionId: "s1", terminalId: "scrollbar-marks-t1" });
 		fakeTransport.current!.pushFrame(buildTextFrame(["a", "b"], 40, { historySize: 0 }));
 		await waitFor(() => expect(scrollbarEl(mounted.container).style.display).toBe("block"));
+		expect(thumbEl(mounted.container).style.height).toBe("100%");
+		expect(thumbEl(mounted.container).style.transform).toBe("translateY(0px)");
 
 		await mounted.dispose();
 	});
@@ -141,6 +154,10 @@ describe("scrollbar track visibility with zero scrollback", () => {
 		const mounted = await mountCanvasTerminal({ sessionId: "s1", terminalId: "scrollbar-marks-t1" });
 		fakeTransport.current!.pushFrame(buildTextFrame(["a", "b"], 40, { historySize: 500 }));
 		await waitFor(() => expect(scrollbarEl(mounted.container).style.display).toBe("block"));
+		// Contrast with the zero-history cases above: real scrollable content runs
+		// the normal thumbHeight/scrollPos math, not the collapsed-to-100% branch.
+		expect(thumbEl(mounted.container).style.height).not.toBe("100%");
+		expect(thumbEl(mounted.container).style.transform).not.toBe("translateY(0px)");
 
 		await mounted.dispose();
 	});

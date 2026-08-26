@@ -1033,11 +1033,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		scrollbarRef.style.display = "block";
 
-		// With zero history, scrollbarThumb() already sizes the thumb to the full
-		// track (ratio 1, top 0) — no drag affordance, just the marks.
-		const thumb = thumbFor(frame);
-		scrollThumbRef.style.height = `${thumb.height}px`;
-		scrollThumbRef.style.transform = `translateY(${thumb.top}px)`;
+		if (frame.historySize === 0) {
+			// Nothing to scroll, but there are marks to show: collapse the thumb to
+			// fill the track (no drag affordance) rather than sizing it from the
+			// cached track height as if there were scrollable content.
+			scrollThumbRef.style.height = "100%";
+			scrollThumbRef.style.transform = "translateY(0px)";
+		} else {
+			const thumb = thumbFor(frame);
+			scrollThumbRef.style.height = `${thumb.height}px`;
+			scrollThumbRef.style.transform = `translateY(${thumb.top}px)`;
+		}
 
 		paintScrollbarMarks(total);
 	}
@@ -3966,6 +3972,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			>
 				<div
 					ref={scrollThumbRef!}
+					data-testid="terminal-scrollbar-thumb"
 					onMouseEnter={(e) => {
 						// Darker, subtle hover like the old terminal scrollbar (#cccccc @0.3),
 						// not the bright --fg-muted.
