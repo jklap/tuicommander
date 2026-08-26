@@ -187,6 +187,16 @@ describe("keyToSequence", () => {
 		expect(keyToSequence(evt("Meta"))).toBeNull();
 		expect(keyToSequence(evt("CapsLock"))).toBeNull();
 	});
+
+	// --- Ctrl (unlike Meta) is not excluded, unlike global-shortcut combos assume ---
+	it("does NOT return null for Ctrl+Shift+. — the Windows/Linux global block-fold-toggle combo", () => {
+		// This is the exact reason CanvasTerminal's keydown handler must special-case
+		// this combo before falling through to keyToSequence: on Windows/Linux the
+		// primary modifier is ctrlKey (not metaKey, which IS excluded above), so
+		// without that guard this "." would be sent to the PTY and the event would
+		// never bubble to the global block-fold-toggle shortcut listener.
+		expect(keyToSequence(evt(".", { ctrlKey: true, shiftKey: true }))).toBe(".");
+	});
 });
 
 describe("altSequenceFromCode", () => {

@@ -19,6 +19,15 @@ export function canvasToGrid(
 	};
 }
 
+/** Last selectable column of a line — shared by triple-click and line-mode
+ *  drag extension so both agree with canvasToGrid's own maxCol (which
+ *  subtracts GUTTER_PX; this used to be computed ad hoc without it). */
+export function lastGridCol(metrics: () => CellMetrics | null, rect: DOMRect): number {
+	const m = metrics();
+	if (!m) return 79;
+	return Math.max(0, Math.floor((rect.width - GUTTER_PX) / m.cellWidth) - 1);
+}
+
 export function mouseModifiers(e: MouseEvent): number {
 	return (e.shiftKey ? 4 : 0) | (e.altKey ? 8 : 0) | (e.ctrlKey ? 16 : 0);
 }
