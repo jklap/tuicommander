@@ -106,7 +106,8 @@ DERIVATION (Claude Code events):
     UserPromptSubmit      state=busy
     PreToolUse            state=busy      scrapes tool_name
     PostToolUse           state=busy      scrapes tool_name
-    PostToolUseFailure    (no state)      scrapes tool_name; toolfail=<exit_code, default 1>
+    PostToolUseFailure    (no state)      scrapes tool_name; toolfail=<exit_code, default 1>,
+                                           suppressed entirely if is_interrupt is true
     Notification          state=awaiting  scrapes message
     Elicitation           state=awaiting  MCP server asking the user for input mid tool call
     ElicitationResult     state=busy      paired retraction for Elicitation
@@ -119,7 +120,8 @@ FLAGS (override the derived value; freely combinable):
     --state <busy|awaiting|idle>   Force the state verb, regardless of derivation.
     --toolfail <code>              Force a fixed toolfail verb.
     --toolfail-from-stdin          Force toolfail, extracting `exit_code` from stdin
-                                    JSON (falls back to "1" if absent or malformed).
+                                    JSON (falls back to "1" if absent or malformed);
+                                    suppressed entirely if stdin's is_interrupt is true.
     --emit-session                 Force scraping session_id/cwd/transcript_path.
     --emit-tool                    Force scraping tool_name.
     --emit-notify                  Force scraping message.
@@ -132,9 +134,10 @@ understand, never fail the hook.
 
 STDIN:
     A JSON object, read in full (bounded to 1 MiB). Fields read: hook_event_name,
-    session_id, cwd, transcript_path, tool_name, message, exit_code. Missing, empty,
-    or malformed fields are treated as absent — never an error. A payload truncated
-    past the bound loses the whole fire's derivation, not just the oversized field.
+    session_id, cwd, transcript_path, tool_name, message, exit_code, is_interrupt.
+    Missing, empty, or malformed fields are treated as absent — never an error. A
+    payload truncated past the bound loses the whole fire's derivation, not just
+    the oversized field.
 
 ENVIRONMENT:
     TUIC_SESSION      Must be set and non-empty, or every flag above is a no-op.
@@ -283,7 +286,10 @@ struct EventDerivation {
 enum DerivedToolfail {
     None,
     /// `PostToolUseFailure`: extract `exit_code` from stdin, same fallback
-    /// as the legacy `--toolfail-from-stdin` flag.
+    /// as the legacy `--toolfail-from-stdin` flag. Suppressed entirely
+    /// (emits no `toolfail` at all) when stdin's `is_interrupt` is `true` —
+    /// a user-cancelled (Esc) tool call, not a real failure. See
+    /// `toolfail_from_exit_code`.
     FromStdinExitCode,
     /// `StopFailure`: no distinguishing field of its own — Claude Code's
     /// `Stop`/`StopFailure` pair is told apart only by which event name
@@ -958,6 +964,7 @@ mod tests {
             "TUIC_HOOK_DEBUG",
             "PostToolUseFailure",
             "StopFailure",
+            "is_interrupt",
         ] {
             assert!(text.contains(needle), "help text missing {needle}");
         }
