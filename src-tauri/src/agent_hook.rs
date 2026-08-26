@@ -222,6 +222,30 @@ mod tests {
     }
 
     #[test]
+    fn every_map_entry_ends_with_sentinel() {
+        // hook_command_ends_with_sentinel only ever exercises hook_command("idle") —
+        // one explicit-state call. derived_hook_command() routes through the same
+        // hook_binary_command() and so carries SENTINEL too, but nothing asserted
+        // that across the actual maps: most Claude entries, and every Gemini/Grok/
+        // Codex entry, are derived_hook_command() calls this never touched. The
+        // installer's whole prune-only-TUIC's-own-entries scheme depends on every
+        // generated command carrying it, regardless of which helper built it.
+        for (map_name, map) in [
+            ("claude", claude_hook_map()),
+            ("gemini", gemini_hook_map()),
+            ("grok", grok_hook_map()),
+            ("codex", codex_hook_map()),
+        ] {
+            for (event, matcher, command) in map {
+                assert!(
+                    command.trim_end().ends_with(SENTINEL),
+                    "{map_name} entry ({event}, {matcher:?}) must end with the ownership sentinel: {command}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hook_command_always_exits_zero() {
         assert!(
             hook_command("busy").contains("|| true"),

@@ -104,6 +104,15 @@ describe("TerminalTab", () => {
 		expect(mockSetShowLastPrompt).toHaveBeenCalledWith(true);
 	});
 
+	it('labels the showLastPrompt toggle "Show PTY prompt bar"', () => {
+		// Every other assertion in this file is index/checked-state based and
+		// would pass unchanged if this literal (not run through t(), unlike its
+		// neighbors) silently reverted during a merge — see efab3cbe, which
+		// moved this control from GeneralTab into this file.
+		const { container } = render(() => <TerminalTab />);
+		expect(container.textContent).toContain("Show PTY prompt bar");
+	});
+
 	it("calls setShowBlockTimestamps when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
