@@ -61,6 +61,8 @@ const APP_DEFAULTS = {
 	osc52_clipboard: true,
 	block_folding_enabled: true,
 	show_scrollbar_marks: true,
+	show_block_marks: true,
+	show_prompt_marks: true,
 	scrollback_reflow: true,
 };
 const NOTIFICATION_DEFAULTS = {
@@ -132,6 +134,22 @@ const CASES: Case[] = [
 		label: "Show scrollbar marks",
 		domain: "app",
 		field: "show_scrollbar_marks",
+		modified: false,
+	},
+	{
+		page: "Terminal",
+		tab: TerminalTab,
+		label: "Show block marks",
+		domain: "app",
+		field: "show_block_marks",
+		modified: false,
+	},
+	{
+		page: "Terminal",
+		tab: TerminalTab,
+		label: "Show prompt marks",
+		domain: "app",
+		field: "show_prompt_marks",
 		modified: false,
 	},
 	{
