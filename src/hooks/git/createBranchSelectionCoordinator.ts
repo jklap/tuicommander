@@ -63,6 +63,11 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				deps.setCurrentRepoPath(repoPath);
 				deps.setCurrentBranch(branchName);
 			}
+			// The owner of record, not just the display index. This path is handed the
+			// repo, so leaving the field null would file a deliberate placement as the
+			// "no registered repo claims this cwd" guess reconcileTerminalOwnership
+			// is entitled to overturn.
+			terminalsStore.setRepoPath(id, repoPath);
 			repositoriesStore.addTerminalToBranch(repoPath, branchName, id);
 			terminalsStore.setActive(id);
 			if (!needsSwitch) {
@@ -252,6 +257,8 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 							agentSessionId: terminal.agentSessionId ?? null,
 							agentLaunchCommand: terminal.agentLaunchCommand ?? null,
 						});
+						// Same reason as handleAddTerminalToBranch: a restore knows its repo.
+						terminalsStore.setRepoPath(id, repoPath);
 						repositoriesStore.addTerminalToBranch(repoPath, branchName, id);
 						restoredIds.push({ id, terminal });
 					}
