@@ -48,7 +48,17 @@ fn resolve_bundled_sidecar() -> Result<String, String> {
 /// hook install still proceeds and simply won't find a working binary at the
 /// stable path, exactly as if the user hadn't enabled instrumentation yet.
 pub(crate) fn ensure_current() {
-    let Ok(bundled) = resolve_bundled_sidecar() else {
+    ensure_current_with(resolve_bundled_sidecar);
+}
+
+/// Testable core of [`ensure_current`], parameterized over how to resolve the
+/// bundled sidecar — the real entry point above always passes
+/// `resolve_bundled_sidecar`, which depends on `std::env::current_exe()` and
+/// can't be pointed at a fixture from a test. This is the orchestration
+/// (skip-if-missing / skip-if-up-to-date / reinstall-if-stale) that has to
+/// run correctly for any user to actually receive a fixed `tuic-hook`.
+fn ensure_current_with(resolve_bundled: impl Fn() -> Result<String, String>) {
+    let Ok(bundled) = resolve_bundled() else {
         tracing::debug!(
             source = "hook_binary",
             "tuic-hook sidecar not found; skipping refresh (expected in a dev build without `pnpm build:sidecar`)"
@@ -177,5 +187,102 @@ mod tests {
             .expect_err("must error, not panic, on a missing source");
         assert!(err.contains("copy"));
         assert!(!stable.exists());
+    }
+
+    // ensure_current_with: the orchestration that has to run correctly for any
+    // user to actually receive a fixed tuic-hook. Every existing test above
+    // (and every test in agent_hook.rs's golden_wire_output module, which
+    // explicitly documents routing around this function) exercises the pieces
+    // in isolation; nothing exercised the decision logic that wires them
+    // together until now.
+
+    #[test]
+    #[cfg(unix)]
+    fn ensure_current_installs_when_stable_is_missing() {
+        let src_dir = tempfile::tempdir().expect("src dir");
+        let config_dir = tempfile::tempdir().expect("config dir");
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let bundled = src_dir.path().join("tuic-hook-fake");
+        write_fake_sidecar(&bundled, "tuic-hook 1.0.0");
+
+        let stable = stable_path();
+        assert!(!stable.exists(), "precondition: nothing installed yet");
+
+        ensure_current_with(|| Ok(bundled.to_string_lossy().into_owned()));
+
+        assert!(
+            stable.exists(),
+            "must install when nothing was there before"
+        );
+        let output = std::process::Command::new(&stable)
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "tuic-hook 1.0.0");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ensure_current_reinstalls_a_stale_stable_copy() {
+        let src_dir = tempfile::tempdir().expect("src dir");
+        let config_dir = tempfile::tempdir().expect("config dir");
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let bundled = src_dir.path().join("tuic-hook-fake");
+
+        write_fake_sidecar(&bundled, "tuic-hook 1.0.0");
+        ensure_current_with(|| Ok(bundled.to_string_lossy().into_owned()));
+
+        write_fake_sidecar(&bundled, "tuic-hook 2.0.0");
+        ensure_current_with(|| Ok(bundled.to_string_lossy().into_owned()));
+
+        let output = std::process::Command::new(stable_path())
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "tuic-hook 2.0.0",
+            "a version-mismatched stable copy must be refreshed to match the bundled sidecar"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ensure_current_leaves_an_up_to_date_stable_copy_untouched() {
+        let src_dir = tempfile::tempdir().expect("src dir");
+        let config_dir = tempfile::tempdir().expect("config dir");
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let bundled = src_dir.path().join("tuic-hook-fake");
+        write_fake_sidecar(&bundled, "tuic-hook 1.0.0");
+        ensure_current_with(|| Ok(bundled.to_string_lossy().into_owned()));
+
+        let stable = stable_path();
+        let mtime_before = std::fs::metadata(&stable).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        // Same reported version, even though the bundled sidecar's own file
+        // changed underneath — version_match compares --version output, not
+        // file size/mtime, so this must NOT trigger a reinstall.
+        write_fake_sidecar(&bundled, "tuic-hook 1.0.0");
+        ensure_current_with(|| Ok(bundled.to_string_lossy().into_owned()));
+
+        let mtime_after = std::fs::metadata(&stable).unwrap().modified().unwrap();
+        assert_eq!(
+            mtime_before, mtime_after,
+            "an up-to-date stable copy must not be rewritten"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ensure_current_is_a_noop_when_the_bundled_sidecar_cannot_be_resolved() {
+        let config_dir = tempfile::tempdir().expect("config dir");
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+
+        // Must not panic, and must not create anything at the stable path —
+        // the expected state for a dev build without `pnpm build:sidecar`.
+        ensure_current_with(|| Err("no bundled sidecar in this build".to_string()));
+
+        assert!(!stable_path().exists());
     }
 }
