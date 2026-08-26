@@ -559,6 +559,7 @@ empty result.
 | `list_markdown_files` | `path` | `Vec<MarkdownFileEntry>` | List .md files in dir |
 | `read_file` | `path, file` | `String` | Read file contents |
 | `get_mcp_status` | -- | `JSON` | MCP server status (no token — use `get_connect_url` for QR) |
+| `mcp_confirm_response` | `request_id, confirmed` | `()` | Answer a pending `ui(action=confirm)`. HTTP: `POST /mcp/confirm-response`. Every client is shown the same request and the first answer wins, so an unknown or already-answered id is a no-op, not an error |
 | `get_connect_url` | `ip` | `String` | Build QR connect URL server-side (token stays in backend) |
 | `check_update_channel` | `channel` | `UpdateCheckResult` | Check beta/nightly channel for updates (hardcoded URLs, SSRF-safe) |
 | `clear_caches` | -- | `()` | Clear in-memory caches |

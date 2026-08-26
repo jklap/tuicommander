@@ -375,6 +375,17 @@ fn screenshot_response(state: State<'_, Arc<AppState>>, request_id: String, data
     }
 }
 
+/// Answer a pending MCP confirmation. Pairs with `ui(action=confirm)`.
+///
+/// Every client is shown the same request, so this is a race by design and the
+/// first answer wins: a request already resolved (or expired) is a no-op rather
+/// than an error, because the loser of that race did nothing wrong.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn mcp_confirm_response(state: State<'_, Arc<AppState>>, request_id: String, confirmed: bool) {
+    crate::mcp_http::resolve_mcp_confirm(&state, &request_id, confirmed);
+}
+
 /// One IPv4 address found on a network interface.
 #[derive(serde::Serialize)]
 struct LocalIpEntry {
@@ -1960,6 +1971,7 @@ pub fn run() {
             claude_usage::get_claude_session_stats,
             claude_usage::get_claude_project_list,
             screenshot_response,
+            mcp_confirm_response,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,

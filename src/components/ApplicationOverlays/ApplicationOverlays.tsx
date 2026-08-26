@@ -11,6 +11,7 @@ import { ContextMenu, type createContextMenu } from "../ContextMenu";
 import { CreateBranchDialog } from "../CreateBranchDialog";
 import { CreateWorktreeDialog } from "../CreateWorktreeDialog";
 import { GeneratorsModal } from "../GeneratorsModal";
+import { McpConfirmHost } from "../McpConfirmHost/McpConfirmHost";
 import {
 	type CleanupStep,
 	PostMergeCleanupDialog,
@@ -285,6 +286,7 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 				onClose={props.contextMenu.close}
 			/>
 			<GitDialogOverlays contract={props.git} />
+			<McpConfirmHost />
 			<PromptDialog
 				visible={props.prompts.terminalRenameVisible()}
 				title="Terminal Title"

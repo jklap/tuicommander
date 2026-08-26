@@ -264,6 +264,8 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::UpstreamStatusChanged { .. } => "upstream-status-changed",
         AppEvent::McpOAuthStart { .. } => "mcp-oauth-start",
         AppEvent::McpToast { .. } => "mcp-toast",
+        AppEvent::McpConfirm { .. } => "mcp-confirm",
+        AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
         AppEvent::DirChanged { .. } => "dir-changed",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
         AppEvent::WorktreeRemoved { .. } => "worktree-removed",
@@ -380,6 +382,27 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "origin_repo_path": origin_repo_path,
                 "origin_session_id": origin_session_id,
             })
+        }
+        AppEvent::McpConfirm {
+            request_id,
+            title,
+            message,
+            origin_repo_path,
+            origin_session_id,
+        } => {
+            serde_json::json!({
+                "request_id": request_id,
+                "title": title,
+                "message": message,
+                "origin_repo_path": origin_repo_path,
+                "origin_session_id": origin_session_id,
+            })
+        }
+        AppEvent::McpConfirmResolved {
+            request_id,
+            confirmed,
+        } => {
+            serde_json::json!({ "request_id": request_id, "confirmed": confirmed })
         }
         AppEvent::DirChanged { dir_path } => {
             serde_json::json!({ "dir_path": dir_path })

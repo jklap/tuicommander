@@ -898,6 +898,50 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Server-Sent Events
         .route("/events", get(sse_routes::sse_events))
         .route("/events/types", post(sse_routes::sse_update_types))
+        // Answer a pending MCP confirmation (the browser/PWA half of the desktop
+        // `mcp_confirm_response` command).
+        .route("/mcp/confirm-response", post(mcp_confirm_response_http))
+}
+
+/// Body of `POST /mcp/confirm-response`.
+#[derive(serde::Deserialize)]
+struct McpConfirmResponseBody {
+    request_id: String,
+    confirmed: bool,
+}
+
+async fn mcp_confirm_response_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<McpConfirmResponseBody>,
+) -> Json<serde_json::Value> {
+    resolve_mcp_confirm(&state, &body.request_id, body.confirmed);
+    Json(serde_json::json!({ "ok": true }))
+}
+
+/// Resolve a pending MCP confirmation and tell every client to dismiss it.
+///
+/// Shared by the Tauri command and the HTTP route so the two transports cannot
+/// drift. Unknown or already-answered ids are ignored: every client races to
+/// answer the same request, and only one of them can win.
+pub(crate) fn resolve_mcp_confirm(state: &Arc<AppState>, request_id: &str, confirmed: bool) {
+    let Some((_, sender)) = state.confirm_responses.remove(request_id) else {
+        return;
+    };
+    let _ = sender.send(confirmed);
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::McpConfirmResolved {
+            request_id: request_id.to_string(),
+            confirmed,
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(ref app) = *state.app_handle.read() {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "mcp-confirm-resolved",
+            serde_json::json!({ "request_id": request_id, "confirmed": confirmed }),
+        );
+    }
 }
 
 pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
@@ -2173,6 +2217,7 @@ mod tests {
             tasks: std::sync::Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
+            confirm_responses: DashMap::new(),
             standby_sessions: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
