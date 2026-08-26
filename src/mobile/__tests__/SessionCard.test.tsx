@@ -71,6 +71,26 @@ describe("SessionCard sub-rows", () => {
 		expect(usage!.textContent).toContain("80%");
 	});
 
+	it("marks a plain shell with the terminal glyph", () => {
+		// Without an icon of its own a PTY card renders an empty square, which
+		// reads as an agent whose icon failed to load rather than as a shell.
+		const session = makeSession();
+		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
+		expect(container.querySelector("[data-testid='pty-icon']")).not.toBeNull();
+	});
+
+	it("marks a session whose agent this build no longer knows as a shell", () => {
+		const session = makeSession({ agent_type: "retired-agent" });
+		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
+		expect(container.querySelector("[data-testid='pty-icon']")).not.toBeNull();
+	});
+
+	it("keeps the agent icon for a known agent", () => {
+		const session = makeSession({ agent_type: "claude" });
+		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
+		expect(container.querySelector("[data-testid='pty-icon']")).toBeNull();
+	});
+
 	it("shows no sub-rows when state is minimal", () => {
 		const session = makeSession();
 		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
