@@ -271,6 +271,51 @@ describe("repoSettingsStore", () => {
 			});
 		});
 
+		// A tri-state field's persistence (toWire/fromWire) and its resolution
+		// (this function) are two separately-tested halves that never meet in
+		// the tests above — every getEffective() case here starts from an
+		// in-memory settings object, never from a value that actually went
+		// through the wire. These two round-trip through a real save→hydrate
+		// cycle, the same path a TriStateToggle's "Use global"/explicit-off
+		// choice takes in production.
+		it("a tri-state field left at null survives save→hydrate and resolves to the global default", async () => {
+			mockDefaults.copyIgnoredFiles = true;
+
+			await testInScopeAsync(async () => {
+				store.getOrCreate("/repo", "my-repo");
+				// getOrCreate leaves copyIgnoredFiles at its null (inherit) default —
+				// capture exactly what was persisted for it.
+				const saved = lastInvokeCall("save_repo_settings");
+				const wire = (saved![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				expect(wire.copy_ignored_files).toBeNull();
+
+				// Fresh store, as if the app restarted: hydrate from exactly that wire payload.
+				mockInvoke.mockResolvedValueOnce({ repos: { "/repo": wire } });
+				await store.hydrate();
+
+				expect(store.get("/repo")?.copyIgnoredFiles).toBeNull();
+				expect(store.getEffective("/repo")?.copyIgnoredFiles).toBe(true);
+			});
+		});
+
+		it("a tri-state field explicitly set to false survives save→hydrate and resolves to false, not the global default", async () => {
+			mockDefaults.copyIgnoredFiles = true;
+
+			await testInScopeAsync(async () => {
+				store.getOrCreate("/repo", "my-repo");
+				store.update("/repo", { copyIgnoredFiles: false });
+				const saved = lastInvokeCall("save_repo_settings");
+				const wire = (saved![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				expect(wire.copy_ignored_files).toBe(false);
+
+				mockInvoke.mockResolvedValueOnce({ repos: { "/repo": wire } });
+				await store.hydrate();
+
+				expect(store.get("/repo")?.copyIgnoredFiles).toBe(false);
+				expect(store.getEffective("/repo")?.copyIgnoredFiles).toBe(false);
+			});
+		});
+
 		it("preserves non-overridable fields (path, displayName, color)", () => {
 			testInScope(() => {
 				store.getOrCreate("/repo", "my-repo");
