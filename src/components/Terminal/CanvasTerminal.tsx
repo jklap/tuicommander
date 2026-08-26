@@ -3692,6 +3692,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			>
 				<div
 					ref={scrollThumbRef!}
+					data-testid="terminal-scrollbar-thumb"
 					onMouseEnter={(e) => {
 						// Darker, subtle hover like the old terminal scrollbar (#cccccc @0.3),
 						// not the bright --fg-muted.

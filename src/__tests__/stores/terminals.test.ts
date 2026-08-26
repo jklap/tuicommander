@@ -151,6 +151,40 @@ describe("terminalsStore", () => {
 		});
 	});
 
+	describe('handleOsc133() "B" marker', () => {
+		// The field real shell integration (shell_integration.rs) now populates via
+		// 133;B — previously untested end to end, even though "A"/"C"/"D" each have
+		// dedicated coverage here.
+		it("sets activeBlock.commandLine when there's an active block", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "A", 10);
+				store.handleOsc133(id, "B", 11);
+				expect(store.get(id)!.activeBlock?.commandLine).toBe(11);
+			});
+		});
+
+		it("does not overwrite other activeBlock fields", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "A", 10, undefined, "please refactor the parser");
+				store.handleOsc133(id, "B", 10);
+				const active = store.get(id)!.activeBlock;
+				expect(active?.promptText).toBe("please refactor the parser");
+				expect(active?.promptLine).toBe(10);
+				expect(active?.commandLine).toBe(10);
+			});
+		});
+
+		it("is a no-op when there's no active block", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "B", 11);
+				expect(store.get(id)!.activeBlock).toBeNull();
+			});
+		});
+	});
+
 	describe("addUserPromptLine()", () => {
 		it("appends user-prompt lines in order", () => {
 			testInScope(() => {

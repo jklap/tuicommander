@@ -142,6 +142,10 @@ describe("shouldShowScrollbar", () => {
 		);
 	});
 
+	it("is false with no history and a prompt mark present but its toggle OFF", () => {
+		expect(shouldShowScrollbar({ ...baseInput({ showPromptMarks: false, blocks: [] }), historySize: 0 })).toBe(false);
+	});
+
 	it("is false with no history and no marks at all — preserves the plain-terminal look", () => {
 		expect(shouldShowScrollbar({ ...baseInput({ blocks: [], promptLines: [] }), historySize: 0 })).toBe(false);
 	});
