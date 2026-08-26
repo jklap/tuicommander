@@ -288,6 +288,48 @@ describe("CanvasTerminal mouse gestures — pinned behavior (Phase 0)", () => {
 			expect(fakeTransport.current!.invokeCalls.some((c) => c.cmd === "write_pty")).toBe(false);
 			await mounted.dispose();
 		});
+
+		// A gesture's forward/local track is decided once, at mousedown
+		// (shouldForwardMouseGesture latches on `selection.selecting`) — a drag
+		// long enough to straddle the app turning mouse-reporting on mid-gesture
+		// must not have its tail silently re-forwarded, nor its mouseup swallowed
+		// by the forward branch instead of running local teardown.
+		it("keeps a drag's mousemove local across a mid-drag mouse-mode flip", async () => {
+			const mounted = await mountCanvasTerminal({ sessionId: "s14", terminalId: "t14" });
+			fakeTransport.current!.pushFrame(buildMouseModeFrame("foo bar baz qux", 0));
+
+			fireEvent.mouseDown(mounted.canvas, { button: 0, ...cellPoint(0, 0) });
+
+			// The app turns mouse reporting on mid-drag.
+			fakeTransport.current!.pushFrame(buildMouseModeFrame("foo bar baz qux", 3));
+
+			fireEvent.mouseMove(document, { buttons: 1, ...cellPoint(10, 0) });
+			await new Promise((r) => requestAnimationFrame(r));
+
+			// If the move had been forwarded instead, this would be the only
+			// signal — mouseup hasn't run yet to reveal the selection either way.
+			expect(fakeTransport.current!.invokeCalls.some((c) => c.cmd === "write_pty")).toBe(false);
+			await mounted.dispose();
+		});
+
+		it("runs local teardown on mouseup after a mid-drag mouse-mode flip, instead of forwarding the release", async () => {
+			const mounted = await mountCanvasTerminal({ sessionId: "s15", terminalId: "t15" });
+			fakeTransport.current!.pushFrame(buildMouseModeFrame("foo bar baz qux", 0));
+
+			fireEvent.mouseDown(mounted.canvas, { button: 0, ...cellPoint(0, 0) });
+			fakeTransport.current!.pushFrame(buildMouseModeFrame("foo bar baz qux", 3));
+			fireEvent.mouseMove(document, { buttons: 1, ...cellPoint(10, 0) });
+			await new Promise((r) => requestAnimationFrame(r));
+			fireEvent.mouseUp(document, { button: 0, ...cellPoint(10, 0) });
+
+			// Teardown ran (selection extended by the drag and got copied) rather
+			// than being swallowed by the forward branch, which would return
+			// before ever reaching copySelection.
+			await selectionText(mounted.ref, "foo bar baz");
+			expect(fakeTransport.current!.invokeCalls.some((c) => c.cmd === "terminal_get_selection_text")).toBe(true);
+			expect(fakeTransport.current!.invokeCalls.some((c) => c.cmd === "write_pty")).toBe(false);
+			await mounted.dispose();
+		});
 	});
 
 	describe("right-click / link context menu", () => {
