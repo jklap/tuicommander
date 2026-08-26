@@ -130,7 +130,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev mold
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev mold fish
 
       # shell_integration.rs launches the claude/codex wrappers in bash, zsh
       # AND fish. fish is on none of the runner images, and the tests used to
