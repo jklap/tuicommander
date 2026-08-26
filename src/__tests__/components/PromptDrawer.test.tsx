@@ -141,6 +141,29 @@ describe("PromptDrawer auto-execute", () => {
 		expect(terminalMocks.openComposeWithText).not.toHaveBeenCalled();
 	});
 
+	it("injects a slow double-click only once", async () => {
+		// The 200ms de-dup timer is shorter than macOS's configurable double-click
+		// interval (up to ~1s). When the timer wins the race the single-click
+		// injection has already run, and the dblclick that follows must not inject
+		// the prompt a second time — least of all submitting it.
+		const { container } = render(() => <PromptDrawer />);
+		const row = createPromptThroughEditor(container, "Slow double-click", "Do it once", false);
+
+		fireEvent.click(row, { detail: 1 });
+		await vi.advanceTimersByTimeAsync(400); // the pending click fires first
+		fireEvent.click(row, { detail: 2 });
+		fireEvent.dblClick(row, { detail: 2 });
+		await vi.advanceTimersByTimeAsync(250);
+
+		// What actually holds the line is `doInject` closing the drawer: the row
+		// unmounts, so the trailing dblclick reaches no handler at all. That is load
+		// bearing, not incidental — this test fails the moment injection stops
+		// closing the drawer.
+		expect(document.body.contains(row)).toBe(false);
+		const injections = ptyMocks.sendCommand.mock.calls.length + terminalMocks.openComposeWithText.mock.calls.length;
+		expect(injections).toBe(1);
+	});
+
 	it("lets Insert and Run override a disabled autoExecute flag after variable entry", async () => {
 		const { container } = render(() => <PromptDrawer />);
 		const row = createPromptThroughEditor(container, "Variable prompt", "Handle {topic}", false);
