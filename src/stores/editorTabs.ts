@@ -111,6 +111,11 @@ function createEditorTabsStore() {
 		clearForRepo(repoPath: string): void {
 			base._clearWhere((tab) => tab.repoPath === repoPath);
 		},
+
+		/** Get tabs for a specific repository */
+		getForRepo(repoPath: string): EditorTabData[] {
+			return Object.values(base.state.tabs).filter((tab) => tab.repoPath === repoPath);
+		},
 	};
 }
 

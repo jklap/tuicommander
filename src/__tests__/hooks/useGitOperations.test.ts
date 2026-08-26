@@ -2,7 +2,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSeed, useGitOperations } from "../../hooks/useGitOperations";
 import * as platform from "../../platform";
+import { diffTabsStore } from "../../stores/diffTabs";
+import { editorTabsStore } from "../../stores/editorTabs";
+import { getForRepo as getFocusForRepo, recordTerminalRepo } from "../../stores/focusRegistry";
 import { githubStore } from "../../stores/github";
+import { mdTabsStore } from "../../stores/mdTabs";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
@@ -21,6 +25,9 @@ function resetStores() {
 	for (const s of repoSettingsStore.getAll()) {
 		repoSettingsStore.remove(s.path);
 	}
+	editorTabsStore.clearAll();
+	diffTabsStore.clearAll();
+	mdTabsStore.clearAll();
 }
 
 describe("buildAgentSeed", () => {
@@ -3161,6 +3168,42 @@ describe("useGitOperations", () => {
 
 			// Repo settings should be cleaned up
 			expect(repoSettingsStore.get("/repo")).toBeUndefined();
+		});
+
+		// Terminals were already closed here; the file-backed tabs of the same repo
+		// were not, and they point at a tree the user just said they are done with.
+		// They survive as tabs nothing can reach: getVisibleIds filters on a branch
+		// key that no longer resolves, so they are invisible AND immortal — every
+		// removal leaks another set. closeTerminal is the only function that closes
+		// a tab completely (store entry, pane slot, next selection), so route them
+		// through it rather than re-deriving that cleanup here.
+		it("closes the repo's editor, diff and markdown tabs too", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.add({ path: "/other", displayName: "Other" });
+
+			const edit = editorTabsStore.add("/repo", "src/main.ts");
+			const diff = diffTabsStore.add("/repo", "src/main.ts", "M");
+			const md = mdTabsStore.add("/repo", "README.md");
+			const keep = editorTabsStore.add("/other", "src/keep.ts");
+
+			await gitOps.handleRemoveRepo("/repo");
+
+			expect(mockCloseTerminal).toHaveBeenCalledWith(edit);
+			expect(mockCloseTerminal).toHaveBeenCalledWith(diff);
+			expect(mockCloseTerminal).toHaveBeenCalledWith(md);
+			expect(mockCloseTerminal).not.toHaveBeenCalledWith(keep);
+		});
+
+		it("forgets the removed repo's remembered focus target", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			recordTerminalRepo("term-1", "/repo");
+			expect(getFocusForRepo("/repo")).not.toBeNull();
+
+			await gitOps.handleRemoveRepo("/repo");
+
+			expect(getFocusForRepo("/repo")).toBeNull();
 		});
 	});
 });
