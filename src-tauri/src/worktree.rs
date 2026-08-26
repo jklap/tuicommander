@@ -2096,17 +2096,16 @@ fn cleanup_needs_confirmation(action: &str, force: bool, dirt: &WorktreeDirtines
 /// Used only by the *automatic* consequences of a merge (auto-archive-merged,
 /// finalize-after-merge) — not the plain manual "remove this worktree" command, which stays a
 /// deliberate user override.
-fn err_if_branch_worktree_busy(base_repo: &Path, branch_name: &str) -> Result<(), String> {
-    let out = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
-        .run()
-        .map_err(|e| format!("git worktree list failed: {e}"))?;
-    if let Some(path) = find_worktree_path_for_branch(&out.stdout, branch_name)
-        && has_operation_in_progress(&path.to_string_lossy())
-    {
+fn err_if_workspace_worktree_busy(base_repo: &Path, workspace_id: &str) -> Result<(), String> {
+    // Keyed by workspace id, not branch: `find_worktree_path_for_branch` was
+    // deleted with #726-5ac7 (two workspaces on one branch made every
+    // branch-keyed path lookup ambiguous) — resolve the record and use its path.
+    let workspace = resolve_workspace(base_repo, workspace_id)?;
+    if has_operation_in_progress(&workspace.path) {
         return Err(format!(
-            "Cannot finalize worktree for branch '{branch_name}': a git operation \
-             (rebase/merge/cherry-pick) is in progress"
+            "Cannot finalize worktree for branch '{}': a git operation \
+             (rebase/merge/cherry-pick) is in progress",
+            workspace.branch
         ));
     }
     Ok(())
@@ -2179,8 +2178,7 @@ pub(crate) fn finalize_merged_worktree_impl(
     let script = resolve_archive_script(&repo_path);
     let base_repo = std::path::PathBuf::from(&repo_path);
 
-    let busy_branch = resolve_workspace(&base_repo, &workspace_id)?.branch;
-    err_if_branch_worktree_busy(&base_repo, &busy_branch)?;
+    err_if_workspace_worktree_busy(&base_repo, &workspace_id)?;
 
     let dirt = worktree_dirtiness(&base_repo, &workspace_id);
     if cleanup_needs_confirmation(&action, force, &dirt) {
@@ -2346,7 +2344,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
             // merge subject the caller named, which is not necessarily what this
             // workspace has checked out — the record is.
             let branch = resolve_workspace(&base_repo, &workspace_id)?.branch;
-            err_if_branch_worktree_busy(&base_repo, &branch)?;
+            err_if_workspace_worktree_busy(&base_repo, &workspace_id)?;
             let archive_path = archive_worktree(&base_repo, &workspace_id, script.as_deref())?;
             // Archiving moves the worktree out of the repo — as far as the sidebar
             // is concerned the row is gone, same as a delete.
@@ -2364,8 +2362,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
             })
         }
         "delete" => {
-            let busy_branch = resolve_workspace(&base_repo, &workspace_id)?.branch;
-            err_if_branch_worktree_busy(&base_repo, &busy_branch)?;
+            err_if_workspace_worktree_busy(&base_repo, &workspace_id)?;
             let outcome = remove_worktree_by_workspace_id(
                 &repo_path,
                 &workspace_id,
@@ -2462,7 +2459,7 @@ pub(crate) fn archive_worktree(
     let workspace = resolve_workspace(base_repo, workspace_id)?;
     let wt_path = PathBuf::from(&workspace.path);
 
-    archive_worktree_dir(base_repo, &wt_path, branch_name, archive_script)
+    archive_worktree_dir(base_repo, &wt_path, &workspace.branch, archive_script)
 }
 
 /// Archive a worktree directory by path rather than by branch lookup. Used for orphan
@@ -2486,7 +2483,7 @@ pub(crate) fn archive_worktree_dir(
     }
     let parent_dir = wt_path.parent().ok_or("Worktree has no parent directory")?;
     let archive_dir = parent_dir.join("__archived");
-    let sanitized = sanitize_name(&workspace.branch);
+    let sanitized = sanitize_name(archive_name);
     let mut archive_dest = archive_dir.join(&sanitized);
 
     // Create archive directory
