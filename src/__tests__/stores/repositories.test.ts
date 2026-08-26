@@ -16,8 +16,11 @@ describe("repositoriesStore", () => {
 		return (
 			last[1] as {
 				config: {
-					repos: Array<{ id: string; after: unknown }>;
-					groups: Array<{ id: string; after: unknown }>;
+					// `before` is half of the compare-and-swap, not optional detail: the
+					// conflict-rebase tests assert the backend is handed the baseline it
+					// actually holds on disk.
+					repos: Array<{ id: string; before: unknown; after: unknown }>;
+					groups: Array<{ id: string; before: unknown; after: unknown }>;
 					groupOrder?: { after: string[] };
 				};
 			}
@@ -601,6 +604,38 @@ describe("repositoriesStore", () => {
 			});
 
 			errorSpy.mockRestore();
+		});
+
+		it("drops a persisted agentType the current build no longer knows", async () => {
+			// `fx` was a first-class agent for five days before being reverted, long
+			// enough to reach savedTerminals on disk. AGENT_DISPLAY and AGENTS are
+			// exhaustive `Record<AgentType, …>` indexed without an existence check, so
+			// restoring the value verbatim throws inside StatusBar's render — and no
+			// ErrorBoundary wraps it. Sanitise once, at the disk boundary.
+			store._testSetHydrated(false);
+			mockInvoke.mockResolvedValueOnce({
+				repos: {
+					"/repo": {
+						path: "/repo",
+						displayName: "Repo",
+						branches: {
+							main: {
+								savedTerminals: [
+									{ name: "t1", cwd: null, fontSize: 12, agentType: "fx" },
+									{ name: "t2", cwd: null, fontSize: 12, agentType: "claude" },
+								],
+							},
+						},
+					},
+				},
+				repoOrder: ["/repo"],
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				const saved = store.get("/repo")?.branches.main?.savedTerminals ?? [];
+				expect(saved.map((t) => t.agentType)).toEqual([null, "claude"]);
+			});
 		});
 
 		it("refuses a delta recognised by its array `repos` alone", async () => {
@@ -1459,18 +1494,105 @@ describe("repositoriesStore", () => {
 				expect(saveCount).toBe(1);
 
 				rejectFirst(new Error("repository configuration conflict"));
-				await Promise.resolve();
-				await Promise.resolve();
-				await Promise.resolve();
+				await vi.advanceTimersByTimeAsync(0);
 
-				const calls = mockInvoke.mock.calls.filter((call: unknown[]) => call[0] === "save_repositories");
-				expect(calls).toHaveLength(2);
-				const queued = (
-					calls[1][1] as {
-						config: { repos: Array<{ id: string; after: unknown }> };
-					}
-				).config.repos.find((mutation) => mutation.id === "/repo");
-				expect(queued?.after).toEqual(expect.objectContaining({ displayName: "Queued" }));
+				// Position-independent on purpose: a conflict now also emits a rebased
+				// retry, so the queued mutation is no longer call #2. What must hold is
+				// that it reaches the backend at all.
+				const queuedAfters = mockInvoke.mock.calls
+					.filter((call: unknown[]) => call[0] === "save_repositories")
+					.flatMap(
+						(call: unknown[]) => (call[1] as { config: { repos: Array<{ id: string; after: unknown }> } }).config.repos,
+					)
+					.filter((mutation) => mutation.id === "/repo")
+					.map((mutation) => mutation.after);
+				expect(queuedAfters).toContainEqual(expect.objectContaining({ displayName: "Queued" }));
+			});
+
+			errorSpy.mockRestore();
+		});
+
+		it("rebases a conflicting mutation on the current disk state and retries it once", async () => {
+			// Another client renamed /repo behind our back, so our `before` no longer
+			// matches disk. The retry must carry disk's value as `before` and our value
+			// as `after` — last-writer-wins for the record we meant to change.
+			const onDisk = {
+				repos: { "/repo": { path: "/repo", displayName: "RenamedElsewhere", branches: {} } },
+				repoOrder: ["/repo"],
+				activeRepoPath: null,
+				groups: {},
+				groupOrder: [],
+			};
+			let saveCount = 0;
+			mockInvoke.mockImplementation((command: string) => {
+				if (command === "load_repositories") return Promise.resolve(onDisk);
+				if (command !== "save_repositories") return Promise.resolve(undefined);
+				saveCount += 1;
+				if (saveCount === 1) {
+					return Promise.reject(
+						new Error("repository configuration conflict: repository '/repo' changed in another window"),
+					);
+				}
+				return Promise.resolve(undefined);
+			});
+
+			await testInScopeAsync(async () => {
+				store.add({ path: "/repo", displayName: "Mine" });
+				await vi.advanceTimersByTimeAsync(500);
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(saveCount).toBe(2);
+				const retry = lastRepositoryMutation().repos.find((m) => m.id === "/repo");
+				expect(retry?.before).toEqual(expect.objectContaining({ displayName: "RenamedElsewhere" }));
+				expect(retry?.after).toEqual(expect.objectContaining({ displayName: "Mine" }));
+			});
+		});
+
+		it("does not wedge future saves after a conflict", async () => {
+			// The regression: a conflict left `persistedSnapshot` stale forever, so every
+			// later save diffed against a baseline disk had already moved past and was
+			// rejected too — permanently, for every repo, not just the conflicting one.
+			const onDisk = {
+				repos: { "/repo": { path: "/repo", displayName: "RenamedElsewhere", branches: {} } },
+				repoOrder: ["/repo"],
+				activeRepoPath: null,
+				groups: {},
+				groupOrder: [],
+			};
+			const conflicts: string[] = [];
+			let saveCount = 0;
+			mockInvoke.mockImplementation((command: string, args: unknown) => {
+				if (command === "load_repositories") return Promise.resolve(onDisk);
+				if (command !== "save_repositories") return Promise.resolve(undefined);
+				saveCount += 1;
+				const batch = (args as { config: { repos: Array<{ id: string; before: unknown }> } }).config;
+				const mutation = batch.repos.find((m) => m.id === "/repo");
+				// Emulate the backend CAS: reject unless `before` matches disk.
+				if (
+					mutation &&
+					(mutation.before as { displayName?: string } | null)?.displayName !== onDisk.repos["/repo"].displayName
+				) {
+					conflicts.push(`save#${saveCount}`);
+					return Promise.reject(new Error("repository configuration conflict: repository '/repo' changed"));
+				}
+				return Promise.resolve(undefined);
+			});
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				store.add({ path: "/repo", displayName: "Mine" });
+				await vi.advanceTimersByTimeAsync(500);
+				await vi.advanceTimersByTimeAsync(0);
+				const afterFirst = saveCount;
+
+				// A completely unrelated, later user edit must still reach disk.
+				store.setDisplayName("/repo", "MineAgain");
+				await vi.advanceTimersByTimeAsync(500);
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(saveCount).toBeGreaterThan(afterFirst);
+				// The last save attempted must have been accepted, not rejected.
+				expect(conflicts).not.toContain(`save#${saveCount}`);
 			});
 
 			errorSpy.mockRestore();
