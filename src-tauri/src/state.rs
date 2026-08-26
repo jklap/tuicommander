@@ -169,6 +169,28 @@ pub enum AppEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         origin_session_id: Option<String>,
     },
+    /// An MCP agent is blocked on a yes/no answer from the human.
+    ///
+    /// Broadcast to every client, not just the desktop window: the answer gates a
+    /// destructive operation, and a human who is away from the machine must still
+    /// be able to give it. The first client to answer resolves the request; the
+    /// rest are told to dismiss by `McpConfirmResolved`.
+    #[serde(rename = "mcp-confirm")]
+    McpConfirm {
+        request_id: String,
+        title: String,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin_repo_path: Option<String>,
+        /// The TUIC session that asked, when the caller is bound to one — so a
+        /// client can show which terminal is waiting.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin_session_id: Option<String>,
+    },
+    /// A pending confirmation was answered (or expired). Clients showing that
+    /// request must dismiss it; `confirmed` is the answer that won.
+    #[serde(rename = "mcp-confirm-resolved")]
+    McpConfirmResolved { request_id: String, confirmed: bool },
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
@@ -1654,6 +1676,14 @@ pub struct AppState {
     /// Pending screenshot requests: request_id → oneshot sender for base64 image data.
     /// Populated by MCP `ui(action=screenshot)`, consumed by `screenshot_response` command.
     pub(crate) screenshot_responses: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
+    /// Pending confirmation requests: request_id → oneshot sender for the human's answer.
+    /// Populated by MCP `ui(action=confirm)`, consumed by `mcp_confirm_response`.
+    ///
+    /// Every connected client — desktop WebView, browser, mobile PWA — is offered
+    /// the same request and the first answer wins, because a remote human must be
+    /// able to unblock an agent that a native desktop dialog would have pinned to
+    /// whoever is sitting at the machine.
+    pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
     #[cfg(unix)]
     pub(crate) standby_sessions: DashMap<String, u64>,
@@ -2595,6 +2625,7 @@ impl AppState {
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
+            confirm_responses: DashMap::new(),
             #[cfg(unix)]
             standby_sessions: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
@@ -3177,9 +3208,16 @@ impl AppState {
         });
     }
 
-    /// Send a push notification to all mobile subscribers.
+    /// Send a push notification to all mobile subscribers, deep-linking a session.
     fn send_mobile_push(state: &Arc<AppState>, session_id: &str, body: &str) {
-        let url = format!("/mobile/session/{session_id}");
+        Self::send_mobile_push_url(state, format!("/mobile/session/{session_id}"), body);
+    }
+
+    /// Send a push notification to all mobile subscribers at an arbitrary deep link.
+    ///
+    /// A blocked confirmation is the reason this is not private to session events:
+    /// a human who is away from the machine learns about it only through push.
+    pub(crate) fn send_mobile_push_url(state: &Arc<AppState>, url: String, body: &str) {
         let config = state.config.read().clone();
         let subs = state.push_store.list();
         let http_client = state.http_client.clone();
@@ -3542,6 +3580,8 @@ impl AppState {
             | AppEvent::UpstreamStatusChanged { .. }
             | AppEvent::McpOAuthStart { .. }
             | AppEvent::McpToast { .. }
+            | AppEvent::McpConfirm { .. }
+            | AppEvent::McpConfirmResolved { .. }
             | AppEvent::DirChanged { .. }
             | AppEvent::WorktreeCreated { .. }
             | AppEvent::WorktreeRemoved { .. }
@@ -6021,6 +6061,7 @@ mod tests {
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
+            confirm_responses: DashMap::new(),
             standby_sessions: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),

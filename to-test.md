@@ -1168,3 +1168,32 @@ fails with "code_graph response has no 'symbols'".
 - [ ] With the OLD mdkb still installed, find-references shows no results and
   logs `mdkb_references failed: ... no 'symbols'` — it must NOT look like a
   symbol with zero callers. Check `GET http://localhost:9876/logs`.
+
+## MCP `ui action=confirm` on every client — after `make dev` restart
+
+Rust change: needs a TUIC restart. The native OS dialog is gone; the request now
+goes to the desktop WebView, browser tabs and the mobile PWA at once, plus a
+mobile push, and the first answer wins.
+
+- [ ] Ask an agent for a confirmation (`ui action=confirm`). The dialog appears
+  **in-app** (dark themed), not as a light macOS system sheet.
+- [ ] The same dialog appears at the same time on `http://localhost:9876/mobile.html`
+  in a browser or on the phone. This is the whole point — before, a remote human
+  could not answer and the agent blocked until someone reached the machine.
+- [ ] On a phone-width screen the dialog is readable and both buttons are
+  tappable — it reuses the desktop `shared/dialog.module.css`, which had never
+  been rendered at that width before. (Needs a live backend to raise a real
+  confirm, so it could not be screenshot-checked at implementation time.)
+- [ ] A confirm with a **long** message scrolls inside the dialog and still shows
+  its buttons. `.popover` clips overflow, so `.body` now caps at 60vh and
+  scrolls — check a couple of ordinary desktop dialogs (rename branch, create
+  worktree, unsaved changes) still look unchanged, since that CSS is shared.
+- [ ] Answering on **mobile** unblocks the agent, and the desktop dialog
+  disappears by itself. Then the reverse: answer on desktop, mobile dismisses.
+- [ ] With a mobile push subscription registered, a confirm raised while the PWA
+  is closed sends a push carrying the title.
+- [ ] Escape / clicking the overlay answers **cancel**, and Enter also takes
+  Cancel — the agent asks before destructive ops, so Enter must not approve.
+- [ ] Leave a confirm unanswered for 5 minutes: the agent receives
+  `{confirmed: false, reason: "no answer within 300s"}` and the dialog closes on
+  every client. It must NOT read as an approval.

@@ -255,6 +255,15 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	close_pty: {
 		map: (args) => ({ method: "DELETE", path: `/sessions/${args.sessionId}` }),
 	},
+	// Answering a blocked agent has to work from a browser or phone — that is the
+	// whole reason the confirmation stopped being a native desktop dialog.
+	mcp_confirm_response: {
+		map: (args) => ({
+			method: "POST",
+			path: "/mcp/confirm-response",
+			body: { request_id: args.requestId, confirmed: args.confirmed },
+		}),
+	},
 	get_session_foreground_process: {
 		map: (args) => ({
 			method: "GET",

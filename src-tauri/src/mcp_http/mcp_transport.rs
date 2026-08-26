@@ -1104,7 +1104,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "ui",
-            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound.\n- confirm: blocking dialog. Returns {confirmed}. Requires title.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
+            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound.\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: tab, toast, confirm, screenshot" },
                 "id": { "type": "string", "description": "Stable identifier for dedup — same id reuses existing tab (action=tab, required)" },
@@ -4911,7 +4911,6 @@ fn resolve_toast_sound(
 
 fn handle_notify(
     state: &Arc<AppState>,
-    addr: SocketAddr,
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
@@ -4970,47 +4969,114 @@ fn handle_notify(
             });
             serde_json::json!({"ok": true})
         }
-        "confirm" => {
-            #[cfg(not(feature = "desktop"))]
-            {
-                serde_json::json!({"error": "Action 'confirm' requires desktop feature"})
-            }
-            #[cfg(feature = "desktop")]
-            {
-                if !addr.ip().is_loopback() {
-                    return serde_json::json!({"error": "Action 'confirm' is restricted to localhost connections"});
-                }
-                let title = match args["title"].as_str() {
-                    Some(t) => t.to_string(),
-                    None => {
-                        return serde_json::json!({"error": "Action 'confirm' requires 'title'"});
-                    }
-                };
-                let message = args["message"].as_str().unwrap_or("").to_string();
-
-                let app_handle = state.app_handle.read();
-                let handle = match app_handle.as_ref() {
-                    Some(h) => h,
-                    None => {
-                        return serde_json::json!({"error": "App handle not available (headless mode)"});
-                    }
-                };
-
-                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                let confirmed = handle
-                    .dialog()
-                    .message(&message)
-                    .title(&title)
-                    .buttons(MessageDialogButtons::OkCancel)
-                    .blocking_show();
-
-                serde_json::json!({"confirmed": confirmed})
-            }
-        }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'notify'. Available: {}", other, LEGACY_NOTIFY_ACTIONS
         )}),
     }
+}
+
+/// How long a confirmation waits for a human before it gives up.
+///
+/// Matches the MCP wait ceiling used elsewhere. A native dialog waited forever,
+/// which is only tolerable when the human is guaranteed to be at the machine —
+/// the whole point of routing this through the clients is that they may not be.
+const CONFIRM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Ask the human a yes/no question and wait for the answer.
+///
+/// The request goes to **every** client — desktop WebView, browser, mobile PWA —
+/// plus a mobile push, and the first answer wins. It used to be a native OS
+/// dialog, which meant an agent asking to confirm a destructive operation blocked
+/// until someone walked back to the machine: unanswerable, and therefore blocking,
+/// for a human working remotely.
+///
+/// A request nobody answers within [`CONFIRM_TIMEOUT`] resolves as *not* confirmed
+/// and says so, so the caller can tell silence apart from a deliberate refusal.
+async fn handle_confirm(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    if !addr.ip().is_loopback() {
+        return serde_json::json!({"error": "Action 'confirm' is restricted to localhost connections"});
+    }
+    let title = match args["title"].as_str() {
+        Some(t) => t.to_string(),
+        None => return serde_json::json!({"error": "Action 'confirm' requires 'title'"}),
+    };
+    let message = args["message"].as_str().unwrap_or("").to_string();
+    let origin_repo_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
+    let origin_session_id = resolve_mcp_origin_session(state, mcp_session_id);
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    state.confirm_responses.insert(request_id.clone(), tx);
+
+    // Dual-emit, same reason as the toast above: the bus only reaches SSE
+    // clients, and there is no bus→window forwarder for the desktop WebView.
+    #[cfg(feature = "desktop")]
+    if let Some(ref app) = *state.app_handle.read() {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "mcp-confirm",
+            serde_json::json!({
+                "request_id": request_id,
+                "title": title,
+                "message": message,
+                "origin_repo_path": origin_repo_path,
+                "origin_session_id": origin_session_id,
+            }),
+        );
+    }
+    let _ = state.event_bus.send(crate::state::AppEvent::McpConfirm {
+        request_id: request_id.clone(),
+        title: title.clone(),
+        message: message.clone(),
+        origin_repo_path,
+        origin_session_id: origin_session_id.clone(),
+    });
+
+    // A PWA that is not open receives nothing over SSE, so push is the only way
+    // a remote human learns an agent is waiting on them.
+    let url = match origin_session_id {
+        Some(ref sid) => format!("/mobile/session/{sid}"),
+        None => "/mobile".to_string(),
+    };
+    let body = if message.is_empty() {
+        title.clone()
+    } else {
+        format!("{title} — {message}")
+    };
+    crate::state::AppState::send_mobile_push_url(state, url, &body);
+
+    let confirmed = match tokio::time::timeout(CONFIRM_TIMEOUT, rx).await {
+        Ok(Ok(answer)) => answer,
+        // Sender dropped without answering, or nobody answered in time. Both are
+        // "no human said yes", which is the safe reading for a destructive op.
+        _ => {
+            state.confirm_responses.remove(&request_id);
+            let _ = state
+                .event_bus
+                .send(crate::state::AppEvent::McpConfirmResolved {
+                    request_id: request_id.clone(),
+                    confirmed: false,
+                });
+            #[cfg(feature = "desktop")]
+            if let Some(ref app) = *state.app_handle.read() {
+                use tauri::Emitter;
+                let _ = app.emit(
+                    "mcp-confirm-resolved",
+                    serde_json::json!({ "request_id": request_id, "confirmed": false }),
+                );
+            }
+            return serde_json::json!({
+                "confirmed": false,
+                "reason": format!("no answer within {}s", CONFIRM_TIMEOUT.as_secs()),
+            });
+        }
+    };
+    serde_json::json!({"confirmed": confirmed})
 }
 
 // ---------------------------------------------------------------------------
@@ -5654,16 +5720,11 @@ async fn handle_ui_unified(
     };
     match action {
         "tab" => handle_ui(state, args, mcp_session_id),
-        "toast" => handle_notify(state, addr, &remap_action(args, action), mcp_session_id),
-        // The native dialog deliberately waits for the human, but it must not
-        // occupy an async MCP worker shared by every connected agent. Isolate
-        // only the requesting call on Tokio's blocking pool.
-        "confirm" => {
-            let state = state.clone();
-            let args = remap_action(args, action);
-            let sid = mcp_session_id.map(str::to_owned);
-            run_blocking_handler(move || handle_notify(&state, addr, &args, sid.as_deref())).await
-        }
+        "toast" => handle_notify(state, &remap_action(args, action), mcp_session_id),
+        // Waits for the human, but only on a oneshot — no blocking-pool worker is
+        // held, so a confirmation left unanswered costs a pending task and nothing
+        // else.
+        "confirm" => handle_confirm(state, addr, args, mcp_session_id).await,
         "screenshot" => handle_screenshot(state, addr, args).await,
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'ui'. Available: {}", other, UI_ACTIONS
@@ -6800,6 +6861,7 @@ mod tests {
             tasks: std::sync::Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: dashmap::DashMap::new(),
+            confirm_responses: dashmap::DashMap::new(),
             standby_sessions: dashmap::DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
@@ -12510,6 +12572,201 @@ mod tests {
         assert!(
             state.mcp_to_session.get("mcp-unbound").is_none(),
             "cwd fallback must not repair the missing identity binding"
+        );
+    }
+
+    // --- ui(action=confirm): answerable from any client, not just the desktop ---
+
+    /// Wait for `handle_confirm` to publish its request, and return the id.
+    ///
+    /// The handler registers the pending entry before it awaits, so polling the
+    /// registry is enough — no need to reach into the event bus for the id.
+    async fn await_pending_confirm(state: &Arc<AppState>) -> String {
+        for _ in 0..200 {
+            if let Some(entry) = state.confirm_responses.iter().next() {
+                return entry.key().clone();
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("confirm request was never registered");
+    }
+
+    #[tokio::test]
+    async fn confirm_returns_the_answer_a_client_gave() {
+        let state = test_state();
+        let addr = "127.0.0.1:0".parse().unwrap();
+
+        let answering = state.clone();
+        tokio::spawn(async move {
+            let id = await_pending_confirm(&answering).await;
+            crate::mcp_http::resolve_mcp_confirm(&answering, &id, true);
+        });
+
+        let result = handle_confirm(
+            &state,
+            addr,
+            &serde_json::json!({"title": "Delete branch?", "message": "git branch -D wip"}),
+            None,
+        )
+        .await;
+
+        assert_eq!(result["confirmed"], true);
+        assert!(
+            result.get("reason").is_none(),
+            "a real answer must not be reported as a timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_reaches_every_client_over_the_event_bus() {
+        let state = test_state();
+        let addr = "127.0.0.1:0".parse().unwrap();
+        // Subscribing before the call is what a remote SSE client does; without
+        // this bus hop a phone would never learn an agent is waiting on it.
+        let mut rx = state.event_bus.subscribe();
+
+        let answering = state.clone();
+        tokio::spawn(async move {
+            let id = await_pending_confirm(&answering).await;
+            crate::mcp_http::resolve_mcp_confirm(&answering, &id, false);
+        });
+
+        let _ = handle_confirm(
+            &state,
+            addr,
+            &serde_json::json!({"title": "Force push?", "message": "to main"}),
+            None,
+        )
+        .await;
+
+        let mut saw_request = None;
+        let mut saw_resolution = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                crate::state::AppEvent::McpConfirm {
+                    request_id,
+                    title,
+                    message,
+                    ..
+                } => {
+                    assert_eq!(title, "Force push?");
+                    assert_eq!(message, "to main");
+                    saw_request = Some(request_id);
+                }
+                crate::state::AppEvent::McpConfirmResolved {
+                    request_id,
+                    confirmed,
+                } => {
+                    assert_eq!(Some(&request_id), saw_request.as_ref());
+                    assert!(!confirmed);
+                    saw_resolution = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_request.is_some(), "no request reached the bus");
+        assert!(
+            saw_resolution,
+            "clients that did not answer are never told to dismiss the dialog"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn confirm_gives_up_when_nobody_answers() {
+        let state = test_state();
+        let addr = "127.0.0.1:0".parse().unwrap();
+
+        let result = handle_confirm(
+            &state,
+            addr,
+            &serde_json::json!({"title": "Drop the table?"}),
+            None,
+        )
+        .await;
+
+        // Silence is not consent: a destructive op nobody approved must read as
+        // refused, and say why so the caller can tell it from a real "no".
+        assert_eq!(result["confirmed"], false);
+        assert!(
+            result["reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("no answer")),
+            "timeout must be distinguishable from a refusal: {result}"
+        );
+        assert!(
+            state.confirm_responses.is_empty(),
+            "an expired request must not leak its registry entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn answering_a_confirm_twice_resolves_it_once() {
+        let state = test_state();
+        let addr = "127.0.0.1:0".parse().unwrap();
+        let mut rx = state.event_bus.subscribe();
+
+        let answering = state.clone();
+        tokio::spawn(async move {
+            let id = await_pending_confirm(&answering).await;
+            // Every client races to answer the same request. The loser must be a
+            // no-op, not an error and not a second resolution.
+            crate::mcp_http::resolve_mcp_confirm(&answering, &id, true);
+            crate::mcp_http::resolve_mcp_confirm(&answering, &id, false);
+        });
+
+        let result = handle_confirm(
+            &state,
+            addr,
+            &serde_json::json!({"title": "Proceed?"}),
+            None,
+        )
+        .await;
+
+        assert_eq!(result["confirmed"], true);
+        let resolutions = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter(|e| matches!(e, crate::state::AppEvent::McpConfirmResolved { .. }))
+            .count();
+        assert_eq!(resolutions, 1, "the losing answer must not re-broadcast");
+    }
+
+    #[tokio::test]
+    async fn confirm_refuses_a_non_loopback_caller() {
+        let state = test_state();
+        let addr = "192.168.1.50:9876".parse().unwrap();
+
+        let result = handle_confirm(
+            &state,
+            addr,
+            &serde_json::json!({"title": "Proceed?"}),
+            None,
+        )
+        .await;
+
+        assert!(
+            result["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("localhost"))
+        );
+        assert!(state.confirm_responses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn confirm_requires_a_title() {
+        let state = test_state();
+        let addr = "127.0.0.1:0".parse().unwrap();
+
+        let result = handle_confirm(
+            &state,
+            addr,
+            &serde_json::json!({"message": "no title"}),
+            None,
+        )
+        .await;
+
+        assert!(
+            result["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("title"))
         );
     }
 
