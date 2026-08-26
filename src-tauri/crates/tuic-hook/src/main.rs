@@ -141,6 +141,8 @@ STDIN:
 
 ENVIRONMENT:
     TUIC_SESSION      Must be set and non-empty, or every flag above is a no-op.
+    TUIC_PTY_TTY      The pty device path, stamped by TUICommander onto every
+                       child it spawns. Wins over ancestor-walk resolution.
     TUIC_HOOK_TTY     Overrides the resolved tty write target (test seam).
     TUIC_HOOK_DEBUG   If set, prints the resolved tty path to stderr.
 
@@ -960,6 +962,7 @@ mod tests {
             "--version",
             "--help",
             "TUIC_SESSION",
+            "TUIC_PTY_TTY",
             "TUIC_HOOK_TTY",
             "TUIC_HOOK_DEBUG",
             "PostToolUseFailure",

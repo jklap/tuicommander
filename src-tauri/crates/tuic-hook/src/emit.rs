@@ -39,7 +39,16 @@ pub fn emit(pairs: &[Emission]) {
     if pairs.is_empty() {
         return;
     }
-    let Some(path) = tty::resolve() else {
+    emit_to(tty::resolve(), pairs);
+}
+
+/// The write side of [`emit`], taking an already-resolved path so the
+/// "nothing resolved" branch is directly testable — `tty::resolve()` returning
+/// `None` is not reliably reproducible from a test (`/dev/tty` exists as a
+/// device node on every dev/CI machine actually used, so the fallback almost
+/// never comes back empty; only the *open* can be forced to fail).
+fn emit_to(path: Option<std::path::PathBuf>, pairs: &[Emission]) {
+    let Some(path) = path else {
         return;
     };
     if std::env::var("TUIC_HOOK_DEBUG").is_ok_and(|v| !v.is_empty()) {
@@ -49,7 +58,22 @@ pub fn emit(pairs: &[Emission]) {
     // device node, and on the rare non-device target (the TUIC_HOOK_TTY test
     // seam) truncating would erase whatever another hook invocation in the
     // same test already wrote there.
-    let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(&path) else {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    // On Linux, a session leader with no controlling terminal that opens a
+    // tty device acquires it as its ctty unless O_NOCTTY is passed — exactly
+    // the state a Claude Code hook subprocess is in when TUIC_PTY_TTY or the
+    // ancestor walk hands it a real device path. Harmless for the
+    // TUIC_HOOK_TTY test seam, which points at a regular file rather than a
+    // device (O_NOCTTY has no effect on non-tty files). macOS/BSD require an
+    // explicit TIOCSCTTY ioctl to acquire a ctty, so this flag is a no-op
+    // there rather than a second mechanism to keep in sync.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOCTTY);
+    }
+    let Ok(mut file) = options.open(&path) else {
         return;
     };
 
@@ -166,5 +190,75 @@ mod tests {
         emit(&[Emission::verbatim("state", "busy")]);
         unsafe { std::env::remove_var("TUIC_HOOK_TTY") };
         assert!(!path.exists(), "must never create the target file");
+    }
+
+    /// `emit()` now opens with `O_NOCTTY` (added alongside `TUIC_PTY_TTY`,
+    /// since both exist to make it safe to point a detached hook process at a
+    /// real pty device). Every other test here writes to a regular file, which
+    /// `O_NOCTTY` doesn't affect — this is the one test against a genuine pty
+    /// slave, pinning that the flag doesn't break opening or writing to an
+    /// actual tty device (e.g. an EINVAL from an unexpected flag encoding).
+    /// It does not assert ctty-acquisition is avoided: that's only observable
+    /// from a process that is a session leader with no ctty of its own, which
+    /// a test running under `cargo test`/`cargo nextest` is not guaranteed
+    /// (and generally is not) — the POSIX behavior `O_NOCTTY` prevents simply
+    /// doesn't trigger here regardless of the flag.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn emit_writes_correctly_to_a_real_pty_slave_with_o_noctty_set() {
+        use std::os::unix::io::FromRawFd;
+
+        let mut master_fd: libc::c_int = -1;
+        let mut slave_fd: libc::c_int = -1;
+        let opened = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(
+            opened,
+            0,
+            "openpty failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let mut name_buf = [0i8; 64];
+        let named = unsafe { libc::ttyname_r(slave_fd, name_buf.as_mut_ptr(), name_buf.len()) };
+        assert_eq!(named, 0, "ttyname_r failed");
+        let slave_path = unsafe { std::ffi::CStr::from_ptr(name_buf.as_ptr()) }
+            .to_str()
+            .expect("tty path must be valid UTF-8")
+            .to_string();
+
+        unsafe { std::env::set_var("TUIC_HOOK_TTY", &slave_path) };
+        emit(&[Emission::verbatim("state", "busy")]);
+        unsafe { std::env::remove_var("TUIC_HOOK_TTY") };
+
+        // SAFETY: master_fd came from openpty() above and is owned by this
+        // test; File::drop closes it once, exactly.
+        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let mut got = [0u8; 64];
+        let n = master.read(&mut got).expect("read from pty master");
+        assert_eq!(&got[..n], b"\x1b]7770;state=busy\x1b\\");
+
+        unsafe { libc::close(slave_fd) };
+    }
+
+    /// The other half of `emit()`'s silent-no-op contract: nothing resolved at
+    /// all (as opposed to the case above, something resolved but wouldn't
+    /// open). No `TUIC_HOOK_TTY` env interaction here, so this doesn't need
+    /// `#[serial_test::serial]` — it drives `emit_to` directly rather than
+    /// going through `tty::resolve()`.
+    #[test]
+    fn emit_is_a_silent_noop_when_nothing_resolves() {
+        emit_to(None, &[Emission::verbatim("state", "busy")]);
+        // No assertion beyond "did not panic" is possible — there is no
+        // target path to inspect when resolution itself came back empty.
+        // That absence of any observable side effect *is* the contract.
     }
 }
