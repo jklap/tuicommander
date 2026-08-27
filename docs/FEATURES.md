@@ -801,6 +801,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Rate Limits section:** Live utilization bars from Anthropic OAuth usage API
   - Follows the focused Claude terminal's `CLAUDE_CONFIG_DIR` credential profile; an unresolved profile shows unknown rather than another account's quota
   - 5-Hour, 7-Day, 7-Day Opus, 7-Day Sonnet, 7-Day Cowork buckets
+  - Enterprise/spend-based plans don't populate those named buckets — falls back to the `extra_usage` figure those plans send instead, without masking a genuine bottleneck if a named bucket is populated but low
   - Color-coded bars: green < 70%, yellow 70-89%, red >= 90%
   - Reset countdown per bucket
 - **Usage Over Time chart:** SVG line chart of token usage over 7 days
