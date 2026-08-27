@@ -9,6 +9,7 @@ import { terminalsStore } from "../../stores/terminals";
 import { verifyAndBuildResumeCommand } from "../../utils/agentSession";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { markPerf } from "../../utils/perfTrace";
+import { randomId } from "../../utils/randomId";
 import { filterValidTerminals } from "../../utils/terminalFilter";
 
 interface BranchSelectionCoordinatorDeps {
@@ -52,7 +53,9 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			name: tabName,
 			cwd: branch?.worktreePath || null,
 			awaitingInput: null,
-			tuicSession: crypto.randomUUID(),
+			// No prefix: tuicSession must stay a bare canonical UUID for the
+			// backend's `is_valid_uuid` prompt-injection guard.
+			tuicSession: randomId(""),
 		});
 		if (label) terminalsStore.update(id, { nameIsCustom: true });
 
@@ -252,7 +255,9 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 							name: terminal.name,
 							cwd: terminal.cwd,
 							awaitingInput: null,
-							tuicSession: terminal.tuicSession ?? crypto.randomUUID(),
+							// No prefix: tuicSession must stay a bare canonical UUID for the
+							// backend's `is_valid_uuid` prompt-injection guard.
+							tuicSession: terminal.tuicSession ?? randomId(""),
 							agentType: terminal.agentType ?? null,
 							agentSessionId: terminal.agentSessionId ?? null,
 							agentLaunchCommand: terminal.agentLaunchCommand ?? null,
