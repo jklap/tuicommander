@@ -167,3 +167,25 @@ listed here.
 - **Estimated complexity:** M (needs design work, not just a patch).
 - **Recommended priority:** P3.
 
+### `MarkdownTab.test.tsx` reports a stable async leak in `ContentRenderer.tsx`, not `MarkdownTab.tsx`
+- **Problem/opportunity:** `pnpm exec vitest run src/__tests__/components/MarkdownTab.test.tsx`
+  reports `Leaks 1 leak` (a `requestAnimationFrame` call) on every run, reproducibly.
+  Investigated while verifying a different, now-fixed leak claim in `MarkdownTab.tsx`'s own
+  `focusWrapper` — the leak persists identically whether or not that fix is applied, and its
+  stack trace instead points at `src/components/ui/ContentRenderer.tsx:434`'s `requestAnimationFrame`
+  call inside a `createEffect`, which **already has** an `onCleanup(() => cancelAnimationFrame(raf))`
+  guard. The test file itself correctly tracks and unmounts every rendered component in
+  `afterEach` (`pendingUnmounts`), so this isn't an obviously missing unmount either. Root
+  cause not yet identified — possibly a timing interaction between Solid's effect scheduling,
+  jsdom's `requestAnimationFrame` polyfill, and vitest's `detectAsyncLeaks` snapshot point,
+  rather than a genuine missing-cleanup bug in application code.
+- **Proposed solution:** Needs focused investigation — reproduce with a minimal
+  `ContentRenderer` mount/unmount test in isolation, and check whether the leak also
+  reproduces in `ContentRenderer.test.tsx` directly or only when mounted via `MarkdownTab`.
+- **Expected benefits:** Either closes a genuine (if subtle) leak, or identifies a
+  vitest/jsdom/Solid interaction worth documenting so it isn't rediscovered.
+- **Trade-offs:** Low urgency — `detectAsyncLeaks` is a reporter in this config, not a hard
+  CI gate, so it doesn't currently block anything.
+- **Estimated complexity:** S (investigation) — unknown for any fix.
+- **Recommended priority:** P3.
+
