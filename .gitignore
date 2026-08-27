@@ -45,7 +45,6 @@ ideas
 .claude
 .aider*
 benchmarks
-CLAUDE.md
 .mdkb
 scripts/*
 !scripts/build-docs.sh
