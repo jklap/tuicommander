@@ -29,8 +29,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { WorktreeManager } from "../../components/WorktreeManager";
 import { githubStore } from "../../stores/github";
 import { repositoriesStore } from "../../stores/repositories";
+import { terminalsStore } from "../../stores/terminals";
 import { worktreeManagerStore } from "../../stores/worktreeManager";
 import type { BranchPrStatus } from "../../types";
+import { makeTerminal } from "../helpers/store";
 
 /** Minimal PR status factory — only override what you need per test */
 function mockPr(
@@ -74,6 +76,9 @@ describe("WorktreeManager", () => {
 		// Clear repos — reset to empty
 		for (const path of Object.keys(repositoriesStore.state.repositories)) {
 			repositoriesStore.remove(path);
+		}
+		for (const id of terminalsStore.getIds()) {
+			terminalsStore.remove(id);
 		}
 	});
 
@@ -451,6 +456,31 @@ describe("WorktreeManager", () => {
 			fireEvent.click(deleteBtn);
 
 			expect(worktreeManagerStore.state.selectedIds.size).toBe(0);
+		});
+
+		it("orders a batch delete safe-first, busy-last", () => {
+			// `onDelete` → `handleRemoveWorkspace` gates each busy workspace behind its
+			// own confirmRemoveBusyWorktree dialog (defaultButton: "cancel") — that
+			// per-item gate is what makes batch delete safe. This only checks that
+			// the uncontroversial (no attached terminal) deletions aren't queued
+			// behind the disruptive prompts for busy ones.
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feat-busy", { worktreePath: "/repo/.wt/busy" });
+			repositoriesStore.setWorkspace("/repo", "feat-safe", { worktreePath: "/repo/.wt/safe" });
+			const termId = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feat-busy", termId);
+
+			worktreeManagerStore.open();
+			worktreeManagerStore.toggleSelect("/repo::feat-busy");
+			worktreeManagerStore.toggleSelect("/repo::feat-safe");
+			const { container } = render(() => <WorktreeManager actions={mockActions} />);
+
+			const deleteBtn = container.querySelector("[class*='batchDeleteBtn']")!;
+			fireEvent.click(deleteBtn);
+
+			expect(mockActions.onDelete).toHaveBeenCalledTimes(2);
+			const order = mockActions.onDelete.mock.calls.map((call) => call[1]);
+			expect(order).toEqual(["feat-safe", "feat-busy"]);
 		});
 
 		it("shows Merge & Archive Selected button when items selected", () => {

@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import type { BranchActivitySummary } from "../utils/activitySnapshot";
 import type { OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 
 /** Which button the Enter key activates. Defaults to "confirm" for backward
@@ -164,6 +165,28 @@ export function useConfirmDialog() {
 			okLabel: "Force Remove",
 			cancelLabel: "Cancel",
 			kind: "warning",
+			// Enter must never force a destructive removal: pressing Enter through a
+			// queue of near-identical prompts was the 2026-08-26 incident's most
+			// plausible trigger.
+			defaultButton: "cancel",
+		});
+	}
+
+	/** Confirm removing a worktree that still has terminals attached.
+	 *
+	 *  Asked after the removal confirmation and BEFORE any terminal is closed,
+	 *  using the workspace's attached-terminal list as of the click — the
+	 *  2026-08-26 incident deleted a worktree with a live (even idle) terminal
+	 *  in it. `defaultButton: "cancel"` so Enter cannot destroy live work. */
+	async function confirmRemoveBusyWorktree(branchName: string, summary: BranchActivitySummary): Promise<boolean> {
+		const lines = summary.terminals.map((t) => `  • ${t.agentType ?? "terminal"} — ${t.label}`).join("\n");
+		return await confirm({
+			title: `"${branchName}" is in use`,
+			message: `${summary.terminalCount} terminal(s) are attached to "${branchName}":\n${lines}\n\nRemoving it now will close them and interrupt whatever is running there.\n\nDelete anyway?`,
+			okLabel: "Delete anyway",
+			cancelLabel: "Cancel",
+			kind: "error",
+			defaultButton: "cancel",
 		});
 	}
 
@@ -300,6 +323,7 @@ export function useConfirmDialog() {
 		confirmSaveChanges,
 		confirmRemoveWorktree,
 		confirmRemoveLockedWorktree,
+		confirmRemoveBusyWorktree,
 		confirmCloseTerminal,
 		confirmRemoveRepo,
 		confirmStashAndSwitch,

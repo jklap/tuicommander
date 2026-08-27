@@ -281,6 +281,16 @@ After each copy, warming adds owner write permission to cloned files and
 directories. It does not follow symlinks or change the source checkout, so
 sealed ignored evidence remains available and the new worktree stays removable.
 
+## Worktree Removal Safety
+
+Removal never collapses git's two independent refusals into one flag: `force` only
+permits discarding dirty files (and needs the confirmed `expected_fingerprint`), while a
+`git worktree lock` needs the separate `override_lock`. Branch deletion after a removal
+always uses the safe `git branch -d`. Live sessions in a checkout (`live_sessions_in`)
+are reported by the removal preview and block orphan cleanup; the desktop removal flow
+additionally asks a Cancel-by-default "in use" question before closing any attached
+terminal (`createWorktreeRemovalCoordinator`).
+
 ## Tauri Commands
 
 ### Repository Info

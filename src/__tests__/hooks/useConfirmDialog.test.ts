@@ -321,6 +321,87 @@ describe("useConfirmDialog", () => {
 		});
 	});
 
+	describe("confirmRemoveLockedWorktree()", () => {
+		it("warns about a safe branch delete when deleteBranch=true", async () => {
+			const promise = dialog.confirmRemoveLockedWorktree("feature-x", true);
+
+			const state = dialog.dialogState();
+			expect(state?.title).toBe("Worktree is locked by an agent");
+			expect(state?.message).toContain('"feature-x" is currently locked by an active Claude agent.');
+			expect(state?.message).toContain("may interrupt the agent mid-task");
+			// Branch deletion never escalates to `-D` — this must not claim
+			// unmerged commits will be lost (root cause of the 2026-08-26
+			// incident's orphaned commits).
+			expect(state?.message).not.toContain("-D");
+			expect(state?.message).not.toContain("permanently lost");
+			expect(state?.message).toContain("deleted only if its commits are already integrated");
+			expect(state?.confirmLabel).toBe("Force Remove");
+			// Enter must not destroy live work by default (this is the incident's
+			// most plausible trigger mechanism) — same invariant as the busy
+			// dialog below.
+			expect(state?.defaultButton).toBe("cancel");
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("omits the branch-deletion note when deleteBranch=false", async () => {
+			const promise = dialog.confirmRemoveLockedWorktree("feature-x", false);
+
+			expect(dialog.dialogState()?.message).not.toContain("already integrated");
+
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+
+		it("defaults deleteBranch to true when omitted", async () => {
+			const promise = dialog.confirmRemoveLockedWorktree("feature-x");
+
+			expect(dialog.dialogState()?.message).toContain("already integrated");
+
+			dialog.handleClose();
+			await promise;
+		});
+	});
+
+	describe("confirmRemoveBusyWorktree()", () => {
+		it("names the attached terminals and defaults Enter to Cancel", async () => {
+			const promise = dialog.confirmRemoveBusyWorktree("feature-x", {
+				terminalCount: 2,
+				isBusy: true,
+				terminals: [
+					{ id: "t1", agentType: "claude", label: "Working" },
+					{ id: "t2", agentType: null, label: "Idle" },
+				],
+			});
+
+			const state = dialog.dialogState();
+			expect(state?.title).toBe('"feature-x" is in use');
+			expect(state?.message).toContain("2 terminal(s)");
+			expect(state?.message).toContain("claude — Working");
+			expect(state?.message).toContain("terminal — Idle");
+			expect(state?.confirmLabel).toBe("Delete anyway");
+			expect(state?.kind).toBe("error");
+			// A batch delete queues one of these per busy item — Enter must not
+			// destroy live work by default (this is the incident's most plausible
+			// trigger mechanism: clicking/pressing through a stack of prompts).
+			expect(state?.defaultButton).toBe("cancel");
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("returns false when the user cancels", async () => {
+			const promise = dialog.confirmRemoveBusyWorktree("feature-y", {
+				terminalCount: 1,
+				isBusy: true,
+				terminals: [{ id: "t1", agentType: null, label: "Idle" }],
+			});
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+	});
+
 	describe("confirmCloseTerminal()", () => {
 		it("shows dialog with correct message for terminal name", async () => {
 			const promise = dialog.confirmCloseTerminal("Terminal 1");

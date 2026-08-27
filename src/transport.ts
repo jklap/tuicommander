@@ -315,12 +315,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		}),
 	},
 	acp_session_list: {
+		// Query params are appended via `path +=`, not interpolated into the base template
+		// literal below — extractPathTemplate's static extraction only captures that base
+		// assignment, so folding the querystring into it (e.g. `${suffix}` inline) makes
+		// normalizeRouteShape collapse it into a second, spurious `:param` glued onto
+		// "sessions" with no separator. Match the convention every other optional-query
+		// mapper in this file already uses (get_recent_branches, get_tunnel_audit, etc).
 		map: (args, p) => {
 			const query = new URLSearchParams();
 			if (args.cwd !== undefined && args.cwd !== null) query.set("cwd", String(args.cwd));
 			if (args.cursor !== undefined && args.cursor !== null) query.set("cursor", String(args.cursor));
-			const suffix = query.toString() ? `?${query.toString()}` : "";
-			return { method: "GET", path: `/acp/connections/${p("connectionId")}/sessions${suffix}` };
+			let path = `/acp/connections/${p("connectionId")}/sessions`;
+			if (query.toString()) path += `?${query.toString()}`;
+			return { method: "GET", path };
 		},
 	},
 	acp_session_load: {

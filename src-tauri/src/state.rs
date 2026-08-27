@@ -5229,6 +5229,36 @@ pub(crate) struct AgentConfig {
 pub(crate) mod tests_support {
     use super::*;
 
+    /// A temporary git repo with one initial commit — the shared fixture for
+    /// HTTP/MCP route tests that need a real repository on disk.
+    pub fn create_temp_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(path)
+                .output()
+                .unwrap();
+        }
+        std::fs::write(path.join("README.md"), "test").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        dir
+    }
+
     /// A live `sessions` entry backed by a real PTY. `live_pty_for_peer` filters on
     /// liveness, so a resolver test needs a session that genuinely exists rather
     /// than a stub the filter would reject.

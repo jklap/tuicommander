@@ -1993,6 +1993,25 @@ Vite reloads this without a restart.
   color versus the "currently chosen" color (they're deliberately different tokens), and
   that highlighted/`<mark>`-wrapped text stays legible in both themes.
 
+## Worktree removal "in use" confirmation (2026-08-26, **Rust change — needs `make dev` restart** for the log persistence)
+
+Ported onto main's removal model (lifecycle confirmation + fingerprint; no backend
+live-session refusal, no session-lifetime git locks — see rebase-log). Verify against a
+throwaway repo on the worktree build (`:9877`, never Boss's real repos):
+
+- With a terminal open in a worktree, click Delete (sidebar `×` or Worktree Manager).
+  After the usual removal confirmation, the "in use" confirmation should appear naming
+  the attached terminal(s), BEFORE the terminal closes, with Enter = Cancel — cancel it
+  and confirm nothing closed. Confirm it and verify the terminal closes, then the
+  worktree is removed as before.
+- The "Worktree is locked by an agent" Force Remove prompt: Enter cancels.
+- Select several worktrees in the Worktree Manager, including one with an attached
+  terminal, and batch-delete: the unused ones go first, the busy one last with its own
+  confirmation.
+- `curl :9877/logs` (or the ErrorLogPanel) after clicking through a removal, then check
+  the day's `tuic.log.*` in the instance's logs dir for the same `git`-sourced entry —
+  this used to live only in the 1000-entry ring buffer.
+
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 
 `drag::Image` has no "no image" variant, so an unresolvable `icons/drag-file.png`

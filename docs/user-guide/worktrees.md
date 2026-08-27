@@ -185,11 +185,12 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 - Both prompt for confirmation
 
 Removing a worktree:
-1. Closes all terminals associated with that branch
-2. Checks checkout and submodule state, restores owner write permission inside the worktree, then runs `git worktree remove` to clean up; a clean populated submodule needs one `--force` after a fresh safety check. If permission repair fails, the checkout stays registered and the error names its path. If Git unregisters the checkout but leaves files behind, TUICommander finishes removing that known checkout before it can delete the branch. If that cleanup fails, the error names the remaining directory.
-3. Removes the branch entry from the sidebar
-4. If branch deletion was requested, checks for unmerged commits before removing the worktree. An unmerged branch blocks a normal removal. A confirmed dirty-file removal can remove the checkout, but keeps an unmerged branch and reports a warning. Merge it first, or turn off **Delete branch on remove** to keep the branch.
-5. If Git rejects branch deletion after removal despite the preflight check, shows a status message that the worktree was removed and the branch was kept.
+1. If a terminal is attached, shows a second "in use" confirmation naming what's attached (Enter = Cancel) — declining it stops here, and nothing is closed
+2. Closes all terminals associated with that branch
+3. Checks checkout and submodule state, restores owner write permission inside the worktree, then runs `git worktree remove` to clean up; a clean populated submodule needs one `--force` after a fresh safety check. If permission repair fails, the checkout stays registered and the error names its path. If Git unregisters the checkout but leaves files behind, TUICommander finishes removing that known checkout before it can delete the branch. If that cleanup fails, the error names the remaining directory.
+4. Removes the branch entry from the sidebar
+5. If branch deletion was requested, checks for unmerged commits before removing the worktree. An unmerged branch blocks a normal removal. A confirmed dirty-file removal can remove the checkout, but keeps an unmerged branch and reports a warning. Merge it first, or turn off **Delete branch on remove** to keep the branch.
+6. If Git rejects branch deletion after removal despite the preflight check, shows a status message that the worktree was removed and the branch was kept.
 
 Immediately before removal, TUICommander refreshes the backend lifecycle verdict
 for the exact workspace id. Dirty files require an explicit destructive
@@ -241,7 +242,7 @@ Each worktree row has action buttons (visible on the right):
 
 Select multiple worktrees using the checkboxes (shown when more than one selectable worktree exists). A batch bar appears with:
 - **Merge & Archive (N)** — Merges and archives all selected branches
-- **Delete (N)** — Deletes all selected worktrees
+- **Delete (N)** — Deletes all selected worktrees. Each selection still goes through the same per-branch "in use" gate as a single delete — a worktree with an attached terminal gets its own confirmation, defaulting to Cancel on Enter so clicking or pressing through a stack of prompts can't destroy live work. Selections with no attached terminal are processed first so they aren't held up behind a disruptive prompt for a busy one.
 
 Use the **Select All** checkbox in the toolbar to toggle all non-main worktrees.
 

@@ -145,6 +145,7 @@ describe("useGitOperations", () => {
 		confirmRemoveRepo: vi.fn().mockResolvedValue(true),
 		confirmRemoveWorktree: vi.fn().mockResolvedValue(true),
 		confirmRemoveLockedWorktree: vi.fn().mockResolvedValue(true),
+		confirmRemoveBusyWorktree: vi.fn().mockResolvedValue(true),
 		confirmStashAndSwitch: vi.fn().mockResolvedValue(true),
 		confirmDirtyWorktreeCleanup: vi.fn().mockResolvedValue(true),
 		reportGitError: vi.fn().mockResolvedValue(false),
@@ -2659,6 +2660,75 @@ describe("useGitOperations", () => {
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
+		});
+	});
+
+	describe("handleRemoveWorkspace (worktree in use)", () => {
+		// "In use" means at least one attached terminal — ANY attached terminal
+		// counts, not only an actively-working one: the 2026-08-26 incident's
+		// worktree was deleted while an idle plain shell sat in it.
+
+		it("asks the busy-worktree question after the removal confirmation and BEFORE closing any terminal", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
+			let closedBeforeBusyAnswer = true;
+			mockDialogs.confirmRemoveBusyWorktree.mockImplementationOnce(async () => {
+				closedBeforeBusyAnswer = mockCloseTerminal.mock.calls.length > 0;
+				return true;
+			});
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalled();
+			expect(mockDialogs.confirmRemoveBusyWorktree).toHaveBeenCalledWith(
+				"feature",
+				expect.objectContaining({ terminalCount: 1, isBusy: true }),
+			);
+			expect(closedBeforeBusyAnswer).toBe(false);
+			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
+		it("does not ask the busy question for a workspace with no attached terminals", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveBusyWorktree).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
+		it("cancelling the busy question removes nothing and closes no terminal", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
+			mockDialogs.confirmRemoveBusyWorktree.mockResolvedValueOnce(false);
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
+		});
+
+		it("releases the removal lock when the busy dialog itself throws", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
+			mockDialogs.confirmRemoveBusyWorktree.mockRejectedValueOnce(new Error("dialog subsystem crashed"));
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
+			// A second attempt proceeds instead of no-opping against a leaked lock.
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1);
 		});
 	});
 

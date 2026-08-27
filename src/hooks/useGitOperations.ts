@@ -151,6 +151,13 @@ export interface GitOperationsDeps {
 			deleteBranch: boolean,
 		) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
+		/** Terminals are attached to this worktree — shown after the removal
+		 *  confirmation and BEFORE any terminal is closed (using the workspace's
+		 *  known terminal list). See `createWorktreeRemovalCoordinator`. */
+		confirmRemoveBusyWorktree?: (
+			branchName: string,
+			summary: import("../utils/activitySnapshot").BranchActivitySummary,
+		) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (
 			repoPath: string,
