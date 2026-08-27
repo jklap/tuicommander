@@ -73,6 +73,96 @@ describe("promptLibraryStore", () => {
 		});
 	});
 
+	describe("importPrompts()", () => {
+		it("upserts all prompts in a single save", () => {
+			testInScope(() => {
+				const result = store.importPrompts([
+					{
+						id: "p1",
+						name: "P1",
+						content: "c1",
+						category: "custom",
+						isFavorite: false,
+						createdAt: 1,
+						updatedAt: 1,
+					},
+					{
+						id: "p2",
+						name: "P2",
+						content: "c2",
+						category: "custom",
+						isFavorite: false,
+						createdAt: 1,
+						updatedAt: 1,
+					},
+				]);
+				expect(result.imported).toBe(2);
+				expect(result.disabled).toEqual([]);
+				expect(store.getPrompt("p1")?.name).toBe("P1");
+				expect(store.getPrompt("p2")?.name).toBe("P2");
+
+				vi.advanceTimersByTime(600);
+				// One debounced save for the whole batch, not one per prompt
+				expect(mockInvoke).toHaveBeenCalledTimes(1);
+			});
+		});
+
+		it("imports shell/api prompts disabled and reports them", () => {
+			testInScope(() => {
+				const result = store.importPrompts([
+					{
+						id: "p1",
+						name: "Prune Branches",
+						content: "git branch -d $(git branch --merged)",
+						category: "custom",
+						isFavorite: false,
+						createdAt: 1,
+						updatedAt: 1,
+						executionMode: "shell",
+						enabled: true,
+					},
+				]);
+				expect(result.disabled).toEqual(["Prune Branches"]);
+				expect(store.getPrompt("p1")?.enabled).toBe(false);
+			});
+		});
+
+		it("preserves createdAt on a conflicting overwrite", () => {
+			testInScope(() => {
+				const original = store.createPrompt({ name: "Original", content: "c", category: "custom", isFavorite: false });
+				store.importPrompts([
+					{
+						...original,
+						name: "Overwritten",
+						content: "new content",
+						createdAt: 999999,
+					},
+				]);
+				const updated = store.getPrompt(original.id);
+				expect(updated?.name).toBe("Overwritten");
+				expect(updated?.createdAt).toBe(original.createdAt);
+			});
+		});
+
+		it("clears a forged builtIn flag on an id that isn't an actual built-in", () => {
+			testInScope(() => {
+				store.importPrompts([
+					{
+						id: "not-a-real-builtin",
+						name: "Fake",
+						content: "c",
+						category: "custom",
+						isFavorite: false,
+						createdAt: 1,
+						updatedAt: 1,
+						builtIn: true,
+					},
+				]);
+				expect(store.getPrompt("not-a-real-builtin")?.builtIn).toBe(false);
+			});
+		});
+	});
+
 	describe("updatePrompt()", () => {
 		it("updates existing prompt", () => {
 			testInScope(() => {
@@ -207,6 +297,80 @@ describe("promptLibraryStore", () => {
 			await testInScopeAsync(async () => {
 				await store.hydrate();
 				expect(localStorage.getItem("tui-commander-prompt-library")).toBeNull();
+			});
+		});
+
+		it("loads a full SavedPrompt from valid stored JSON (not just the legacy simple-format fallback)", async () => {
+			const stored = {
+				id: "p1",
+				name: "Full Prompt",
+				content: "do the thing",
+				category: "custom" as const,
+				isFavorite: true,
+				createdAt: 5,
+				updatedAt: 5,
+				executionMode: "headless" as const,
+				placement: ["toolbar" as const],
+			};
+			mockInvoke.mockResolvedValueOnce({
+				prompts: [{ id: "p1", label: "Full Prompt", text: JSON.stringify(stored), pinned: true }],
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				const loaded = store.getPrompt("p1");
+				expect(loaded?.name).toBe("Full Prompt");
+				expect(loaded?.executionMode).toBe("headless");
+				expect(loaded?.placement).toEqual(["toolbar"]);
+			});
+		});
+
+		it("forwards sanitizePrompt warnings through appLogger during hydrate", async () => {
+			const { appLogger } = await import("../../stores/appLogger");
+			const warnSpy = vi.spyOn(appLogger, "warn");
+			const stored = {
+				id: "p1",
+				name: "Bad Mode",
+				content: "c",
+				category: "custom" as const,
+				isFavorite: false,
+				createdAt: 1,
+				updatedAt: 1,
+				// biome-ignore lint/suspicious/noExplicitAny: deliberately invalid input under test
+				executionMode: "delete-everything" as any,
+			};
+			mockInvoke.mockResolvedValueOnce({
+				prompts: [{ id: "p1", label: "Bad Mode", text: JSON.stringify(stored), pinned: false }],
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.getPrompt("p1")?.executionMode).toBe("inject");
+				expect(warnSpy.mock.calls.some((call) => String(call[1]).includes("invalid executionMode"))).toBe(true);
+			});
+		});
+
+		it("re-saves after migrating a legacy tab-context placement during hydrate", async () => {
+			const stored = {
+				id: "p1",
+				name: "Legacy Placement",
+				content: "c",
+				category: "custom" as const,
+				isFavorite: false,
+				createdAt: 1,
+				updatedAt: 1,
+				// biome-ignore lint/suspicious/noExplicitAny: exercising the legacy placement name
+				placement: ["tab-context"] as any,
+			};
+			mockInvoke.mockResolvedValueOnce({
+				prompts: [{ id: "p1", label: "Legacy Placement", text: JSON.stringify(stored), pinned: false }],
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.getPrompt("p1")?.placement).toEqual(["terminal-context"]);
+				vi.advanceTimersByTime(600);
+				expect(mockInvoke).toHaveBeenCalledWith("save_prompt_library", expect.anything());
 			});
 		});
 	});

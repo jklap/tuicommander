@@ -316,6 +316,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Smart Prompts Import/Export",
+		description:
+			"Export your Smart Prompts (everything, modified only, or custom only) to a file, or import someone else's — you'll review each one before it's applied.",
+		shortcut: null,
+	},
+	{
 		feature: "Split/Unified Diff",
 		description:
 			"Toggle between side-by-side and inline diff views with the toolbar buttons in any diff tab. Your preference is saved.",

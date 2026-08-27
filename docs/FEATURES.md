@@ -1199,6 +1199,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Variable insertion dropdown below content textarea: grouped by Git/GitHub/Terminal, click to insert `{variable}` at cursor
 - Create custom smart prompts with `+ New Prompt` button
 - Built-in prompts show a "Reset to Default" button when content is overridden
+- Import/export: export scope picker (Everything / Modified only / Custom only) downloads a portable `.json`; Import reads a file and shows a per-prompt review dialog (NEW/CONFLICT badges, select which to apply) before anything is overwritten. Imported `shell`/`api` prompts land disabled pending review.
 
 ### 10.11 Headless Template Configuration
 
