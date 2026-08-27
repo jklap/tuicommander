@@ -2231,6 +2231,11 @@ pub struct AppState {
     pub(crate) bound_socket_path: parking_lot::RwLock<std::path::PathBuf>,
     /// Tailscale daemon state (detected at server startup)
     pub(crate) tailscale_state: parking_lot::RwLock<crate::tailscale::TailscaleState>,
+    /// True when the currently-active TLS config is the self-signed LAN
+    /// fallback (rather than a real Tailscale-issued cert or none at all).
+    /// Set wherever `provision_tls_config` runs; read by `get_connect_url` to
+    /// decide whether a plain LAN IP should get `https://`.
+    pub(crate) self_signed_active: std::sync::atomic::AtomicBool,
     /// Push notification subscription store
     pub(crate) push_store: crate::push::PushStore,
     /// Live ACP connections to ego, one supervised child process each.
@@ -3502,6 +3507,7 @@ impl AppState {
             ),
             acp: crate::acp::AcpClientManager::new(),
             acp_push_last_ms: DashMap::new(),
+            self_signed_active: std::sync::atomic::AtomicBool::new(false),
             push_store,
             desktop_window_focused: std::sync::atomic::AtomicBool::new(cfg!(feature = "desktop")),
             window_geometry: crate::window_geometry::WindowGeometryTracker::new(

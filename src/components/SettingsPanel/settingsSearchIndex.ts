@@ -620,6 +620,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/services/RemoteAccessPanel.tsx
 	{ tab: "remote-access", section: "Remote Access", sectionKey: "services.heading.remoteAccess" },
 	{ tab: "remote-access", section: "Tailscale HTTPS" },
+	{ tab: "remote-access", section: "Self-Signed HTTPS", sectionKey: "services.heading.selfSignedHttps" },
 	{ tab: "remote-access", section: "Cloud Relay", sectionKey: "services.heading.cloudRelay" },
 	{
 		tab: "remote-access",

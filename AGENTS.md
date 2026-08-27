@@ -10,6 +10,11 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
 - Bare `cargo test` Rust test binaries initialize `TMPDIR`, `TMP`, and `TEMP` from `TUIC_TEST_TMP_ROOT` or this checkout's `.tmp/tuic-tests` before libtest starts; Nextest does the same for every test binary through `.config/nextest.toml` setup scripts. New Rust tests must use `test_temp_root()` or assert their scratch paths stay inside it. Neither mechanism changes `make dev` or `cargo run`.
 
 - **Test only the changed behavior.** Routine validation MUST use the narrowest test filters that cover the production code, protocol surface, fixtures, or test support changed by the task. Do not run full-crate, full-app, full-tree, or unrelated suites merely for reassurance; they waste shared build time and obscure relevant evidence. Expand beyond targeted tests only when a documented gate explicitly requires it, targeted evidence proves a cross-cutting risk, or Boss explicitly asks for the broader run.
+- Before declaring a change complete, run `./scripts/check-gate.sh` (or `make check-gate`) —
+  not a scoped test filter, and not a bare `make check 2>&1 | tee log` (that pipeline's exit
+  code is `tee`'s, not `make`'s, so a real failure can go unnoticed). Repo-wide consistency
+  tests — e.g. the IPC/HTTP Parity mapping test below — only run as part of the full suite and
+  will not show up in a feature-scoped filter.
 - Tests are the spec. When a test fails after a code change, investigate BOTH sides before deciding which to fix.
 - **Finding a story partially implemented does NOT mean it's done.** When you pick up a story and discover the feature already exists, verify EVERY part of the story is honored — each acceptance criterion, edge case, and requirement — before marking it complete. Never assume the whole story is satisfied just because one part is implemented. Check each criterion against the code and prove it, or the story isn't done.
 - `to-test.md` tracks features awaiting manual testing — add items there for minor features.
@@ -660,6 +665,7 @@ Do NOT flag these as security issues in reviews — they are intentional design 
 - **`opener:allow-open-path` scope `"**"`** — FileBrowser must open any file the user can see. Narrower globs break external drives and network mounts.
 - **Iframe sandbox = `allow-scripts allow-same-origin`** — ALL iframes MUST use this. NEVER use bare `sandbox=""` — it kills JavaScript.
 - **Plugin capabilities do not isolate plugins from each other.** `plugin_id` is caller-supplied and plugins load into the same JS realm as the host, so any plugin can pass another plugin's id and inherit its grants. This is known, documented at the capability check in `plugins.rs`, at the `import()` in `pluginLoader.ts`, and in `docs/plugins.md`. A per-plugin token was considered and rejected — same-realm JS can read or proxy it, so it would be security theatre. Real isolation needs Worker/iframe + a host-created MessagePort; it is deferred, not overlooked. Do NOT propose the token.
+- **The self-signed-HTTPS HTTP→HTTPS redirect trusts `X-Forwarded-Host` over `Host` with no allow-list** (`axum-server-dual-protocol`'s `UpgradeHttp`, activated via `upgrade_http`/`.set_upgrade()` in `mcp_http::start_server` whenever the self-signed cert — not Tailscale — is the active TLS source). This is a textbook open-redirect *pattern*, but doesn't clear a real bar for reporting it: there's no reverse proxy in front of this app, exploitation needs LAN access plus a non-simple cross-origin header no normal browser navigation ever sends, and no credentials leak on redirect (Basic Auth isn't auto-forwarded cross-origin). Known and accepted; do not re-flag it without a concrete new exploitation path.
 
 ## Ideas Tracker
 

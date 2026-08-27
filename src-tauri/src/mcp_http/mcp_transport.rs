@@ -1003,14 +1003,6 @@ fn instruction_context(state: &Arc<AppState>) -> InstructionContext {
     }
 }
 
-/// Sanitize a branch name before it's embedded in a suggested-subagent prompt
-/// (`cc_agent_hint.suggested_prompt`). A backtick could break out of the
-/// surrounding `` ` `` code-span quoting the branch is embedded in, and a
-/// newline could smuggle an extra instruction line into that prompt.
-fn sanitize_branch_for_suggested_prompt(branch_name: &str) -> String {
-    branch_name.replace('`', "'").replace('\n', " ")
-}
-
 fn build_mcp_instructions_for_mode(
     state: &Arc<AppState>,
     client_name: Option<&str>,
@@ -8945,6 +8937,14 @@ pub(crate) fn test_translate_special_key(key: &str) -> Option<&'static str> {
 #[cfg(test)]
 pub(crate) fn test_validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
     validate_mcp_repo_path(path)
+}
+
+/// Sanitize a branch name before it's embedded in a suggested-subagent prompt
+/// (`cc_agent_hint.suggested_prompt`). A backtick could break out of the
+/// surrounding `` ` `` code-span quoting the branch is embedded in, and a
+/// newline could smuggle an extra instruction line into that prompt.
+fn sanitize_branch_for_suggested_prompt(branch_name: &str) -> String {
+    branch_name.replace('`', "'").replace('\n', " ")
 }
 
 #[cfg(test)]
