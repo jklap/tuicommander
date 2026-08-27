@@ -73,6 +73,71 @@ fn mcp_instructions_request_current_intent_at_task_start_and_phase_changes() {
     assert!(!disabled.contains("`intent: <desc> (<title>)`"));
 }
 
+#[test]
+fn mcp_instructions_omit_suggest_when_globally_disabled() {
+    // Symmetric to the intent case above — suggest_followups had no direct
+    // coverage of its own global gate.
+    let state = test_state();
+    let enabled = build_mcp_instructions_for_mode(&state, None, true);
+    assert!(enabled.contains("suggest: [ A | B | C ]"));
+
+    state.config.write().suggest_followups = false;
+    let disabled = build_mcp_instructions_for_mode(&state, None, true);
+    assert!(!disabled.contains("suggest: [ A | B | C ]"));
+}
+
+#[test]
+fn marker_flags_for_agent_and_rule_cannot_be_widened_by_either_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = test_state();
+
+    // No per-agent entry: effective flags follow the global toggle alone.
+    state.config.write().intent_tab_title = true;
+    state.config.write().suggest_followups = true;
+    assert_eq!(marker_flags_for_agent(&state, Some("claude")), (true, true));
+
+    // Per-agent override can narrow a globally-on marker off.
+    let mut agents_cfg = crate::config::AgentsConfig::default();
+    agents_cfg.agents.insert(
+        "claude".to_string(),
+        crate::config::AgentSettings {
+            intent_tab_title: Some(false),
+            suggest_followups: Some(false),
+            ..Default::default()
+        },
+    );
+    crate::config::save_agents_config(crate::config::load_agents_config(), agents_cfg).unwrap();
+    assert_eq!(
+        marker_flags_for_agent(&state, Some("claude")),
+        (false, false),
+        "a per-agent override must be able to narrow a globally-on marker"
+    );
+
+    // A per-agent override cannot widen a globally-off marker back on — the
+    // rule is an AND, not an OR, in either direction.
+    state.config.write().intent_tab_title = false;
+    state.config.write().suggest_followups = false;
+    let mut agents_cfg = crate::config::AgentsConfig::default();
+    agents_cfg.agents.insert(
+        "claude".to_string(),
+        crate::config::AgentSettings {
+            intent_tab_title: Some(true),
+            suggest_followups: Some(true),
+            ..Default::default()
+        },
+    );
+    crate::config::save_agents_config(crate::config::load_agents_config(), agents_cfg).unwrap();
+    assert_eq!(
+        marker_flags_for_agent(&state, Some("claude")),
+        (false, false),
+        "the global toggle must win when off, even if the per-agent override says on"
+    );
+
+    // An agent type with no entry in agents.json follows the global toggle alone.
+    assert_eq!(marker_flags_for_agent(&state, Some("codex")), (false, false));
+}
+
 // --- the voice tool (817-f67c) ---
 
 fn native_tool_named(name: &str) -> serde_json::Value {
@@ -955,8 +1020,10 @@ fn instructions_collapse_off_points_at_tool_descriptions() {
 fn instructions_scope_ack_to_the_connection() {
     let state = test_state();
     let out = build_mcp_instructions(&state, None);
-    assert!(out.contains("exactly once per MCP connection or reconnect"));
-    assert!(out.contains("Never repeat it on each conversational turn"));
+    assert!(out.contains("once per MCP connection or reconnect"));
+    assert!(out.contains("Not repeated on later turns"));
+    assert!(out.contains("requested by TUICommander, the local terminal application"));
+    assert!(out.contains("Subagents (Task tool) and in-process teammates must NOT emit these"));
     assert!(!out.contains("Aliases \"swarm\""));
 }
 

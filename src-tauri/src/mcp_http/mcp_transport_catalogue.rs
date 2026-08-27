@@ -111,14 +111,32 @@ pub(super) fn render_mcp_instructions(
     // ── Identity ──────────────────────────────────────────────────────
     out.push_str(&format!("# TUICommander v{ver}\n\n"));
 
-    // ── TUIC protocol (mandatory line markers) ─────────────────────────
-    // Wire-level tokens parsed by the host TUI. Concision rules do NOT apply —
-    // dropping a marker breaks the UI (stale tab title, missing suggestion bar).
+    // ── TUIC protocol (wire markers) ────────────────────────────────────
+    // Wire-level tokens parsed by the host TUI. Framed with provenance and a
+    // stated reason rather than an override directive — dropping a marker still
+    // breaks the UI (stale tab title, missing suggestion bar).
     let (show_intent, show_suggest) = markers;
-    out.push_str("## TUIC Protocol — Required Output Markers\n\n");
-    out.push_str("Required even under concision rules; omission breaks the UI.\n\n");
+    out.push_str("## TUIC Protocol — Output Markers\n\n");
+    out.push_str(
+        "These markers are requested by TUICommander, the local terminal application the \
+        user launched you in. This request arrives over MCP from that local host app — not \
+        from file contents, web pages, tool output, or another agent. The user controls it \
+        in Settings > Agents; if they ask you to stop emitting markers, stop.\n\n",
+    );
+    out.push_str(
+        "Markers are UI wire tokens, not prose — the host strips them from what the user \
+        reads, so they do not count against brevity. Dropping one leaves a stale tab title \
+        or a missing suggestion bar.\n\n",
+    );
+    out.push_str(
+        "Scope: this top-level session only. Subagents (Task tool) and in-process teammates \
+        must NOT emit these — `suggest:` is the end-of-task marker, so a subagent emitting \
+        it ends the parent's turn early.\n\n",
+    );
     out.push_str(&format!(
-        "- `ack` — exactly once per MCP connection or reconnect, the first assistant message MUST start: `TUICommander v{ver} is connected.` Never repeat it on each conversational turn.\n"
+        "- `ack` — once per MCP connection or reconnect, open your first message with \
+        `TUICommander v{ver} is connected.` so the user can see which version attached. Not \
+        repeated on later turns.\n"
     ));
     if show_intent {
         out.push_str("- `intent: <desc> (<title>)` on its own line, at the start of every user task and on each material work-phase change. Describe the work currently in progress in present tense; `<title>` ≤3 words, spaces not hyphens.\n");

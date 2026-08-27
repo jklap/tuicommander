@@ -133,6 +133,14 @@ fn create_session_in_dir(state: &Arc<AppState>, cwd: &str) -> Result<String, Str
     })
 }
 
+/// Sanitize a branch name before it's embedded in a suggested-subagent prompt
+/// (`cc_agent_hint.suggested_prompt`). A backtick could break out of the
+/// surrounding `` ` `` code-span quoting the branch is embedded in, and a
+/// newline could smuggle an extra instruction line into that prompt.
+pub(super) fn sanitize_branch_for_suggested_prompt(branch_name: &str) -> String {
+    branch_name.replace('`', "'").replace('\n', " ")
+}
+
 pub(super) fn worktree_remove_success_response(
     branch_delete_warning: Option<String>,
     removal_rule: &str,
@@ -360,14 +368,14 @@ async fn handle_worktree_with_caller(
                     }
                     // Add structured hint for Claude Code clients to spawn a subagent in the worktree
                     if is_claude_code {
-                        // Sanitize branch name to prevent prompt injection via backticks/newlines
-                        let safe_branch = branch_name.replace('`', "'").replace('\n', " ");
+                        let safe_branch = sanitize_branch_for_suggested_prompt(&branch_name);
                         response["cc_agent_hint"] = serde_json::json!({
                             "worktree_path": wt_path,
                             "suggested_prompt": format!(
                                 "Work in the worktree at `{}`. Use absolute paths for ALL file operations \
                                 (Read, Edit, Glob, Grep). For git commands, use `cd {} && git ...`. \
-                                The branch is `{}`.",
+                                The branch is `{}`. Do not emit TUICommander `intent:` / `suggest:` / ack \
+                                markers — those belong to the parent session only.",
                                 wt_path, wt_path, safe_branch,
                             )
                         });

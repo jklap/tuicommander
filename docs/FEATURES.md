@@ -906,13 +906,13 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Purpose:** Enables Claude Code's Agent Teams feature to use TUIC tabs instead of tmux panes
 - **Approach:** Environment variable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` injected into PTY sessions, which unlocks Claude Code's TeamCreate/TaskCreate/SendMessage tools. Agent spawning uses direct MCP tool calls (`agent spawn`) instead of the deprecated it2 shim
 - **Session lifecycle events:** MCP-spawned sessions emit `session-created` and `session-closed` events so they automatically appear as tabs and clean up on exit
-- **Settings toggle:** Settings > Agents > Agent Teams
+- **No settings toggle:** enabled unconditionally for every Claude Code PTY session — there is no Settings > Agents > Agent Teams switch
 - **Suggest follow-ups:** Agents can propose follow-up actions via `suggest: [ A | B | C ]` tokens, displayed as floating chip bar
 - **Deprecated:** The it2 shim approach (iTerm2 CLI emulation) is commented out — superseded by direct MCP tool spawning
 
 ### 6.11 Suggest Follow-up Actions
 - **Protocol:** Agents emit `suggest: [ action1 | action2 | action3 ]` at column 0 after completing a task. The whole token sits on one row, bounded by `[ … ]` with no nested brackets — so stray pipes/brackets in surrounding output (mermaid, markdown tables, prose) can never be mis-parsed as items
-- **Answer marker:** The MCP initialize instructions (Required Output Markers block) also teach every agent to prefix each sentence that directly answers the user's question with `💬 ` at the start of the row; the answers-only view (`Cmd+Alt+R`) parses it. Always sent, independent of the intent/suggest settings
+- **Answer marker:** The MCP initialize instructions (Output Markers block) also teach every agent to prefix each sentence that directly answers the user's question with `💬 ` at the start of the row; the answers-only view (`Cmd+Alt+R`) parses it. Always sent, independent of the intent/suggest settings
 - **Token concealment:** Suggest tokens are concealed in terminal output via line erasure or space replacement — the raw token never appears on screen. Concealment is agent-gated
 - **Desktop:** Floating chip bar (SuggestOverlay) above terminal with larger buttons and keyboard shortcut badges (`1`–`9` to select, `Esc` to dismiss). Auto-dismiss after 30s, on typing, or on Esc
 - **Mobile:** Horizontal scrollable pill buttons above CommandInput in SessionDetailScreen
