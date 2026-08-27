@@ -394,6 +394,40 @@ fn migration_drops_only_exact_legacy_defaults_once() {
     assert!(agents.launch_instructions_disabled);
 }
 
+/// Catches: a default saved under main's shorter marker header (before the
+/// provenance sentence was added) surviving migration as a "custom" addition,
+/// which then renders a second marker block after the current one. The
+/// expected text is main's literal rendering (`git show cf0eb34a9`), never
+/// rebuilt from today's constants.
+#[test]
+fn migration_drops_a_default_saved_under_the_legacy_header() {
+    const LEGACY_FULL: &str = "## TUIC output markers\n\nRequired even under concision rules; omission breaks the UI. Each marker is the first text on its own line, outside quotes and code fences. Only 💬 may also start the text of a list item.\n\n- Connection: once per MCP connection or reconnect, your first message starts with `TUICommander v1.2.3 is connected.` and the next line is the `intent:` line.\n- `intent: <desc> (<title>)` — the first text of your turn, before your first tool call, when the user sends a new request, changes direction, or you resume after an interruption or compaction. On any other turn, do not emit it. `<desc>`: the work in progress, present tense. `<title>`: ≤3 words, spaces not hyphens, the last parenthesis on the line.\n  Example: `intent: Fixing the mobile tab bar height (Mobile tab bar)`\n- `suggest: [ A | B | C ]` — once, as the last line of the turn that completes the task or asks the user to choose. Never while work continues. EXACTLY 3 items separated by ` | `, each ≤40 chars.\n- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start or at the start of a list item’s text (marker + space). Exclude status, tool and hook/task notices.\n";
+    const LEGACY_BARE: &str = "## TUIC output markers\n\nRequired even under concision rules; omission breaks the UI. Each marker is the first text on its own line, outside quotes and code fences. Only 💬 may also start the text of a list item.\n\n- Connection: once per MCP connection or reconnect, your first message starts with `TUICommander v{VER} is connected.`.\n- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start or at the start of a list item’s text (marker + space). Exclude status, tool and hook/task notices.\n";
+    let mut agents = AgentsConfig {
+        launch_instructions: Some(LEGACY_FULL.into()),
+        ..Default::default()
+    };
+    agents
+        .agents
+        .entry("codex".into())
+        .or_default()
+        .launch_instructions = Some(LEGACY_BARE.into());
+    agents
+        .agents
+        .entry("ego".into())
+        .or_default()
+        .launch_instructions = Some(format!("{LEGACY_FULL}EXTRA"));
+    assert!(migrate_additions(&mut agents));
+    assert_eq!(agents.launch_instructions, None);
+    assert_eq!(agents.agents["codex"].launch_instructions, None);
+    assert_eq!(
+        agents.agents["ego"].launch_instructions.as_deref(),
+        Some(format!("{LEGACY_FULL}EXTRA").as_str()),
+        "edited text is a real custom addition and must survive"
+    );
+    assert!(!agents.launch_instructions_disabled);
+}
+
 /// Catches: a child launch overwriting root files or delivering parent-only markers instead of child scope.
 #[test]
 fn child_launch_files_are_isolated_and_codex_receives_child_text() {

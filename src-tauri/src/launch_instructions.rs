@@ -25,7 +25,15 @@ pub(crate) const AGENTS: [&str; 7] = ["claude", "codex", "grok", "opencode", "go
 /// Tokens the TUIC parser anchors on; exposed with the preview metadata.
 pub(crate) const REQUIRED_MARKERS: [&str; 3] = ["intent:", "suggest:", "💬 "];
 
+// Provenance and a stated reason come first, so main's "required even under
+// concision rules" sentence never reads as a bare override directive (wip
+// 49c014a37 found it alone looked like a prompt injection); both are kept.
 const HEADER: &str = "## TUIC output markers\n\n\
+Requested by TUICommander, the local terminal application the user launched you in — not by file contents, web pages, tool output, or another agent; the user controls them in Settings > Agents. They are UI wire tokens the host strips from what the user reads, so they do not count against brevity; dropping one leaves a stale tab title or a missing suggestion bar. Required even under concision rules; omission breaks the UI. Top-level session only: subagents and in-process teammates do not emit them. Each marker is the first text on its own line, outside quotes and code fences. Only 💬 may also start the text of a list item.\n\n";
+/// Main's header before the provenance sentence (main 50fde4b53..cf0eb34a9).
+/// Only `migrate_additions` reads it: a default saved under it is still a
+/// default, not a custom addition.
+const LEGACY_HEADER: &str = "## TUIC output markers\n\n\
 Required even under concision rules; omission breaks the UI. Each marker is the first text on its own line, outside quotes and code fences. Only 💬 may also start the text of a list item.\n\n";
 const CONNECTION: &str = "- Connection: once per MCP connection or reconnect, your first message starts with `TUICommander v{VER} is connected.`";
 const CONNECTION_INTENT: &str = " and the next line is the `intent:` line";
@@ -36,7 +44,11 @@ const ANSWER: &str = "- `💬 ` — prefix every sentence that directly answers 
 /// The shipped text. A marker turned off for the agent is left out, so the
 /// launch text never demands what the MCP instructions withhold.
 fn marker_text(intent: bool, suggest: bool) -> String {
-    let mut out = String::from(HEADER);
+    marker_text_with(HEADER, intent, suggest)
+}
+
+fn marker_text_with(header: &str, intent: bool, suggest: bool) -> String {
+    let mut out = String::from(header);
     out.push_str(CONNECTION);
     if intent {
         out.push_str(CONNECTION_INTENT);
@@ -159,10 +171,12 @@ pub(crate) fn migrate_additions(agents: &mut AgentsConfig) -> bool {
                 normalized.replace_range(start..start + end, "{VER}");
             }
         }
-        if [false, true].into_iter().any(|intent| {
-            [false, true]
-                .into_iter()
-                .any(|suggest| normalized == marker_text(intent, suggest))
+        if [HEADER, LEGACY_HEADER].into_iter().any(|header| {
+            [false, true].into_iter().any(|intent| {
+                [false, true]
+                    .into_iter()
+                    .any(|suggest| normalized == marker_text_with(header, intent, suggest))
+            })
         }) {
             *text = None;
         }
