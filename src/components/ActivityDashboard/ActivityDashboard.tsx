@@ -6,6 +6,7 @@ import { rateLimitStore } from "../../stores/ratelimit";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import {
+	displayTask,
 	effectiveActivityState,
 	isActivityWorking,
 	projectName,
@@ -181,8 +182,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			idleSince: term.idleSince,
 			lastPrompt: term.lastPrompt,
 			agentIntent: term.agentIntent,
-			// Claude Code spinner verbs are decorative garbage — suppress them
-			currentTask: term.agentType === "claude" ? null : term.currentTask,
+			currentTask: displayTask(term.currentTask, term.agentType),
 			activeSubTasks: term.activeSubTasks,
 			isActive: terminalsStore.state.activeId === id,
 			isPromoted: globalWorkspaceStore.isPromoted(id),
