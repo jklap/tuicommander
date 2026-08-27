@@ -36,6 +36,7 @@ import { SidebarPluginSection } from "./SidebarPluginSection";
 const BRANCH_ICON_CLASSES: Record<string, string> = {
 	main: s.branchIconMain,
 	worktree: s.branchIconWorktree,
+	branch: s.branchIconBranch,
 	error: s.branchIconError,
 	question: s.branchIconQuestion,
 	activity: s.branchIconActivity,
@@ -46,18 +47,21 @@ const BRANCH_ICON_CLASSES: Record<string, string> = {
 /** Branch icon component — icon shape and color driven by terminal state.
  *
  *  Icon shapes:
+ *  - Error (terminal awaiting input on an error) → "!" (overrides all)
+ *  - Question (awaiting input) → "?" (overrides error's overrides — second priority)
  *  - Main worktree + main branch → star
  *  - Main worktree + non-main branch (after switch) → branch icon
  *  - Linked worktree → worktree fork icon
  *  - Shell (non-git dir) → terminal icon
- *  - Question (awaiting input) → "?" (overrides all)
  *
  *  Color priority (highest wins):
- *  1. question  → --attention (pulsing)
- *  2. busy      → --activity  (pulsing)
- *  3. unseen    → --unseen    (static purple)
- *  4. idle      → --fg-muted  (no open terminal on this branch)
- *  5. base      → --warning (main) or --success (worktree)
+ *  1. error     → --error      (pulsing)
+ *  2. question  → --attention  (pulsing)
+ *  3. busy      → --activity   (pulsing)
+ *  4. unseen    → --unseen     (static purple)
+ *  5. idle      → --fg-muted   (no open terminal on this branch)
+ *  6. base      → --warning (main branch) or --accent (main worktree, non-main
+ *                 branch checked out) or --success (a separate, linked worktree)
  */
 export const BranchIcon: Component<{
 	isMainBranch: boolean;
@@ -81,8 +85,9 @@ export const BranchIcon: Component<{
 	/** Single source of truth for icon color — priority cascade.
 	 *  Error > question > busy > unseen > idle > base.
 	 *  A branch with no open terminal is idle (grey), even when other branches
-	 *  in the same repo have tabs open — the base color (yellow for main, green
-	 *  for worktree) means "has an open tab here, nothing special happening". */
+	 *  in the same repo have tabs open — the base color (yellow for main, blue for
+	 *  the main worktree on a different branch, green for a separate linked
+	 *  worktree) means "has an open tab here, nothing special happening". */
 	const colorClass = () => {
 		if (props.hasError) return "error";
 		if (props.hasQuestion) return "question";
@@ -90,6 +95,11 @@ export const BranchIcon: Component<{
 		if (props.hasUnseen) return "unseen";
 		if (props.branchHasTerminals === false) return "idle";
 		if (props.isMainBranch) return "main";
+		// Same worktree as isMainBranch's "star"/"branch" shape split above — a
+		// non-main branch checked out in the main worktree is neither the main
+		// branch nor a separate linked worktree, so it gets its own color rather
+		// than being visually indistinguishable (mod icon shape) from one.
+		if (props.isMainWorktree) return "branch";
 		return "worktree";
 	};
 

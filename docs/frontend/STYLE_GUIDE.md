@@ -64,7 +64,7 @@ Values shown are the **vscode-dark** theme defaults (defined in `:root` of `glob
 | `--fg-primary` | `#cccccc` | Primary text (max brightness for text) |
 | `--fg-secondary` | `#a0a0a0` | Labels, secondary text |
 | `--fg-muted` | `#9aa1a9` | Section titles, tertiary text |
-| `--accent` | `#59a8dd` | Primary actions, active indicators, links (theme-dependent) |
+| `--accent` | `#59a8dd` | Primary actions, active indicators, links, off-main main-worktree branch icon (theme-dependent) |
 | `--accent-hover` | `#7abde5` | Hover on accent elements (theme-dependent) |
 | `--activity` | `#59a8dd` | Busy/activity pulse indicators (fixed in `global.css`, not overridden by themes) |
 | `--success` | `#4ec9b0` | Positive states, open PRs (teal) |
