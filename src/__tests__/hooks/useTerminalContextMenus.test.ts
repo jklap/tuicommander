@@ -10,7 +10,7 @@ const { mockAgentConfigs, mockContextActions, mockPaneLayout, mockTerminals, moc
 		get: vi.fn(),
 		update: vi.fn(),
 	},
-	mockWriteClipboard: vi.fn(),
+	mockWriteClipboard: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
@@ -29,6 +29,7 @@ vi.mock("../../utils/sendCommand", () => ({
 }));
 
 import { useTerminalContextMenus } from "../../hooks/useTerminalContextMenus";
+import { appLogger } from "../../stores/appLogger";
 
 function createOptions(available: Array<{ type: string }> = []) {
 	return {
@@ -53,7 +54,7 @@ describe("useTerminalContextMenus", () => {
 		mockContextActions.getContextActions.mockReset().mockReturnValue([]);
 		mockPaneLayout.isSplit.mockReset().mockReturnValue(false);
 		mockPaneLayout.canSplit.mockReset().mockReturnValue(true);
-		mockWriteClipboard.mockClear();
+		mockWriteClipboard.mockReset().mockResolvedValue(undefined);
 	});
 
 	it("builds core terminal actions and disables splitting without an active terminal", () => {
@@ -79,6 +80,24 @@ describe("useTerminalContextMenus", () => {
 		await items.find((item) => item.label === "Copy Block Output")?.action();
 
 		expect(mockWriteClipboard).toHaveBeenCalledWith("output");
+	});
+
+	it("logs instead of throwing when Copy Block Output's clipboard write is denied", async () => {
+		const err = new DOMException("Write permission denied.", "NotAllowedError");
+		mockWriteClipboard.mockRejectedValueOnce(err);
+		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({
+			commandBlocks: [{ executionLine: 10, endLine: 13 }],
+			ref: { getBufferLines: vi.fn().mockResolvedValue(["output", ""]) },
+		});
+		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
+
+		await items.find((item) => item.label === "Copy Block Output")?.action();
+
+		await vi.waitFor(() => {
+			expect(warnSpy).toHaveBeenCalledWith("terminal", "Copy Block Output failed to write clipboard", err);
+		});
 	});
 
 	it("creates and configures a branch terminal from the sidebar agent action", async () => {

@@ -30,7 +30,7 @@ import { settingsStore } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabOrdering";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
-import { writeClipboard } from "../../utils/clipboard";
+import { copyPathToClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { computeLeafRects } from "../../utils/paneTreeGeometry";
@@ -130,10 +130,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 				{
 					label: t("tabBar.copyPath", "Copy Path"),
 					action: () => {
-						if (tab?.filePath)
-							writeClipboard(shortenHomePath(tab.filePath)).catch((err) =>
-								appLogger.error("app", "Failed to copy path", err),
-							);
+						if (tab?.filePath) copyPathToClipboard(shortenHomePath(tab.filePath));
 					},
 				},
 				{
@@ -176,9 +173,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 							{
 								label: t("tabBar.copyPath", "Copy Path"),
 								action: () => {
-									writeClipboard(shortenHomePath(tab.filePath)).catch((err) =>
-										appLogger.error("app", "Failed to copy path", err),
-									);
+									copyPathToClipboard(shortenHomePath(tab.filePath));
 								},
 							},
 						]
@@ -223,10 +218,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 				{
 					label: t("tabBar.copyPath", "Copy Path"),
 					action: () => {
-						if (tab?.filePath)
-							writeClipboard(shortenHomePath(tab.filePath)).catch((err) =>
-								appLogger.error("app", "Failed to copy path", err),
-							);
+						if (tab?.filePath) copyPathToClipboard(shortenHomePath(tab.filePath));
 					},
 				},
 				{

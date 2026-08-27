@@ -111,6 +111,34 @@ function resolveHeadlessAgent(prompt: SavedPrompt): ResolvedAgent {
 	return { agent: global, isApi: global === "api" };
 }
 
+/** Route headless output to the appropriate destination */
+export function routeHeadlessOutput(prompt: SavedPrompt, output: string): void {
+	if (!output) return;
+	switch (prompt.outputTarget) {
+		case "clipboard":
+			writeClipboard(output).then(
+				() => appLogger.info("prompts", `"${prompt.name}" output copied to clipboard`),
+				(err) => appLogger.error("prompts", `Failed to copy to clipboard`, err),
+			);
+			break;
+		case "toast":
+			appLogger.info("prompts", `${prompt.name}: ${output.slice(0, 500)}`);
+			break;
+		case "commit-message":
+			// Emit a custom event that the Git Panel commit textarea can listen to
+			window.dispatchEvent(new CustomEvent("smart-prompt:commit-message", { detail: output }));
+			appLogger.info("prompts", `"${prompt.name}" output sent to commit message`);
+			break;
+		case "panel":
+			// For now, log the output — a dedicated panel can be added later
+			appLogger.info("prompts", `${prompt.name} result:\n${output.slice(0, 2000)}`);
+			break;
+		default:
+			// No routing — output is available in the SmartPromptResult
+			break;
+	}
+}
+
 export function useSmartPrompts() {
 	const pty = usePty();
 
@@ -358,34 +386,6 @@ export function useSmartPrompts() {
 		} catch (err) {
 			appLogger.error("prompts", `API execution failed for "${prompt.name}"`, err);
 			return { ok: false, reason: String(err) };
-		}
-	}
-
-	/** Route headless output to the appropriate destination */
-	function routeHeadlessOutput(prompt: SavedPrompt, output: string): void {
-		if (!output) return;
-		switch (prompt.outputTarget) {
-			case "clipboard":
-				writeClipboard(output).then(
-					() => appLogger.info("prompts", `"${prompt.name}" output copied to clipboard`),
-					(err) => appLogger.error("prompts", `Failed to copy to clipboard`, err),
-				);
-				break;
-			case "toast":
-				appLogger.info("prompts", `${prompt.name}: ${output.slice(0, 500)}`);
-				break;
-			case "commit-message":
-				// Emit a custom event that the Git Panel commit textarea can listen to
-				window.dispatchEvent(new CustomEvent("smart-prompt:commit-message", { detail: output }));
-				appLogger.info("prompts", `"${prompt.name}" output sent to commit message`);
-				break;
-			case "panel":
-				// For now, log the output — a dedicated panel can be added later
-				appLogger.info("prompts", `${prompt.name} result:\n${output.slice(0, 2000)}`);
-				break;
-			default:
-				// No routing — output is available in the SmartPromptResult
-				break;
 		}
 	}
 

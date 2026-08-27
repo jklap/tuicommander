@@ -28,6 +28,15 @@ vi.mock("@tauri-apps/api/window", () => ({
 	})),
 }));
 
+const mockWriteClipboard = vi.fn().mockResolvedValue(undefined);
+vi.mock("../../utils/clipboard", () => ({ writeClipboard: (text: string) => mockWriteClipboard(text) }));
+
+const mockAppLoggerWarn = vi.fn();
+vi.mock("../../stores/appLogger", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../stores/appLogger")>();
+	return { ...actual, appLogger: { ...actual.appLogger, warn: (...args: unknown[]) => mockAppLoggerWarn(...args) } };
+});
+
 // Track whether addEventListener("message") was called inside an onMount callback.
 // We wrap solid-js onMount to set a flag during its execution.
 let insideOnMount = false;
@@ -73,6 +82,8 @@ describe("PluginPanel", () => {
 		vi.useFakeTimers();
 		insideOnMount = false;
 		messageListenerCalledInsideOnMount = null;
+		mockWriteClipboard.mockReset().mockResolvedValue(undefined);
+		mockAppLoggerWarn.mockReset();
 
 		const originalAdd = window.addEventListener.bind(window);
 		addEventListenerSpy = vi
@@ -390,6 +401,46 @@ describe("PluginPanel", () => {
 			expect(postMessageSpy).toHaveBeenCalledTimes(3);
 			expect(postMessageSpy).toHaveBeenCalledWith({ type: "tuic:sdk-init", version: "1.0" }, "*");
 			expect(postMessageSpy).toHaveBeenCalledWith({ type: "tuic:repo-changed", repoPath: null }, "*");
+		});
+
+		function sendTuicMessage(iframe: HTMLIFrameElement, data: Record<string, unknown>) {
+			const postMessageSpy = vi.fn();
+			const fakeContentWindow = { postMessage: postMessageSpy };
+			Object.defineProperty(iframe, "contentWindow", {
+				configurable: true,
+				get: () => fakeContentWindow,
+			});
+			const [, handler] = addEventListenerSpy.mock.calls.find(([event]: [string]) => event === "message")!;
+			const event = new MessageEvent("message", { data });
+			Object.defineProperty(event, "source", { get: () => fakeContentWindow });
+			(handler as EventListener)(event);
+		}
+
+		it("writes the clipboard text on tuic:clipboard", async () => {
+			const tab = makeUrlTab();
+			const { container } = render(() => <PluginPanel tab={tab} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+
+			sendTuicMessage(iframe, { type: "tuic:clipboard", text: "hello from plugin" });
+
+			await vi.waitFor(() => {
+				expect(mockWriteClipboard).toHaveBeenCalledWith("hello from plugin");
+			});
+			expect(mockAppLoggerWarn).not.toHaveBeenCalled();
+		});
+
+		it("logs a warning instead of throwing when tuic:clipboard write is denied", async () => {
+			const err = new DOMException("Write permission denied.", "NotAllowedError");
+			mockWriteClipboard.mockRejectedValue(err);
+			const tab = makeUrlTab();
+			const { container } = render(() => <PluginPanel tab={tab} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+
+			expect(() => sendTuicMessage(iframe, { type: "tuic:clipboard", text: "hello" })).not.toThrow();
+
+			await vi.waitFor(() => {
+				expect(mockAppLoggerWarn).toHaveBeenCalledWith("plugin", expect.stringContaining("tuic:clipboard failed"));
+			});
 		});
 
 		it("sdk-init is idempotent across repeated onLoad (e.g., in-iframe navigation)", () => {

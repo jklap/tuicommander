@@ -19,7 +19,7 @@ import { appLogger } from "../../stores/appLogger";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { cx, globToRegex } from "../../utils";
-import { writeClipboard } from "../../utils/clipboard";
+import { copyPathToClipboard } from "../../utils/clipboard";
 import { pathBasename, pathDirname } from "../../utils/pathUtils";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu";
 import g from "../shared/git-status.module.css";
@@ -307,9 +307,7 @@ export const MarkdownPanel: Component<MarkdownPanelProps> = (props) => {
 			{
 				label: t("markdownPanel.copyPath", "Copy Path"),
 				action: () => {
-					writeClipboard(shortenHomePath(`${root}/${entry.path}`)).catch((err) =>
-						appLogger.error("app", "Failed to copy path", err),
-					);
+					copyPathToClipboard(shortenHomePath(`${root}/${entry.path}`));
 				},
 			},
 		];

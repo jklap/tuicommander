@@ -115,6 +115,31 @@ const NATIVE_TOOLS: { name: string; description: string; actions: string }[] = [
 	},
 ];
 
+/** Copy the remote-access connect URL to clipboard. Returns whether the write
+ *  succeeded so the caller only shows the "Copied" indicator on actual success. */
+export async function copyConnectUrl(url: string): Promise<boolean> {
+	try {
+		await writeClipboard(url);
+		return true;
+	} catch {
+		// Fallback: select text for manual copy
+		return false;
+	}
+}
+
+/** Copy the MCP client config snippet to clipboard, logging on failure. Returns
+ *  whether the write succeeded so the caller only shows the "Copied" indicator
+ *  on actual success. */
+export async function copyMcpSnippet(snippet: string): Promise<boolean> {
+	try {
+		await writeClipboard(snippet);
+		return true;
+	} catch (err) {
+		appLogger.warn("settings", "Clipboard write failed", { error: String(err) });
+		return false;
+	}
+}
+
 const LocalServicesPanel: Component = () => {
 	const [status, setStatus] = createSignal<McpStatus | null>(null);
 	const [localIps] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
@@ -280,12 +305,9 @@ const LocalServicesPanel: Component = () => {
 	const copyUrl = async () => {
 		const url = connectUrl();
 		if (!url) return;
-		try {
-			await writeClipboard(url);
+		if (await copyConnectUrl(url)) {
 			setUrlCopied(true);
 			setTimeout(() => setUrlCopied(false), 2000);
-		} catch {
-			// Fallback: select text for manual copy
 		}
 	};
 
@@ -768,15 +790,11 @@ const LocalServicesPanel: Component = () => {
 							<pre class={s.mcpSnippetPre}>{bridgeInfo()!.config_snippet}</pre>
 							<button
 								class={s.mcpSnippetCopy}
-								onClick={() => {
-									writeClipboard(bridgeInfo()!.config_snippet)
-										.then(() => {
-											setSnippetCopied(true);
-											setTimeout(() => setSnippetCopied(false), 2000);
-										})
-										.catch((err) => {
-											appLogger.warn("settings", "Clipboard write failed", { error: String(err) });
-										});
+								onClick={async () => {
+									if (await copyMcpSnippet(bridgeInfo()!.config_snippet)) {
+										setSnippetCopied(true);
+										setTimeout(() => setSnippetCopied(false), 2000);
+									}
 								}}
 							>
 								{snippetCopied() ? "Copied" : "Copy"}
