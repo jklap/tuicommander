@@ -24,14 +24,21 @@ pub struct MdkbSymbol {
 
 /// `code_find`'s envelope. `total` is the unclamped match count, so a capped
 /// `symbols` cannot be mistaken for the whole set.
+///
+/// `cfg(unix)` because only the socket client decodes it; the Windows stub
+/// answers without ever talking to a daemon.
+#[cfg(unix)]
 #[derive(Debug, Deserialize)]
 struct CodeFindResponse {
     symbols: Vec<MdkbSymbol>,
 }
 
 // Unix sockets are not available on Windows
+//
+// Every method stays `async` with nothing to await: this stub must present the
+// exact signature the socket client does, or every call site would need a cfg.
 #[cfg(not(unix))]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::unused_async_trait_impl)]
 mod platform {
     use super::*;
 
