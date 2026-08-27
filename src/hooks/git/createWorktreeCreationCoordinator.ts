@@ -16,6 +16,9 @@ export interface WorktreeDialogState {
 	worktreeBranches: string[];
 	worktreesDir: string;
 	baseRefs: BaseRefOption[];
+	/** Base ref to preselect in the dialog — the last one used successfully for this
+	 * repo this session, falling back to `baseRefs[0]`. */
+	defaultBaseRef: string;
 }
 
 interface WorktreeCreationCoordinatorDeps {
@@ -61,6 +64,20 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		handleAddTerminalToBranch,
 	} = deps;
 
+	// Last base ref successfully used per repo, this session only — forgotten on
+	// restart (repo-level persisted settings are a heavier bar for what is really
+	// just a UI convenience). Recorded only on a successful creation FROM THE
+	// DIALOG; see confirmCreateWorktree below.
+	const lastBaseRefByRepo = new Map<string, string>();
+
+	/** Base ref to preselect: the remembered one if it still exists among `baseRefs`,
+	 * else the backend's own default (`baseRefs[0]`). */
+	const resolveDefaultBaseRef = (repoPath: string, baseRefs: BaseRefOption[]): string => {
+		const remembered = lastBaseRefByRepo.get(repoPath);
+		if (remembered && baseRefs.some((r) => r.name === remembered)) return remembered;
+		return baseRefs[0]?.name ?? "";
+	};
+
 	const handleAddWorktree = async (repoPath: string) => {
 		// Prevent concurrent creations for the same repo
 		if (creatingWorktreeRepos().has(repoPath)) return;
@@ -76,6 +93,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 			deps.repo.listBaseRefOptions(repoPath),
 		]);
 
+		const defaultBaseRef = resolveDefaultBaseRef(repoPath, baseRefs);
 		const promptOnCreate = deps.getPromptOnCreate?.(repoPath) ?? true;
 
 		if (!promptOnCreate) {
@@ -87,11 +105,12 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				worktreeBranches,
 				worktreesDir,
 				baseRefs,
+				defaultBaseRef,
 			});
 			await confirmCreateWorktree({
 				branchName: suggestedName,
 				createBranch: true,
-				baseRef: baseRefs[0]?.name ?? "HEAD",
+				baseRef: defaultBaseRef || "HEAD",
 			});
 			return;
 		}
@@ -103,6 +122,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 			worktreeBranches,
 			worktreesDir,
 			baseRefs,
+			defaultBaseRef,
 		});
 	};
 
@@ -179,6 +199,13 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				options.createBranch,
 				options.baseRef,
 			);
+
+			// Remember this repo's base ref for next time — only on success (never in
+			// the catch below), and only for "pending" or "ok": both mean the backend
+			// accepted the ref. Deliberately NOT done in handleCreateWorktreeFromBranch —
+			// that quick-clone flow's base ref is whichever branch was right-clicked, not
+			// a choice made in this dialog, so it shouldn't redefine the dialog's default.
+			if (options.baseRef) lastBaseRefByRepo.set(repoPath, options.baseRef);
 
 			setWorktreeDialogState(null);
 

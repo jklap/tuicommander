@@ -2954,6 +2954,48 @@ mod tests {
     }
 
     #[test]
+    fn generate_worktree_name_matches_adjective_name_number_format() {
+        let name = generate_worktree_name(&[]);
+        let parts: Vec<&str> = name.split('-').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "Expected adjective-name-number format, got: {name}"
+        );
+        assert!(
+            parts[0].chars().all(|c| c.is_ascii_lowercase()),
+            "Adjective part should be lowercase ascii: {name}"
+        );
+        assert!(
+            parts[1].chars().all(|c| c.is_ascii_lowercase()),
+            "Name part should be lowercase ascii: {name}"
+        );
+        assert_eq!(
+            parts[2].len(),
+            3,
+            "Number part should be zero-padded to 3 digits: {name}"
+        );
+        assert!(
+            parts[2].chars().all(|c| c.is_ascii_digit()),
+            "Number part should be digits: {name}"
+        );
+    }
+
+    #[test]
+    fn generate_worktree_name_avoids_collision_with_existing() {
+        // Pre-populate with one name and verify a different one is generated,
+        // mirroring generate_clone_branch_name_avoids_collisions below — this is the
+        // collision-avoidance path the dialog's "suggested name" actually relies on
+        // (existing worktree branches are passed in via `existing`).
+        let first = generate_worktree_name(&[]);
+        let second = generate_worktree_name(std::slice::from_ref(&first));
+        assert_ne!(
+            first, second,
+            "Should generate a name distinct from `existing`"
+        );
+    }
+
+    #[test]
     fn generate_clone_branch_name_includes_source() {
         let existing: Vec<String> = vec![];
         let name = generate_clone_branch_name("feat/auth-flow", &existing);

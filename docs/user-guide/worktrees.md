@@ -34,9 +34,9 @@ Override per-repo in Settings → Repository → Worktree.
 ### From the `+` Button (with prompt)
 
 Click `+` next to a repository name. A dialog opens where you can:
-- Type a new branch name (creates branch + worktree)
+- Type a new branch name (creates branch + worktree) — the list below filters as you type, and matching text is highlighted; use `↑`/`↓` to move a keyboard cursor over it and `Enter` to pick the highlighted branch (a second `Enter` then creates)
 - Select an existing branch from the list
-- Choose a "Start from" base ref (default branch, or any local branch)
+- Choose a "Start from" base ref (default branch, or any local/remote branch) — the dropdown has its own search box with `↑`/`↓`/`Enter` navigation, grouped into Local and Remote sections; the base ref you last used successfully for this repo is preselected next time, for as long as the app stays open (this memory is per session, not saved to disk)
 - Generate a random sci-fi name
 
 ### From the `+` Button (instant mode)

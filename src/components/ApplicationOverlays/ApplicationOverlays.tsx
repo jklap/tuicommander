@@ -174,6 +174,7 @@ function GitDialogOverlays(props: { contract: GitOverlaysContract }) {
 					worktreeBranches={git.worktreeState()?.worktreeBranches ?? []}
 					worktreesDir={git.worktreeState()?.worktreesDir ?? ""}
 					baseRefs={git.worktreeState()?.baseRefs}
+					defaultBaseRef={git.worktreeState()?.defaultBaseRef}
 					onGenerateName={git.onGenerateWorktreeName}
 					onClose={git.closeWorktree}
 					onCreate={git.onCreateWorktree}

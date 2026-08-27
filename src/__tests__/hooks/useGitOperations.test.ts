@@ -2102,6 +2102,140 @@ describe("useGitOperations", () => {
 			// Should use first baseRef option as the base
 			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "cool-ripley-007", true, "develop");
 		});
+
+		it("falls back to HEAD when skipping dialog and no baseRefs are available", async () => {
+			const noPromptGitOps = useGitOperations({
+				repo: mockRepo,
+				pty: mockPty,
+				dialogs: mockDialogs,
+				closeTerminal: mockCloseTerminal,
+				createNewTerminal: mockCreateNewTerminal,
+				setStatusInfo: mockSetStatusInfo,
+				getDefaultFontSize: () => 14,
+				getMaxTabNameLength: () => 25,
+				getPromptOnCreate: () => false,
+			});
+
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.generateWorktreeName.mockResolvedValue("cool-ripley-007");
+			mockRepo.listLocalBranches.mockResolvedValue(["main"]);
+			mockRepo.listBaseRefOptions.mockResolvedValue([]);
+			mockRepo.createWorktree.mockResolvedValue({
+				name: "cool-ripley-007",
+				path: "/repo/.worktrees/cool-ripley-007",
+				branch: "cool-ripley-007",
+				base_repo: "/repo",
+			});
+			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
+
+			await noPromptGitOps.handleAddWorktree("/repo");
+
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "cool-ripley-007", true, "HEAD");
+		});
+	});
+
+	describe("remembered base ref (session-scoped)", () => {
+		beforeEach(() => {
+			mockRepo.listBaseRefOptions.mockResolvedValue([
+				{ name: "main", kind: "local", is_default: true },
+				{ name: "develop", kind: "local", is_default: false },
+			]);
+			mockRepo.createWorktree.mockResolvedValue({
+				name: "bold-nexus-042",
+				path: "/repo/.worktrees/bold-nexus-042",
+				branch: "bold-nexus-042",
+				base_repo: "/repo",
+			});
+			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
+		});
+
+		it("preselects the base ref used successfully last time, for the same repo", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
+
+			await gitOps.handleAddWorktree("/repo");
+			expect(gitOps.worktreeDialogState()?.defaultBaseRef).toBe("main"); // backend default, nothing chosen yet
+			await gitOps.confirmCreateWorktree({ branchName: "feat-a", createBranch: true, baseRef: "develop" });
+
+			await gitOps.handleAddWorktree("/repo");
+			expect(gitOps.worktreeDialogState()?.defaultBaseRef).toBe("develop");
+		});
+
+		it("does not carry the remembered base ref over to a different repo", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.add({ path: "/other", displayName: "Other" });
+			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
+
+			await gitOps.handleAddWorktree("/repo");
+			await gitOps.confirmCreateWorktree({ branchName: "feat-a", createBranch: true, baseRef: "develop" });
+
+			await gitOps.handleAddWorktree("/other");
+			expect(gitOps.worktreeDialogState()?.defaultBaseRef).toBe("main"); // /other's own backend default
+		});
+
+		it("falls back to baseRefs[0] when the remembered ref no longer exists", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
+
+			await gitOps.handleAddWorktree("/repo");
+			await gitOps.confirmCreateWorktree({ branchName: "feat-a", createBranch: true, baseRef: "develop" });
+
+			// "develop" branch got deleted before the next worktree is created
+			mockRepo.listBaseRefOptions.mockResolvedValue([{ name: "main", kind: "local", is_default: true }]);
+			await gitOps.handleAddWorktree("/repo");
+			expect(gitOps.worktreeDialogState()?.defaultBaseRef).toBe("main");
+		});
+
+		it("does not remember the base ref when creation fails", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
+			mockRepo.createWorktree.mockRejectedValueOnce(new Error("boom"));
+
+			await gitOps.handleAddWorktree("/repo");
+			await expect(
+				gitOps.confirmCreateWorktree({ branchName: "feat-a", createBranch: true, baseRef: "develop" }),
+			).rejects.toThrow("boom");
+
+			await gitOps.handleAddWorktree("/repo");
+			expect(gitOps.worktreeDialogState()?.defaultBaseRef).toBe("main"); // unchanged
+		});
+
+		it("does not remember the base ref from the quick-clone (handleCreateWorktreeFromBranch) flow", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
+			mockRepo.createWorktree.mockResolvedValue({
+				name: "feat-x--clone",
+				path: "/repo/.worktrees/feat-x--clone",
+				branch: "feat-x--clone",
+				base_repo: "/repo",
+			});
+
+			await gitOps.handleCreateWorktreeFromBranch("/repo", "develop");
+
+			await gitOps.handleAddWorktree("/repo");
+			expect(gitOps.worktreeDialogState()?.defaultBaseRef).toBe("main"); // still the backend default
+		});
+
+		it("does not remember an empty baseRef", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
+
+			await gitOps.handleAddWorktree("/repo");
+			// A dialog with no resolvable base ref (e.g. baseRefs came back empty) can
+			// submit baseRef: "" — confirm that doesn't get remembered as if it were a
+			// real choice.
+			await gitOps.confirmCreateWorktree({ branchName: "feat-a", createBranch: true, baseRef: "" });
+
+			await gitOps.handleAddWorktree("/repo");
+			expect(gitOps.worktreeDialogState()?.defaultBaseRef).toBe("main"); // unchanged
+		});
 	});
 
 	describe("confirmCreateWorktree", () => {
@@ -2145,6 +2279,31 @@ describe("useGitOperations", () => {
 
 			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "develop", false, "main");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Created worktree develop");
+		});
+
+		it("forwards a non-default baseRef verbatim to repo.createWorktree", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.generateWorktreeName.mockResolvedValue("bold-nexus-042");
+			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
+			mockRepo.listBaseRefOptions.mockResolvedValue([
+				{ name: "main", kind: "local", is_default: true },
+				{ name: "develop", kind: "local", is_default: false },
+			]);
+			mockRepo.createWorktree.mockResolvedValue({
+				name: "bold-nexus-042",
+				path: "/repo/.worktrees/bold-nexus-042",
+				branch: "bold-nexus-042",
+				base_repo: "/repo",
+			});
+			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
+
+			await gitOps.handleAddWorktree("/repo");
+			// Pick a baseRef that is NOT the default — proves confirmCreateWorktree forwards
+			// whatever the caller passed rather than always re-deriving the default.
+			await gitOps.confirmCreateWorktree({ branchName: "bold-nexus-042", createBranch: true, baseRef: "develop" });
+
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "bold-nexus-042", true, "develop");
 		});
 
 		it("handles pending status: shows placeholder with isPreparing=true, no setup script", async () => {
