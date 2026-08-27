@@ -19,7 +19,7 @@ const {
 		get: vi.fn(),
 		update: vi.fn(),
 	},
-	mockWriteClipboard: vi.fn(),
+	mockWriteClipboard: vi.fn().mockResolvedValue(undefined),
 	mockRpc: vi.fn(),
 }));
 
@@ -56,6 +56,7 @@ vi.mock("../../transport", () => ({ rpc: mockRpc }));
 
 import { useTerminalContextMenus } from "../../hooks/useTerminalContextMenus";
 import { isWindows } from "../../platform";
+import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 import { getShellFamily, sendCommand } from "../../utils/sendCommand";
 
@@ -83,7 +84,7 @@ describe("useTerminalContextMenus", () => {
 		mockContextActions.getContextActions.mockReset().mockReturnValue([]);
 		mockPaneLayout.isSplit.mockReset().mockReturnValue(false);
 		mockPaneLayout.canSplit.mockReset().mockReturnValue(true);
-		mockWriteClipboard.mockClear();
+		mockWriteClipboard.mockReset().mockResolvedValue(undefined);
 		mockRpc.mockReset().mockImplementation(async (_command: string, args: { args?: string[] }) => args?.args ?? []);
 		vi.mocked(getShellFamily).mockResolvedValue("posix");
 		vi.mocked(isWindows).mockReturnValue(false);
@@ -129,6 +130,24 @@ describe("useTerminalContextMenus", () => {
 		term.historyBase = 15;
 		await items.find((item) => item.label === "Copy Block Output")?.action();
 		expect(getBufferLines).not.toHaveBeenCalled();
+	});
+
+	it("logs instead of throwing when Copy Block Output's clipboard write is denied", async () => {
+		const err = new DOMException("Write permission denied.", "NotAllowedError");
+		mockWriteClipboard.mockRejectedValueOnce(err);
+		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({
+			commandBlocks: [{ executionLine: 10, endLine: 13 }],
+			ref: { getBufferLines: vi.fn().mockResolvedValue(["output", ""]) },
+		});
+		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
+
+		await items.find((item) => item.label === "Copy Block Output")?.action();
+
+		await vi.waitFor(() => {
+			expect(warnSpy).toHaveBeenCalledWith("terminal", "Copy Block Output failed to write clipboard", err);
+		});
 	});
 
 	it("creates and configures a branch terminal from the sidebar agent action", async () => {

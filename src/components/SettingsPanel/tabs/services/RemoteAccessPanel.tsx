@@ -30,6 +30,18 @@ interface LocalIpEntry {
 	label: string;
 }
 
+/** Copy the remote-access connect URL to clipboard. Returns whether the write
+ *  succeeded so the caller only shows the "Copied" indicator on actual success. */
+export async function copyConnectUrl(url: string): Promise<boolean> {
+	try {
+		await writeClipboard(url);
+		return true;
+	} catch {
+		// Fallback: select text for manual copy
+		return false;
+	}
+}
+
 /**
  * Remote Access page: enablement, authentication, network settings,
  * Tailscale HTTPS, the QR/connect URL, and the cloud relay.
@@ -165,12 +177,9 @@ export const RemoteAccessPanel: Component = () => {
 	const copyUrl = async () => {
 		const url = connectUrl();
 		if (!url) return;
-		try {
-			await writeClipboard(url);
+		if (await copyConnectUrl(url)) {
 			setUrlCopied(true);
 			setTimeout(() => setUrlCopied(false), 2000);
-		} catch {
-			// Fallback: select text for manual copy
 		}
 	};
 

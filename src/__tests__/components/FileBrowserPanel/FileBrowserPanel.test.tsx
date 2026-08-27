@@ -38,6 +38,7 @@ const emitEvent = (event: string, payload: unknown) => {
 
 const { FileBrowserPanel } = await import("../../../components/FileBrowserPanel/FileBrowserPanel");
 const { uiStore } = await import("../../../stores/ui");
+const { appLogger } = await import("../../../stores/appLogger");
 const { mdTabsStore } = await import("../../../stores/mdTabs");
 const { editorTabsStore } = await import("../../../stores/editorTabs");
 const { repositoriesStore } = await import("../../../stores/repositories");
@@ -649,5 +650,58 @@ describe("FileBrowserPanel pointer drag (#1329-a31a)", () => {
 		await dragFileOntoDir("mouse");
 		expect(renameCalls()).toHaveLength(1);
 		expect(renameCalls()[0][1]).toMatchObject({ from: "a.txt", to: "docs/a.txt" });
+	});
+});
+
+describe("FileBrowserPanel copy path", () => {
+	const openContextMenuOn = (container: HTMLElement, name: string) => {
+		const label = Array.from(container.querySelectorAll(".entryName")).find((el) => el.textContent === name);
+		if (!label) throw new Error(`row not found: ${name}`);
+		fireEvent.contextMenu(label.parentElement as HTMLElement);
+	};
+
+	const clickMenuItem = (label: string) => {
+		const item = Array.from(document.querySelectorAll("*")).find(
+			(el) => el.children.length === 0 && el.textContent?.trim() === label,
+		);
+		if (!item) throw new Error(`menu item not found: ${label}`);
+		fireEvent.click(item);
+	};
+
+	it("writes the clipboard-manager plugin on Copy Path", async () => {
+		listings.set("/repo|.", [file("README.md")]);
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("README.md")).not.toBeNull());
+
+		openContextMenuOn(container, "README.md");
+		clickMenuItem("Copy Path");
+
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("plugin:clipboard-manager|write_text", {
+				text: "/repo/README.md",
+				label: undefined,
+			}),
+		);
+	});
+
+	it("logs instead of throwing when the clipboard write is denied", async () => {
+		const err = new DOMException("Write permission denied.", "NotAllowedError");
+		mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+			if (cmd === "plugin:clipboard-manager|write_text") return Promise.reject(err);
+			return defaultInvoke(cmd, args);
+		});
+		const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+		listings.set("/repo|.", [file("README.md")]);
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("README.md")).not.toBeNull());
+
+		openContextMenuOn(container, "README.md");
+		expect(() => clickMenuItem("Copy Path")).not.toThrow();
+
+		await waitFor(() => expect(errorSpy).toHaveBeenCalledWith("app", "Failed to copy path", err));
 	});
 });
