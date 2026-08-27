@@ -6,6 +6,7 @@ import type { CustomLauncher, IdeType, UpdateChannel } from "../../../stores/set
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
+import { randomId } from "../../../utils/randomId";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -110,7 +111,7 @@ export const GeneralTab: Component = () => {
 	const addLauncher = () =>
 		settingsStore.setCustomLaunchers([
 			...launchers(),
-			{ id: crypto.randomUUID(), name: "New tool", executable: "", args: [], enabled: true },
+			{ id: randomId("tool-"), name: "New tool", executable: "", args: [], enabled: true },
 		]);
 	const removeLauncher = (id: string) => settingsStore.setCustomLaunchers(launchers().filter((l) => l.id !== id));
 

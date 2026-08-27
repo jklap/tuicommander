@@ -3,6 +3,7 @@ import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc, type UpstreamMcpConfig, type UpstreamMcpServer, type UpstreamTransport } from "../../../../transport";
 import { handleOpenUrl } from "../../../../utils/openUrl";
+import { randomId } from "../../../../utils/randomId";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import s from "../../Settings.module.css";
 import { SETTINGS_SECTION_UPSTREAM_MCP } from "../../sections";
@@ -224,7 +225,9 @@ export const UpstreamMcpPanel: Component = () => {
 					};
 
 		const server: UpstreamMcpServer = {
-			id: crypto.randomUUID(),
+			// No prefix: the backend's `UpstreamMcpServer.id` field is documented
+			// as a UUID.
+			id: randomId(""),
 			name: f.name.trim(),
 			transport,
 			enabled: true,

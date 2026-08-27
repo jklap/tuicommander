@@ -17,6 +17,7 @@ import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
+import { randomId } from "../../utils/randomId";
 import { safeUnlisten } from "../../utils/safeUnlisten";
 import { createSearchVisibility } from "../shared/SearchBar";
 import { handleAgentExitCompletion } from "./agentExitCompletion";
@@ -452,7 +453,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					break;
 				case "agent-session-conflict": {
 					const oldUuid = terminalsStore.get(props.id)?.tuicSession;
-					const newUuid = crypto.randomUUID();
+					// No prefix: tuicSession must stay a bare canonical UUID for the
+					// backend's `is_valid_uuid` prompt-injection guard.
+					const newUuid = randomId("");
 					terminalsStore.update(props.id, { tuicSession: newUuid });
 					appLogger.warn(
 						"terminal",

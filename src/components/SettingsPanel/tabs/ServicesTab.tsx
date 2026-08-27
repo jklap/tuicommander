@@ -5,6 +5,7 @@ import { appLogger } from "../../../stores/appLogger";
 import { rpc } from "../../../transport";
 import { cx } from "../../../utils";
 import { writeClipboard } from "../../../utils/clipboard";
+import { randomId } from "../../../utils/randomId";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
 import { SettingInput, SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -638,7 +639,7 @@ const LocalServicesPanel: Component = () => {
 				onChange={(val) => {
 					setRelayEnabled(val);
 					if (val && !relaySessionId()) {
-						const id = crypto.randomUUID();
+						const id = randomId("relay-");
 						setRelaySessionId(id);
 						saveConfigField((c) => {
 							c.services.relay.enabled = val;
@@ -709,7 +710,7 @@ const LocalServicesPanel: Component = () => {
 						<button
 							class={s.toggleBtn}
 							onClick={() => {
-								const id = crypto.randomUUID();
+								const id = randomId("relay-");
 								setRelaySessionId(id);
 								saveConfigField((c) => {
 									c.services.relay.session_id = id;
