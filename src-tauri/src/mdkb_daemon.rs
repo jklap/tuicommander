@@ -77,7 +77,7 @@ impl MdkbDaemon {
         if incompatible_daemon_found {
             self.restart_daemon().await?;
         } else {
-            self.spawn_daemon().await?;
+            self.spawn_daemon()?;
         }
 
         self.client = Some(self.wait_for_compatible_daemon().await?);
@@ -92,7 +92,9 @@ impl MdkbDaemon {
                 .is_none_or(|expected| ping.version.as_deref() == Some(expected))
     }
 
-    async fn spawn_daemon(&self) -> Result<()> {
+    /// Not `async`: `--detach` means we spawn and walk away, and
+    /// `tokio::process::Command::spawn` is itself synchronous.
+    fn spawn_daemon(&self) -> Result<()> {
         let bin = self
             .binary_path
             .as_ref()
@@ -209,7 +211,7 @@ mod tests {
             binary_path: None,
             cached_version: None,
         };
-        let err = daemon.spawn_daemon().await.unwrap_err();
+        let err = daemon.spawn_daemon().unwrap_err();
         assert!(err.to_string().contains("not found"));
     }
 

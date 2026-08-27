@@ -709,6 +709,12 @@ impl UpstreamRegistry {
     ///
     /// Returns an error if `name` collides with an existing entry or if the
     /// config is self-referential (proxy pointing to itself).
+    ///
+    /// Stays `async` with nothing to await on purpose: it ends in `tokio::spawn`,
+    /// which panics outside a runtime. `async fn` makes "a runtime exists here" a
+    /// compile-time fact — the same invariant `disconnect_upstream` has to state
+    /// in prose because it is sync and does run from non-runtime contexts.
+    #[allow(clippy::unused_async_trait_impl)]
     pub(crate) async fn connect_upstream(
         &self,
         config: UpstreamMcpServer,

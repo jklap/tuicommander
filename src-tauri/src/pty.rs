@@ -686,9 +686,17 @@ fn interactive_io_boost() -> thread_qos::QosBoost {
     thread_qos::QosBoost::user_interactive()
 }
 
+/// The guard the other platforms have nothing to restore into. It exists so the
+/// call reads identically everywhere and `#[must_use]` keeps meaning "hold this",
+/// rather than degrading to a unit that a caller binds and clippy rejects.
+#[cfg(not(target_os = "macos"))]
+pub(crate) struct QosBoost;
+
 #[cfg(not(target_os = "macos"))]
 #[must_use = "the QoS is restored when the guard drops; dropping it immediately bumps nothing"]
-fn interactive_io_boost() {}
+fn interactive_io_boost() -> QosBoost {
+    QosBoost
+}
 
 /// Resolve the shell to use: explicit override > env default > platform default.
 pub(crate) fn resolve_shell(override_shell: Option<String>) -> String {
@@ -2468,10 +2476,10 @@ fn prompt_probe_applies(state: &AppState, session_id: &str) -> bool {
     {
         return false;
     }
-    if !state
+    if state
         .shell_states
         .get(session_id)
-        .is_some_and(|shell| shell.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY)
+        .is_none_or(|shell| shell.load(std::sync::atomic::Ordering::Acquire) != SHELL_BUSY)
     {
         return false;
     }
