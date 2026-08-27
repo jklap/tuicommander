@@ -14,6 +14,7 @@ import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
 import { openDialog } from "../../../utils/nativeDialog";
+import { randomId } from "../../../utils/randomId";
 import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
 import { Textarea } from "../../ui/Textarea";
@@ -148,7 +149,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 	const addLauncher = () =>
 		settingsStore.setCustomLaunchers([
 			...launchers(),
-			{ id: crypto.randomUUID(), name: "New tool", executable: "", args: [], enabled: true },
+			{ id: randomId("tool-"), name: "New tool", executable: "", args: [], enabled: true },
 		]);
 	const removeLauncher = (id: string) => settingsStore.setCustomLaunchers(launchers().filter((l) => l.id !== id));
 
@@ -307,89 +308,83 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 						</SettingRow>
 					</Show>
 					<Show when={isTauri()}>
-						<>
-							<div>
-								<SettingRow
-									label={t("general.heading.customLaunchers", "Custom Launchers")}
-									help={
-										<>
-											{t(
-												"general.hint.customLaunchers",
-												'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {fileDir}, {repo}, {cwd}, {home}, {line}, {column} placeholders. One argument per line.',
-											)}
-										</>
-									}
-									hint={launchers().length ? `${launchers().length} custom launchers` : "No custom launchers"}
-								>
-									{() => (
-										<Button
-											data-non-setting="Create or remove a stable custom-launcher record through its owner"
-											class={s.testBtn}
-											onClick={addLauncher}
-										>
-											{t("general.btn.addLauncher", "Add launcher")}
-										</Button>
-									)}
-								</SettingRow>
-								<For each={launchers()}>
-									{(launcher) => (
-										<div
-											class={s.group}
-											style={{
-												border: "1px solid var(--border)",
-												"border-radius": "var(--radius-md)",
-												padding: "8px",
-												"margin-bottom": "8px",
-											}}
-										>
-											<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-bottom": "6px" }}>
-												<input
-													data-setting-id="app.custom_launchers.{id}.enabled"
-													type="checkbox"
-													checked={launcher.enabled}
-													title={t("general.label.launcherEnabled", "Enabled")}
-													onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
-												/>
-												<Input
-													data-setting-id="app.custom_launchers.{id}.name"
-													type="text"
-													value={launcher.name}
-													placeholder={t("general.placeholder.launcherName", "Name")}
-													onInput={(e) => updateLauncher(launcher.id, { name: e.currentTarget.value })}
-													style={{ flex: "1" }}
-												/>
-												<Button
-													data-non-setting="Create or remove a stable custom-launcher record through its owner"
-													class={s.testBtn}
-													onClick={() => removeLauncher(launcher.id)}
-												>
-													{t("general.btn.remove", "Remove")}
-												</Button>
-											</div>
+						<div>
+							<SettingRow
+								label={t("general.heading.customLaunchers", "Custom Launchers")}
+								help={t(
+									"general.hint.customLaunchers",
+									'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {fileDir}, {repo}, {cwd}, {home}, {line}, {column} placeholders. One argument per line.',
+								)}
+								hint={launchers().length ? `${launchers().length} custom launchers` : "No custom launchers"}
+							>
+								{() => (
+									<Button
+										data-non-setting="Create or remove a stable custom-launcher record through its owner"
+										class={s.testBtn}
+										onClick={addLauncher}
+									>
+										{t("general.btn.addLauncher", "Add launcher")}
+									</Button>
+								)}
+							</SettingRow>
+							<For each={launchers()}>
+								{(launcher) => (
+									<div
+										class={s.group}
+										style={{
+											border: "1px solid var(--border)",
+											"border-radius": "var(--radius-md)",
+											padding: "8px",
+											"margin-bottom": "8px",
+										}}
+									>
+										<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-bottom": "6px" }}>
+											<input
+												data-setting-id="app.custom_launchers.{id}.enabled"
+												type="checkbox"
+												checked={launcher.enabled}
+												title={t("general.label.launcherEnabled", "Enabled")}
+												onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
+											/>
 											<Input
-												data-setting-id="app.custom_launchers.{id}.executable"
+												data-setting-id="app.custom_launchers.{id}.name"
 												type="text"
-												value={launcher.executable}
-												placeholder={t(
-													"general.placeholder.launcherExec",
-													"Executable (e.g. code, or /usr/local/bin/code)",
-												)}
-												onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
-												style={{ width: "100%", "margin-bottom": "6px" }}
+												value={launcher.name}
+												placeholder={t("general.placeholder.launcherName", "Name")}
+												onInput={(e) => updateLauncher(launcher.id, { name: e.currentTarget.value })}
+												style={{ flex: "1" }}
 											/>
-											<Textarea
-												data-setting-id="app.custom_launchers.{id}.args"
-												value={launcher.args.join("\n")}
-												placeholder={"--goto\n{file}:{line}:{column}"}
-												rows={3}
-												onInput={(e) => updateLauncher(launcher.id, { args: e.currentTarget.value.split("\n") })}
-												style={{ width: "100%", "font-family": "var(--font-mono)", "font-size": "var(--font-sm)" }}
-											/>
+											<Button
+												data-non-setting="Create or remove a stable custom-launcher record through its owner"
+												class={s.testBtn}
+												onClick={() => removeLauncher(launcher.id)}
+											>
+												{t("general.btn.remove", "Remove")}
+											</Button>
 										</div>
-									)}
-								</For>
-							</div>
-						</>
+										<Input
+											data-setting-id="app.custom_launchers.{id}.executable"
+											type="text"
+											value={launcher.executable}
+											placeholder={t(
+												"general.placeholder.launcherExec",
+												"Executable (e.g. code, or /usr/local/bin/code)",
+											)}
+											onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
+											style={{ width: "100%", "margin-bottom": "6px" }}
+										/>
+										<Textarea
+											data-setting-id="app.custom_launchers.{id}.args"
+											value={launcher.args.join("\n")}
+											placeholder={"--goto\n{file}:{line}:{column}"}
+											rows={3}
+											onInput={(e) => updateLauncher(launcher.id, { args: e.currentTarget.value.split("\n") })}
+											style={{ width: "100%", "font-family": "var(--font-mono)", "font-size": "var(--font-sm)" }}
+										/>
+									</div>
+								)}
+							</For>
+						</div>
 					</Show>
 				</SectionCard>
 			</Show>

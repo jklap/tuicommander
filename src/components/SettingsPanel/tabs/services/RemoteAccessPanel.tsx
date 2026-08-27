@@ -18,6 +18,7 @@ import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
+import { randomId } from "../../../../utils/randomId";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Button } from "../../../ui/Button";
 import { Input } from "../../../ui/Input";
@@ -47,6 +48,18 @@ export const normalizeAuthUsername = (input: string): string => input.trim() || 
 interface LocalIpEntry {
 	ip: string;
 	label: string;
+}
+
+/** Copy the remote-access connect URL to clipboard. Returns whether the write
+ *  succeeded so the caller only shows the "Copied" indicator on actual success. */
+export async function copyConnectUrl(url: string): Promise<boolean> {
+	try {
+		await writeClipboard(url);
+		return true;
+	} catch {
+		// Fallback: select text for manual copy
+		return false;
+	}
 }
 
 /**
@@ -223,12 +236,9 @@ export const RemoteAccessPanel: Component = () => {
 	const copyUrl = async () => {
 		const url = connectUrl();
 		if (!url) return;
-		try {
-			await writeClipboard(url);
+		if (await copyConnectUrl(url)) {
 			setUrlCopied(true);
 			setTimeout(() => setUrlCopied(false), 2000);
-		} catch {
-			// Fallback: select text for manual copy
 		}
 	};
 
@@ -558,43 +568,41 @@ export const RemoteAccessPanel: Component = () => {
 									: "Not installed";
 						const showHint = ts.state === "Running" && !ts.https_enabled;
 						return (
-							<>
-								<div class={s.group}>
-									<label>{t("services.label.tailscaleStatus", "Status")}</label>
-									<div class={s.mcpStatusRow}>
-										<span class={s.mcpStatusText}>{statusText}</span>
-										<Button
-											data-non-setting="Explicit Tailscale runtime discovery"
-											class={s.testBtn}
-											onClick={async () => {
-												try {
-													const updated = await rpc<TailscaleStatus>("recheck_tailscale_status");
-													setTailscaleState(updated);
-												} catch (e) {
-													appLogger.error("tailscale", "Recheck failed", e);
-												}
-											}}
-											title={t("services.action.recheckTailscale", "Recheck Tailscale status")}
-										>
-											{t("services.action.recheck", "Recheck")}
-										</Button>
-									</div>
-									<Show when={ts.state === "Running" && ts.https_enabled && !status()?.tls_active}>
-										<p class={s.hint}>
-											Enable remote access, then recheck Tailscale. If HTTPS remains unavailable, check the Tailscale
-											certificate errors in the app logs.
-										</p>
-									</Show>
-									<Show when={showHint}>
-										<p class={s.hint}>
-											{t(
-												"services.hint.tailscaleEnableHttps",
-												"Enable HTTPS certificates in your Tailscale admin console to serve the PWA over HTTPS.",
-											)}
-										</p>
-									</Show>
+							<div class={s.group}>
+								<label>{t("services.label.tailscaleStatus", "Status")}</label>
+								<div class={s.mcpStatusRow}>
+									<span class={s.mcpStatusText}>{statusText}</span>
+									<Button
+										data-non-setting="Explicit Tailscale runtime discovery"
+										class={s.testBtn}
+										onClick={async () => {
+											try {
+												const updated = await rpc<TailscaleStatus>("recheck_tailscale_status");
+												setTailscaleState(updated);
+											} catch (e) {
+												appLogger.error("tailscale", "Recheck failed", e);
+											}
+										}}
+										title={t("services.action.recheckTailscale", "Recheck Tailscale status")}
+									>
+										{t("services.action.recheck", "Recheck")}
+									</Button>
 								</div>
-							</>
+								<Show when={ts.state === "Running" && ts.https_enabled && !status()?.tls_active}>
+									<p class={s.hint}>
+										Enable remote access, then recheck Tailscale. If HTTPS remains unavailable, check the Tailscale
+										certificate errors in the app logs.
+									</p>
+								</Show>
+								<Show when={showHint}>
+									<p class={s.hint}>
+										{t(
+											"services.hint.tailscaleEnableHttps",
+											"Enable HTTPS certificates in your Tailscale admin console to serve the PWA over HTTPS.",
+										)}
+									</p>
+								</Show>
+							</div>
 						);
 					})()}
 				</Show>
@@ -633,7 +641,7 @@ export const RemoteAccessPanel: Component = () => {
 					onChange={(val) => {
 						setRelayEnabled(val);
 						if (val && !relaySessionId()) {
-							const id = crypto.randomUUID();
+							const id = randomId("relay-");
 							setRelaySessionId(id);
 							saveConfigField((c) => {
 								c.services.relay.enabled = val;
@@ -717,7 +725,7 @@ export const RemoteAccessPanel: Component = () => {
 								data-non-setting="Rotate the runtime relay-session identity through its existing owner"
 								class={s.toggleBtn}
 								onClick={() => {
-									const id = crypto.randomUUID();
+									const id = randomId("relay-");
 									setRelaySessionId(id);
 									saveConfigField((c) => {
 										c.services.relay.session_id = id;

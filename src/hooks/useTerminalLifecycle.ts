@@ -453,6 +453,7 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 			}
 		} catch (err) {
 			appLogger.error("terminal", "Failed to copy", err);
+			deps.setStatusInfo("Copy failed — clipboard unavailable");
 		}
 	};
 
@@ -465,6 +466,7 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 			}
 		} catch (err) {
 			appLogger.error("terminal", "Failed to paste", err);
+			deps.setStatusInfo("Paste failed — clipboard unavailable");
 		}
 	};
 
