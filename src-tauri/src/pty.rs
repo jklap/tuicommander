@@ -865,6 +865,13 @@ const AGENT_READY_CONFIRM: std::time::Duration = std::time::Duration::from_milli
 /// interrupted screen, then discard it without changing shell state.
 const INTERRUPT_PENDING_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// How long a plain shell latched BUSY by OSC 133 must stay silent before its
+/// foreground process group is inspected for a nested prompt. A command that is
+/// genuinely running (build, test, `dd`) either prints inside this window or
+/// keeps a non-shell process in the group, so the probe stays off the hot path
+/// and costs nothing while work is actually happening.
+const SHELL_PROMPT_PROBE_SILENCE_MS: u64 = 3_000;
+
 /// Maximum time active_sub_tasks can block idle transition (30s).
 /// If the parser sets active_sub_tasks > 0 but the agent exits or the
 /// mode-line disappears without emitting count=0, the terminal would stay
@@ -2367,6 +2374,132 @@ fn background_work_from_snapshot(
     Some(has_meaningful_descendant(agent_root, processes))
 }
 
+/// Interactive shells, and the privilege wrappers that exist only to start one.
+/// `login` and `doas` are here for the same reason as `sudo`/`su`: on their own
+/// they are not work, they are the two hops between the outer prompt and the
+/// inner one.
+const PROMPT_SHELL_NAMES: &[&str] = &[
+    "sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "csh", "tcsh", "ash",
+];
+const PROMPT_SHELL_WRAPPERS: &[&str] = &["sudo", "su", "doas", "login"];
+
+/// Whether this process is a shell sitting at a prompt rather than running a
+/// script. A login shell reports as `-zsh`, so the leading dash is stripped;
+/// `-c` means the shell was handed a command and is therefore work.
+fn is_prompt_shell_process(process: &ProcessTreeEntry) -> bool {
+    let name = process.name.to_ascii_lowercase();
+    let name = normalized_process_name(&name)
+        .trim_start_matches('-')
+        .to_string();
+    if PROMPT_SHELL_WRAPPERS.contains(&name.as_str()) {
+        return true;
+    }
+    if !PROMPT_SHELL_NAMES.contains(&name.as_str()) {
+        return false;
+    }
+    !process
+        .command
+        .split_whitespace()
+        .skip(1)
+        .any(|argument| argument == "-c")
+}
+
+/// Whether the PTY's foreground process group is nothing but shells.
+///
+/// OSC 133 marks a command busy once and clears it once, so an interactive
+/// subshell (`sh`, `sudo su`, `bash -l`) latches the outer shell BUSY for its
+/// entire life — the inner shell has no integration of its own and never emits
+/// the closing marker. The user is looking at an idle prompt while the tab says
+/// working, which is what this repairs.
+///
+/// The whole subtree must qualify, not just its root: `sudo dd …` is a wrapper
+/// with real work underneath it, and `sudo` on macOS allocates its own PTY, so
+/// the inner shell is only reachable through the parent chain.
+fn foreground_group_at_prompt(root_pid: u32, processes: &[ProcessTreeEntry]) -> bool {
+    let mut children = std::collections::HashMap::<u32, Vec<&ProcessTreeEntry>>::new();
+    let mut root = None;
+    for process in processes {
+        children
+            .entry(process.parent_pid)
+            .or_default()
+            .push(process);
+        if process.pid == root_pid {
+            root = Some(process);
+        }
+    }
+    let Some(root) = root else {
+        return false;
+    };
+    let mut stack = vec![root];
+    while let Some(process) = stack.pop() {
+        if !is_prompt_shell_process(process) {
+            return false;
+        }
+        if let Some(descendants) = children.get(&process.pid) {
+            stack.extend(descendants.iter().copied());
+        }
+    }
+    true
+}
+
+/// The pid whose process tree represents this session's foreground work.
+fn session_foreground_pid(state: &AppState, session_id: &str) -> Option<u32> {
+    let entry = state.sessions.get(session_id)?;
+    let session = entry.value().lock();
+    #[cfg(not(windows))]
+    {
+        session.master.process_group_leader().map(|pid| pid as u32)
+    }
+    #[cfg(windows)]
+    {
+        session._child.process_id()
+    }
+}
+
+/// Cheap precondition for the nested-prompt probe: a plain shell, currently
+/// BUSY, silent long enough that no running command would still be quiet.
+/// Shared by the probe itself and by the process-snapshot demand check, so the
+/// snapshot is only enumerated while a session could actually use it.
+fn prompt_probe_applies(state: &AppState, session_id: &str) -> bool {
+    if state
+        .session_states
+        .get(session_id)
+        .is_none_or(|session| session.agent_type.is_some())
+    {
+        return false;
+    }
+    if !state
+        .shell_states
+        .get(session_id)
+        .is_some_and(|shell| shell.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY)
+    {
+        return false;
+    }
+    let last_ms = state
+        .last_output_ms
+        .get(session_id)
+        .map(|ts| ts.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(0);
+    last_ms != 0 && now_epoch_ms().saturating_sub(last_ms) >= SHELL_PROMPT_PROBE_SILENCE_MS
+}
+
+/// Whether an explicit OSC 133 busy marker should be overruled because the
+/// session is parked at a nested shell prompt. Must be evaluated before the
+/// SilenceState lock is taken: it locks the PtySession to read the foreground
+/// process group.
+fn explicit_busy_is_a_nested_prompt(state: &AppState, session_id: &str) -> bool {
+    if !prompt_probe_applies(state, session_id) {
+        return false;
+    }
+    let Some((_, processes)) = state.process_snapshot_cache.load() else {
+        return false;
+    };
+    let Some(root_pid) = session_foreground_pid(state, session_id) else {
+        return false;
+    };
+    foreground_group_at_prompt(root_pid, &processes)
+}
+
 #[cfg(not(windows))]
 fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     let output = std::process::Command::new("ps")
@@ -2681,17 +2814,7 @@ fn refresh_background_work(state: &AppState, session_id: &str) {
         .session_states
         .get(session_id)
         .map(|session| session.turn_epoch);
-    let root_pid = state.sessions.get(session_id).and_then(|entry| {
-        let session = entry.value().lock();
-        #[cfg(not(windows))]
-        {
-            session.master.process_group_leader().map(|pid| pid as u32)
-        }
-        #[cfg(windows)]
-        {
-            session._child.process_id()
-        }
-    });
+    let root_pid = session_foreground_pid(state, session_id);
     let (Some(root_pid), Some(agent_type), Some(observed_turn_epoch)) =
         (root_pid, agent_type, observed_turn_epoch)
     else {
@@ -2726,9 +2849,11 @@ fn refresh_background_work_from_cached_snapshot(
 
 fn process_snapshot_is_demanded(state: &AppState) -> bool {
     state.session_states.iter().any(|session| {
-        session.agent_type.is_some()
-            && (session.has_pending_background_probe() || session.background_work)
-            && state.silence_states.contains_key(session.key())
+        (if session.agent_type.is_some() {
+            session.has_pending_background_probe() || session.background_work
+        } else {
+            prompt_probe_applies(state, session.key())
+        }) && state.silence_states.contains_key(session.key())
             && state.shell_states.contains_key(session.key())
     })
 }
@@ -3544,6 +3669,10 @@ fn try_timer_idle_transition(
     evidence_turn_epoch: Option<u64>,
 ) -> TimerIdleTransition {
     let lifecycle = Arc::clone(silence);
+    // Read the foreground process group before taking the lifecycle lock: the
+    // probe locks the PtySession, which the reader thread holds while it takes
+    // this same SilenceState.
+    let nested_prompt = agent_type.is_none() && explicit_busy_is_a_nested_prompt(state, session_id);
     let (transitioned, force_cleared_subtasks, screen_confirms_idle, parent_dispatch) = {
         let mut silence = silence.lock();
         if evidence_turn_epoch.is_some_and(|observed| {
@@ -3589,7 +3718,7 @@ fn try_timer_idle_transition(
         let decision = if screen_confirms_idle && ready_probe_satisfied {
             IdleDecision::yes(evidence_turn_epoch)
         } else if screen_confirms_idle
-            || silence.explicit_busy
+            || (silence.explicit_busy && !nested_prompt)
             || hold_for_ready_confirmation
             || silence.is_api_retry_active()
         {
@@ -13689,6 +13818,159 @@ mod tests {
             command: command.to_string(),
             age_seconds: None,
         }
+    }
+
+    /// `sudo su` as the OS actually reports it: sudo re-execs itself, and on
+    /// macOS the second hop allocates its own PTY, so the inner shell is only
+    /// reachable through the parent chain.
+    fn sudo_su_tree() -> Vec<ProcessTreeEntry> {
+        vec![
+            process(100, 1, "zsh", "/bin/zsh"),
+            process(200, 100, "sudo", "sudo su"),
+            process(201, 200, "sudo", "sudo su"),
+            process(202, 201, "su", "su"),
+            process(203, 202, "sh", "sh"),
+        ]
+    }
+
+    #[test]
+    fn a_bare_shell_reads_as_a_prompt() {
+        assert!(is_prompt_shell_process(&process(1, 0, "sh", "sh")));
+        assert!(is_prompt_shell_process(&process(1, 0, "bash", "bash -l")));
+        // A login shell reports its name with a leading dash.
+        assert!(is_prompt_shell_process(&process(1, 0, "-zsh", "-zsh")));
+    }
+
+    #[test]
+    fn a_shell_handed_a_command_is_work() {
+        assert!(!is_prompt_shell_process(&process(
+            1,
+            0,
+            "sh",
+            "sh -c 'while true; do sleep 1; done'"
+        )));
+        assert!(!is_prompt_shell_process(&process(
+            1,
+            0,
+            "bash",
+            "bash -c make"
+        )));
+    }
+
+    #[test]
+    fn a_non_shell_is_never_a_prompt() {
+        assert!(!is_prompt_shell_process(&process(
+            1,
+            0,
+            "dd",
+            "dd if=/dev/rdisk11 of=/tmp/x.img"
+        )));
+        assert!(!is_prompt_shell_process(&process(1, 0, "vim", "vim a.txt")));
+    }
+
+    #[test]
+    fn nested_interactive_shell_is_a_prompt_not_work() {
+        // The regression: `sudo su` latches the outer shell BUSY via OSC 133 and
+        // the inner `sh` never emits the closing marker, so the tab reported
+        // working for as long as the root shell lived.
+        assert!(foreground_group_at_prompt(200, &sudo_su_tree()));
+        assert!(foreground_group_at_prompt(
+            300,
+            &[process(300, 100, "sh", "sh")]
+        ));
+    }
+
+    #[test]
+    fn a_wrapper_running_real_work_is_not_a_prompt() {
+        let mut tree = sudo_su_tree();
+        tree.push(process(204, 203, "dd", "dd if=/dev/rdisk11 of=/tmp/x.img"));
+        assert!(
+            !foreground_group_at_prompt(200, &tree),
+            "work anywhere under the wrapper must keep the session busy"
+        );
+        assert!(!foreground_group_at_prompt(
+            400,
+            &[
+                process(400, 100, "sudo", "sudo dd if=/dev/rdisk11"),
+                process(401, 400, "dd", "dd if=/dev/rdisk11"),
+            ]
+        ));
+    }
+
+    #[test]
+    fn an_unknown_root_is_not_a_prompt() {
+        // No snapshot entry for the pid means no evidence; fail toward busy.
+        assert!(!foreground_group_at_prompt(999, &sudo_su_tree()));
+    }
+
+    fn busy_plain_shell(sid: &str, silent_for_ms: u64) -> AppState {
+        use std::sync::atomic::{AtomicU8, AtomicU64};
+        let state = crate::state::tests_support::make_test_app_state();
+        state
+            .shell_states
+            .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
+        state
+            .session_states
+            .insert(sid.to_string(), crate::state::SessionState::default());
+        state.last_output_ms.insert(
+            sid.to_string(),
+            AtomicU64::new(now_epoch_ms() - silent_for_ms),
+        );
+        state
+    }
+
+    #[test]
+    fn prompt_probe_waits_for_real_silence() {
+        let sid = "s";
+        assert!(prompt_probe_applies(
+            &busy_plain_shell(sid, SHELL_PROMPT_PROBE_SILENCE_MS + 500),
+            sid
+        ));
+        assert!(
+            !prompt_probe_applies(&busy_plain_shell(sid, 200), sid),
+            "a command that just printed is running, not parked at a prompt"
+        );
+    }
+
+    #[test]
+    fn prompt_probe_leaves_agents_alone() {
+        let sid = "s";
+        let state = busy_plain_shell(sid, SHELL_PROMPT_PROBE_SILENCE_MS + 500);
+        state.session_states.insert(
+            sid.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("claude".to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(
+            !prompt_probe_applies(&state, sid),
+            "agents own a ready-screen adapter; this probe must not second-guess it"
+        );
+    }
+
+    #[test]
+    fn prompt_probe_ignores_an_idle_session() {
+        use std::sync::atomic::AtomicU8;
+        let sid = "s";
+        let state = busy_plain_shell(sid, SHELL_PROMPT_PROBE_SILENCE_MS + 500);
+        state
+            .shell_states
+            .insert(sid.to_string(), AtomicU8::new(SHELL_IDLE));
+        assert!(!prompt_probe_applies(&state, sid));
+    }
+
+    #[test]
+    fn prompt_probe_demands_the_process_snapshot() {
+        let sid = "s";
+        let state = busy_plain_shell(sid, SHELL_PROMPT_PROBE_SILENCE_MS + 500);
+        state
+            .silence_states
+            .insert(sid.to_string(), Arc::new(Mutex::new(SilenceState::new())));
+        assert!(
+            process_snapshot_is_demanded(&state),
+            "without demand the cache stays empty and the probe can never fire"
+        );
     }
 
     /// A process the snapshot could age. Ageless entries keep the name list as

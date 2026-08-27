@@ -1211,3 +1211,18 @@ mobile push, and the first answer wins.
 - [ ] Leave a confirm unanswered for 5 minutes: the agent receives
   `{confirmed: false, reason: "no answer within 300s"}` and the dialog closes on
   every client. It must NOT read as an approval.
+
+## Nested shell prompt no longer reads as working
+
+Requires a `make dev` restart — the change is in `src-tauri/src/pty.rs`.
+
+- [ ] In a shell tab run `sh` (or `sudo su`). Within ~4s of the inner prompt
+  appearing the tab badge goes **idle**. Before, OSC 133 latched it `busy` for
+  as long as the inner shell lived — observed stuck for 33 minutes.
+- [ ] Run a real command in that inner shell (`sleep 20`, a build): the tab goes
+  back to working while it prints, and returns to idle at the prompt.
+- [ ] `sudo dd if=… of=…` with no output for a minute must stay **working** —
+  the wrapper has real work under it. This is the regression the probe must not
+  cause.
+- [ ] An agent tab (Claude, Codex) is unaffected: its badge still follows the
+  ready-screen adapter, not this probe.
