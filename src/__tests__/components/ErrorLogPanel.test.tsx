@@ -1,8 +1,11 @@
-import { render } from "@solidjs/testing-library";
+import { fireEvent, render } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorLogPanel } from "../../components/ErrorLogPanel/ErrorLogPanel";
 import { appLogger } from "../../stores/appLogger";
 import { errorLogStore } from "../../stores/errorLog";
+
+const mockWriteClipboard = vi.fn();
+vi.mock("../../utils/clipboard", () => ({ writeClipboard: (text: string) => mockWriteClipboard(text) }));
 
 /**
  * The panel is mounted for the whole app lifetime — App renders it
@@ -83,5 +86,43 @@ describe("ErrorLogPanel memo gating", () => {
 
 		view.unmount();
 		vi.unstubAllGlobals();
+	});
+});
+
+describe("ErrorLogPanel copy actions", () => {
+	beforeEach(() => {
+		errorLogStore.close();
+		appLogger.clear();
+		mockWriteClipboard.mockReset();
+	});
+
+	it("does not throw when the per-row clipboard write is denied", () => {
+		mockWriteClipboard.mockRejectedValue(new DOMException("Write permission denied.", "NotAllowedError"));
+		appLogger.error("app", "boom");
+		const view = render(() => <ErrorLogPanel />);
+		errorLogStore.open();
+
+		const btn = Array.from(view.container.querySelectorAll("button")).find((b) => b.title === "Copy to clipboard");
+		expect(btn).toBeDefined();
+		expect(() => fireEvent.click(btn as HTMLButtonElement)).not.toThrow();
+		expect(mockWriteClipboard).toHaveBeenCalled();
+
+		view.unmount();
+	});
+
+	it("does not throw when the Copy All clipboard write is denied", () => {
+		mockWriteClipboard.mockRejectedValue(new DOMException("Write permission denied.", "NotAllowedError"));
+		appLogger.error("app", "boom");
+		const view = render(() => <ErrorLogPanel />);
+		errorLogStore.open();
+
+		const copyAllBtn = Array.from(view.container.querySelectorAll("button")).find(
+			(b) => b.title === "Copy all visible entries",
+		);
+		expect(copyAllBtn).toBeDefined();
+		expect(() => fireEvent.click(copyAllBtn as HTMLButtonElement)).not.toThrow();
+		expect(mockWriteClipboard).toHaveBeenCalled();
+
+		view.unmount();
 	});
 });

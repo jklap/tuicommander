@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useTerminalLifecycle } from "../../hooks/useTerminalLifecycle";
+import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { mdTabsStore } from "../../stores/mdTabs";
@@ -845,6 +846,18 @@ describe("useTerminalLifecycle", () => {
 
 			expect(mockSetStatusInfo).not.toHaveBeenCalledWith("Copied to clipboard");
 		});
+
+		it("logs and surfaces a status message when the clipboard write fails", async () => {
+			vi.spyOn(window, "getSelection").mockReturnValue({ toString: () => "selected text" } as Selection);
+			const err = new DOMException("Write permission denied.", "NotAllowedError");
+			mockInvoke.mockRejectedValueOnce(err);
+			const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+			await lifecycle.copyFromTerminal();
+
+			expect(errorSpy).toHaveBeenCalledWith("terminal", "Failed to copy", err);
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Copy failed — clipboard unavailable");
+		});
 	});
 
 	describe("pasteToTerminal", () => {
@@ -908,6 +921,23 @@ describe("useTerminalLifecycle", () => {
 			// Bracketed paste wrapping is the responsibility of ref.paste() (Terminal/CanvasTerminal),
 			// which has access to the current bracketedPaste terminal state.
 			expect(ref.paste).toHaveBeenCalledWith("line1\nline2\nline3");
+		});
+
+		it("logs and surfaces a status message when the clipboard read fails", async () => {
+			const ref = makeRef();
+			const err = new DOMException("Read permission denied.", "NotAllowedError");
+			mockInvoke.mockRejectedValue(err);
+			const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			terminalsStore.setActive(id);
+			terminalsStore.update(id, { ref });
+
+			await lifecycle.pasteToTerminal();
+
+			expect(ref.paste).not.toHaveBeenCalled();
+			expect(errorSpy).toHaveBeenCalledWith("terminal", "Failed to paste", err);
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Paste failed — clipboard unavailable");
 		});
 	});
 
