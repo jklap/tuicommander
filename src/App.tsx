@@ -23,14 +23,19 @@ const ActivityDashboard = lazy(() =>
 
 const TunnelsPanel = lazy(() => import("./components/TunnelsPanel").then((m) => ({ default: m.TunnelsPanel })));
 
+const ErrorLogPanel = lazy(() => import("./components/ErrorLogPanel").then((m) => ({ default: m.ErrorLogPanel })));
+
+const WorktreeManager = lazy(() =>
+	import("./components/WorktreeManager").then((m) => ({ default: m.WorktreeManager })),
+);
+
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DictationToast } from "./components/DictationToast/DictationToast";
-import { ErrorLogPanel } from "./components/ErrorLogPanel";
 import { McpPopup } from "./components/McpPopup/McpPopup";
 import { MobileViewBanner } from "./components/MobileViewBanner";
 import { ToastContainer } from "./components/ToastContainer/ToastContainer";
-import { type WorktreeActions, WorktreeManager } from "./components/WorktreeManager";
+import type { WorktreeActions } from "./components/WorktreeManager";
 import { useActiveTerminalSync } from "./hooks/useActiveTerminalSync";
 import { useAgentDetection } from "./hooks/useAgentDetection";
 import { useAgentPolling } from "./hooks/useAgentPolling";
@@ -1062,13 +1067,17 @@ const App: Component = () => {
 			</Show>
 
 			{/* Worktree manager */}
-			<WorktreeManager actions={worktreeActions} />
+			<Suspense>
+				<WorktreeManager actions={worktreeActions} />
+			</Suspense>
 
 			{/* MCP servers popup (per-repo) */}
 			<McpPopup onOpenSettings={openSettings} />
 
 			{/* Error log panel */}
-			<ErrorLogPanel />
+			<Suspense>
+				<ErrorLogPanel />
+			</Suspense>
 
 			<ApplicationOverlays
 				panels={{

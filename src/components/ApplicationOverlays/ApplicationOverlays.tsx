@@ -10,8 +10,6 @@ import { terminalsStore } from "../../stores/terminals";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type createContextMenu } from "../ContextMenu";
 import { CreateBranchDialog } from "../CreateBranchDialog";
-import { CreateWorktreeDialog } from "../CreateWorktreeDialog";
-import { GeneratorsModal } from "../GeneratorsModal";
 import { McpConfirmHost } from "../McpConfirmHost/McpConfirmHost";
 import {
 	type CleanupStep,
@@ -19,20 +17,28 @@ import {
 	type StepId,
 	type StepStatus,
 } from "../PostMergeCleanupDialog/PostMergeCleanupDialog";
-import { ProcessManagerModal } from "../ProcessManagerModal/ProcessManagerModal";
 import { PromptDialog } from "../PromptDialog";
 import qd from "../QuitDialog/QuitDialog.module.css";
-import { RemoteQrDialog } from "../RemoteQrDialog";
 import { RemoteRepoPicker } from "../RemoteRepoPicker";
 import { RenameBranchDialog } from "../RenameBranchDialog";
 import { RunCommandDialog } from "../RunCommandDialog";
 import type { SettingsContext } from "../SettingsPanel";
-import { TaskQueuePanel } from "../TaskQueuePanel";
 import { UpdateProgressDialog } from "../UpdateProgressDialog";
 import { WhatsNewDialog } from "../WhatsNewDialog/WhatsNewDialog";
 
 const SettingsPanel = lazy(() => import("../SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
 const HelpPanel = lazy(() => import("../HelpPanel").then((module) => ({ default: module.HelpPanel })));
+const CreateWorktreeDialog = lazy(() =>
+	import("../CreateWorktreeDialog").then((module) => ({ default: module.CreateWorktreeDialog })),
+);
+const ProcessManagerModal = lazy(() =>
+	import("../ProcessManagerModal/ProcessManagerModal").then((module) => ({ default: module.ProcessManagerModal })),
+);
+const GeneratorsModal = lazy(() =>
+	import("../GeneratorsModal").then((module) => ({ default: module.GeneratorsModal })),
+);
+const RemoteQrDialog = lazy(() => import("../RemoteQrDialog").then((module) => ({ default: module.RemoteQrDialog })));
+const TaskQueuePanel = lazy(() => import("../TaskQueuePanel").then((module) => ({ default: module.TaskQueuePanel })));
 
 type GitOperations = ReturnType<typeof useGitOperations>;
 type ConfirmDialogs = ReturnType<typeof useConfirmDialog>;
@@ -165,17 +171,19 @@ function GitDialogOverlays(props: { contract: GitOverlaysContract }) {
 				onClose={git.closeCreate}
 				onCreate={git.onCreate}
 			/>
-			<CreateWorktreeDialog
-				visible={git.worktreeState() !== null}
-				suggestedName={git.worktreeState()?.suggestedName ?? ""}
-				existingBranches={git.worktreeState()?.existingBranches ?? []}
-				worktreeBranches={git.worktreeState()?.worktreeBranches ?? []}
-				worktreesDir={git.worktreeState()?.worktreesDir ?? ""}
-				baseRefs={git.worktreeState()?.baseRefs}
-				onGenerateName={git.onGenerateWorktreeName}
-				onClose={git.closeWorktree}
-				onCreate={git.onCreateWorktree}
-			/>
+			<Suspense>
+				<CreateWorktreeDialog
+					visible={git.worktreeState() !== null}
+					suggestedName={git.worktreeState()?.suggestedName ?? ""}
+					existingBranches={git.worktreeState()?.existingBranches ?? []}
+					worktreeBranches={git.worktreeState()?.worktreeBranches ?? []}
+					worktreesDir={git.worktreeState()?.worktreesDir ?? ""}
+					baseRefs={git.worktreeState()?.baseRefs}
+					onGenerateName={git.onGenerateWorktreeName}
+					onClose={git.closeWorktree}
+					onCreate={git.onCreateWorktree}
+				/>
+			</Suspense>
 			<RunCommandDialog
 				visible={git.runVisible()}
 				savedCommand={git.activeRunCommand() || ""}
@@ -285,7 +293,9 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 					context={props.panels.settingsContext()}
 				/>
 			</Suspense>
-			<TaskQueuePanel visible={props.panels.taskQueueVisible()} onClose={props.panels.closeTaskQueue} />
+			<Suspense>
+				<TaskQueuePanel visible={props.panels.taskQueueVisible()} onClose={props.panels.closeTaskQueue} />
+			</Suspense>
 			<ContextMenu
 				items={props.getContextMenuItems()}
 				x={props.contextMenu.position().x}
@@ -338,13 +348,19 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 			</Show>
 			<ConfirmationOverlays contract={props.confirmations} />
 			<Show when={props.utilities.processManagerVisible()}>
-				<ProcessManagerModal onClose={props.utilities.closeProcessManager} />
+				<Suspense>
+					<ProcessManagerModal onClose={props.utilities.closeProcessManager} />
+				</Suspense>
 			</Show>
 			<Show when={props.utilities.generatorsVisible()}>
-				<GeneratorsModal onClose={props.utilities.closeGenerators} />
+				<Suspense>
+					<GeneratorsModal onClose={props.utilities.closeGenerators} />
+				</Suspense>
 			</Show>
 			<Show when={props.utilities.remoteQrVisible()}>
-				<RemoteQrDialog onClose={props.utilities.closeRemoteQr} />
+				<Suspense>
+					<RemoteQrDialog onClose={props.utilities.closeRemoteQr} />
+				</Suspense>
 			</Show>
 			<WhatsNewDialog
 				visible={props.utilities.whatsNewVersion() !== null && (whatsNewEntry()?.highlights.length ?? 0) > 0}
