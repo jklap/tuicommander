@@ -2118,7 +2118,7 @@ describe("Sidebar", () => {
 			expect(container.querySelector(".branchIconMain")).not.toBeNull();
 		});
 
-		it("falls through to the default (link) icon for the main worktree on a non-main branch", () => {
+		it("falls through to the default (link) icon, with its own accent color, for the main worktree on a non-main branch", () => {
 			// iconShape() returns "branch" here, but the render switch has no "branch"
 			// case — it silently falls to `default`. This is the actual shipped
 			// behavior (not necessarily intentional), pinned down so a refactor can't
@@ -2126,10 +2126,14 @@ describe("Sidebar", () => {
 			const { container } = render(() => <BranchIcon isMainBranch={false} isMainWorktree={true} />);
 			const path = container.querySelector("svg path");
 			expect(path?.getAttribute("d")).toMatch(/^M11\.75 2\.5a\.75\.75/);
-			// colorClass() only checks isMainBranch, not isMainWorktree — a non-main
-			// branch colors as "worktree" (green) even while sitting on the main
-			// worktree, e.g. right after switching the main checkout off main.
-			expect(container.querySelector(".branchIconWorktree")).not.toBeNull();
+			// colorClass() checks isMainWorktree after isMainBranch — a non-main
+			// branch sitting in the main worktree (e.g. right after switching the
+			// main checkout off main) gets its own "branch" accent color, distinct
+			// from both the main branch's yellow and a separate linked worktree's
+			// green — those two are otherwise identical in color despite the
+			// different icon shape.
+			expect(container.querySelector(".branchIconBranch")).not.toBeNull();
+			expect(container.querySelector(".branchIconWorktree")).toBeNull();
 		});
 
 		it("renders the worktree-fork icon and worktree color for a linked worktree", () => {
