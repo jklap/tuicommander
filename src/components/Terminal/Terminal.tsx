@@ -14,7 +14,6 @@ import { type AwaitingInputType, isShellState, terminalsStore } from "../../stor
 import { toastsStore } from "../../stores/toasts";
 import { isTauri, subscribePty, type Unsubscribe } from "../../transport";
 import { onClickKeyDown } from "../../utils/a11y";
-import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { randomId } from "../../utils/randomId";
@@ -28,6 +27,7 @@ import { focusIsInsideOwnInput } from "./focusGuards";
 import { getSharedMetrics } from "./glyphCache";
 import { handleIntentEvent } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
+import { handleOsc52ClipboardStore } from "./osc52Clipboard";
 import s from "./Terminal.module.css";
 import { TerminalSearch, type TerminalSearchRef } from "./TerminalSearch";
 
@@ -728,9 +728,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			// per-byte parse hot path — this fires once per actual OSC 52 sequence.)
 			unlistenClipboardStore = await listen<string>(`pty-clipboard-store-${targetSessionId}`, (event) => {
 				if (!settingsStore.state.osc52Clipboard) return;
-				writeClipboard(event.payload).catch(() => {});
 				const name = terminalsStore.get(props.id)?.name || "terminal";
-				toastsStore.add("Clipboard updated", `by ${name}`, "info");
+				handleOsc52ClipboardStore(event.payload, name);
 			});
 			if (disposed) {
 				safeUnlisten(unlistenClipboardStore);

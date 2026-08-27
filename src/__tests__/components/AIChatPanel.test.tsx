@@ -1,5 +1,6 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ToolCallEntry } from "../../stores/conversationStore";
 
 const {
 	mockSubscribe,
@@ -12,6 +13,8 @@ const {
 	mockIsThinking,
 	mockMessages,
 	mockSendMessage,
+	mockToolCalls,
+	mockWriteClipboard,
 } = vi.hoisted(() => ({
 	mockSubscribe: vi.fn().mockResolvedValue(undefined),
 	mockUnsubscribe: vi.fn().mockResolvedValue(undefined),
@@ -23,7 +26,11 @@ const {
 	mockIsThinking: vi.fn(() => false),
 	mockMessages: vi.fn(() => [] as Array<{ role: string; content: string }>),
 	mockSendMessage: vi.fn(),
+	mockToolCalls: vi.fn(() => [] as ToolCallEntry[]),
+	mockWriteClipboard: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn().mockResolvedValue(undefined),
@@ -58,7 +65,6 @@ vi.mock("../../stores/conversationStore", () => ({
 		loadConversation: vi.fn(),
 		resetChatId: vi.fn(),
 		agentState: () => "idle",
-		toolCalls: () => [],
 		textChunks: () => null,
 		unrestricted: () => false,
 		setUnrestricted: vi.fn(),
@@ -72,6 +78,7 @@ vi.mock("../../stores/conversationStore", () => ({
 		reset: vi.fn(),
 		reasoningChunks: mockReasoningChunks,
 		isThinking: mockIsThinking,
+		toolCalls: mockToolCalls,
 	},
 }));
 
@@ -121,7 +128,8 @@ vi.mock("../../components/ui/ContentRenderer", () => ({
 	ContentRenderer: (props: { content: string }) => <div>{props.content}</div>,
 }));
 
-import { AIChatPanel } from "../../components/AIChatPanel/AIChatPanel";
+import { AIChatPanel, copyToClipboard } from "../../components/AIChatPanel/AIChatPanel";
+import { appLogger } from "../../stores/appLogger";
 
 describe("AIChatPanel lifecycle", () => {
 	beforeEach(() => {
@@ -292,5 +300,86 @@ describe("AIChatPanel terminal binding", () => {
 		typeAndSend(container, "hello from the main window");
 
 		expect(mockSendMessage).toHaveBeenCalledWith("hello from the main window", "sess-1");
+	});
+});
+
+describe("copyToClipboard", () => {
+	beforeEach(() => {
+		mockWriteClipboard.mockReset();
+	});
+
+	it("returns true when the clipboard write succeeds", async () => {
+		mockWriteClipboard.mockResolvedValue(undefined);
+		await expect(copyToClipboard("hello")).resolves.toBe(true);
+	});
+
+	it("returns false when the clipboard write is denied", async () => {
+		mockWriteClipboard.mockRejectedValue(new DOMException("denied", "NotAllowedError"));
+		await expect(copyToClipboard("hello")).resolves.toBe(false);
+	});
+});
+
+describe("AIChatPanel tool call result copy", () => {
+	const doneEntry: ToolCallEntry = {
+		status: "done",
+		toolName: "bash",
+		args: {},
+		startedAt: 0,
+		result: { success: true, output: "tool output text" },
+		duration: 42,
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		// The message list's entire body (including tool call cards) sits behind a
+		// `messages().length > 0 || isStreaming()` gate, with an empty-state fallback.
+		mockMessages.mockReturnValue([{ role: "assistant", content: "ran a tool" }]);
+		mockReasoningChunks.mockReturnValue("");
+		mockIsThinking.mockReturnValue(false);
+		mockToolCalls.mockReturnValue([doneEntry]);
+		mockWriteClipboard.mockReset();
+	});
+
+	afterEach(() => {
+		cleanup();
+	});
+
+	function expandAndGetCopyButton(container: HTMLElement): HTMLButtonElement {
+		const header = container.querySelector('[role="button"]') as HTMLElement;
+		header.click();
+		return container.querySelector('button[title="Copy result to clipboard"]') as HTMLButtonElement;
+	}
+
+	it("shows the copied state only once the clipboard write resolves", async () => {
+		vi.useFakeTimers();
+		try {
+			mockWriteClipboard.mockResolvedValue(undefined);
+			const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
+
+			const copyBtn = expandAndGetCopyButton(container);
+			copyBtn.click();
+
+			await vi.waitFor(() => expect(copyBtn.textContent).toBe("copied"), { timeout: 5000 });
+			expect(appLogger.error).not.toHaveBeenCalled();
+
+			// The "copied" state reverts after 1.5s — flush it so no timer leaks past this test.
+			await vi.advanceTimersByTimeAsync(1500);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not show the copied state and logs when the clipboard write is denied", async () => {
+		const err = new DOMException("Write permission denied.", "NotAllowedError");
+		mockWriteClipboard.mockRejectedValue(err);
+		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
+
+		const copyBtn = expandAndGetCopyButton(container);
+		copyBtn.click();
+
+		await vi.waitFor(() => {
+			expect(appLogger.error).toHaveBeenCalledWith("ai-chat", "Failed to copy tool output", err);
+		});
+		expect(copyBtn.textContent).toBe("copy");
 	});
 });

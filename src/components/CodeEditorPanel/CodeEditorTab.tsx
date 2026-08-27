@@ -33,7 +33,7 @@ import { referencesStore } from "../../stores/references";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
-import { writeClipboard } from "../../utils/clipboard";
+import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
 import { isAbsolutePath } from "../../utils/pathUtils";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
@@ -864,9 +864,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 						label: t("codeEditor.copyPath", "Copy Path"),
 						action: () => {
 							const fullPath = isExternal() ? props.filePath : `${fsRoot()}/${props.filePath}`;
-							writeClipboard(shortenHomePath(fullPath)).catch((err) =>
-								appLogger.error("app", "Failed to copy path", err),
-							);
+							copyPathToClipboard(shortenHomePath(fullPath));
 						},
 					},
 					{

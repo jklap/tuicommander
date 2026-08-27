@@ -2,6 +2,18 @@ import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
 
+const { mockWriteClipboard, mockAppLoggerError } = vi.hoisted(() => ({
+	mockWriteClipboard: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+	mockAppLoggerError: vi.fn(),
+}));
+
+vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
+
+vi.mock("../../stores/appLogger", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../stores/appLogger")>();
+	return { appLogger: { ...actual.appLogger, error: mockAppLoggerError } };
+});
+
 // Use vi.hoisted so these are available to vi.mock factories (which are hoisted)
 const { mockGitHubStatus, mockGitHubRefresh, mockGetActive, mockGetBranchPrData, mockIsGitRepo } = vi.hoisted(() => ({
 	mockGitHubStatus: vi.fn<() => unknown>(() => null),
@@ -162,6 +174,35 @@ describe("StatusBar", () => {
 		const statusInfo = container.querySelector(".info");
 		expect(statusInfo).not.toBeNull();
 		expect(statusInfo!.textContent).toBe("Ready");
+	});
+
+	describe("cwd copy", () => {
+		// This suite runs under vi.useFakeTimers(), so @testing-library's waitFor
+		// (which polls via real setTimeout) never wakes up — flush microtasks
+		// explicitly via advanceTimersByTimeAsync(0) instead, matching the
+		// convention used elsewhere for fake-timer suites (see flushRAF in
+		// useTerminalLifecycle.test.ts).
+		it("shows 'Copied!' after a successful clipboard write", async () => {
+			mockWriteClipboard.mockResolvedValueOnce(undefined);
+			const { container } = render(() => <StatusBar {...defaultProps} cwd="/repo/sub" />);
+
+			fireEvent.click(container.querySelector(".cwd")!);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(container.querySelector(".cwd")!.textContent).toContain("Copied!");
+		});
+
+		it("does not show 'Copied!' and logs an error when the clipboard write fails", async () => {
+			const err = new DOMException("Write permission denied.", "NotAllowedError");
+			mockWriteClipboard.mockRejectedValueOnce(err);
+			const { container } = render(() => <StatusBar {...defaultProps} cwd="/repo/sub" />);
+
+			fireEvent.click(container.querySelector(".cwd")!);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(mockAppLoggerError).toHaveBeenCalledWith("app", "Failed to copy cwd", err);
+			expect(container.querySelector(".cwd")!.textContent).not.toContain("Copied!");
+		});
 	});
 
 	it("calls onToggleMarkdown when MD button clicked", () => {
