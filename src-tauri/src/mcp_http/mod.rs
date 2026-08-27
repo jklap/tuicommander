@@ -1533,6 +1533,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route("/config/clear-caches", post(config_routes::clear_caches))
         .route(
+            "/scrollback",
+            delete(config_routes::clear_saved_scrollback_http),
+        )
+        .route(
             "/config/clear-repo-caches",
             post(config_routes::clear_repo_caches),
         )

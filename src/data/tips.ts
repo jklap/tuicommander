@@ -461,6 +461,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Restore Terminal Scrollback",
+		description:
+			"Enable Save terminal scrollback in Settings → Terminal to see a restored tab's recent output above a fresh prompt after relaunching — off by default since it's saved as plain text.",
+		shortcut: null,
+	},
+	{
 		feature: "Customize the UI Legend",
 		description:
 			"Settings → Appearance → UI Legend isn't just a reference — pick a color, icon, or animation for any status dot, badge, or symbol, and toggle whole groups (tab tint, PR badges, git status, diff stats) on or off.",
