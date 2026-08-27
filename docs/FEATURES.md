@@ -2522,7 +2522,7 @@ partial work, and their child processes may continue.
 
 ### 20.7 Frontend Bundle Splitting
 - Vite `manualChunks`: terminal, codemirror, diff-view, markdown as separate chunks
-- SettingsPanel, ActivityDashboard, HelpPanel lazy-loaded with `lazy()` + `Suspense`
+- SettingsPanel, ActivityDashboard, HelpPanel, TunnelsPanel, WorktreeManager, ErrorLogPanel, CreateWorktreeDialog, ProcessManagerModal, GeneratorsModal, RemoteQrDialog, TaskQueuePanel, ChangelogModal, AutofixDialog lazy-loaded with `lazy()` + `Suspense`
 - PTY read buffer increased from 4KB to 64KB for natural batching
 
 ### 20.8 Conditional Timers
