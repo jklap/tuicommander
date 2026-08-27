@@ -715,6 +715,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - The active Claude or Codex badge opens its matching dashboard; `Cmd+Shift+A` opens Claude Usage
 - **Rate Limits section:** Live utilization bars from Anthropic OAuth usage API
   - 5-Hour, 7-Day, 7-Day Opus, 7-Day Sonnet, 7-Day Cowork buckets
+  - Enterprise/spend-based plans don't populate those named buckets — falls back to the `extra_usage` figure those plans send instead, without masking a genuine bottleneck if a named bucket is populated but low
   - Color-coded bars: green < 70%, yellow 70-89%, red >= 90%
   - Reset countdown per bucket
 - **Usage Over Time chart:** SVG line chart of token usage over 7 days
