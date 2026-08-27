@@ -43,7 +43,7 @@ import { installFrameTimingDebugHook, isFrameTimingEnabled, recordFrameTiming, r
 import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } from "./glyphCache";
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
-import { filePathRegex, fileUrlRegex } from "./linkProvider";
+import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./suggestOverlay";
 import {
 	altSequenceFromCode,
@@ -1591,7 +1591,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	// --- Link detection ---
 
-	const WEB_URL_RE = /https?:\/\/[^\s<>"{}|\\^`[\]]+/g;
 	const FILE_PATH_RE = filePathRegex();
 	const FILE_URL_RE = fileUrlRegex();
 
@@ -1608,11 +1607,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		const text = rowToText(row);
 		const spans: { colStart: number; colEnd: number }[] = [];
-		let match: RegExpExecArray | null;
 
-		WEB_URL_RE.lastIndex = 0;
-		while ((match = WEB_URL_RE.exec(text)) !== null) {
-			spans.push({ colStart: match.index, colEnd: match.index + match[0].length });
+		for (const url of matchWebUrls(text)) {
+			spans.push({ colStart: url.index, colEnd: url.index + url.text.length });
 		}
 
 		// File paths: only underline if previously verified to exist
@@ -1750,12 +1747,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				checkedLogicalStarts.add(startRow);
 
 				// Web URLs — no path resolution needed.
-				WEB_URL_RE.lastIndex = 0;
-				let wm: RegExpExecArray | null;
-				while ((wm = WEB_URL_RE.exec(logicalText)) !== null) {
-					const matchEnd = wm.index + wm[0].length;
-					if (!spansMultipleRows(wm.index, matchEnd)) continue;
-					recordWrappedSpans(startRow, wm.index, matchEnd);
+				for (const url of matchWebUrls(logicalText)) {
+					const matchEnd = url.index + url.text.length;
+					if (!spansMultipleRows(url.index, matchEnd)) continue;
+					recordWrappedSpans(startRow, url.index, matchEnd);
 					anyFound = true;
 				}
 
@@ -1853,7 +1848,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (links === undefined) {
 			const fpRe = FILE_PATH_RE;
 			const fuRe = FILE_URL_RE;
-			const webUrlRe = WEB_URL_RE;
 			const fileMatches: { text: string; candidate: string; index: number }[] = [];
 			const urlMatches: { text: string; path: string; index: number }[] = [];
 			let match: RegExpExecArray | null;
@@ -1863,10 +1857,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// logical-line pass below so the FULL url is captured, not the
 			// truncated single-row prefix (e.g. http://127.0.0.1:8090 wrapping to
 			// ".../8" + "090" must not open as http://127.0.0.1:8).
-			webUrlRe.lastIndex = 0;
-			while ((match = webUrlRe.exec(rowText)) !== null) {
-				if (match.index + match[0].length >= rowText.length) continue;
-				urlMatches.push({ text: match[0], path: match[0], index: match.index });
+			for (const url of matchWebUrls(rowText)) {
+				if (url.index + url.text.length >= rowText.length) continue;
+				urlMatches.push({ text: url.text, path: url.text, index: url.index });
 			}
 
 			// File paths
@@ -1946,17 +1939,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// A web URL that reaches the row's right edge was deferred above (it may be
 		// soft-wrapped); force the logical-line pass so it's re-detected on the
 		// joined line even when the row happens not to be wrapped.
-		let rowHasEdgeUrl = false;
-		{
-			WEB_URL_RE.lastIndex = 0;
-			let em: RegExpExecArray | null;
-			while ((em = WEB_URL_RE.exec(rowText)) !== null) {
-				if (em.index + em[0].length >= rowText.length) {
-					rowHasEdgeUrl = true;
-					break;
-				}
-			}
-		}
+		const rowHasEdgeUrl = matchWebUrls(rowText).some((url) => url.index + url.text.length >= rowText.length);
 
 		// If no single-row link found, try logical line (joins soft-wrapped rows)
 		if (!hoveredLink && ref) {
@@ -1972,7 +1955,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					const logicalCol = colOffset + col;
 					const fuRe = FILE_URL_RE;
 					const fpRe = FILE_PATH_RE;
-					const webRe = WEB_URL_RE;
 					const logicalMatches: { text: string; candidate: string; index: number; isUrl: boolean }[] = [];
 
 					fuRe.lastIndex = 0;
@@ -1985,9 +1967,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						const idx = logicalText.indexOf(m[1], m.index);
 						logicalMatches.push({ text: m[1], candidate: m[1], index: idx, isUrl: false });
 					}
-					webRe.lastIndex = 0;
-					while ((m = webRe.exec(logicalText)) !== null) {
-						logicalMatches.push({ text: m[0], candidate: m[0], index: m.index, isUrl: true });
+					for (const url of matchWebUrls(logicalText)) {
+						logicalMatches.push({ text: url.text, candidate: url.text, index: url.index, isUrl: true });
 					}
 
 					for (const lm of logicalMatches) {
