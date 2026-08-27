@@ -99,6 +99,26 @@ describe("usePty", () => {
 			expect(sentBody.config.session_id).toBeTruthy();
 			expect(browserCreatedSessions.has(result.session_id)).toBe(true);
 		});
+
+		it("still pre-registers a session id when crypto.randomUUID is unavailable (non-secure-context remote clients)", async () => {
+			// `crypto.randomUUID` is only defined in a secure context (https or
+			// localhost). Remote clients reaching TUIC over plain http on a LAN
+			// address — exactly the browser-mode path under test — see it as
+			// undefined, so a bare call throws instead of pre-registering an id.
+			const realCrypto = globalThis.crypto;
+			vi.stubGlobal("crypto", {});
+			try {
+				const config = { cwd: "/tmp", rows: 24, cols: 80, shell: null };
+				const sessionId = await pty.createSession(config);
+
+				const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+				expect(sentBody.session_id).toBeTruthy();
+				expect(sessionId).toBe(sentBody.session_id);
+				expect(browserCreatedSessions.has(sessionId)).toBe(true);
+			} finally {
+				vi.stubGlobal("crypto", realCrypto);
+			}
+		});
 	});
 
 	describe("createSessionWithWorktree()", () => {

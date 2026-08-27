@@ -1,6 +1,7 @@
 import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { DEFAULT_WORD_SEPARATORS, settingsStore } from "../../../stores/settings";
 import { onClickKeyDown } from "../../../utils/a11y";
+import { randomId } from "../../../utils/randomId";
 import { resolveSmartSelectionRules } from "../../Terminal/smartSelectionDefaults";
 import type {
 	SmartSelectionAction,
@@ -41,7 +42,7 @@ function isValidRegex(pattern: string): boolean {
 
 function newRule(): SmartSelectionRule {
 	return {
-		id: crypto.randomUUID(),
+		id: randomId("sel-"),
 		name: "New rule",
 		regex: "",
 		precision: "normal",
