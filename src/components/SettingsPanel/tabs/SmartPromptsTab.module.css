@@ -308,3 +308,13 @@ button.varItem[data-control-layout="row"]:hover {
   .promptName { min-width: 0; overflow-wrap: anywhere; }
   .promptMeta { flex-wrap: wrap; }
 }
+
+/* Import / export toolbar */
+
+.transferRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
