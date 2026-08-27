@@ -35,6 +35,20 @@ no items left goes too. What stays open must carry its own stated reason.
 > loaded. That skew already cost the repo list once (first section below). The
 > 08-21 sections stay open until a `make dev` restart.
 
+## Atomic MCP managed-agent submission (2026-08-27, **Rust change — needs `make dev` restart**)
+
+The running backend cannot expose the new `session action=submit` schema or
+handler until it is rebuilt. Validation belongs to the Luna delivery pass; this
+manual item covers only the rebuilt live Codex integration.
+
+- [ ] After restarting `make dev`, create a throwaway managed Codex session,
+  wait for a confirmed idle composer, and issue one MCP
+  `session action=submit session_id=<id> input=/clear` call. The same call must
+  return either `status=acknowledged` with terminal-movement evidence or a
+  precise non-retryable timeout; it must not require a `status`/`output` poll,
+  leave `/clear` in the composer, or run it twice. Close only the throwaway
+  session after observing the result.
+
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 
 `drag::Image` has no "no image" variant, so an unresolvable `icons/drag-file.png`

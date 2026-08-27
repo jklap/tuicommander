@@ -545,6 +545,23 @@ Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 
 **Transactional peer injection:** Reserving an idle composer creates an ownership token before the PTY write. A failure proven to occur before any byte was written rolls the synthetic BUSY state back to the prior confirmed IDLE state and keeps the message queued. Once any byte may have escaped, failure is `delivery_uncertain`: the session remains conservatively BUSY, the authoritative inbox remains readable, and TUIC does not automatically retry into the terminal. Real output, a Working screen, or an explicit state marker invalidates rollback ownership so a late error cannot erase genuine activity. `session status` exposes the additive `delivery_uncertain` flag.
 
+**Atomic MCP submission reuses the same claim:** `session action=submit` first
+requires a confirmed-idle managed agent, empty `InputLineBuffer`, no confident
+dialog, and an empty shared injection FIFO. It never adds itself to that FIFO.
+The claim marks the session BUSY before any bytes; one PTY writer guard then
+spans Ctrl-U, optional bracketed paste, the 50 ms scheduling gap, and CR, so
+neither raw input nor a peer can splice the command. A peer arriving after the
+claim queues; a peer that claims first makes submission reject.
+
+After a complete write, the existing input bookkeeping records the original
+text and CR, clears slash mode, and advances `turn_epoch` once. The MCP handler
+waits up to a bounded deadline for `OutputRingBuffer.total_written` to move past
+the pre-Enter offset and labels the existing agent screen state when available.
+Local composer clearing, epoch mutation, and the PTY write itself cannot satisfy
+that acknowledgement. Movement proves the child terminal reacted, not that the
+application understood the command. A complete or uncertain write is never
+automatically retryable; only rejection/no-byte failure is.
+
 **User-composed commands share that gate:** the Compose panel's enqueue action
 (`enqueue_agent_command` / `POST /sessions/:id/queue`) appends to the same
 typed `pending_injections` FIFO as peer delivery rather than writing to the PTY,

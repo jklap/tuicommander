@@ -1,7 +1,7 @@
 # TUICommander Specification
 
 **Version:** 1.7.4
-**Last Updated:** 2026-07-11
+**Last Updated:** 2026-08-27
 
 ## Overview
 
@@ -112,6 +112,14 @@ PTY lifecycle mutations reach that snapshot through a lossless ordered lane;
 the broadcast event bus is reserved for reconnectable live consumers and cannot
 be the sole carrier of sticky SET/CLEAR state. Before any lifecycle evidence,
 the shell state is absent and a detected agent remains `starting`.
+
+MCP managed-agent commands use one `session action=submit` request. It claims a
+confirmed-idle empty composer, never queues, serializes the complete raw-mode
+payload through Enter, advances this same input FSM and epoch, and waits
+internally for bounded child terminal movement. The receipt distinguishes
+complete, not-started, and uncertain writes; only a provably not-started write
+is retry-safe. Terminal movement is acknowledgement evidence, not semantic
+application acceptance. `session action=input` remains raw and write-only.
 
 #### repositoriesStore
 Manages the list of git repositories.
@@ -308,6 +316,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Sidebar PR badges retain `#number` while showing lifecycle, conflict, CI, and review state
 - [x] Parallel agent orchestration
 - [x] Orchestrated PTY task descriptions with prompt-derived fallback metadata
+- [x] One-call MCP managed-agent submission with bounded terminal-movement receipt
 - [x] Expandable terminal Context bar for agent intent, orchestrator assignment, and last user prompt
 - [x] Font selection setting
 - [x] Tab bar with keyboard navigation

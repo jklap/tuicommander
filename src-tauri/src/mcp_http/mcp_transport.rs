@@ -904,7 +904,7 @@ fn build_mcp_instructions_for_mode(
         out.push_str("**Worktrees:** never `git worktree add/remove` — always use `repo action=worktree_create` / `worktree_remove` so TUIC tracks the worktree and can spawn a PTY inside.\n\n");
     } else {
         out.push_str("## Tools\n\n");
-        out.push_str("- `session` (PTY panes, tmux-equivalent): list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats\n");
+        out.push_str("- `session` (PTY panes, tmux-equivalent): list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats\n");
         out.push_str("- `agent` (AI peers + messaging): spawn, wait, detect, stats, metrics, register, list_peers, send, inbox\n");
         out.push_str("- `task` (poll a spawn that outlives a wait): get, cancel\n");
         out.push_str("- `repo` (repos, PRs, worktrees): list, active, prs, status, worktree_list, worktree_create, worktree_remove\n");
@@ -912,6 +912,12 @@ fn build_mcp_instructions_for_mode(
         out.push_str("- `plugin_dev_guide`: plugin authoring reference\n\n");
         out.push_str("**Worktrees:** always `repo action=worktree_create`/`worktree_remove` — never `git worktree add/remove` (TUIC must track them to spawn a PTY inside).\n\n");
         out.push_str("**UI feedback:** `ui action=toast` on task done/blocking error · `ui action=confirm` BEFORE destructive ops (rm -rf, git reset --hard, force push, DROP TABLE) · `ui action=tab` for structured output >20 lines · `ui action=screenshot id=<panel-id>` to see rendered output (Read the returned path).\n\n");
+    }
+
+    if collapse_tools {
+        out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+    } else {
+        out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
     }
 
     // ── Workflow (phase-grouped) ──────────────────────────────────────
@@ -1006,7 +1012,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 }
 
 const SESSION_ACTIONS: &str =
-    "list, create, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
+    "list, create, submit, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
 const REPO_ACTIONS: &str =
@@ -1037,14 +1043,14 @@ fn native_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
-                "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume, wait)" },
+                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
+                "session_id": { "type": "string", "description": "Session ID (required for submit, input, output, resize, close, pause, resume, wait)" },
                 "until": { "type": "string", "description": "Wait target: 'idle' or 'exited' (action=wait, default idle)" },
-                "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
-                "input": { "type": "string", "description": "Raw text to write (action=input)" },
-                "pty_description": { "type": ["string", "null"], "description": "Short orchestrator-supplied description shown above the PTY (action=input)" },
+                "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "action=submit: acknowledgement wait, clamped 250-10000ms, default 3000. action=wait: max wait, default 60000; values at or above 300000 run as 295000." },
+                "input": { "type": "string", "description": "Non-empty command (action=submit) or raw text (action=input)" },
+                "pty_description": { "type": ["string", "null"], "description": "Short orchestrator-supplied description shown above the PTY (action=submit or input)" },
                 "special_key": { "type": "string", "description": "Special key: enter, tab, ctrl+c, ctrl+d, ctrl+z, ctrl+l, ctrl+a, ctrl+e, ctrl+k, ctrl+u, ctrl+w, ctrl+r, up, down, left, right, home, end, backspace, delete, escape (action=input)" },
                 "rows": { "type": "integer", "description": "Terminal rows (action=create or resize)" },
                 "cols": { "type": "integer", "description": "Terminal cols (action=create or resize)" },
@@ -1692,9 +1698,10 @@ async fn handle_mcp_tool_call_with_context(
     match name {
         "session" => {
             // Executing / destructive session actions carry the same loopback
-            // restriction as `agent spawn`: `input` writes raw bytes to a PTY's stdin
+            // restriction as `agent spawn`: `submit` executes a managed-agent
+            // composer command, while `input` writes raw bytes to a PTY's stdin
             // (arbitrary command execution on a shell session, unfiltered context
-            // injection on an agent session), `create`/`kill`/`close` spawn or
+            // injection on an agent session). `create`/`kill`/`close` spawn or
             // destroy sessions, and `pause`/`resume` halt/resume output buffering
             // (a remote `pause` on any session is a DoS). A non-loopback MCP client
             // (authenticated remote, or admitted via lan_auth_bypass) must not reach
@@ -1706,6 +1713,12 @@ async fn handle_mcp_tool_call_with_context(
                 // Read-only blocking wait — needs the async runtime for its poll
                 // loop, so it can't live in the sync handle_session.
                 handle_session_wait(state, args).await
+            } else if action == "submit" && !addr.ip().is_loopback() {
+                serde_json::json!({
+                    "error": "This session action is restricted to localhost connections"
+                })
+            } else if action == "submit" {
+                handle_session_submit(state, args).await
             } else if matches!(
                 action,
                 "create" | "input" | "kill" | "close" | "pause" | "resume"
@@ -1924,6 +1937,257 @@ async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) ->
     // a spurious timed_out response.
     let met = woke || session_wait_met(state, &session_id, until);
     session_wait_response(state, &session_id, until, met)
+}
+
+const SUBMIT_ACK_DEFAULT_MS: u64 = 3_000;
+const SUBMIT_ACK_MIN_MS: u64 = 250;
+const SUBMIT_ACK_MAX_MS: u64 = 10_000;
+const SUBMIT_ACK_CHECK_MS: u64 = 10;
+
+struct StartedSubmission {
+    submission_id: String,
+    session_id: String,
+    turn_epoch: u64,
+    acknowledgement_offset: u64,
+    timeout_ms: u64,
+}
+
+enum BeginSubmission {
+    Response(serde_json::Value),
+    Started(StartedSubmission),
+}
+
+fn submission_turn_epoch(state: &AppState, session_id: &str) -> u64 {
+    state
+        .session_states
+        .get(session_id)
+        .map(|session| session.turn_epoch)
+        .unwrap_or(0)
+}
+
+fn submission_output_offset(state: &AppState, session_id: &str) -> Option<u64> {
+    state
+        .output_buffers
+        .get(session_id)
+        .map(|buffer| buffer.lock().total_written)
+}
+
+fn begin_session_submit(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+) -> BeginSubmission {
+    let session_id = match require_session_id(args, "submit") {
+        Ok(id) => id.to_string(),
+        Err(error) => return BeginSubmission::Response(error),
+    };
+    let text = match args["input"].as_str() {
+        Some(text) if !text.is_empty() => text,
+        _ => {
+            return BeginSubmission::Response(serde_json::json!({
+                "error": "Action 'submit' requires non-empty 'input'"
+            }));
+        }
+    };
+    let submission_id = Uuid::new_v4().to_string();
+    let turn_epoch = submission_turn_epoch(state, &session_id);
+    if !state.sessions.contains_key(&session_id) {
+        return BeginSubmission::Response(serde_json::json!({
+            "status": "rejected",
+            "submission_id": submission_id,
+            "submitted": false,
+            "write_state": "not_started",
+            "acknowledged": false,
+            "retry_safe": true,
+            "reason": "session_not_found",
+            "turn_epoch": turn_epoch,
+            "composer_state": "unknown",
+        }));
+    }
+    if submission_output_offset(state, &session_id).is_none() {
+        return BeginSubmission::Response(serde_json::json!({
+            "status": "rejected",
+            "submission_id": submission_id,
+            "submitted": false,
+            "write_state": "not_started",
+            "acknowledged": false,
+            "retry_safe": true,
+            "reason": "observation_unavailable",
+            "turn_epoch": turn_epoch,
+            "composer_state": "unknown",
+        }));
+    }
+
+    match crate::pty::write_agent_submission_to_pty(state, &session_id, text) {
+        crate::pty::AgentSubmissionWrite::Rejected {
+            reason,
+            composer_state,
+        } => BeginSubmission::Response(serde_json::json!({
+            "status": "rejected",
+            "submission_id": submission_id,
+            "submitted": false,
+            "write_state": "not_started",
+            "acknowledged": false,
+            "retry_safe": true,
+            "reason": reason,
+            "turn_epoch": submission_turn_epoch(state, &session_id),
+            "composer_state": composer_state,
+        })),
+        crate::pty::AgentSubmissionWrite::Failed(detail) => {
+            BeginSubmission::Response(serde_json::json!({
+                "status": "write_failed",
+                "submission_id": submission_id,
+                "submitted": false,
+                "write_state": "not_started",
+                "acknowledged": false,
+                "retry_safe": true,
+                "reason": "pty_write_failed",
+                "detail": detail,
+                "turn_epoch": submission_turn_epoch(state, &session_id),
+                "composer_state": "empty",
+            }))
+        }
+        crate::pty::AgentSubmissionWrite::Uncertain(detail) => {
+            BeginSubmission::Response(serde_json::json!({
+                "status": "write_uncertain",
+                "submission_id": submission_id,
+                "submitted": false,
+                "write_state": "uncertain",
+                "acknowledged": false,
+                "retry_safe": false,
+                "reason": "pty_write_uncertain",
+                "detail": detail,
+                "turn_epoch": submission_turn_epoch(state, &session_id),
+                "composer_state": "unknown",
+            }))
+        }
+        crate::pty::AgentSubmissionWrite::Complete {
+            acknowledgement_offset,
+        } => {
+            // Reuse the same FSM path as raw MCP/HTTP input. The text and CR are
+            // bookkeeping boundaries only; the framed PTY bytes were written once
+            // above. This advances the authoritative turn epoch exactly once.
+            crate::pty_capture::record_input(&session_id, text.as_bytes());
+            crate::pty_capture::record_input(&session_id, b"\r");
+            super::session::apply_input_bookkeeping(state, &session_id, text);
+            super::session::apply_input_bookkeeping(state, &session_id, "\r");
+            let timeout_ms = args["timeout_ms"]
+                .as_u64()
+                .unwrap_or(SUBMIT_ACK_DEFAULT_MS)
+                .clamp(SUBMIT_ACK_MIN_MS, SUBMIT_ACK_MAX_MS);
+            BeginSubmission::Started(StartedSubmission {
+                submission_id,
+                session_id: session_id.clone(),
+                turn_epoch: submission_turn_epoch(state, &session_id),
+                acknowledgement_offset,
+                timeout_ms,
+            })
+        }
+    }
+}
+
+async fn handle_session_submit(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+) -> serde_json::Value {
+    let pty_description = match parse_pty_description(args) {
+        Ok(description) => description,
+        Err(error) => return error,
+    };
+    let blocking_state = Arc::clone(state);
+    let blocking_args = args.clone();
+    let begin = match tokio::task::spawn_blocking(move || {
+        begin_session_submit(&blocking_state, &blocking_args)
+    })
+    .await
+    {
+        Ok(begin) => begin,
+        Err(error) => {
+            return serde_json::json!({
+                "error": format!("tool handler failed to complete: {error}")
+            });
+        }
+    };
+    let started = match begin {
+        BeginSubmission::Response(response) => return response,
+        BeginSubmission::Started(started) => started,
+    };
+    apply_pty_description(state, &started.session_id, pty_description);
+
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_millis(started.timeout_ms);
+    loop {
+        let current_epoch = submission_turn_epoch(state, &started.session_id);
+        if current_epoch != started.turn_epoch {
+            return serde_json::json!({
+                "status": "superseded",
+                "submission_id": started.submission_id,
+                "submitted": true,
+                "write_state": "complete",
+                "acknowledged": false,
+                "retry_safe": false,
+                "reason": "turn_epoch_changed",
+                "turn_epoch": started.turn_epoch,
+                "current_turn_epoch": current_epoch,
+                "composer_state": "cleared",
+            });
+        }
+        if let Some(output_offset) = submission_output_offset(state, &started.session_id)
+            && output_offset > started.acknowledgement_offset
+        {
+            return serde_json::json!({
+                "status": "acknowledged",
+                "submission_id": started.submission_id,
+                "submitted": true,
+                "write_state": "complete",
+                "acknowledged": true,
+                "retry_safe": false,
+                "turn_epoch": started.turn_epoch,
+                "composer_state": "cleared",
+                "acknowledgement": {
+                    "kind": "terminal_movement",
+                    "screen_state": crate::pty::agent_submission_ack_kind(state, &started.session_id),
+                    "output_offset": output_offset,
+                },
+            });
+        }
+        if !state.sessions.contains_key(&started.session_id) {
+            let mut response = serde_json::json!({
+                "status": "session_ended",
+                "submission_id": started.submission_id,
+                "submitted": true,
+                "write_state": "complete",
+                "acknowledged": false,
+                "retry_safe": false,
+                "reason": "session_ended_before_ack",
+                "turn_epoch": started.turn_epoch,
+                "composer_state": "unknown",
+            });
+            if let Some(exit_code) = state.exit_codes.get(&started.session_id) {
+                response["exit_code"] = serde_json::json!(*exit_code.value());
+            }
+            return response;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return serde_json::json!({
+                "status": "ack_timeout",
+                "submission_id": started.submission_id,
+                "submitted": true,
+                "write_state": "complete",
+                "acknowledged": false,
+                "retry_safe": false,
+                "reason": "no_terminal_movement_after_enter",
+                "turn_epoch": started.turn_epoch,
+                "composer_state": "cleared",
+                "timeout_ms": started.timeout_ms,
+                "output_offset": submission_output_offset(state, &started.session_id),
+            });
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(
+            SUBMIT_ACK_CHECK_MS.min((deadline - now).as_millis().max(1) as u64),
+        ))
+        .await;
+    }
 }
 
 /// `agent action=wait` — block until the caller's inbox has a message newer than
@@ -2326,6 +2590,8 @@ fn handle_session(
                 if let Err(e) = crate::pty::write_agent_command_to_pty(state, session_id, text) {
                     return serde_json::json!({"error": e});
                 }
+                crate::pty_capture::record_input(session_id, text.as_bytes());
+                crate::pty_capture::record_input(session_id, b"\r");
                 super::session::apply_input_bookkeeping(state, session_id, text);
                 super::session::apply_input_bookkeeping(state, session_id, "\r");
                 apply_pty_description(state, session_id, pty_description);
@@ -2357,6 +2623,9 @@ fn handle_session(
             apply_pty_description(state, session_id, pty_description);
             serde_json::json!({"ok": true})
         }
+        "submit" => serde_json::json!({
+            "error": "Action 'submit' requires the asynchronous MCP dispatch path"
+        }),
         "output" => {
             let session_id = match require_session_id(args, "output") {
                 Ok(id) => id,
@@ -6558,7 +6827,9 @@ mod tests {
 
     #[test]
     fn only_genuinely_blocking_session_and_agent_actions_are_offloaded() {
-        for action in ["list", "output", "status", "pause", "resume", "unknown"] {
+        for action in [
+            "list", "submit", "output", "status", "pause", "resume", "unknown",
+        ] {
             assert!(!session_action_requires_blocking_pool(action), "{action}");
         }
         for action in ["create", "input", "kill", "close", "process_stats"] {
@@ -7077,6 +7348,328 @@ mod tests {
                 shell: "true".to_string(),
             }),
         );
+    }
+
+    #[cfg(unix)]
+    struct SubmissionRecordingWriter {
+        bytes: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    #[cfg(unix)]
+    impl std::io::Write for SubmissionRecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Install the smallest raw-mode adapter around the production submission
+    /// state machine: a recording PTY writer plus the real composer, lifecycle,
+    /// turn-epoch, queue, and child-output ring owned by AppState.
+    #[cfg(unix)]
+    fn install_atomic_submit_test_session(
+        state: &Arc<AppState>,
+        session_id: &str,
+    ) -> Arc<std::sync::Mutex<Vec<u8>>> {
+        insert_managed_test_session(state, session_id, "/tmp");
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer: Box<dyn std::io::Write + Send> = Box::new(SubmissionRecordingWriter {
+            bytes: Arc::clone(&bytes),
+        });
+        state.sessions.get(session_id).unwrap().lock().writer =
+            Arc::new(parking_lot::Mutex::new(writer));
+        state.session_states.insert(
+            session_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        let mut silence = crate::pty::SilenceState::new();
+        silence.confirm_idle();
+        state.silence_states.insert(
+            session_id.to_string(),
+            Arc::new(parking_lot::Mutex::new(silence)),
+        );
+        state.output_buffers.insert(
+            session_id.to_string(),
+            parking_lot::Mutex::new(OutputRingBuffer::new(4096)),
+        );
+        bytes
+    }
+
+    #[cfg(unix)]
+    async fn submit_with_child_movement(
+        state: &Arc<AppState>,
+        session_id: &str,
+        input: &str,
+        bytes: &Arc<std::sync::Mutex<Vec<u8>>>,
+    ) -> serde_json::Value {
+        let call_state = Arc::clone(state);
+        let args = serde_json::json!({
+            "action": "submit",
+            "session_id": session_id,
+            "input": input,
+            "timeout_ms": 1_000,
+        });
+        let call = tokio::spawn(async move {
+            handle_mcp_tool_call(&call_state, loopback_addr(), "session", &args, None).await
+        });
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if bytes.lock().unwrap().last() == Some(&b'\r') {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "submit did not finish its framed PTY write"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        state
+            .output_buffers
+            .get(session_id)
+            .unwrap()
+            .lock()
+            .write(b"child moved");
+        call.await.unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_submit_returns_acknowledged_receipt_in_the_same_call() {
+        let state = test_state();
+        let session_id = "submit-ack";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+
+        let response =
+            submit_with_child_movement(&state, session_id, "inspect the repository", &bytes).await;
+
+        assert_eq!(response["status"], "acknowledged");
+        assert_eq!(response["submitted"], true);
+        assert_eq!(response["write_state"], "complete");
+        assert_eq!(response["acknowledged"], true);
+        assert_eq!(response["retry_safe"], false);
+        assert_eq!(response["turn_epoch"], 1);
+        assert_eq!(response["composer_state"], "cleared");
+        assert_eq!(response["acknowledgement"]["kind"], "terminal_movement");
+        assert_eq!(response["acknowledgement"]["screen_state"], "terminal_output");
+        assert_eq!(response["acknowledgement"]["output_offset"], 11);
+        Uuid::parse_str(response["submission_id"].as_str().unwrap()).unwrap();
+        let keys: std::collections::BTreeSet<_> =
+            response.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            std::collections::BTreeSet::from([
+                "acknowledged",
+                "acknowledgement",
+                "composer_state",
+                "retry_safe",
+                "status",
+                "submission_id",
+                "submitted",
+                "turn_epoch",
+                "write_state",
+            ])
+        );
+        assert_eq!(
+            bytes.lock().unwrap().as_slice(),
+            b"\x15inspect the repository\r"
+        );
+        assert_eq!(
+            state
+                .input_buffers
+                .get(session_id)
+                .unwrap()
+                .lock()
+                .content(),
+            ""
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_submit_write_only_cannot_false_positive_and_times_out() {
+        let state = test_state();
+        let session_id = "submit-timeout";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+
+        let response = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({
+                "action": "submit",
+                "session_id": session_id,
+                "input": "no child output",
+                "timeout_ms": 1,
+            }),
+            None,
+        )
+        .await;
+
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15no child output\r");
+        assert_eq!(
+            state
+                .output_buffers
+                .get(session_id)
+                .unwrap()
+                .lock()
+                .total_written,
+            0,
+            "TUICommander's own write must not move the child-output receipt boundary"
+        );
+        assert_eq!(response["status"], "ack_timeout");
+        assert_eq!(response["submitted"], true);
+        assert_eq!(response["acknowledged"], false);
+        assert_eq!(response["retry_safe"], false);
+        assert_eq!(response["reason"], "no_terminal_movement_after_enter");
+        assert_eq!(response["timeout_ms"], SUBMIT_ACK_MIN_MS);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_submit_rejects_a_preexisting_partial_composer() {
+        let state = test_state();
+        let session_id = "submit-partial";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+        let mut composer = crate::input_line_buffer::InputLineBuffer::new();
+        composer.feed("Boss draft");
+        state.input_buffers.insert(
+            session_id.to_string(),
+            parking_lot::Mutex::new(composer),
+        );
+
+        let response = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({
+                "action": "submit",
+                "session_id": session_id,
+                "input": "replacement",
+            }),
+            None,
+        )
+        .await;
+
+        assert_eq!(response["status"], "rejected");
+        assert_eq!(response["submitted"], false);
+        assert_eq!(response["write_state"], "not_started");
+        assert_eq!(response["retry_safe"], true);
+        assert_eq!(response["reason"], "partial_composer");
+        assert_eq!(response["composer_state"], "partial");
+        assert!(bytes.lock().unwrap().is_empty());
+        assert_eq!(
+            state
+                .input_buffers
+                .get(session_id)
+                .unwrap()
+                .lock()
+                .content(),
+            "Boss draft"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_submit_slash_clear_uses_the_same_receipt_and_fsm() {
+        let state = test_state();
+        let session_id = "submit-clear";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+
+        let response = submit_with_child_movement(&state, session_id, "/clear", &bytes).await;
+
+        assert_eq!(response["status"], "acknowledged");
+        assert_eq!(response["turn_epoch"], 1);
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15/clear\r");
+        assert!(
+            !state
+                .slash_mode
+                .get(session_id)
+                .unwrap()
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
+        assert_eq!(
+            state
+                .input_buffers
+                .get(session_id)
+                .unwrap()
+                .lock()
+                .content(),
+            ""
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_input_remains_a_raw_write_only_compatibility_surface() {
+        let state = test_state();
+        let session_id = "input-compat";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({
+                "action": "input",
+                "session_id": session_id,
+                "input": "literal draft",
+            }),
+            None,
+        );
+
+        assert_eq!(response, serde_json::json!({"ok": true}));
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"literal draft");
+        assert_eq!(
+            state
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .turn_epoch,
+            0
+        );
+        assert_eq!(
+            state
+                .input_buffers
+                .get(session_id)
+                .unwrap()
+                .lock()
+                .content(),
+            "literal draft"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_submit_is_rejected_before_io_for_non_loopback_callers() {
+        let state = test_state();
+
+        let response = handle_mcp_tool_call(
+            &state,
+            non_loopback_addr(),
+            "session",
+            &serde_json::json!({
+                "action": "submit",
+                "session_id": "remote-target",
+                "input": "must not run",
+            }),
+            None,
+        )
+        .await;
+
+        assert!(
+            response["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("restricted to localhost"))
+        );
+        assert!(state.sessions.is_empty());
     }
 
     #[test]
@@ -11474,6 +12067,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn initialize_instructions_pin_the_one_call_submit_rule_in_both_modes() {
+        let state = test_state();
+        let classic = build_mcp_instructions_for_mode(&state, None, false);
+        let collapsed = build_mcp_instructions_for_mode(&state, None, true);
+
+        assert!(classic.contains(
+            "**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll."
+        ));
+        assert!(collapsed.contains(
+            "**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll."
+        ));
+        assert!(!classic.contains("text then"));
+        assert!(!collapsed.contains("status after"));
+    }
+
     // ---- Swarm Layer 4: MCP tool descriptions (#1165-b124) -------------------
 
     #[test]
@@ -11496,6 +12105,47 @@ mod tests {
         assert!(
             action_enum.contains("status"),
             "session action enum must include status"
+        );
+    }
+
+    #[test]
+    fn session_submit_schema_pins_receipt_and_raw_input_semantics() {
+        let defs = native_tool_definitions();
+        let session = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "session")
+            .unwrap();
+        let description = session["description"].as_str().unwrap();
+        let properties = &session["inputSchema"]["properties"];
+
+        assert!(description.contains(
+            "Use one call; never split text and Enter; never poll after it."
+        ));
+        assert!(description.contains(
+            "Acknowledgement means child terminal movement after Enter, not semantic application acceptance."
+        ));
+        assert!(description.contains(
+            "composer_state (tracked InputLineBuffer, not application state)"
+        ));
+        assert!(description.contains(
+            "Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing."
+        ));
+        assert!(description.contains(
+            "input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only."
+        ));
+        assert_eq!(
+            properties["action"]["description"],
+            "One of: list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats"
+        );
+        assert_eq!(
+            properties["input"]["description"],
+            "Non-empty command (action=submit) or raw text (action=input)"
+        );
+        assert_eq!(
+            properties["timeout_ms"]["description"],
+            "action=submit: acknowledgement wait, clamped 250-10000ms, default 3000. action=wait: max wait, default 60000; values at or above 300000 run as 295000."
         );
     }
 

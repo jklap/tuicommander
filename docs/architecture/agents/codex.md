@@ -273,15 +273,42 @@ Not observed: `/stats`, `/status` (CC-specific).
 
 ---
 
-## Known Issues
+## Command Submission
 
-### Enter key handling
+Codex uses a raw-mode composer where a carriage return that arrives with the
+prompt payload, or too soon after it, can be interpreted as a newline instead
+of submitting the turn. Managed automation must use one atomic MCP call:
 
-Codex likely uses the kitty keyboard protocol to distinguish Enter
-(submit) from Enter (newline in multiline prompt). The TUICommander
-`session action=input special_key=enter` sends `\r` which Codex may
-interpret as newline. Workaround: send text and Enter in separate
-calls, but this is unreliable for multiline content.
+```json
+{
+  "action": "submit",
+  "session_id": "<session-id>",
+  "input": "/clear"
+}
+```
+
+`submit` claims a confirmed-idle, empty managed-agent composer; holds the PTY
+writer across Ctrl-U, optional bracketed paste, the 50 ms scheduling gap, and
+the final carriage return; advances the normal input FSM and turn epoch; then
+waits internally for child terminal movement. The same response returns
+`submission_id`, `submitted`, `write_state`, `acknowledged`, `retry_safe`,
+`turn_epoch`, and `composer_state` plus the acknowledgement evidence or a
+precise failure reason. No follow-up `status` or `output` poll is part of the
+protocol.
+
+Acknowledgement proves terminal movement after Enter, not that Codex understood
+the command or completed the requested work. A completed write that produces no
+movement before the bounded deadline returns `ack_timeout` and
+`retry_safe:false`; automatic replay could duplicate an active command.
+
+The action never queues. A partial composer, interactive dialog, busy or
+unconfirmed agent, or older queued message rejects before writing. Once the
+claim is held, a concurrent peer message queues behind the submission and
+cannot splice into it. Slash commands such as `/clear` use the same contract.
+
+`session action=input` remains the backward-compatible raw text/key surface.
+Its `{ "ok": true }` means PTY write only. Use it to prefill or answer
+interactive controls; do not split command text and Enter into separate calls.
 
 ### ask_user_question tool (proposed)
 

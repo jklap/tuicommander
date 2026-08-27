@@ -52,6 +52,10 @@
 - [State Management](./architecture/state-management.md)
 - [Terminal State Machine](./architecture/terminal-state-machine.md)
 
+## Architecture Decisions
+
+- [Atomic MCP Agent Submission](./decisions/2026-08-27-atomic-mcp-agent-submission.md)
+
 ## Agent Detection
 
 - [Agent UI Analysis](./architecture/agent-ui-analysis.md)
