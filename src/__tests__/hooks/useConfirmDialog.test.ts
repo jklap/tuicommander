@@ -298,6 +298,37 @@ describe("useConfirmDialog", () => {
 			dialog.handleClose();
 			expect(await promise).toBe(false);
 		});
+
+		it("mentions the safe local-branch delete when deleteBranch is true", async () => {
+			const promise = dialog.confirmRemoveWorktree(
+				"feature-x",
+				{ dirtyFiles: 0, removalSafety: "safe" } as never,
+				true,
+			);
+
+			expect(dialog.dialogState()?.message).toContain("Git will safely delete the local branch");
+			expect(dialog.dialogState()?.message).not.toContain("will be kept.");
+
+			dialog.handleClose();
+			await promise;
+		});
+
+		// Regression: the dialog used to unconditionally claim the local branch
+		// would be deleted, even when the repo's "Delete local branch when
+		// removing worktree" setting was off.
+		it("says the local branch is kept when deleteBranch is false", async () => {
+			const promise = dialog.confirmRemoveWorktree(
+				"feature-x",
+				{ dirtyFiles: 0, removalSafety: "safe" } as never,
+				false,
+			);
+
+			expect(dialog.dialogState()?.message).toContain("The local branch will be kept.");
+			expect(dialog.dialogState()?.message).not.toContain("safely delete the local branch");
+
+			dialog.handleClose();
+			await promise;
+		});
 	});
 
 	describe("confirmDirtyWorktreeCleanup()", () => {
