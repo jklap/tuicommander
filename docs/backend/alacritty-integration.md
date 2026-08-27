@@ -77,6 +77,12 @@ rows marked with `WRAPLINE`, trims terminal padding, and then removes only
 coherent multi-line Claude `NBSP NBSP ▎` visual gutters. This normalization is
 outside the Alacritty fork and is shared by desktop IPC and HTTP clients.
 
+Atomic MCP agent-submission receipts require no Alacritty patch. The receipt
+boundary is the raw child-output ring offset captured before Enter; after that
+offset moves, the current agent screen adapter may classify the already-built
+grid as working, ready, or interrupted. Neither grid mutation nor local input
+bookkeeping is itself an acknowledgement.
+
 ## Notable forks and patches (external)
 
 ### Zed Editor (zed-industries/alacritty)

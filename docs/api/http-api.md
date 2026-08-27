@@ -372,6 +372,13 @@ Content-Type: application/json
 
 Single endpoint for all MCP JSON-RPC requests (initialize, tools/list, tools/call). Returns JSON-RPC responses directly in the HTTP response body. Session ID returned via `Mcp-Session-Id` header on initialize.
 
+The native `session` tool includes `action=submit` for a managed-agent command
+and bounded terminal-movement receipt in that same JSON-RPC response. It is
+loopback-only, never queues, and rejects a busy/dialog/partial composer before
+writing. `action=input` and `POST /sessions/:id/write` remain raw write-only
+surfaces; neither returns submission acknowledgement. See
+[MCP & HTTP Server](../backend/mcp-http.md#mcp-tool-session-atomic-submission).
+
 ```
 GET /mcp          → 405 Method Not Allowed
 DELETE /mcp       → Ends MCP session (pass Mcp-Session-Id header)

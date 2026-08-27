@@ -40,6 +40,7 @@
 - Terminals are never unmounted — hidden tabs stay alive with full scroll history
 - Session persistence across app restarts (lazy restore on branch click); only agent tabs are restored — plain shell tabs are discarded and a fresh terminal is spawned instead
 - Orchestrated PTYs show a task description above the terminal alongside the last submitted user prompt; MCP callers can supply `pty_description`, while spawn-only orchestration schemas fall back to a compact summary of the task prompt without changing agent launch or prompt-delivery behavior
+- Managed-agent automation submits a command with one MCP `session action=submit` call: an idle empty composer is claimed atomically, raw-mode text/Enter framing cannot interleave with another writer, and the same response reports terminal acknowledgement or a precise non-retryable timeout. The action never queues or overwrites a draft; raw `session action=input` remains write-only compatibility
 - Agent session restore shows a clickable banner ("Agent session was active — click to resume") instead of auto-injecting the resume command; Space/Enter resumes, other keys dismiss
 - Foreground process detection (macOS: `libproc`, Windows: `CreateToolhelp32Snapshot`)
 - PTY environment: `TERM=xterm-256color`, `COLORTERM=truecolor`, `LANG=en_US.UTF-8`. A parent `NO_COLOR` is stripped (`sanitize_pty_parent_env`) so a TUICommander launched from Codex does not leak that opt-out into independent sessions; per-command flags and per-agent environment can still request monochrome deliberately

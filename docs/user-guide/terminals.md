@@ -265,6 +265,20 @@ The Compose panel can leave work for an agent without steering its current turn:
 
 Queueing is available only for detected agent sessions, not plain shells.
 
+### Submitting through MCP
+
+Automation that must start a new managed-agent turn uses one
+`session action=submit session_id=<id> input=<command>` call. TUICommander
+refuses busy agents, interactive dialogs, partial drafts, and sessions with
+older queued work instead of steering or overwriting them. The same response
+reports whether the complete PTY write occurred and whether the child terminal
+moved after Enter; no follow-up polling call is required. Terminal movement
+does not mean the agent understood the command or completed the work. If a
+complete write times out without movement, do not replay it automatically.
+
+`session action=input` remains available for raw text, prefilling, and
+interactive keys. Its `ok:true` reports only that bytes were written.
+
 ### Session Restore
 
 On restart, only terminals that had an active agent session are restored — plain shell tabs are discarded and a fresh terminal is spawned. For restored agent tabs, a clickable banner appears: "Agent session was active — click to resume." Clicking the banner sends the agent's resume command. Press **Escape** or click the **x** button to dismiss the banner without resuming.

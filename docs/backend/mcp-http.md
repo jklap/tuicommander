@@ -286,7 +286,7 @@ Eight native tools, organized by domain. Two (`config`, `debug`) are hidden by d
 
 | Tool | Actions | Default |
 |------|---------|---------|
-| `session` | list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
+| `session` | list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
 | `repo` | list, active, prs, status, worktree_list, worktree_create, worktree_remove | Enabled |
@@ -459,6 +459,42 @@ import { registerDebugSnapshot } from "./debugRegistry";
 registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 ```
 
+### MCP Tool: `session` Atomic Submission
+
+`session action=submit session_id=<id> input=<command>` is the managed-agent
+command surface. It accepts only a confirmed-idle agent with an empty composer,
+never queues, and keeps the PTY writer locked across Ctrl-U, bracketed paste for
+multiline input, the 50 ms raw-mode scheduling gap, and Enter. The existing
+`InputLineBuffer`, slash-mode tracking, submitted-input lifecycle, and
+`turn_epoch` advance exactly once after the full write.
+
+The handler then waits internally for child output beyond the offset captured
+immediately before Enter. One response returns:
+
+| Field | Meaning |
+|-------|---------|
+| `submission_id` | UUID for this call |
+| `submitted` / `write_state` | Whether the complete framed write finished; `uncertain` means retry may duplicate bytes |
+| `acknowledged` | Child terminal output moved after Enter |
+| `retry_safe` | True only when no byte was written |
+| `turn_epoch` | Epoch advanced by the shared input FSM |
+| `composer_state` | Tracked `InputLineBuffer`: `cleared`, `partial`, `empty`, or `unknown`; not the application's semantic state |
+| `acknowledgement` / `reason` | Terminal-movement evidence or the precise rejection/timeout |
+
+The acknowledgement does not claim semantic application acceptance or task
+success. Default acknowledgement timeout is 3,000 ms; callers may request
+`timeout_ms`, clamped to 250–10,000 ms. `ack_timeout`, session exit after a
+complete write, a superseding epoch, and an uncertain write all set
+`retry_safe:false`. Partial composers, confident dialogs, busy/unconfirmed
+agents, and older queued commands reject before the first byte. A peer that
+arrives after the claim queues behind it; a peer that wins first makes `submit`
+reject. Slash commands, including `/clear`, follow the same receipt contract.
+
+`session action=input` remains the raw compatibility surface. Its `ok:true`
+proves PTY write only; it may prefill a composer or send an interactive key and
+never returns a submission receipt. Never split command text and Enter across
+two calls.
+
 ### MCP Tool: `session` Output
 
 The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). For managed peers, task results travel through `agent action=send`; raw session output is only the anomaly fallback when a child failed to send its result. The `action=list` response includes process details per session: `child_pid`, `foreground_pgid`, `foreground_process`, `shell_state`, `agent_state`, `background_work`, and `is_caller`. `is_caller=true` identifies the managed PTY that owns the current MCP connection so an orchestrator does not close itself. Optional values such as alias, display name, cwd, worktree data, process identity, and agent state are omitted when absent rather than serialized as `null`; `status` follows the same omission rule.
@@ -483,16 +519,19 @@ marker and reserves `idle` for an unclassified ready state.
 | `format` | (text) | `"raw"` preserves ANSI escape codes |
 | `since_cursor` | (none) | Cursor from a previous response — returns only new scrollback lines since this position |
 
-`session action=input` and HTTP `POST /sessions/:id/write` share the same PTY
+`session action=input` and HTTP `POST /sessions/:id/write` share the same raw PTY
 bookkeeping: each write stamps `last_input_ms` and feeds the `InputLineBuffer`
 so slash-mode tracking stays identical for MCP and remote web clients. When a
 combined text + Enter request targets a prefill-only agent such as Codex or
-OpenCode, MCP uses the canonical agent-submit sequence (Ctrl-U, bracketed paste
+OpenCode, MCP uses the legacy framed injection sequence (Ctrl-U, bracketed paste
 for multiline text, a flushed scheduling gap, then CR). Other text/key pairs,
-including Claude's established input path, retain raw pair semantics.
+including Claude's established input path, retain raw pair semantics. This
+legacy combined form remains write-only; new managed automation uses
+`action=submit` for the bounded receipt.
 
 Orchestrated PTYs accept an optional `pty_description` field on
-`session action=input`. It is independent from `last_prompt`: the former is a
+`session action=submit` and `session action=input`. It is independent from
+`last_prompt`: the former is a
 short description of the assigned work written by the orchestrator, while the
 latter is the last substantial user prompt submitted to the agent. Omit the
 field to keep the current description; pass a string to replace it, or `null`
@@ -967,7 +1006,7 @@ When MCP-only (localhost):
 - **CORS:** Enabled for all origins (browser mode support)
 - **Compression:** Gzip and Brotli via `CompressionLayer` (responses >860 bytes, auto-negotiated). SSE and WebSocket excluded by `DefaultPredicate`
 - **No TLS:** Intended for local network use; use SSH tunnel for remote
-- **Loopback-only session actions:** `session create`, `input`, `kill`, `close`, `pause`, and `resume` are restricted to loopback connections — a non-loopback (remote/LAN) MCP client cannot pause/resume sessions, write to PTYs, or spawn/destroy sessions (those remain read-only: `list`, `output`, `status`)
+- **Loopback-only session actions:** `session create`, `submit`, `input`, `kill`, `close`, `pause`, and `resume` are restricted to loopback connections — a non-loopback (remote/LAN) MCP client cannot pause/resume sessions, write to PTYs, or spawn/destroy sessions (those remain read-only: `list`, `output`, `status`)
 - **Remote `/fs/read-editor*` cap:** Remote clients receive the standard 10 MB file-read cap on `/fs/read-editor` and `/fs/read-editor-external`, not the 250 MB local cap (`MAX_EDITOR_LARGE_FILE_SIZE`). The local (loopback) router routes these paths to the large-cap handler; the remote router routes them to the standard-cap handler to avoid OOM/latency over metered links (see `build_remote_router` in `src-tauri/src/mcp_http/mod.rs`)
 - **Traversal gate on absolute-path fs routes:** `/fs/read-external`, `/fs/read-editor-external`, `/fs/write-external`, `/fs/copy-abs`, `/fs/move-abs` and `/fs/transfer` (its `destDir`) share `deny_unless_in_roots`, which rejects `..`, NUL and relative paths before the lexical `Path::starts_with` containment check. Without that first layer, `/repo/../../etc/passwd` passes containment by components while the OS resolves it outside the repo. These routes are in `shared_routes()`, so they are reachable from the remote router too. Paths are intentionally not canonicalized — symlinks placed inside a registered repo are an accepted design decision
 - **Anti-hijack guard on `agent register`:** A non-loopback caller cannot register as an existing live TUIC session — the `register` action (along with `list_peers`, `send`, `inbox`) is restricted to loopback connections, preventing a remote client from injecting messages into another agent's context (see `mcp_transport.rs`)

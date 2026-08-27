@@ -50,6 +50,12 @@ The `Err` arm means the pool task itself failed; a session that is gone is still
 the old default (or a 404 over HTTP). See
 [`docs/backend/command-threading.md`](../backend/command-threading.md).
 
+MCP `session action=submit` deliberately has no new Tauri command. It is a
+request-scoped orchestration contract in `mcp_transport.rs`: it reuses the PTY
+injection claim, writer, input FSM, and output ring, then keeps the MCP response
+open for a bounded terminal-movement receipt. Desktop `write_pty` and
+`write_pty_parts` remain raw input primitives and make no acknowledgement claim.
+
 ## Generators (`generators.rs`)
 
 | Command | Args | Returns | Description |

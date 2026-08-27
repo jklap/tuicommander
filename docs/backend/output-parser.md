@@ -286,6 +286,14 @@ ParsedEvent::ShellState {
 
 Emitted by the reader thread on real-output→busy and idle transitions. The frontend consumes this instead of deriving busy/idle from raw PTY data. See `docs/backend/pty.md` for idle detection details.
 
+`session action=submit` uses these existing agent screen adapters only to label
+an acknowledgement after the raw child-output ring moves beyond its pre-Enter
+offset (`working_screen`, `ready_screen`, `interrupted_screen`, or the generic
+`terminal_output`). It does not add a parsed event or a second lifecycle state
+machine. The output movement is independent of local input bookkeeping and is
+therefore a valid terminal receipt, but it is not semantic application
+acceptance.
+
 ### AgentSessionConflict
 
 Claude Code startup session-id failure:

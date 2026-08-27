@@ -3051,6 +3051,27 @@ fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> Ag
     }
 }
 
+/// Classify the existing screen signal for an MCP submission receipt.
+/// Raw-output movement is checked by the caller first; `terminal_output` means
+/// the child moved but its agent adapter has no stronger current-state label.
+pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &'static str {
+    let agent_type = state
+        .session_states
+        .get(session_id)
+        .and_then(|session| session.agent_type.clone());
+    let activity = state
+        .vt_log_buffers
+        .get(session_id)
+        .map(|vt| detect_agent_screen_activity(agent_type.as_deref(), &vt.lock().screen_rows()))
+        .unwrap_or(AgentScreenActivity::Unknown);
+    match activity {
+        AgentScreenActivity::Working => "working_screen",
+        AgentScreenActivity::Ready => "ready_screen",
+        AgentScreenActivity::Interrupted => "interrupted_screen",
+        AgentScreenActivity::Unknown => "terminal_output",
+    }
+}
+
 /// Agents listed here recover to idle from the screen. An agent that is MISSING here and
 /// whose foreground command is long-lived stays busy for the whole process, because OSC 133
 /// marks that command busy once and nothing else ever clears it (#523-1df4, #534-e30c,
@@ -6182,6 +6203,104 @@ fn mark_orchestrator_notice_uncertain(state: &AppState, session_id: &str, claim:
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AgentSubmissionWrite {
+    Complete {
+        acknowledgement_offset: u64,
+    },
+    Rejected {
+        reason: &'static str,
+        composer_state: &'static str,
+    },
+    Failed(String),
+    Uncertain(String),
+}
+
+fn agent_submission_rejection(
+    state: &AppState,
+    session_id: &str,
+) -> Option<(&'static str, &'static str)> {
+    if !state.sessions.contains_key(session_id) {
+        return Some(("session_not_found", "unknown"));
+    }
+    if !session_is_agent(state, session_id) {
+        return Some(("not_managed_agent", "unknown"));
+    }
+    if has_partial_user_input(state, session_id) {
+        return Some(("partial_composer", "partial"));
+    }
+    if state
+        .pending_injections
+        .get(session_id)
+        .is_some_and(|queue| !queue.is_empty())
+    {
+        return Some(("queued_commands_pending", "empty"));
+    }
+    if state
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.question_confident)
+    {
+        return Some(("awaiting_input", "empty"));
+    }
+    if !should_inject_now(state, session_id) {
+        return Some(("agent_not_ready", "empty"));
+    }
+    None
+}
+
+/// Claim and write one MCP-managed agent command without queueing it.
+///
+/// This is the ordering half of `session action=submit`. The caller owns the
+/// existing input-bookkeeping FSM and the bounded acknowledgement wait after a
+/// complete write. Rejections happen before the first byte. Once the claim is
+/// held, concurrent peer delivery observes BUSY and queues behind this command.
+pub(crate) fn write_agent_submission_to_pty(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+) -> AgentSubmissionWrite {
+    if let Some((reason, composer_state)) = agent_submission_rejection(state, session_id) {
+        return AgentSubmissionWrite::Rejected {
+            reason,
+            composer_state,
+        };
+    }
+    let Some(claim) = claim_idle_for_injection(state, session_id) else {
+        let (reason, composer_state) =
+            agent_submission_rejection(state, session_id).unwrap_or(("claim_lost", "unknown"));
+        return AgentSubmissionWrite::Rejected {
+            reason,
+            composer_state,
+        };
+    };
+
+    let (outcome, acknowledgement_offset) =
+        write_agent_command_with_boundary(state, session_id, text);
+    match outcome {
+        InjectionOutcome::Submitted => {
+            // Terminal movement during the split write can invalidate the claim;
+            // that is independent evidence, not a reason to discard a completed
+            // write. Clear the token when it is still ours. The MCP caller advances
+            // the turn through InputLineBuffer exactly once.
+            if let Some(silence) = state.silence_states.get(session_id) {
+                silence.lock().commit_injection_claim(claim.token);
+            }
+            AgentSubmissionWrite::Complete {
+                acknowledgement_offset,
+            }
+        }
+        InjectionOutcome::NotStarted(error) => {
+            rollback_injection_claim(state, session_id, claim);
+            AgentSubmissionWrite::Failed(error)
+        }
+        InjectionOutcome::Uncertain(error) => {
+            mark_injection_uncertain(state, session_id, claim);
+            AgentSubmissionWrite::Uncertain(error)
+        }
+    }
+}
+
 /// Build the first write of an injection: Ctrl-U clears any pending input, and
 /// multiline text rides inside a bracketed paste (ESC[200~ … ESC[201~) so the
 /// TUI keeps embedded newlines as paste content and the trailing CR (sent as a
@@ -6215,53 +6334,20 @@ fn injection_payload(text: &str) -> String {
 /// in step — separate flushes never guaranteed separate reads, only time does.
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// Type a framed line into a session's PTY as if the user submitted it, waking an
-/// idle agent so it processes the message on its next turn. Split-write with the
-/// `injection_payload` framing that Ink/raw-mode agents require, and — critically —
-/// a REAL time gap between the payload and the Enter (see `INJECT_ENTER_GAP`): a
-/// concatenated or merely back-to-back Enter is missed, and unbracketed multiline
-/// text never submits. The session lock is released across the gap so a concurrent
-/// writer to the same session is never blocked by the delay. Best-effort: a dead
-/// PTY is logged and ignored (the inbox still holds the message).
 /// Write prompt text and a submitting Enter to an agent PTY using the exact
 /// framing and timing required by raw-mode TUIs. The caller owns bookkeeping:
 /// peer delivery records a synthetic submission, while MCP session input feeds
-/// the original text and Enter through its input-state FSM.
+/// the original text and Enter through its input-state FSM. One writer guard
+/// spans the real scheduling gap, so another producer cannot splice the line.
 pub(crate) fn write_agent_command_to_pty(
     state: &AppState,
     session_id: &str,
     text: &str,
 ) -> Result<(), String> {
-    {
-        let writer = state
-            .pty_writer(session_id)
-            .ok_or_else(|| "Session not found".to_string())?;
-        let mut writer = writer.lock();
-        writer
-            .write_all(injection_payload(text).as_bytes())
-            .map_err(|e| format!("Write failed: {e}"))?;
-        writer.flush().map_err(|e| format!("Flush failed: {e}"))?;
-    } // writer lock released before the gap
-
-    // DEFERRED (2026-07-17) — this blocks the calling thread (sometimes a tokio
-    // worker: session-state accumulator / agent-send dispatch) for INJECT_ENTER_GAP.
-    // Acceptable because injection is low-frequency (peer messages, idle-transition
-    // wakes). If a hot path ever calls this, move the sequence onto a detached
-    // thread — that needs Arc<AppState> threaded through deliver/flush (wider refactor).
-    std::thread::sleep(INJECT_ENTER_GAP);
-
-    {
-        let writer = state
-            .pty_writer(session_id)
-            .ok_or_else(|| "Session vanished before Enter injection".to_string())?;
-        let mut writer = writer.lock();
-        writer
-            .write_all(b"\r")
-            .map_err(|e| format!("Write failed: {e}"))?;
-        writer.flush().map_err(|e| format!("Flush failed: {e}"))?;
+    match write_agent_command_with_boundary(state, session_id, text).0 {
+        InjectionOutcome::Submitted => Ok(()),
+        InjectionOutcome::NotStarted(error) | InjectionOutcome::Uncertain(error) => Err(error),
     }
-
-    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -6297,49 +6383,78 @@ fn write_all_with_progress(
     Ok(())
 }
 
-fn write_claimed_agent_command(state: &AppState, session_id: &str, text: &str) -> InjectionOutcome {
+fn write_agent_command_with_boundary(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+) -> (InjectionOutcome, u64) {
     let payload = injection_payload(text);
+    let writer = match state.pty_writer(session_id) {
+        Some(writer) => writer,
+        None => {
+            return (
+                InjectionOutcome::NotStarted("Session not found".to_string()),
+                0,
+            );
+        }
+    };
+    // One writer guard spans payload, scheduling gap, and Enter. The injection
+    // claim orders managed peers; this mutex also keeps raw/UI writers from
+    // splicing bytes into the command while the child is allowed to consume the
+    // payload as a separate read.
+    let mut writer = writer.lock();
+    if let Err((written, error)) =
+        write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0)
     {
-        let writer = match state.pty_writer(session_id) {
-            Some(writer) => writer,
-            None => return InjectionOutcome::NotStarted("Session not found".to_string()),
-        };
-        let mut writer = writer.lock();
-        if let Err((written, error)) =
-            write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0)
-        {
-            return if written == 0 {
+        return (
+            if written == 0 {
                 InjectionOutcome::NotStarted(error)
             } else {
                 InjectionOutcome::Uncertain(error)
-            };
-        }
-        if let Err(error) = writer.flush() {
-            return InjectionOutcome::Uncertain(format!("Flush failed: {error}"));
-        }
+            },
+            0,
+        );
+    }
+    if let Err(error) = writer.flush() {
+        return (
+            InjectionOutcome::Uncertain(format!("Flush failed: {error}")),
+            0,
+        );
     }
 
+    // DEFERRED (2026-07-17) — this blocks the calling thread (sometimes a tokio
+    // worker: session-state accumulator / agent-send dispatch) for INJECT_ENTER_GAP.
+    // Acceptable because injection is low-frequency (peer messages, idle-transition
+    // wakes). If a hot path ever calls this, move the sequence onto a detached
+    // thread — that needs Arc<AppState> threaded through deliver/flush (wider refactor).
     std::thread::sleep(INJECT_ENTER_GAP);
 
-    {
-        let writer = match state.pty_writer(session_id) {
-            Some(writer) => writer,
-            None => {
-                return InjectionOutcome::Uncertain(
-                    "Session vanished before Enter injection".to_string(),
-                );
-            }
-        };
-        let mut writer = writer.lock();
-        if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\r", payload.len()) {
-            return InjectionOutcome::Uncertain(error);
-        }
-        if let Err(error) = writer.flush() {
-            return InjectionOutcome::Uncertain(format!("Flush failed: {error}"));
-        }
+    // Exclude payload echo already observable before Enter. The async handler
+    // checks this boundary only after the complete Enter write returns; movement
+    // beyond it is child PTY output, never TUICommander's own turn bookkeeping.
+    let acknowledgement_offset = state
+        .output_buffers
+        .get(session_id)
+        .map(|buffer| buffer.lock().total_written)
+        .unwrap_or(0);
+    if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\r", payload.len()) {
+        return (
+            InjectionOutcome::Uncertain(error),
+            acknowledgement_offset,
+        );
+    }
+    if let Err(error) = writer.flush() {
+        return (
+            InjectionOutcome::Uncertain(format!("Flush failed: {error}")),
+            acknowledgement_offset,
+        );
     }
 
-    InjectionOutcome::Submitted
+    (InjectionOutcome::Submitted, acknowledgement_offset)
+}
+
+fn write_claimed_agent_command(state: &AppState, session_id: &str, text: &str) -> InjectionOutcome {
+    write_agent_command_with_boundary(state, session_id, text).0
 }
 
 fn commit_injection_claim(state: &AppState, session_id: &str, claim: InjectionClaim) {
@@ -18968,6 +19083,143 @@ mod tests {
                 .map(|a| a.load(std::sync::atomic::Ordering::Relaxed)),
             Some(SHELL_IDLE),
             "a refused claim must not leave the session marked busy"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_submission_rejects_partial_composer_without_writing() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "submit-partial", SHELL_IDLE);
+        let bytes = insert_recording_session(&state, "submit-partial");
+        let mut buffer = InputLineBuffer::new();
+        buffer.feed("Boss draft");
+        state.input_buffers.insert(
+            "submit-partial".to_string(),
+            parking_lot::Mutex::new(buffer),
+        );
+
+        assert_eq!(
+            write_agent_submission_to_pty(&state, "submit-partial", "new command"),
+            AgentSubmissionWrite::Rejected {
+                reason: "partial_composer",
+                composer_state: "partial",
+            }
+        );
+        assert!(bytes.lock().unwrap().is_empty());
+        assert_eq!(
+            state
+                .input_buffers
+                .get("submit-partial")
+                .unwrap()
+                .lock()
+                .content(),
+            "Boss draft",
+            "a receipt request must preserve the user's draft verbatim"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_submission_does_not_overtake_existing_queue() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "submit-queued", SHELL_IDLE);
+        let bytes = insert_recording_session(&state, "submit-queued");
+        state
+            .pending_injections
+            .entry("submit-queued".to_string())
+            .or_default()
+            .push_back(crate::state::PendingInjection::peer_message("older peer"));
+
+        assert_eq!(
+            write_agent_submission_to_pty(&state, "submit-queued", "new command"),
+            AgentSubmissionWrite::Rejected {
+                reason: "queued_commands_pending",
+                composer_state: "empty",
+            }
+        );
+        assert!(bytes.lock().unwrap().is_empty());
+        assert_eq!(
+            state
+                .pending_injections
+                .get("submit-queued")
+                .unwrap()
+                .front()
+                .map(crate::state::PendingInjection::text),
+            Some("older peer")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_submission_claim_prevents_concurrent_peer_splicing() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        agent_session(&state, "submit-race", SHELL_IDLE);
+        let bytes = insert_recording_session(&state, "submit-race");
+        let submit_state = Arc::clone(&state);
+        let submit = std::thread::spawn(move || {
+            write_agent_submission_to_pty(&submit_state, "submit-race", "atomic command")
+        });
+
+        for _ in 0..100 {
+            if !bytes.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let peer = deliver_message_to_pty(&state, "submit-race", "peer command");
+        let submitted = submit.join().unwrap();
+
+        assert!(matches!(submitted, AgentSubmissionWrite::Complete { .. }));
+        assert_eq!(peer, PtyDelivery::Queued);
+        assert_eq!(
+            String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+            "\u{15}atomic command\r",
+            "the peer payload must not land between the split payload and Enter"
+        );
+        assert_eq!(
+            state
+                .pending_injections
+                .get("submit-race")
+                .unwrap()
+                .front()
+                .map(crate::state::PendingInjection::text),
+            Some("peer command")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_submission_writer_lock_prevents_raw_input_splicing() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        agent_session(&state, "submit-raw-race", SHELL_IDLE);
+        let bytes = insert_recording_session(&state, "submit-raw-race");
+        let submit_state = Arc::clone(&state);
+        let submit = std::thread::spawn(move || {
+            write_agent_submission_to_pty(&submit_state, "submit-raw-race", "atomic command")
+        });
+
+        for _ in 0..100 {
+            if !bytes.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let raw_state = Arc::clone(&state);
+        let raw = std::thread::spawn(move || {
+            let writer = raw_state.pty_writer("submit-raw-race").unwrap();
+            let mut writer = writer.lock();
+            writer.write_all(b"raw input").unwrap();
+            writer.flush().unwrap();
+        });
+        let submitted = submit.join().unwrap();
+        raw.join().unwrap();
+
+        assert!(matches!(submitted, AgentSubmissionWrite::Complete { .. }));
+        assert_eq!(
+            String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+            "\u{15}atomic command\rraw input",
+            "a raw writer may follow the submission but cannot land before its Enter"
         );
     }
 
