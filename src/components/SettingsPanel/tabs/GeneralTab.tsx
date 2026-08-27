@@ -430,6 +430,21 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					hint="Display the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent"
 				/>
 			</SectionCard>
+			<Show when={isTauri()}>
+				<SectionCard title={t("general.heading.window", "Window")}>
+					<SettingToggle
+						settingId="app.restore_window_geometry"
+						row
+						checked={settingsStore.state.restoreWindowGeometry}
+						onChange={(v) => settingsStore.setRestoreWindowGeometry(v)}
+						label={t("general.toggle.restoreWindowGeometry", "Restore window size and position on launch")}
+						hint={t(
+							"general.hint.restoreWindowGeometry",
+							"Reopen the app window at the same size and position as when it was last closed",
+						)}
+					/>
+				</SectionCard>
+			</Show>
 			<SectionCard title={t("general.heading.confirmations", "Confirmations")}>
 				<Show when={isTauri()}>
 					<SettingSelect

@@ -63,6 +63,10 @@ interface RustAppConfig {
 	background?: { hide_dock_icon?: boolean; tray_icon?: TrayIconPreference; webview_unload_minutes?: number };
 	confirm_before_quit: boolean;
 	confirm_before_closing_tab: boolean;
+	restore_window_geometry?: boolean;
+	restore_shell_terminals?: boolean;
+	restore_scrollback?: boolean;
+	restore_scrollback_lines?: number;
 	max_tab_name_length: number;
 	split_tab_mode: string;
 	tab_ordering_mode: string;
@@ -305,6 +309,10 @@ interface SettingsStoreState {
 	trayIcon: TrayIconPreference;
 	confirmBeforeQuit: boolean;
 	confirmBeforeClosingTab: boolean;
+	restoreWindowGeometry: boolean;
+	restoreShellTerminals: boolean;
+	restoreScrollback: boolean;
+	restoreScrollbackLines: number;
 	maxTabNameLength: number;
 	splitTabMode: SplitTabMode;
 	tabOrderingMode: TabOrderingMode;
@@ -390,6 +398,10 @@ function createSettingsStore() {
 		trayIcon: "background_only",
 		confirmBeforeQuit: true,
 		confirmBeforeClosingTab: true,
+		restoreWindowGeometry: true,
+		restoreShellTerminals: true,
+		restoreScrollback: false,
+		restoreScrollbackLines: 1000,
 		maxTabNameLength: 25,
 		splitTabMode: "separate",
 		tabOrderingMode: "grouped-by-type",
@@ -542,6 +554,11 @@ function createSettingsStore() {
 		values.showPrBadges = config.show_pr_badges ?? true;
 		values.showGitState = config.show_git_state ?? true;
 		values.tabTypeHighlighting = config.tab_type_highlighting ?? true;
+		values.restoreWindowGeometry = config.restore_window_geometry ?? true;
+		values.restoreShellTerminals = config.restore_shell_terminals ?? true;
+		values.restoreScrollback = config.restore_scrollback ?? false;
+		// `??`, not `||`: a persisted 0 line-cap is a real value, not "unset".
+		values.restoreScrollbackLines = config.restore_scrollback_lines ?? 1000;
 		return values;
 	}
 
@@ -619,6 +636,10 @@ function createSettingsStore() {
 			show_pr_badges: values.showPrBadges,
 			show_git_state: values.showGitState,
 			tab_type_highlighting: values.tabTypeHighlighting,
+			restore_window_geometry: values.restoreWindowGeometry,
+			restore_shell_terminals: values.restoreShellTerminals,
+			restore_scrollback: values.restoreScrollback,
+			restore_scrollback_lines: values.restoreScrollbackLines,
 		} satisfies Partial<RustAppConfig>;
 	}
 
@@ -841,6 +862,30 @@ function createSettingsStore() {
 		/** Set confirm-before-closing-tab preference */
 		setConfirmBeforeClosingTab(enabled: boolean): void {
 			setState("confirmBeforeClosingTab", enabled);
+			save();
+		},
+
+		/** Set whether the main window's size/position is restored on launch */
+		setRestoreWindowGeometry(enabled: boolean): void {
+			setState("restoreWindowGeometry", enabled);
+			save();
+		},
+
+		/** Set whether plain shell tabs (not just agent tabs) are restored on launch */
+		setRestoreShellTerminals(enabled: boolean): void {
+			setState("restoreShellTerminals", enabled);
+			save();
+		},
+
+		/** Set whether terminal scrollback is persisted to disk and replayed on restore */
+		setRestoreScrollback(enabled: boolean): void {
+			setState("restoreScrollback", enabled);
+			save();
+		},
+
+		/** Set the max scrollback lines persisted per terminal */
+		setRestoreScrollbackLines(lines: number): void {
+			setState("restoreScrollbackLines", Math.max(0, Math.round(lines)));
 			save();
 		},
 

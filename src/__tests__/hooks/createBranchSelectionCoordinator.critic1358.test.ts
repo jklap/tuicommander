@@ -20,6 +20,7 @@ describe("branch restore with suspended tabs (critic 1358)", () => {
 	let createBranchSelectionCoordinator: typeof import("../../hooks/git/createBranchSelectionCoordinator").createBranchSelectionCoordinator;
 	let repositoriesStore: typeof import("../../stores/repositories").repositoriesStore;
 	let terminalsStore: typeof import("../../stores/terminals").terminalsStore;
+	let settingsStore: typeof import("../../stores/settings").settingsStore;
 
 	beforeEach(async () => {
 		vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
@@ -30,6 +31,7 @@ describe("branch restore with suspended tabs (critic 1358)", () => {
 			.createBranchSelectionCoordinator;
 		repositoriesStore = (await import("../../stores/repositories")).repositoriesStore;
 		terminalsStore = (await import("../../stores/terminals")).terminalsStore;
+		settingsStore = (await import("../../stores/settings")).settingsStore;
 		repositoriesStore._testSetHydrated(true);
 	});
 	afterEach(async () => {
@@ -56,8 +58,11 @@ describe("branch restore with suspended tabs (critic 1358)", () => {
 
 	// Catches: a file saved before this feature (no `suspended` key) is read as suspended, or the
 	// plain-shell filter now keeps unsuspended shells.
+	// "Restore open terminals on launch" (restore_shell_terminals) defaults on; these
+	// two cases pin the agent-only behaviour it reproduces when turned off.
 	it("restores an old record without the flag as before: agent live, plain shell dropped", () =>
 		testInScope(async () => {
+			settingsStore.setRestoreShellTerminals(false);
 			const tabs = await restore([saved({ name: "agent", agentType: "claude" }), saved({ name: "shell" })]);
 			expect(tabs.map((t) => t.name)).toEqual(["agent"]);
 			expect(tabs[0].suspended).toBe(false);
@@ -66,10 +71,20 @@ describe("branch restore with suspended tabs (critic 1358)", () => {
 	// Catches: `suspended: false` explicitly saved on a plain shell is treated as truthy-present.
 	it("drops a plain shell saved with suspended=false", () =>
 		testInScope(async () => {
+			settingsStore.setRestoreShellTerminals(false);
 			const tabs = await restore([saved({ name: "shell", suspended: false })]);
 			// All-plain-shell snapshots fall through to a fresh terminal; none is the restored record.
 			expect(tabs.map((t) => t.name)).not.toContain("shell");
 			expect(tabs.some((t) => t.suspended)).toBe(false);
+		}));
+
+	// Catches: restore_shell_terminals (default on) not bringing a plain shell back live.
+	it("restores a plain shell live when restoring open terminals is on", () =>
+		testInScope(async () => {
+			settingsStore.setRestoreShellTerminals(true);
+			const tabs = await restore([saved({ name: "agent", agentType: "claude" }), saved({ name: "shell" })]);
+			expect(tabs.map((t) => t.name)).toEqual(["agent", "shell"]);
+			expect(tabs.every((t) => !t.suspended)).toBe(true);
 		}));
 
 	// Catches: a suspended plain shell is dropped like an unsuspended one, or comes back running.

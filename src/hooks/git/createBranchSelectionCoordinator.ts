@@ -5,6 +5,7 @@ import { paneLayoutStore } from "../../stores/paneLayout";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
+import { settingsStore } from "../../stores/settings";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import type { SavedTerminal } from "../../types";
@@ -122,10 +123,12 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		const resolutions = autoResume
 			? await Promise.all(
 					tabs.map((terminal) =>
-						terminal.suspended
+						// Shell tabs (restoreShellTerminals) have no agentType and nothing
+						// to resume — they restore as a fresh live prompt in their cwd.
+						terminal.suspended || !terminal.agentType
 							? null
 							: resolveAgentResume(
-									terminal.agentType!,
+									terminal.agentType,
 									terminal.cwd,
 									terminal.tuicSession,
 									terminal.agentSessionId,
@@ -183,10 +186,13 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				.filter(({ terminal }) => !terminal.suspended)
 				.map(async ({ id, terminal, resolution }) => {
 					if (resolution?.verified && resolution.cmd) return;
+					// Shell tabs have no agentType and nothing to resume.
+					const agentType = terminal.agentType;
+					if (!agentType) return;
 					const resumeCmd = resolution
 						? resolution.cmd
 						: await verifyAndBuildResumeCommand(
-								terminal.agentType!,
+								agentType,
 								terminal.cwd,
 								terminal.tuicSession,
 								terminal.agentSessionId,
@@ -360,10 +366,15 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 					}
 				}
 			} else if (branch?.savedTerminals && branch.savedTerminals.length > 0) {
-				// Only restore agent tabs with resumable sessions — plain shell tabs
-				// have nothing meaningful to resume and would just be empty shells.
-				// A suspended tab is the exception: the user kept it on purpose.
-				const restorableTerminals = branch.savedTerminals.filter((t) => t.agentType != null || t.suspended);
+				// Agent tabs restore with a resume banner (verified below). Shell
+				// tabs restore as a fresh live shell in their saved cwd when the
+				// setting is on; otherwise they're dropped — they have no session
+				// to resume and would just be empty shells duplicating the
+				// fallback spawn below. A suspended tab is always kept: the user
+				// kept it on purpose.
+				const restorableTerminals = settingsStore.state.restoreShellTerminals
+					? branch.savedTerminals
+					: branch.savedTerminals.filter((t) => t.agentType != null || t.suspended);
 				// Clear savedTerminals (consume-once) regardless of filter result
 				repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminals: [] });
 
@@ -401,7 +412,8 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 					// A suspended tab stays suspended; resuming it builds the command then.
 					void applyResumeBanners(restoredIds);
 				} else {
-					// All saved tabs were plain shells — spawn a fresh terminal
+					// Only reachable with restoreShellTerminals off and every saved tab
+					// a plain shell — nothing left worth restoring, spawn a fresh terminal.
 					paneLayoutStore.reset();
 					await handleAddTerminalToWorkspace(repoPath, workspaceId);
 				}
