@@ -157,7 +157,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
 			case "unsupported":
 				return "Not supported in this browser";
 			case "requires-https":
-				return "Requires HTTPS (enable Tailscale)";
+				return "Requires HTTPS — reload via https://";
 			case "requires-install":
 				return "Add to Home Screen first";
 			case "denied":

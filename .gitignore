@@ -57,6 +57,7 @@ scripts/*
 !scripts/install-launch-shells.sh
 !scripts/check-no-nul-bytes.mjs
 !scripts/run-plugin-tests.mjs
+!scripts/check-gate.sh
 !scripts/hooks/
 !scripts/perf/
 scripts/perf/results/
