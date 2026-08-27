@@ -6403,9 +6403,7 @@ fn write_agent_command_with_boundary(
     // splicing bytes into the command while the child is allowed to consume the
     // payload as a separate read.
     let mut writer = writer.lock();
-    if let Err((written, error)) =
-        write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0)
-    {
+    if let Err((written, error)) = write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0) {
         return (
             if written == 0 {
                 InjectionOutcome::NotStarted(error)
@@ -6438,10 +6436,7 @@ fn write_agent_command_with_boundary(
         .map(|buffer| buffer.lock().total_written)
         .unwrap_or(0);
     if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\r", payload.len()) {
-        return (
-            InjectionOutcome::Uncertain(error),
-            acknowledgement_offset,
-        );
+        return (InjectionOutcome::Uncertain(error), acknowledgement_offset);
     }
     if let Err(error) = writer.flush() {
         return (
