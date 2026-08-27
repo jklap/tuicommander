@@ -105,6 +105,12 @@ export default defineConfig(async ({ command }) => ({
   build: {
     target: "esnext",
     cssMinify: "lightningcss",
+    // DiffFileList (git-diff-view) and mermaid's generated parser are large but
+    // already lazy-loaded (see scripts/report-frontend-bundles.mjs, which enforces
+    // they stay out of the eager load graph and that gzip'd initial payload stays
+    // under budget). Raise the raw-size warning limit past those so it still fires
+    // on genuine regressions to eagerly-loaded chunks instead of being noise.
+    chunkSizeWarningLimit: 1100,
     rolldownOptions: {
       input: {
         main: "index.html",
