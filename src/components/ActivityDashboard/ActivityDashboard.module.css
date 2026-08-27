@@ -84,6 +84,17 @@
   opacity: 1;
 }
 
+/* Keyboard cursor — an inset ring rather than a background fill, so it stays
+ * distinguishable from .activeRow's tint (the app's active terminal) and layers
+ * cleanly on top of .idleRow's reduced opacity. */
+.selectedRow {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.selectedRow.idleRow {
+  opacity: 1;
+}
+
 .rowMain {
   display: grid;
   grid-template-columns: 1fr 80px 120px 80px 28px;
@@ -97,6 +108,15 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+/* Dim 1-9 jump-key badge shown on the first 9 rows */
+.rowNumber {
+  flex-shrink: 0;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  min-width: 12px;
+  text-align: right;
 }
 
 .termName {

@@ -84,6 +84,13 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] Manual: set to "Never" — confirm plain click never opens a link but the dashed underline stays visible and right-click's Open/Copy-link menu still works.
 - [ ] Manual: with mouse-reporting on (e.g. inside `vim`/`htop`) and mode = "⌘Click", confirm modifier+left-click on a link opens it without the app receiving a stray click, and confirm a right-click on a link still reaches the Open/Copy-link menu (not swallowed as a mouse report) — regression guard for #57.
 
+## Activity Dashboard keyboard navigation (2026-08-26, frontend only — Vite HMR is enough)
+
+- [x] Arrow-key cursor movement, Return-to-activate, digit 1-9 jump-and-activate, capture-phase interception ahead of useKeyboardRedirect's PTY writer _(verified: src/__tests__/components/ActivityDashboard.test.tsx, "Keyboard navigation" suite)_
+- [x] Idle rows sort by idleSince descending without disturbing the working-group anti-reshuffle spine _(verified: src/__tests__/utils/activitySnapshot.test.ts, `reconcileActivityOrder` suite)_
+- [ ] Manual: open the Activity Dashboard with more rows than fit on screen, arrow down past the visible area, and confirm the list actually scrolls the selected row into view and the selected-row highlight is visually distinguishable — not observable in jsdom.
+- [ ] Manual: repeat the arrow/Return/digit navigation in the **detached** Activity Dashboard panel window (`Cmd+Shift+A` panel detach) — the detached-window code path (separate mount, `props.embedded`) isn't exercised by any existing test.
+
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 
 `drag::Image` has no "no image" variant, so an unresolvable `icons/drag-file.png`

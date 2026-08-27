@@ -99,14 +99,26 @@ export function terminalStatusLabel(
 }
 
 /** Reconcile a persistent display spine with the current terminal set, then return
- *  ids partitioned working-first / idle-second, each group in spine (first-seen) order.
+ *  ids partitioned working-first / idle-second. The working group stays in spine
+ *  (first-seen) order. The idle group, when `idleSortKey` is given, is sorted by that
+ *  key descending (most-recently-active first), `null` keys last, ties broken by spine
+ *  order (`Array.prototype.sort` is stable) — otherwise it also stays in spine order.
  *
  *  Mutates `spine` in place: drops removed terminals (preserving order), appends
  *  newly-seen ones at the end. A terminal's rendered position is a pure function of
- *  (working, spine-index) — so a row moves ONLY when it crosses the working/idle
- *  boundary (a real state change), never on a recency/timestamp tick. This is what
- *  keeps the dashboard from reshuffling avanti-e-indietro on every poll. */
-export function reconcileActivityOrder(spine: string[], ids: string[], isWorking: (id: string) => boolean): string[] {
+ *  (working, spine-index, idleSortKey) — so a row moves ONLY when it crosses the
+ *  working/idle boundary or its idle key changes, never on a bare recency/timestamp
+ *  tick with nothing actually changed. `idleSortKey` is meant to be backed by a value
+ *  like `idleSince` that is written once on the busy→idle transition and held constant
+ *  for as long as the row stays idle (see stores/terminals.ts's `handleShellStateChange`)
+ *  — so the sort key does not itself drift while a row sits in the idle group. This is
+ *  what keeps the dashboard from reshuffling avanti-e-indietro on every poll. */
+export function reconcileActivityOrder(
+	spine: string[],
+	ids: string[],
+	isWorking: (id: string) => boolean,
+	idleSortKey?: (id: string) => number | null,
+): string[] {
 	const present = new Set(ids);
 	for (let i = spine.length - 1; i >= 0; i--) {
 		if (!present.has(spine[i])) spine.splice(i, 1);
@@ -115,6 +127,16 @@ export function reconcileActivityOrder(spine: string[], ids: string[], isWorking
 	const working: string[] = [];
 	const idle: string[] = [];
 	for (const id of spine) (isWorking(id) ? working : idle).push(id);
+	if (idleSortKey) {
+		idle.sort((a, b) => {
+			const ka = idleSortKey(a);
+			const kb = idleSortKey(b);
+			if (ka === null && kb === null) return 0;
+			if (ka === null) return 1;
+			if (kb === null) return -1;
+			return kb - ka;
+		});
+	}
 	return [...working, ...idle];
 }
 
@@ -186,6 +208,7 @@ export function buildActivitySnapshot(): ActivitySnapshot {
 			)
 		);
 	};
-	const order = reconcileActivityOrder(snapshotSpine, ids, isWorking);
+	const idleSortKey = (id: string): number | null => rowById.get(id)?.idleSince ?? null;
+	const order = reconcileActivityOrder(snapshotSpine, ids, isWorking, idleSortKey);
 	return { terminals: order.map((id) => rowById.get(id)).filter((r): r is ActivityTerminalRow => !!r) };
 }

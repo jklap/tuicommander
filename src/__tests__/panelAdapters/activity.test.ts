@@ -94,6 +94,24 @@ describe("snapshotToRows row identity", () => {
 		expect(second[0].id).toBe("b");
 	});
 
+	it("returns a new array (with reused row objects) when two unchanged rows swap places", () => {
+		// reconcileTerminalRows (ActivityDashboard.tsx:107-109) has a positional check
+		// specifically so a pure reorder — every id/field unchanged, just moved — still
+		// produces a new array. Without it, ordering changes (e.g. sorting idle rows by
+		// idle time) would silently fail to re-render because every row is `sameRow`-equal
+		// to its previous self.
+		const a = terminal({ id: "a" });
+		const b = terminal({ id: "b" });
+		const first = snapshotToRows(snapshot(a, b));
+		const second = snapshotToRows(snapshot(b, a), first);
+
+		expect(second).not.toBe(first);
+		expect(second.map((r) => r.id)).toEqual(["b", "a"]);
+		// Field-identical rows keep their object identity even though they moved.
+		expect(second[0]).toBe(first[1]);
+		expect(second[1]).toBe(first[0]);
+	});
+
 	it("returns a new array when the terminal set shrinks", () => {
 		const first = snapshotToRows(snapshot(terminal({ id: "a" }), terminal({ id: "b" })));
 		const second = snapshotToRows(snapshot(terminal({ id: "a" })), first);
