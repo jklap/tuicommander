@@ -91,6 +91,11 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] Manual: open the Activity Dashboard with more rows than fit on screen, arrow down past the visible area, and confirm the list actually scrolls the selected row into view and the selected-row highlight is visually distinguishable — not observable in jsdom.
 - [ ] Manual: repeat the arrow/Return/digit navigation in the **detached** Activity Dashboard panel window (`Cmd+Shift+A` panel detach) — the detached-window code path (separate mount, `props.embedded`) isn't exercised by any existing test.
 
+## Main-worktree-on-non-main-branch icon color (2026-08-26, frontend only)
+
+- [ ] **[MANUAL]** Switch the main checkout to a non-main branch (e.g. `git checkout -b tmp` in the main repo directory, not a linked worktree). Confirm the sidebar's branch icon turns the new accent/blue color, distinct from the main branch's yellow star and a separate linked worktree's green fork icon. Screenshot in both light and dark themes.
+- [ ] **[MANUAL]** With that same off-main main-worktree row visible, select/focus it (and, separately, a different row) and confirm the new accent-blue icon color doesn't get visually confused with the sidebar's existing accent-colored active/selected-row indicator — i.e. an unselected row showing this color shouldn't read as "currently selected."
+
 ## Create Worktree dialog: searchable base-ref picker + keyboard nav (2026-08-26, frontend only)
 
 The "Start from" base-ref dropdown gained a search box, `↑`/`↓`/`Enter` navigation, and
