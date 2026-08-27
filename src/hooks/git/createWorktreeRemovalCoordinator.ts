@@ -100,6 +100,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		// workspace gets a dialog that says so, BEFORE the close-terminal loop
 		// below ever runs. See plans/worktree-removal-incident-2026-08-26.md.
 		const activity = branchActivitySummary(branch.terminals);
+		const deleteBranch = repoSettingsStore.getEffective(repoPath)?.deleteBranchOnRemove ?? true;
 		const confirmed = activity.isBusy
 			? await (deps.dialogs.confirmRemoveBusyWorktree?.(branchName, activity) ??
 					deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, deleteBranch))
@@ -151,7 +152,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			// instance knew about, so this fails only when git itself refuses
 			// (dirty/locked) or another session neither the frontend nor this
 			// close loop knew about is still attached.
-			const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch);
+			const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, false);
 			appLogger.info("git", `handleRemoveWorkspace: remove_worktree SUCCESS`, { workspaceId });
 			shouldRemoveFromStore = true;
 			shouldClearBranchLabel = !outcome?.branch_delete_warning;

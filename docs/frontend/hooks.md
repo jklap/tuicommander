@@ -259,7 +259,7 @@ Confirmation and info dialogs using Tauri dialog plugin.
 | `confirm(options)` | Show Yes/No confirmation |
 | `info(title, message)` | Show info dialog |
 | `error(title, message)` | Show error dialog |
-| `confirmRemoveWorktree(branch)` | Confirm worktree removal |
+| `confirmRemoveWorktree(branch, deleteBranch?)` | Confirm worktree removal — message mentions the local branch only when `deleteBranch` is true (default) |
 | `confirmCloseTerminal(name)` | Confirm terminal close |
 | `confirmRemoveRepo(name)` | Confirm repo removal |
 
