@@ -79,6 +79,7 @@ describe("useRepository", () => {
 				branchName: "feature-x",
 				deleteBranch: true,
 				force: false,
+				overrideBusy: false,
 			});
 		});
 
@@ -90,6 +91,19 @@ describe("useRepository", () => {
 				branchName: "feature-x",
 				deleteBranch: false,
 				force: false,
+				overrideBusy: false,
+			});
+		});
+
+		it("passes overrideBusy through when the busy-liveness gate is being overridden", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+			await repo.removeWorktree("/repos/my-repo", "feature-x", true, false, true);
+			expect(mockInvoke).toHaveBeenCalledWith("remove_worktree", {
+				repoPath: "/repos/my-repo",
+				branchName: "feature-x",
+				deleteBranch: true,
+				force: false,
+				overrideBusy: true,
 			});
 		});
 	});

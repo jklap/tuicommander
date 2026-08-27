@@ -1023,6 +1023,45 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps remove_worktree to DELETE with deleteBranch, force, and overrideBusy query params", () => {
+			const plain = mapCommandToHttp("remove_worktree", { repoPath: "/r", branchName: "feat" });
+			expect(plain.method).toBe("DELETE");
+			expect(plain.path).toBe("/worktrees/feat?repoPath=%2Fr&deleteBranch=true");
+
+			const explicit = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				branchName: "feat",
+				deleteBranch: false,
+			});
+			expect(explicit.path).toBe("/worktrees/feat?repoPath=%2Fr&deleteBranch=false");
+
+			// `force` overrides git's own dirty/lock refusals; `overrideBusy` is the
+			// independent live-session-gate override — both must reach the HTTP
+			// transport the same way they reach the Tauri IPC command, and neither
+			// implies the other.
+			const forced = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				branchName: "feat",
+				force: true,
+			});
+			expect(forced.path).toBe("/worktrees/feat?repoPath=%2Fr&deleteBranch=true&force=true");
+
+			const overridden = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				branchName: "feat",
+				overrideBusy: true,
+			});
+			expect(overridden.path).toBe("/worktrees/feat?repoPath=%2Fr&deleteBranch=true&overrideBusy=true");
+
+			const both = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				branchName: "feat",
+				force: true,
+				overrideBusy: true,
+			});
+			expect(both.path).toBe("/worktrees/feat?repoPath=%2Fr&deleteBranch=true&force=true&overrideBusy=true");
+		});
+
 		it("maps close_issue to POST", () => {
 			const result = mapCommandToHttp("close_issue", { repoPath: "/r", issueNumber: 42 });
 			expect(result.method).toBe("POST");

@@ -89,19 +89,39 @@ export function useRepository() {
 		}
 	}
 
-	/** Remove a worktree by branch name */
+	/** Remove a worktree by branch name.
+	 *
+	 *  `force` overrides git's own dirty/lock refusals (`worktree_dirty:` /
+	 *  `worktree_locked:`). `overrideBusy` is a *separate* flag: it skips only
+	 *  the live-session gate (`worktree_busy:`) and never escalates dirty-file
+	 *  or lock handling — see `worktree.rs::remove_worktree_by_branch`. */
 	async function removeWorktree(
 		repoPath: string,
 		branchName: string,
 		deleteBranch: boolean,
 		force?: boolean,
+		overrideBusy?: boolean,
 	): Promise<RemoveWorktreeResult> {
 		return await invoke<RemoveWorktreeResult>("remove_worktree", {
 			repoPath,
 			branchName,
 			deleteBranch,
 			force: force ?? false,
+			overrideBusy: overrideBusy ?? false,
 		});
+	}
+
+	/** Check whether a branch's worktree has uncommitted changes. Returns `null`
+	 *  when the backend can't answer (e.g. a transient git failure) — callers
+	 *  that gate a destructive action on this must treat that as "don't know,"
+	 *  not as clean. */
+	async function checkWorktreeDirty(repoPath: string, branchName: string): Promise<boolean | null> {
+		try {
+			return await invoke<boolean>("check_worktree_dirty", { repoPath, branchName });
+		} catch (err) {
+			appLogger.debug("git", "Failed to check worktree dirty state", { repoPath, branchName, err });
+			return null;
+		}
 	}
 
 	/** Create a new worktree with a branch */
@@ -419,6 +439,7 @@ export function useRepository() {
 		renameBranch,
 		createBranch,
 		removeWorktree,
+		checkWorktreeDirty,
 		createWorktree,
 		getWorktreePaths,
 		getChangedFiles,

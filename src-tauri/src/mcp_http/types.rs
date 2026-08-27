@@ -199,11 +199,18 @@ pub(super) struct RemoveWorktreeQuery {
     /// When true, also delete the local branch. Defaults to true.
     #[serde(rename = "deleteBranch", default)]
     pub delete_branch: Option<bool>,
-    /// When true, force-remove a locked worktree (mirrors the desktop
-    /// confirmation dialog). Also switches the branch deletion from `git
-    /// branch -d` (safe) to `-D` (force). Defaults to false.
+    /// When true, force-remove a dirty and/or locked worktree (mirrors the
+    /// desktop confirmation dialog's "force remove" retry). Branch deletion
+    /// always uses the safe `git branch -d` regardless of this flag — a
+    /// worktree removal never force-deletes the branch. Defaults to false.
     #[serde(default)]
     pub force: Option<bool>,
+    /// When true, skip the check that refuses to remove a worktree with a live
+    /// PTY/agent session attached. Independent of `force`: overriding a live
+    /// session never also escalates dirty-file or lock handling. Defaults to
+    /// false.
+    #[serde(rename = "overrideBusy", default)]
+    pub override_busy: Option<bool>,
 }
 
 #[derive(Deserialize)]

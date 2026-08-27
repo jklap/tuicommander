@@ -445,3 +445,65 @@ describe("displayTask", () => {
 		expect(displayTask("Waiting for background terminal", null)).toBe("Waiting for background terminal");
 	});
 });
+
+describe("branchActivitySummary", () => {
+	let branchActivitySummary: typeof import("../../utils/activitySnapshot").branchActivitySummary;
+	let terminalsStore: typeof import("../../stores/terminals").terminalsStore;
+
+	beforeEach(async () => {
+		vi.resetModules();
+		mockInvoke.mockReset().mockResolvedValue(undefined);
+		vi.doMock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
+
+		const termMod = await import("../../stores/terminals");
+		terminalsStore = termMod.terminalsStore;
+		const snapMod = await import("../../utils/activitySnapshot");
+		branchActivitySummary = snapMod.branchActivitySummary;
+	});
+
+	it("is not busy when no terminals are attached", () => {
+		const summary = branchActivitySummary([]);
+		expect(summary).toEqual({ terminalCount: 0, isBusy: false, terminals: [] });
+	});
+
+	it("is busy for ANY attached terminal, not only an actively-working one", () => {
+		// The 2026-08-26 incident's worktree was deleted while an idle plain
+		// shell sat in it, not a busy agent — the removal gate this backs must
+		// not miss that case.
+		const id = terminalsStore.add({
+			name: "Idle shell",
+			sessionId: "s1",
+			cwd: "/repo/wt",
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: null,
+		});
+		terminalsStore.update(id, { shellState: "idle" });
+
+		const summary = branchActivitySummary([id]);
+		expect(summary.isBusy).toBe(true);
+		expect(summary.terminalCount).toBe(1);
+	});
+
+	it("reports a per-terminal label including agentType", () => {
+		const id = terminalsStore.add({
+			name: "Agent",
+			sessionId: "s1",
+			cwd: "/repo/wt",
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: "claude",
+		});
+		terminalsStore.update(id, { shellState: "busy" });
+
+		const summary = branchActivitySummary([id]);
+		expect(summary.terminals).toEqual([{ id, agentType: "claude", label: "Working" }]);
+	});
+
+	it("tolerates a terminal id that no longer exists in the store", () => {
+		const summary = branchActivitySummary(["gone"]);
+		expect(summary.terminalCount).toBe(1);
+		expect(summary.isBusy).toBe(true);
+		expect(summary.terminals).toEqual([{ id: "gone", agentType: null, label: "—" }]);
+	});
+});

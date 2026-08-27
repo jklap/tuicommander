@@ -769,6 +769,19 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     }
     tracing::info!(source = "repo_watcher", path = %repo_path, "Starting watcher");
 
+    // Clear any TUIC-owned `git worktree lock` left behind by an unclean
+    // shutdown (crash, force-quit) while a session was still attached to one
+    // of this repo's worktrees — otherwise it stays git-locked forever, since
+    // nothing else ever revisits an already-removed session's lock. Runs once
+    // per repo per app lifetime (guarded by the early return above), off the
+    // hot path in a background thread since it shells out to git.
+    {
+        let repo_path_for_sweep = repo_path.to_string();
+        std::thread::spawn(move || {
+            crate::worktree::sweep_stale_tuic_locks(&repo_path_for_sweep);
+        });
+    }
+
     let repo = PathBuf::from(repo_path);
     // A registered directory may not (yet) be a git repo — watch it anyway so a
     // runtime `git init` is detected: the `.git` creation event classifies as

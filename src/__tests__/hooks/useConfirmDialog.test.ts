@@ -172,6 +172,252 @@ describe("useConfirmDialog", () => {
 		});
 	});
 
+	describe("confirmRemoveLockedWorktree()", () => {
+		it("warns about a safe branch delete when deleteBranch=true", async () => {
+			const promise = dialog.confirmRemoveLockedWorktree("feature-x", true);
+
+			const state = dialog.dialogState();
+			expect(state?.title).toBe("Worktree is locked by an agent");
+			expect(state?.message).toContain('"feature-x" is currently locked by an active Claude agent.');
+			expect(state?.message).toContain("may interrupt the agent mid-task");
+			// Branch deletion never escalates to `-D` — this must not claim
+			// unmerged commits will be lost (root cause of the 2026-08-26
+			// incident's orphaned commits).
+			expect(state?.message).not.toContain("-D");
+			expect(state?.message).not.toContain("permanently lost");
+			expect(state?.message).toContain("git branch -d");
+			expect(state?.confirmLabel).toBe("Force Remove");
+			// Enter must not destroy live work by default (this is the incident's
+			// most plausible trigger mechanism) — same invariant as its two
+			// siblings below.
+			expect(state?.defaultButton).toBe("cancel");
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("omits the branch-deletion note when deleteBranch=false", async () => {
+			const promise = dialog.confirmRemoveLockedWorktree("feature-x", false);
+
+			expect(dialog.dialogState()?.message).not.toContain("git branch -d");
+
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+
+		it("defaults deleteBranch to true when omitted", async () => {
+			const promise = dialog.confirmRemoveLockedWorktree("feature-x");
+
+			expect(dialog.dialogState()?.message).toContain("git branch -d");
+
+			dialog.handleClose();
+			await promise;
+		});
+
+		it("warns that uncommitted work will also be discarded when isDirty is true", async () => {
+			// Forcing a locked worktree through uses double --force, which also
+			// overrides git's dirty-worktree refusal — the caller must be told,
+			// or confirming this dialog can silently discard uncommitted work
+			// with no dirty-specific warning of its own in between.
+			const promise = dialog.confirmRemoveLockedWorktree("feature-x", true, true);
+
+			expect(dialog.dialogState()?.message).toContain("uncommitted changes");
+			expect(dialog.dialogState()?.message).toContain("discard them too");
+
+			dialog.handleClose();
+			await promise;
+		});
+
+		it("omits the dirty warning when isDirty is false", async () => {
+			const promise = dialog.confirmRemoveLockedWorktree("feature-x", true, false);
+
+			expect(dialog.dialogState()?.message).not.toContain("uncommitted changes");
+
+			dialog.handleClose();
+			await promise;
+		});
+
+		it("defaults isDirty to true (fail toward warning) when omitted", async () => {
+			const promise = dialog.confirmRemoveLockedWorktree("feature-x");
+
+			expect(dialog.dialogState()?.message).toContain("uncommitted changes");
+
+			dialog.handleClose();
+			await promise;
+		});
+	});
+
+	describe("confirmRemoveBusyWorktree()", () => {
+		it("names the attached terminals and defaults Enter to Cancel", async () => {
+			const promise = dialog.confirmRemoveBusyWorktree("feature-x", {
+				terminalCount: 2,
+				isBusy: true,
+				terminals: [
+					{ id: "t1", agentType: "claude", label: "Working" },
+					{ id: "t2", agentType: null, label: "Idle" },
+				],
+			});
+
+			const state = dialog.dialogState();
+			expect(state?.title).toBe('"feature-x" is in use');
+			expect(state?.message).toContain("2 terminal(s)");
+			expect(state?.message).toContain("claude — Working");
+			expect(state?.message).toContain("terminal — Idle");
+			expect(state?.confirmLabel).toBe("Delete anyway");
+			expect(state?.kind).toBe("error");
+			// A batch delete queues one of these per busy item — Enter must not
+			// destroy live work by default (this is the incident's most plausible
+			// trigger mechanism: clicking/pressing through a stack of prompts).
+			expect(state?.defaultButton).toBe("cancel");
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("returns false when the user cancels", async () => {
+			const promise = dialog.confirmRemoveBusyWorktree("feature-y", {
+				terminalCount: 1,
+				isBusy: true,
+				terminals: [{ id: "t1", agentType: null, label: "Idle" }],
+			});
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+	});
+
+	describe("confirmForceRemoveDirtyWorktree()", () => {
+		it("warns that uncommitted changes will be discarded and defaults Enter to Cancel", async () => {
+			const promise = dialog.confirmForceRemoveDirtyWorktree("feature-x");
+
+			const state = dialog.dialogState();
+			expect(state?.title).toBe("Uncommitted changes in the worktree");
+			expect(state?.message).toContain("feature-x");
+			expect(state?.message).toContain("discards them permanently");
+			expect(state?.confirmLabel).toBe("Delete anyway");
+			expect(state?.kind).toBe("error");
+			expect(state?.defaultButton).toBe("cancel");
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("returns false when the user cancels", async () => {
+			const promise = dialog.confirmForceRemoveDirtyWorktree("feature-y");
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+	});
+
+	describe("confirmStashAndSwitch()", () => {
+		it("shows dialog with correct message and resolves true on confirm", async () => {
+			const promise = dialog.confirmStashAndSwitch("main");
+
+			expect(dialog.dialogState()).toEqual({
+				title: "Uncommitted changes",
+				message: "Working tree has uncommitted changes.\nStash them and switch to main?",
+				confirmLabel: "Stash & Switch",
+				cancelLabel: "Cancel",
+				kind: "warning",
+				defaultButton: "confirm",
+			});
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("returns false when user cancels", async () => {
+			const promise = dialog.confirmStashAndSwitch("main");
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+	});
+
+	describe("reportGitError()", () => {
+		it("shows OK/Dismiss labels by default", async () => {
+			const promise = dialog.reportGitError("Commit failed", "fatal: nothing to commit");
+
+			expect(dialog.dialogState()).toEqual({
+				title: "Commit failed",
+				message: "fatal: nothing to commit",
+				confirmLabel: "OK",
+				cancelLabel: "Dismiss",
+				kind: "error",
+				defaultButton: "confirm",
+			});
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("shows Retry/Cancel labels and resolves true only when Retry is chosen", async () => {
+			const promise = dialog.reportGitError("Push failed", "fatal: connection reset", true);
+
+			const state = dialog.dialogState();
+			expect(state?.confirmLabel).toBe("Retry");
+			expect(state?.cancelLabel).toBe("Cancel");
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("resolves false when the acknowledge dialog is dismissed", async () => {
+			const promise = dialog.reportGitError("Commit failed", "fatal: nothing to commit");
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+	});
+
+	describe("confirmOrphanCleanup()", () => {
+		it("lists every orphan path and resolves true on Archive", async () => {
+			const promise = dialog.confirmOrphanCleanup(["/repo__wt/old-a", "/repo__wt/old-b"]);
+
+			const state = dialog.dialogState();
+			expect(state?.title).toBe("Orphaned worktrees found");
+			expect(state?.message).toContain("2 worktree(s)");
+			expect(state?.message).toContain("/repo__wt/old-a");
+			expect(state?.message).toContain("/repo__wt/old-b");
+			expect(state?.confirmLabel).toBe("Archive");
+			expect(state?.cancelLabel).toBe("Keep");
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("returns false when the user keeps the orphans", async () => {
+			const promise = dialog.confirmOrphanCleanup(["/repo__wt/old-a"]);
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+	});
+
+	describe("confirmDirtyWorktreeCleanup()", () => {
+		it("describes deletion and mentions the merge would be a no-op when commitsAhead is 0", async () => {
+			const promise = dialog.confirmDirtyWorktreeCleanup("feature-x", "delete", 0);
+
+			const state = dialog.dialogState();
+			expect(state?.title).toBe("Uncommitted work in the worktree");
+			expect(state?.message).toContain("Deleting it removes the worktree directory");
+			expect(state?.message).toContain("no commits the target branch lacks");
+			expect(state?.confirmLabel).toBe("Delete anyway");
+			expect(state?.cancelLabel).toBe("Keep it");
+
+			dialog.handleConfirm();
+			expect(await promise).toBe(true);
+		});
+
+		it("describes archiving and omits the no-op note when there are commits ahead", async () => {
+			const promise = dialog.confirmDirtyWorktreeCleanup("feature-y", "archive", 3);
+
+			const state = dialog.dialogState();
+			expect(state?.message).toContain("Archiving it moves the worktree to __archived/");
+			expect(state?.message).not.toContain("would do nothing");
+			expect(state?.confirmLabel).toBe("Archive anyway");
+
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+	});
+
 	describe("confirmCloseTerminal()", () => {
 		it("shows dialog with correct message for terminal name", async () => {
 			const promise = dialog.confirmCloseTerminal("Terminal 1");

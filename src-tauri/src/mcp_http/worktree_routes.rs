@@ -216,9 +216,28 @@ pub(super) async fn remove_worktree_http(
     let repo_path = q.repo_path.clone();
     let delete_branch = q.delete_branch.unwrap_or(true);
     let force = q.force.unwrap_or(false);
+    let override_busy = q.override_busy.unwrap_or(false);
+    let mode = if force {
+        crate::worktree::RemovalMode::Forced
+    } else {
+        crate::worktree::RemovalMode::Safe
+    };
     let branch_for_event = branch.clone();
+    let state_arc = state.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::remove_worktree_by_branch(&repo_path, &branch, delete_branch, None, force)
+        // `resolve_archive_script` — the Tauri command and MCP transport both
+        // run the pre-removal archive script; this HTTP route previously
+        // skipped it (passed `None`), a transport-parity drift.
+        let script = crate::worktree::resolve_archive_script(&repo_path);
+        crate::worktree::remove_worktree_by_branch(
+            &repo_path,
+            &branch,
+            delete_branch,
+            script.as_deref(),
+            mode,
+            Some(&state_arc),
+            override_busy,
+        )
     })
     .await;
     if matches!(result, Ok(Ok(_))) {
@@ -452,5 +471,164 @@ pub(super) async fn merge_and_archive_worktree_http(
     match res {
         Ok(r) => json_result(r),
         Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::tests_support::create_temp_git_repo;
+    use axum::response::IntoResponse;
+
+    async fn response_json(response: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn remove_worktree_http_removes_a_real_worktree_and_notifies() {
+        // `remove_worktree_http` had zero tests before this — including the
+        // transport-parity bug this closes: it passed `archive_script: None`
+        // unconditionally instead of `resolve_archive_script`, unlike the Tauri
+        // command and the MCP transport (both of which do resolve it).
+        let repo = create_temp_git_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = crate::worktree::WorktreeConfig {
+            task_name: "http-remove".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("http-remove".to_string()),
+            create_branch: true,
+        };
+        let wt = crate::worktree::create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("create worktree");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = remove_worktree_http(
+            State(state),
+            Path("http-remove".to_string()),
+            Query(RemoveWorktreeQuery {
+                repo_path: repo.path().to_string_lossy().to_string(),
+                delete_branch: Some(true),
+                force: None,
+                override_busy: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["ok"], true, "response: {body}");
+        assert!(!wt.path.exists(), "worktree directory should be removed");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remove_worktree_http_refuses_a_worktree_with_a_live_session() {
+        let repo = create_temp_git_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = crate::worktree::WorktreeConfig {
+            task_name: "http-busy".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("http-busy".to_string()),
+            create_branch: true,
+        };
+        let wt = crate::worktree::create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("create worktree");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session_attached_to(&state, "s1", wt.clone());
+
+        let response = remove_worktree_http(
+            State(state.clone()),
+            Path("http-busy".to_string()),
+            Query(RemoveWorktreeQuery {
+                repo_path: repo.path().to_string_lossy().to_string(),
+                delete_branch: Some(true),
+                force: None,
+                override_busy: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = response_json(response).await;
+        let error = body["error"].as_str().expect("error field");
+        assert!(
+            error.starts_with("worktree_busy:"),
+            "expected worktree_busy: prefix, got: {error}"
+        );
+        assert!(wt.path.exists(), "worktree must survive a refused removal");
+
+        // The `force` query param threads through to override the live-session
+        // gate too — the same escape hatch the desktop UI's "Delete anyway"
+        // dialog uses via the Tauri command's `override_busy` param.
+        let response = remove_worktree_http(
+            State(state),
+            Path("http-busy".to_string()),
+            Query(RemoveWorktreeQuery {
+                repo_path: repo.path().to_string_lossy().to_string(),
+                delete_branch: Some(true),
+                force: None,
+                override_busy: Some(true),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            !wt.path.exists(),
+            "override_busy should let the removal through"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_worktree_http_runs_the_archive_script() {
+        // Regression test for the transport-parity bug found while adding the
+        // liveness gate: this route used to call `remove_worktree_by_branch`
+        // with `archive_script: None` unconditionally, silently skipping the
+        // pre-removal archive script that the Tauri command and MCP transport
+        // both run.
+        let repo = create_temp_git_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = crate::worktree::WorktreeConfig {
+            task_name: "http-archive-script".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("http-archive-script".to_string()),
+            create_branch: true,
+        };
+        crate::worktree::create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("create worktree");
+
+        let marker = repo.path().join("script-ran.txt");
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+        crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig {
+            archive_script: format!("touch {}", marker.display()),
+            ..crate::config::load_repo_defaults()
+        })
+        .expect("save repo defaults");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = remove_worktree_http(
+            State(state),
+            Path("http-archive-script".to_string()),
+            Query(RemoveWorktreeQuery {
+                repo_path: repo.path().to_string_lossy().to_string(),
+                delete_branch: Some(true),
+                force: None,
+                override_busy: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            marker.exists(),
+            "the configured archive script should have run"
+        );
     }
 }

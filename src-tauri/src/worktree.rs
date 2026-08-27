@@ -344,6 +344,54 @@ pub(crate) const MAIN_WORKTREE_PREFIX: &str = "worktree_is_main:";
 /// don't drift on the literal string.
 pub(crate) const STALE_DIR_PREFIX: &str = "STALE_DIR:";
 
+/// Error prefix returned when `git worktree remove` refuses a worktree that holds
+/// uncommitted (modified or untracked) work and the caller did not confirm
+/// destroying it. The JS layer matches this prefix to offer an informed retry
+/// ("this will discard uncommitted changes") instead of silently dropping the
+/// sidebar row while the worktree is still on disk.
+pub(crate) const DIRTY_WORKTREE_PREFIX: &str = "worktree_dirty:";
+
+/// Error prefix returned when a live PTY/agent session is attached to the
+/// worktree being removed (see [`crate::state::AppState::live_sessions_in_worktree`]).
+/// This is a hard refusal independent of git's own dirty/lock checks — a clean,
+/// unlocked worktree can still have a terminal open in it. Only an explicit
+/// `override_busy` skips this gate; it is deliberately never implied by `force`,
+/// so overriding a live session never also escalates dirty-file or lock handling.
+pub(crate) const BUSY_WORKTREE_PREFIX: &str = "worktree_busy:";
+
+/// How aggressively `git worktree remove` should override git's own safety checks.
+///
+/// A plain bool can't express this: git's `remove` has two *independent* refusals
+/// (uncommitted work, and a `git worktree lock`) and a single `--force` only lifts
+/// the first — lifting the second needs `--force` twice. See the incident writeup
+/// at `plans/worktree-removal-incident-2026-08-26.md` for why collapsing these two
+/// into one flag is exactly what let a live worktree be destroyed unconditionally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemovalMode {
+    /// `git worktree remove` — refuses both a dirty and a locked worktree. The
+    /// default for every removal path; nothing is destroyed without an explicit
+    /// override from a caller that has already confirmed with the user.
+    Safe,
+    /// `git worktree remove --force` — overrides the dirty-worktree check only.
+    /// Used once uncommitted work is confirmed disposable (e.g. a merge/finalize
+    /// cleanup the user already confirmed), never to break a lock.
+    Dirty,
+    /// `git worktree remove --force --force` — also overrides a `git worktree
+    /// lock`. Reserved for the explicit "force remove" confirmation after a
+    /// `worktree_locked:` refusal.
+    Forced,
+}
+
+impl RemovalMode {
+    fn force_args(self) -> &'static [&'static str] {
+        match self {
+            RemovalMode::Safe => &["worktree", "remove"],
+            RemovalMode::Dirty => &["worktree", "remove", "--force"],
+            RemovalMode::Forced => &["worktree", "remove", "--force", "--force"],
+        }
+    }
+}
+
 /// Force-remove a stale worktree directory.
 ///
 /// Runs `git worktree remove --force` (cleans the registry entry) and then verifies
@@ -412,21 +460,20 @@ pub(crate) fn create_worktree_with_stale_recovery(
     }
 }
 
-pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
+pub(crate) fn remove_worktree_internal(
+    worktree: &WorktreeInfo,
+    mode: RemovalMode,
+) -> Result<(), String> {
     let wt_path_str = worktree.path.to_string_lossy().to_string();
     tracing::info!(
         source = "worktree",
         branch = %worktree.name,
         path = %wt_path_str,
-        force = %force,
+        mode = ?mode,
         "remove_worktree_internal: start"
     );
 
-    let force_args: &[&str] = if force {
-        &["worktree", "remove", "--force", "--force"]
-    } else {
-        &["worktree", "remove", "--force"]
-    };
+    let force_args = mode.force_args();
 
     match git_cmd(&worktree.base_repo)
         .args(
@@ -437,7 +484,7 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
         .run()
     {
         Ok(_) => {
-            tracing::info!(source = "worktree", branch = %worktree.name, force = %force, "git worktree remove: OK");
+            tracing::info!(source = "worktree", branch = %worktree.name, mode = ?mode, "git worktree remove: OK");
         }
         Err(crate::git_cli::GitError::NonZeroExit { ref stderr, .. })
             if stderr.contains("not a working tree") || stderr.contains("No such file") =>
@@ -449,13 +496,13 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
             );
         }
         Err(crate::git_cli::GitError::NonZeroExit { ref stderr, .. })
-            if !force
+            if mode != RemovalMode::Forced
                 && (stderr.contains("locked working tree")
                     || stderr.contains("cannot remove a locked")) =>
         {
-            // Worktree is locked and caller did not request force. Surface a
-            // distinctive error so the JS layer can prompt the user to confirm
-            // before retrying with force=true.
+            // Worktree is locked and the caller did not request the double-force
+            // that overrides a lock. Surface a distinctive error so the JS layer
+            // can prompt the user to confirm before retrying with Forced.
             tracing::warn!(
                 source = "worktree",
                 branch = %worktree.name,
@@ -463,6 +510,23 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
                 "git worktree remove: locked — returning error for JS confirmation prompt"
             );
             return Err(format!("{LOCKED_WORKTREE_PREFIX}{stderr}"));
+        }
+        Err(crate::git_cli::GitError::NonZeroExit { ref stderr, .. })
+            if mode == RemovalMode::Safe
+                && stderr.contains("contains modified or untracked files") =>
+        {
+            // Worktree has uncommitted work and the caller asked for the Safe
+            // (no-override) removal. Surface a distinctive error so the JS layer
+            // can offer an informed retry instead of silently discarding it — or,
+            // on the generic-error fallback path, silently dropping the sidebar
+            // row while the worktree is still on disk.
+            tracing::warn!(
+                source = "worktree",
+                branch = %worktree.name,
+                stderr = %stderr,
+                "git worktree remove: dirty — returning error for JS confirmation prompt"
+            );
+            return Err(format!("{DIRTY_WORKTREE_PREFIX}{stderr}"));
         }
         Err(crate::git_cli::GitError::NonZeroExit { ref stderr, .. })
             if stderr.contains("is a main working tree") =>
@@ -499,6 +563,12 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
         tracing::info!(source = "worktree", branch = %worktree.name, "directory already gone after git worktree remove");
     }
 
+    // Unlock first — `prune` skips locked worktrees and would leave a ghost
+    // entry in `git worktree list` (same reasoning as `archive_worktree_dir`).
+    // Best-effort: the directory is already gone at this point, so a failure
+    // here just means git had nothing left to unlock.
+    unlock_worktree(&worktree.base_repo, &worktree.path);
+
     // Prune worktrees (non-fatal: stale entries are harmless)
     if let Err(e) = git_cmd(&worktree.base_repo)
         .args(["worktree", "prune"])
@@ -511,6 +581,53 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
 
     tracing::info!(source = "worktree", branch = %worktree.name, "remove_worktree_internal: done");
     Ok(())
+}
+
+/// Best-effort `git worktree lock` with a TUIC-owned reason, run when a PTY/agent
+/// session attaches to a worktree. Failure is never fatal to the caller — a lock
+/// is defense in depth (it also protects against a bare `git worktree remove` run
+/// outside TUIC entirely), not the primary gate; the primary gate is the live
+/// session check in `remove_worktree_by_branch`.
+///
+/// The reason is prefixed `tuic: ` so the startup sweep can distinguish a
+/// TUIC-owned lock (safe to clear once its session is gone) from a lock a user
+/// or another tool (e.g. Claude Code's own agent locking) set deliberately.
+pub(crate) fn lock_worktree_for_session(base_repo: &Path, worktree_path: &Path, session_id: &str) {
+    let wt_path_str = worktree_path.to_string_lossy().to_string();
+    if let Err(e) = git_cmd(base_repo)
+        .args([
+            "worktree",
+            "lock",
+            &wt_path_str,
+            "--reason",
+            &format!("{TUIC_LOCK_REASON_PREFIX}session {session_id}"),
+        ])
+        .run()
+    {
+        tracing::warn!(
+            source = "worktree",
+            path = %wt_path_str,
+            session_id = %session_id,
+            "lock_worktree_for_session: git worktree lock failed (non-fatal): {e}"
+        );
+    }
+}
+
+/// Best-effort `git worktree unlock`, run when the last session attached to a
+/// worktree detaches. Never fatal — an unlock failure just means the worktree
+/// stays locked until the next successful removal attempt or startup sweep.
+pub(crate) fn unlock_worktree(base_repo: &Path, worktree_path: &Path) {
+    let wt_path_str = worktree_path.to_string_lossy().to_string();
+    if let Err(e) = git_cmd(base_repo)
+        .args(["worktree", "unlock", &wt_path_str])
+        .run()
+    {
+        tracing::warn!(
+            source = "worktree",
+            path = %wt_path_str,
+            "unlock_worktree: git worktree unlock failed (non-fatal): {e}"
+        );
+    }
 }
 
 /// Adjective + sci-fi character worktree name generator
@@ -837,7 +954,9 @@ pub(crate) fn remove_worktree_by_branch(
     branch_name: &str,
     delete_branch: bool,
     archive_script: Option<&str>,
-    force: bool,
+    mode: RemovalMode,
+    state: Option<&Arc<AppState>>,
+    override_busy: bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
     let base_repo = PathBuf::from(repo_path);
     let mut branch_delete_warning = None;
@@ -846,6 +965,8 @@ pub(crate) fn remove_worktree_by_branch(
         source = "worktree",
         branch = %branch_name,
         delete_branch = %delete_branch,
+        mode = ?mode,
+        override_busy = %override_busy,
         "remove_worktree_by_branch: start"
     );
 
@@ -872,6 +993,38 @@ pub(crate) fn remove_worktree_by_branch(
         "remove_worktree_by_branch: worktree path resolved"
     );
 
+    // Refuse to remove a worktree with a live PTY/agent session attached, unless
+    // the caller has already confirmed the override. This is deliberately
+    // independent of git's own dirty/lock checks — a clean, unlocked worktree
+    // can still have a terminal open in it — and is the backstop for callers
+    // (MCP, HTTP) that never go through the frontend's own terminal-aware
+    // confirmation flow. `state` is `None` only for pre-attach callers (e.g.
+    // cleanup after a failed PTY spawn) where no session could possibly exist.
+    if !override_busy && let Some(state) = state {
+        let attached = state.live_sessions_in_worktree(&worktree_path);
+        if !attached.is_empty() {
+            let ids = attached
+                .iter()
+                .map(|s| {
+                    // Prefer the live cwd (what the JS layer's "in use" summary
+                    // wants to show); fall back to the bare session id.
+                    s.cwd.as_deref().unwrap_or(s.session_id.as_str())
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            tracing::warn!(
+                source = "worktree",
+                branch = %branch_name,
+                sessions = %ids,
+                "remove_worktree_by_branch: refusing — live session(s) attached"
+            );
+            return Err(format!(
+                "{BUSY_WORKTREE_PREFIX}{} session(s) attached: {ids}",
+                attached.len()
+            ));
+        }
+    }
+
     // Run archive/cleanup script before deletion (if configured)
     if let Some(script) = archive_script
         && !script.is_empty()
@@ -888,32 +1041,32 @@ pub(crate) fn remove_worktree_by_branch(
         base_repo,
     };
 
-    remove_worktree_internal(&worktree, force)?;
+    remove_worktree_internal(&worktree, mode)?;
 
-    // Delete the local branch when requested. Default uses `-d` (safe delete):
-    // unmerged branches are refused so unpushed commits aren't silently lost.
-    // Only when the caller passes `force=true` (e.g. the locked-worktree
-    // confirmation dialog already warned the user) do we use `-D`.
+    // Delete the local branch when requested. Always uses `-d` (safe delete):
+    // unmerged branches are refused so unpushed/unmerged commits are never
+    // silently discarded by a worktree removal, no matter how the worktree
+    // itself was removed. `RemovalMode` governs the worktree directory only —
+    // it never escalates branch deletion. (Previously `force` also selected
+    // `-D` here, which is what force-deleted the branch behind the 2026-08-26
+    // incident's orphaned commits; see the incident writeup.)
     if delete_branch {
-        let flag = if force { "-D" } else { "-d" };
         // `--` separates flags from positional args so a branch name beginning
-        // with `-` (e.g. `-D`, `--force`) cannot be misparsed as a git option.
+        // with `-` cannot be misparsed as a git option.
         match git_cmd(&worktree.base_repo)
-            .args(["branch", flag, "--", branch_name])
+            .args(["branch", "-d", "--", branch_name])
             .run()
         {
             Ok(_) => tracing::info!(
                 source = "worktree",
                 branch = %branch_name,
-                flag = %flag,
                 "git branch delete: OK"
             ),
             Err(e) => {
-                let warning = format!("git branch {flag} {branch_name} failed: {e}");
+                let warning = format!("git branch -d {branch_name} failed: {e}");
                 tracing::warn!(
                     source = "worktree",
                     branch = %branch_name,
-                    flag = %flag,
                     "git branch delete failed (branch ref preserved): {e}"
                 );
                 branch_delete_warning = Some(warning);
@@ -930,6 +1083,16 @@ pub(crate) fn remove_worktree_by_branch(
 /// Remove a git worktree by branch name (Tauri command with cache invalidation)
 ///
 /// `delete_branch` defaults to `true` when omitted (preserving existing behavior).
+///
+/// `force` (default `false`) selects [`RemovalMode::Forced`] — the double
+/// `--force` that overrides both a dirty worktree and a `git worktree lock`.
+/// The default `Safe` attempt is expected to fail informatively
+/// (`worktree_dirty:` / `worktree_locked:`) so the frontend can show the right
+/// confirmation before retrying with `force: true`.
+///
+/// `override_busy` (default `false`) is a *separate* flag: it skips the
+/// live-session gate only, and never escalates dirty-file or lock handling —
+/// see `remove_worktree_by_branch`.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn remove_worktree(
@@ -938,27 +1101,38 @@ pub(crate) async fn remove_worktree(
     branch_name: String,
     delete_branch: Option<bool>,
     force: Option<bool>,
+    override_busy: Option<bool>,
 ) -> Result<RemoveWorktreeOutcome, String> {
     let delete_branch = delete_branch.unwrap_or(true);
     let force = force.unwrap_or(false);
+    let override_busy = override_busy.unwrap_or(false);
+    let mode = if force {
+        RemovalMode::Forced
+    } else {
+        RemovalMode::Safe
+    };
     tracing::info!(
         source = "worktree",
         branch = %branch_name,
         repo = %repo_path,
         delete_branch = %delete_branch,
         force = %force,
+        override_busy = %override_busy,
         "remove_worktree command: invoked"
     );
     let script = resolve_archive_script(&repo_path);
     let repo_path_clone = repo_path.clone();
     let branch_name_clone = branch_name.clone();
+    let state_arc = state.inner().clone();
     let result = tokio::task::spawn_blocking(move || {
         remove_worktree_by_branch(
             &repo_path_clone,
             &branch_name_clone,
             delete_branch,
             script.as_deref(),
-            force,
+            mode,
+            Some(&state_arc),
+            override_busy,
         )
     })
     .await
@@ -1010,6 +1184,7 @@ pub(crate) fn delete_local_branch_impl(
     repo_path: &str,
     branch_name: &str,
     keep_worktree: bool,
+    state: Option<&Arc<AppState>>,
 ) -> Result<(), String> {
     // Refuse to delete the default branch
     let default_branch =
@@ -1045,8 +1220,18 @@ pub(crate) fn delete_local_branch_impl(
                 .map_err(|e| format!("git branch -d {branch_name} failed: {e}"))?;
         }
         (Some(_), false) => {
-            // Remove worktree + branch in one go
-            remove_worktree_by_branch(repo_path, branch_name, true, None, false)?;
+            // Remove worktree + branch in one go. Safe mode: this is documented
+            // as a safe deletion, so it must never silently discard uncommitted
+            // work in the worktree either.
+            remove_worktree_by_branch(
+                repo_path,
+                branch_name,
+                true,
+                None,
+                RemovalMode::Safe,
+                state,
+                false,
+            )?;
         }
         (None, _) => {
             // Bare branch — no worktree to consider
@@ -1075,7 +1260,7 @@ pub(crate) fn delete_local_branch(
     keep_worktree: Option<bool>,
 ) -> Result<(), String> {
     let keep_worktree = keep_worktree.unwrap_or(false);
-    delete_local_branch_impl(&repo_path, &branch_name, keep_worktree)?;
+    delete_local_branch_impl(&repo_path, &branch_name, keep_worktree, Some(state.inner()))?;
     if keep_worktree {
         state.invalidate_repo_caches(&repo_path);
     } else {
@@ -1110,7 +1295,16 @@ struct WorktreeEntry {
     /// Branch from the `branch refs/heads/...` line — absent while HEAD is detached.
     branch: Option<String>,
     detached: bool,
+    /// Reason from a `locked <reason>` line, if the worktree is git-locked.
+    /// `Some("")` means locked with no reason recorded. `None` means unlocked.
+    locked_reason: Option<String>,
 }
+
+/// Prefix `lock_worktree_for_session` writes into `git worktree lock --reason`.
+/// A lock whose reason carries this prefix is safe for the startup sweep to
+/// clear — it's TUIC's own bookkeeping, never a user's or another tool's
+/// (e.g. Claude Code's own agent locking) deliberate lock.
+const TUIC_LOCK_REASON_PREFIX: &str = "tuic: ";
 
 fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
     let mut entries = Vec::new();
@@ -1124,6 +1318,7 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
         let mut path: Option<String> = None;
         let mut branch: Option<String> = None;
         let mut detached = false;
+        let mut locked_reason: Option<String> = None;
 
         for line in block.lines() {
             if let Some(p) = line.strip_prefix("worktree ") {
@@ -1132,6 +1327,10 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
                 branch = Some(b.to_string());
             } else if line == "detached" {
                 detached = true;
+            } else if let Some(reason) = line.strip_prefix("locked ") {
+                locked_reason = Some(reason.to_string());
+            } else if line == "locked" {
+                locked_reason = Some(String::new());
             }
         }
 
@@ -1140,11 +1339,59 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
                 path,
                 branch,
                 detached,
+                locked_reason,
             });
         }
     }
 
     entries
+}
+
+/// Unlock every TUIC-owned lock (reason prefixed [`TUIC_LOCK_REASON_PREFIX`])
+/// left behind by an unclean shutdown — a lock never gets a matching
+/// `unlock_worktree` call if TUIC exits (crash, force-quit) while a session is
+/// still attached. Run once at startup, per repo. Never touches a lock without
+/// that prefix: a user's manual lock or another tool's (e.g. Claude Code's own
+/// agent locking) is left exactly as-is.
+///
+/// Returns the number of worktrees unlocked. Best-effort throughout — a single
+/// failed unlock is warned and does not stop the sweep.
+pub(crate) fn sweep_stale_tuic_locks(repo_path: &str) -> usize {
+    let base_repo = Path::new(repo_path);
+    let out = match git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+    {
+        Ok(out) => out,
+        Err(e) => {
+            tracing::warn!(
+                source = "worktree",
+                repo = %repo_path,
+                "sweep_stale_tuic_locks: git worktree list failed: {e}"
+            );
+            return 0;
+        }
+    };
+
+    let mut swept = 0;
+    for entry in parse_worktree_entries(&out.stdout) {
+        let Some(reason) = entry.locked_reason else {
+            continue;
+        };
+        if !reason.starts_with(TUIC_LOCK_REASON_PREFIX) {
+            continue;
+        }
+        tracing::info!(
+            source = "worktree",
+            repo = %repo_path,
+            path = %entry.path,
+            reason = %reason,
+            "sweep_stale_tuic_locks: clearing stale TUIC-owned lock"
+        );
+        unlock_worktree(base_repo, Path::new(&entry.path));
+        swept += 1;
+    }
+    swept
 }
 
 /// Marker files git writes into a worktree's admin dir while a multi-step operation is in
@@ -1354,7 +1601,19 @@ pub(crate) fn delete_orphan_worktree_impl(
         branch: None,
         base_repo,
     };
-    remove_worktree_internal(&worktree, false)?;
+    // This path is only reached via the explicit `OrphanCleanup::Delete`
+    // opt-in — the user already chose "hard-delete, no archive, unrecoverable"
+    // as a standing setting. Still refuse a live session outright: an orphan
+    // (detached HEAD, no branch) is a heuristic classification, and a session
+    // attached to it is strong evidence it's not actually abandoned.
+    let attached = state.live_sessions_in_worktree(&worktree.path);
+    if !attached.is_empty() {
+        return Err(format!(
+            "{BUSY_WORKTREE_PREFIX}{} session(s) attached",
+            attached.len()
+        ));
+    }
+    remove_worktree_internal(&worktree, RemovalMode::Dirty)?;
     state.invalidate_repo_caches(&repo_path);
     Ok(())
 }
@@ -1983,7 +2242,25 @@ pub(crate) fn finalize_merged_worktree_impl(
             })
         }
         "delete" => {
-            remove_worktree_by_branch(&repo_path, &branch_name, true, script.as_deref(), false)?;
+            // `cleanup_needs_confirmation` above already refused unless the
+            // worktree is known clean or `force` explicitly confirmed destroying
+            // it — so Dirty (not Safe) is correct here: it does the confirmed
+            // override without also reaching for the lock-breaking Forced mode,
+            // which this path has no business touching.
+            let mode = if force {
+                RemovalMode::Dirty
+            } else {
+                RemovalMode::Safe
+            };
+            remove_worktree_by_branch(
+                &repo_path,
+                &branch_name,
+                true,
+                script.as_deref(),
+                mode,
+                Some(state),
+                false,
+            )?;
             state.notify_worktree_removed(&repo_path, &branch_name);
             Ok(MergeArchiveResult {
                 merged: true,
@@ -2095,7 +2372,23 @@ pub(crate) fn merge_and_archive_worktree_impl(
         }
         "delete" => {
             err_if_branch_worktree_busy(&base_repo, &branch_name)?;
-            remove_worktree_by_branch(&repo_path, &branch_name, true, script.as_deref(), false)?;
+            // See the comment on the equivalent branch in
+            // `finalize_merged_worktree_impl`: `cleanup_needs_confirmation` above
+            // already gated this on `force`, so Dirty (never Forced) is correct.
+            let mode = if force {
+                RemovalMode::Dirty
+            } else {
+                RemovalMode::Safe
+            };
+            remove_worktree_by_branch(
+                &repo_path,
+                &branch_name,
+                true,
+                script.as_deref(),
+                mode,
+                Some(state),
+                false,
+            )?;
             state.notify_worktree_removed(&repo_path, &branch_name);
             Ok(MergeArchiveResult {
                 merged: true,
@@ -2576,7 +2869,7 @@ mod tests {
             .expect("First create should succeed");
 
         // 2. Remove the worktree but PRESERVE the branch (delete_branch=false path).
-        remove_worktree_internal(&wt, true).expect("remove should succeed");
+        remove_worktree_internal(&wt, RemovalMode::Safe).expect("remove should succeed");
         assert!(
             !wt.path.exists(),
             "worktree dir should be gone after removal"
@@ -2670,7 +2963,7 @@ mod tests {
             "Worktree should exist before removal"
         );
 
-        let result = remove_worktree_internal(&worktree, false);
+        let result = remove_worktree_internal(&worktree, RemovalMode::Safe);
         assert!(result.is_ok(), "Failed to remove worktree: {:?}", result);
 
         assert!(
@@ -2691,7 +2984,7 @@ mod tests {
         };
 
         // Should not error when removing non-existent worktree
-        let result = remove_worktree_internal(&worktree, false);
+        let result = remove_worktree_internal(&worktree, RemovalMode::Safe);
         assert!(
             result.is_ok(),
             "Removing nonexistent worktree should succeed"
@@ -2726,7 +3019,7 @@ mod tests {
             .output()
             .expect("git worktree lock failed");
 
-        let result = remove_worktree_internal(&worktree, false);
+        let result = remove_worktree_internal(&worktree, RemovalMode::Safe);
         assert!(
             result.is_err(),
             "Should fail on locked worktree without force"
@@ -2770,7 +3063,7 @@ mod tests {
             .output()
             .expect("git worktree lock failed");
 
-        let result = remove_worktree_internal(&worktree, true);
+        let result = remove_worktree_internal(&worktree, RemovalMode::Forced);
         assert!(
             result.is_ok(),
             "Force removal of locked worktree should succeed: {:?}",
@@ -2779,6 +3072,332 @@ mod tests {
         assert!(
             !worktree.path.exists(),
             "Worktree directory should be gone after force removal"
+        );
+    }
+
+    /// Create a worktree with a modified-and-added (tracked) uncommitted file.
+    fn worktree_with_modified_file(
+        repo: &TempDir,
+        worktrees_dir: &Path,
+        task: &str,
+    ) -> WorktreeInfo {
+        let config = WorktreeConfig {
+            task_name: task.to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: None,
+            create_branch: false,
+        };
+        let wt = create_worktree_internal(worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+        fs::write(wt.path.join("dirty.txt"), "uncommitted work").unwrap();
+        git_cmd(&wt.path).args(["add", "."]).run().unwrap();
+        wt
+    }
+
+    /// Create a worktree with an untracked-only (never `git add`ed) file.
+    fn worktree_with_untracked_file(
+        repo: &TempDir,
+        worktrees_dir: &Path,
+        task: &str,
+    ) -> WorktreeInfo {
+        let config = WorktreeConfig {
+            task_name: task.to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: None,
+            create_branch: false,
+        };
+        let wt = create_worktree_internal(worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+        fs::write(wt.path.join("untracked.txt"), "uncommitted work").unwrap();
+        wt
+    }
+
+    #[test]
+    fn safe_remove_refuses_a_dirty_worktree() {
+        // Root cause of the 2026-08-26 incident: `remove_worktree_internal`
+        // passed a single `--force` even on the "non-force" path, which
+        // silently overrides git's own dirty-worktree refusal. Nothing
+        // previously asserted the non-force path actually protects
+        // uncommitted work — every prior non-force test removed a clean
+        // worktree. `RemovalMode::Safe` must behave like plain
+        // `git worktree remove`: refuse outright.
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let wt = worktree_with_modified_file(&repo, &worktrees_dir, "dirty-safe");
+
+        let result = remove_worktree_internal(&wt, RemovalMode::Safe);
+        let err = result.expect_err("Safe removal of a dirty worktree must fail");
+        assert!(
+            err.starts_with(DIRTY_WORKTREE_PREFIX),
+            "Error should start with DIRTY_WORKTREE_PREFIX, got: {err}"
+        );
+        assert!(
+            wt.path.join("dirty.txt").exists(),
+            "uncommitted work must survive a refused Safe removal"
+        );
+    }
+
+    #[test]
+    fn safe_remove_refuses_an_untracked_only_worktree() {
+        // Same protection, for a worktree whose only uncommitted content is
+        // untracked (never `git add`ed) — a distinct git refusal path from a
+        // modified tracked file, but Safe mode must refuse both.
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let wt = worktree_with_untracked_file(&repo, &worktrees_dir, "dirty-untracked");
+
+        let result = remove_worktree_internal(&wt, RemovalMode::Safe);
+        let err = result.expect_err("Safe removal of an untracked-only worktree must fail");
+        assert!(
+            err.starts_with(DIRTY_WORKTREE_PREFIX),
+            "Error should start with DIRTY_WORKTREE_PREFIX, got: {err}"
+        );
+        assert!(
+            wt.path.join("untracked.txt").exists(),
+            "untracked work must survive a refused Safe removal"
+        );
+    }
+
+    #[test]
+    fn dirty_mode_removes_a_dirty_worktree_but_not_a_locked_one() {
+        // The middle mode: overrides the dirty check (single --force) but not
+        // a lock (still needs the second --force). Neither half of this was
+        // reachable before `RemovalMode` existed — `force: bool` could only
+        // express "override neither" or "override both".
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+
+        let dirty_wt = worktree_with_modified_file(&repo, &worktrees_dir, "dirty-mode-dirty");
+        assert!(
+            remove_worktree_internal(&dirty_wt, RemovalMode::Dirty).is_ok(),
+            "Dirty mode should remove a merely-dirty worktree"
+        );
+        assert!(!dirty_wt.path.exists());
+
+        let locked_config = WorktreeConfig {
+            task_name: "dirty-mode-locked".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: None,
+            create_branch: false,
+        };
+        let locked_wt = create_worktree_internal(&worktrees_dir, &locked_config, None)
+            .expect("Failed to create worktree");
+        Command::new("git")
+            .current_dir(repo.path())
+            .args([
+                "worktree",
+                "lock",
+                "--reason",
+                "test lock",
+                locked_wt.path.to_str().unwrap(),
+            ])
+            .output()
+            .expect("git worktree lock failed");
+
+        let result = remove_worktree_internal(&locked_wt, RemovalMode::Dirty);
+        let err = result.expect_err("Dirty mode must not override a lock");
+        assert!(
+            err.starts_with(LOCKED_WORKTREE_PREFIX),
+            "Error should start with LOCKED_WORKTREE_PREFIX, got: {err}"
+        );
+        assert!(locked_wt.path.exists());
+    }
+
+    #[test]
+    fn remove_worktree_internal_unlocks_before_pruning() {
+        // A successful removal must drop git's administrative lock entry, not
+        // just delete the directory — otherwise `git worktree list` keeps
+        // reporting a ghost `locked` entry for a path that no longer exists
+        // (mirrors the reasoning already applied to `archive_worktree_dir`).
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = WorktreeConfig {
+            task_name: "unlock-before-prune".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: None,
+            create_branch: false,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+        Command::new("git")
+            .current_dir(repo.path())
+            .args([
+                "worktree",
+                "lock",
+                "--reason",
+                "tuic: session test",
+                wt.path.to_str().unwrap(),
+            ])
+            .output()
+            .expect("git worktree lock failed");
+
+        remove_worktree_internal(&wt, RemovalMode::Forced).expect("forced removal should succeed");
+
+        let out = git_cmd(repo.path())
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .expect("list worktrees");
+        assert!(
+            !out.stdout.contains(wt.path.to_str().unwrap()),
+            "removed worktree must not linger as a ghost entry: {}",
+            out.stdout
+        );
+    }
+
+    #[test]
+    fn parse_worktree_entries_reads_the_locked_reason() {
+        let porcelain = "worktree /repo\nHEAD abc123\nbranch refs/heads/main\n\n\
+                          worktree /repo__wt/feature\nHEAD def456\nbranch refs/heads/feature\n\
+                          locked tuic: session xyz\n\n\
+                          worktree /repo__wt/unlocked\nHEAD 789abc\nbranch refs/heads/other\n";
+        let entries = parse_worktree_entries(porcelain);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].locked_reason, None);
+        assert_eq!(
+            entries[1].locked_reason.as_deref(),
+            Some("tuic: session xyz")
+        );
+        assert_eq!(entries[2].locked_reason, None);
+    }
+
+    #[test]
+    fn sweep_stale_tuic_locks_clears_only_the_tuic_owned_lock() {
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+
+        let tuic_config = WorktreeConfig {
+            task_name: "sweep-tuic-owned".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: None,
+            create_branch: false,
+        };
+        let tuic_wt = create_worktree_internal(&worktrees_dir, &tuic_config, None)
+            .expect("Failed to create worktree");
+        Command::new("git")
+            .current_dir(repo.path())
+            .args([
+                "worktree",
+                "lock",
+                "--reason",
+                "tuic: session dead-session",
+                tuic_wt.path.to_str().unwrap(),
+            ])
+            .output()
+            .expect("git worktree lock failed");
+
+        let foreign_config = WorktreeConfig {
+            task_name: "sweep-foreign-owned".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: None,
+            create_branch: false,
+        };
+        let foreign_wt = create_worktree_internal(&worktrees_dir, &foreign_config, None)
+            .expect("Failed to create worktree");
+        Command::new("git")
+            .current_dir(repo.path())
+            .args([
+                "worktree",
+                "lock",
+                "--reason",
+                "claude agent session",
+                foreign_wt.path.to_str().unwrap(),
+            ])
+            .output()
+            .expect("git worktree lock failed");
+
+        let swept = sweep_stale_tuic_locks(repo.path().to_str().unwrap());
+        assert_eq!(swept, 1, "only the tuic-owned lock should be cleared");
+
+        // The tuic-owned lock is gone: a Safe removal (no --force at all) now succeeds.
+        assert!(remove_worktree_internal(&tuic_wt, RemovalMode::Safe).is_ok());
+
+        // The foreign lock is untouched: even Dirty (single --force) is still refused.
+        let result = remove_worktree_internal(&foreign_wt, RemovalMode::Dirty);
+        assert!(
+            result.is_err_and(|e| e.starts_with(LOCKED_WORKTREE_PREFIX)),
+            "a non-TUIC lock must survive the sweep"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_worktree_by_branch_refuses_a_worktree_with_a_live_session() {
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = WorktreeConfig {
+            task_name: "busy-branch".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("busy-branch".to_string()),
+            create_branch: true,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session_attached_to(&state, "s1", wt.clone());
+
+        let result = remove_worktree_by_branch(
+            repo.path().to_str().unwrap(),
+            "busy-branch",
+            true,
+            None,
+            RemovalMode::Safe,
+            Some(&state),
+            false,
+        );
+        let err = result.expect_err("a live session must refuse removal outright");
+        assert!(
+            err.starts_with(BUSY_WORKTREE_PREFIX),
+            "Error should start with BUSY_WORKTREE_PREFIX, got: {err}"
+        );
+        assert!(
+            wt.path.exists(),
+            "worktree must survive a refused busy removal"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn override_busy_skips_the_liveness_gate_without_escalating_branch_delete() {
+        // `override_busy` is a distinct flag from `RemovalMode` on purpose:
+        // overriding a live session must never also force-delete the branch —
+        // exactly the coupling that caused the 2026-08-26 incident's data loss.
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = WorktreeConfig {
+            task_name: "override-busy".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("override-busy".to_string()),
+            create_branch: true,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+        // Unmerged commit so a safe `git branch -d` would refuse.
+        fs::write(wt.path.join("new.txt"), "unmerged work").unwrap();
+        git_cmd(&wt.path).args(["add", "."]).run().unwrap();
+        git_cmd(&wt.path)
+            .args(["commit", "-m", "unmerged change"])
+            .run()
+            .unwrap();
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session_attached_to(&state, "s1", wt.clone());
+
+        let outcome = remove_worktree_by_branch(
+            repo.path().to_str().unwrap(),
+            "override-busy",
+            true,
+            None,
+            RemovalMode::Safe,
+            Some(&state),
+            true, // override_busy
+        )
+        .expect("override_busy should skip the liveness gate");
+        assert!(!wt.path.exists(), "worktree should be removed");
+        assert!(
+            outcome.branch_delete_warning.is_some(),
+            "override_busy must not also escalate branch deletion — the unmerged \
+             branch should survive exactly as it would without an override"
         );
     }
 
@@ -2794,7 +3413,7 @@ mod tests {
             base_repo: repo.path().to_path_buf(),
         };
 
-        let result = remove_worktree_internal(&main_worktree, false);
+        let result = remove_worktree_internal(&main_worktree, RemovalMode::Safe);
         assert!(result.is_err(), "Removing main worktree should fail");
         let err = result.unwrap_err();
         assert!(
@@ -2828,11 +3447,13 @@ mod tests {
             .run()
             .unwrap();
 
-        // Safe remove (force=false): worktree gone, branch survives
+        // Safe remove: worktree gone, branch survives
         let outcome = remove_worktree_by_branch(
             repo.path().to_str().unwrap(),
             "feat-unmerged",
             true,
+            None,
+            RemovalMode::Safe,
             None,
             false,
         )
@@ -2855,9 +3476,15 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_worktree_by_branch_force_delete_removes_unmerged_branch() {
-        // Scenario: same as above but with force=true (user confirmed via locked-worktree dialog).
-        // Expected: branch ref is force-deleted via `git branch -D`.
+    fn forced_remove_never_force_deletes_the_branch() {
+        // Root cause of the 2026-08-26 incident's orphaned commits:
+        // `remove_worktree_by_branch` used to key `git branch -d` vs `-D` off the
+        // same `force` flag that overrides git's worktree-remove safety checks,
+        // so a forced worktree removal silently force-deleted an unmerged branch
+        // too (`git branch -D`), orphaning its commits. Branch deletion must
+        // always use the safe `-d` — worktree removal mode governs the worktree
+        // directory only and never escalates branch deletion, no matter how
+        // aggressively the worktree itself was removed.
         let repo = setup_test_repo();
         let worktrees_dir = repo.path().join("worktrees");
 
@@ -2882,12 +3509,14 @@ mod tests {
             "feat-force",
             true,
             None,
-            true,
+            RemovalMode::Forced,
+            None,
+            false,
         );
-        let outcome = res.expect("force remove should succeed");
+        let outcome = res.expect("forced remove should succeed");
         assert!(
-            outcome.branch_delete_warning.is_none(),
-            "force branch delete should not report a partial warning"
+            outcome.branch_delete_warning.is_some(),
+            "safe branch delete refusal must still be surfaced even under Forced worktree removal"
         );
 
         let branches = git_cmd(repo.path())
@@ -2895,8 +3524,8 @@ mod tests {
             .run()
             .unwrap();
         assert!(
-            !branches.stdout.contains("feat-force"),
-            "branch ref should be force-deleted (got: {})",
+            branches.stdout.contains("feat-force"),
+            "branch ref with unmerged commits must survive even a Forced worktree removal (got: {})",
             branches.stdout
         );
     }
@@ -3262,6 +3891,37 @@ mod tests {
     }
 
     #[test]
+    fn merge_and_archive_deletes_a_dirty_worktree_once_confirmed() {
+        // Gap the plan called out explicitly: `merge_and_archive_worktree_impl`'s
+        // "delete" branch already confirmed dirtiness via `cleanup_needs_confirmation`
+        // before ever reaching `remove_worktree_by_branch` — so once `RemovalMode::Safe`
+        // became the real default (refusing a dirty worktree outright), this path had
+        // to switch to `RemovalMode::Dirty` on `force`, or a confirmed cleanup would
+        // start failing. `merge_and_archive_proceeds_once_the_user_confirms` covers the
+        // "archive" branch (a different code path, no `remove_worktree_by_branch` call
+        // at all); this is the "delete" equivalent.
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let wt = dirty_worktree_with(repo.path(), "feat-delete-confirmed", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = merge_and_archive_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-delete-confirmed".to_string(),
+            base,
+            "delete".to_string(),
+            true,
+        )
+        .expect("delete");
+
+        assert_eq!(res.action, "deleted");
+        assert!(res.merged);
+        assert!(!wt.exists(), "the user asked for it");
+    }
+
+    #[test]
     fn merge_and_archive_does_not_ask_about_a_clean_worktree() {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
@@ -3608,8 +4268,16 @@ mod tests {
         create_worktree_internal(&worktrees_dir, &config, None).expect("Failed to create worktree");
 
         // Remove with delete_branch=true
-        remove_worktree_by_branch(&repo_path, "feat-delete-branch", true, None, false)
-            .expect("Failed to remove worktree");
+        remove_worktree_by_branch(
+            &repo_path,
+            "feat-delete-branch",
+            true,
+            None,
+            RemovalMode::Safe,
+            None,
+            false,
+        )
+        .expect("Failed to remove worktree");
 
         // Branch should be gone
         let out = git_cmd(repo.path())
@@ -3639,8 +4307,16 @@ mod tests {
         create_worktree_internal(&worktrees_dir, &config, None).expect("Failed to create worktree");
 
         // Remove with delete_branch=false
-        remove_worktree_by_branch(&repo_path, "feat-keep-branch", false, None, false)
-            .expect("Failed to remove worktree");
+        remove_worktree_by_branch(
+            &repo_path,
+            "feat-keep-branch",
+            false,
+            None,
+            RemovalMode::Safe,
+            None,
+            false,
+        )
+        .expect("Failed to remove worktree");
 
         // Branch should still exist
         let out = git_cmd(repo.path())
@@ -3874,7 +4550,7 @@ branch refs/heads/feat
         assert!(branches.contains(&"feat-to-delete".to_string()));
 
         // Delete it
-        let result = delete_local_branch_impl(&repo_path, "feat-to-delete", false);
+        let result = delete_local_branch_impl(&repo_path, "feat-to-delete", false, None);
         assert!(
             result.is_ok(),
             "delete_local_branch_impl failed: {:?}",
@@ -3892,7 +4568,7 @@ branch refs/heads/feat
         let repo_path = repo.path().to_string_lossy().to_string();
 
         let default_branch = get_remote_default_branch(&repo_path).unwrap();
-        let result = delete_local_branch_impl(&repo_path, &default_branch, false);
+        let result = delete_local_branch_impl(&repo_path, &default_branch, false, None);
         assert!(result.is_err());
         assert!(
             result
@@ -3921,7 +4597,7 @@ branch refs/heads/feat
         assert!(wt.path.exists());
 
         // Delete via delete_local_branch_impl (default cascade: keep_worktree = false)
-        let result = delete_local_branch_impl(&repo_path, &wt.name, false);
+        let result = delete_local_branch_impl(&repo_path, &wt.name, false, None);
         assert!(
             result.is_ok(),
             "delete_local_branch_impl failed: {:?}",
@@ -3958,7 +4634,7 @@ branch refs/heads/feat
         // Simulates PostMergeCleanupDialog flow with the worktree step
         // unchecked but delete-local checked. `keep_worktree = true` must
         // detach the worktree HEAD and remove only the branch ref.
-        let result = delete_local_branch_impl(&repo_path, &wt.name, true);
+        let result = delete_local_branch_impl(&repo_path, &wt.name, true, None);
         assert!(
             result.is_ok(),
             "delete_local_branch_impl with keep_worktree=true failed: {:?}",

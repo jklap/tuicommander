@@ -114,10 +114,11 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 - Both prompt for confirmation
 
 Removing a worktree:
-1. Closes all terminals associated with that branch
-2. Runs `git worktree remove` to clean up
-3. Removes the branch entry from the sidebar
-4. If branch deletion was requested but `git branch -d` keeps the branch because it is not safely merged, shows a status message that the worktree was removed and the branch was kept
+1. If a terminal is attached, shows a distinct "in use" confirmation naming what's attached — declining it stops here, and nothing is closed. This fires before anything else: closing a terminal is disruptive on its own (it can interrupt a running agent), so the busy check happens before that step, not after.
+2. Closes all terminals associated with that branch
+3. Runs `git worktree remove` to clean up. This is a **Safe** removal by default — it refuses a worktree with uncommitted changes or a git-level lock, each with its own follow-up confirmation ("Uncommitted changes" / "Worktree is locked by an agent") before retrying with an explicit override. A live session the app didn't already know about (e.g. one spawned via MCP) can still refuse the removal at this step even after terminals were closed — that's the backend's own backstop, and gets the same "in use" confirmation.
+4. Removes the branch entry from the sidebar
+5. If branch deletion was requested but `git branch -d` keeps the branch because it is not safely merged, shows a status message that the worktree was removed and the branch was kept — this is always the safe `git branch -d`, never a forced delete, no matter how the worktree itself was removed
 
 ## Worktree Manager Panel
 
@@ -151,7 +152,7 @@ Each worktree row has action buttons (visible on the right):
 
 Select multiple worktrees using the checkboxes (shown when more than one selectable worktree exists). A batch bar appears with:
 - **Merge & Archive (N)** — Merges and archives all selected branches
-- **Delete (N)** — Deletes all selected worktrees
+- **Delete (N)** — Deletes all selected worktrees. Each selection still goes through the same per-branch "in use" gate as a single delete — a worktree with an attached terminal gets its own confirmation, defaulting to Cancel on Enter so clicking or pressing through a stack of prompts can't destroy live work. Selections with no attached terminal are processed first so they aren't held up behind a disruptive prompt for a busy one.
 
 Use the **Select All** checkbox in the toolbar to toggle all non-main worktrees.
 

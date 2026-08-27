@@ -54,6 +54,14 @@ Every git subprocess invocation goes through `git_cmd(cwd: &Path) -> GitCmd`. Th
 
 `GitError` implements `Into<String>` for seamless use in Tauri command returns.
 
+## Worktree Removal Safety
+
+`worktree.rs::remove_worktree_internal` takes a `RemovalMode` (`Safe` / `Dirty` / `Forced`) rather than a bare `force: bool` — `git worktree remove` has two *independent* refusals (uncommitted work, and a `git worktree lock`) and a single `--force` only lifts the first; lifting the second needs `--force` twice. Collapsing that into one flag is what let a live worktree be destroyed unconditionally in the 2026-08-26 incident (`plans/worktree-removal-incident-2026-08-26.md`) — every removal path used to pass a single `--force` even on its "safe" branch. `Safe` (no `--force`) is now the default everywhere; callers escalate only after an explicit user confirmation of the specific refusal (`worktree_dirty:` / `worktree_locked:` error prefixes).
+
+**Live-session gate.** `remove_worktree_by_branch` additionally refuses with `worktree_busy:` when `AppState::live_sessions_in_worktree` finds a PTY/agent session attached to the target path — matched on the session's spawn-time `WorktreeInfo.path` or its live (OSC7-tracked) `cwd`, so a session that `cd`ed into the worktree after the fact still counts. This is independent of git's own checks (a clean, unlocked worktree can still have a terminal open in it) and is skipped only by a separate `override_busy` flag that never escalates `RemovalMode` — overriding a live session must not also silently blow through a dirty worktree or a lock.
+
+**`git worktree lock` lifecycle.** `create_pty_with_worktree` locks the worktree (`lock_worktree_for_session`, reason `tuic: session <id>`) right after a session attaches; `close_pty_core` unlocks it (`unlock_worktree`) once no other session is still attached, and `remove_worktree_internal` unlocks before pruning so a removal never leaves a ghost `git worktree list` entry. This is defense-in-depth on top of the live-session gate above — it also protects against a bare `git worktree remove` run outside TUIC entirely. A stale TUIC-owned lock left by an unclean shutdown is swept at `repo_watcher::start_watching` time (`worktree::sweep_stale_tuic_locks`, keyed on the `tuic: ` reason prefix so a user's or another tool's lock — e.g. Claude Code's own agent locking — is never touched).
+
 ## Tauri Commands
 
 ### Repository Info
