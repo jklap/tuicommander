@@ -102,11 +102,15 @@ export function useConfirmDialog() {
 		settle("discard");
 	}
 
-	/** Confirm removing a worktree/branch */
-	async function confirmRemoveWorktree(branchName: string): Promise<boolean> {
+	/** Confirm removing a worktree/branch. `deleteBranch` (default true — fail
+	 *  toward the stronger warning) mirrors the repo's `deleteBranchOnRemove`
+	 *  setting so the dialog never claims the local branch will be deleted when
+	 *  that setting is off. */
+	async function confirmRemoveWorktree(branchName: string, deleteBranch: boolean = true): Promise<boolean> {
+		const branchNote = deleteBranch ? " and its local branch" : "";
 		return await confirm({
 			title: "Remove worktree?",
-			message: `Remove ${branchName}?\nThis deletes the worktree directory and its local branch.`,
+			message: `Remove ${branchName}?\nThis deletes the worktree directory${branchNote}.`,
 			okLabel: "Remove",
 			cancelLabel: "Cancel",
 			kind: "warning",

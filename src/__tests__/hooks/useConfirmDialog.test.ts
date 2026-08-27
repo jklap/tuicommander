@@ -170,6 +170,41 @@ describe("useConfirmDialog", () => {
 			dialog.handleClose();
 			expect(await promise).toBe(false);
 		});
+
+		it("defaults deleteBranch to true (mentions the local branch) when omitted", async () => {
+			const promise = dialog.confirmRemoveWorktree("feature-x");
+
+			expect(dialog.dialogState()?.message).toBe(
+				"Remove feature-x?\nThis deletes the worktree directory and its local branch.",
+			);
+
+			dialog.handleClose();
+			await promise;
+		});
+
+		it("mentions the local branch when deleteBranch is explicitly true", async () => {
+			const promise = dialog.confirmRemoveWorktree("feature-x", true);
+
+			expect(dialog.dialogState()?.message).toBe(
+				"Remove feature-x?\nThis deletes the worktree directory and its local branch.",
+			);
+
+			dialog.handleClose();
+			await promise;
+		});
+
+		// Regression: the dialog used to unconditionally claim the local branch
+		// would be deleted, even when the repo's "Delete local branch when
+		// removing worktree" setting was off.
+		it("omits the local-branch mention when deleteBranch is false", async () => {
+			const promise = dialog.confirmRemoveWorktree("feature-x", false);
+
+			expect(dialog.dialogState()?.message).toBe("Remove feature-x?\nThis deletes the worktree directory.");
+			expect(dialog.dialogState()?.message).not.toContain("local branch");
+
+			dialog.handleClose();
+			await promise;
+		});
 	});
 
 	describe("confirmRemoveLockedWorktree()", () => {
