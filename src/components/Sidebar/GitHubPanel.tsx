@@ -1,4 +1,4 @@
-import { type Component, createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, lazy, onMount, Show, Suspense } from "solid-js";
 import { Portal } from "solid-js/web";
 import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { executeCleanup } from "../../hooks/usePostMergeCleanup";
@@ -17,8 +17,6 @@ import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
-import { AutofixDialog } from "../AutofixDialog/AutofixDialog";
-import { ChangelogModal } from "../ChangelogModal/ChangelogModal";
 import { IssueDetailContent } from "../IssueDetailPopover/IssueDetailContent";
 import {
 	type CleanupStep,
@@ -30,6 +28,13 @@ import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
 import { ChevronIcon } from "../ui/ChevronIcon";
 import { PrSection } from "./PrSection";
 import s from "./Sidebar.module.css";
+
+const AutofixDialog = lazy(() =>
+	import("../AutofixDialog/AutofixDialog").then((module) => ({ default: module.AutofixDialog })),
+);
+const ChangelogModal = lazy(() =>
+	import("../ChangelogModal/ChangelogModal").then((module) => ({ default: module.ChangelogModal })),
+);
 
 const FILTER_OPTIONS: { value: IssueFilterMode; label: string }[] = [
 	{ value: "disabled", label: "Disabled" },
@@ -443,17 +448,21 @@ export const GitHubPanel: Component<{
 					</div>
 
 					<Show when={showChangelog()}>
-						<ChangelogModal repoPath={props.repoPath} onClose={() => setShowChangelog(false)} />
+						<Suspense>
+							<ChangelogModal repoPath={props.repoPath} onClose={() => setShowChangelog(false)} />
+						</Suspense>
 					</Show>
 
 					<Show when={autofixIssue()}>
 						{(num) => (
-							<AutofixDialog
-								repoPath={props.repoPath}
-								issueNumber={num()}
-								onConfirm={(prompt) => props.onAutofix?.(num(), prompt)}
-								onClose={() => setAutofixIssue(null)}
-							/>
+							<Suspense>
+								<AutofixDialog
+									repoPath={props.repoPath}
+									issueNumber={num()}
+									onConfirm={(prompt) => props.onAutofix?.(num(), prompt)}
+									onClose={() => setAutofixIssue(null)}
+								/>
+							</Suspense>
 						)}
 					</Show>
 
