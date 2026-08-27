@@ -84,6 +84,17 @@
   opacity: 1;
 }
 
+/* Keyboard cursor — an inset ring rather than a background fill, so it stays
+ * distinguishable from .activeRow's tint (the app's active terminal) and layers
+ * cleanly on top of .idleRow's reduced opacity. */
+.selectedRow {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.selectedRow.idleRow {
+  opacity: 1;
+}
+
 /* The status column fits the widest badge, "Waiting for input" (109.4px at 12px system UI
  * including padding, measured in Chrome); the name column absorbs the difference. */
 .rowMain {
@@ -99,6 +110,15 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+/* Dim 1-9 jump-key badge shown on the first 9 rows */
+.rowNumber {
+  flex-shrink: 0;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  min-width: 12px;
+  text-align: right;
 }
 
 .termName {
