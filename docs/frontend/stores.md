@@ -246,6 +246,7 @@ Prompt template management with variable substitution.
 | `hydrate()` | Load from Rust |
 | `openDrawer()` / `closeDrawer()` / `toggleDrawer()` | Drawer visibility |
 | `createPrompt(data)` | Create new prompt |
+| `importPrompts(prompts)` | Batch-upsert prompts from an import file in one save; forces `enabled: false` on `shell`/`api` prompts, preserves `createdAt` on a conflicting id, and clears a forged `builtIn` flag on an id that isn't an actual built-in. Returns `{ imported, disabled }`. See `src/utils/promptExport.ts` and `src/utils/promptSanitize.ts` for the export/import pipeline this feeds from. |
 | `updatePrompt(id, data)` | Update prompt |
 | `deletePrompt(id)` | Delete prompt |
 | `toggleFavorite(id)` | Toggle pinned status |

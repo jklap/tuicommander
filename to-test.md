@@ -397,6 +397,19 @@ display-only metadata from the original spawn prompt.
 
 - [ ] **After a `make dev` restart**: a Codex collaboration subagent shows its task description above the terminal.
 
+## Smart Prompts import & export (2026-08-24)
+
+- [x] Export scope selection (`selectForExport`): "all" returns every prompt, "custom" returns only non-built-in prompts, "modified" returns changed built-ins plus every custom prompt, and comparison ignores placement order and volatile fields (`createdAt`/`updatedAt`/`lastUsed`/`builtInVersion`) _(verified: `src/__tests__/utils/promptExport.test.ts`, 22/22 pass)_
+- [x] Import parsing rejects non-JSON, a mismatched `kind`, and a newer `schemaVersion`; sanitizes an invalid `executionMode`/`injectTarget`/`preferredAgent` instead of rejecting the whole file; drops entries missing `id`/`name`/`content` with a warning _(verified: `src/__tests__/utils/promptExport.test.ts`, `src/__tests__/utils/promptSanitize.test.ts`)_
+- [x] `importPrompts()` batch-upserts in a single debounced save, forces `enabled: false` on imported `shell`/`api` prompts and reports their names, preserves the existing `createdAt` on a conflicting overwrite, and clears a forged `builtIn: true` on an id that isn't an actual built-in _(verified: `src/__tests__/stores/promptLibrary.test.ts` "importPrompts()" suite)_
+- [x] `hydrate()` behavior is unchanged after extracting its validation into `sanitizePrompt` — same warnings, same `tab-context` migration _(verified: existing `hydrate()` tests in `src/__tests__/stores/promptLibrary.test.ts` still pass unmodified)_
+- [x] `PromptImportDialog` renders one row per candidate with NEW/CONFLICT badges, flags shell/api rows needing review, defaults to everything selected, and the All/None/New-only bulk controls and Import/Cancel buttons behave correctly _(verified: `src/__tests__/components/PromptImportDialog.test.tsx`, 8/8 pass)_
+- [x] `downloadPromptExport`/`pickPromptImportFile` build the right Blob/anchor and file input, and resolve the picked file's text (or `null` when nothing was selected) _(verified: `src/__tests__/utils/promptTransfer.test.ts`)_
+- [ ] Manual click-through in **Settings > Smart Prompts**: Export "Everything" downloads a `.json` with all 27+ built-ins and any customs, no `lastUsed` keys; edit one built-in and disable a second, then Export "Modified only" includes exactly those two plus all customs; Export "Custom only" has no `builtIn: true` entries.
+- [ ] Re-import the "Everything" file: every row shows CONFLICT; uncheck some rows and confirm only the checked ones are overwritten. Import into a profile with no `prompt-library.json`: every row shows NEW.
+- [ ] Hand-craft a file with a `shell`-mode prompt and import it: it lands disabled, and the toast/warning names it. Confirm a modified built-in still offers "Reset to default" after import.
+- [ ] Remote/browser mode (`http://127.0.0.1:9877` per `AGENTS.md`'s test-instance rule): Export downloads via the browser's normal download flow and Import opens the native OS file picker, with the same behavior as desktop.
+
 ## Scroll acceleration cap + SGR-report input corruption (2026-08-20)
 
 - [x] `gestureAccelFactor` stays within `[0.5, 2.0]` and reaches exactly `1.0` at two screens of cumulative travel _(verified: `src/components/Terminal/__tests__/canvasTerminalScroll.test.ts` "gestureAccelFactor" suite; `cargo`/`vitest` n/a here, this is the frontend suite — 141/141 pass)_

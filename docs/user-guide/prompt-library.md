@@ -50,6 +50,13 @@ Use the category tabs to narrow the list:
 - Click the **pencil icon** on any prompt row, or select it and press `Ctrl+E`/`Cmd+E`
 - Click the **trash icon** to delete — a confirmation dialog appears before deletion
 
+## Import & Export
+
+The library backs both this drawer and the **Settings > Smart Prompts** screen, so exporting
+or importing prompts there covers everything saved here too. See [Smart
+Prompts](smart-prompts.md#import--export) for scopes (everything / modified only / custom
+only) and how conflicts are reviewed on import.
+
 ## Variable Substitution
 
 Use `{{variable_name}}` placeholders in prompt content. When you send a prompt that contains variables, a dialog appears asking you to fill in each value before injection.

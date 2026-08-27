@@ -51,6 +51,25 @@ Open **Settings > Smart Prompts** to manage prompts:
 - **Create** your own smart prompts with the same placement options and variable system
 - **View** each prompt's placement (toolbar, git-changes, pr-popover, git-branches) and execution mode
 
+## Import & Export
+
+The toolbar at the top of **Settings > Smart Prompts** lets you move prompts between machines
+or share them with a teammate:
+
+- **Export scope** — choose what to include, then click **Export…** to download a `.json` file:
+  - **Everything** — every built-in and custom prompt
+  - **Modified only** — built-ins you've changed (content, placement, enabled state, or any
+    other setting) plus all of your custom prompts
+  - **Custom only** — just the prompts you created, no built-ins
+- **Import…** — pick a previously exported `.json` file. A review dialog lists every prompt in
+  the file, marking each as **NEW** or **CONFLICT** (an id that already exists in your library).
+  Uncheck anything you don't want, or use **All** / **None** / **New only**, then click
+  **Import N** to apply your selection.
+
+Exported files never include per-machine usage data (last-used timestamps). Prompts that run
+shell commands or call an external API directly are imported **disabled** — review their
+content in the list before turning them on.
+
 ## Status Feedback
 
 When prompts cannot execute, the dropdown shows a **status banner** at the top explaining why:
