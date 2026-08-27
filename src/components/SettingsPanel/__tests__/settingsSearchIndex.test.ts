@@ -19,6 +19,7 @@ const TAB_SOURCES: Record<string, string[]> = {
 	appearance: ["tabs/AppearanceTab.tsx"],
 	notifications: ["tabs/NotificationsTab.tsx"],
 	terminal: ["tabs/TerminalTab.tsx"],
+	selection: ["tabs/SelectionTab.tsx"],
 	"keyboard-shortcuts": ["tabs/KeyboardShortcutsTab.tsx"],
 	dictation: ["DictationSettings.tsx"],
 	github: ["tabs/GitHubTab.tsx"],
@@ -46,6 +47,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// Notification sound row labels are runtime entries, not static search targets.
 	notifications: { dynamic: 1, orphans: 0 },
 	terminal: { dynamic: 0, orphans: 0 },
+	// SelectionTab: the per-rule "Enabled" and per-action "Default" labels wrap a nested
+	// input (dynamic); the rule editor's Name/Pattern/Precision fields live in a
+	// collapsed, per-rule row component (orphans) — no stable scroll target for either.
+	selection: { dynamic: 2, orphans: 3 },
 	// The `<label>{section.title}</label>` over each group of the shortcut list —
 	// the groups and their bindings are built at runtime, so the page is indexed
 	// by its heading, the global hotkey and the plugin-commands group only.

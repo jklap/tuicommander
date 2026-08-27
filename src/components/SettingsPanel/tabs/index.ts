@@ -10,6 +10,7 @@ export { RemoteMachinesTab } from "./RemoteMachinesTab";
 export { RepoScriptsTab } from "./RepoScriptsTab";
 export type { RepoTabProps } from "./RepoWorktreeTab";
 export { RepoWorktreeTab } from "./RepoWorktreeTab";
+export { SelectionTab } from "./SelectionTab";
 export { SmartPromptsTab } from "./SmartPromptsTab";
 export { LocalMcpPanel } from "./services/LocalMcpPanel";
 export { RemoteAccessPanel } from "./services/RemoteAccessPanel";
