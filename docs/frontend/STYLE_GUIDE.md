@@ -66,7 +66,7 @@ Values shown are the startup `:root` defaults: foregrounds from shared `foregrou
 | `--fg-primary` | `#d4d4d4` | Primary text (Commander startup value) |
 | `--fg-secondary` | `#b5b5b5` | Labels, secondary text |
 | `--fg-muted` | `#a6a6a6` | Section titles, tertiary text |
-| `--accent` | `#59a8dd` | Primary actions, active indicators, links (theme-dependent) |
+| `--accent` | `#59a8dd` | Primary actions, active indicators, links, off-main main-worktree branch icon (theme-dependent) |
 | `--accent-hover` | `#7abde5` | Hover on accent elements (theme-dependent) |
 | `--activity` | `#59a8dd` | Busy/activity pulse indicators (fixed in `global.css`, not overridden by themes) |
 | `--success` | `#4ec9b0` | Positive states, open PRs (teal) |
