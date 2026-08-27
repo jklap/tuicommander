@@ -80,6 +80,7 @@ scripts/*
 !scripts/test-with-test-tmp-worktree-target.sh
 !scripts/check-no-nul-bytes.mjs
 !scripts/run-plugin-tests.mjs
+!scripts/check-gate.sh
 !scripts/hooks/
 !scripts/speech-assets/
 !scripts/perf/

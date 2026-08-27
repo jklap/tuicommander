@@ -1451,7 +1451,7 @@ actual file-picker UX needs a human pass in the real desktop app.
 
 - [x] On macOS, Settings → Services & MCP's "Network Interface" picker includes an "mDNS — `<name>.local`" entry after the IP entries, is NOT auto-selected over the existing Wi-Fi/LAN entry, and is a real choosable `<option>` (selecting it resolves to the hostname value) _(verified: Playwright against a throwaway `make dev` test instance on :9877 — screenshot shows "mDNS — DJW0791KX5.local" both listed after "Wi-Fi / LAN (en0)"/"VPN (utun4)" and, once selected, rendered as the picker's chosen value with no layout/overflow issues)_
 - [ ] **[MANUAL]** Select the mDNS entry and confirm the resulting connect URL is `https://<name>.local:<port>/?token=...` and actually loads TUICommander in a browser on another device on the same LAN (mDNS resolution + cert accepted after the usual one-time browser warning) — the connect-URL logic itself is unit-tested (`resolve_connect_target`/`build_connect_url` are unchanged, generic host-string handling) and the served cert's SAN list was confirmed via `openssl` to include `DNS:<name>.local`, but actual mDNS resolution from a second physical device needs real hardware.
-- [ ] **[MANUAL]** After changing the Mac's local hostname (System Settings → General → Sharing → Local hostname) and waiting for the 60s self-signed recheck loop (or restarting), confirm the cert regenerates to cover the new name — the old `.local` name should stop being covered and the new one should appear in the SAN list (checkable via the SHA-256 fingerprint changing in Settings → Services → Self-Signed HTTPS, or `openssl s_client -connect <ip>:<port> -servername localhost </dev/null 2>/dev/null | openssl x509 -noout -text | grep -A2 "Subject Alternative Name"`).
+- [ ] **[MANUAL]** After changing the Mac's local hostname (System Settings → General → Sharing → Local hostname) and waiting for the 60s self-signed recheck loop (or restarting), confirm the cert regenerates to cover the new name — the old `.local` name should stop being covered and the new one should appear in the SAN list (checkable via the SHA-256 fingerprint changing in Settings → Remote Access → Self-Signed HTTPS, or `openssl s_client -connect <ip>:<port> -servername localhost </dev/null 2>/dev/null | openssl x509 -noout -text | grep -A2 "Subject Alternative Name"`).
 - [ ] **[HUMAN]** On Windows and on Linux (with and without Avahi running), confirm the network picker does NOT show an "mDNS" entry and `/system/local-ips` does not include one — `local_mdns_hostname()` is `#[cfg(target_os = "macos")]`-gated to return `None` on both platforms, but this has only been exercised by code inspection + the compile-time cfg, never run on real Windows/Linux hardware (Windows CI never builds/tests this crate per the native-hooks section above).
 
 ## New Worktree dialog: fixed-height branch list + "Start from" click-select fix (2026-08-27)
@@ -1697,7 +1697,7 @@ done, CLI/typecheck done — only the visual/browser step (rungs 4-5) is outstan
 Remote access now defaults to HTTPS even without Tailscale: `provision_tls_config` falls back to
 a self-signed cert (`src-tauri/src/selfsigned.rs`) covering `localhost` + current LAN IPs when
 Tailscale HTTPS isn't active, plain `http://` on the same port 301-redirects to `https://` while
-that fallback is serving, and Settings > Services > Self-Signed HTTPS shows status/fingerprint/a
+that fallback is serving, and Settings > Remote Access > Self-Signed HTTPS shows status/fingerprint/a
 Regenerate action. Covered by 23 Rust unit tests (cert generation/caching/expiry/IP-coverage,
 concurrent-regeneration serialization, the connect-URL scheme decision, `get_self_signed_cert_status`/
 `regenerate_self_signed_cert` command wiring) and `cargo nextest run --workspace` (5269 tests),
@@ -1714,7 +1714,7 @@ Settings panel's actual rendering — needs a live `make dev` restart to check:
 - [ ] **[MANUAL]** Navigate to the plain `http://<lan-ip>:<port>` URL directly (not the QR code)
   while the self-signed fallback is active — confirm it 301-redirects to `https://` rather than
   serving plain HTTP or erroring.
-- [ ] **[MANUAL]** Open Settings > Services > Self-Signed HTTPS — confirm the status line, expiry
+- [ ] **[MANUAL]** Open Settings > Remote Access > Self-Signed HTTPS — confirm the status line, expiry
   date, and SHA-256 fingerprint render correctly, and that the fingerprint shown matches what the
   browser's own certificate-details view reports for the same cert.
 - [ ] **[MANUAL]** Click "Regenerate" — confirm status updates to a new fingerprint/expiry after
