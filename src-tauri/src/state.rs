@@ -1496,6 +1496,15 @@ pub struct AppState {
     /// Updated by PTY reader on every non-empty chunk. Used to derive shell_state:
     /// "busy" when now - last < 500ms, "idle" otherwise (matches desktop model).
     pub(crate) last_output_ms: DashMap<String, AtomicU64>,
+    /// `scrollback_store::capture_fingerprint()` of this session's `VtLogBuffer`
+    /// as of its last scrollback-restore capture write (see `scrollback_store.rs`).
+    /// Combines `total_lines()` with a hash of the current on-screen rows —
+    /// `total_lines()` alone never moves for a full-screen app that redraws via
+    /// cursor addressing without scrolling, which would otherwise freeze its
+    /// saved scrollback at whatever was on screen at the first capture. Lets the
+    /// periodic sweep skip an idle session's write entirely instead of rewriting
+    /// an unchanged file every tick.
+    pub(crate) scrollback_capture_marks: DashMap<String, u64>,
     /// Per-session timestamp of last user input written to the PTY (epoch ms).
     /// Stamped by `write_pty`. The grid ticker reads it to throttle frame sends
     /// while the user is actively typing AND the system CPU is saturated, so the
@@ -1622,6 +1631,13 @@ pub struct AppState {
     /// alerts. Set to true on focus and at startup; set to false on blur or
     /// window minimize. Push notifications fire only when this is false.
     pub(crate) desktop_window_focused: std::sync::atomic::AtomicBool,
+    /// Live geometry of the main window, seeded at startup and updated by the
+    /// `main` window's `on_window_event` handler. Flushed to
+    /// `window-geometry.json` on a timer and at exit — see `window_geometry.rs`
+    /// for why this bypasses `tauri-plugin-window-state`'s SIZE flag. Present
+    /// unconditionally (like `desktop_window_focused`) so the remote/headless
+    /// build compiles the same `AppState`; it is only ever mutated in desktop.
+    pub(crate) window_geometry: crate::window_geometry::WindowGeometryTracker,
     /// Server start time for uptime calculation in health endpoint.
     pub(crate) server_start_time: std::time::Instant,
     /// Per-MCP-session broadcast channels for inter-agent messaging notifications.
@@ -2469,6 +2485,17 @@ impl AppState {
         orphaned
     }
 
+    /// Read-only counterpart to `unbind_live_pty`: the `$TUIC_SESSION` identity
+    /// currently backed by `session_id`, if any, without removing the binding.
+    /// Used to capture a session's scrollback under its stable identity right
+    /// before `unbind_live_pty` drops the mapping on close.
+    pub(crate) fn tuic_session_for_live_pty(&self, session_id: &str) -> Option<String> {
+        self.live_pty_by_tuic_session
+            .iter()
+            .find(|entry| entry.value() == session_id)
+            .map(|entry| entry.key().clone())
+    }
+
     /// Drop the waiter leases of a bridge that a reconnect just replaced.
     ///
     /// Leases carry no owning MCP session, but on a reconnect the distinction is
@@ -2608,6 +2635,7 @@ impl AppState {
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             slash_mode: DashMap::new(),
             last_output_ms: DashMap::new(),
+            scrollback_capture_marks: DashMap::new(),
             last_input_ms: DashMap::new(),
             shell_states: DashMap::new(),
             terminal_rows: DashMap::new(),
@@ -2647,6 +2675,9 @@ impl AppState {
             ),
             push_store,
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
+            window_geometry: crate::window_geometry::WindowGeometryTracker::new(
+                crate::window_geometry::WindowGeometry::default(),
+            ),
             server_start_time: std::time::Instant::now(),
             term_aliases: DashMap::new(),
             term_alias_counters: DashMap::new(),
@@ -3718,6 +3749,12 @@ pub(crate) struct PtyConfig {
     /// symlinks, wrapper scripts).
     #[serde(default)]
     pub(crate) agent_type: Option<String>,
+    /// When true and saved scrollback exists for `tuic_session`, seed the new
+    /// PTY's grid with it (via `log_lines_to_ansi` + `VtLogBuffer::process`)
+    /// before the reader thread starts. No-op when `tuic_session` is absent or
+    /// nothing was saved for it.
+    #[serde(default)]
+    pub(crate) restore_scrollback: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -3743,7 +3780,7 @@ pub(crate) const VT_LOG_BUFFER_CAPACITY: usize = 10_000;
 ///
 /// Serializes as `{"idx": N}` for 256-color palette or `{"rgb": [r,g,b]}` for
 /// 24-bit color.  Default color is omitted (serialized as `null` / skipped).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogColor {
     Idx(u8),
@@ -3792,26 +3829,26 @@ impl LogColor {
 }
 
 /// A contiguous run of text with uniform formatting attributes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogSpan {
     pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fg: Option<LogColor>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bg: Option<LogColor>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bold: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub italic: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub underline: bool,
 }
 
 /// A single log line composed of styled spans.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogLine {
     pub spans: Vec<LogSpan>,
-    #[serde(skip_serializing_if = "is_zero_u16")]
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub cols: u16,
     /// True when this line is agent UI chrome (prompt box, footer, status bar)
     /// rather than agent output. Set once, at capture time, by
@@ -3858,6 +3895,68 @@ impl LogLine {
         // Remove spans that became empty after stripping
         self.spans.retain(|s| !s.text.is_empty());
     }
+}
+
+/// SGR parameter codes for one color, standard-16-color-aware: `Idx(0..16)`
+/// uses the short `3x`/`4x`/`9x`/`10x` forms (so it round-trips through the
+/// same `NamedColor` branch `LogColor::from_ansi_color` maps back from),
+/// everything else uses the extended `38;5;n` / `48;5;n` indexed form.
+fn sgr_color_codes(color: LogColor, is_bg: bool) -> Vec<String> {
+    match color {
+        LogColor::Idx(n) if n < 8 => vec![(if is_bg { 40 + n } else { 30 + n }).to_string()],
+        LogColor::Idx(n) if n < 16 => {
+            vec![(if is_bg { 100 + (n - 8) } else { 90 + (n - 8) }).to_string()]
+        }
+        LogColor::Idx(n) => vec![
+            if is_bg { "48" } else { "38" }.to_string(),
+            "5".to_string(),
+            n.to_string(),
+        ],
+        LogColor::Rgb(r, g, b) => vec![
+            if is_bg { "48" } else { "38" }.to_string(),
+            "2".to_string(),
+            r.to_string(),
+            g.to_string(),
+            b.to_string(),
+        ],
+    }
+}
+
+/// Render styled log lines back into ANSI-escaped bytes, suitable for feeding
+/// through [`VtLogBuffer::process`] to seed a fresh terminal with restored
+/// scrollback — the same entry point live PTY output uses, so every consumer
+/// downstream (canvas rendering, search, selection, `ai_terminal_read_screen`)
+/// needs no separate code path for restored history.
+///
+/// Each span gets a full SGR reset before its own attributes are applied, so
+/// output is correct regardless of what state a naive replay left behind;
+/// lines are separated by `\r\n` to match real PTY line endings.
+pub fn log_lines_to_ansi(lines: &[LogLine]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for line in lines {
+        for span in &line.spans {
+            let mut codes: Vec<String> = vec!["0".to_string()];
+            if span.bold {
+                codes.push("1".to_string());
+            }
+            if span.italic {
+                codes.push("3".to_string());
+            }
+            if span.underline {
+                codes.push("4".to_string());
+            }
+            if let Some(fg) = span.fg {
+                codes.extend(sgr_color_codes(fg, false));
+            }
+            if let Some(bg) = span.bg {
+                codes.extend(sgr_color_codes(bg, true));
+            }
+            out.extend_from_slice(format!("\x1b[{}m", codes.join(";")).as_bytes());
+            out.extend_from_slice(span.text.as_bytes());
+        }
+        out.extend_from_slice(b"\x1b[0m\r\n");
+    }
+    out
 }
 
 /// A screen row that changed after a `VtLogBuffer::process()` call.
@@ -5144,6 +5243,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tuic_session_for_live_pty_finds_the_identity_backing_a_session() {
+        let state = tests_support::make_test_app_state();
+        state.bind_live_pty("tuic-uuid-1", "pty-key");
+
+        assert_eq!(
+            state.tuic_session_for_live_pty("pty-key"),
+            Some("tuic-uuid-1".to_string())
+        );
+    }
+
+    #[test]
+    fn tuic_session_for_live_pty_returns_none_for_an_unbound_session() {
+        let state = tests_support::make_test_app_state();
+        assert_eq!(state.tuic_session_for_live_pty("no-such-session"), None);
+    }
+
+    #[test]
+    fn tuic_session_for_live_pty_does_not_remove_the_binding() {
+        let state = tests_support::make_test_app_state();
+        state.bind_live_pty("tuic-uuid-1", "pty-key");
+
+        state.tuic_session_for_live_pty("pty-key");
+
+        assert_eq!(
+            state.tuic_session_for_live_pty("pty-key"),
+            Some("tuic-uuid-1".to_string()),
+            "the read-only lookup must not unbind, unlike unbind_live_pty"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn respawn_under_the_same_identity_resolves_to_the_new_pty() {
@@ -6139,6 +6269,7 @@ mod tests {
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             slash_mode: DashMap::new(),
             last_output_ms: DashMap::new(),
+            scrollback_capture_marks: DashMap::new(),
             last_input_ms: DashMap::new(),
             shell_states: DashMap::new(),
             terminal_rows: DashMap::new(),
@@ -6178,6 +6309,9 @@ mod tests {
             ),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
+            window_geometry: crate::window_geometry::WindowGeometryTracker::new(
+                crate::window_geometry::WindowGeometry::default(),
+            ),
             server_start_time: std::time::Instant::now(),
             term_aliases: DashMap::new(),
             term_alias_counters: DashMap::new(),
@@ -7816,6 +7950,166 @@ mod tests {
             buf.lines().len() <= 10,
             "log should be capped at capacity=10, got {}",
             buf.lines().len()
+        );
+    }
+
+    // --- log_lines_to_ansi round-trip (Story: restore terminal scrollback) ---
+    //
+    // The load-bearing property for scrollback restore: feed styled ANSI into a
+    // VtLogBuffer, read the resulting LogLines back out, re-render them to ANSI
+    // with log_lines_to_ansi, feed THAT into a fresh VtLogBuffer, and assert the
+    // two LogLine sequences are identical. Because LogLine derives PartialEq,
+    // this is a direct equality assertion — it proves colors, attributes, and
+    // text all survive a save/restore cycle, not just that no panic occurs.
+
+    /// Round-trip `lines` through `log_lines_to_ansi` and a fresh `VtLogBuffer`,
+    /// returning what the replay buffer captured into its durable log.
+    ///
+    /// `VtLogBuffer`'s durable log only holds lines that have scrolled OFF the
+    /// visible screen — the trailing `screen_lines` rows always stay on-screen,
+    /// never reaching `lines_since_owned`. Padding with extra blank lines after
+    /// the real content pushes every real line off-screen and into history, so
+    /// the comparison isn't contaminated by that windowing; `.take(lines.len())`
+    /// then drops the padding's own (empty) history entries from the tail.
+    fn round_trip_through_ansi(lines: &[LogLine]) -> Vec<LogLine> {
+        const SCREEN_ROWS: u16 = 3;
+        let mut ansi = log_lines_to_ansi(lines);
+        for _ in 0..SCREEN_ROWS {
+            ansi.extend_from_slice(b"\r\n");
+        }
+        let mut replay = VtLogBuffer::new(SCREEN_ROWS, 80, 1000);
+        replay.process(&ansi);
+        let (replayed, _) = replay.lines_since_owned(0, usize::MAX);
+        replayed.into_iter().take(lines.len()).collect()
+    }
+
+    #[test]
+    fn log_lines_to_ansi_round_trips_plain_text() {
+        let mut original = VtLogBuffer::new(3, 80, 1000);
+        for i in 0..10 {
+            original.process(format!("line {i}\r\n").as_bytes());
+        }
+        let (lines, _) = original.lines_since_owned(0, usize::MAX);
+        assert!(!lines.is_empty(), "test setup: expected scrolled lines");
+
+        assert_eq!(lines, round_trip_through_ansi(&lines));
+    }
+
+    #[test]
+    fn log_lines_to_ansi_round_trips_16_color_and_attributes() {
+        let mut original = VtLogBuffer::new(3, 80, 1000);
+        for i in 0..10 {
+            // Bold red foreground, plain suffix on the same line — forces a
+            // multi-span line with a real fg + bold change mid-row.
+            original.process(format!("\x1b[1;31merr {i}\x1b[0m ok\r\n").as_bytes());
+        }
+        let (lines, _) = original.lines_since_owned(0, usize::MAX);
+        assert!(!lines.is_empty(), "test setup: expected scrolled lines");
+        assert!(
+            lines.iter().any(|l| l.spans.iter().any(|s| s.bold)),
+            "test setup: expected at least one bold span"
+        );
+
+        assert_eq!(lines, round_trip_through_ansi(&lines));
+    }
+
+    #[test]
+    fn log_lines_to_ansi_round_trips_bright_16_color() {
+        let mut original = VtLogBuffer::new(3, 80, 1000);
+        for i in 0..10 {
+            // Bright colors (90-97/100-107) exercise the Idx(8..16) branch,
+            // distinct from the plain Idx(0..8) branch above.
+            original.process(format!("\x1b[92;104mline {i}\x1b[0m\r\n").as_bytes());
+        }
+        let (lines, _) = original.lines_since_owned(0, usize::MAX);
+        assert!(!lines.is_empty());
+
+        assert_eq!(lines, round_trip_through_ansi(&lines));
+    }
+
+    #[test]
+    fn log_lines_to_ansi_round_trips_256_indexed_color() {
+        let mut original = VtLogBuffer::new(3, 80, 1000);
+        for i in 0..10 {
+            original.process(format!("\x1b[38;5;196mline {i}\x1b[0m\r\n").as_bytes());
+        }
+        let (lines, _) = original.lines_since_owned(0, usize::MAX);
+        assert!(!lines.is_empty());
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.spans.iter().any(|s| s.fg == Some(LogColor::Idx(196))))
+        );
+
+        assert_eq!(lines, round_trip_through_ansi(&lines));
+    }
+
+    #[test]
+    fn log_lines_to_ansi_round_trips_truecolor_rgb() {
+        let mut original = VtLogBuffer::new(3, 80, 1000);
+        for i in 0..10 {
+            original.process(
+                format!("\x1b[38;2;10;20;30;48;2;200;150;100mline {i}\x1b[0m\r\n").as_bytes(),
+            );
+        }
+        let (lines, _) = original.lines_since_owned(0, usize::MAX);
+        assert!(!lines.is_empty());
+        assert!(lines.iter().any(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.fg == Some(LogColor::Rgb(10, 20, 30)))
+        }));
+
+        assert_eq!(lines, round_trip_through_ansi(&lines));
+    }
+
+    #[test]
+    fn log_lines_to_ansi_round_trips_italic_and_underline() {
+        let mut original = VtLogBuffer::new(3, 80, 1000);
+        for i in 0..10 {
+            original.process(format!("\x1b[3;4mline {i}\x1b[0m\r\n").as_bytes());
+        }
+        let (lines, _) = original.lines_since_owned(0, usize::MAX);
+        assert!(!lines.is_empty());
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.spans.iter().any(|s| s.italic && s.underline))
+        );
+
+        assert_eq!(lines, round_trip_through_ansi(&lines));
+    }
+
+    #[test]
+    fn log_lines_to_ansi_produces_empty_output_for_empty_input() {
+        assert_eq!(log_lines_to_ansi(&[]), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn sgr_color_codes_uses_short_form_below_16() {
+        assert_eq!(sgr_color_codes(LogColor::Idx(1), false), vec!["31"]);
+        assert_eq!(sgr_color_codes(LogColor::Idx(1), true), vec!["41"]);
+        assert_eq!(sgr_color_codes(LogColor::Idx(9), false), vec!["91"]);
+        assert_eq!(sgr_color_codes(LogColor::Idx(9), true), vec!["101"]);
+    }
+
+    #[test]
+    fn sgr_color_codes_uses_indexed_form_at_and_above_16() {
+        assert_eq!(
+            sgr_color_codes(LogColor::Idx(16), false),
+            vec!["38", "5", "16"]
+        );
+        assert_eq!(
+            sgr_color_codes(LogColor::Idx(255), true),
+            vec!["48", "5", "255"]
+        );
+    }
+
+    #[test]
+    fn sgr_color_codes_uses_truecolor_form_for_rgb() {
+        assert_eq!(
+            sgr_color_codes(LogColor::Rgb(1, 2, 3), false),
+            vec!["38", "2", "1", "2", "3"]
         );
     }
 

@@ -6209,6 +6209,7 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
     state.vt_log_buffers.remove(session_id);
     state.pty_raw_rings.remove(session_id);
     state.last_output_ms.remove(session_id);
+    state.scrollback_capture_marks.remove(session_id);
     state.exit_codes.remove(session_id);
     state.term_aliases.remove(session_id);
     state.marker_stats.remove(session_id);
@@ -6257,6 +6258,26 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
         .entry(session_id.to_string())
         .or_insert_with(|| AtomicU64::new(0))
         .store(now_ms, Ordering::Relaxed);
+    // Capture scrollback under this session's $TUIC_SESSION identity before
+    // remove_live_session_state unbinds it below. This is the only point that
+    // catches a tab closed mid-run — every exit path (close, kill, process
+    // died on its own) funnels through here.
+    let (restore_scrollback, max_scrollback_lines) = {
+        let cfg = state.config.read();
+        (
+            cfg.restore_scrollback,
+            cfg.restore_scrollback_lines as usize,
+        )
+    };
+    if restore_scrollback && let Some(tuic_session) = state.tuic_session_for_live_pty(session_id) {
+        crate::scrollback_store::capture_session(
+            state,
+            session_id,
+            &tuic_session,
+            max_scrollback_lines,
+            now_ms,
+        );
+    }
     remove_live_session_state(session_id, state);
 }
 
@@ -8446,6 +8467,25 @@ pub(crate) async fn create_pty(
     let mut vt_log = VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY);
     if let Some(colors) = state.ansi_colors.read().as_ref() {
         vt_log.set_ansi_colors(colors);
+    }
+    // Seed restored scrollback through the same VtLogBuffer::process entry
+    // point live PTY output uses, so canvas rendering, search, selection, and
+    // ai_terminal_read_screen all see it with no separate code path. Must run
+    // before spawn_reader_thread starts feeding live bytes into this buffer.
+    if config.restore_scrollback
+        && let Some(tuic_session) = tuic_session.as_deref()
+        && let Some(saved) = crate::scrollback_store::load(tuic_session)
+    {
+        vt_log.process(&crate::scrollback_store::replay_bytes(&saved));
+        // Seed the capture dedup mark to the just-replayed content now, not
+        // after the buffer is inserted below — otherwise the first periodic
+        // sweep (or an exit before any new output) sees no mark at all,
+        // treats the replay as new content, and re-persists it — separator
+        // and all — compounding on every restart of a tab nobody touched.
+        state.scrollback_capture_marks.insert(
+            session_id.clone(),
+            crate::scrollback_store::capture_fingerprint(&vt_log),
+        );
     }
     state
         .vt_log_buffers

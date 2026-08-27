@@ -833,6 +833,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					tuic_session: termData?.tuicSession ?? null,
 					env: agentConfigsStore.getEnvFlags("claude"),
 					agent_type: termData?.pendingInitCommand ? (termData.agentType ?? null) : null,
+					// No-op when nothing was saved for this tuic_session — safe to
+					// pass unconditionally rather than threading a "this is a
+					// restore" flag through the whole terminal-creation path.
+					restore_scrollback: settingsStore.state.restoreScrollback,
 				});
 				// The component can unmount during the await above (tab churn while
 				// an agent like grok rapidly toggles visibility). setCurrentSessionId

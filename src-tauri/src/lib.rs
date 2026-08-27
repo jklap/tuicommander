@@ -93,6 +93,7 @@ pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
 pub(crate) mod remote_connection;
 pub(crate) mod repo_watcher;
+pub(crate) mod scrollback_store;
 mod shell_integration;
 #[cfg(feature = "desktop")]
 pub(crate) mod sleep_prevention;
@@ -110,6 +111,7 @@ mod tuic_cli;
 pub(crate) mod tunnels;
 #[cfg(feature = "desktop")]
 mod updater;
+pub(crate) mod window_geometry;
 pub(crate) mod worktree;
 
 use std::path::{Path, PathBuf};
@@ -146,6 +148,32 @@ async fn open_secondary_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Pure core of [`sanitize_window_state`]: patch any per-window entry in a
+/// `.window-state.json` document whose persisted width/height has fossilised
+/// below the app's minimum (see `sanitize_window_state` for why that happens).
+/// Returns whether the document was modified, so the caller can skip the
+/// write when nothing changed. Free of any filesystem access so it can be
+/// unit-tested directly against constructed JSON.
+fn sanitize_window_state_doc(json: &mut serde_json::Value) -> bool {
+    let Some(map) = json.as_object_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for (_label, state) in map.iter_mut() {
+        let Some(obj) = state.as_object_mut() else {
+            continue;
+        };
+        let w = obj.get("width").and_then(|v| v.as_u64()).unwrap_or(0);
+        let h = obj.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
+        if w < 800 || h < 600 {
+            obj.insert("width".into(), serde_json::json!(1200));
+            obj.insert("height".into(), serde_json::json!(800));
+            changed = true;
+        }
+    }
+    changed
+}
+
 #[cfg(feature = "desktop")]
 /// Fix corrupted dimensions in the window-state JSON before the plugin reads it.
 /// titleBarStyle Overlay can persist width/height 0; SIZE is excluded from the
@@ -162,25 +190,72 @@ fn sanitize_window_state() {
         let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&data) else {
             continue;
         };
-        let Some(map) = json.as_object_mut() else {
-            continue;
-        };
-        let mut changed = false;
-        for (_label, state) in map.iter_mut() {
-            let Some(obj) = state.as_object_mut() else {
-                continue;
-            };
-            let w = obj.get("width").and_then(|v| v.as_u64()).unwrap_or(0);
-            let h = obj.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
-            if w < 800 || h < 600 {
-                obj.insert("width".into(), serde_json::json!(1200));
-                obj.insert("height".into(), serde_json::json!(800));
-                changed = true;
-            }
-        }
-        if changed && let Ok(out) = serde_json::to_string_pretty(&json) {
+        if sanitize_window_state_doc(&mut json)
+            && let Ok(out) = serde_json::to_string_pretty(&json)
+        {
             let _ = std::fs::write(&path, out);
         }
+    }
+}
+
+/// Minimum window dimensions — below this the window is considered corrupted.
+const MIN_WINDOW_WIDTH: u32 = 800;
+const MIN_WINDOW_HEIGHT: u32 = 600;
+/// Fallback size applied when a window's persisted geometry is invalid.
+const FALLBACK_WINDOW_WIDTH: u32 = 1200;
+const FALLBACK_WINDOW_HEIGHT: u32 = 800;
+
+/// A monitor's `(position, size)` in physical pixels.
+type MonitorRect = ((i32, i32), (u32, u32));
+
+/// The corrected size to apply when a window's geometry is invalid or its
+/// center falls off every available monitor. `window_geometry_fix` always
+/// resets to the fallback size — repositioning back on-screen is handled
+/// separately by `window.center()`, since the fallback size alone doesn't
+/// imply a sensible position.
+struct GeometryFix {
+    width: u32,
+    height: u32,
+}
+
+/// Pure core of [`ensure_window_visible`]: decide whether a window's geometry
+/// needs correcting, given its outer size, outer position, and the set of
+/// available monitors as `(position, size)` pairs. Returns `None` when the
+/// window is already valid and on-screen.
+///
+/// Free of any Tauri window/monitor types so it can be unit-tested directly
+/// with synthetic geometry — including the corrupted-dimension case that
+/// motivated the `i32::try_from`/saturating-arithmetic guard below.
+fn window_geometry_fix(
+    size: (u32, u32),
+    pos: (i32, i32),
+    monitors: &[MonitorRect],
+) -> Option<GeometryFix> {
+    let (width, height) = size;
+    let (x, y) = pos;
+
+    let size_invalid = width < MIN_WINDOW_WIDTH || height < MIN_WINDOW_HEIGHT;
+
+    // Check whether the window center is on any available monitor.
+    // Use saturating conversion to avoid arithmetic overflow on corrupted dimensions.
+    let half_w = i32::try_from(width / 2).unwrap_or(i32::MAX);
+    let half_h = i32::try_from(height / 2).unwrap_or(i32::MAX);
+    let center_x = x.saturating_add(half_w);
+    let center_y = y.saturating_add(half_h);
+    let on_screen = monitors.iter().any(|(mp, ms)| {
+        center_x >= mp.0
+            && center_x < mp.0.saturating_add(ms.0 as i32)
+            && center_y >= mp.1
+            && center_y < mp.1.saturating_add(ms.1 as i32)
+    });
+
+    if size_invalid || !on_screen {
+        Some(GeometryFix {
+            width: FALLBACK_WINDOW_WIDTH,
+            height: FALLBACK_WINDOW_HEIGHT,
+        })
+    } else {
+        None
     }
 }
 
@@ -189,37 +264,22 @@ fn sanitize_window_state() {
 /// The window-state plugin can persist invalid state (e.g. width/height 0, or
 /// positions off-screen) which causes downstream failures like PTY garbage output.
 fn ensure_window_visible(window: &WebviewWindow) {
-    #[cfg(feature = "desktop")]
     use tauri::PhysicalPosition;
-
-    const MIN_WIDTH: u32 = 800;
-    const MIN_HEIGHT: u32 = 600;
 
     let size = window.outer_size().unwrap_or_default();
     let pos = window.outer_position().unwrap_or_default();
-
-    let size_invalid = size.width < MIN_WIDTH || size.height < MIN_HEIGHT;
-
-    // Check whether the window center is on any available monitor
-    // Use saturating conversion to avoid arithmetic overflow on corrupted dimensions
-    let half_w = i32::try_from(size.width / 2).unwrap_or(i32::MAX);
-    let half_h = i32::try_from(size.height / 2).unwrap_or(i32::MAX);
-    let center_x = pos.x.saturating_add(half_w);
-    let center_y = pos.y.saturating_add(half_h);
-    let on_screen = window
+    let monitors: Vec<MonitorRect> = window
         .available_monitors()
         .unwrap_or_default()
         .iter()
-        .any(|m| {
+        .map(|m| {
             let mp = m.position();
             let ms = m.size();
-            center_x >= mp.x
-                && center_x < mp.x + ms.width as i32
-                && center_y >= mp.y
-                && center_y < mp.y + ms.height as i32
-        });
+            ((mp.x, mp.y), (ms.width, ms.height))
+        })
+        .collect();
 
-    if size_invalid || !on_screen {
+    if let Some(fix) = window_geometry_fix((size.width, size.height), (pos.x, pos.y), &monitors) {
         tracing::warn!(
             width = size.width,
             height = size.height,
@@ -227,7 +287,7 @@ fn ensure_window_visible(window: &WebviewWindow) {
             y = pos.y,
             "Invalid window state — resetting to defaults"
         );
-        if let Err(e) = window.set_size(tauri::PhysicalSize::new(1200u32, 800u32)) {
+        if let Err(e) = window.set_size(tauri::PhysicalSize::new(fix.width, fix.height)) {
             tracing::warn!("Failed to reset window size: {e}");
         }
         if let Err(e) = window.set_position(PhysicalPosition::new(100i32, 100i32)) {
@@ -236,6 +296,88 @@ fn ensure_window_visible(window: &WebviewWindow) {
         if let Err(e) = window.center() {
             tracing::warn!("Failed to center window: {e}");
         }
+    }
+}
+
+/// One Newton-style correction step for a `set_size` round-trip that doesn't
+/// land where requested.
+///
+/// `tauri_runtime::set_size` sets the window's INNER size, but we save and
+/// restore `outer_size()` (frame included) — see the module doc on
+/// `window_geometry.rs` for why. If asking for `requested` produces
+/// `observed`, the frame contributed a constant offset of
+/// `observed - requested`; asking for `requested - offset` should land
+/// exactly on `requested` next time. Clamped to be non-zero so a corrected
+/// dimension is never degenerate.
+fn corrected_size(requested: u32, observed: u32) -> u32 {
+    let offset = i64::from(observed) - i64::from(requested);
+    let corrected = i64::from(requested) - offset;
+    corrected.clamp(1, i64::from(u32::MAX)) as u32
+}
+
+#[cfg(feature = "desktop")]
+/// Poll `window`'s outer geometry until two consecutive reads agree, or a
+/// small iteration budget is exhausted.
+///
+/// macOS, X11 and Windows apply `set_position`/`set_size` synchronously, so
+/// this returns after its first (single, ~10ms) sleep there. Some compositors
+/// (Wayland in particular) negotiate resize/move asynchronously, so a read
+/// immediately after issuing one can still reflect the pre-change geometry —
+/// which would make both the inner/outer drift correction in
+/// `apply_window_geometry` and the immediately-following
+/// `ensure_window_visible` act on stale data. This is a best-effort mitigation
+/// bounded to ~50ms worst case, not a guarantee: a compositor slower than that
+/// still races it.
+fn wait_for_geometry_to_settle(window: &WebviewWindow) {
+    const MAX_ITERS: u32 = 5;
+    const DELAY: std::time::Duration = std::time::Duration::from_millis(10);
+    let mut last = (window.outer_size().ok(), window.outer_position().ok());
+    for _ in 0..MAX_ITERS {
+        std::thread::sleep(DELAY);
+        let current = (window.outer_size().ok(), window.outer_position().ok());
+        if current == last {
+            return;
+        }
+        last = current;
+    }
+}
+
+#[cfg(feature = "desktop")]
+/// Apply this session's saved geometry to `window`, self-correcting the
+/// `set_size` inner/outer drift with one measure-and-correct step. Falls back
+/// to whatever `window.set_size`/`set_position` land on if the correction
+/// itself doesn't fully converge — `ensure_window_visible`, called right
+/// after this in `RunEvent::Ready`, is the safety net for anything still
+/// invalid or off-screen.
+fn apply_window_geometry(window: &WebviewWindow, saved: window_geometry::WindowGeometry) {
+    use tauri::{PhysicalPosition, PhysicalSize};
+
+    if let Err(e) = window.set_position(PhysicalPosition::new(saved.x, saved.y)) {
+        tracing::warn!("Failed to restore window position: {e}");
+    }
+    if let Err(e) = window.set_size(PhysicalSize::new(saved.width, saved.height)) {
+        tracing::warn!("Failed to restore window size: {e}");
+    }
+    wait_for_geometry_to_settle(window);
+
+    if let Ok(observed) = window.outer_size()
+        && (observed.width != saved.width || observed.height != saved.height)
+    {
+        let corrected = PhysicalSize::new(
+            corrected_size(saved.width, observed.width),
+            corrected_size(saved.height, observed.height),
+        );
+        if let Err(e) = window.set_size(corrected) {
+            tracing::warn!("Failed to apply corrected window size: {e}");
+        }
+        wait_for_geometry_to_settle(window);
+    }
+
+    if saved.maximized {
+        let _ = window.maximize();
+    }
+    if saved.fullscreen {
+        let _ = window.set_fullscreen(true);
     }
 }
 
@@ -1412,6 +1554,12 @@ pub fn run() {
                         | tauri_plugin_window_state::StateFlags::DECORATIONS
                         | tauri_plugin_window_state::StateFlags::FULLSCREEN,
                 )
+                // `main` is fully owned by window_geometry.rs instead (position,
+                // size, maximized, fullscreen — all of it), which self-corrects
+                // the inner/outer `set_size` drift the SIZE exclusion above works
+                // around for this plugin. Every other window (floating-*, panel-*)
+                // still goes through the plugin unchanged.
+                .with_denylist(&["main"])
                 .build(),
         )
         .manage(state)
@@ -1489,6 +1637,103 @@ pub fn run() {
                     }
                 });
             }
+
+            // Seed and track main-window geometry for our own persistence — see
+            // window_geometry.rs for why this bypasses tauri-plugin-window-state's
+            // SIZE flag (the plugin still owns every other window).
+            if let Some(window) = app.get_webview_window("main") {
+                let outer_size = window.outer_size().unwrap_or_default();
+                let outer_pos = window.outer_position().unwrap_or_default();
+                let maximized = window.is_maximized().unwrap_or(false);
+                let fullscreen = window.is_fullscreen().unwrap_or(false);
+                app_state.window_geometry.set_maximized(maximized);
+                app_state.window_geometry.set_fullscreen(fullscreen);
+                app_state
+                    .window_geometry
+                    .record_size(outer_size.width, outer_size.height);
+                app_state
+                    .window_geometry
+                    .record_position(outer_pos.x, outer_pos.y);
+                // The seed above is the window's geometry at startup, not a
+                // user-driven change — it must not force an immediate write.
+                app_state.window_geometry.take_if_dirty();
+
+                let geometry_handle = app.handle().clone();
+                let geometry_state = Arc::clone(app_state);
+                window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::Resized(size) => {
+                        // Re-fetch the window rather than capturing it directly —
+                        // is_maximized()/is_fullscreen() need a live handle, and
+                        // AppHandle (unlike WebviewWindow) is cheaply Clone.
+                        let Some(w) = geometry_handle.get_webview_window("main") else {
+                            return;
+                        };
+                        let maximized = w.is_maximized().unwrap_or(false);
+                        let fullscreen = w.is_fullscreen().unwrap_or(false);
+                        geometry_state.window_geometry.set_maximized(maximized);
+                        geometry_state.window_geometry.set_fullscreen(fullscreen);
+                        geometry_state
+                            .window_geometry
+                            .record_size(size.width, size.height);
+                    }
+                    tauri::WindowEvent::Moved(pos) => {
+                        // Re-derive maximized/fullscreen here too, same as
+                        // Resized — a WM can emit Moved without a paired
+                        // Resized when a maximized/fullscreen window changes
+                        // monitor, and record_position must not act on a
+                        // stale cached flag from before that transition.
+                        let Some(w) = geometry_handle.get_webview_window("main") else {
+                            return;
+                        };
+                        let maximized = w.is_maximized().unwrap_or(false);
+                        let fullscreen = w.is_fullscreen().unwrap_or(false);
+                        geometry_state.window_geometry.set_maximized(maximized);
+                        geometry_state.window_geometry.set_fullscreen(fullscreen);
+                        geometry_state.window_geometry.record_position(pos.x, pos.y);
+                    }
+                    _ => {}
+                });
+
+                // Periodic flush: writes only when the setting is on AND the
+                // tracker is actually dirty, so an idle app never rewrites the
+                // file. Final flush happens at RunEvent::Exit regardless of the
+                // interval's phase.
+                let flush_state = Arc::clone(app_state);
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                    loop {
+                        interval.tick().await;
+                        if !flush_state.config.read().restore_window_geometry {
+                            continue;
+                        }
+                        if let Some(geometry) = flush_state.window_geometry.take_if_dirty()
+                            && let Err(e) = window_geometry::save("main", geometry)
+                        {
+                            tracing::warn!("Failed to save window geometry: {e}");
+                        }
+                    }
+                });
+            }
+
+            // Periodic terminal-scrollback capture (mirrors the frontend's own
+            // 30s savedTerminals snapshot timer in useAppInit.ts). Entirely a
+            // no-op — one config-flag read, no allocation — while
+            // restore_scrollback is off, which is the default.
+            {
+                let scrollback_state = Arc::clone(app_state);
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                    loop {
+                        interval.tick().await;
+                        scrollback_store::sweep_all(&scrollback_state);
+                    }
+                });
+            }
+            // Drop scrollback files nobody has touched in a week — the backstop
+            // against the directory growing forever from tabs closed without an
+            // explicit clear. One pass at startup is enough; this is hygiene, not
+            // a live constraint.
+            scrollback_store::prune(std::time::Duration::from_secs(7 * 24 * 3600));
 
             #[cfg(feature = "desktop")]
             {
@@ -1622,6 +1867,7 @@ pub fn run() {
             panel_window::focus_panel_window,
             panel_window::close_panel_window,
             panel_window::focus_main_window,
+            scrollback_store::clear_saved_scrollback,
             pty::create_pty,
             pty::create_pty_with_worktree,
             pty::list_worktrees,
@@ -2014,11 +2260,20 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match &event {
-                // Guard against corrupted window-state applied by tauri-plugin-window-state.
-                // Must run at Ready (after plugins have restored persisted position/size),
-                // not in setup() which fires before the plugin applies its state.
+                // `main` is denylisted from tauri-plugin-window-state (see its
+                // registration above), so nothing else restores its geometry —
+                // apply our own save before the ensure_window_visible safety net.
+                // Must run at Ready, same as ensure_window_visible always has:
+                // the window exists but hasn't necessarily settled into its
+                // final on-screen geometry until the event loop is running.
                 tauri::RunEvent::Ready => {
                     if let Some(window) = app_handle.get_webview_window("main") {
+                        if let Some(state) = app_handle.try_state::<Arc<AppState>>()
+                            && state.config.read().restore_window_geometry
+                            && let Some(saved) = window_geometry::load("main")
+                        {
+                            apply_window_geometry(&window, saved);
+                        }
                         ensure_window_visible(&window);
                     }
                 }
@@ -2068,6 +2323,17 @@ pub fn run() {
                     if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
                         state.tunnel_manager.shutdown_all();
                         crate::ai_agent::knowledge::flush_dirty(state.inner());
+                        // Final geometry flush — the periodic task's 2s interval
+                        // may not have ticked since the last resize/move.
+                        if state.config.read().restore_window_geometry
+                            && let Err(e) =
+                                window_geometry::save("main", state.window_geometry.current())
+                        {
+                            tracing::warn!("Failed to save window geometry on exit: {e}");
+                        }
+                        // Final scrollback flush — the periodic task's 30s
+                        // interval may not have ticked since the last output.
+                        scrollback_store::sweep_all(state.inner());
                     }
                 }
                 _ => {}
@@ -2398,6 +2664,149 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- sanitize_window_state_doc ---
+
+    #[test]
+    fn sanitize_window_state_doc_repairs_fossilised_zero_size() {
+        let mut json = serde_json::json!({
+            "main": { "x": 10, "y": 10, "width": 0, "height": 0 }
+        });
+        assert!(sanitize_window_state_doc(&mut json));
+        assert_eq!(json["main"]["width"], serde_json::json!(1200));
+        assert_eq!(json["main"]["height"], serde_json::json!(800));
+    }
+
+    #[test]
+    fn sanitize_window_state_doc_repairs_sub_minimum_dims() {
+        let mut json = serde_json::json!({
+            "main": { "width": 799, "height": 599 }
+        });
+        assert!(sanitize_window_state_doc(&mut json));
+        assert_eq!(json["main"]["width"], serde_json::json!(1200));
+        assert_eq!(json["main"]["height"], serde_json::json!(800));
+    }
+
+    #[test]
+    fn sanitize_window_state_doc_leaves_valid_dims_untouched() {
+        let mut json = serde_json::json!({
+            "main": { "x": 10, "y": 10, "width": 1400, "height": 900 }
+        });
+        assert!(!sanitize_window_state_doc(&mut json));
+        assert_eq!(json["main"]["width"], serde_json::json!(1400));
+        assert_eq!(json["main"]["height"], serde_json::json!(900));
+    }
+
+    #[test]
+    fn sanitize_window_state_doc_skips_non_object_entries() {
+        let mut json = serde_json::json!({ "main": "not-an-object" });
+        assert!(!sanitize_window_state_doc(&mut json));
+    }
+
+    #[test]
+    fn sanitize_window_state_doc_handles_empty_map() {
+        let mut json = serde_json::json!({});
+        assert!(!sanitize_window_state_doc(&mut json));
+    }
+
+    #[test]
+    fn sanitize_window_state_doc_handles_non_object_root() {
+        let mut json = serde_json::json!([1, 2, 3]);
+        assert!(!sanitize_window_state_doc(&mut json));
+    }
+
+    #[test]
+    fn sanitize_window_state_doc_fixes_only_the_bad_entry() {
+        let mut json = serde_json::json!({
+            "main": { "width": 1400, "height": 900 },
+            "secondary": { "width": 0, "height": 0 }
+        });
+        assert!(sanitize_window_state_doc(&mut json));
+        assert_eq!(json["main"]["width"], serde_json::json!(1400));
+        assert_eq!(json["secondary"]["width"], serde_json::json!(1200));
+    }
+
+    // --- window_geometry_fix ---
+
+    #[test]
+    fn window_geometry_fix_none_when_on_screen_and_valid() {
+        let monitors = [((0, 0), (1920, 1080))];
+        let fix = window_geometry_fix((1200, 800), (100, 100), &monitors);
+        assert!(fix.is_none());
+    }
+
+    #[test]
+    fn window_geometry_fix_resets_when_center_off_every_monitor() {
+        let monitors = [((0, 0), (1920, 1080))];
+        // Center at (100000, 100000) — far off the only monitor.
+        let fix = window_geometry_fix((1200, 800), (99400, 99600), &monitors);
+        let fix = fix.expect("off-screen center must be corrected");
+        assert_eq!(fix.width, FALLBACK_WINDOW_WIDTH);
+        assert_eq!(fix.height, FALLBACK_WINDOW_HEIGHT);
+    }
+
+    #[test]
+    fn window_geometry_fix_resets_when_size_below_minimum() {
+        let monitors = [((0, 0), (1920, 1080))];
+        let fix = window_geometry_fix((10, 10), (900, 500), &monitors);
+        assert!(fix.is_some(), "sub-minimum size must always be corrected");
+    }
+
+    #[test]
+    fn window_geometry_fix_resets_with_empty_monitor_list() {
+        let fix = window_geometry_fix((1200, 800), (100, 100), &[]);
+        assert!(
+            fix.is_some(),
+            "no monitors means the window cannot be on-screen"
+        );
+    }
+
+    #[test]
+    fn window_geometry_fix_does_not_overflow_on_corrupted_dimensions() {
+        // u32::MAX width/height must not panic the saturating-arithmetic path.
+        let monitors = [((0, 0), (1920, 1080))];
+        let fix = window_geometry_fix(
+            (u32::MAX, u32::MAX),
+            (i32::MAX - 10, i32::MAX - 10),
+            &monitors,
+        );
+        assert!(fix.is_some());
+    }
+
+    #[test]
+    fn window_geometry_fix_accepts_center_on_second_monitor() {
+        let monitors = [((0, 0), (1920, 1080)), ((1920, 0), (1920, 1080))];
+        // Window centered on the second monitor.
+        let fix = window_geometry_fix((800, 600), (2400, 200), &monitors);
+        assert!(fix.is_none());
+    }
+
+    // --- corrected_size ---
+
+    #[test]
+    fn corrected_size_converges_in_one_step() {
+        // Simulate a 28px inner/outer offset: requesting 1200 lands on 1228.
+        // The correction should ask for 1172 so the NEXT set_size(1172) would
+        // land on exactly 1200 — i.e. corrected = requested - (observed - requested).
+        assert_eq!(corrected_size(1200, 1228), 1172);
+    }
+
+    #[test]
+    fn corrected_size_handles_negative_offset() {
+        // observed < requested (offset shrinks the window) is symmetric.
+        assert_eq!(corrected_size(1200, 1172), 1228);
+    }
+
+    #[test]
+    fn corrected_size_is_noop_when_already_exact() {
+        assert_eq!(corrected_size(1200, 1200), 1200);
+    }
+
+    #[test]
+    fn corrected_size_never_returns_zero_or_negative() {
+        // A huge positive offset must clamp to a sane minimum, not underflow.
+        assert_eq!(corrected_size(10, 10_000), 1);
+    }
 
     #[test]
     fn relay_does_not_own_a_second_tokio_runtime() {

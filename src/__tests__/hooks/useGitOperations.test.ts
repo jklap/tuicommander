@@ -314,7 +314,7 @@ describe("useGitOperations", () => {
 			expect(terminalsStore.state.activeId).toBe(branch?.terminals[0]);
 		});
 
-		it("skips plain shell tabs and spawns fresh terminal on restore", async () => {
+		it("restores plain shell tabs as fresh live shells (restoreShellTerminals default on)", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "feature", {
 				worktreePath: "/repo/wt",
@@ -328,9 +328,11 @@ describe("useGitOperations", () => {
 			await gitOps.handleBranchSelect("/repo", "feature");
 
 			const branch = repositoriesStore.get("/repo")?.branches["feature"];
-			// Plain shell tabs filtered out → fresh terminal spawned
-			expect(branch?.terminals.length).toBe(1);
+			// Both saved shell tabs restore as fresh terminals in their saved cwd.
+			expect(branch?.terminals.length).toBe(2);
 			expect(branch?.savedTerminals?.length).toBe(0);
+			const names = branch!.terminals.map((id) => terminalsStore.get(id)?.name).sort();
+			expect(names).toEqual(["Shell 1", "Shell 2"]);
 		});
 
 		it("preserves terminal metadata during lazy restore", async () => {
@@ -445,10 +447,13 @@ describe("useGitOperations", () => {
 			await gitOps.handleBranchSelect("/repo", "feature");
 
 			const branch = repositoriesStore.get("/repo")?.branches["feature"];
-			// Only the agent tab is restored (plain shell filtered out)
-			expect(branch?.terminals.length).toBe(1);
-			const agentTerm = terminalsStore.get(branch!.terminals[0]);
+			// Both the agent tab and the plain shell tab restore.
+			expect(branch?.terminals.length).toBe(2);
+			const restored = branch!.terminals.map((id) => terminalsStore.get(id));
+			const agentTerm = restored.find((t) => t?.agentType === "claude");
 			expect(agentTerm?.pendingResumeCommand).toBe("claude --continue");
+			const shellTerm = restored.find((t) => t?.agentType == null);
+			expect(shellTerm?.pendingResumeCommand).toBeNull();
 		});
 
 		it("does not restore savedTerminals when live terminals exist", async () => {

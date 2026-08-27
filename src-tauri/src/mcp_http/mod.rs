@@ -1191,6 +1191,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route("/config/clear-caches", post(config_routes::clear_caches))
         .route(
+            "/scrollback",
+            delete(config_routes::clear_saved_scrollback_http),
+        )
+        .route(
             "/config/clear-repo-caches",
             post(config_routes::clear_repo_caches),
         )
@@ -2158,6 +2162,7 @@ mod tests {
             indexer_throttle: std::sync::Arc::new(crate::content_index::IndexerThrottle::default()),
             slash_mode: DashMap::new(),
             last_output_ms: DashMap::new(),
+            scrollback_capture_marks: DashMap::new(),
             last_input_ms: DashMap::new(),
             shell_states: DashMap::new(),
             terminal_rows: DashMap::new(),
@@ -2197,6 +2202,9 @@ mod tests {
             ),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
+            window_geometry: crate::window_geometry::WindowGeometryTracker::new(
+                crate::window_geometry::WindowGeometry::default(),
+            ),
             server_start_time: std::time::Instant::now(),
             term_aliases: dashmap::DashMap::new(),
             term_alias_counters: dashmap::DashMap::new(),

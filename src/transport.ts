@@ -521,6 +521,11 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	clear_caches: { map: () => ({ method: "POST", path: "/config/clear-caches" }) },
 	clear_repo_caches: { map: (a) => ({ method: "POST", path: `/config/clear-repo-caches`, body: { path: a.path } }) },
 
+	// --- Config: scrollback restore ---
+	clear_saved_scrollback: {
+		map: (a) => ({ method: "DELETE", path: "/scrollback", body: { session: a.session ?? null } }),
+	},
+
 	// --- Config: repo local config (.tuic.json) ---
 	load_repo_local_config: {
 		map: (_args, p) => ({ method: "GET", path: `/config/repo-local-config?path=${p("repoPath")}` }),

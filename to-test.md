@@ -96,6 +96,36 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] **[MANUAL]** Switch the main checkout to a non-main branch (e.g. `git checkout -b tmp` in the main repo directory, not a linked worktree). Confirm the sidebar's branch icon turns the new accent/blue color, distinct from the main branch's yellow star and a separate linked worktree's green fork icon. Screenshot in both light and dark themes.
 - [ ] **[MANUAL]** With that same off-main main-worktree row visible, select/focus it (and, separately, a different row) and confirm the new accent-blue icon color doesn't get visually confused with the sidebar's existing accent-colored active/selected-row indicator — i.e. an unselected row showing this color shouldn't read as "currently selected."
 
+## Window geometry restore, shell tab restore, and scrollback restore (2026-08-26, **Rust change — needs `make dev` restart**)
+
+Three related features. `main` is now denylisted from `tauri-plugin-window-state` and owns its own size/position/maximized/fullscreen persistence (`window-geometry.json`, `src-tauri/src/window_geometry.rs`) with a measure-and-correct restore step working around the plugin's `set_size`/`outer_size` inner/outer drift under `titleBarStyle: Overlay`. `createBranchSelectionCoordinator.ts` now restores plain shell tabs (not just agent tabs) on branch select, behind Settings → Terminal → "Restore open terminals on launch" (default on). A new opt-in "Save terminal scrollback" setting (default off) persists each terminal's recent output (`scrollback_store.rs`) and replays it above a fresh prompt on restore.
+
+- [ ] **[MANUAL]** `make dev`, resize and move the window, quit, relaunch. Repeat **three
+  times** in a row and confirm the size is byte-identical every launch — this is the exact
+  regression the `SIZE` flag was excluded from the plugin to avoid (progressive shrink), so
+  a single restart is not enough evidence either way.
+- [ ] **[MANUAL]** Maximize the window, quit, relaunch — comes back maximized. Un-maximize
+  it — reveals the pre-maximize size, not the screen size.
+- [ ] **[MANUAL]** Move the window to a second display, quit, disconnect that display,
+  relaunch — the window recenters onto a live monitor instead of restoring off-screen.
+- [ ] **[MANUAL]** Toggle "Restore window size and position on launch" off in Settings →
+  General, resize the window, restart — comes back at the 1200×800 default instead.
+- [ ] **[MANUAL]** Open two plain shells and one agent tab in a repo branch, quit, relaunch,
+  reselect that branch — all three tabs return; the shells show a live prompt in their saved
+  cwd; the agent tab shows its resume banner. Toggle "Restore open terminals on launch" off,
+  repeat — only the agent tab comes back.
+- [ ] **[MANUAL]** Enable "Save terminal scrollback", run a colorful command (e.g. `ls -la
+  --color`) and a longer one that scrolls, restart, reselect the branch — the prior output
+  appears above a dim "restored from previous session" separator with colors/bold intact,
+  is scrollable and searchable, and the live prompt below it still works normally.
+- [ ] **[MANUAL]** With scrollback saving on, set "Scrollback lines to save" low (e.g. 100),
+  generate more output than that in a terminal, restart — confirm only the cap's worth comes
+  back. Click "Clear saved scrollback" and confirm a subsequent restart shows no restored
+  history for any tab.
+- [ ] **[MANUAL]** Confirm `<config dir>/scrollback/*.json` files are not world-readable
+  (owner-only permissions) and that the directory doesn't exist at all when scrollback
+  saving has never been turned on.
+
 ## Create Worktree dialog: searchable base-ref picker + keyboard nav (2026-08-26, frontend only)
 
 The "Start from" base-ref dropdown gained a search box, `↑`/`↓`/`Enter` navigation, and

@@ -46,6 +46,10 @@ interface RustAppConfig {
 	default_font_size: number;
 	confirm_before_quit: boolean;
 	confirm_before_closing_tab: boolean;
+	restore_window_geometry?: boolean;
+	restore_shell_terminals?: boolean;
+	restore_scrollback?: boolean;
+	restore_scrollback_lines?: number;
 	max_tab_name_length: number;
 	split_tab_mode: string;
 	tab_ordering_mode: string;
@@ -398,6 +402,10 @@ interface SettingsStoreState {
 	theme: string;
 	confirmBeforeQuit: boolean;
 	confirmBeforeClosingTab: boolean;
+	restoreWindowGeometry: boolean;
+	restoreShellTerminals: boolean;
+	restoreScrollback: boolean;
+	restoreScrollbackLines: number;
 	maxTabNameLength: number;
 	splitTabMode: SplitTabMode;
 	tabOrderingMode: TabOrderingMode;
@@ -458,6 +466,10 @@ function createSettingsStore() {
 		theme: "commander",
 		confirmBeforeQuit: true,
 		confirmBeforeClosingTab: true,
+		restoreWindowGeometry: true,
+		restoreShellTerminals: true,
+		restoreScrollback: false,
+		restoreScrollbackLines: 1000,
 		maxTabNameLength: 25,
 		splitTabMode: "separate",
 		tabOrderingMode: "grouped-by-type",
@@ -535,6 +547,10 @@ function createSettingsStore() {
 		config.default_font_size = state.defaultFontSize;
 		config.confirm_before_quit = state.confirmBeforeQuit;
 		config.confirm_before_closing_tab = state.confirmBeforeClosingTab;
+		config.restore_window_geometry = state.restoreWindowGeometry;
+		config.restore_shell_terminals = state.restoreShellTerminals;
+		config.restore_scrollback = state.restoreScrollback;
+		config.restore_scrollback_lines = state.restoreScrollbackLines;
 		config.max_tab_name_length = state.maxTabNameLength;
 		config.split_tab_mode = state.splitTabMode;
 		config.tab_ordering_mode = state.tabOrderingMode;
@@ -643,6 +659,10 @@ function createSettingsStore() {
 				setState("theme", config.theme || "vscode-dark");
 				setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
 				setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
+				setState("restoreWindowGeometry", config.restore_window_geometry ?? true);
+				setState("restoreShellTerminals", config.restore_shell_terminals ?? true);
+				setState("restoreScrollback", config.restore_scrollback ?? false);
+				setState("restoreScrollbackLines", config.restore_scrollback_lines ?? 1000);
 				setState("maxTabNameLength", config.max_tab_name_length || 25);
 				setState("splitTabMode", config.split_tab_mode === "unified" ? "unified" : "separate");
 				const tom = config.tab_ordering_mode;
@@ -751,6 +771,30 @@ function createSettingsStore() {
 		/** Set confirm-before-closing-tab preference */
 		setConfirmBeforeClosingTab(enabled: boolean): void {
 			setState("confirmBeforeClosingTab", enabled);
+			save();
+		},
+
+		/** Set whether the main window's size/position is restored on launch */
+		setRestoreWindowGeometry(enabled: boolean): void {
+			setState("restoreWindowGeometry", enabled);
+			save();
+		},
+
+		/** Set whether plain shell tabs (not just agent tabs) are restored on launch */
+		setRestoreShellTerminals(enabled: boolean): void {
+			setState("restoreShellTerminals", enabled);
+			save();
+		},
+
+		/** Set whether terminal scrollback is persisted to disk and replayed on restore */
+		setRestoreScrollback(enabled: boolean): void {
+			setState("restoreScrollback", enabled);
+			save();
+		},
+
+		/** Set the max scrollback lines persisted per terminal */
+		setRestoreScrollbackLines(lines: number): void {
+			setState("restoreScrollbackLines", Math.max(0, Math.round(lines)));
 			save();
 		},
 

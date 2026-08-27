@@ -11,12 +11,14 @@ vi.mock("../../transport", async (importOriginal) => ({
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
+import { activityStore } from "../../stores/activityStore";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { uiStore } from "../../stores/ui";
 import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -697,6 +699,108 @@ describe("initApp", () => {
 		const branch = repositoriesStore.get("/repo")?.branches["main"];
 		expect(branch?.savedTerminals?.length).toBe(1);
 		expect(branch?.savedTerminals?.[0].agentSessionId).toBeNull();
+	});
+
+	describe("collectTerminalSnapshots (via beforeunload / periodic timer)", () => {
+		it("includes plain shell tabs, not just agent tabs", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+
+			// No agent_type — a plain shell, re-adopted with agentType: null.
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "shell-1", cwd: "/repo" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+			await initApp(deps);
+			expect(terminalsStore.get(terminalsStore.getIds()[0])?.agentType).toBeNull();
+
+			window.dispatchEvent(new Event("beforeunload"));
+
+			const saved = repositoriesStore.get("/repo")?.branches["main"]?.savedTerminals;
+			expect(saved).toHaveLength(1);
+			expect(saved?.[0].agentType).toBeNull();
+		});
+
+		it("carries tuicSession and agentLaunchCommand through the snapshot", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-1", cwd: "/repo" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+			await initApp(deps);
+			const termId = terminalsStore.getIds()[0];
+			terminalsStore.update(termId, {
+				tuicSession: "tuic-abc",
+				agentLaunchCommand: "c --model opus",
+			});
+
+			window.dispatchEvent(new Event("beforeunload"));
+
+			const saved = repositoriesStore.get("/repo")?.branches["main"]?.savedTerminals?.[0];
+			expect(saved?.tuicSession).toBe("tuic-abc");
+			expect(saved?.agentLaunchCommand).toBe("c --model opus");
+		});
+
+		it("does not touch savedTerminals for a branch with no terminals", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setBranch("/repo", "empty-branch", { worktreePath: "/repo/wt-empty" });
+
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-1", cwd: "/repo" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+			await initApp(deps);
+
+			window.dispatchEvent(new Event("beforeunload"));
+
+			expect(repositoriesStore.get("/repo")?.branches["main"]?.savedTerminals).toHaveLength(1);
+			expect(repositoriesStore.get("/repo")?.branches["empty-branch"]?.savedTerminals).toBeUndefined();
+		});
+
+		it("flushes activityStore, uiStore, and paneLayoutStore before snapshotting", async () => {
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const activityFlush = vi.spyOn(activityStore, "flushSave");
+			const uiFlush = vi.spyOn(uiStore, "flushSave");
+			const paneFlush = vi.spyOn(paneLayoutStore, "flushSave");
+
+			window.dispatchEvent(new Event("beforeunload"));
+
+			expect(activityFlush).toHaveBeenCalled();
+			expect(uiFlush).toHaveBeenCalled();
+			expect(paneFlush).toHaveBeenCalled();
+
+			activityFlush.mockRestore();
+			uiFlush.mockRestore();
+			paneFlush.mockRestore();
+		});
+
+		it("periodically snapshots terminals every 30s without needing beforeunload", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-1", cwd: "/repo" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+			await initApp(deps);
+
+			expect(repositoriesStore.get("/repo")?.branches["main"]?.savedTerminals).toBeUndefined();
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(repositoriesStore.get("/repo")?.branches["main"]?.savedTerminals).toHaveLength(1);
+		});
 	});
 
 	it("registers beforeunload handler to close PTY sessions", async () => {

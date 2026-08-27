@@ -254,6 +254,20 @@ export const GeneralTab: Component = () => {
 				</div>
 			</Show>
 
+			<Show when={isTauri()}>
+				<h3>{t("general.heading.window", "Window")}</h3>
+
+				<SettingToggle
+					checked={settingsStore.state.restoreWindowGeometry}
+					onChange={(v) => settingsStore.setRestoreWindowGeometry(v)}
+					label={t("general.toggle.restoreWindowGeometry", "Restore window size and position on launch")}
+					hint={t(
+						"general.hint.restoreWindowGeometry",
+						"Reopen the app window at the same size and position as when it was last closed",
+					)}
+				/>
+			</Show>
+
 			<h3>{t("general.heading.confirmations", "Confirmations")}</h3>
 
 			<SettingToggle

@@ -279,6 +279,38 @@ pub(super) async fn clear_caches(
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
+/// HTTP/MCP equivalent of the desktop `clear_saved_scrollback` command — see
+/// `scrollback_store.rs`. `{"session": "<tuic_session>"}` clears one tab;
+/// an empty body (or `session: null`) clears every saved tab.
+pub(super) async fn clear_saved_scrollback_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    body: Option<Json<serde_json::Value>>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    let session = body
+        .as_ref()
+        .and_then(|Json(v)| v.get("session"))
+        .and_then(|v| v.as_str());
+    let result = match session {
+        Some(tuic_session) => {
+            crate::scrollback_store::clear(tuic_session);
+            Ok(())
+        }
+        None => crate::scrollback_store::clear_all(),
+    };
+    match result {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
 pub(super) async fn clear_repo_caches(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
@@ -905,6 +937,76 @@ mod tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn clear_saved_scrollback_http_rejects_unauthenticated_remote() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let resp = clear_saved_scrollback_http(ConnectInfo(lan()), None, None)
+            .await
+            .into_response();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn clear_saved_scrollback_http_with_no_body_clears_every_tab() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        crate::scrollback_store::save("tuic-a", &[], 80, 1).unwrap();
+        crate::scrollback_store::save("tuic-b", &[], 80, 1).unwrap();
+
+        let resp = clear_saved_scrollback_http(ConnectInfo(loopback()), None, None)
+            .await
+            .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(crate::scrollback_store::load("tuic-a").is_none());
+        assert!(crate::scrollback_store::load("tuic-b").is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn clear_saved_scrollback_http_with_a_session_clears_only_that_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        crate::scrollback_store::save("tuic-a", &[], 80, 1).unwrap();
+        crate::scrollback_store::save("tuic-b", &[], 80, 1).unwrap();
+
+        let resp = clear_saved_scrollback_http(
+            ConnectInfo(loopback()),
+            None,
+            Some(Json(serde_json::json!({"session": "tuic-a"}))),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(crate::scrollback_store::load("tuic-a").is_none());
+        assert!(crate::scrollback_store::load("tuic-b").is_some());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn clear_saved_scrollback_http_treats_null_session_as_clear_all() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        crate::scrollback_store::save("tuic-a", &[], 80, 1).unwrap();
+
+        let resp = clear_saved_scrollback_http(
+            ConnectInfo(loopback()),
+            None,
+            Some(Json(serde_json::json!({"session": null}))),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(crate::scrollback_store::load("tuic-a").is_none());
     }
 
     #[tokio::test]

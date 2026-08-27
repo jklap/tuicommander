@@ -20,6 +20,17 @@ fn load_geometry() -> PanelGeometryMap {
     crate::config::load_json_config(PANEL_GEOMETRY_FILE)
 }
 
+/// Minimum size a panel window's geometry must have to be worth persisting.
+/// Below this, a spurious `inner_size()`/`outer_position()` read (e.g. during
+/// teardown) would otherwise fossilise a near-zero geometry for next launch.
+const MIN_PANEL_GEOMETRY_SIZE: u32 = 100;
+
+/// Pure predicate behind [`save_window_geometry`]'s early-return: is this size
+/// worth persisting?
+fn is_geometry_worth_saving(width: u32, height: u32) -> bool {
+    width >= MIN_PANEL_GEOMETRY_SIZE && height >= MIN_PANEL_GEOMETRY_SIZE
+}
+
 fn validate_panel_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
     {
@@ -106,7 +117,7 @@ fn save_window_geometry(panel_id: &str, window: &tauri::WebviewWindow) {
     let Ok(size) = window.inner_size() else {
         return;
     };
-    if size.width < 100 || size.height < 100 {
+    if !is_geometry_worth_saving(size.width, size.height) {
         return;
     }
     let geometry = PanelGeometry {
@@ -185,5 +196,91 @@ mod tests {
             "exactly 64 chars"
         );
         assert!(validate_panel_id("ABC-123-def").is_ok(), "mixed case");
+    }
+
+    #[test]
+    fn is_geometry_worth_saving_rejects_below_minimum() {
+        assert!(!is_geometry_worth_saving(0, 0));
+        assert!(!is_geometry_worth_saving(99, 200));
+        assert!(!is_geometry_worth_saving(200, 99));
+    }
+
+    #[test]
+    fn is_geometry_worth_saving_accepts_at_and_above_minimum() {
+        assert!(is_geometry_worth_saving(100, 100));
+        assert!(is_geometry_worth_saving(500, 600));
+    }
+
+    #[test]
+    fn panel_geometry_map_round_trips_through_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let geometry = PanelGeometry {
+            x: 42,
+            y: 7,
+            width: 640,
+            height: 480,
+        };
+        let saved =
+            crate::config::ConfigFile::<PanelGeometryMap>::new(PANEL_GEOMETRY_FILE).update(|map| {
+                map.insert("ai-chat".to_string(), geometry.clone());
+                true
+            });
+        assert!(saved.is_ok(), "update should succeed: {saved:?}");
+
+        let loaded = load_geometry();
+        let entry = loaded.get("ai-chat").expect("entry persisted");
+        assert_eq!(entry.x, 42);
+        assert_eq!(entry.y, 7);
+        assert_eq!(entry.width, 640);
+        assert_eq!(entry.height, 480);
+    }
+
+    #[test]
+    fn load_geometry_defaults_to_empty_map_when_file_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        assert!(load_geometry().is_empty());
+    }
+
+    #[test]
+    fn panel_geometry_map_preserves_other_entries_on_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let cfg = crate::config::ConfigFile::<PanelGeometryMap>::new(PANEL_GEOMETRY_FILE);
+        cfg.update(|map| {
+            map.insert(
+                "first".to_string(),
+                PanelGeometry {
+                    x: 1,
+                    y: 1,
+                    width: 100,
+                    height: 100,
+                },
+            );
+            true
+        })
+        .unwrap();
+        cfg.update(|map| {
+            map.insert(
+                "second".to_string(),
+                PanelGeometry {
+                    x: 2,
+                    y: 2,
+                    width: 200,
+                    height: 200,
+                },
+            );
+            true
+        })
+        .unwrap();
+
+        let loaded = load_geometry();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.contains_key("first"));
+        assert!(loaded.contains_key("second"));
     }
 }

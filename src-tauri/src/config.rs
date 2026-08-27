@@ -536,6 +536,22 @@ pub(crate) struct AppConfig {
     /// Show confirmation dialog when closing a terminal tab
     #[serde(default = "default_true")]
     pub(crate) confirm_before_closing_tab: bool,
+    /// Restore the main window's size and position from the last session on launch
+    #[serde(default = "default_true")]
+    pub(crate) restore_window_geometry: bool,
+    /// Restore plain shell tabs (not just agent tabs) from the last session on launch
+    #[serde(default = "default_true")]
+    pub(crate) restore_shell_terminals: bool,
+    /// Persist each terminal's recent scrollback to disk so it can be replayed
+    /// above a fresh prompt on restore. Off by default — output is stored as
+    /// plaintext in the config directory and may contain secrets echoed to a
+    /// terminal.
+    #[serde(default)]
+    pub(crate) restore_scrollback: bool,
+    /// Maximum number of scrollback lines persisted per terminal when
+    /// `restore_scrollback` is enabled.
+    #[serde(default = "default_restore_scrollback_lines")]
+    pub(crate) restore_scrollback_lines: u32,
     /// Maximum characters for tab names before truncation
     #[serde(default = "default_max_tab_name_length")]
     pub(crate) max_tab_name_length: u32,
@@ -861,6 +877,10 @@ fn default_max_tab_name_length() -> u32 {
     25
 }
 
+fn default_restore_scrollback_lines() -> u32 {
+    1000
+}
+
 fn default_remote_port() -> u16 {
     9876
 }
@@ -881,6 +901,10 @@ impl Default for AppConfig {
             services: ServicesConfig::default(),
             confirm_before_quit: true,
             confirm_before_closing_tab: true,
+            restore_window_geometry: true,
+            restore_shell_terminals: true,
+            restore_scrollback: false,
+            restore_scrollback_lines: default_restore_scrollback_lines(),
             max_tab_name_length: default_max_tab_name_length(),
             split_tab_mode: SplitTabMode::default(),
             tab_ordering_mode: TabOrderingMode::default(),
@@ -3199,6 +3223,10 @@ mod tests {
             },
             confirm_before_quit: false,
             confirm_before_closing_tab: true,
+            restore_window_geometry: true,
+            restore_shell_terminals: true,
+            restore_scrollback: false,
+            restore_scrollback_lines: default_restore_scrollback_lines(),
             max_tab_name_length: 40,
             split_tab_mode: SplitTabMode::Unified,
             tab_ordering_mode: TabOrderingMode::TerminalsFirst,
@@ -3275,6 +3303,13 @@ mod tests {
         assert_eq!(loaded.services.auth.password_hash, "$2b$12$hash");
         assert!(!loaded.confirm_before_quit);
         assert!(loaded.confirm_before_closing_tab);
+        assert!(loaded.restore_window_geometry);
+        assert!(loaded.restore_shell_terminals);
+        assert!(!loaded.restore_scrollback);
+        assert_eq!(
+            loaded.restore_scrollback_lines,
+            default_restore_scrollback_lines()
+        );
         assert_eq!(loaded.max_tab_name_length, 40);
         assert_eq!(loaded.split_tab_mode, SplitTabMode::Unified);
         assert!(loaded.pr_hide_drafts);
@@ -3336,6 +3371,22 @@ mod tests {
         assert_eq!(loaded.services.auth.password_hash, "");
         assert!(loaded.confirm_before_quit);
         assert!(loaded.confirm_before_closing_tab);
+        assert!(
+            loaded.restore_window_geometry,
+            "a config.json predating this field must still restore window geometry by default"
+        );
+        assert!(
+            loaded.restore_shell_terminals,
+            "a config.json predating this field must still restore shell tabs by default"
+        );
+        assert!(
+            !loaded.restore_scrollback,
+            "scrollback persistence must default to off for a config.json predating it — it writes plaintext to disk"
+        );
+        assert_eq!(
+            loaded.restore_scrollback_lines,
+            default_restore_scrollback_lines()
+        );
         assert_eq!(loaded.max_tab_name_length, 25);
         assert_eq!(loaded.split_tab_mode, SplitTabMode::Separate);
         assert!(!loaded.prevent_sleep_when_busy);

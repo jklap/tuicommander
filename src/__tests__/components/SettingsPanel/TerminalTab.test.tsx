@@ -16,6 +16,9 @@ const {
 	mockSetOsc52Clipboard,
 	mockSetShowLastPrompt,
 	mockSetLinkActivation,
+	mockSetRestoreShellTerminals,
+	mockSetRestoreScrollback,
+	mockSetRestoreScrollbackLines,
 } = vi.hoisted(() => ({
 	mockSetShowBlockTimestamps: vi.fn(),
 	mockSetShowBlockMarks: vi.fn(),
@@ -29,6 +32,9 @@ const {
 	mockSetOsc52Clipboard: vi.fn(),
 	mockSetShowLastPrompt: vi.fn(),
 	mockSetLinkActivation: vi.fn(),
+	mockSetRestoreShellTerminals: vi.fn(),
+	mockSetRestoreScrollback: vi.fn(),
+	mockSetRestoreScrollbackLines: vi.fn(),
 }));
 
 vi.mock("../../../stores/settings", () => ({
@@ -47,6 +53,9 @@ vi.mock("../../../stores/settings", () => ({
 			showBlockMarks: true,
 			showPromptMarks: false,
 			blockFoldingEnabled: true,
+			restoreShellTerminals: true,
+			restoreScrollback: false,
+			restoreScrollbackLines: 1000,
 		},
 		setFont: mockSetFont,
 		setDefaultFontSize: mockSetDefaultFontSize,
@@ -60,6 +69,9 @@ vi.mock("../../../stores/settings", () => ({
 		setShowBlockMarks: mockSetShowBlockMarks,
 		setShowPromptMarks: mockSetShowPromptMarks,
 		setBlockFoldingEnabled: mockSetBlockFoldingEnabled,
+		setRestoreShellTerminals: mockSetRestoreShellTerminals,
+		setRestoreScrollback: mockSetRestoreScrollback,
+		setRestoreScrollbackLines: mockSetRestoreScrollbackLines,
 	},
 	FONT_FAMILIES: { "JetBrains Mono": "JetBrains Mono", "Fira Code": "Fira Code" },
 }));
@@ -71,17 +83,17 @@ describe("TerminalTab", () => {
 		vi.clearAllMocks();
 	});
 
-	it("renders the Rendering, Behavior, and Blocks headings in order", () => {
+	it("renders the Rendering, Behavior, Blocks, and Session Restore headings in order", () => {
 		const { container } = render(() => <TerminalTab />);
 		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.textContent);
-		expect(headings).toEqual(["Rendering", "Behavior", "Blocks"]);
+		expect(headings).toEqual(["Rendering", "Behavior", "Blocks", "Session Restore"]);
 	});
 
-	it("shows all seven toggles with the correct checked state", () => {
+	it("shows all nine toggles with the correct checked state", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = Array.from(container.querySelectorAll("input[type=checkbox]")) as HTMLInputElement[];
-		expect(checkboxes).toHaveLength(7);
-		expect(checkboxes.map((cb) => cb.checked)).toEqual([true, true, false, true, true, false, true]);
+		expect(checkboxes).toHaveLength(9);
+		expect(checkboxes.map((cb) => cb.checked)).toEqual([true, true, false, true, true, false, true, true, false]);
 	});
 
 	it("calls setCopyOnSelect when its toggle changes", () => {
@@ -141,6 +153,33 @@ describe("TerminalTab", () => {
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
 		fireEvent.change(checkboxes[6], { target: { checked: false } });
 		expect(mockSetBlockFoldingEnabled).toHaveBeenCalledWith(false);
+	});
+
+	it("calls setRestoreShellTerminals when its toggle changes", () => {
+		const { container } = render(() => <TerminalTab />);
+		const checkboxes = container.querySelectorAll("input[type=checkbox]");
+		fireEvent.change(checkboxes[7], { target: { checked: false } });
+		expect(mockSetRestoreShellTerminals).toHaveBeenCalledWith(false);
+	});
+
+	it("calls setRestoreScrollback when its toggle changes", () => {
+		const { container } = render(() => <TerminalTab />);
+		const checkboxes = container.querySelectorAll("input[type=checkbox]");
+		fireEvent.change(checkboxes[8], { target: { checked: true } });
+		expect(mockSetRestoreScrollback).toHaveBeenCalledWith(true);
+	});
+
+	it("calls setRestoreScrollbackLines when the slider changes", () => {
+		const { container } = render(() => <TerminalTab />);
+		const sliders = Array.from(container.querySelectorAll("input[type=range]")) as HTMLInputElement[];
+		const scrollbackSlider = sliders[sliders.length - 1];
+		fireEvent.input(scrollbackSlider, { target: { value: "2000" } });
+		expect(mockSetRestoreScrollbackLines).toHaveBeenCalledWith(2000);
+	});
+
+	it('shows a "Clear saved scrollback" button', () => {
+		const { container } = render(() => <TerminalTab />);
+		expect(container.textContent).toContain("Clear saved scrollback");
 	});
 
 	it("shows the font family select with the current value", () => {
