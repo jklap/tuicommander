@@ -4,7 +4,9 @@ use tuic_terminal::{chrome, terminal_grid};
 
 mod state {
     mod tests {
-        use tuic_terminal::vt_log::{LogColor, LogLine, LogSpan, VtLogBuffer, mark_agent_chrome};
+        use tuic_terminal::vt_log::{
+            LogColor, LogLine, LogSpan, VtLogBuffer, log_lines_to_ansi, mark_agent_chrome,
+        };
 
         // --- VtLogBuffer tests ---
 
@@ -332,6 +334,138 @@ mod state {
                 "log should be capped at capacity=10, got {}",
                 buf.lines().len()
             );
+        }
+
+        // --- log_lines_to_ansi round-trip (Story: restore terminal scrollback) ---
+        //
+        // The load-bearing property for scrollback restore: feed styled ANSI into a
+        // VtLogBuffer, read the resulting LogLines back out, re-render them to ANSI
+        // with log_lines_to_ansi, feed THAT into a fresh VtLogBuffer, and assert the
+        // two LogLine sequences are identical. Because LogLine derives PartialEq,
+        // this is a direct equality assertion — it proves colors, attributes, and
+        // text all survive a save/restore cycle, not just that no panic occurs.
+
+        /// Round-trip `lines` through `log_lines_to_ansi` and a fresh `VtLogBuffer`,
+        /// returning what the replay buffer captured into its durable log.
+        ///
+        /// `VtLogBuffer`'s durable log only holds lines that have scrolled OFF the
+        /// visible screen — the trailing `screen_lines` rows always stay on-screen,
+        /// never reaching `lines_since_owned`. Padding with extra blank lines after
+        /// the real content pushes every real line off-screen and into history, so
+        /// the comparison isn't contaminated by that windowing; `.take(lines.len())`
+        /// then drops the padding's own (empty) history entries from the tail.
+        fn round_trip_through_ansi(lines: &[LogLine]) -> Vec<LogLine> {
+            const SCREEN_ROWS: u16 = 3;
+            let mut ansi = log_lines_to_ansi(lines);
+            for _ in 0..SCREEN_ROWS {
+                ansi.extend_from_slice(b"\r\n");
+            }
+            let mut replay = VtLogBuffer::new(SCREEN_ROWS, 80, 1000);
+            replay.process(&ansi);
+            let (replayed, _) = replay.lines_since_owned(0, usize::MAX);
+            replayed.into_iter().take(lines.len()).collect()
+        }
+
+        #[test]
+        fn log_lines_to_ansi_round_trips_plain_text() {
+            let mut original = VtLogBuffer::new(3, 80, 1000);
+            for i in 0..10 {
+                original.process(format!("line {i}\r\n").as_bytes());
+            }
+            let (lines, _) = original.lines_since_owned(0, usize::MAX);
+            assert!(!lines.is_empty(), "test setup: expected scrolled lines");
+
+            assert_eq!(lines, round_trip_through_ansi(&lines));
+        }
+
+        #[test]
+        fn log_lines_to_ansi_round_trips_16_color_and_attributes() {
+            let mut original = VtLogBuffer::new(3, 80, 1000);
+            for i in 0..10 {
+                // Bold red foreground, plain suffix on the same line — forces a
+                // multi-span line with a real fg + bold change mid-row.
+                original.process(format!("\x1b[1;31merr {i}\x1b[0m ok\r\n").as_bytes());
+            }
+            let (lines, _) = original.lines_since_owned(0, usize::MAX);
+            assert!(!lines.is_empty(), "test setup: expected scrolled lines");
+            assert!(
+                lines.iter().any(|l| l.spans.iter().any(|s| s.bold)),
+                "test setup: expected at least one bold span"
+            );
+
+            assert_eq!(lines, round_trip_through_ansi(&lines));
+        }
+
+        #[test]
+        fn log_lines_to_ansi_round_trips_bright_16_color() {
+            let mut original = VtLogBuffer::new(3, 80, 1000);
+            for i in 0..10 {
+                // Bright colors (90-97/100-107) exercise the Idx(8..16) branch,
+                // distinct from the plain Idx(0..8) branch above.
+                original.process(format!("\x1b[92;104mline {i}\x1b[0m\r\n").as_bytes());
+            }
+            let (lines, _) = original.lines_since_owned(0, usize::MAX);
+            assert!(!lines.is_empty());
+
+            assert_eq!(lines, round_trip_through_ansi(&lines));
+        }
+
+        #[test]
+        fn log_lines_to_ansi_round_trips_256_indexed_color() {
+            let mut original = VtLogBuffer::new(3, 80, 1000);
+            for i in 0..10 {
+                original.process(format!("\x1b[38;5;196mline {i}\x1b[0m\r\n").as_bytes());
+            }
+            let (lines, _) = original.lines_since_owned(0, usize::MAX);
+            assert!(!lines.is_empty());
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.spans.iter().any(|s| s.fg == Some(LogColor::Idx(196))))
+            );
+
+            assert_eq!(lines, round_trip_through_ansi(&lines));
+        }
+
+        #[test]
+        fn log_lines_to_ansi_round_trips_truecolor_rgb() {
+            let mut original = VtLogBuffer::new(3, 80, 1000);
+            for i in 0..10 {
+                original.process(
+                    format!("\x1b[38;2;10;20;30;48;2;200;150;100mline {i}\x1b[0m\r\n").as_bytes(),
+                );
+            }
+            let (lines, _) = original.lines_since_owned(0, usize::MAX);
+            assert!(!lines.is_empty());
+            assert!(lines.iter().any(|l| {
+                l.spans
+                    .iter()
+                    .any(|s| s.fg == Some(LogColor::Rgb(10, 20, 30)))
+            }));
+
+            assert_eq!(lines, round_trip_through_ansi(&lines));
+        }
+
+        #[test]
+        fn log_lines_to_ansi_round_trips_italic_and_underline() {
+            let mut original = VtLogBuffer::new(3, 80, 1000);
+            for i in 0..10 {
+                original.process(format!("\x1b[3;4mline {i}\x1b[0m\r\n").as_bytes());
+            }
+            let (lines, _) = original.lines_since_owned(0, usize::MAX);
+            assert!(!lines.is_empty());
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.spans.iter().any(|s| s.italic && s.underline))
+            );
+
+            assert_eq!(lines, round_trip_through_ansi(&lines));
+        }
+
+        #[test]
+        fn log_lines_to_ansi_produces_empty_output_for_empty_input() {
+            assert_eq!(log_lines_to_ansi(&[]), Vec::<u8>::new());
         }
 
         /// lines_since_owned returns lines after offset and correct new offset.

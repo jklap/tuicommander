@@ -1,10 +1,12 @@
-import { type Component, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { t } from "../../../i18n";
+import { invoke } from "../../../invoke";
 import { getModifierSymbol } from "../../../platform";
 import type { FontType } from "../../../stores/settings";
 import { FONT_FAMILIES, settingsStore } from "../../../stores/settings";
 import { getTerminalTheme, getThemeNames } from "../../../themes";
 import type { LinkActivation } from "../../Terminal/canvasTerminalLinks";
+import { Button } from "../../ui/Button";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -288,6 +290,18 @@ const themeOptions = () => Object.entries(getThemeNames()).map(([value, label]) 
 const fontOptions = Object.keys(FONT_FAMILIES).map((value) => ({ value, label: value }));
 
 export const TerminalTab: Component = () => {
+	const [scrollbackCleared, setScrollbackCleared] = createSignal(false);
+	const handleClearScrollback = async () => {
+		try {
+			await invoke("clear_saved_scrollback", {});
+			setScrollbackCleared(true);
+			setTimeout(() => setScrollbackCleared(false), 3000);
+		} catch {
+			// Best-effort UI action — the periodic sweep will just overwrite
+			// whatever's on disk on its next tick either way.
+		}
+	};
+
 	return (
 		<div class={`${s.section} ${w.page}`}>
 			<SettingPageHeader title="Terminal" scope="Application defaults" breadcrumb="Workspace / Terminal" />
@@ -498,6 +512,50 @@ export const TerminalTab: Component = () => {
 						)}
 					/>
 				</ExpertSetting>
+			</SectionCard>
+			<SectionCard title={t("terminal.heading.sessionRestore", "Session Restore")}>
+				<SettingToggle
+					checked={settingsStore.state.restoreShellTerminals}
+					onChange={(v) => settingsStore.setRestoreShellTerminals(v)}
+					label={t("terminal.toggle.restoreShellTerminals", "Restore open terminals on launch")}
+					hint={t(
+						"terminal.hint.restoreShellTerminals",
+						"Reopen plain shell tabs (not just agent tabs) in their saved directory when you relaunch",
+					)}
+				/>
+				<SettingToggle
+					checked={settingsStore.state.restoreScrollback}
+					onChange={(v) => settingsStore.setRestoreScrollback(v)}
+					label={t("terminal.toggle.restoreScrollback", "Save terminal scrollback")}
+					hint={t(
+						"terminal.hint.restoreScrollback",
+						"Show a restored terminal's recent output above a fresh prompt. Saved as plain text in the app's config directory — off by default.",
+					)}
+				/>
+				<SettingSlider
+					label={t("terminal.label.restoreScrollbackLines", "Scrollback lines to save")}
+					value={settingsStore.state.restoreScrollbackLines}
+					onChange={(v) => settingsStore.setRestoreScrollbackLines(v)}
+					min={100}
+					max={10000}
+					step={100}
+					hint={t(
+						"terminal.hint.restoreScrollbackLines",
+						"Maximum lines of output saved per terminal when scrollback saving is on",
+					)}
+				/>
+				<div class={s.group}>
+					<Button
+						data-non-setting="Deletes saved scrollback files; not a stored setting"
+						class={s.testBtn}
+						onClick={handleClearScrollback}
+					>
+						{t("terminal.btn.clearScrollback", "Clear saved scrollback")}
+					</Button>
+					<Show when={scrollbackCleared()}>
+						<p class={s.hint}>{t("terminal.status.scrollbackCleared", "Cleared")}</p>
+					</Show>
+				</div>
 			</SectionCard>
 		</div>
 	);
