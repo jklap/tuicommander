@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import { VisibleIntersectionObserver } from "../../../../__tests__/helpers/visibleIntersectionObserver";
 import CanvasTerminal, { type CanvasTerminalProps, type CanvasTerminalRef } from "../../CanvasTerminal";
 import type { TerminalTransport } from "../../canvasTerminalTransport";
-import type { CellMetrics } from "../../canvasTerminalUtils";
+import { type CellMetrics, type DecodedRow, decodeBinaryFrame, rowText } from "../../canvasTerminalUtils";
 
 /**
  * Mount harness for CanvasTerminal — the component has never been rendered in
@@ -150,6 +150,27 @@ export function createFakeTransport(): FakeTransport {
 	const invokeHandlers = new Map<string, (args: Record<string, unknown>) => unknown>();
 	const invokeCalls: { cmd: string; args: Record<string, unknown> }[] = [];
 	const ackCalls: number[] = [];
+	const screenRows = new Map<number, DecodedRow>();
+	let lastHistorySize = 0;
+
+	function selectionTextFromFrames(args: Record<string, unknown>): string {
+		const startRow = Number(args.startRow);
+		const endRow = Number(args.endRow);
+		const lines: string[] = [];
+		for (let gridRow = startRow; gridRow <= endRow; gridRow++) {
+			const row = screenRows.get(gridRow - lastHistorySize);
+			const text = row ? rowText(row) : "";
+			const from = gridRow === startRow ? Number(args.startCol) : 0;
+			const to = gridRow === endRow ? Number(args.endCol) + 1 : text.length;
+			const piece = text.slice(from, to).replace(/\s+$/, "");
+			if (lines.length > 0 && screenRows.get(gridRow - 1 - lastHistorySize)?.wrapped) {
+				lines[lines.length - 1] += piece;
+			} else {
+				lines.push(piece);
+			}
+		}
+		return lines.join("\n");
+	}
 
 	return {
 		invokeCalls,
@@ -163,7 +184,13 @@ export function createFakeTransport(): FakeTransport {
 		},
 		async invoke(cmd, args) {
 			invokeCalls.push({ cmd, args });
-			return invokeHandlers.get(cmd)?.(args);
+			const handler = invokeHandlers.get(cmd);
+			if (handler) return handler(args);
+			// Copies read selected text from the backend grid (main's projected
+			// copy path never falls back to local rows), so answer it from the
+			// frames this fake has delivered: grid-relative rows, inclusive cols.
+			if (cmd === "terminal_get_selection_text") return selectionTextFromFrames(args);
+			return undefined;
 		},
 		ackFrame(received) {
 			ackCalls.push(received);
@@ -172,6 +199,13 @@ export function createFakeTransport(): FakeTransport {
 			eventHandlers.set(type, handler);
 		},
 		pushFrame(data: ArrayBuffer) {
+			// Keep a decoded copy so the default `terminal_get_selection_text`
+			// answer below can stand in for the backend's grid read.
+			const decoded = decodeBinaryFrame(data);
+			if (decoded) {
+				lastHistorySize = decoded.historySize;
+				for (const row of decoded.rows) screenRows.set(row.index, row);
+			}
 			onFrameHandler?.(data);
 		},
 		emitEvent(type, payload) {
