@@ -1011,8 +1011,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
     super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-const SESSION_ACTIONS: &str =
-    "list, create, submit, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
+const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
 const REPO_ACTIONS: &str =
@@ -1972,10 +1971,7 @@ fn submission_output_offset(state: &AppState, session_id: &str) -> Option<u64> {
         .map(|buffer| buffer.lock().total_written)
 }
 
-fn begin_session_submit(
-    state: &Arc<AppState>,
-    args: &serde_json::Value,
-) -> BeginSubmission {
+fn begin_session_submit(state: &Arc<AppState>, args: &serde_json::Value) -> BeginSubmission {
     let session_id = match require_session_id(args, "submit") {
         Ok(id) => id.to_string(),
         Err(error) => return BeginSubmission::Response(error),
@@ -2113,8 +2109,8 @@ async fn handle_session_submit(
     };
     apply_pty_description(state, &started.session_id, pty_description);
 
-    let deadline = tokio::time::Instant::now()
-        + std::time::Duration::from_millis(started.timeout_ms);
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_millis(started.timeout_ms);
     loop {
         let current_epoch = submission_turn_epoch(state, &started.session_id);
         if current_epoch != started.turn_epoch {
@@ -7461,11 +7457,18 @@ mod tests {
         assert_eq!(response["turn_epoch"], 1);
         assert_eq!(response["composer_state"], "cleared");
         assert_eq!(response["acknowledgement"]["kind"], "terminal_movement");
-        assert_eq!(response["acknowledgement"]["screen_state"], "terminal_output");
+        assert_eq!(
+            response["acknowledgement"]["screen_state"],
+            "terminal_output"
+        );
         assert_eq!(response["acknowledgement"]["output_offset"], 11);
         Uuid::parse_str(response["submission_id"].as_str().unwrap()).unwrap();
-        let keys: std::collections::BTreeSet<_> =
-            response.as_object().unwrap().keys().map(String::as_str).collect();
+        let keys: std::collections::BTreeSet<_> = response
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         assert_eq!(
             keys,
             std::collections::BTreeSet::from([
@@ -7543,10 +7546,9 @@ mod tests {
         let bytes = install_atomic_submit_test_session(&state, session_id);
         let mut composer = crate::input_line_buffer::InputLineBuffer::new();
         composer.feed("Boss draft");
-        state.input_buffers.insert(
-            session_id.to_string(),
-            parking_lot::Mutex::new(composer),
-        );
+        state
+            .input_buffers
+            .insert(session_id.to_string(), parking_lot::Mutex::new(composer));
 
         let response = handle_mcp_tool_call(
             &state,
@@ -7628,14 +7630,7 @@ mod tests {
 
         assert_eq!(response, serde_json::json!({"ok": true}));
         assert_eq!(bytes.lock().unwrap().as_slice(), b"literal draft");
-        assert_eq!(
-            state
-                .session_states
-                .get(session_id)
-                .unwrap()
-                .turn_epoch,
-            0
-        );
+        assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 0);
         assert_eq!(
             state
                 .input_buffers
@@ -12120,15 +12115,15 @@ mod tests {
         let description = session["description"].as_str().unwrap();
         let properties = &session["inputSchema"]["properties"];
 
-        assert!(description.contains(
-            "Use one call; never split text and Enter; never poll after it."
-        ));
+        assert!(
+            description.contains("Use one call; never split text and Enter; never poll after it.")
+        );
         assert!(description.contains(
             "Acknowledgement means child terminal movement after Enter, not semantic application acceptance."
         ));
-        assert!(description.contains(
-            "composer_state (tracked InputLineBuffer, not application state)"
-        ));
+        assert!(
+            description.contains("composer_state (tracked InputLineBuffer, not application state)")
+        );
         assert!(description.contains(
             "Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing."
         ));
