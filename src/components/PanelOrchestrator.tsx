@@ -1,6 +1,6 @@
 import { type Component, Show } from "solid-js";
 import { diffTabsStore } from "../stores/diffTabs";
-import { globalWorkspaceStore } from "../stores/globalWorkspace";
+import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
 import { settingsStore } from "../stores/settings";
 import { uiStore } from "../stores/ui";
 import { sendTextToActiveTerminal } from "../utils/sendToActiveTerminal";
@@ -20,12 +20,24 @@ export interface PanelOrchestratorProps {
 	onFileOpen: (repoPath: string, filePath: string, line?: number) => void;
 }
 
+/**
+ * Whether the hand-promoted, cross-repo global workspace is showing.
+ *
+ * A per-repo auto-consolidated workspace (#e767) has a single, well-defined
+ * repo — `props.repoPath`/`fsRoot` still resolve correctly — so it must not
+ * suppress these panels the way the manual, potentially cross-repo workspace
+ * does.
+ */
+function manualWorkspaceActive(): boolean {
+	return globalWorkspaceStore.isActive() && globalWorkspaceStore.getScope() === MANUAL_SCOPE;
+}
+
 export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 	return (
 		<>
 			<Show when={!uiStore.isDetached("file-browser")}>
 				<FileBrowserPanel
-					visible={uiStore.state.fileBrowserPanelVisible && !globalWorkspaceStore.isActive()}
+					visible={uiStore.state.fileBrowserPanelVisible && !manualWorkspaceActive()}
 					repoPath={props.repoPath}
 					fsRoot={props.fsRoot}
 					onClose={() => uiStore.toggleFileBrowserPanel()}
@@ -61,7 +73,7 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 
 			<Show when={!uiStore.isDetached("git")}>
 				<GitPanel
-					visible={uiStore.state.gitPanelVisible && !globalWorkspaceStore.isActive()}
+					visible={uiStore.state.gitPanelVisible && !manualWorkspaceActive()}
 					repoPath={props.repoPath}
 					fsRoot={props.fsRoot}
 					onClose={() => uiStore.toggleGitPanel()}
