@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicU64, AtomicUsize};
 use std::time::{Duration, Instant};
@@ -1034,6 +1034,14 @@ pub struct PtySession {
     /// "C:\\Program Files\\Git\\bin\\bash.exe", "wsl.exe -d Ubuntu").
     /// Kept so `get_session_shell_family` can classify without re-resolving.
     pub shell: String,
+}
+
+/// A live PTY session found attached to a worktree, returned by
+/// [`AppState::live_sessions_in_worktree`]. Backs the `worktree_busy:` removal
+/// gate — see `worktree.rs::remove_worktree_by_branch`.
+pub(crate) struct AttachedSession {
+    pub(crate) session_id: String,
+    pub(crate) cwd: Option<String>,
 }
 
 /// Configuration for agent orchestration
@@ -3136,6 +3144,40 @@ impl AppState {
         }
     }
 
+    /// A PTY session found attached to a worktree by [`AppState::live_sessions_in_worktree`].
+    /// Used to build the `worktree_busy:` refusal message — see that method.
+    pub(crate) fn live_sessions_in_worktree(&self, worktree_path: &Path) -> Vec<AttachedSession> {
+        let target = worktree_path
+            .canonicalize()
+            .unwrap_or_else(|_| worktree_path.to_path_buf());
+        self.sessions
+            .iter()
+            .filter_map(|entry| {
+                let session = entry.value().lock();
+                let path_matches = |p: &Path| {
+                    p == worktree_path || p.canonicalize().map(|c| c == target).unwrap_or(false)
+                };
+                // Attachment via the worktree the session was spawned into (stable,
+                // set once at spawn time and never cleared) OR via a live `cd`
+                // reported by OSC7 (`cwd`, kept current for the session's lifetime).
+                // The latter matters because a session started in the main
+                // checkout can `cd` into a worktree after the fact.
+                let attached = session
+                    .worktree
+                    .as_ref()
+                    .is_some_and(|wt| path_matches(&wt.path))
+                    || session
+                        .cwd
+                        .as_deref()
+                        .is_some_and(|cwd| path_matches(Path::new(cwd)));
+                attached.then(|| AttachedSession {
+                    session_id: entry.key().clone(),
+                    cwd: session.cwd.clone(),
+                })
+            })
+            .collect()
+    }
+
     /// Default rate limit expiry when no retry_after_ms is provided (120s).
     const RATE_LIMIT_DEFAULT_EXPIRY_MS: u64 = 120_000;
 
@@ -4277,6 +4319,38 @@ fn mark_agent_chrome(lines: &mut [LogLine]) {
 pub(crate) mod tests_support {
     use super::*;
 
+    /// A temp git repo with an initial commit, for worktree-removal test fixtures.
+    /// Shared so `mcp_http::mod`, `mcp_http::worktree_routes`, `mcp_http::mcp_transport`,
+    /// and `mcp_http::git_routes` don't each carry their own copy — `worktree::tests`'
+    /// own `setup_test_repo` is private to that module and not reachable here.
+    pub fn create_temp_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(path)
+                .output()
+                .unwrap();
+        }
+        std::fs::write(path.join("README.md"), "test").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        dir
+    }
+
     /// A live `sessions` entry backed by a real PTY. `live_pty_for_peer` filters on
     /// liveness, so a resolver test needs a session that genuinely exists rather
     /// than a stub the filter would reject.
@@ -4304,6 +4378,46 @@ pub(crate) mod tests_support {
                 paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
                 cwd: None,
+                display_name: None,
+                display_name_is_custom: false,
+                is_remote: false,
+                shell: "/bin/sh".to_string(),
+            }),
+        );
+    }
+
+    /// Like [`insert_dummy_session`], but attaches the session to `worktree` —
+    /// for tests of the `remove_worktree_by_branch` live-session gate
+    /// (`AppState::live_sessions_in_worktree`), which reads `session.worktree`.
+    #[cfg(unix)]
+    pub fn insert_dummy_session_attached_to(
+        state: &AppState,
+        session_id: &str,
+        worktree: WorktreeInfo,
+    ) {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        let child = pair.slave.spawn_command(command).expect("spawn shell");
+        let writer = pair.master.take_writer().expect("writer");
+        let cwd = Some(worktree.path.to_string_lossy().to_string());
+        state.sessions.insert(
+            session_id.to_string(),
+            parking_lot::Mutex::new(PtySession {
+                writer: std::sync::Arc::new(parking_lot::Mutex::new(writer)),
+                master: pair.master,
+                _child: child,
+                paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                worktree: Some(worktree),
+                cwd,
                 display_name: None,
                 display_name_is_custom: false,
                 is_remote: false,
@@ -8991,5 +9105,78 @@ mod tests {
         assert!(vt.is_alternate_screen());
         vt.process(b"\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
         assert!(!vt.is_alternate_screen());
+    }
+
+    // ── live_sessions_in_worktree: the worktree-removal liveness gate ──────
+
+    #[cfg(unix)]
+    #[test]
+    fn live_sessions_in_worktree_finds_a_session_attached_by_worktree() {
+        let state = tests_support::make_test_app_state();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let wt = WorktreeInfo {
+            name: "feature".to_string(),
+            path: dir.path().to_path_buf(),
+            branch: Some("feature".to_string()),
+            base_repo: dir.path().to_path_buf(),
+        };
+        tests_support::insert_dummy_session_attached_to(&state, "s1", wt);
+
+        let attached = state.live_sessions_in_worktree(dir.path());
+        assert_eq!(attached.len(), 1);
+        assert_eq!(attached[0].session_id, "s1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_sessions_in_worktree_empty_when_nothing_attached() {
+        let state = tests_support::make_test_app_state();
+        let dir = tempfile::tempdir().expect("temp dir");
+        // A session attached to some *other* worktree must not count.
+        let other = tempfile::tempdir().expect("temp dir");
+        let wt = WorktreeInfo {
+            name: "other".to_string(),
+            path: other.path().to_path_buf(),
+            branch: Some("other".to_string()),
+            base_repo: other.path().to_path_buf(),
+        };
+        tests_support::insert_dummy_session_attached_to(&state, "s1", wt);
+
+        assert!(state.live_sessions_in_worktree(dir.path()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_sessions_in_worktree_matches_on_live_cwd_even_without_worktree_attachment() {
+        // A session started elsewhere (worktree: None) that has `cd`ed into the
+        // target directory — tracked live via OSC7 — must still count. This is
+        // what protects a plain shell that `cd`ed into a worktree, not just a
+        // session TUIC itself spawned there.
+        let state = tests_support::make_test_app_state();
+        let dir = tempfile::tempdir().expect("temp dir");
+        tests_support::insert_dummy_session(&state, "s1");
+        state.sessions.get("s1").expect("session").lock().cwd =
+            Some(dir.path().to_string_lossy().to_string());
+
+        let attached = state.live_sessions_in_worktree(dir.path());
+        assert_eq!(attached.len(), 1);
+        assert_eq!(attached[0].session_id, "s1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_sessions_in_worktree_ignores_a_removed_session() {
+        let state = tests_support::make_test_app_state();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let wt = WorktreeInfo {
+            name: "feature".to_string(),
+            path: dir.path().to_path_buf(),
+            branch: Some("feature".to_string()),
+            base_repo: dir.path().to_path_buf(),
+        };
+        tests_support::insert_dummy_session_attached_to(&state, "s1", wt);
+        state.sessions.remove("s1");
+
+        assert!(state.live_sessions_in_worktree(dir.path()).is_empty());
     }
 }

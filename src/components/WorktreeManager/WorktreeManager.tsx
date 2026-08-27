@@ -7,6 +7,7 @@ import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { worktreeManagerStore } from "../../stores/worktreeManager";
 import type { BranchPrStatus } from "../../types";
+import { branchActivitySummary } from "../../utils/activitySnapshot";
 import { formatRelativeTime } from "../../utils/time";
 import b from "../shared/branch.module.css";
 import s from "./WorktreeManager.module.css";
@@ -200,9 +201,29 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 	function handleBatchDelete() {
 		if (!props.actions) return;
 		const selected = [...worktreeManagerStore.state.selectedIds];
-		for (const id of selected) {
-			const parsed = parseWorktreeId(id);
-			if (parsed) props.actions.onDelete(parsed.repoPath, parsed.branchName);
+		const parsed = selected.map(parseWorktreeId).filter((p): p is { repoPath: string; branchName: string } => !!p);
+
+		// `onDelete` → `handleRemoveBranch` already gates each busy branch behind
+		// its own confirmRemoveBusyWorktree dialog (defaultButton: "cancel", so
+		// clicking through a stack of near-identical prompts can't destroy live
+		// work) — that per-item gate is what makes batch delete safe at all, not
+		// this ordering. This just keeps the disruptive prompts from blocking the
+		// uncontroversial deletions: safe (no attached terminal) branches go
+		// first, busy ones last, so an accidental Enter through the leading
+		// prompts can only fast-forward past removals nothing was using.
+		const busy: { repoPath: string; branchName: string }[] = [];
+		const safe: { repoPath: string; branchName: string }[] = [];
+		for (const p of parsed) {
+			const terminals = repositoriesStore.get(p.repoPath)?.branches[p.branchName]?.terminals ?? [];
+			(branchActivitySummary(terminals).isBusy ? busy : safe).push(p);
+		}
+		if (busy.length > 0) {
+			appLogger.info("git", `handleBatchDelete: ${busy.length} of ${parsed.length} selected worktrees are in use`, {
+				busy: busy.map((p) => p.branchName),
+			});
+		}
+		for (const { repoPath, branchName } of [...safe, ...busy]) {
+			props.actions.onDelete(repoPath, branchName);
 		}
 		worktreeManagerStore.clearSelection();
 	}

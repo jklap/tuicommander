@@ -55,7 +55,10 @@ export interface GitOperationsDeps {
 			branchName: string,
 			deleteBranch: boolean,
 			force?: boolean,
+			overrideBusy?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
+		/** `null` when the backend can't answer — treat as "don't know," not clean. */
+		checkWorktreeDirty: (repoPath: string, branchName: string) => Promise<boolean | null>;
 		createWorktree: (
 			baseRepo: string,
 			branchName: string,
@@ -108,7 +111,17 @@ export interface GitOperationsDeps {
 	dialogs: {
 		confirmRemoveRepo: (repoName: string) => Promise<boolean>;
 		confirmRemoveWorktree: (branchName: string) => Promise<boolean>;
-		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
+		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean, isDirty?: boolean) => Promise<boolean>;
+		/** A live PTY/agent session is attached to this worktree — shown BEFORE any
+		 *  terminal is closed (using the branch's known terminal list), and again if
+		 *  the backend's own live-session check catches a session the frontend
+		 *  didn't know about. See `createWorktreeRemovalCoordinator`. */
+		confirmRemoveBusyWorktree?: (
+			branchName: string,
+			summary: import("../utils/activitySnapshot").BranchActivitySummary,
+		) => Promise<boolean>;
+		/** The worktree has uncommitted changes and the Safe removal was refused. */
+		confirmForceRemoveDirtyWorktree?: (branchName: string) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (paths: string[]) => Promise<boolean>;
 		/** Archiving or deleting this worktree would destroy uncommitted work — proceed anyway? */
@@ -238,6 +251,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 	const { handleRemoveBranch } = createWorktreeRemovalCoordinator({
 		repo: deps.repo,
+		checkWorktreeDirty: deps.repo.checkWorktreeDirty,
 		dialogs: deps.dialogs,
 		closeTerminal: deps.closeTerminal,
 		setStatusInfo: deps.setStatusInfo,

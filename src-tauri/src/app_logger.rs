@@ -241,6 +241,16 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RingBufferLayer {
         event: &tracing::Event<'_>,
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
+        // Frontend-originated entries (`emit_frontend_log`, target "ui") are
+        // inserted into the buffer directly by the caller — inserting them
+        // again here would double them up. The file/stderr `fmt` layers still
+        // see the event; only the ring buffer skips it. Checked before
+        // extracting fields below, since every frontend log line hits this
+        // path purely to reach the file layer and gets discarded here.
+        if event.metadata().target() == "ui" {
+            return;
+        }
+
         // Extract the message and optional `source` field.
         let mut visitor = LogVisitor::default();
         event.record(&mut visitor);
@@ -349,8 +359,15 @@ const LOG_RETENTION_DAYS: u64 = 5;
 /// The default level is `info`; override with `RUST_LOG=debug` etc.
 /// Must be called exactly once, early in `run()`.
 pub(crate) fn init_tracing(buffer: Arc<Mutex<LogRingBuffer>>) {
+    // `ui=debug` guarantees every frontend-originated log line (any level, via
+    // `emit_frontend_log`) reaches the file regardless of the ambient default —
+    // without it, a `push_log` "debug" call would be dropped before any layer
+    // (including the file layer) ever saw it, silently defeating the "frontend
+    // logs persist past the ring buffer" guarantee for that level. Only applies
+    // when `RUST_LOG` is unset; an operator's explicit override is respected
+    // as given.
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,ui=debug"));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
@@ -417,7 +434,45 @@ fn cleanup_old_logs(log_dir: &std::path::Path) {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-/// Push a log entry from the frontend into the Rust ring buffer.
+/// Emit a `tracing` event carrying a frontend-sourced log entry, targeted
+/// `"ui"` so [`RingBufferLayer::on_event`] skips it (the ring buffer already
+/// gets the entry directly from the caller — see `push_log`/`push_log_http`).
+/// This is what gets appLogger entries into the daily-rotated `tuic.log` file:
+/// previously `push_log` wrote only to the in-memory ring buffer
+/// (`LOG_RING_CAPACITY` = 1000 entries, shared with the CPU watchdog's
+/// per-minute diagnostic spam), so the JS-side click that started an action
+/// could roll off within minutes — exactly what made the 2026-08-26 worktree
+/// removal incident impossible to pin down after the fact.
+///
+/// `tracing`'s macros pick their level at compile time, so a runtime `level`
+/// string needs this 4-arm match rather than a single call.
+pub(crate) fn emit_frontend_log(
+    level: &str,
+    source: &str,
+    message: &str,
+    data_json: Option<&str>,
+    audience: Option<&str>,
+) {
+    let audience = audience.unwrap_or("");
+    let data_json = data_json.unwrap_or("");
+    match level {
+        "error" => {
+            tracing::error!(target: "ui", source = %source, audience = %audience, data_json = %data_json, "{message}")
+        }
+        "warn" => {
+            tracing::warn!(target: "ui", source = %source, audience = %audience, data_json = %data_json, "{message}")
+        }
+        "debug" => {
+            tracing::debug!(target: "ui", source = %source, audience = %audience, data_json = %data_json, "{message}")
+        }
+        _ => {
+            tracing::info!(target: "ui", source = %source, audience = %audience, data_json = %data_json, "{message}")
+        }
+    }
+}
+
+/// Push a log entry from the frontend into the Rust ring buffer, and persist
+/// it to the log file via [`emit_frontend_log`].
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn push_log(
@@ -428,6 +483,13 @@ pub(crate) fn push_log(
     data_json: Option<String>,
     audience: Option<String>,
 ) {
+    emit_frontend_log(
+        &level,
+        &source,
+        &message,
+        data_json.as_deref(),
+        audience.as_deref(),
+    );
     let mut buf = state.log_buffer.lock();
     buf.push_with_audience(level, source, message, data_json, audience);
 }
@@ -455,6 +517,7 @@ pub(crate) fn clear_logs(state: State<'_, Arc<AppState>>) {
 /// (e.g. watcher callbacks, plugin lifecycle hooks). Falls back silently if state
 /// is not yet initialised.
 pub(crate) fn log_via_handle(handle: &tauri::AppHandle, level: &str, source: &str, message: &str) {
+    emit_frontend_log(level, source, message, None, None);
     let state = handle.state::<Arc<AppState>>();
     let mut buf = state.log_buffer.lock();
     buf.push(
@@ -467,6 +530,7 @@ pub(crate) fn log_via_handle(handle: &tauri::AppHandle, level: &str, source: &st
 
 /// Push a log entry from internal Rust code using an AppState reference directly.
 pub(crate) fn log_via_state(state: &Arc<AppState>, level: &str, source: &str, message: &str) {
+    emit_frontend_log(level, source, message, None, None);
     let mut buf = state.log_buffer.lock();
     buf.push(
         level.to_string(),
@@ -794,5 +858,82 @@ mod tests {
         let entries = buf.get_entries(0);
         assert_eq!(entries[2].message, "c");
         assert_eq!(entries[2].repeat_count, 1);
+    }
+
+    // ---- emit_frontend_log / RingBufferLayer double-insertion guard ----
+    //
+    // `push_log` writes the ring buffer directly (unchanged, exact same
+    // dedup/audience behavior as before) AND emits a `target: "ui"` tracing
+    // event so the entry also reaches the log file. `RingBufferLayer` must
+    // skip that event, or every frontend log line would appear twice in the
+    // ring buffer once `init_tracing` wires both up in production.
+
+    fn ring_layer_for_test(buffer: Arc<Mutex<LogRingBuffer>>) -> impl tracing::Subscriber {
+        tracing_subscriber::registry().with(RingBufferLayer { buffer })
+    }
+
+    #[test]
+    fn ring_buffer_layer_skips_ui_targeted_events() {
+        let buffer = Arc::new(Mutex::new(LogRingBuffer::new(10)));
+        let subscriber = ring_layer_for_test(buffer.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "ui", source = "git", "frontend message");
+        });
+        assert_eq!(
+            buffer.lock().len(),
+            0,
+            "a target=\"ui\" event must not be inserted by RingBufferLayer — \
+             emit_frontend_log's caller already inserted it directly"
+        );
+    }
+
+    #[test]
+    fn ring_buffer_layer_still_records_ordinary_events() {
+        let buffer = Arc::new(Mutex::new(LogRingBuffer::new(10)));
+        let subscriber = ring_layer_for_test(buffer.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(source = "worktree", "ordinary backend event");
+        });
+        let entries = buffer.lock().get_entries(0);
+        assert_eq!(entries.len(), 1, "a normal-target event must still land");
+        assert_eq!(entries[0].message, "ordinary backend event");
+        assert_eq!(entries[0].source, "worktree");
+    }
+
+    #[test]
+    fn emit_frontend_log_does_not_touch_the_ring_buffer_directly() {
+        // emit_frontend_log only emits a tracing event — it never calls
+        // LogRingBuffer itself. Callers (push_log, the HTTP route,
+        // log_via_handle/log_via_state) are responsible for the direct
+        // buffer insert, exactly as before this feature existed. Exercises
+        // all four level arms (only "warn" and the default/"info" arm were
+        // covered by other tests) since the match has no test-visible
+        // behavior difference beyond which `tracing` macro fires.
+        let buffer = Arc::new(Mutex::new(LogRingBuffer::new(10)));
+        let subscriber = ring_layer_for_test(buffer.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            for level in ["error", "warn", "debug", "info", "unrecognized"] {
+                emit_frontend_log(level, "git", "click: remove worktree", None, None);
+            }
+        });
+        assert_eq!(
+            buffer.lock().len(),
+            0,
+            "emit_frontend_log must not itself populate the ring buffer"
+        );
+    }
+
+    #[test]
+    fn emit_frontend_log_does_not_panic_with_no_subscriber_installed() {
+        // Most call sites run with the real global subscriber, but this must
+        // be safe to call even when none is installed (e.g. very early
+        // startup, or a unit test that doesn't set one up).
+        emit_frontend_log(
+            "info",
+            "git",
+            "no subscriber here",
+            Some("{}"),
+            Some("user"),
+        );
     }
 }

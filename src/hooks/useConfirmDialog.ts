@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import type { BranchActivitySummary } from "../utils/activitySnapshot";
 
 /** Which button the Enter key activates. Defaults to "confirm" for backward
  *  compatibility; destructive dialogs can set "cancel" so an accidental Enter
@@ -114,20 +115,77 @@ export function useConfirmDialog() {
 
 	/** Confirm force-removing a worktree that is locked by an active agent.
 	 *
-	 *  Pass `deleteBranch=true` when the branch ref will also be force-deleted —
-	 *  the dialog then warns that any unmerged/unpushed commits will be
-	 *  destroyed along with the worktree (force-remove uses `git branch -D`).
+	 *  `deleteBranch` only affects the message: branch deletion always uses the
+	 *  safe `git branch -d` — an unmerged/unpushed branch survives even a
+	 *  force-remove of its worktree — so this no longer warns about commit
+	 *  loss the way it used to (see `worktree.rs::remove_worktree_by_branch`).
+	 *
+	 *  `isDirty` (default true — fail toward warning, not toward silence) warns
+	 *  that force-removing a locked worktree uses Forced (double `--force`),
+	 *  which ALSO overrides git's dirty-worktree refusal: confirming this
+	 *  dialog can discard uncommitted work too, with no dirty-specific dialog
+	 *  of its own in between.
+	 *
+	 *  `defaultButton: "cancel"` deliberately, matching its two siblings below
+	 *  — pressing Enter through a queue of near-identical confirm prompts
+	 *  (e.g. a batch delete) cannot destroy live work, the incident's most
+	 *  plausible trigger mechanism.
 	 */
-	async function confirmRemoveLockedWorktree(branchName: string, deleteBranch: boolean = true): Promise<boolean> {
-		const branchWarning = deleteBranch
-			? `\n\nThe branch "${branchName}" will be force-deleted (\`git branch -D\`). Any unmerged or unpushed commits will be permanently lost.`
+	async function confirmRemoveLockedWorktree(
+		branchName: string,
+		deleteBranch: boolean = true,
+		isDirty: boolean = true,
+	): Promise<boolean> {
+		const branchNote = deleteBranch
+			? `\n\nThe branch "${branchName}" will only be deleted if it's fully merged (\`git branch -d\`) — an unmerged branch is kept.`
+			: "";
+		const dirtyWarning = isDirty
+			? `\n\nThis worktree also has (or may have) uncommitted changes — forcing the removal through will discard them too.`
 			: "";
 		return await confirm({
 			title: "Worktree is locked by an agent",
-			message: `"${branchName}" is currently locked by an active Claude agent.\n\nForce-removing it may interrupt the agent mid-task.${branchWarning}\n\nContinue anyway?`,
+			message: `"${branchName}" is currently locked by an active Claude agent.\n\nForce-removing it may interrupt the agent mid-task.${dirtyWarning}${branchNote}\n\nContinue anyway?`,
 			okLabel: "Force Remove",
 			cancelLabel: "Cancel",
 			kind: "warning",
+			defaultButton: "cancel",
+		});
+	}
+
+	/** Confirm removing a worktree with a live PTY/agent session attached.
+	 *
+	 *  This is the primary UI-side gate for the class of incident where a
+	 *  worktree with an active (even idle) terminal got deleted out from under
+	 *  it — it fires BEFORE any terminal is closed, using the branch's
+	 *  attached-terminal list as of the moment the user clicked delete. See
+	 *  `createWorktreeRemovalCoordinator` and
+	 *  `plans/worktree-removal-incident-2026-08-26.md`.
+	 *
+	 *  `defaultButton: "cancel"` deliberately, so pressing Enter through a
+	 *  queue of near-identical confirm prompts (e.g. a batch delete) cannot
+	 *  destroy live work — the incident's most plausible trigger mechanism. */
+	async function confirmRemoveBusyWorktree(branchName: string, summary: BranchActivitySummary): Promise<boolean> {
+		const lines = summary.terminals.map((t) => `  • ${t.agentType ?? "terminal"} — ${t.label}`).join("\n");
+		return await confirm({
+			title: `"${branchName}" is in use`,
+			message: `${summary.terminalCount} terminal(s) are attached to "${branchName}":\n${lines}\n\nRemoving it now will interrupt whatever is running there, and any uncommitted work may be lost.\n\nDelete anyway?`,
+			okLabel: "Delete anyway",
+			cancelLabel: "Cancel",
+			kind: "error",
+			defaultButton: "cancel",
+		});
+	}
+
+	/** Confirm force-removing a worktree whose Safe removal was refused because
+	 *  it has uncommitted changes (`worktree_dirty:`). */
+	async function confirmForceRemoveDirtyWorktree(branchName: string): Promise<boolean> {
+		return await confirm({
+			title: "Uncommitted changes in the worktree",
+			message: `"${branchName}"'s worktree has uncommitted changes.\n\nRemoving it now discards them permanently.\n\nDelete anyway?`,
+			okLabel: "Delete anyway",
+			cancelLabel: "Cancel",
+			kind: "error",
+			defaultButton: "cancel",
 		});
 	}
 
@@ -246,6 +304,8 @@ export function useConfirmDialog() {
 		confirmSaveChanges,
 		confirmRemoveWorktree,
 		confirmRemoveLockedWorktree,
+		confirmRemoveBusyWorktree,
+		confirmForceRemoveDirtyWorktree,
 		confirmCloseTerminal,
 		confirmRemoveRepo,
 		confirmStashAndSwitch,

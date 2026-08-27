@@ -875,7 +875,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Archive script: runs before a worktree is archived or deleted; non-zero exit blocks the operation
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools
-- Remove via sidebar `×` button or context menu (with confirmation)
+- Remove via sidebar `×` button or context menu (with confirmation). Removal is refused outright while a terminal/agent is attached, with a distinct "in use" confirmation shown BEFORE any terminal is closed; uncommitted work and a git-level lock each get their own follow-up confirmation instead of being silently overridden. Branch deletion always uses safe `git branch -d`, never a forced delete, regardless of how the worktree itself was removed.
 - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
   - Dedicated overlay listing all worktrees across all repos with metadata: branch name, repo badge, PR state (open/merged/closed), dirty stats, last commit timestamp
   - Orphan worktree detection with warning badge and Archive action (moves the worktree aside, recoverable)

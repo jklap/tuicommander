@@ -2034,6 +2034,7 @@ pub async fn start_server(
 mod tests {
     use super::*;
     use crate::MAX_CONCURRENT_SESSIONS;
+    use crate::state::tests_support::create_temp_git_repo;
     use axum::body::Body;
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::{Request, StatusCode};
@@ -4040,39 +4041,6 @@ mod tests {
                 .unwrap()
                 .contains("Unknown action 'commit'")
         );
-    }
-
-    /// Helper: create a temporary git repo with an initial commit for worktree tests.
-    fn create_temp_git_repo() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path();
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        std::fs::write(path.join("README.md"), "test").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "initial"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        dir
     }
 
     #[tokio::test]

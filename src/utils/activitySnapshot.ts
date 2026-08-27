@@ -212,3 +212,54 @@ export function buildActivitySnapshot(): ActivitySnapshot {
 	const order = reconcileActivityOrder(snapshotSpine, ids, isWorking, idleSortKey);
 	return { terminals: order.map((id) => rowById.get(id)).filter((r): r is ActivityTerminalRow => !!r) };
 }
+
+/** One attached terminal, as summarized for a removal-confirmation dialog. */
+export interface BranchActivityTerminal {
+	id: string;
+	agentType: string | null;
+	label: string;
+}
+
+/** Whether a branch's worktree has anything attached, and what it's doing.
+ *
+ *  `isBusy` mirrors the backend's live-session gate exactly: it is true
+ *  whenever ANY terminal is attached, not only when one is actively working —
+ *  the 2026-08-26 incident's worktree was deleted while an idle plain shell
+ *  sat in it, not a busy agent. `terminals` gives a removal dialog something
+ *  more specific to show than a bare count. */
+export interface BranchActivitySummary {
+	terminalCount: number;
+	isBusy: boolean;
+	terminals: BranchActivityTerminal[];
+}
+
+const REMOVAL_DIALOG_CLASS_NAMES = { rateLimited: "", error: "", waiting: "", working: "", idle: "" };
+
+/** Build a [`BranchActivitySummary`] for `terminalIds` (a branch's attached
+ *  terminal ids, i.e. `BranchState.terminals`). Reuses the same activity
+ *  primitives as the sidebar dot and the dashboard (`effectiveActivityState`,
+ *  `terminalStatusLabel`) — extracted here so the removal-confirmation gate,
+ *  the sidebar, and the Worktree Manager can never disagree about what
+ *  "busy" means. See `RepoSection.tsx`'s `hasBusy`/`hasError`/`hasQuestion`
+ *  closures for the sidebar-dot precedent this generalizes. */
+export function branchActivitySummary(terminalIds: string[]): BranchActivitySummary {
+	const terminals: BranchActivityTerminal[] = [];
+	for (const id of terminalIds) {
+		const t = terminalsStore.get(id);
+		const isRateLimited = !!(t?.sessionId && rateLimitStore.isRateLimited(t.sessionId));
+		const { label } = terminalStatusLabel(
+			t?.shellState ?? null,
+			t?.awaitingInput ?? null,
+			isRateLimited,
+			REMOVAL_DIALOG_CLASS_NAMES,
+			t?.agentState ?? null,
+			t?.backgroundWork ?? false,
+		);
+		terminals.push({ id, agentType: t?.agentType ?? null, label });
+	}
+	return {
+		terminalCount: terminalIds.length,
+		isBusy: terminalIds.length > 0,
+		terminals,
+	};
+}

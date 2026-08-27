@@ -58,11 +58,21 @@ pub(crate) struct PushLogBody {
     audience: Option<String>,
 }
 
-/// POST /logs — push a log entry into the ring buffer.
+/// POST /logs — push a log entry into the ring buffer, and persist it to the
+/// log file (see `app_logger::emit_frontend_log`) so it survives past the
+/// ring buffer's 1000-entry cap — the browser/PWA transport twin of the Tauri
+/// `push_log` command.
 pub(crate) async fn push_log(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PushLogBody>,
 ) -> StatusCode {
+    crate::app_logger::emit_frontend_log(
+        &body.level,
+        &body.source,
+        &body.message,
+        body.data_json.as_deref(),
+        body.audience.as_deref(),
+    );
     let mut buf = state.log_buffer.lock();
     buf.push_with_audience(
         body.level,

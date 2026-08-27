@@ -1349,9 +1349,10 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	remove_worktree: {
 		map: (args, p) => {
 			const force = args.force === true ? "&force=true" : "";
+			const overrideBusy = args.overrideBusy === true ? "&overrideBusy=true" : "";
 			return {
 				method: "DELETE",
-				path: `/worktrees/${p("branchName")}?repoPath=${p("repoPath")}&deleteBranch=${args.deleteBranch ?? true}${force}`,
+				path: `/worktrees/${p("branchName")}?repoPath=${p("repoPath")}&deleteBranch=${args.deleteBranch ?? true}${force}${overrideBusy}`,
 			};
 		},
 	},

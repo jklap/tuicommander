@@ -259,7 +259,19 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				throw err;
 			}
 			appLogger.error("git", "Failed to merge and archive worktree", err);
-			deps.setStatusInfo(`Failed to merge: ${err}`);
+			// `worktree_busy:` (a live PTY/agent session this flow's own terminal
+			// close didn't reach) can only fire from the archive/delete cleanup
+			// step, which runs after the merge itself already succeeded — say so,
+			// rather than showing the raw backend string as if the merge failed.
+			// This flow doesn't have a busy-confirmation dialog of its own; the
+			// worktree/branch are left exactly as they were (nothing destroyed),
+			// so removing it via the sidebar afterwards gets the full gate.
+			const reason = err instanceof Error ? err.message : String(err);
+			deps.setStatusInfo(
+				reason.startsWith("worktree_busy:")
+					? `Merged ${branchName}, but its worktree is in use and was not cleaned up — close its terminal and remove it manually`
+					: `Failed to merge: ${err}`,
+			);
 		}
 	};
 

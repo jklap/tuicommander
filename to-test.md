@@ -126,6 +126,43 @@ Vite reloads this without a restart.
   color versus the "currently chosen" color (they're deliberately different tokens), and
   that highlighted/`<mark>`-wrapped text stays legible in both themes.
 
+## Worktree removal safety gate (2026-08-26, **Rust change — needs `make dev` restart**)
+
+Fix for the incident in `plans/worktree-removal-incident-2026-08-26.md` (worktree
+deleted twice while an agent worked in it). Rust unit tests cover the logic
+directly (`cargo nextest run worktree::`, `mcp_http::worktree_routes::`,
+`mcp_http::mcp_transport::tests::handle_worktree_remove*`), but the end-to-end
+UI flow and the git-lock lifecycle need a live app. Verify against a throwaway
+repo on the worktree build's HTTP API (`:9877` — never `:9876`, never Boss's
+real repos):
+
+- Spawn a session inside a worktree, then `git worktree list --porcelain` in the
+  base repo shows `locked tuic: session <id>`. Close the session's terminal and
+  confirm the lock is gone (no other session still attached to that path).
+- With a terminal open in a worktree, click Delete (sidebar `×` or Worktree
+  Manager). The "in use" confirmation should appear naming the attached
+  terminal(s), BEFORE the terminal closes — cancel it and confirm nothing
+  closed. Confirm it and verify the terminal closes, then the worktree and
+  branch are removed as before.
+- Leave an uncommitted file in a worktree with no terminal attached, click
+  Delete. Expect the "Uncommitted changes" confirmation (not a silent removal,
+  and not the worktree disappearing from the UI while the file stays on disk).
+  Confirm "Delete anyway" and verify it's actually gone.
+- `DELETE :9877/worktrees/<branch>?repoPath=<repo>` on a worktree with a live
+  session, no `overrideBusy` → expect a `worktree_busy:` error and the worktree
+  still present; repeat with `&overrideBusy=true` → expect success.
+- Select several worktrees in the Worktree Manager, including one with an
+  attached terminal, and batch-delete. The uncontroversial ones should go
+  through; the busy one gets its own confirmation, not silently included.
+- Kill the app while a session is attached to a worktree (unclean shutdown),
+  restart, and confirm the stale lock is cleared (`git worktree list
+  --porcelain` no longer shows it locked) — and that a lock you set by hand
+  (`git worktree lock --reason "manual"`) is left alone.
+- `curl :9877/logs` (or the ErrorLogPanel) after clicking through a removal and
+  confirm a `git`-sourced entry from the click shows up, then check the day's
+  `~/Library/Application Support/com.tuic.commander/logs/tuic.log.*` for the
+  same entry — this is what used to only live in the 1000-entry ring buffer.
+
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 
 `drag::Image` has no "no image" variant, so an unresolvable `icons/drag-file.png`
