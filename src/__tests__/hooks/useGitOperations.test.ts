@@ -731,6 +731,9 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
+			// Regression: the confirm dialog must reflect the same setting, not
+			// unconditionally claim the local branch will be deleted.
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", expect.anything(), false);
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", false, false);
 		});
 
@@ -2179,7 +2182,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
-			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature");
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", true);
 			expect(mockDialogs.confirmRemoveBusyWorktree).not.toHaveBeenCalled();
 		});
 
