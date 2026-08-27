@@ -1653,6 +1653,7 @@ pub async fn start_server(
     mcp_enabled: bool,
     remote_enabled: bool,
     tls_config: Option<axum_server::tls_rustls::RustlsConfig>,
+    upgrade_http: bool,
 ) -> bool {
     let config = state.config.read().clone();
 
@@ -1964,11 +1965,16 @@ pub async fn start_server(
             let svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
 
             if let Some(tls) = tls_config.clone() {
-                tracing::info!(source = "mcp_http", %addr, "TCP listening with dual-protocol HTTP+HTTPS");
+                tracing::info!(
+                    source = "mcp_http",
+                    %addr,
+                    upgrade_http,
+                    "TCP listening with dual-protocol HTTP+HTTPS"
+                );
                 Some(tokio::spawn(async move {
                     use axum_server_dual_protocol::ServerExt;
                     if let Err(e) = axum_server_dual_protocol::from_tcp_dual_protocol(listener, tls)
-                        .set_upgrade(false)
+                        .set_upgrade(upgrade_http)
                         .serve(svc)
                         .await
                     {
@@ -2011,6 +2017,32 @@ pub async fn start_server(
         None
     };
 
+    // Spawn self-signed cert re-check task: catches LAN-IP changes (e.g. the
+    // laptop roaming to a new network) between restarts, which
+    // `ensure_self_signed_cert` otherwise only re-evaluates when
+    // `provision_tls_config` runs again (boot/restart). Desktop-only — the
+    // headless build never sets `self_signed_active` (it only supports
+    // manually-configured `TlsConfig::Manual` certs).
+    #[cfg(feature = "desktop")]
+    let self_signed_renewal_handle = if let Some(ref tls) = tls_config {
+        if state
+            .self_signed_active
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let tls_clone = tls.clone();
+            let state_clone = state.clone();
+            Some(tokio::spawn(async move {
+                crate::self_signed_recheck_loop(state_clone, tls_clone).await;
+            }))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    #[cfg(not(feature = "desktop"))]
+    let self_signed_renewal_handle: Option<tokio::task::JoinHandle<()>> = None;
+
     // Wait for shutdown signal
     let _ = shutdown_rx.await;
 
@@ -2028,6 +2060,9 @@ pub async fn start_server(
         h.abort();
     }
     if let Some(h) = renewal_handle {
+        h.abort();
+    }
+    if let Some(h) = self_signed_renewal_handle {
         h.abort();
     }
 
@@ -2200,6 +2235,7 @@ mod tests {
             tailscale_state: parking_lot::RwLock::new(
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
+            self_signed_active: std::sync::atomic::AtomicBool::new(false),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             window_geometry: crate::window_geometry::WindowGeometryTracker::new(

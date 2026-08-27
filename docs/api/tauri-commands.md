@@ -583,6 +583,8 @@ empty result.
 | `read_external_file` | `path` | `String` | Read file outside repo (standalone file open) |
 | `get_relay_status` | -- | `JSON` | Cloud relay connection status |
 | `get_tailscale_status` | -- | `TailscaleState` | Tailscale daemon status (NotInstalled/NotRunning/Running with fqdn, https_enabled) |
+| `get_self_signed_cert_status` | -- | `JSON` | Self-signed LAN-HTTPS fallback cert status: `active`, `generated`, `not_after_unix`, `fingerprint_sha256` |
+| `regenerate_self_signed_cert` | -- | `Result<(), String>` | Force-regenerate the self-signed cert and restart the server to pick it up |
 
 ## Global Hotkey
 

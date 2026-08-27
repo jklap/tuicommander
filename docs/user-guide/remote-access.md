@@ -11,18 +11,34 @@ Access TUICommander from a browser on another device on your network.
    - **Password** — Basic Auth password (stored as a bcrypt hash, never in plaintext)
 3. Enable remote access
 
-Once enabled, the settings panel shows the access URL: `http://<your-ip>:<port>`
+Once enabled, the settings panel shows the access URL: `https://<your-ip>:<port>` (see [HTTPS](#https) below for where that certificate comes from).
 
 ## Connecting from Another Device
 
 1. Open a browser on any device on the same network
-2. Navigate to the URL shown in settings (e.g., `http://192.168.1.42:9876`)
-3. Enter the username and password you configured
-4. TUICommander loads in the browser with full terminal access
+2. Navigate to the URL shown in settings (e.g., `https://192.168.1.42:9876`)
+3. If your browser shows a certificate warning, see [HTTPS](#https) below before proceeding
+4. Enter the username and password you configured
+5. TUICommander loads in the browser with full terminal access
 
 ### QR Code
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
+
+## HTTPS
+
+Browsers only expose some features — notably the Clipboard API used for copy/paste — to a "secure context": `https://` or `http://localhost`. A plain `http://<lan-ip>` URL doesn't qualify, so TUICommander serves HTTPS for remote/LAN access using one of two sources, in this priority order:
+
+1. **Tailscale HTTPS** — if the Tailscale daemon is running and HTTPS Certificates are enabled in your tailnet's admin console, TUICommander provisions a real Let's Encrypt-backed certificate for your tailnet hostname. No browser warning, ever.
+2. **Self-signed certificate (fallback)** — if Tailscale HTTPS isn't available, TUICommander generates and serves a self-signed certificate covering `localhost` and all of the machine's current LAN IPs. This is the standard approach for LAN-only HTTPS (the same thing Plex, Home Assistant, and Portainer do), but it means your browser doesn't recognize the certificate authority and shows a security warning — **once per device**, the first time that device connects. Click through it (usually "Advanced" → "Proceed") to continue; the browser remembers your choice for that device.
+
+Since remote access defaults to serving HTTPS, plain `http://` requests to the same port are automatically redirected (301) to `https://` when the self-signed fallback is active, so old bookmarks and QR codes keep working.
+
+### Verifying the self-signed certificate
+
+A LAN threat model is low-risk, but it's still worth a quick check the first time: **Settings → Services → Self-Signed HTTPS** shows the certificate's SHA-256 fingerprint. Before clicking through your browser's warning, you can compare that fingerprint against the one your browser shows in its "view certificate" details (usually reachable from the padlock/warning icon in the address bar) to confirm you're accepting the certificate TUICommander actually generated on your machine — not one substituted by something else on the network.
+
+If you ever suspect the cert was compromised, or you just want a fresh one, use the **Regenerate** button in that same settings section.
 
 ## What Works Remotely
 
@@ -262,13 +278,16 @@ The daemon binds to `0.0.0.0:<port>` and serves:
 
 ### TLS
 
-Configure TLS via the TUICommander config file (`~/.config/tuicommander/config.toml`):
+`tuic-remote` doesn't generate a self-signed cert on its own — that fallback is desktop-only. Configure a cert manually via the TUICommander config file (`~/.config/tuicommander/config.toml`):
 
 ```toml
 [services.tls]
+mode = "manual"
 cert_path = "/path/to/cert.pem"
 key_path = "/path/to/key.pem"
 ```
+
+Both HTTP and HTTPS are served on the same port (no forced redirect) once a manual cert is configured.
 
 ### Differences from Desktop Remote Access
 

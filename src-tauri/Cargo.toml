@@ -233,6 +233,8 @@ cron = "0.17"
 toml = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ssh2-config = "0.7"
+rcgen = "0.14.9"
+time = { version = "0.3.55", features = ["std"] }
 
 [features]
 default = ["desktop"]

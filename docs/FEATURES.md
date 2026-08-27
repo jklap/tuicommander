@@ -1391,15 +1391,37 @@ All data persisted to platform config directory via Rust:
 ### 14.9 macOS Dock Badge
 - Badge count for attention-requiring notifications (questions, errors)
 
-### 14.9 Tailscale HTTPS
+### 14.10 Tailscale HTTPS
 - Auto-detects Tailscale daemon and FQDN via `tailscale status --json` (cross-platform)
 - Provisions TLS certificates from Tailscale Local API (Unix socket on macOS/Linux, CLI on Windows)
 - HTTP+HTTPS dual-protocol on same port via `axum-server-dual-protocol`
-- Graceful fallback: HTTP-only when Tailscale unavailable or HTTPS not enabled
+- Falls back to the self-signed HTTPS cert (§14.11) when Tailscale HTTPS is unavailable, rather
+  than plain HTTP — zero-warning Tailscale HTTPS still wins whenever it's available
 - QR code uses `https://` scheme with Tailscale FQDN when TLS active
 - Background cert renewal every 24h with hot-reload via `RustlsConfig::reload_from_pem()`
 - Session cookie gets `Secure` flag on TLS connections
 - Settings panel shows Tailscale status with actionable guidance
+
+### 14.11 Self-Signed HTTPS Fallback
+- When Tailscale HTTPS isn't active (or fails to provision) and remote access is enabled,
+  generates and serves a self-signed TLS cert instead of falling back to plain HTTP — LAN/remote
+  access gets HTTPS by default, since some browser APIs (e.g. the async Clipboard API) are
+  gated behind a secure context
+- Cert covers `localhost`, `127.0.0.1`, `::1`, and every current LAN IP; 10-year validity
+  (a locally-trusted-by-exception cert accepted via a one-time browser warning per device gets no
+  security benefit from short rotation)
+- Cached under the app's config directory; regenerates on expiry-within-30-days or when the
+  machine's LAN IPs no longer match the cached SAN list (checked at boot/restart, and via a 60s
+  background re-check loop that hot-reloads the live TLS config for network changes mid-session)
+- Plain `http://` requests on the same port automatically 301-redirect to `https://` while the
+  self-signed fallback (not Tailscale) is the active TLS source — old bookmarks/QR codes keep working
+- Settings panel (Services → Self-Signed HTTPS) shows status (active/generated/expiry), a SHA-256
+  fingerprint for verifying the browser's warning dialog shows the genuine cert, and a Regenerate
+  action
+- Concurrent regeneration attempts (e.g. a settings-driven restart racing the Regenerate button)
+  are serialized so cert.pem/key.pem/meta.json can't end up as a mismatched set
+- `tuic-remote` (the headless daemon) does not generate a self-signed cert — it only serves a
+  manually-configured `TlsConfig::Manual` cert (`services.tls` in config.toml)
 
 ---
 
@@ -1763,7 +1785,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Rate limited: max 1 push per session per 30 seconds
 - Stale subscriptions cleaned on HTTP 410 Gone
 - iOS standalone detection: shows "Add to Home Screen" guidance when not installed
-- HTTP detection: shows "Push requires HTTPS (enable Tailscale)" when not on HTTPS
+- HTTP detection: shows "Requires HTTPS — reload via https://" when not on a secure context (rare now that remote access defaults to the self-signed HTTPS fallback, §14.11)
 
 ### 18.9 Notification Sounds
 - Audio playback via Rust `rodio` crate (Tauri command `play_notification_sound`), replacing the previous Web Audio API approach

@@ -55,6 +55,7 @@ scripts/*
 !scripts/check-frontend-cycles.mjs
 !scripts/check-no-nul-bytes.mjs
 !scripts/run-plugin-tests.mjs
+!scripts/check-gate.sh
 !scripts/hooks/
 !scripts/perf/
 scripts/perf/results/
