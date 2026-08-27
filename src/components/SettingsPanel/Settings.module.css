@@ -1279,8 +1279,8 @@
 .ruleCard {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
 }
 
 .ruleCard select,
@@ -1301,11 +1301,19 @@
   border-color: var(--accent);
 }
 
+/* Single-line collapsed row — click anywhere to expand the editor below it. */
 .ruleHeader {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.ruleHeader:hover {
+  background: var(--bg-highlight);
 }
 
 .ruleHeaderEnabled {
@@ -1315,10 +1323,49 @@
   white-space: nowrap;
   font-size: var(--font-sm);
   color: var(--fg-secondary);
+  cursor: default;
 }
 
-.ruleName {
+.ruleNameLabel {
+  font-weight: 600;
+  font-size: var(--font-sm);
+  color: var(--fg-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ruleRegexPreview {
   flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ruleWarningBadge {
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  background: rgba(224, 175, 104, 0.15);
+  color: var(--warning);
+}
+
+/* Expanded editor, revealed below the header on click. */
+.ruleBody {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .ruleFieldLabel {
@@ -1329,7 +1376,7 @@
 }
 
 .ruleField {
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .ruleRegex {
