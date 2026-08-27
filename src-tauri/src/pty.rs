@@ -22277,6 +22277,50 @@ mod tests {
         );
     }
 
+    /// Regression fixture for the tty-resolution fix (commit `4914bb42`):
+    /// before it, a hook-instrumented Claude tab never emitted OSC 7770 at all
+    /// because `tuic-hook` couldn't find a tty to write to (see
+    /// `crates/tuic-hook/src/emit.rs`). Captured live via `POST
+    /// /diagnostics/capture` from a real hook-instrumented `claude` turn
+    /// (single `pwd` via the Bash tool, no failures) with the fix applied, then
+    /// replayed here through the same `TerminalGrid` the PTY hot path uses.
+    #[test]
+    fn claude_hook_osc7770_turn_reaches_busy_then_idle() {
+        use crate::pty_capture::CaptureDirection;
+        use crate::terminal_grid::TerminalGrid;
+
+        let bytes = agent_prompt_fixture("claude-hook-osc7770-basic-turn.tcap");
+        let mut grid = TerminalGrid::new(40, 120, 2000);
+        let mut states = Vec::new();
+
+        for record in crate::pty_capture::decode(&bytes).expect("valid capture") {
+            if record.direction != CaptureDirection::Output {
+                continue;
+            }
+            grid.process(&record.data);
+            for event in grid.drain_events() {
+                if let crate::terminal_grid::TermEvent::Tuic { verb, payload, .. } = event
+                    && verb == "state"
+                {
+                    states.push(payload);
+                }
+            }
+        }
+
+        // Two `busy` events are real: the hook fires on both UserPromptSubmit
+        // and PreToolUse. What the tty-resolution regression actually broke was
+        // ALL of it — `emit()` returned early before a single byte reached the
+        // terminal, so this vec would be empty and `last() == idle` would never
+        // hold.
+        assert_eq!(
+            states,
+            vec!["busy".to_string(), "busy".to_string(), "idle".to_string()],
+            "the hook must resolve a tty and emit busy...busy...idle for this \
+             single-tool turn — silently finding zero states is exactly how the \
+             tty-resolution regression presented"
+        );
+    }
+
     /// Replay a whole directory of real `.tcap` captures through the production
     /// composition and report what the detection pipeline made of them.
     ///
