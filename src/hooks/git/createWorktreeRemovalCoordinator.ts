@@ -16,7 +16,7 @@ interface WorktreeRemovalCoordinatorDeps {
 		) => Promise<RemoveWorktreeResult | undefined>;
 	};
 	dialogs: {
-		confirmRemoveWorktree: (branchName: string) => Promise<boolean>;
+		confirmRemoveWorktree: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean, isDirty?: boolean) => Promise<boolean>;
 		confirmRemoveBusyWorktree?: (
 			branchName: string,
@@ -71,10 +71,11 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		// a busy branch gets a dialog that says so, BEFORE the close-terminal
 		// loop below ever runs. See plans/worktree-removal-incident-2026-08-26.md.
 		const activity = branchActivitySummary(branch.terminals);
+		const deleteBranch = repoSettingsStore.getEffective(repoPath)?.deleteBranchOnRemove ?? true;
 		const confirmed = activity.isBusy
 			? await (deps.dialogs.confirmRemoveBusyWorktree?.(branchName, activity) ??
-					deps.dialogs.confirmRemoveWorktree(branchName))
-			: await deps.dialogs.confirmRemoveWorktree(branchName);
+					deps.dialogs.confirmRemoveWorktree(branchName, deleteBranch))
+			: await deps.dialogs.confirmRemoveWorktree(branchName, deleteBranch);
 		if (!confirmed) {
 			clearLock();
 			return;
@@ -100,8 +101,6 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			}
 		}
 
-		const effective = repoSettingsStore.getEffective(repoPath);
-		const deleteBranch = effective?.deleteBranchOnRemove ?? true;
 		appLogger.info("git", `handleRemoveBranch: invoking remove_worktree`, {
 			repoPath,
 			branchName,

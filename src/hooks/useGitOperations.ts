@@ -110,7 +110,7 @@ export interface GitOperationsDeps {
 	};
 	dialogs: {
 		confirmRemoveRepo: (repoName: string) => Promise<boolean>;
-		confirmRemoveWorktree: (branchName: string) => Promise<boolean>;
+		confirmRemoveWorktree: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean, isDirty?: boolean) => Promise<boolean>;
 		/** A live PTY/agent session is attached to this worktree — shown BEFORE any
 		 *  terminal is closed (using the branch's known terminal list), and again if

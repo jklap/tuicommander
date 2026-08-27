@@ -684,7 +684,7 @@ describe("useGitOperations", () => {
 			// Default deleteBranchOnRemove is true (from repoDefaults)
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
-			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature");
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", true);
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true);
 			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
 		});
@@ -717,6 +717,9 @@ describe("useGitOperations", () => {
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", false);
+			// Regression: the confirm dialog must reflect the same setting, not
+			// unconditionally claim the local branch will be deleted.
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", false);
 		});
 
 		it("rejects removal of non-worktree branch", async () => {
@@ -2063,7 +2066,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
-			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature");
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", true);
 			expect(mockDialogs.confirmRemoveBusyWorktree).not.toHaveBeenCalled();
 		});
 
