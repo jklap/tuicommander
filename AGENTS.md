@@ -67,6 +67,8 @@ When a commit resolves a **GitHub issue**, use a closing keyword so GitHub auto-
 
 To debug the WebView in a release build, temporarily add `"devtools"` to the tauri features in `Cargo.toml`, add `w.open_devtools()` in the `setup` closure (after getting the main webview window), and rebuild with `make build`. Remove both before committing.
 
+`make build`/`make build-dmg` auto-disable updater-artifact signing (`createUpdaterArtifacts`) when `TAURI_SIGNING_PRIVATE_KEY` is unset, so local/dev builds don't fail; CI/release builds set the key and get signed artifacts. Calling `pnpm tauri build` directly (bypassing Make) does **not** get this override and will fail locally without the key.
+
 ## Dev Hot Reload
 
 **`make dev` runs `pnpm tauri dev --no-watch` — the Rust backend NEVER hot-reloads.** The Tauri CLI file watcher is disabled on purpose: editing anything under `src-tauri/**` (including editor/RTK `.rs.tmp.*` scratch files) will NOT rebuild or restart the Rust process. Only Vite HMR reloads the UI (frontend runs as a separate `beforeDevCommand` process). This is intentional — a mid-session Rust restart tears down every live PTY/agent session Boss is running.
