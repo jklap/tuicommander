@@ -89,6 +89,20 @@ describe("HelpPanel", () => {
 		);
 	});
 
+	it("does not flip to 'Copied' when the clipboard write fails", async () => {
+		mockInvoke.mockClear().mockRejectedValue(new DOMException("Write permission denied.", "NotAllowedError"));
+
+		const { container } = render(() => <HelpPanel {...defaultProps} />);
+		const copyBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Copy");
+		expect(copyBtn).not.toBeUndefined();
+
+		fireEvent.click(copyBtn!);
+
+		// Flush the rejected writeClipboard promise before asserting nothing changed.
+		await Promise.resolve().then(() => Promise.resolve());
+		expect(copyBtn!.textContent?.trim()).toBe("Copy");
+	});
+
 	it("displays license and credits", () => {
 		const { container } = render(() => <HelpPanel {...defaultProps} />);
 		expect(container.textContent).toContain("MIT License");
