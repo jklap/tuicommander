@@ -113,6 +113,7 @@ never all expert: in basic mode it would show an empty page.
 | **Show agent context bar** | Show the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent. |
 | **When closing the main window** | Desktop: Ask (default), Background, or Quit. Ask offers Remember. Background hides visible windows and keeps sessions running. Use the application menu to quit; on macOS, click the Dock icon to show the window again. |
 | **Hide Dock icon in background** | On | macOS desktop only. Hide the Dock icon while windows are hidden; restore it on Show. |
+| **Restore window size and position on launch** | Reopen the app window at the same size and position as when it was last closed (desktop app only; **Window** section) |
 | **Confirm before quitting** | Confirm real quit with active terminals, including Cmd/Ctrl+Q. Background does not prompt. Detached-panel close closes only that panel. |
 | **Confirm before closing a tab** | Ask before closing terminal tab |
 | **Prevent sleep when busy** | Keep the machine awake while agents are working (**Power Management** section) |
@@ -246,6 +247,17 @@ See [Command Blocks](terminals.md#command-blocks) for what the block settings co
 
 The terminal bell mode (`none`, `visual`, `sound`, `both`) is set on the Appearance page
 (**Bell** section), not the Terminal page (see [Terminal Bell](terminals.md#terminal-bell)).
+
+### Session Restore
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Restore open terminals on launch** | On | Reopen plain shell tabs (not just agent tabs) in their saved directory when you relaunch. Off restores only agent tabs, matching pre-1.8 behavior. |
+| **Save terminal scrollback** | Off | Persist each terminal's recent output to disk and replay it above a fresh prompt when the tab is restored. Stored as plain text in the app's config directory — leave off if that output may contain secrets. |
+| **Scrollback lines to save** | 1000 | Maximum lines of output saved per terminal when scrollback saving is on |
+| **Clear saved scrollback** button | — | Deletes every saved scrollback file immediately |
+
+See [Session Restore](terminals.md#session-restore) for how restore behaves across a relaunch.
 
 ### Selection
 

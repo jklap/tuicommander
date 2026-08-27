@@ -493,6 +493,19 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					hint={t("general.hint.confirmBeforeClosingTab", "Show a confirmation dialog when closing a terminal tab")}
 				/>
 			</SectionCard>
+			<Show when={isTauri()}>
+				<SectionCard title={t("general.heading.window", "Window")}>
+					<SettingToggle
+						checked={settingsStore.state.restoreWindowGeometry}
+						onChange={(v) => settingsStore.setRestoreWindowGeometry(v)}
+						label={t("general.toggle.restoreWindowGeometry", "Restore window size and position on launch")}
+						hint={t(
+							"general.hint.restoreWindowGeometry",
+							"Reopen the app window at the same size and position as when it was last closed",
+						)}
+					/>
+				</SectionCard>
+			</Show>
 			<SectionCard title={t("general.heading.powerManagement", "Power Management")}>
 				<SettingToggle
 					settingId="app.prevent_sleep_when_busy"
