@@ -1,6 +1,7 @@
 import { appLogger } from "../stores/appLogger";
 import { isTauri, owningConnectionFor, rpc } from "../transport";
 import type { OrchestratorStats, PtyConfig } from "../types";
+import { randomId } from "../utils/randomId";
 import { clearShellFamilyCache, getShellFamily, sendCommand as sendCommandUtil } from "../utils/sendCommand";
 import { browserCreatedSessions } from "./useAppInit";
 
@@ -16,7 +17,10 @@ import { browserCreatedSessions } from "./useAppInit";
  *  decide whether `write_pty` needs its per-session queue. */
 function preRegisterBrowserSessionId(command: string, args: Record<string, unknown>): string | undefined {
 	if (isTauri() && !owningConnectionFor(command, args)) return undefined;
-	const id = crypto.randomUUID();
+	// No prefix: this id becomes the PTY's `$TUIC_SESSION` and is filtered
+	// through the backend's `is_valid_uuid` gate, which rejects anything that
+	// isn't a bare canonical UUID.
+	const id = randomId("");
 	browserCreatedSessions.add(id);
 	return id;
 }

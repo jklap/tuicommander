@@ -6,6 +6,7 @@ import { errorLogStore } from "../../stores/errorLog";
 
 const { writeClipboard } = vi.hoisted(() => ({ writeClipboard: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../../utils/clipboard", () => ({ writeClipboard }));
+const mockWriteClipboard = writeClipboard;
 
 /**
  * The panel is mounted for the whole app lifetime — App renders it
@@ -123,4 +124,42 @@ it("catches shared filters losing severity selection and clipboard actions losin
 	expect(errorLogStore.state.isOpen).toBe(false);
 	cleanup();
 	vi.restoreAllMocks();
+});
+
+describe("ErrorLogPanel copy actions", () => {
+	beforeEach(() => {
+		errorLogStore.close();
+		appLogger.clear();
+		mockWriteClipboard.mockReset();
+	});
+
+	it("does not throw when the per-row clipboard write is denied", () => {
+		mockWriteClipboard.mockRejectedValue(new DOMException("Write permission denied.", "NotAllowedError"));
+		appLogger.error("app", "boom");
+		const view = render(() => <ErrorLogPanel />);
+		errorLogStore.open();
+
+		const btn = Array.from(view.container.querySelectorAll("button")).find((b) => b.title === "Copy to clipboard");
+		expect(btn).toBeDefined();
+		expect(() => fireEvent.click(btn as HTMLButtonElement)).not.toThrow();
+		expect(mockWriteClipboard).toHaveBeenCalled();
+
+		view.unmount();
+	});
+
+	it("does not throw when the Copy All clipboard write is denied", () => {
+		mockWriteClipboard.mockRejectedValue(new DOMException("Write permission denied.", "NotAllowedError"));
+		appLogger.error("app", "boom");
+		const view = render(() => <ErrorLogPanel />);
+		errorLogStore.open();
+
+		const copyAllBtn = Array.from(view.container.querySelectorAll("button")).find(
+			(b) => b.title === "Copy all visible entries",
+		);
+		expect(copyAllBtn).toBeDefined();
+		expect(() => fireEvent.click(copyAllBtn as HTMLButtonElement)).not.toThrow();
+		expect(mockWriteClipboard).toHaveBeenCalled();
+
+		view.unmount();
+	});
 });
