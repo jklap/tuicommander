@@ -109,7 +109,26 @@ pub(crate) async fn create_pty(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    let mut vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    // Seed restored scrollback through the same VtLogBuffer::process entry
+    // point live PTY output uses, so canvas rendering, search, selection, and
+    // ai_terminal_read_screen all see it with no separate code path. Must run
+    // before spawn_reader_thread starts feeding live bytes into this buffer.
+    if config.restore_scrollback
+        && let Some(tuic_session) = tuic_session.as_deref()
+        && let Some(saved) = crate::scrollback_store::load(tuic_session)
+    {
+        vt_log.process(&crate::scrollback_store::replay_bytes(&saved));
+        // Seed the capture dedup mark to the just-replayed content now, not
+        // after the buffer is inserted below — otherwise the first periodic
+        // sweep (or an exit before any new output) sees no mark at all,
+        // treats the replay as new content, and re-persists it — separator
+        // and all — compounding on every restart of a tab nobody touched.
+        state.session_maps.scrollback_capture_marks.insert(
+            session_id.clone(),
+            crate::scrollback_store::capture_fingerprint(&vt_log),
+        );
+    }
     state
         .grid
         .vt_log_buffers

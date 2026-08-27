@@ -769,6 +769,61 @@ was still on-screen, which is why the old check never caught it).
   then launch — confirm the app resets to the ~1200×800 fallback centered on-screen
   instead of opening oversized/off-screen.
 
+## Window geometry restore, shell tab restore, and scrollback restore (2026-08-26, **Rust change — needs `make dev` restart**)
+
+Three related features. `main` is now denylisted from `tauri-plugin-window-state` and owns its own size/position/maximized/fullscreen persistence (`window-geometry.json`, `src-tauri/src/window_geometry.rs`) with a measure-and-correct restore step working around the plugin's `set_size`/`outer_size` inner/outer drift under `titleBarStyle: Overlay`. `createBranchSelectionCoordinator.ts` now restores plain shell tabs (not just agent tabs) on branch select, behind Settings → Terminal → "Restore open terminals on launch" (default on). A new opt-in "Save terminal scrollback" setting (default off) persists each terminal's recent output (`scrollback_store.rs`) and replays it above a fresh prompt on restore.
+
+- [ ] **[MANUAL]** `make dev`, resize and move the window, quit, relaunch. Repeat **three
+  times** in a row and confirm the size is byte-identical every launch — this is the exact
+  regression the `SIZE` flag was excluded from the plugin to avoid (progressive shrink), so
+  a single restart is not enough evidence either way.
+- [ ] **[MANUAL]** Maximize the window, quit, relaunch — comes back maximized. Un-maximize
+  it — reveals the pre-maximize size, not the screen size.
+- [ ] **[MANUAL]** Move the window to a second display, quit, disconnect that display,
+  relaunch — the window recenters onto a live monitor instead of restoring off-screen.
+- [ ] **[MANUAL]** Toggle "Restore window size and position on launch" off in Settings →
+  General, resize the window, restart — comes back at the 1200×800 default instead.
+- [ ] **[MANUAL]** Open two plain shells and one agent tab in a repo branch, quit, relaunch,
+  reselect that branch — all three tabs return; the shells show a live prompt in their saved
+  cwd; the agent tab shows its resume banner. Toggle "Restore open terminals on launch" off,
+  repeat — only the agent tab comes back.
+- [ ] **[MANUAL]** Enable "Save terminal scrollback", run a colorful command (e.g. `ls -la
+  --color`) and a longer one that scrolls, restart, reselect the branch — the prior output
+  appears above a dim "restored from previous session" separator with colors/bold intact,
+  is scrollable and searchable, and the live prompt below it still works normally.
+- [ ] **[MANUAL]** With scrollback saving on, set "Scrollback lines to save" low (e.g. 100),
+  generate more output than that in a terminal, restart — confirm only the cap's worth comes
+  back. Click "Clear saved scrollback" and confirm a subsequent restart shows no restored
+  history for any tab.
+- [ ] **[MANUAL]** Confirm `<config dir>/scrollback/*.json` files are not world-readable
+  (owner-only permissions) and that the directory doesn't exist at all when scrollback
+  saving has never been turned on.
+
+**Follow-up fix (2026-08-27, `size-restore` branch, Rust change — needs `make dev`
+restart):** the "resize/restart three times" item above is exactly what should have
+caught a real bug that shipped with the original feature — a live install's
+`window-geometry.json` was found corrupted to `width: 4944, height: 2368` on a
+`3456x2234` physical display (window far wider than the screen, off the edge). Root
+cause: `apply_window_geometry`'s measure-and-correct step (`corrected_size`) could act
+on a stale pre-resize `outer_size()` read (`wait_for_geometry_to_settle` returning
+early on a compositor that hadn't started applying the resize yet), computing a wildly
+wrong "correction" that then got persisted and compounded larger on each subsequent
+restart. Fixed with a plausibility bound (`is_frame_offset_plausible`, skips the
+correction if the observed/requested gap exceeds 256px) and a missing safety-net check
+(`window_geometry_fix` now also resets geometry wider/taller than every monitor
+combined, not just too-small or off-screen-by-center — the corrupted window's *center*
+was still on-screen, which is why the old check never caught it).
+
+- [ ] **[MANUAL]** After restart on this fix: resize the window noticeably (e.g. drag
+  much wider than default), quit, relaunch — confirm the restored size matches. Repeat
+  several times in a row, including at least once right after a fresh `make dev` start
+  (cold start is when the original race was most likely to hit) — this is the scenario
+  that produced the real corrupted value above.
+- [ ] **[MANUAL]** With TUICommander closed, manually edit `window-geometry.json` in the
+  app's config dir and set `width`/`height` larger than your actual display (e.g. 2x),
+  then launch — confirm the app resets to the ~1200×800 fallback centered on-screen
+  instead of opening oversized/off-screen.
+
 ## Create Worktree dialog: searchable base-ref picker + keyboard nav (2026-08-26, frontend only)
 
 The "Start from" base-ref dropdown gained a search box, `↑`/`↓`/`Enter` navigation, and

@@ -335,7 +335,15 @@ interactive keys. Its `ok:true` reports only that bytes were written.
 
 ### Session Restore
 
-On restart, only terminals that had an active agent session are restored — plain shell tabs are discarded and a fresh terminal is spawned. For restored agent tabs, a clickable banner appears: "Agent session was active — click to resume." Clicking the banner sends the agent's resume command. Press **Escape** or click the **x** button to dismiss the banner without resuming.
+On restart, every terminal tab a branch had open is restored, each with a fresh live shell in its saved working directory — controlled by **Restore open terminals on launch** in Settings → Terminal (default on; off restores only agent tabs, matching pre-1.8 behavior). For restored agent tabs, a clickable banner also appears: "Agent session was active — click to resume." Clicking the banner sends the agent's resume command. Press **Escape** or click the **x** button to dismiss the banner without resuming.
+
+Restore is lazy and branch-scoped: terminals reappear only when you select the repository and branch that owned them, not immediately on launch.
+
+The main window's size and position are restored the same way, controlled by **Restore window size and position on launch** in Settings → General (default on, desktop app only).
+
+#### Scrollback restore
+
+Enable **Save terminal scrollback** in Settings → Terminal to also see a restored terminal's recent output — dimmed, above a live prompt separated by a `───── restored from previous session ─────` marker. Off by default: saved output is written as plain text to the app's config directory, so leave it off if a terminal might echo secrets. **Scrollback lines to save** caps how much is kept per terminal (default 1000); **Clear saved scrollback** deletes everything saved immediately.
 
 ### OSC 8 Hyperlinks
 

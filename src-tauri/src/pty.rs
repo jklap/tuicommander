@@ -7142,6 +7142,7 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
     state.session_maps.marker_stats.remove(session_id);
     state.session_maps.session_visibility.remove(session_id);
     state.ai.ai_suggestions_enabled.remove(session_id);
+    state.session_maps.scrollback_capture_marks.remove(session_id);
 }
 
 // NOT A DEFERRAL — four session-keyed maps are deliberately NOT reaped by
@@ -7186,6 +7187,26 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
         .entry(session_id.to_string())
         .or_insert_with(|| AtomicU64::new(0))
         .store(now_ms, Ordering::Relaxed);
+    // Capture scrollback under this session's $TUIC_SESSION identity before
+    // remove_live_session_state unbinds it below. This is the only point that
+    // catches a tab closed mid-run — every exit path (close, kill, process
+    // died on its own) funnels through here.
+    let (restore_scrollback, max_scrollback_lines) = {
+        let cfg = state.config.read();
+        (
+            cfg.restore_scrollback,
+            cfg.restore_scrollback_lines as usize,
+        )
+    };
+    if restore_scrollback && let Some(tuic_session) = state.tuic_session_for_live_pty(session_id) {
+        crate::scrollback_store::capture_session(
+            state,
+            session_id,
+            &tuic_session,
+            max_scrollback_lines,
+            now_ms,
+        );
+    }
     remove_live_session_state(session_id, state);
 }
 

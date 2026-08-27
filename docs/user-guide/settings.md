@@ -24,6 +24,7 @@ Two limits are deliberate:
 | **Language** | UI language. The list offers the locales that ship with a message catalog, each named in its own language, and the pick applies immediately — no reload. A locale without a catalog is never offered, because it would render English while claiming to be translated. English is the only catalog shipped today, so the list currently holds one entry. |
 | **Default IDE** | IDE for "Open in..." actions. Only installed apps are offered, grouped by category: Code Editors (VS Code, Cursor, Zed, Windsurf, Neovim, Xcode, `$EDITOR`), JetBrains (IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet), Terminals (Ghostty, WezTerm, Alacritty, Kitty, Warp, iTerm2), Git Tools (Sourcetree, GitHub Desktop, Fork, GitKraken, Sublime Merge, Tower), System (Terminal, Finder) |
 | **Custom Launchers** | Define your own tools for the "Open in" menu. Each launcher has a name, an executable (bare name resolved on `PATH`, or absolute path), and arguments (one per line). Arguments may use placeholders, expanded at launch: `{path}`/`{file}` (focused file, else repo root), `{fileDir}` (directory of the focused file), `{repo}` (repo/worktree root), `{cwd}` (focused terminal's working directory), `{home}` (your home directory), `{line}`/`{column}` (1-based editor cursor position). Args are passed verbatim (no shell parsing), so paths with spaces are safe. |
+| **Restore window size and position on launch** | Reopen the app window at the same size and position as when it was last closed (desktop app only) |
 | **Confirm before quitting** | Show dialog when closing app with active terminals |
 | **Confirm before closing tab** | Ask before closing terminal tab |
 | **Prevent sleep when busy** | Keep machine awake while agents are working |
@@ -121,6 +122,17 @@ A live preview reflects these as you change them.
 | **Enable block folding** | `boolean` | `true` | Allow collapsing a command block's output with `Cmd+Shift+.` — gutter click selects the block's output instead, it does not fold |
 
 See [Command Blocks](terminals.md#command-blocks) for what each of these controls.
+
+### Session Restore
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Restore open terminals on launch** | `boolean` | `true` | Reopen plain shell tabs (not just agent tabs) in their saved directory when you relaunch. Off restores only agent tabs, matching pre-1.8 behavior. |
+| **Save terminal scrollback** | `boolean` | `false` | Persist each terminal's recent output to disk and replay it above a fresh prompt when the tab is restored. Stored as plain text in the app's config directory — leave off if that output may contain secrets. |
+| **Scrollback lines to save** | `number` | `1000` | Maximum lines of output saved per terminal when scrollback saving is on |
+| **Clear saved scrollback** button | — | — | Deletes every saved scrollback file immediately |
+
+See [Session Restore](terminals.md#session-restore) for how restore behaves across a relaunch.
 
 ## Selection Tab
 

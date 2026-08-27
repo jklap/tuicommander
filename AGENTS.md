@@ -294,6 +294,35 @@ Top-level sessions only. Subagents (Task tool) and in-process teammates must NEV
 
 **A worktree with a submodule checked out is a third refusal, but a plain `--force` DOES lift it** — `fatal: working trees containing submodules cannot be moved or removed`. Confirmed empirically (git 2.55.0): `git worktree remove --force` succeeds outright here, even on an otherwise-dirty worktree, so `RemovalMode::Dirty`/`::Forced` never even hit this refusal — their first attempt already passes `--force` and succeeds directly. Only `RemovalMode::Safe` (no force) hits it. It still fires *before* git's own dirty-worktree check though, so a Safe-mode caller can't rely on git to separately report dirtiness — `remove_worktree_internal` (`worktree.rs`) replicates that check itself via `git status --porcelain --untracked-files=all` at the worktree root (which git's own default submodule-summary behavior already extends to cover uncommitted/untracked content *inside* the submodule — verified: untracked files, modified tracked files, and a diverged submodule HEAD all show up as `M <submodule-dir>`) before retrying with `--force`. `git submodule deinit --force`/`--all --force` does **not** help on its own (the gitlink stays in the index/tree — `git ls-files -s` still shows `160000 ...` after deinit — so a bare retry without `--force` still fails identically); the fix that actually works is the plain `--force` retry. This was gotten wrong once already in-session — assumed the standard "deinit then retry" workaround worked without testing the simpler "just add `--force`" case first, and only a code review caught it. Before asserting a git force flag does or doesn't lift a given refusal, verify by actually running every relevant combination — don't reason from a flag's name, from partial testing, or from what a search result suggests.
 
+## Window Geometry Restore
+
+`main` is permanently denylisted from `tauri-plugin-window-state`'s `SIZE` flag (`lib.rs`
+plugin registration) — it owns its own size/position/maximized/fullscreen persistence via
+`window_geometry.rs` instead. **Never re-enable `SIZE` for `main`**: the plugin round-trips
+through `set_size()`/`outer_size()`, which drift under `titleBarStyle: Overlay`, and
+re-enabling it silently reintroduces a compounding visual regression on every restart.
+
+`apply_window_geometry`'s measure-and-correct step (`corrected_size`, a one-step Newton
+correction for the `set_size`-sets-inner/`outer_size()`-reads-outer drift) must stay bounded
+by `is_frame_offset_plausible` (`MAX_TRUSTED_FRAME_OFFSET`, 256px). This is not a cosmetic
+guard: `wait_for_geometry_to_settle` can return believing geometry has settled while it's
+actually still reading the window's stale pre-resize size (a real, reproduced race against
+an async compositor/WM, not just a theoretical Wayland concern — see `settle_loop`'s tests).
+Without the plausibility bound, a single stale read feeds a wildly wrong "correction" back
+through `record_size` into persisted geometry, and because each restart's correction is
+computed relative to the previous (already wrong) saved value, the error compounds
+**geometrically** across restarts. This produced a real corrupted `window-geometry.json`
+(`width: 4944, height: 2368` on a `3456x2234` physical display — window far wider than the
+screen, off the edge) despite the feature shipping with unit tests; the tests covered only
+plausible/small offsets, never an implausible one.
+
+`window_geometry_fix` (the `ensure_window_visible` safety net) must check for **three**
+independent failure modes, not two: too-small, off-screen-by-center, AND larger than the
+combined bounding box of every monitor. The oversized case is easy to miss — a corrupted
+window's *center* can still land on-screen even though the window itself dwarfs the
+display, so folding "too large" into the on-screen check misses it entirely (this is
+exactly how the corrupted value above sailed through validation on every launch).
+
 ## IPC / HTTP Parity
 
 **Every Tauri IPC surface MUST have an HTTP/WS equivalent, and the two MUST stay consistent.** The desktop app talks over Tauri IPC; browser/PWA/remote clients talk over HTTP+SSE+WS. They are two transports for the *same* backend — never let them drift.
