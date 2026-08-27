@@ -115,6 +115,57 @@ describe("activitySnapshot", () => {
 		expect(row.isWorking).toBe(false);
 	});
 
+	it("orders the snapshot working-first, idle-second", () => {
+		const idleId = terminalsStore.add({
+			name: "Idle terminal",
+			sessionId: "sess-idle",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+		});
+		terminalsStore.update(idleId, { shellState: "idle" });
+		const busyId = terminalsStore.add({
+			name: "Busy terminal",
+			sessionId: "sess-busy",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+		});
+		terminalsStore.update(busyId, { shellState: "busy" });
+
+		const snap = buildActivitySnapshot();
+		expect(snap.terminals.map((t) => t.id)).toEqual([busyId, idleId]);
+	});
+
+	it("orders the idle group by idleSince descending (most-recently-active first)", () => {
+		// A direct null→idle transition (never having been busy) sets idleSince without
+		// starting the busy→idle cooldown timer (see handleShellStateChange), so this
+		// avoids leaving a dangling setTimeout behind when the test ends.
+		const olderId = terminalsStore.add({
+			name: "Older idle",
+			sessionId: "sess-older",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+		});
+		terminalsStore.update(olderId, { shellState: "idle" });
+
+		const newerId = terminalsStore.add({
+			name: "Newer idle",
+			sessionId: "sess-newer",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+		});
+		terminalsStore.update(newerId, { shellState: "idle" });
+		// Force the second terminal's idleSince strictly later than the first's, since
+		// both may otherwise land on the same millisecond in a fast test run.
+		terminalsStore.update(newerId, { idleSince: (terminalsStore.get(olderId)?.idleSince ?? 0) + 1000 });
+
+		const snap = buildActivitySnapshot();
+		expect(snap.terminals.map((t) => t.id)).toEqual([newerId, olderId]);
+	});
+
 	it("renders an omitted busy session as exited rather than working", () => {
 		const row = snapshotToRows({
 			terminals: [
@@ -270,6 +321,85 @@ describe("reconcileActivityOrder", () => {
 		const after = reconcileActivityOrder(spine, ["a", "c"], working(new Set()));
 		expect(after).toEqual(["a", "c"]);
 		expect(spine).toEqual(["a", "c"]);
+	});
+
+	it("appends a terminal at the end (not its old slot) if it disappears and comes back", () => {
+		const spine: string[] = [];
+		reconcileActivityOrder(spine, ["a", "b", "c"], working(new Set()));
+		// b drops out...
+		reconcileActivityOrder(spine, ["a", "c"], working(new Set()));
+		// ...then reappears. It re-enters at the end of the spine, not back at index 1.
+		const after = reconcileActivityOrder(spine, ["a", "c", "b"], working(new Set()));
+		expect(after).toEqual(["a", "c", "b"]);
+	});
+
+	describe("idleSortKey", () => {
+		const keyOf = (keys: Record<string, number | null>) => (id: string) => keys[id] ?? null;
+
+		it("sorts the idle group by key descending (most-recently-active first)", () => {
+			const spine: string[] = [];
+			const order = reconcileActivityOrder(
+				spine,
+				["a", "b", "c"],
+				working(new Set()),
+				keyOf({ a: 100, b: 300, c: 200 }),
+			);
+			expect(order).toEqual(["b", "c", "a"]);
+		});
+
+		it("never sorts the working group", () => {
+			const spine: string[] = [];
+			// Working keys would sort b before a if the working group were sorted too.
+			const order = reconcileActivityOrder(
+				spine,
+				["a", "b", "c"],
+				working(new Set(["a", "b"])),
+				keyOf({ a: 1, b: 999, c: 500 }),
+			);
+			expect(order).toEqual(["a", "b", "c"]);
+		});
+
+		it("places null keys last", () => {
+			const spine: string[] = [];
+			const order = reconcileActivityOrder(
+				spine,
+				["a", "b", "c"],
+				working(new Set()),
+				keyOf({ a: 100, b: null as unknown as number, c: 200 }),
+			);
+			expect(order).toEqual(["c", "a", "b"]);
+		});
+
+		it("keeps spine order for equal keys (stable sort)", () => {
+			const spine: string[] = [];
+			reconcileActivityOrder(spine, ["a", "b", "c"], working(new Set()));
+			const order = reconcileActivityOrder(spine, ["a", "b", "c"], working(new Set()), keyOf({ a: 1, b: 1, c: 1 }));
+			expect(order).toEqual(["a", "b", "c"]);
+		});
+
+		it("does not oscillate on repeated calls with unchanged keys", () => {
+			const spine: string[] = [];
+			const key = keyOf({ a: 100, b: 300, c: 200 });
+			const first = reconcileActivityOrder(spine, ["a", "b", "c"], working(new Set()), key);
+			const second = reconcileActivityOrder(spine, ["a", "b", "c"], working(new Set()), key);
+			expect(second).toEqual(first);
+		});
+
+		it("moves a row out of the sorted group entirely once it starts working", () => {
+			const spine: string[] = [];
+			const key = keyOf({ a: 100, b: 300, c: 200 });
+			reconcileActivityOrder(spine, ["a", "b", "c"], working(new Set()), key);
+			// b (highest idle key) starts working — it leaves the sorted idle group and
+			// heads the working group instead, regardless of its old idle key.
+			const after = reconcileActivityOrder(spine, ["a", "b", "c"], working(new Set(["b"])), key);
+			expect(after).toEqual(["b", "c", "a"]);
+		});
+
+		it("omitting the parameter reproduces the pre-Phase-1 spine-order behavior", () => {
+			const spine: string[] = [];
+			const order = reconcileActivityOrder(spine, ["a", "b", "c", "d"], working(new Set(["b", "d"])));
+			expect(order).toEqual(["b", "d", "a", "c"]);
+		});
 	});
 });
 
