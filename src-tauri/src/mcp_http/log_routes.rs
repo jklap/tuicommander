@@ -260,3 +260,80 @@ pub(crate) fn eval_debug_script(state: &Arc<AppState>, script: &str) -> serde_js
 pub(crate) fn eval_debug_script(_state: &Arc<AppState>, _script: &str) -> serde_json::Value {
     serde_json::json!({"error": "invoke_js requires desktop feature"})
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::MarkerKind;
+
+    fn session_entry(sessions: &serde_json::Value, session_id: &str) -> serde_json::Value {
+        sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["session_id"] == session_id)
+            .unwrap_or_else(|| panic!("session {session_id} missing from {sessions}"))
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn marker_compliance_reports_counts_and_the_and_rule_gate() {
+        let dir = std::env::temp_dir().join("test-marker-compliance-route");
+        let _ = std::fs::create_dir_all(&dir);
+        let _guard = crate::config::set_config_dir_override(dir);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        state.config.write().intent_tab_title = true;
+        state.config.write().suggest_followups = true;
+        state.session_states.insert(
+            "on-session".to_string(),
+            crate::state::SessionState {
+                agent_type: Some("claude".to_string()),
+                ..Default::default()
+            },
+        );
+        state.note_marker("on-session", MarkerKind::TurnSubmitted);
+        state.note_marker("on-session", MarkerKind::Intent);
+
+        // suggest never fired for this session, and its markers are globally off —
+        // both must be visible in the same response without one masking the other.
+        state.session_states.insert(
+            "off-session".to_string(),
+            crate::state::SessionState {
+                agent_type: Some("cursor".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut agents_cfg = crate::config::AgentsConfig::default();
+        agents_cfg.agents.insert(
+            "cursor".to_string(),
+            crate::config::AgentSettings {
+                intent_tab_title: Some(false),
+                suggest_followups: Some(false),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents_cfg).unwrap();
+        state.note_marker("off-session", MarkerKind::TurnSubmitted);
+
+        let result = marker_compliance_get(State(state)).await.0;
+
+        let on = session_entry(&result, "on-session");
+        assert_eq!(on["turns"], 1);
+        assert_eq!(on["intent"], 1);
+        assert_eq!(on["suggest"], 0);
+        assert_eq!(on["intent_enabled"], true);
+        assert_eq!(on["suggest_enabled"], true);
+
+        let off = session_entry(&result, "off-session");
+        assert_eq!(off["turns"], 1);
+        assert_eq!(off["intent"], 0);
+        assert_eq!(off["suggest"], 0);
+        assert_eq!(
+            off["intent_enabled"], false,
+            "a per-agent override disabled this session's marker — a zero count \
+            alone can't distinguish that from the agent ignoring the protocol"
+        );
+        assert_eq!(off["suggest_enabled"], false);
+    }
+}

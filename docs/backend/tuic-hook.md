@@ -13,8 +13,8 @@ for the wire-level verb table and consumer side).
 
 Source: `src-tauri/crates/tuic-hook/src/main.rs`. Generator side (which builds the
 installed hook commands, and the per-agent event→command maps):
-`src-tauri/src/agent_hook.rs`. See also `hook-lifecycle.html` (repo root) for a fuller,
-visual walk through the whole event→wire→feature pipeline.
+`src-tauri/src/agent_hook.rs`. See also `hook-lifecycle.html` (repo root, tracked) for a
+fuller, visual walk through the whole event→wire→feature pipeline.
 
 ## Derivation vs. flags
 
