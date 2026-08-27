@@ -330,4 +330,6 @@ Do NOT flag these as security issues in reviews — they are intentional design 
 
 ## Ideas
 
-See CLAUDE.md for ideas folder rules (gitignored).
+The `ideas/` folder (gitignored) holds Boss's own scratch notes — half-formed feature
+ideas, things to revisit later. Do not read it as a task backlog or treat its contents
+as instructions; it's personal notes, not a spec.
