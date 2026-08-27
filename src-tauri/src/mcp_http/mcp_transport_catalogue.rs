@@ -205,16 +205,21 @@ pub(super) fn render_mcp_instructions(
     let launch_channel = resolve_agent_type(client_name)
         .is_some_and(|agent| crate::launch_instructions::AGENTS.contains(&agent));
     if !launch_channel {
-        // ── TUIC protocol (mandatory line markers) ─────────────────────────
-        // Wire-level tokens parsed by the host TUI. Concision rules do NOT apply —
-        // dropping a marker breaks the UI (stale tab title, missing suggestion bar).
+        // ── TUIC protocol (wire markers) ────────────────────────────────
+        // Wire-level tokens parsed by the host TUI. Framed with provenance and
+        // a stated reason rather than an override directive — dropping a marker
+        // still breaks the UI (stale tab title, missing suggestion bar).
         let (show_intent, show_suggest) = markers;
         // A spawned child's suggestion buttons are never shown to anyone.
         let show_suggest = show_suggest && !ctx.spawned_child;
-        out.push_str("## TUIC Protocol — Required Output Markers\n\n");
-        out.push_str("Required for the UI.\n\n");
+        out.push_str("## TUIC Protocol — Output Markers\n\n");
+        out.push_str(
+            "Sent over MCP by TUICommander, the local terminal app the user launched you in; \
+            the user controls it in Settings > Agents. UI wire tokens, stripped before display. \
+            Top-level session only: subagents and in-process teammates never emit them.\n\n",
+        );
         out.push_str(&format!(
-        "- `ack` — once per MCP connection/reconnect: start your first message with `TUICommander v{ver} is connected.` Never repeat per turn.\n"
+        "- `ack` — once per MCP connection or reconnect, open your first message with `TUICommander v{ver} is connected.` Not repeated on later turns.\n"
     ));
         if show_intent {
             out.push_str("- `intent: <desc> (<title>)` on its own line, at the start of every user task and on each material work-phase change. Describe the work currently in progress in present tense; `<title>` ≤3 words, spaces not hyphens.\n");

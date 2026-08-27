@@ -41,6 +41,14 @@ Claude Code supports two display modes for teammates:
 
 TUICommander works with both modes. In-process mode is the default and requires no extra setup. With split panes, each teammate appears as a separate TUICommander tab.
 
+This distinction also determines who owns the TUIC protocol markers (`ack`/`intent:`/`suggest:`,
+see [TUIC Protocol — Output Markers](ai-agents.md#tuic-protocol--output-markers)). A split-pane
+teammate gets its own PTY and therefore its own MCP `initialize` call — it receives the marker
+instructions directly and owns its own tab title/chip bar. An in-process teammate shares the
+lead's terminal and MCP connection; it never gets its own `initialize`, so it must not emit
+markers — doing so would be indistinguishable from the lead emitting them, and a stray `suggest:`
+would flip the lead's session to `completed` mid-work.
+
 ### Key Controls (In-process Mode)
 
 | Key | Action |
