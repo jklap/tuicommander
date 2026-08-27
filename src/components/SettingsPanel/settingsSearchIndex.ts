@@ -723,6 +723,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "remote-access", section: "Remote Access" },
 	{ tab: "remote-access", section: "Connection status" },
 	{ tab: "remote-access", section: "Tailscale HTTPS" },
+	{ tab: "remote-access", section: "Self-Signed HTTPS", sectionKey: "services.heading.selfSignedHttps" },
 	{ tab: "remote-access", section: "Danger zone" },
 	{ tab: "remote-access", section: "Cloud Relay", sectionKey: "services.heading.cloudRelay" },
 	{
@@ -764,6 +765,18 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "app.services.server.ipv6_enabled",
 	},
 	{ tab: "remote-access", section: "Tailscale HTTPS", label: "Status", labelKey: "services.label.tailscaleStatus" },
+	{
+		tab: "remote-access",
+		section: "Self-Signed HTTPS",
+		label: "Status",
+		labelKey: "services.label.selfSignedStatus",
+	},
+	{
+		tab: "remote-access",
+		section: "Self-Signed HTTPS",
+		label: "Fingerprint",
+		labelKey: "services.label.selfSignedFingerprint",
+	},
 	{
 		tab: "remote-access",
 		section: "Cloud Relay",

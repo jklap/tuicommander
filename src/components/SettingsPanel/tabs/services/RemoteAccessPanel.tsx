@@ -56,7 +56,7 @@ export async function copyConnectUrl(url: string): Promise<boolean> {
  * Tailscale HTTPS, the QR/connect URL, and the cloud relay.
  */
 export const RemoteAccessPanel: Component = () => {
-	const { status, relayConnected, refresh } = useMcpStatusPoll();
+	const { status, relayConnected, refresh } = useMcpStatusPoll(() => refreshSelfSignedStatus());
 	const [localIps, { refetch: refetchLocalIps }] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
 	const availableIps = () => (localIps.error ? undefined : localIps());
 	const [selectedIp, setSelectedIp] = createSignal<string>("");
@@ -81,6 +81,27 @@ export const RemoteAccessPanel: Component = () => {
 		| { state: "Running"; fqdn: string; https_enabled: boolean };
 
 	const [tailscaleState, setTailscaleState] = createSignal<TailscaleStatus | null>(null);
+
+	// Self-signed HTTPS fallback status (active when Tailscale HTTPS isn't)
+	interface SelfSignedCertStatus {
+		active: boolean;
+		generated: boolean;
+		not_after_unix: number | null;
+		fingerprint_sha256: string | null;
+	}
+	const [selfSignedStatus, setSelfSignedStatus] = createSignal<SelfSignedCertStatus | null>(null);
+	const [regeneratingCert, setRegeneratingCert] = createSignal(false);
+	const refreshSelfSignedStatus = async () => {
+		try {
+			setSelfSignedStatus(await rpc<SelfSignedCertStatus>("get_self_signed_cert_status"));
+		} catch {
+			// Self-signed cert status not available (non-desktop build)
+		}
+	};
+	const isTailscaleHttpsActive = () => {
+		const ts = tailscaleState();
+		return ts?.state === "Running" && ts.https_enabled;
+	};
 
 	// Relay state
 	const [relayEnabled, setRelayEnabled] = createSignal(false);
@@ -587,9 +608,71 @@ export const RemoteAccessPanel: Component = () => {
 						);
 					})()}
 				</Show>
-
-				{/* ── Cloud Relay ── */}
 			</SectionCard>
+			{/* ── Self-signed HTTPS fallback ── */}
+			<Show when={raEnabled() && !isTailscaleHttpsActive() && selfSignedStatus()}>
+				{(() => {
+					const ss = selfSignedStatus()!;
+					const expiry = ss.not_after_unix != null ? new Date(ss.not_after_unix * 1000).toLocaleDateString() : null;
+					const statusText = ss.active
+						? expiry
+							? t("services.status.selfSignedActiveWithExpiry", "Active (expires {expiry})", { expiry })
+							: t("services.status.selfSignedActive", "Active")
+						: ss.generated
+							? t("services.status.selfSignedGeneratedInactive", "Generated, not yet active")
+							: t("services.status.selfSignedNotGenerated", "Not yet generated");
+					return (
+						<SectionCard title={t("services.heading.selfSignedHttps", "Self-Signed HTTPS")}>
+							<div class={s.group}>
+								<label>{t("services.label.selfSignedStatus", "Status")}</label>
+								<div class={s.mcpStatusRow}>
+									<span class={s.mcpStatusText}>{statusText}</span>
+									<button
+										data-non-setting="Regenerates the self-signed TLS certificate (runtime action)"
+										class={s.testBtn}
+										disabled={regeneratingCert()}
+										onClick={async () => {
+											setRegeneratingCert(true);
+											try {
+												await rpc("regenerate_self_signed_cert");
+												// Server restart is async server-side; give it a moment before polling status.
+												setTimeout(refresh, 500);
+											} catch (e) {
+												appLogger.error("tailscale", "Self-signed cert regenerate failed", e);
+											} finally {
+												setRegeneratingCert(false);
+											}
+										}}
+										title={t("services.action.regenerateSelfSignedTitle", "Regenerate self-signed certificate")}
+									>
+										{regeneratingCert()
+											? t("services.action.regenerating", "Regenerating…")
+											: t("services.action.regenerate", "Regenerate")}
+									</button>
+								</div>
+							</div>
+							<Show when={ss.fingerprint_sha256}>
+								{(fingerprint) => (
+									<div class={s.group}>
+										<label>{t("services.label.selfSignedFingerprint", "Fingerprint")}</label>
+										<code class={s.url}>
+											{fingerprint()
+												.match(/.{1,2}/g)
+												?.join(":")}
+										</code>
+									</div>
+								)}
+							</Show>
+							<p class={s.hint}>
+								{t(
+									"services.hint.selfSignedExplain",
+									"Without Tailscale HTTPS, TUICommander serves a self-signed certificate so remote/LAN access still gets HTTPS (needed for the clipboard and other browser features that require a secure context). Each device shows a one-time browser security warning the first time it connects — that's expected; accept it to continue. Plain http:// links now redirect to https:// automatically.",
+								)}
+							</p>
+						</SectionCard>
+					);
+				})()}
+			</Show>
 			<Show when={raEnabled()}>
 				{" "}
 				<DangerZone

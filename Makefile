@@ -35,7 +35,7 @@ DIST_DIR=dist-release
 # generation in that case rather than failing the whole build.
 TAURI_BUILD_FLAGS=$(if $(TAURI_SIGNING_PRIVATE_KEY),,--config '{"bundle":{"createUpdaterArtifacts":false}}')
 
-.PHONY: all clean dev test agent-test agent-test-stop test-shell build build-dmg check check-desktop-embedding cov crap fmt sign verify-sign notarize release dist \
+.PHONY: all clean dev test agent-test agent-test-stop test-shell build build-dmg check check-gate check-desktop-embedding cov crap fmt sign verify-sign notarize release dist \
        nightly github-release preview bump release-notes hooks docs docs-serve \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
@@ -158,6 +158,16 @@ check: test-shell check-desktop-embedding
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm audit --audit-level=high && echo "  pnpm audit ✓"
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK_ERR) cargo audit -q && echo "  cargo audit ✓"
+
+# Runs `check` the way it needs to be run to actually trust the result:
+# defensively rebuilds tuic-hook first (it can transiently read as 0 bytes
+# even after a prior successful build — see AGENTS.md > Fresh Worktree
+# Setup), warns instead of silently misreporting when the plugins/ submodule
+# is uninitialized, and captures make's real exit code instead of a `tee`
+# pipeline's (almost always 0, masking a real failure). Prefer this over
+# `make check 2>&1 | tee log` directly.
+check-gate:
+	@./scripts/check-gate.sh
 
 # Rust coverage: cargo-llvm-cov + nextest. Terminal summary + HTML report.
 # Instrumented artifacts live in target/llvm-cov-target — the normal build
