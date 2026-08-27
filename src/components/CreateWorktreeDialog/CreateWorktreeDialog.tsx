@@ -24,6 +24,9 @@ export interface CreateWorktreeDialogProps {
 	worktreesDir: string;
 	/** Available base refs for the "Start from" dropdown (first is default) */
 	baseRefs?: BaseRefOption[];
+	/** Base ref to preselect when the dialog opens — e.g. the last one used
+	 * successfully for this repo this session. Falls back to `baseRefs[0]`. */
+	defaultBaseRef?: string;
 	/** Generate a random branch name */
 	onGenerateName?: () => Promise<string>;
 	onClose: () => void;
@@ -35,18 +38,65 @@ function sanitizeForPath(name: string): string {
 	return name.replace(/\//g, "-");
 }
 
-/** Custom styled dropdown replacing native <select>, with local/remote grouping */
+/** Wraps the first case-insensitive match of `query` inside `text` in a `<mark>`.
+ * The filter is a single substring match, so a single highlighted range is enough —
+ * mirrors CommandPalette's `renderMatchLine`. */
+const HighlightMatch: Component<{ text: string; query: string }> = (props) => {
+	const segments = createMemo(() => {
+		const q = props.query.trim().toLowerCase();
+		if (!q) return null;
+		const idx = props.text.toLowerCase().indexOf(q);
+		if (idx < 0) return null;
+		return {
+			before: props.text.slice(0, idx),
+			match: props.text.slice(idx, idx + q.length),
+			after: props.text.slice(idx + q.length),
+		};
+	});
+
+	return (
+		<Show when={segments()} fallback={props.text}>
+			{(seg) => (
+				<>
+					{seg().before}
+					<mark class={s.matchHighlight}>{seg().match}</mark>
+					{seg().after}
+				</>
+			)}
+		</Show>
+	);
+};
+
+/** Custom styled dropdown replacing native <select>, with local/remote grouping,
+ * a search box, and full keyboard navigation. */
 const BaseRefDropdown: Component<{
 	value: string;
 	options: BaseRefOption[];
 	onChange: (value: string) => void;
+	/** Disabled while the typed name matches an existing branch (nothing to base it from) —
+	 * the row stays mounted rather than unmounting, so the dialog doesn't resize as the
+	 * typed name crosses in and out of an exact match. */
+	disabled?: boolean;
 }> = (props) => {
 	const [open, setOpen] = createSignal(false);
+	const [query, setQuery] = createSignal("");
+	// -1 means "no keyboard cursor yet" — mirrors the branch list below: opening the
+	// list or typing a query shouldn't visually pre-select a row until the user moves.
+	const [selectedIndex, setSelectedIndex] = createSignal(-1);
 	let triggerRef: HTMLButtonElement | undefined;
 	let listRef: HTMLDivElement | undefined;
+	let searchRef: HTMLInputElement | undefined;
 
-	const localRefs = () => props.options.filter((r) => r.kind === "local");
-	const remoteRefs = () => props.options.filter((r) => r.kind === "remote");
+	// Flat, filtered list in the same local-then-remote order the backend already
+	// returns — this is what keyboard navigation walks, so arrows cross the section
+	// headers without the grouped render needing to know about indices itself.
+	const filteredRefs = createMemo(() => {
+		const q = query().trim().toLowerCase();
+		if (!q) return props.options;
+		return props.options.filter((r) => r.name.toLowerCase().includes(q));
+	});
+	const filteredLocalRefs = createMemo(() => filteredRefs().filter((r) => r.kind === "local"));
+	const filteredRemoteRefs = createMemo(() => filteredRefs().filter((r) => r.kind === "remote"));
 
 	// Close on outside click
 	const handleDocClick = (e: MouseEvent) => {
@@ -55,19 +105,111 @@ const BaseRefDropdown: Component<{
 		}
 	};
 
+	// Force-close if the row becomes disabled while open (typed name became an exact
+	// existing-branch match while the list was open) — the `<Show>` below already
+	// hides the list from the DOM in that case, but without also resetting `open`
+	// here, the list would silently reappear on its own the moment the row becomes
+	// enabled again (e.g. typing past the exact match), with no new click.
+	createEffect(() => {
+		if (props.disabled) setOpen(false);
+	});
+
 	createEffect(() => {
 		if (!open()) return;
 		document.addEventListener("mousedown", handleDocClick);
 		onCleanup(() => document.removeEventListener("mousedown", handleDocClick));
 	});
 
-	const renderItem = (option: BaseRefOption) => (
+	// Reset search state on open, autofocus the search input, and claim Escape for
+	// just this dropdown while it's open — the modal stack is LIFO, so this entry
+	// (pushed after the dialog's own) wins first; a second Escape then falls through
+	// to close the dialog itself.
+	createEffect(() => {
+		if (!open()) return;
+		setQuery("");
+		setSelectedIndex(-1);
+		// setTimeout (not requestAnimationFrame) so this reliably fires after the
+		// dialog's own mount-time name-input focus, which is queued the same way —
+		// two rAFs and a 0ms timer don't have a guaranteed relative order, but two
+		// same-delay timers run in scheduling order.
+		const focusTimer = setTimeout(() => searchRef?.focus(), 0);
+		onCleanup(() => clearTimeout(focusTimer));
+		registerModal(() => setOpen(false));
+	});
+
+	// Reset the keyboard cursor whenever the query changes
+	createEffect(() => {
+		query();
+		setSelectedIndex(-1);
+	});
+
+	// Scroll the highlighted item into view. Can't index listRef.children directly
+	// (the search input and section headers are siblings of the items), so look up
+	// by data-index instead.
+	createEffect(() => {
+		const idx = selectedIndex();
+		if (!listRef || idx < 0) return;
+		listRef.querySelector(`[data-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
+	});
+
+	const commitSelection = (index: number) => {
+		const option = filteredRefs()[index];
+		if (!option) return;
+		props.onChange(option.name);
+		setOpen(false);
+	};
+
+	const handleSearchKeydown = (e: KeyboardEvent) => {
+		switch (e.key) {
+			case "ArrowDown":
+				e.preventDefault();
+				e.stopPropagation();
+				setSelectedIndex((i) => Math.min(i + 1, filteredRefs().length - 1));
+				break;
+			case "ArrowUp":
+				e.preventDefault();
+				e.stopPropagation();
+				setSelectedIndex((i) => Math.max(i - 1, 0));
+				break;
+			case "Enter":
+				// Stop this from also reaching the dialog's document-level Enter
+				// handler, which would submit the whole form while picking a ref.
+				e.preventDefault();
+				e.stopPropagation();
+				commitSelection(selectedIndex());
+				break;
+			case "Tab":
+				e.stopPropagation();
+				setOpen(false);
+				break;
+			default:
+				break;
+		}
+	};
+
+	// `<For>` only invokes this mapping callback once per distinct option (keyed by
+	// reference) — it does NOT re-invoke it when filtering merely shifts that same
+	// option to a different position in the list. So the index must be read fresh
+	// on every use via the accessor `<For>` hands us, not captured once as a plain
+	// number: a closure over a snapshot index goes stale the moment typing removes
+	// an earlier match, and a click/hover then acts on the wrong (or out-of-bounds)
+	// slot in `filteredRefs()` and silently no-ops. `index` here is a lazy accessor
+	// (never called until something actually needs the current value), mirroring
+	// how the branch list below reads its own `<For>` index — do not eagerly
+	// resolve it to a number at the call site, and do not resolve it via a
+	// linear `indexOf` scan either (recomputing on every row, every keystroke).
+	const renderItem = (option: BaseRefOption, index: () => number) => (
 		<div
-			class={`${s.dropdownItem} ${option.name === props.value ? s.dropdownItemActive : ""}`}
+			data-index={index()}
+			data-testid="base-ref-item"
+			class={`${s.dropdownItem} ${option.name === props.value ? s.dropdownItemActive : ""} ${
+				index() === selectedIndex() ? s.dropdownItemSelected : ""
+			}`}
 			onClick={() => {
 				props.onChange(option.name);
 				setOpen(false);
 			}}
+			onMouseEnter={() => setSelectedIndex(index())}
 		>
 			{option.name}
 			{option.is_default ? ` (${t("createWorktree.default", "default")})` : ""}
@@ -75,24 +217,51 @@ const BaseRefDropdown: Component<{
 	);
 
 	return (
-		<div class={s.baseRefRow}>
+		<div class={s.baseRefRow} data-disabled={props.disabled ? "" : undefined}>
 			<label>{t("createWorktree.startFrom", "Start from")}</label>
 			<div class={s.dropdownWrapper}>
-				<button ref={triggerRef} type="button" class={s.dropdownTrigger} onClick={() => setOpen(!open())}>
+				<button
+					ref={triggerRef}
+					type="button"
+					class={s.dropdownTrigger}
+					data-testid="base-ref-trigger"
+					disabled={props.disabled}
+					onClick={() => setOpen(!open())}
+				>
 					<span class={s.dropdownValue}>{props.value}</span>
 					<svg class={s.dropdownChevron} width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
 						<path d="M4 6l4 4 4-4" />
 					</svg>
 				</button>
-				<Show when={open()}>
+				<Show when={open() && !props.disabled}>
 					<div ref={listRef} class={s.dropdownList}>
-						<Show when={localRefs().length > 0}>
-							<div class={s.dropdownSectionHeader}>{t("createWorktree.localBranches", "Local")}</div>
-							<For each={localRefs()}>{renderItem}</For>
-						</Show>
-						<Show when={remoteRefs().length > 0}>
-							<div class={s.dropdownSectionHeader}>{t("createWorktree.remoteBranches", "Remote")}</div>
-							<For each={remoteRefs()}>{renderItem}</For>
+						<input
+							ref={searchRef}
+							type="text"
+							class={s.dropdownSearch}
+							data-testid="base-ref-search"
+							value={query()}
+							onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+							onKeyDown={handleSearchKeydown}
+							placeholder={t("createWorktree.searchRefs", "Search branches...")}
+							autocomplete="off"
+							autocorrect="off"
+							spellcheck={false}
+						/>
+						<Show
+							when={filteredRefs().length > 0}
+							fallback={<div class={s.dropdownEmpty}>{t("createWorktree.noRefsMatch", "No refs match")}</div>}
+						>
+							<Show when={filteredLocalRefs().length > 0}>
+								<div class={s.dropdownSectionHeader}>{t("createWorktree.localBranches", "Local")}</div>
+								<For each={filteredLocalRefs()}>{(option, i) => renderItem(option, i)}</For>
+							</Show>
+							<Show when={filteredRemoteRefs().length > 0}>
+								<div class={s.dropdownSectionHeader}>{t("createWorktree.remoteBranches", "Remote")}</div>
+								<For each={filteredRemoteRefs()}>
+									{(option, i) => renderItem(option, () => filteredLocalRefs().length + i())}
+								</For>
+							</Show>
 						</Show>
 					</div>
 				</Show>
@@ -106,7 +275,13 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 	const [baseRef, setBaseRef] = createSignal("");
 	const [error, setError] = createSignal<string | null>(null);
 	const [isCreating, setIsCreating] = createSignal(false);
+	// -1 = no keyboard cursor: Enter creates with whatever's typed, same as today.
+	// A non-negative index means "highlighted, not yet accepted" — Enter accepts
+	// that row (populates the input) rather than submitting; a second Enter then
+	// creates, matching the existing click-to-populate mouse behavior.
+	const [branchIndex, setBranchIndex] = createSignal(-1);
 	let inputRef: HTMLInputElement | undefined;
+	let branchListRef: HTMLDivElement | undefined;
 
 	/** Available base refs — first entry is the default */
 	const availableBaseRefs = () => props.baseRefs ?? [];
@@ -126,6 +301,27 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 		return props.existingBranches.filter((b) => b.toLowerCase().includes(query));
 	});
 
+	// Indices into filteredBranches() that are selectable (i.e. don't already have
+	// a worktree) — the keyboard cursor only ever lands on one of these.
+	const selectableIndices = createMemo(() =>
+		filteredBranches()
+			.map((_, i) => i)
+			.filter((i) => !props.worktreeBranches.includes(filteredBranches()[i])),
+	);
+
+	const moveBranchCursor = (delta: 1 | -1) => {
+		const selectable = selectableIndices();
+		if (selectable.length === 0) return;
+		const pos = selectable.indexOf(branchIndex());
+		if (delta > 0) {
+			setBranchIndex(selectable[pos < 0 ? 0 : Math.min(pos + 1, selectable.length - 1)]);
+		} else if (pos <= 0) {
+			setBranchIndex(-1);
+		} else {
+			setBranchIndex(selectable[pos - 1]);
+		}
+	};
+
 	// Path preview
 	const pathPreview = createMemo(() => {
 		const name = trimmedName();
@@ -134,19 +330,53 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 		return `${dir}/${sanitizeForPath(name)}/`;
 	});
 
+	// Truncated for display only — shows the tail (the branch-derived directory
+	// name), the informative part, rather than the shared worktrees-dir prefix.
+	// A fixed character budget (not CSS text-overflow / direction:rtl) is used
+	// deliberately: the common "ellipsize at the start" CSS trick reorders the
+	// text via the Unicode Bidi Algorithm, which can visually scramble digit
+	// runs in an otherwise strong-LTR string — e.g. a path ending in a
+	// date/number segment (`.../worktree-2026-08-28`) — even with no RTL
+	// characters anywhere in it. Truncating the actual string sidesteps that
+	// entirely; text-overflow: ellipsis in the CSS stays only as a backstop.
+	const PATH_PREVIEW_MAX_CHARS = 48;
+	const pathPreviewDisplay = createMemo(() => {
+		const full = pathPreview();
+		if (full.length <= PATH_PREVIEW_MAX_CHARS) return full;
+		return `…${full.slice(full.length - PATH_PREVIEW_MAX_CHARS + 1)}`;
+	});
+
 	// Reset state when dialog opens
 	createEffect(() => {
 		if (props.visible) {
 			setBranchName("");
-			setBaseRef(availableBaseRefs()[0]?.name ?? "");
+			setBaseRef(props.defaultBaseRef || availableBaseRefs()[0]?.name || "");
 			setError(null);
-			setTimeout(() => {
+			setBranchIndex(-1);
+			// Cleared on re-close/unmount so a stale timer can't fire `.focus()` against
+			// a detached input after a rapid close-then-reopen (surfaced by tests that
+			// toggle `visible` more than once).
+			const focusTimer = setTimeout(() => {
 				if (inputRef) {
 					inputRef.focus();
 				}
 			}, 0);
+			onCleanup(() => clearTimeout(focusTimer));
 		}
 	});
+
+	// Scroll the keyboard-highlighted branch row into view
+	createEffect(() => {
+		const idx = branchIndex();
+		if (!branchListRef || idx < 0) return;
+		branchListRef.querySelector(`[data-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
+	});
+
+	const acceptHighlightedBranch = () => {
+		const branch = filteredBranches()[branchIndex()];
+		setBranchIndex(-1);
+		if (branch) handleBranchClick(branch);
+	};
 
 	// Keyboard handling
 	createEffect(() => {
@@ -157,9 +387,34 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 		registerModal(props.onClose);
 
 		const handleKeydown = (e: KeyboardEvent) => {
-			if (e.key === "Enter") {
-				e.preventDefault();
-				handleCreate();
+			// Anything inside the base-ref dropdown (trigger or search box) handles its
+			// own Enter/Arrow keys — see BaseRefDropdown's handleSearchKeydown. Committing
+			// a ref, or opening/closing that list, must not also drive the branch list or
+			// submit the dialog. Solid delegates "keydown" through a single document-level
+			// listener (see solid-js/web's DelegatedEvents), so a plain e.stopPropagation()
+			// inside the dropdown can't reliably preempt this sibling listener on the same
+			// node — checking the target's ancestry here is the robust fix.
+			if (e.target instanceof Element && e.target.closest(`.${s.dropdownWrapper}`)) return;
+
+			switch (e.key) {
+				case "ArrowDown":
+					e.preventDefault();
+					moveBranchCursor(1);
+					break;
+				case "ArrowUp":
+					e.preventDefault();
+					moveBranchCursor(-1);
+					break;
+				case "Enter":
+					e.preventDefault();
+					if (branchIndex() >= 0) {
+						acceptHighlightedBranch();
+					} else {
+						handleCreate();
+					}
+					break;
+				default:
+					break;
 			}
 		};
 
@@ -204,6 +459,7 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 	const handleInputChange = (e: Event) => {
 		const value = (e.target as HTMLInputElement).value;
 		setBranchName(value);
+		setBranchIndex(-1);
 		if (error()) setError(null);
 	};
 
@@ -252,42 +508,67 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 							</Show>
 						</div>
 
-						<Show when={availableBaseRefs().length > 1 && !isExistingBranch()}>
-							<BaseRefDropdown value={baseRef()} options={availableBaseRefs()} onChange={setBaseRef} />
+						<Show when={availableBaseRefs().length > 1}>
+							<BaseRefDropdown
+								value={baseRef()}
+								options={availableBaseRefs()}
+								onChange={setBaseRef}
+								disabled={isExistingBranch()}
+							/>
 						</Show>
 
-						<div class={s.branchList}>
-							<For each={filteredBranches()}>
-								{(branch) => {
-									const isDisabled = () => props.worktreeBranches.includes(branch);
-									return (
-										<div
-											class={`${s.branchItem} ${isDisabled() ? s.disabled : ""} ${trimmedName() === branch ? s.selected : ""}`}
-											onClick={() => handleBranchClick(branch)}
-										>
-											<span>{branch}</span>
-											<Show when={isDisabled()}>
-												<span class={s.worktreeTag}>{t("createWorktree.hasWorktree", "(has worktree)")}</span>
-											</Show>
-										</div>
-									);
-								}}
-							</For>
+						<div class={s.branchList} ref={branchListRef}>
+							<Show
+								when={filteredBranches().length > 0}
+								fallback={
+									<div class={s.dropdownEmpty}>{t("createWorktree.noBranchesMatch", "No existing branches match")}</div>
+								}
+							>
+								<For each={filteredBranches()}>
+									{(branch, index) => {
+										const isDisabled = () => props.worktreeBranches.includes(branch);
+										return (
+											<div
+												data-index={index()}
+												data-testid="worktree-branch-item"
+												class={`${s.branchItem} ${isDisabled() ? s.disabled : ""} ${trimmedName() === branch ? s.selected : ""} ${
+													index() === branchIndex() ? s.branchItemHighlighted : ""
+												}`}
+												onClick={() => handleBranchClick(branch)}
+												onMouseEnter={() => setBranchIndex(isDisabled() ? branchIndex() : index())}
+											>
+												<span>
+													<HighlightMatch text={branch} query={trimmedName()} />
+												</span>
+												<Show when={isDisabled()}>
+													<span class={s.worktreeTag}>{t("createWorktree.hasWorktree", "(has worktree)")}</span>
+												</Show>
+											</div>
+										);
+									}}
+								</For>
+							</Show>
 						</div>
 
-						<Show when={trimmedName()}>
-							<div class={s.statusLine}>
-								{isExistingBranch()
-									? t("createWorktree.statusExisting", "Will check out existing branch into new worktree")
-									: t("createWorktree.statusNew", "Will create new branch and worktree")}
-							</div>
-						</Show>
+						{/* Wrapped in a fixed-min-height footer (rather than making each row
+						    always-mounted) so the dialog's overall height stays constant as
+						    these rows individually appear/disappear/change per keystroke —
+						    each row keeps its original conditional-Show semantics. */}
+						<div class={s.previewFooter}>
+							<Show when={trimmedName()}>
+								<div class={s.statusLine}>
+									{isExistingBranch()
+										? t("createWorktree.statusExisting", "Will check out existing branch into new worktree")
+										: t("createWorktree.statusNew", "Will create new branch and worktree")}
+								</div>
+							</Show>
 
-						<Show when={pathPreview()}>
-							<div class={s.pathPreview}>{pathPreview()}</div>
-						</Show>
+							<Show when={pathPreview()}>
+								<div class={s.pathPreview}>{pathPreviewDisplay()}</div>
+							</Show>
 
-						{error() && <p class={d.error}>{error()}</p>}
+							{error() && <p class={`${d.error} ${s.errorLine}`}>{error()}</p>}
+						</div>
 					</div>
 					<div class={d.actions}>
 						<button class={d.cancelBtn} onClick={props.onClose}>
