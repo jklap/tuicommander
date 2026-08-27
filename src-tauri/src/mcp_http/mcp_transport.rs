@@ -7145,6 +7145,7 @@ mod tests {
             indexer_throttle: std::sync::Arc::new(crate::content_index::IndexerThrottle::default()),
             slash_mode: dashmap::DashMap::new(),
             last_output_ms: dashmap::DashMap::new(),
+            scrollback_capture_marks: dashmap::DashMap::new(),
             last_input_ms: dashmap::DashMap::new(),
             shell_states: dashmap::DashMap::new(),
             terminal_rows: dashmap::DashMap::new(),
@@ -7183,6 +7184,9 @@ mod tests {
             ),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
+            window_geometry: crate::window_geometry::WindowGeometryTracker::new(
+                crate::window_geometry::WindowGeometry::default(),
+            ),
             server_start_time: std::time::Instant::now(),
             term_aliases: dashmap::DashMap::new(),
             term_alias_counters: dashmap::DashMap::new(),

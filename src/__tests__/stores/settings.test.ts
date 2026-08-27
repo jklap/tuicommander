@@ -158,6 +158,10 @@ describe("settingsStore", () => {
 				expect(store.state.confirmBeforeQuit).toBe(true);
 				expect(store.state.confirmBeforeClosingTab).toBe(true);
 				expect(store.state.splitTabMode).toBe("separate");
+				expect(store.state.restoreWindowGeometry).toBe(true);
+				expect(store.state.restoreShellTerminals).toBe(true);
+				expect(store.state.restoreScrollback).toBe(false);
+				expect(store.state.restoreScrollbackLines).toBe(1000);
 			});
 		});
 	});
@@ -523,6 +527,58 @@ describe("settingsStore", () => {
 			});
 		});
 
+		it("loads window-geometry / session-restore fields from Rust config", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				shell: null,
+				font_family: "JetBrains Mono",
+				font_size: 14,
+				theme: "vscode-dark",
+				mcp_server_enabled: false,
+				ide: "vscode",
+				default_font_size: 13,
+				restore_window_geometry: false,
+				restore_shell_terminals: false,
+				restore_scrollback: true,
+				restore_scrollback_lines: 2500,
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.restoreWindowGeometry).toBe(false);
+				expect(store.state.restoreShellTerminals).toBe(false);
+				expect(store.state.restoreScrollback).toBe(true);
+				expect(store.state.restoreScrollbackLines).toBe(2500);
+			});
+		});
+
+		it("respects an explicit persisted 0 for restoreScrollbackLines (not the 1000 default)", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				shell: null,
+				font_family: "JetBrains Mono",
+				font_size: 14,
+				theme: "vscode-dark",
+				mcp_server_enabled: false,
+				ide: "vscode",
+				default_font_size: 13,
+				restore_scrollback_lines: 0,
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.restoreScrollbackLines).toBe(0);
+			});
+		});
+
+		it("falls back to defaults when window-geometry / session-restore fields are absent from config", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.state.restoreWindowGeometry).toBe(true);
+				expect(store.state.restoreShellTerminals).toBe(true);
+				expect(store.state.restoreScrollback).toBe(false);
+				expect(store.state.restoreScrollbackLines).toBe(1000);
+			});
+		});
+
 		it("migrates legacy IDE from localStorage", async () => {
 			localStorage.setItem("tui-commander-default-ide", "cursor");
 			mockInvoke.mockResolvedValueOnce({
@@ -665,6 +721,75 @@ describe("settingsStore", () => {
 			testInScope(() => {
 				store.setConfirmBeforeClosingTab(false);
 				expect(store.state.confirmBeforeClosingTab).toBe(false);
+			});
+		});
+	});
+
+	describe("setRestoreWindowGeometry()", () => {
+		it("updates state and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setRestoreWindowGeometry(false);
+				expect(store.state.restoreWindowGeometry).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ restore_window_geometry: false }),
+				});
+			});
+		});
+	});
+
+	describe("setRestoreShellTerminals()", () => {
+		it("updates state and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setRestoreShellTerminals(false);
+				expect(store.state.restoreShellTerminals).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ restore_shell_terminals: false }),
+				});
+			});
+		});
+	});
+
+	describe("setRestoreScrollback()", () => {
+		it("updates state and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setRestoreScrollback(true);
+				expect(store.state.restoreScrollback).toBe(true);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ restore_scrollback: true }),
+				});
+			});
+		});
+	});
+
+	describe("setRestoreScrollbackLines()", () => {
+		it("updates state and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setRestoreScrollbackLines(2000);
+				expect(store.state.restoreScrollbackLines).toBe(2000);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ restore_scrollback_lines: 2000 }),
+				});
+			});
+		});
+
+		it("clamps to a non-negative rounded integer", () => {
+			testInScope(() => {
+				store.setRestoreScrollbackLines(-5.7);
+				expect(store.state.restoreScrollbackLines).toBe(0);
+				store.setRestoreScrollbackLines(123.6);
+				expect(store.state.restoreScrollbackLines).toBe(124);
 			});
 		});
 	});

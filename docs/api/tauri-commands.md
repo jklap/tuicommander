@@ -56,6 +56,12 @@ injection claim, writer, input FSM, and output ring, then keeps the MCP response
 open for a bounded terminal-movement receipt. Desktop `write_pty` and
 `write_pty_parts` remain raw input primitives and make no acknowledgement claim.
 
+## Scrollback Restore (`scrollback_store.rs`)
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `clear_saved_scrollback` | `session: Option<String>` | `()` | Delete saved scrollback for one `tuic_session`, or every saved tab when `session` is omitted |
+
 ## Generators (`generators.rs`)
 
 | Command | Args | Returns | Description |

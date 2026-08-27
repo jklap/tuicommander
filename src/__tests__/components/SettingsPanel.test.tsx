@@ -159,14 +159,14 @@ describe("SettingsPanel", () => {
 		expect(labels).not.toContain("Groups");
 	});
 
-	it("shows the Rendering/Behavior/Blocks groups when the Terminal nav item is active", () => {
+	it("shows the Rendering/Behavior/Blocks/Session Restore groups when the Terminal nav item is active", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		const navItems = container.querySelectorAll(".navItem");
 		const terminalItem = Array.from(navItems).find((n) => n.textContent === "Terminal")!;
 		fireEvent.click(terminalItem);
 
 		const headings = Array.from(container.querySelectorAll(".section h3")).map((h) => h.textContent);
-		expect(headings).toEqual(["Rendering", "Behavior", "Blocks"]);
+		expect(headings).toEqual(["Rendering", "Behavior", "Blocks", "Session Restore"]);
 
 		const toggleLabels = Array.from(container.querySelectorAll(".toggle span")).map((n) => n.textContent);
 		expect(toggleLabels).toContain("Copy on select");
@@ -175,6 +175,8 @@ describe("SettingsPanel", () => {
 		expect(toggleLabels).toContain("Show block marks");
 		expect(toggleLabels).toContain("Show prompt marks");
 		expect(toggleLabels).toContain("Enable block folding");
+		expect(toggleLabels).toContain("Restore open terminals on launch");
+		expect(toggleLabels).toContain("Save terminal scrollback");
 	});
 
 	it("shows the Selection nav item and its content when active", () => {

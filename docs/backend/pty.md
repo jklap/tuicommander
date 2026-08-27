@@ -329,6 +329,22 @@ Each session gets its own `VtLogBuffer` stored in `AppState.vt_log_buffers: Dash
 
 `TerminalGrid::get_selection_text()` is the canonical desktop and HTTP selection path. It reads absolute scrollback coordinates, skips wide-character spacer cells, removes row padding, and joins rows carrying Alacritty's `WRAPLINE` flag so a visual wrap does not become a newline. Before returning clipboard text, it removes only contiguous multi-line Claude visual gutters with the exact `NBSP NBSP ▎` prefix. A lone marker, ASCII-indented block character, and non-breaking spaces inside the selected content remain unchanged.
 
+### Scrollback restore
+
+**Module:** `src-tauri/src/scrollback_store.rs`. Opt-in via `AppConfig::restore_scrollback` (default off) — persists a terminal's recent output to disk so it can be replayed above a fresh prompt after an app restart. Off by default because output routed through a terminal can contain secrets, and this is stored as plaintext JSON.
+
+**Format:** one file per tab at `<config dir>/scrollback/<tuic_session>.json` — `StoredScrollback { version, saved_at_ms, cols, lines: Vec<LogLine> }`, keyed by the tab's stable `tuic_session` UUID (the same identity `SavedTerminal.tuicSession` carries through the existing terminal-tab restore in `repositories.ts`), not the ephemeral PTY `session_id`.
+
+**Capture** (`capture_session`): reads a session's `VtLogBuffer` — the durable log tail plus unflushed on-screen rows, capped at `AppConfig::restore_scrollback_lines` (default 1000) — and writes it via `AppState.scrollback_capture_marks: DashMap<String, usize>` deduplication, so an unchanged buffer is never rewritten. Three call sites, all no-ops when the setting is off:
+
+1. **Periodic sweep** (`sweep_all`) — a 30s `tauri::async_runtime` interval over every entry in `AppState.live_pty_by_tuic_session`.
+2. **On exit** — inside `tombstone_transient_cleanup()`, before `remove_live_session_state()` unbinds the `tuic_session` mapping. This is the single hook point for all three exit paths (`close_pty_core`, `kill_pty_core`, and a PTY exiting on its own — `mark_session_exited`), since all three call `tombstone_transient_cleanup()`.
+3. **`RunEvent::Exit`** — a final `sweep_all()` in case the 30s interval hasn't ticked since the last change.
+
+**Replay** (`log_lines_to_ansi` in `state.rs` + `replay_bytes`): renders saved `LogLine`s back into SGR-escaped ANSI bytes (full reset before each span's own attributes — colors use the short `3x`/`4x`/`9x`/`10x` SGR forms below index 16, `38;5;n`/`48;5;n` above), appends a dim `───── restored from previous session ─────` separator, then feeds the result through `VtLogBuffer::process()` in `create_pty` — the same entry point live PTY output uses, so canvas rendering, search, selection, and `ai_terminal_read_screen` all see restored content with no separate code path. `PtyConfig.restore_scrollback` is the per-call flag the frontend passes; it no-ops when nothing was saved for that `tuic_session`.
+
+**Cleanup:** `prune(max_age)` runs once at startup, deleting files untouched for 7 days — the backstop against the directory growing forever from tabs closed without an explicit clear. `clear`/`clear_all` back the `clear_saved_scrollback` Tauri command and `DELETE /scrollback` HTTP route (`mcp_http/config_routes.rs`).
+
 ## OSC 7 CWD Tracking
 
 Shells that emit OSC 7 (`\x1b]7;file://hostname/path\x07`) report the current working directory after each command. TUICommander uses this to keep the Rust-side `PtySession.cwd` in sync:

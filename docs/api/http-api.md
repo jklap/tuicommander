@@ -983,6 +983,8 @@ POST /config/note-assets/delete       { noteId }           -> { ok }
 POST /config/note-assets/delete-batch { noteIds }          -> { ok }
 GET  /config/themes                          -> ThemeEntry[]
 POST /config/project-mcp-upstreams { repoPath, upstreamNames? } -> { ok }
+DELETE /scrollback              { session?: string | null } -> { ok }   [guarded]
+  (clears one tab's saved scrollback by tuic_session, or every saved tab when omitted)
 POST /exec/shell-script        { scriptContent, timeoutMs, repoPath } -> string  [guarded]
 GET  /audio/output-devices                   -> AudioOutputDevice[] (empty on remote)
 POST /agent/discover-session   { agentType, cwd, claimedIds, agentPid?, envOverrides } -> string|null

@@ -455,4 +455,10 @@ export const TIPS: Tip[] = [
 			"Per-repo on/off settings have a third position between On and Off — click it to inherit the global default instead of overriding it, without resetting every other setting for that repo.",
 		shortcut: null,
 	},
+	{
+		feature: "Restore Terminal Scrollback",
+		description:
+			"Enable Save terminal scrollback in Settings → Terminal to see a restored tab's recent output above a fresh prompt after relaunching — off by default since it's saved as plain text.",
+		shortcut: null,
+	},
 ];

@@ -38,7 +38,8 @@
 - Up to 50 concurrent PTY sessions (configurable in Rust `MAX_SESSIONS`)
 - Each tab runs an independent pseudo-terminal with the user's shell
 - Terminals are never unmounted — hidden tabs stay alive with full scroll history
-- Session persistence across app restarts (lazy restore on branch click); only agent tabs are restored — plain shell tabs are discarded and a fresh terminal is spawned instead
+- Session persistence across app restarts (lazy restore on branch click) — every tab a branch had open is restored, each with a fresh live shell in its saved directory (**Restore open terminals on launch** in Settings → Terminal, default on; off restores only agent tabs)
+- Terminal scrollback restore (opt-in, **Save terminal scrollback** in Settings → Terminal, default off since it writes plaintext to disk): a restored tab shows its recent output above a live prompt, separated by a dim "restored from previous session" marker; capped by **Scrollback lines to save** (default 1000) and clearable via a settings button
 - Orchestrated PTYs show a task description above the terminal alongside the last submitted user prompt; MCP callers can supply `pty_description`, while spawn-only orchestration schemas fall back to a compact summary of the task prompt without changing agent launch or prompt-delivery behavior
 - Managed-agent automation submits a command with one MCP `session action=submit` call: an idle empty composer is claimed atomically, raw-mode text/Enter framing cannot interleave with another writer, and the same response reports terminal acknowledgement or a precise non-retryable timeout. The action never queues or overwrites a draft; raw `session action=input` remains write-only compatibility
 - Agent session restore shows a clickable banner ("Agent session was active — click to resume") instead of auto-injecting the resume command; Space/Enter resumes, other keys dismiss
@@ -1227,11 +1228,13 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 
 ### 11.1 General
 - Language, Default IDE, Shell
+- Window: restore size and position on launch (desktop app only, default on)
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
 - Power management: prevent sleep when busy
 - Updates: auto-check, check now
 - Git integration: auto-show PR popover
 - Terminal: copy-on-select toggle (auto-copy selection to clipboard)
+- Terminal session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback
 - Experimental Features: master toggle + per-feature sub-flags (AI Chat, AI Triage, AI Watchers, Scrollback Reflow)
 - Repository defaults: base branch, file handling, setup/run scripts, worktree defaults (storage strategy, prompt on create, etc.)
 
@@ -1311,6 +1314,8 @@ All data persisted to platform config directory via Rust:
 - `providers.json` — provider registry (providers, models, slot assignments)
 - `.tuic.json` — repo-root team config (read-only from app, highest precedence for overridable fields)
 - `claude-usage-cache.json` — incremental session transcript parse cache
+- `window-geometry.json` — main window size/position/maximized/fullscreen, owned outside `tauri-plugin-window-state` (`src-tauri/src/window_geometry.rs`)
+- `scrollback/<tuic_session>.json` — one file per tab's saved scrollback, opt-in (see `docs/backend/pty.md` § Scrollback restore)
 
 ### 12.2 Hydration Safety
 - `save()` blocks before `hydrate()` completes to prevent data loss

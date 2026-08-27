@@ -33,6 +33,9 @@ export interface PtyConfig {
 	 *  registered before the create RPC so the `session-created` SSE echo is
 	 *  recognized as locally-created and does not spawn a duplicate "PTY:" tab. */
 	session_id?: string;
+	/** Seed the new PTY with `tuic_session`'s saved scrollback, if any exists.
+	 *  A no-op when nothing was saved for it — safe to pass on every create. */
+	restore_scrollback?: boolean;
 }
 
 /** PTY exit event data */

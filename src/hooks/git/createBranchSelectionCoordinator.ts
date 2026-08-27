@@ -5,6 +5,7 @@ import { paneLayoutStore } from "../../stores/paneLayout";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { verifyAndBuildResumeCommand } from "../../utils/agentSession";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
@@ -236,9 +237,14 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 					}
 				}
 			} else if (branch?.savedTerminals && branch.savedTerminals.length > 0) {
-				// Only restore agent tabs with resumable sessions — plain shell tabs
-				// have nothing meaningful to resume and would just be empty shells.
-				const restorableTerminals = branch.savedTerminals.filter((t) => t.agentType != null);
+				// Agent tabs restore with a resume banner (verified below). Shell
+				// tabs restore as a fresh live shell in their saved cwd when the
+				// setting is on; otherwise they're dropped — they have no session
+				// to resume and would just be empty shells duplicating the
+				// fallback spawn below.
+				const restorableTerminals = settingsStore.state.restoreShellTerminals
+					? branch.savedTerminals
+					: branch.savedTerminals.filter((t) => t.agentType != null);
 				// Clear savedTerminals (consume-once) regardless of filter result
 				repositoriesStore.setBranch(repoPath, branchName, { savedTerminals: [] });
 
@@ -284,11 +290,15 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 						paneLayoutStore.reset();
 					}
 
-					// Second pass: verify resume commands in parallel (non-blocking)
+					// Second pass: verify resume commands in parallel (non-blocking).
+					// Shell tabs have no agentType and nothing to resume — a restored
+					// shell is just a fresh live prompt in its saved cwd.
 					Promise.all(
 						restoredIds.map(async ({ id, terminal }) => {
+							const agentType = terminal.agentType;
+							if (!agentType) return;
 							const resumeCmd = await verifyAndBuildResumeCommand(
-								terminal.agentType!,
+								agentType,
 								terminal.cwd,
 								terminal.tuicSession,
 								terminal.agentSessionId,
@@ -303,7 +313,8 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 						}),
 					).catch((e) => appLogger.warn("terminal", "Resume command verification failed", { error: String(e) }));
 				} else {
-					// All saved tabs were plain shells — spawn a fresh terminal
+					// Only reachable with restoreShellTerminals off and every saved tab
+					// a plain shell — nothing left worth restoring, spawn a fresh terminal.
 					paneLayoutStore.reset();
 					await handleAddTerminalToBranch(repoPath, branchName);
 				}

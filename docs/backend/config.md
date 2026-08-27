@@ -123,6 +123,10 @@ cleartext copy does not survive on disk.
 
 | `confirm_before_quit` | `bool` | `true` | Show quit confirmation |
 | `confirm_before_closing_tab` | `bool` | `true` | Show tab close confirmation |
+| `restore_window_geometry` | `bool` | `true` | Restore the main window's size and position from the last session on launch |
+| `restore_shell_terminals` | `bool` | `true` | Restore plain shell tabs (not just agent tabs) from the last session on launch |
+| `restore_scrollback` | `bool` | `false` | Persist each terminal's recent scrollback to disk and replay it above a fresh prompt on restore. Output is stored as plaintext in the config directory |
+| `restore_scrollback_lines` | `u32` | `1000` | Maximum scrollback lines persisted per terminal when `restore_scrollback` is enabled |
 | `copy_on_select` | `bool` | `true` | Auto-copy terminal selection to clipboard |
 | `osc52_clipboard` | `bool` | `true` | Honor OSC 52 clipboard-write sequences from terminal output (a notice shows on each write; disable to ignore them) |
 | `show_last_prompt` | `bool` | `true` | Show last prompt overlay bar at the top of the terminal |
