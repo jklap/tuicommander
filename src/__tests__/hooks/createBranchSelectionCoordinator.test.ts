@@ -56,6 +56,28 @@ describe("createBranchSelectionCoordinator", () => {
 		});
 	});
 
+	// `crypto.randomUUID` is only defined in a secure context (https, or
+	// localhost). TUIC is also reached over plain http on a LAN address, where
+	// a bare call throws instead of minting the terminal's `tuicSession` id.
+	it("still adds a terminal when crypto.randomUUID is unavailable (non-secure-context remote clients)", async () => {
+		const realCrypto = globalThis.crypto;
+		vi.stubGlobal("crypto", {});
+		try {
+			await testInScope(async () => {
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setBranch("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+				repositoriesStore.setActiveBranch("/Gits/alpha", "main");
+
+				const id = await makeCoordinator().handleAddTerminalToBranch("/Gits/alpha", "main");
+
+				expect(id).toBeTruthy();
+				expect(terminalsStore.get(id!)?.tuicSession).toBeTruthy();
+			});
+		} finally {
+			vi.stubGlobal("crypto", realCrypto);
+		}
+	});
+
 	/**
 	 * `cwd: null` is not "the default directory" — the backend spawns the PTY in the
 	 * user's HOME. A workspace row whose `worktreePath` was never filled in (a row
