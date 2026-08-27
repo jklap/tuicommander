@@ -1024,7 +1024,7 @@ re-derived later.
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
 - Archived worktrees remain usable Git checkouts under `__archived`, including HEAD, reflogs, and initialized submodule refs; locked checkouts are left in place and archived paths are hidden from the active workspace list.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools
-- Remove via sidebar `×` button or context menu (with confirmation)
+- Remove via sidebar `×` button or context menu (with confirmation). A workspace with a terminal attached gets a second, Cancel-by-default "in use" confirmation naming what's attached, shown BEFORE any terminal is closed
 - **Warm linked worktrees**: every workspace shares refs and objects with the parent. After `git worktree add`, ignored directories such as `node_modules`, `target`, and `.venv` are copied with clonefile/reflink when supported; `.tmp` and `.mdkb` directories, tracked paths, ignored files, nested repositories, and the destination ancestor are never copied
   - Capability is measured against the actual source/destination pair. Unsupported filesystems produce one warning and a valid cold worktree
   - Read-only copied files and directories gain owner write permission in the new worktree only; symlinks are not followed
