@@ -42,9 +42,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	appearance: { dynamic: 0, orphans: 0 },
 	notifications: { dynamic: 0, orphans: 0 },
 	terminal: { dynamic: 0, orphans: 0 },
-	// SelectionTab: the per-rule "Enabled" and per-action "Default" labels, which wrap a
-	// nested input inside a runtime-rendered rule card (no stable scroll target).
-	selection: { dynamic: 2, orphans: 0 },
+	// SelectionTab: the per-rule "Enabled" and per-action "Default" labels wrap a nested
+	// input (dynamic); the rule editor's Name/Pattern/Precision fields live in a
+	// collapsed, per-rule row component (orphans) — no stable scroll target for either.
+	selection: { dynamic: 2, orphans: 3 },
 	// The `<label>{section.title}</label>` over each group of the shortcut list —
 	// the groups and their bindings are built at runtime, so the page is indexed
 	// by its heading, the global hotkey and the plugin-commands group only.
