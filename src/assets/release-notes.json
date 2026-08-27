@@ -191,5 +191,18 @@
       "Vague OSC 777 notifications no longer latch a permanent awaiting-input badge; only explicit permission prompts stay confident."
     ],
     "date": "2026-08-12"
+  },
+  "1.7.5": {
+    "highlights": [
+      "Confirmation prompts from agents now reach the desktop, every browser tab, and the phone with push, first answer wins.",
+      "Installing the MCP bridge preserves your Zed, VS Code, and opencode settings byte-for-byte, with backups and a remove-all button.",
+      "Browser and PWA clients gain working AI chat history, Command Palette, plugin watcher matches, and reliable event delivery.",
+      "Agent state is more accurate: idle root shells, awaiting-input, and stuck badges no longer misreport work.",
+      "Git, search, dictation, and Build Cleaner panels now show current state instead of results from before your last action.",
+      "Long AI answers and phone terminal views stay responsive as output grows, rendering only what changed.",
+      "Session history, repository edits, and terminal command blocks survive concurrent saves, restarts, and multi-window use.",
+      "Terminal links with trailing punctuation open correctly, and copying Claude output no longer pastes its quote gutter."
+    ],
+    "date": "2026-08-27"
   }
 }
