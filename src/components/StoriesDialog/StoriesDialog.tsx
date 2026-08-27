@@ -24,6 +24,7 @@ import { HttpRpcError, isTauri } from "../../transport";
 import type { PlanState, StoryStatus, StoryType, StoryVisibility } from "../../types/stories.gen";
 import { openFileAction } from "../../utils/filePreview";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { randomId } from "../../utils/randomId";
 import d from "../shared/dialog.module.css";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
@@ -639,7 +640,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			const reply = await callRun({
 				action: "command",
 				run_id: selected.id,
-				command_id: crypto.randomUUID(),
+				command_id: randomId(""),
 				expected_sequence: selected.sequence,
 				command,
 			});
@@ -697,7 +698,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			);
 			setPublishedChoices(choices);
 			setWorkflowChoice(choices[0]?.id ?? "");
-			startRequestId = crypto.randomUUID();
+			startRequestId = randomId("");
 			if (open) setStartOpen(true);
 			await checkStartReadiness(choices[0]?.id ?? "");
 		} catch (cause) {
@@ -1270,7 +1271,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									value={workflowChoice()}
 									onChange={(event) => {
 										setWorkflowChoice(event.currentTarget.value);
-										startRequestId = crypto.randomUUID();
+										startRequestId = randomId("");
 										void checkStartReadiness(event.currentTarget.value);
 									}}
 								>

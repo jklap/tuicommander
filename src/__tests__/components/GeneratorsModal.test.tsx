@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GeneratorsModal } from "../../components/GeneratorsModal/GeneratorsModal";
+import { appLogger } from "../../stores/appLogger";
 import { mockInvoke } from "../mocks/tauri";
 import "../mocks/tauri";
 
@@ -71,4 +72,16 @@ it("catches Regenerate and Copy becoming enabled before a generation settles", a
 	await waitFor(() => expect(view.getByRole("button", { name: "Regenerate" })).not.toBeDisabled());
 	fireEvent.click(view.getByRole("button", { name: "Regenerate" }));
 	await waitFor(() => expect(mockInvoke).toHaveBeenCalledTimes(2));
+});
+
+it("catches a denied clipboard write showing Copied! instead of logging it", async () => {
+	const err = new DOMException("Write permission denied.", "NotAllowedError");
+	writeClipboard.mockRejectedValueOnce(err);
+	const logError = vi.spyOn(appLogger, "error");
+	const view = render(() => <GeneratorsModal onClose={() => {}} />);
+	await waitFor(() => expect(view.getByRole("button", { name: "Copy" })).not.toBeDisabled());
+	fireEvent.click(view.getByRole("button", { name: "Copy" }));
+	await waitFor(() => expect(logError).toHaveBeenCalledWith("app", "Failed to copy generated value", err));
+	expect(view.queryByRole("button", { name: "Copied!" })).toBeNull();
+	logError.mockRestore();
 });
