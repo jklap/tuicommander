@@ -11,6 +11,7 @@ import {
 	type SshAgentInfo,
 	type SshHostStatus,
 } from "../../../../stores/remoteConnections";
+import { randomId } from "../../../../utils/randomId";
 import s from "../../Settings.module.css";
 
 // ---------------------------------------------------------------------------
@@ -164,7 +165,9 @@ export const RemoteMachinesPanel: Component = () => {
 				: { type: "Direct", url: f.directUrl.trim() };
 
 		const conn: RemoteConnection = {
-			id: crypto.randomUUID(),
+			// No prefix: the backend's `validate()` requires `id` to be a bare
+			// UUID (`Uuid::parse_str`), rejecting anything else.
+			id: randomId(""),
 			name,
 			transport,
 			auth_username: f.authUsername.trim(),
