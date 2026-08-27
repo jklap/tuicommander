@@ -7288,6 +7288,7 @@ mod tests {
             tailscale_state: parking_lot::RwLock::new(
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
+            self_signed_active: std::sync::atomic::AtomicBool::new(false),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             window_geometry: crate::window_geometry::WindowGeometryTracker::new(

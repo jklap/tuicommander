@@ -96,6 +96,39 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] **[MANUAL]** Switch the main checkout to a non-main branch (e.g. `git checkout -b tmp` in the main repo directory, not a linked worktree). Confirm the sidebar's branch icon turns the new accent/blue color, distinct from the main branch's yellow star and a separate linked worktree's green fork icon. Screenshot in both light and dark themes.
 - [ ] **[MANUAL]** With that same off-main main-worktree row visible, select/focus it (and, separately, a different row) and confirm the new accent-blue icon color doesn't get visually confused with the sidebar's existing accent-colored active/selected-row indicator — i.e. an unselected row showing this color shouldn't read as "currently selected."
 
+## Self-signed HTTPS fallback for remote/LAN access (2026-08-27, **Rust change — needs `make dev` restart**)
+
+Remote access now defaults to HTTPS even without Tailscale: `provision_tls_config` falls back to
+a self-signed cert (`src-tauri/src/selfsigned.rs`) covering `localhost` + current LAN IPs when
+Tailscale HTTPS isn't active, plain `http://` on the same port 301-redirects to `https://` while
+that fallback is serving, and Settings > Services > Self-Signed HTTPS shows status/fingerprint/a
+Regenerate action. Covered by 23 Rust unit tests (cert generation/caching/expiry/IP-coverage,
+concurrent-regeneration serialization, the connect-URL scheme decision, `get_self_signed_cert_status`/
+`regenerate_self_signed_cert` command wiring) and `cargo nextest run --workspace` (5269 tests),
+but none of that exercises a real TLS handshake, a real browser's certificate-warning UX, or the
+Settings panel's actual rendering — needs a live `make dev` restart to check:
+
+- [ ] **[MANUAL]** With remote access enabled and no Tailscale, open the connect URL from Settings
+  (or the QR code) on a phone/second device that has never connected before — confirm the browser
+  shows a certificate warning exactly once, that clicking through (Advanced → Proceed) works, and
+  that copy/paste (Clipboard API) works afterward, since that's the whole point of this feature.
+- [ ] **[MANUAL]** With Tailscale HTTPS active, confirm the connect URL still uses
+  `https://<fqdn>` (zero-warning) — the self-signed fallback must not activate when Tailscale is
+  already serving HTTPS.
+- [ ] **[MANUAL]** Navigate to the plain `http://<lan-ip>:<port>` URL directly (not the QR code)
+  while the self-signed fallback is active — confirm it 301-redirects to `https://` rather than
+  serving plain HTTP or erroring.
+- [ ] **[MANUAL]** Open Settings > Services > Self-Signed HTTPS — confirm the status line, expiry
+  date, and SHA-256 fingerprint render correctly, and that the fingerprint shown matches what the
+  browser's own certificate-details view reports for the same cert.
+- [ ] **[MANUAL]** Click "Regenerate" — confirm status updates to a new fingerprint/expiry after
+  the server restarts, and that a device that already trusted the old cert now sees a fresh
+  warning (expected — it's a genuinely different cert).
+- [ ] **[MANUAL]** With remote access + self-signed active, change networks (e.g. join a
+  different Wi-Fi network) without restarting the app — within ~60s the background re-check loop
+  should regenerate/hot-reload the cert to cover the new IP; confirm connecting from the new
+  network doesn't hit a hostname-mismatch error. (Hard to force reliably — best-effort check.)
+
 ## Window geometry restore, shell tab restore, and scrollback restore (2026-08-26, **Rust change — needs `make dev` restart**)
 
 Three related features. `main` is now denylisted from `tauri-plugin-window-state` and owns its own size/position/maximized/fullscreen persistence (`window-geometry.json`, `src-tauri/src/window_geometry.rs`) with a measure-and-correct restore step working around the plugin's `set_size`/`outer_size` inner/outer drift under `titleBarStyle: Overlay`. `createBranchSelectionCoordinator.ts` now restores plain shell tabs (not just agent tabs) on branch select, behind Settings → Terminal → "Restore open terminals on launch" (default on). A new opt-in "Save terminal scrollback" setting (default off) persists each terminal's recent output (`scrollback_store.rs`) and replays it above a fresh prompt on restore.

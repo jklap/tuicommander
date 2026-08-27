@@ -6,6 +6,11 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
 
 ## Tests
 
+- Before declaring a change complete, run `./scripts/check-gate.sh` (or `make check-gate`) —
+  not a scoped test filter, and not a bare `make check 2>&1 | tee log` (that pipeline's exit
+  code is `tee`'s, not `make`'s, so a real failure can go unnoticed). Repo-wide consistency
+  tests — e.g. the IPC/HTTP Parity mapping test below — only run as part of the full suite and
+  will not show up in a feature-scoped filter.
 - Tests are the spec. When a test fails after a code change, investigate BOTH sides before deciding which to fix.
 - **Finding a story partially implemented does NOT mean it's done.** When you pick up a story and discover the feature already exists, verify EVERY part of the story is honored — each acceptance criterion, edge case, and requirement — before marking it complete. Never assume the whole story is satisfied just because one part is implemented. Check each criterion against the code and prove it, or the story isn't done.
 - `to-test.md` tracks features awaiting manual testing — add items there for minor features.
@@ -60,6 +65,50 @@ When a commit resolves a **GitHub issue**, use a closing keyword so GitHub auto-
 - Use the GitHub-issue keyword only for the commit that actually fixes it; reference-only commits keep `(#N)`.
 - This is distinct from **mdkb story ids** (7-char hex like `#abc1234`): those follow the wiz convention — `(#abc1234)` for traceability, `(closes #abc1234)` on story completion — and are unrelated to GitHub issue auto-close.
 - **Enforced by the `pre-push` hook** (`scripts/hooks/pre-push`, installed by `make hooks` / `make dev`): a push to `main` is blocked if a pushed commit references an **open** issue with a bare `#N` and no closing keyword. Reference-only pushes bypass with `git push --no-verify` (or `TUIC_SKIP_ISSUE_CHECK=1`). The hook skips silently when `gh` is missing/unauthenticated/offline — it never blocks on a verification failure.
+
+## Fresh Worktree Setup
+
+A brand-new git worktree is missing gitignored build artifacts that `cargo test`/`cargo build`
+need — this is why the exact same commands "just work" in the main checkout or any
+previously-built worktree but fail in a fresh one:
+
+1. **Frontend `dist/` stub** — `src-tauri/src/mcp_http/static_files.rs` does
+   `include_dir!("$CARGO_MANIFEST_DIR/../dist")` at compile time. Without it: `mkdir -p dist &&
+   echo '<html></html>' > dist/index.html` (from the repo root).
+2. **Sidecar binary placeholders** — `tauri.conf.json`'s `externalBin` lists `binaries/tuic-bridge`,
+   `binaries/tuic`, `binaries/tuic-hook`; the build script checks these paths exist for the host
+   target triple. Empty files satisfy the resource-existence check: `target=$(rustc --print
+   host-tuple); mkdir -p src-tauri/binaries; touch src-tauri/binaries/tuic-bridge-$target
+   src-tauri/binaries/tuic-hook-$target; chmod +x src-tauri/binaries/tuic-bridge-$target
+   src-tauri/binaries/tuic-hook-$target` (the plain `tuic-$target` one needs to be a real binary
+   to actually run the app, but an empty file is enough for `cargo test`).
+3. **A real `tuic-hook` build** — unlike the other two, this can't be a stub.
+   `src-tauri/src/agent_hook.rs`'s `golden_wire_output` tests execute the compiled `tuic-hook`
+   binary and assert on its real output; a 0-byte placeholder fails every one of those tests with
+   `assertion failed: !text.is_empty()`. Fix: `cargo build --package tuic-hook` (from
+   `src-tauri/`) — small crate, few deps, fast — populates `src-tauri/target/debug/tuic-hook`,
+   which `agent_hook.rs` resolves at test time. This binary can transiently read as 0 bytes
+   (`ls -la`) immediately after a successful build reports "Finished"/"nothing to rebuild" — a
+   second `ls -la` or re-running the build (which is a no-op) shows the correct size with the same
+   mtime. If `golden_wire_output` tests fail with empty-output assertions right after a build
+   that already succeeded once, re-check the file size before assuming a real regression.
+
+The `plugins/` git submodule is also frequently out of sync in worktrees — either pinned to a
+stale commit (`src/__tests__/plugins/buildCleaner.test.ts` fails to resolve an import) or not
+initialized at all (`git submodule status plugins` shows a leading `-`; `make check`'s `Plugin
+tests` step / `pnpm test:plugins` reports 0 tests collected and exits 1). Both are pre-existing
+environment drift, not a regression — don't spend time fixing the submodule pointer unless
+explicitly asked.
+
+`src/__tests__/components/ChangelogModal.test.tsx` has a flaky async leak (an uncleaned
+timer/effect from its `onMount`, unrelated to the file's own logic — confirmed pre-existing,
+untouched by recent commits) that vitest's leak detector marks as a failed test FILE even when
+every individual test in the run passes (`Test Files 1 failed | ... ` alongside
+`Tests  N passed (N)`). This fails the whole `vitest` step — and therefore all of `make check` —
+regardless of what else changed. Before treating a `make check`/vitest failure as a regression,
+run `pnpm exec vitest run` directly and check whether the `Tests` line shows 0 real failures; if
+so, this is that known flake, not your change. Use `./scripts/check-gate.sh` (or `make
+check-gate`), which detects and calls this out automatically.
 
 ## Building
 
@@ -327,6 +376,7 @@ Do NOT flag these as security issues in reviews — they are intentional design 
 - **`opener:allow-open-path` scope `"**"`** — FileBrowser must open any file the user can see. Narrower globs break external drives and network mounts.
 - **Iframe sandbox = `allow-scripts allow-same-origin`** — ALL iframes MUST use this. NEVER use bare `sandbox=""` — it kills JavaScript.
 - **Plugin capabilities do not isolate plugins from each other.** `plugin_id` is caller-supplied and plugins load into the same JS realm as the host, so any plugin can pass another plugin's id and inherit its grants. This is known, documented at the capability check in `plugins.rs`, at the `import()` in `pluginLoader.ts`, and in `docs/plugins.md`. A per-plugin token was considered and rejected — same-realm JS can read or proxy it, so it would be security theatre. Real isolation needs Worker/iframe + a host-created MessagePort; it is deferred, not overlooked. Do NOT propose the token.
+- **The self-signed-HTTPS HTTP→HTTPS redirect trusts `X-Forwarded-Host` over `Host` with no allow-list** (`axum-server-dual-protocol`'s `UpgradeHttp`, activated via `upgrade_http`/`.set_upgrade()` in `mcp_http::start_server` whenever the self-signed cert — not Tailscale — is the active TLS source). This is a textbook open-redirect *pattern*, but doesn't clear a real bar for reporting it: there's no reverse proxy in front of this app, exploitation needs LAN access plus a non-simple cross-origin header no normal browser navigation ever sends, and no credentials leak on redirect (Basic Auth isn't auto-forwarded cross-origin). Known and accepted; do not re-flag it without a concrete new exploitation path.
 
 ## Ideas
 

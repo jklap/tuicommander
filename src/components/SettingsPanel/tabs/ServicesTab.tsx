@@ -172,6 +172,20 @@ const LocalServicesPanel: Component = () => {
 
 	const [tailscaleState, setTailscaleState] = createSignal<TailscaleStatus | null>(null);
 
+	// Self-signed HTTPS fallback status (active when Tailscale HTTPS isn't)
+	interface SelfSignedCertStatus {
+		active: boolean;
+		generated: boolean;
+		not_after_unix: number | null;
+		fingerprint_sha256: string | null;
+	}
+	const [selfSignedStatus, setSelfSignedStatus] = createSignal<SelfSignedCertStatus | null>(null);
+	const [regeneratingCert, setRegeneratingCert] = createSignal(false);
+	const isTailscaleHttpsActive = () => {
+		const ts = tailscaleState();
+		return ts?.state === "Running" && ts.https_enabled;
+	};
+
 	// Relay state
 	const [relayEnabled, setRelayEnabled] = createSignal(false);
 	const [relayUrl, setRelayUrl] = createSignal("wss://relay.tuicommander.com");
@@ -239,6 +253,12 @@ const LocalServicesPanel: Component = () => {
 			setRelayConnected(rs.connected);
 		} catch {
 			// Relay status not available
+		}
+		try {
+			const ss = await rpc<SelfSignedCertStatus>("get_self_signed_cert_status");
+			setSelfSignedStatus(ss);
+		} catch {
+			// Self-signed cert status not available (non-desktop build)
 		}
 	};
 
@@ -647,6 +667,73 @@ const LocalServicesPanel: Component = () => {
 										)}
 									</p>
 								</Show>
+							</div>
+						</>
+					);
+				})()}
+			</Show>
+
+			{/* ── Self-signed HTTPS fallback ── */}
+			<Show when={raEnabled() && !isTailscaleHttpsActive() && selfSignedStatus()}>
+				{(() => {
+					const ss = selfSignedStatus()!;
+					const expiry = ss.not_after_unix != null ? new Date(ss.not_after_unix * 1000).toLocaleDateString() : null;
+					const statusText = ss.active
+						? expiry
+							? t("services.status.selfSignedActiveWithExpiry", "Active (expires {expiry})", { expiry })
+							: t("services.status.selfSignedActive", "Active")
+						: ss.generated
+							? t("services.status.selfSignedGeneratedInactive", "Generated, not yet active")
+							: t("services.status.selfSignedNotGenerated", "Not yet generated");
+					return (
+						<>
+							<h3>{t("services.heading.selfSignedHttps", "Self-Signed HTTPS")}</h3>
+							<div class={s.group}>
+								<div class={s.row}>
+									<span class={s.label}>{t("services.label.selfSignedStatus", "Status")}</span>
+									<span class={s.value}>
+										{statusText}
+										<button
+											class={s.inlineBtn}
+											disabled={regeneratingCert()}
+											onClick={async () => {
+												setRegeneratingCert(true);
+												try {
+													await rpc("regenerate_self_signed_cert");
+													// Server restart is async server-side; give it a moment before polling status.
+													setTimeout(refreshStatus, 500);
+												} catch (e) {
+													appLogger.error("tailscale", "Self-signed cert regenerate failed", e);
+												} finally {
+													setRegeneratingCert(false);
+												}
+											}}
+											title={t("services.action.regenerateSelfSignedTitle", "Regenerate self-signed certificate")}
+										>
+											{regeneratingCert()
+												? t("services.action.regenerating", "Regenerating…")
+												: t("services.action.regenerate", "Regenerate")}
+										</button>
+									</span>
+								</div>
+								<Show when={ss.fingerprint_sha256}>
+									{(fingerprint) => (
+										<div class={s.row}>
+											<span class={s.label}>{t("services.label.selfSignedFingerprint", "Fingerprint")}</span>
+											<span class={s.value} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
+												{fingerprint()
+													.match(/.{1,2}/g)
+													?.join(":")}
+											</span>
+										</div>
+									)}
+								</Show>
+								<p class={s.hint}>
+									{t(
+										"services.hint.selfSignedExplain",
+										"Without Tailscale HTTPS, TUICommander serves a self-signed certificate so remote/LAN access still gets HTTPS (needed for the clipboard and other browser features that require a secure context). Each device shows a one-time browser security warning the first time it connects — that's expected; accept it to continue. Plain http:// links now redirect to https:// automatically.",
+									)}
+								</p>
 							</div>
 						</>
 					);

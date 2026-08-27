@@ -94,6 +94,8 @@ pub(crate) mod relay_client;
 pub(crate) mod remote_connection;
 pub(crate) mod repo_watcher;
 pub(crate) mod scrollback_store;
+#[cfg(feature = "desktop")]
+pub(crate) mod selfsigned;
 mod shell_integration;
 #[cfg(feature = "desktop")]
 pub(crate) mod sleep_prevention;
@@ -1088,19 +1090,48 @@ fn regenerate_session_token(state: State<'_, Arc<AppState>>) {
 fn get_connect_url(state: State<'_, Arc<AppState>>, ip: String) -> String {
     let port = state.config.read().services.server.port;
     let token = state.session_token.read().clone();
-
-    // If TLS is active and the IP is a Tailscale address, use https + FQDN
     let ts = state.tailscale_state.read().clone();
-    if let tailscale::TailscaleState::Running {
-        ref fqdn,
-        https_enabled: true,
-    } = ts
-        && crate::mcp_http::auth::is_tailscale_ip(&ip)
+    let self_signed_active = state
+        .self_signed_active
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let (scheme, host) = resolve_connect_target(&ts, self_signed_active, &ip);
+    build_connect_url(scheme, &host, port, &token)
+}
+
+/// Decide the scheme + host to embed in a connect URL, given current
+/// Tailscale state, whether the self-signed cert fallback is active, and the
+/// target IP. Zero-warning Tailscale HTTPS wins when available; otherwise the
+/// self-signed fallback (if active) still upgrades any IP to `https`; plain
+/// `http` is the last resort.
+fn resolve_connect_target(
+    ts: &tailscale::TailscaleState,
+    self_signed_active: bool,
+    ip: &str,
+) -> (&'static str, String) {
+    // `self_signed_active` is only ever true when `provision_tls_config`'s
+    // Tailscale branch did NOT win (Tailscale's `https_enabled` reflects the
+    // tailnet admin-console setting, not whether we actually have a live
+    // Tailscale-issued cert — provisioning can fail transiently while that
+    // flag stays true). Trusting `https_enabled` alone here would hand out a
+    // `https://<fqdn>` URL while the self-signed cert (which doesn't cover
+    // the FQDN) is what's actually being served — a hostname-mismatch error
+    // instead of the documented one-time self-signed warning.
+    if !self_signed_active
+        && let tailscale::TailscaleState::Running {
+            fqdn,
+            https_enabled: true,
+        } = ts
+        && crate::mcp_http::auth::is_tailscale_ip(ip)
     {
-        return build_connect_url("https", fqdn, port, &token);
+        return ("https", fqdn.clone());
     }
 
-    build_connect_url("http", &ip, port, &token)
+    if self_signed_active {
+        return ("https", ip.to_string());
+    }
+
+    ("http", ip.to_string())
 }
 
 /// Get Tailscale daemon status for the frontend Settings panel.
@@ -1110,12 +1141,72 @@ fn get_tailscale_status(state: State<'_, Arc<AppState>>) -> tailscale::Tailscale
     state.tailscale_state.read().clone()
 }
 
+/// Self-signed cert status for the Settings panel's LAN-HTTPS fallback
+/// section. Reports the cache as-is — never generates a cert as a side
+/// effect of checking status.
+#[derive(serde::Serialize)]
+struct SelfSignedCertStatus {
+    /// True when the self-signed cert is the one currently serving TLS
+    /// (i.e. Tailscale HTTPS isn't active).
+    active: bool,
+    generated: bool,
+    not_after_unix: Option<i64>,
+    fingerprint_sha256: Option<String>,
+}
+
 #[cfg(feature = "desktop")]
-/// Provision TLS config from current Tailscale state.
-/// Returns Some(RustlsConfig) if Tailscale is running with HTTPS enabled and cert provisioning succeeds.
+#[tauri::command]
+fn get_self_signed_cert_status(state: State<'_, Arc<AppState>>) -> SelfSignedCertStatus {
+    let status = selfsigned::cert_status();
+    SelfSignedCertStatus {
+        active: state
+            .self_signed_active
+            .load(std::sync::atomic::Ordering::Relaxed),
+        generated: status.generated,
+        not_after_unix: status.not_after_unix,
+        fingerprint_sha256: status.fingerprint_sha256,
+    }
+}
+
+/// Force-regenerate the self-signed cert and restart the server to pick it
+/// up. Used by the Settings panel's "Regenerate" action.
+///
+/// Regeneration itself runs synchronously here (fast — cert generation is
+/// milliseconds of local crypto/file I/O) so a real failure is returned to
+/// the caller as `Err`, rather than only being attempted later inside
+/// `restart_server`'s detached thread where nothing could report it back to
+/// the UI. `restart_server` afterward just swaps the live listener onto the
+/// now-freshly-cached cert (a cheap cache hit, not a second generation).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn regenerate_self_signed_cert(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    selfsigned::clear_cached_cert().map_err(|e| e.to_string())?;
+    let ipv6_enabled = state.config.read().services.server.ipv6_enabled;
+    selfsigned::ensure_self_signed_cert(&current_lan_ips(ipv6_enabled))
+        .map_err(|e| e.to_string())?;
+    restart_server(state.inner(), "self-signed cert regeneration requested");
+    Ok(())
+}
+
+/// A provisioned TLS config plus which source produced it — a Tailscale
+/// zero-warning cert, or the self-signed LAN fallback.
+#[cfg(feature = "desktop")]
+struct ProvisionedTls {
+    config: axum_server::tls_rustls::RustlsConfig,
+    self_signed: bool,
+}
+
+#[cfg(feature = "desktop")]
+/// Provision TLS config from current Tailscale state, falling back to a
+/// self-signed cert covering the machine's current LAN IPs when Tailscale
+/// HTTPS isn't active (or fails to provision) and remote access is enabled.
+/// Tailscale HTTPS always wins when available — zero-warning beats
+/// one-warning.
 async fn provision_tls_config(
     ts_state: &tailscale::TailscaleState,
-) -> Option<axum_server::tls_rustls::RustlsConfig> {
+    remote_enabled: bool,
+    ipv6_enabled: bool,
+) -> Option<ProvisionedTls> {
     if let tailscale::TailscaleState::Running {
         fqdn,
         https_enabled: true,
@@ -1124,9 +1215,12 @@ async fn provision_tls_config(
         match tailscale::provision_cert(fqdn).await {
             Ok((cert_pem, key_pem)) => {
                 match axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem).await {
-                    Ok(tls) => {
+                    Ok(config) => {
                         tracing::info!(source = "tailscale", fqdn, "TLS cert provisioned");
-                        return Some(tls);
+                        return Some(ProvisionedTls {
+                            config,
+                            self_signed: false,
+                        });
                     }
                     Err(e) => {
                         tracing::error!(source = "tailscale", "Failed to load TLS config: {e}")
@@ -1136,7 +1230,89 @@ async fn provision_tls_config(
             Err(e) => tracing::error!(source = "tailscale", "Failed to provision cert: {e}"),
         }
     }
-    None
+
+    if !remote_enabled {
+        return None;
+    }
+
+    match selfsigned::ensure_self_signed_cert(&current_lan_ips(ipv6_enabled)) {
+        Ok((cert_pem, key_pem)) => {
+            match axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem).await {
+                Ok(config) => {
+                    tracing::info!(
+                        source = "selfsigned",
+                        "Self-signed TLS cert active (Tailscale HTTPS unavailable)"
+                    );
+                    Some(ProvisionedTls {
+                        config,
+                        self_signed: true,
+                    })
+                }
+                Err(e) => {
+                    tracing::error!(
+                        source = "selfsigned",
+                        "Failed to load self-signed TLS config: {e}"
+                    );
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                source = "selfsigned",
+                "Failed to generate self-signed TLS cert: {e}"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(feature = "desktop")]
+/// Current non-loopback IP addresses as parsed `IpAddr`s (the frontend/RPC
+/// surface deals in strings via `LocalIpEntry`; TLS SAN-coverage checks need
+/// the parsed form).
+fn current_lan_ips(ipv6_enabled: bool) -> Vec<std::net::IpAddr> {
+    get_local_ips_with_config(ipv6_enabled)
+        .into_iter()
+        .filter_map(|entry| entry.ip.parse().ok())
+        .collect()
+}
+
+#[cfg(feature = "desktop")]
+/// Periodically re-check the self-signed cert against the machine's current
+/// LAN IPs, hot-reloading the live TLS config in place (via
+/// `RustlsConfig::reload_from_pem`, the same mechanism
+/// `tailscale::cert_renewal_loop` uses) when `ensure_self_signed_cert`
+/// regenerates — e.g. because the laptop roamed to a new network and the
+/// cached cert's SAN list no longer covers the new IP. `provision_tls_config`
+/// only re-evaluates this at boot/restart, which would otherwise leave a
+/// long-running session on a stale, non-covering cert until the next restart.
+/// Runs on a much shorter interval than Tailscale's 24h renewal loop since
+/// network changes happen far more often than TLS expiry.
+pub(crate) async fn self_signed_recheck_loop(
+    state: Arc<AppState>,
+    tls_config: axum_server::tls_rustls::RustlsConfig,
+) {
+    const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+    loop {
+        tokio::time::sleep(CHECK_INTERVAL).await;
+
+        let ipv6_enabled = state.config.read().services.server.ipv6_enabled;
+        match selfsigned::ensure_self_signed_cert(&current_lan_ips(ipv6_enabled)) {
+            Ok((cert_pem, key_pem)) => {
+                if let Err(e) = tls_config.reload_from_pem(cert_pem, key_pem).await {
+                    tracing::error!(
+                        source = "selfsigned",
+                        "Failed to hot-reload self-signed TLS config: {e}"
+                    );
+                }
+            }
+            Err(e) => tracing::error!(
+                source = "selfsigned",
+                "Failed to check/regenerate self-signed cert: {e}"
+            ),
+        }
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -1164,8 +1340,21 @@ fn restart_server(state: &Arc<AppState>, reason: &'static str) {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime for HTTP server restart");
         rt.block_on(async move {
             let ts = state_arc.tailscale_state.read().clone();
-            let tls_config = provision_tls_config(&ts).await;
-            mcp_http::start_server(state_arc, true, remote_enabled, tls_config).await;
+            let ipv6_enabled = state_arc.config.read().services.server.ipv6_enabled;
+            let provisioned = provision_tls_config(&ts, remote_enabled, ipv6_enabled).await;
+            let self_signed_active = provisioned.as_ref().is_some_and(|p| p.self_signed);
+            state_arc
+                .self_signed_active
+                .store(self_signed_active, std::sync::atomic::Ordering::Relaxed);
+            let tls_config = provisioned.map(|p| p.config);
+            mcp_http::start_server(
+                state_arc,
+                true,
+                remote_enabled,
+                tls_config,
+                self_signed_active,
+            )
+            .await;
         });
     });
 }
@@ -1413,7 +1602,7 @@ pub fn run() {
                 }
 
                 // Detect Tailscale and provision TLS cert (async, doesn't block window render)
-                let tls_config = if remote_enabled {
+                let provisioned = if remote_enabled {
                     let ts_state = detect_tailscale_bounded(async {
                         tokio::task::spawn_blocking(tailscale::detect)
                             .await
@@ -1426,10 +1615,16 @@ pub fn run() {
                         "Tailscale detection result"
                     );
                     *server_state.tailscale_state.write() = ts_state.clone();
-                    provision_tls_config(&ts_state).await
+                    let ipv6_enabled = server_state.config.read().services.server.ipv6_enabled;
+                    provision_tls_config(&ts_state, remote_enabled, ipv6_enabled).await
                 } else {
                     None
                 };
+                let self_signed_active = provisioned.as_ref().is_some_and(|p| p.self_signed);
+                server_state
+                    .self_signed_active
+                    .store(self_signed_active, std::sync::atomic::Ordering::Relaxed);
+                let tls_config = provisioned.map(|p| p.config);
 
                 // `start_server` binds the IPC socket and then parks on the
                 // shutdown signal — it only returns on save_config/restart, so
@@ -1468,6 +1663,7 @@ pub fn run() {
                     true,
                     remote_enabled,
                     tls_config,
+                    self_signed_active,
                 ))
                 .await;
             });
@@ -2060,6 +2256,8 @@ pub fn run() {
             regenerate_session_token,
             get_tailscale_status,
             recheck_tailscale_status,
+            get_self_signed_cert_status,
+            regenerate_self_signed_cert,
             get_relay_status,
             dictation::commands::get_dictation_status,
             dictation::commands::get_model_info,
@@ -2530,7 +2728,7 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
 
     // Run server until SIGINT/SIGTERM, then shut down gracefully.
     tokio::select! {
-        tcp_bound = mcp_http::start_server(state.clone(), true, true, tls_config) => {
+        tcp_bound = mcp_http::start_server(state.clone(), true, true, tls_config, false) => {
             if !tcp_bound {
                 anyhow::bail!("Fatal: failed to bind TCP on port {port} — cannot serve in headless mode");
             }
@@ -2642,19 +2840,41 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
     let listener = std::net::TcpListener::bind(&bind_addr)
         .map_err(|e| anyhow::anyhow!("Fatal: failed to bind TCP on port {port}: {e}"))?;
     listener.set_nonblocking(true)?;
-    let listener = tokio::net::TcpListener::from_std(listener)?;
 
     let router = mcp_http::build_remote_router(state.clone());
     let svc = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
 
-    tokio::select! {
-        result = axum::serve(listener, svc) => {
-            if let Err(e) = result {
-                anyhow::bail!("TCP server error: {e}");
+    // Dual-protocol HTTP+HTTPS when a manual cert is configured, matching the
+    // branch `mcp_http::start_server` takes — see that function's TCP listener
+    // section for the same pattern.
+    match tls_config {
+        Some(tls) => {
+            use axum_server_dual_protocol::ServerExt;
+            tokio::select! {
+                result = axum_server_dual_protocol::from_tcp_dual_protocol(listener, tls)
+                    .set_upgrade(false)
+                    .serve(svc) => {
+                    if let Err(e) = result {
+                        anyhow::bail!("TCP/TLS server error: {e}");
+                    }
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!(source = "remote", "Received shutdown signal");
+                }
             }
         }
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!(source = "remote", "Received shutdown signal");
+        None => {
+            let listener = tokio::net::TcpListener::from_std(listener)?;
+            tokio::select! {
+                result = axum::serve(listener, svc) => {
+                    if let Err(e) = result {
+                        anyhow::bail!("TCP server error: {e}");
+                    }
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!(source = "remote", "Received shutdown signal");
+                }
+            }
         }
     }
 
@@ -3010,6 +3230,170 @@ mod tests {
         assert_eq!(
             build_connect_url("https", "myhost.tail-abc.ts.net", 9876, "tok"),
             "https://myhost.tail-abc.ts.net:9876/?token=tok"
+        );
+    }
+
+    // --- resolve_connect_target ---
+
+    #[test]
+    fn resolve_connect_target_tailscale_https_wins_for_tailscale_ip() {
+        let ts = tailscale::TailscaleState::Running {
+            fqdn: "myhost.tail-abc.ts.net".to_string(),
+            https_enabled: true,
+        };
+        let (scheme, host) = resolve_connect_target(&ts, false, "100.64.1.2");
+        assert_eq!(scheme, "https");
+        assert_eq!(host, "myhost.tail-abc.ts.net");
+    }
+
+    #[test]
+    fn resolve_connect_target_tailscale_https_ignored_for_non_tailscale_ip() {
+        // Tailscale HTTPS is active, but the caller is asking about a plain
+        // LAN IP — the FQDN doesn't cover it, so it must not be substituted.
+        let ts = tailscale::TailscaleState::Running {
+            fqdn: "myhost.tail-abc.ts.net".to_string(),
+            https_enabled: true,
+        };
+        let (scheme, host) = resolve_connect_target(&ts, false, "192.168.1.50");
+        assert_eq!(scheme, "http");
+        assert_eq!(host, "192.168.1.50");
+    }
+
+    #[test]
+    fn resolve_connect_target_plain_lan_ip_no_tailscale_stays_http_today() {
+        // Characterizes today's behavior: no Tailscale, no self-signed fallback
+        // active yet — a plain LAN IP must get http://. Once the self-signed
+        // fallback (Phase 3) defaults `self_signed_active` to true, the real
+        // call site's behavior changes to https — this exact case (explicit
+        // self_signed_active: false) stays a green, deliberate characterization.
+        let (scheme, host) = resolve_connect_target(
+            &tailscale::TailscaleState::NotRunning,
+            false,
+            "192.168.1.50",
+        );
+        assert_eq!(scheme, "http");
+        assert_eq!(host, "192.168.1.50");
+    }
+
+    #[test]
+    fn resolve_connect_target_self_signed_upgrades_plain_lan_ip() {
+        let (scheme, host) =
+            resolve_connect_target(&tailscale::TailscaleState::NotRunning, true, "192.168.1.50");
+        assert_eq!(scheme, "https");
+        assert_eq!(host, "192.168.1.50");
+    }
+
+    #[test]
+    fn resolve_connect_target_self_signed_wins_when_tailscale_provisioning_failed() {
+        // Tailscale's admin-console `https_enabled` flag stays true even when
+        // `provision_cert` transiently failed and `provision_tls_config` fell
+        // back to the self-signed cert — `self_signed_active` is the
+        // authoritative signal for what's actually being served.
+        let ts = tailscale::TailscaleState::Running {
+            fqdn: "myhost.tail-abc.ts.net".to_string(),
+            https_enabled: true,
+        };
+        let (scheme, host) = resolve_connect_target(&ts, true, "100.64.1.2");
+        assert_eq!(scheme, "https");
+        assert_eq!(
+            host, "100.64.1.2",
+            "must not claim the FQDN when the self-signed cert (not the Tailscale cert) is what's actually being served"
+        );
+    }
+
+    // --- provision_tls_config ---
+
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn provision_tls_config_none_when_tailscale_not_installed_and_remote_disabled() {
+        assert!(
+            provision_tls_config(&tailscale::TailscaleState::NotInstalled, false, false)
+                .await
+                .is_none()
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn provision_tls_config_none_when_tailscale_not_running_and_remote_disabled() {
+        assert!(
+            provision_tls_config(&tailscale::TailscaleState::NotRunning, false, false)
+                .await
+                .is_none()
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn provision_tls_config_none_when_tailscale_https_disabled_and_remote_disabled() {
+        let ts = tailscale::TailscaleState::Running {
+            fqdn: "myhost.tail-abc.ts.net".to_string(),
+            https_enabled: false,
+        };
+        assert!(provision_tls_config(&ts, false, false).await.is_none());
+    }
+
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn provision_tls_config_self_signed_fallback_when_no_tailscale_and_remote_enabled() {
+        // `RustlsConfig::from_pem` needs a process-wide rustls CryptoProvider;
+        // outside the real binary entrypoints (which install one at startup)
+        // nothing does this, so install it here. Already-installed is fine.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = config::set_config_dir_override(tmp.path().to_path_buf());
+
+        let provisioned = provision_tls_config(&tailscale::TailscaleState::NotRunning, true, false)
+            .await
+            .expect("self-signed fallback must activate when remote access is enabled");
+        assert!(provisioned.self_signed);
+    }
+
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn provision_tls_config_self_signed_fallback_when_tailscale_https_disabled_and_remote_enabled()
+     {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = config::set_config_dir_override(tmp.path().to_path_buf());
+
+        let ts = tailscale::TailscaleState::Running {
+            fqdn: "myhost.tail-abc.ts.net".to_string(),
+            https_enabled: false,
+        };
+        let provisioned = provision_tls_config(&ts, true, false)
+            .await
+            .expect("self-signed fallback must activate when Tailscale HTTPS isn't active");
+        assert!(provisioned.self_signed);
+    }
+
+    // --- run_remote must actually serve the TLS config it computes ---
+    // A source-text scan (like `relay_does_not_own_a_second_tokio_runtime`
+    // above) rather than a call into `run_remote` itself, since `run_remote`
+    // only compiles under `not(feature = "desktop")` while this test suite
+    // normally runs under the default `desktop` feature.
+
+    #[test]
+    fn run_remote_applies_its_computed_tls_config() {
+        // `run_remote` computes `tls_config` from `app_config.services.tls` but
+        // (as of the bug this test encodes) never threads it into the actual
+        // serve call, which is unconditionally plain `axum::serve`. Once fixed,
+        // `run_remote`'s body must branch on `tls_config` the same way
+        // `mcp_http::start_server` does — dual-protocol when `Some`.
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("pub async fn run_remote(")
+            .expect("run_remote must exist");
+        // Bound the search to run_remote's body only, not the whole file.
+        let end = source[start..]
+            .find("\n#[cfg(test)]\nmod tests {")
+            .map(|i| start + i)
+            .unwrap_or(source.len());
+        let body = &source[start..end];
+        assert!(
+            body.contains("axum_server_dual_protocol"),
+            "run_remote must serve dual-protocol HTTP+HTTPS when tls_config is Some, \
+             matching mcp_http::start_server's branch"
         );
     }
 }

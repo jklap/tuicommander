@@ -1624,6 +1624,11 @@ pub struct AppState {
     pub(crate) bound_socket_path: parking_lot::RwLock<std::path::PathBuf>,
     /// Tailscale daemon state (detected at server startup)
     pub(crate) tailscale_state: parking_lot::RwLock<crate::tailscale::TailscaleState>,
+    /// True when the currently-active TLS config is the self-signed LAN
+    /// fallback (rather than a real Tailscale-issued cert or none at all).
+    /// Set wherever `provision_tls_config` runs; read by `get_connect_url` to
+    /// decide whether a plain LAN IP should get `https://`.
+    pub(crate) self_signed_active: std::sync::atomic::AtomicBool,
     /// Push notification subscription store
     pub(crate) push_store: crate::push::PushStore,
     /// When true, the desktop window is currently focused and the user is at
@@ -2673,6 +2678,7 @@ impl AppState {
             tailscale_state: parking_lot::RwLock::new(
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
+            self_signed_active: std::sync::atomic::AtomicBool::new(false),
             push_store,
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             window_geometry: crate::window_geometry::WindowGeometryTracker::new(
@@ -6307,6 +6313,7 @@ mod tests {
             tailscale_state: parking_lot::RwLock::new(
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
+            self_signed_active: std::sync::atomic::AtomicBool::new(false),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             window_geometry: crate::window_geometry::WindowGeometryTracker::new(

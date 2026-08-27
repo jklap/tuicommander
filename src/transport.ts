@@ -1941,6 +1941,8 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"regenerate_session_token",
 	"get_tailscale_status",
 	"recheck_tailscale_status",
+	"get_self_signed_cert_status",
+	"regenerate_self_signed_cert",
 	// Deep-link / OAuth callback entry points — invoked by the OS URL handler, not UI.
 	"deep_link_mcp_call",
 	"mcp_oauth_callback",
