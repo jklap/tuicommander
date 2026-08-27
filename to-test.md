@@ -91,6 +91,36 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] Manual: open the Activity Dashboard with more rows than fit on screen, arrow down past the visible area, and confirm the list actually scrolls the selected row into view and the selected-row highlight is visually distinguishable — not observable in jsdom.
 - [ ] Manual: repeat the arrow/Return/digit navigation in the **detached** Activity Dashboard panel window (`Cmd+Shift+A` panel detach) — the detached-window code path (separate mount, `props.embedded`) isn't exercised by any existing test.
 
+## Create Worktree dialog: searchable base-ref picker + keyboard nav (2026-08-26, frontend only)
+
+The "Start from" base-ref dropdown gained a search box, `↑`/`↓`/`Enter` navigation, and
+Local/Remote section headers that arrows cross transparently. The existing-branch list
+below the name input gained the same `↑`/`↓`/`Enter` navigation plus match highlighting.
+The last base ref chosen in the dialog is now remembered per repo for the session (not
+persisted — forgotten on restart) and preselected next time that repo's dialog opens.
+Vite reloads this without a restart.
+
+- [ ] **[MANUAL]** Open Create Worktree on a repo with several local + remote branches.
+  Type into the "Start from" search box — confirm it narrows both groups, `↑`/`↓` moves a
+  visible highlight across the Local/Remote boundary without getting stuck, and `Enter`
+  picks the highlighted ref and closes the list. Confirm one `Escape` closes just the
+  dropdown and a second closes the whole dialog — and that Escape never reaches the
+  terminal underneath (types `ESC` into the active session) either time.
+- [ ] **[MANUAL]** With the dropdown closed, confirm `Enter` (or `Space`) while the
+  "Start from" trigger button has focus opens the list and does **not** submit the dialog.
+- [ ] **[MANUAL]** In the branch list, confirm `↑`/`↓` skips rows tagged "(has worktree)",
+  and that typing a fragment highlights the matching substring in each row. Confirm `Enter`
+  with no cursor still creates using the typed text (unchanged behavior), and `Enter` with
+  a highlighted row populates the input instead of submitting (a second `Enter` submits).
+- [ ] **[MANUAL]** Create a worktree off a non-default branch, then reopen the dialog for
+  the same repo — the "Start from" trigger should show that branch preselected. Reopen it
+  for a *different* repo — it should show that other repo's own default, not the first
+  repo's remembered choice. Restart the app and confirm the memory is gone (session-only).
+- [ ] **[MANUAL]** Screenshot the dropdown's search box and the branch list's highlight
+  styling in both light and dark themes — check the sticky search row, the keyboard-cursor
+  color versus the "currently chosen" color (they're deliberately different tokens), and
+  that highlighted/`<mark>`-wrapped text stays legible in both themes.
+
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 
 `drag::Image` has no "no image" variant, so an unresolvable `icons/drag-file.png`

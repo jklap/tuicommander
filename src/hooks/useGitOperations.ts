@@ -16,7 +16,7 @@ import { findOrphanTerminals } from "../utils/terminalOrphans";
 import { createBranchSelectionCoordinator } from "./git/createBranchSelectionCoordinator";
 import { createRepositoryRefreshCoordinator, type PendingCreation } from "./git/createRepositoryRefreshCoordinator";
 import { createTerminalWorktreeCoordinator } from "./git/createTerminalWorktreeCoordinator";
-import { createWorktreeCreationCoordinator } from "./git/createWorktreeCreationCoordinator";
+import { createWorktreeCreationCoordinator, type WorktreeDialogState } from "./git/createWorktreeCreationCoordinator";
 import { createWorktreeRemovalCoordinator } from "./git/createWorktreeRemovalCoordinator";
 import { createWorktreeWorkflowCoordinator } from "./git/createWorktreeWorkflowCoordinator";
 import type { RemoveWorktreeResult } from "./useRepository";
@@ -152,14 +152,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	// error path) the entry is removed without running setup.
 	const pendingCreations = new Map<string, PendingCreation>(); // key: `${repoPath}::${branchName}`
 	const pendingKey = (repoPath: string, branchName: string) => `${repoPath}::${branchName}`;
-	const [worktreeDialogState, setWorktreeDialogState] = createSignal<{
-		repoPath: string;
-		suggestedName: string;
-		existingBranches: string[];
-		worktreeBranches: string[];
-		worktreesDir: string;
-		baseRefs: import("./useRepository").BaseRefOption[];
-	} | null>(null);
+	const [worktreeDialogState, setWorktreeDialogState] = createSignal<WorktreeDialogState | null>(null);
 
 	/** Pending merge context — set when afterMerge=ask; cleared once the user picks or skips cleanup */
 	const [mergePendingCtx, setMergePendingCtx] = createSignal<{

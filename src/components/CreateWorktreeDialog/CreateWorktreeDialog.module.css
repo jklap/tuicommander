@@ -88,13 +88,39 @@
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  max-height: 160px;
+  max-height: 200px;
   overflow-y: auto;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-popup);
   z-index: 10;
+}
+
+.dropdownSearch {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  font-size: var(--font-md);
+  font-family: var(--font-ui);
+}
+
+.dropdownSearch:focus {
+  outline: none;
+}
+
+.dropdownEmpty {
+  padding: 8px 10px;
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  font-style: italic;
 }
 
 .dropdownItem {
@@ -116,6 +142,16 @@
 }
 
 .dropdownItemActive:hover {
+  background: var(--accent-hover);
+}
+
+/* The keyboard cursor — distinct from dropdownItemActive, which marks the
+ * currently-chosen value. Both can apply to the same row at once. */
+.dropdownItemSelected {
+  background: var(--bg-highlight);
+}
+
+.dropdownItemActive.dropdownItemSelected {
   background: var(--accent-hover);
 }
 
@@ -164,10 +200,26 @@
   color: var(--text-on-accent);
 }
 
+/* The keyboard cursor — distinct from .selected, which marks the row matching
+ * what's currently typed. Both can apply to the same row at once. */
+.branchItem.branchItemHighlighted {
+  background: var(--bg-highlight);
+}
+
+.branchItem.selected.branchItemHighlighted {
+  background: var(--accent-hover);
+}
+
 .worktreeTag {
   font-size: var(--font-sm);
   color: var(--fg-muted);
   font-style: italic;
+}
+
+.matchHighlight {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-radius: 2px;
 }
 
 .statusLine {
