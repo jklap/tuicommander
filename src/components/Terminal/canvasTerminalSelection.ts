@@ -71,13 +71,26 @@ function isBaseWordChar(cp: number): boolean {
 	return /[A-Za-z0-9_]/.test(String.fromCodePoint(cp));
 }
 
-function rowToPlainText(row: DecodedRow): string {
+/**
+ * Renders a row to plain text alongside two index maps between grid columns
+ * and `text` offsets. Needed because `String.fromCodePoint` emits a UTF-16
+ * surrogate pair (2 code units) for any astral codepoint (emoji, many Nerd
+ * Font icons) — without these maps, code that assumes "1 column = 1 text
+ * index" silently desyncs for every column after the first astral character
+ * in the row.
+ */
+function rowToPlainText(row: DecodedRow): { text: string; colToOffset: number[]; offsetToCol: number[] } {
 	let text = "";
+	const colToOffset: number[] = new Array(row.count);
+	const offsetToCol: number[] = [];
 	for (let i = 0; i < row.count; i++) {
+		colToOffset[i] = text.length;
 		const cp = row.codepoints[i];
-		text += cp === 0 ? " " : String.fromCodePoint(cp);
+		const ch = cp === 0 ? " " : String.fromCodePoint(cp);
+		for (let u = 0; u < ch.length; u++) offsetToCol.push(i);
+		text += ch;
 	}
-	return text;
+	return { text, colToOffset, offsetToCol };
 }
 
 /** Parse a `|`-joined alternates string into compiled sticky (`y`) regexes,
@@ -112,13 +125,14 @@ function computeRegexWordClass(row: DecodedRow, alternates: RegExp[]): boolean[]
 	const wordClass: boolean[] = new Array(row.count);
 	for (let i = 0; i < row.count; i++) wordClass[i] = isBaseWordChar(row.codepoints[i]);
 	if (alternates.length === 0) return wordClass;
-	const text = rowToPlainText(row);
+	const { text, colToOffset, offsetToCol } = rowToPlainText(row);
 	for (const regex of alternates) {
 		for (let i = 0; i < row.count; i++) {
-			regex.lastIndex = i;
+			regex.lastIndex = colToOffset[i];
 			const match = regex.exec(text);
 			if (match && match[0].length > 0) {
-				const end = Math.min(i + match[0].length, row.count);
+				const endOffset = colToOffset[i] + match[0].length;
+				const end = endOffset >= offsetToCol.length ? row.count : offsetToCol[endOffset];
 				for (let k = i; k < end; k++) wordClass[k] = true;
 			}
 		}
@@ -213,8 +227,12 @@ export function buildSmartSelectionWindow(
 		for (let c = 0; c < row.count; c++) {
 			if (r === clickRow && c === clickCol) targetOffset = text.length;
 			const cp = row.codepoints[c];
-			text += cp === 0 ? " " : String.fromCodePoint(cp);
-			coords.push({ row: r, col: c });
+			const ch = cp === 0 ? " " : String.fromCodePoint(cp);
+			text += ch;
+			// `ch` is 2 UTF-16 units for an astral codepoint (emoji, many Nerd
+			// Font icons) — push one coords entry per unit so `coords[i]` stays
+			// aligned with `text[i]` for every offset a match can land on.
+			for (let u = 0; u < ch.length; u++) coords.push({ row: r, col: c });
 		}
 	}
 
