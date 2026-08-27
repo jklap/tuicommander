@@ -56,6 +56,71 @@ describe("canvas terminal selection controller", () => {
 		expect(selection.cachedText).toBe("");
 	});
 
+	it("hasRange is false with no selection and false for a zero-width caret (same row and column)", () => {
+		const selection = createCanvasSelectionController();
+		expect(selection.hasRange()).toBe(false);
+
+		selection.start = { row: 2, col: 5 };
+		selection.end = { row: 2, col: 5 };
+		expect(selection.hasRange()).toBe(false);
+	});
+
+	it("spansOffscreen is false with no selection and false when every row in range is visible", () => {
+		const selection = createCanvasSelectionController();
+		expect(selection.spansOffscreen(() => 0)).toBe(false);
+
+		selection.start = { row: 3, col: 0 };
+		selection.end = { row: 4, col: 0 };
+		expect(selection.spansOffscreen((absoluteRow) => absoluteRow)).toBe(false);
+	});
+
+	it("getLocalText returns an empty string with no selection", () => {
+		const selection = createCanvasSelectionController();
+		expect(selection.getLocalText(() => null)).toBe("");
+	});
+
+	it("getLocalText on a single row slices between the two columns regardless of drag direction", () => {
+		const rows = new Map([[9, row("hello world")]]);
+		const selection = createCanvasSelectionController();
+		selection.start = { row: 9, col: 6 };
+		selection.end = { row: 9, col: 10 };
+		expect(selection.getLocalText((index) => rows.get(index) ?? null)).toBe("world");
+
+		selection.start = { row: 9, col: 10 };
+		selection.end = { row: 9, col: 6 };
+		expect(selection.getLocalText((index) => rows.get(index) ?? null)).toBe("world");
+	});
+
+	it("getLocalText renders a NUL cell as a space, same convention as buildSmartSelectionWindow", () => {
+		const rows = new Map([[0, row("ab\0cd")]]);
+		const selection = createCanvasSelectionController();
+		selection.start = { row: 0, col: 0 };
+		selection.end = { row: 0, col: 4 };
+		expect(selection.getLocalText((index) => rows.get(index) ?? null)).toBe("ab cd");
+	});
+
+	it("getLocalText inserts a blank line for a row missing mid-range (e.g. scrolled out of the retained buffer)", () => {
+		const rows = new Map([
+			[0, row("first")],
+			[2, row("third")],
+		]);
+		const selection = createCanvasSelectionController();
+		selection.start = { row: 0, col: 0 };
+		selection.end = { row: 2, col: 4 };
+		expect(selection.getLocalText((index) => rows.get(index) ?? null)).toBe("first\n\nthird");
+	});
+
+	it("getLocalText collapses to an empty string when the whole range is blank/whitespace", () => {
+		const rows = new Map([
+			[0, row("      ")],
+			[1, row("      ")],
+		]);
+		const selection = createCanvasSelectionController();
+		selection.start = { row: 0, col: 0 };
+		selection.end = { row: 1, col: 5 };
+		expect(selection.getLocalText((index) => rows.get(index) ?? null)).toBe("");
+	});
+
 	it("defaults mode to char and resets it on clear", () => {
 		const selection = createCanvasSelectionController();
 		expect(selection.mode).toBe("char");
@@ -316,6 +381,21 @@ describe("buildSmartSelectionWindow", () => {
 		const win = buildSmartSelectionWindow(0, 0, 0, rowsMap(rows));
 		expect(win.text).toBe("ab cd");
 	});
+
+	it("keeps coords aligned with text when an astral codepoint (e.g. a Nerd Font icon) precedes the click, one grid cell per codepoint", () => {
+		// A single astral codepoint (U+1F4C1 FOLDER) occupies exactly one grid
+		// column but encodes as a UTF-16 surrogate pair (2 code units) once
+		// rendered to text — regression test for the coords/text desync this caused.
+		const iconLine = row("\u{1F4C1} file.md");
+		expect(iconLine.count).toBe(9); // one cell for the icon + " file.md" (8 chars)
+		const rows = { 0: iconLine };
+		// Click lands on the 'f' of "file.md", at column 2.
+		const win = buildSmartSelectionWindow(0, 2, 0, rowsMap(rows));
+		expect(win.text).toBe("\u{1F4C1} file.md");
+		expect(win.coords).toHaveLength(win.text.length);
+		expect(win.coords[win.targetOffset]).toEqual({ row: 0, col: 2 });
+		expect(win.text[win.targetOffset]).toBe("f");
+	});
 });
 
 describe("createWordBoundaryResolver", () => {
@@ -433,6 +513,50 @@ describe("createWordBoundaryResolver", () => {
 			expect(resolver(row(text), text.indexOf("my") + 1)).toEqual({
 				left: 0,
 				right: text.indexOf(".") - 1,
+			});
+		});
+
+		it("treats a NUL cell as not-word, matching the NUL-as-space convention used elsewhere", () => {
+			const resolver = createWordBoundaryResolver({ mode: "regex", separators: "", regexAlternates: "" });
+			expect(resolver(row("ab\0cd"), 2)).toBeNull();
+		});
+
+		// Regression coverage for the astral-codepoint/UTF-16-surrogate-pair bug fixed
+		// alongside the double-click desync in `buildSmartSelectionWindow`: an alternate
+		// match is anchored via `regex.lastIndex` set to a column-to-text-OFFSET (not the
+		// column itself), and a naive implementation that reused the column index as the
+		// text index would silently desync — and therefore stop matching alternates
+		// correctly — as soon as any earlier cell in the row was an astral codepoint (an
+		// emoji, or many Nerd Font icons used by icon-enabled `ls`/prompts), since
+		// `String.fromCodePoint` emits a 2-unit UTF-16 surrogate pair for those but the
+		// grid still counts them as one column.
+		it("keeps the column-to-text-offset mapping correct when an astral codepoint (e.g. an emoji) precedes the match", () => {
+			const resolver = createWordBoundaryResolver({ mode: "regex", separators: "", regexAlternates: "https://" });
+			const text = "\u{1F4C1} https://example";
+			const cells = Array.from(text); // one entry per grid cell, same indexing as `row()`
+			const httpsCol = cells.indexOf("h");
+			const clickCol = httpsCol + "https://".length + 2; // inside "example"
+			expect(resolver(row(text), clickCol)).toEqual({ left: httpsCol, right: cells.length - 1 });
+		});
+
+		it("marks columns through the end of the row when a match runs off the end of the text, with an astral codepoint earlier in the row", () => {
+			const resolver = createWordBoundaryResolver({ mode: "regex", separators: "", regexAlternates: "https://" });
+			const text = "\u{1F4C1}https://";
+			const cells = Array.from(text);
+			const httpsCol = cells.indexOf("h");
+			expect(resolver(row(text), httpsCol)).toEqual({ left: httpsCol, right: cells.length - 1 });
+		});
+
+		it("renders a NUL cell as a space when building the row's plain-text view for alternates, same convention as elsewhere — and it correctly breaks an otherwise-contiguous run", () => {
+			const resolver = createWordBoundaryResolver({ mode: "regex", separators: "", regexAlternates: "https://" });
+			const text = "https://a\0b";
+			// The scheme (via the alternate) joins onto the base-word-class "a", but
+			// the NUL cell right after it is not-word and must stop the run there —
+			// the trailing "b" is a separate, disjoint word.
+			expect(resolver(row(text), 0)).toEqual({ left: 0, right: text.indexOf("a") });
+			expect(resolver(row(text), text.indexOf("b"))).toEqual({
+				left: text.indexOf("b"),
+				right: text.indexOf("b"),
 			});
 		});
 	});

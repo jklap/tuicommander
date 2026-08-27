@@ -89,6 +89,16 @@ describe("findSmartMatch", () => {
 		const match = findSmartMatch(text, offset, [shaRule]);
 		expect(match?.text).toBe("a1b2c3d");
 	});
+
+	// A zero-length match (e.g. `x*` against text with no "x") can't advance
+	// `lastIndex` on its own — regression coverage for the manual bump that
+	// keeps this from looping forever, and for the fact a zero-length match
+	// can never itself satisfy `matchEnd > targetOffset`, so it's correctly
+	// never a candidate.
+	it("a rule whose regex can match zero-length text neither hangs nor wins a match", () => {
+		const zeroWidth = rule({ id: "zero", regex: "x*", precision: "very_high" });
+		expect(findSmartMatch("foo bar", 1, [zeroWidth])).toBeNull();
+	});
 });
 
 describe("substituteActionParameter", () => {
