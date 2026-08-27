@@ -93,6 +93,8 @@ Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath
 
 **A panel that renders ONLY committed history** (commit log, file history, stashes) uses `getGitRevision(repoPath)` instead, so a plain file save no longer re-runs its git processes. The two counters are nested, not parallel: `bumpGitRevision` bumps **both**, and `getRevision` still moves on every event. `getRevision` is therefore always the safe default — a panel left on it cannot go stale, while a panel wrongly moved to `getGitRevision` silently misses working-tree changes. Move a panel only after checking every command it calls ignores uncommitted state.
 
+**Panel visibility gates must check the specific scope they care about.** A gate bundled in from cross-repo/global state (e.g. `globalWorkspaceStore.isActive()`) must check the scope (`MANUAL_SCOPE`) it actually cares about, not just `isActive()` — a per-repo auto-consolidated workspace is a different activation with a single well-defined repo, and a bare `isActive()` check will wrongly suppress panels for it. The same "boolean/flag check too coarse for a growing state space" shape has recurred more than once (File Browser/Git Panel suppression, sidebar branch-icon color falling through to the wrong case) — when a state space grows a new case, re-check every existing boolean gate against it rather than assuming the old check still covers the new state correctly.
+
 ## Architecture
 
 All business logic in Rust. Frontend only renders and handles interaction — no data reshaping, computation, or process orchestration.
