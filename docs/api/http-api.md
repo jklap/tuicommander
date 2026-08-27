@@ -1299,6 +1299,15 @@ Content-Type: application/json
 
 Returns bcrypt hash string.
 
+### Clear Saved Scrollback
+
+```
+DELETE /scrollback              { session?: string | null } -> { ok }   [guarded]
+```
+
+Clears one tab's saved scrollback by `tuic_session`, or every saved tab when `session` is omitted.
+IPC twin: `clear_saved_scrollback`.
+
 ### Notification Config
 
 Interactive config `PUT` routes below (except `/config/repositories`, which has

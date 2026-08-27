@@ -62,7 +62,8 @@ per cell and the configured history limit still apply.
 - Up to 50 concurrent PTY sessions (configurable in Rust `MAX_SESSIONS`)
 - Each tab runs an independent pseudo-terminal with the user's shell
 - Terminals are never unmounted — hidden tabs stay alive with full scroll history
-- Session persistence across app restarts (lazy restore on branch click); only agent tabs are restored — plain shell tabs are discarded and a fresh terminal is spawned instead
+- Session persistence across app restarts (lazy restore on branch click) — every tab a branch had open is restored, each with a fresh live shell in its saved directory (**Restore open terminals on launch** in Settings → Terminal, default on; off restores only agent tabs)
+- Terminal scrollback restore (opt-in, **Save terminal scrollback** in Settings → Terminal, default off since it writes plaintext to disk): a restored tab shows its recent output above a live prompt, separated by a dim "restored from previous session" marker; capped by **Scrollback lines to save** (default 1000) and clearable via a settings button
 - Orchestrated PTYs show a task description above the terminal alongside the last submitted user prompt; MCP callers can supply `pty_description`, while spawn-only orchestration schemas fall back to a compact summary of the task prompt without changing agent launch or prompt-delivery behavior
 - Managed-agent automation submits a command with one MCP `session action=submit` call: an idle empty composer is claimed atomically, raw-mode text/Enter framing cannot interleave with another writer, and the same response reports terminal acknowledgement or a precise non-retryable timeout. The action never queues or overwrites a draft; `session action=input` remains write-only compatibility, with a text-to-Enter gap for detected agent sessions
 - Agent session restore shows a clickable banner ("Agent session was active — click to resume") instead of auto-injecting the resume command; Space/Enter resumes, other keys dismiss
@@ -1479,6 +1480,7 @@ The navigation groups the global pages by task. Each group is a static label row
 ### 11.1 General
 - Language: the locales that ship a message catalog, each named in its own language. The pick persists to `config.json` and re-renders every translated string without a reload. Locales with no catalog are not listed — they would render English while claiming to be translated — so the list holds only English until more catalogs land
 - Show agent context bar
+- Window: restore size and position on launch (desktop app only, default on)
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
 - Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
 - Updates: auto-check, update channel, check now
@@ -1558,6 +1560,7 @@ ego's own configuration; the `ego_executable` path and the `ai_chat_workspace` f
 - Shell
 - Terminal font: bundled monospace fonts (JetBrains Mono default), default font size (8-32px slider), font weight, cursor style (bar / block / underline)
 - Copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, block timestamps (elapsed-time label per command block while Ctrl+Cmd is held), block folding (gates the Toggle Block Fold shortcut and its palette entry), scrollbar marks, scrollback reflow on resize
+- Terminal session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback
 
 ### 11.10 Git & GitHub
 - GitHub authentication (see **8.13**), additional accounts and repository bindings (see **8.14**)
@@ -1597,6 +1600,8 @@ All data persisted to platform config directory via Rust:
 - `dictation_config.json` — dictation settings
 - `.tuic.json` — repo-root team config (read-only from app, highest precedence for overridable fields)
 - `claude-usage-cache.json` — incremental session transcript parse cache
+- `window-geometry.json` — main window size/position/maximized/fullscreen, owned outside `tauri-plugin-window-state` (`src-tauri/src/window_geometry.rs`)
+- `scrollback/<tuic_session>.json` — one file per tab's saved scrollback, opt-in (see `docs/backend/pty.md` § Scrollback restore)
 
 ### 12.2 Hydration Safety
 - `save()` blocks before `hydrate()` completes to prevent data loss

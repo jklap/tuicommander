@@ -2,7 +2,7 @@ use super::{grid_gate, terminal_grid};
 use crate::chrome::find_scrollback_chrome_cutoff;
 use crate::output_parser;
 use alacritty_terminal::grid::ReflowMode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 // ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ pub fn mark_agent_chrome(lines: &mut [LogLine]) {
 ///
 /// Serializes as `{"idx": N}` for 256-color palette or `{"rgb": [r,g,b]}` for
 /// 24-bit color.  Default color is omitted (serialized as `null` / skipped).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogColor {
     Idx(u8),
@@ -76,26 +76,26 @@ impl LogColor {
 }
 
 /// A contiguous run of text with uniform formatting attributes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogSpan {
     pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fg: Option<LogColor>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bg: Option<LogColor>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bold: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub italic: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub underline: bool,
 }
 
 /// A single log line composed of styled spans.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogLine {
     pub spans: Vec<LogSpan>,
-    #[serde(skip_serializing_if = "is_zero_u16")]
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub cols: u16,
     /// True when this line is agent UI chrome (prompt box, footer, status bar)
     /// rather than agent output. Set once, at capture time, by
@@ -171,6 +171,68 @@ fn strip_structural_blocks(lines: &mut Vec<LogLine>) {
     for line in lines {
         line.strip_structural_tokens();
     }
+}
+
+/// SGR parameter codes for one color, standard-16-color-aware: `Idx(0..16)`
+/// uses the short `3x`/`4x`/`9x`/`10x` forms (so it round-trips through the
+/// same `NamedColor` branch `LogColor::from_ansi_color` maps back from),
+/// everything else uses the extended `38;5;n` / `48;5;n` indexed form.
+fn sgr_color_codes(color: LogColor, is_bg: bool) -> Vec<String> {
+    match color {
+        LogColor::Idx(n) if n < 8 => vec![(if is_bg { 40 + n } else { 30 + n }).to_string()],
+        LogColor::Idx(n) if n < 16 => {
+            vec![(if is_bg { 100 + (n - 8) } else { 90 + (n - 8) }).to_string()]
+        }
+        LogColor::Idx(n) => vec![
+            if is_bg { "48" } else { "38" }.to_string(),
+            "5".to_string(),
+            n.to_string(),
+        ],
+        LogColor::Rgb(r, g, b) => vec![
+            if is_bg { "48" } else { "38" }.to_string(),
+            "2".to_string(),
+            r.to_string(),
+            g.to_string(),
+            b.to_string(),
+        ],
+    }
+}
+
+/// Render styled log lines back into ANSI-escaped bytes, suitable for feeding
+/// through [`VtLogBuffer::process`] to seed a fresh terminal with restored
+/// scrollback — the same entry point live PTY output uses, so every consumer
+/// downstream (canvas rendering, search, selection, `ai_terminal_read_screen`)
+/// needs no separate code path for restored history.
+///
+/// Each span gets a full SGR reset before its own attributes are applied, so
+/// output is correct regardless of what state a naive replay left behind;
+/// lines are separated by `\r\n` to match real PTY line endings.
+pub fn log_lines_to_ansi(lines: &[LogLine]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for line in lines {
+        for span in &line.spans {
+            let mut codes: Vec<String> = vec!["0".to_string()];
+            if span.bold {
+                codes.push("1".to_string());
+            }
+            if span.italic {
+                codes.push("3".to_string());
+            }
+            if span.underline {
+                codes.push("4".to_string());
+            }
+            if let Some(fg) = span.fg {
+                codes.extend(sgr_color_codes(fg, false));
+            }
+            if let Some(bg) = span.bg {
+                codes.extend(sgr_color_codes(bg, true));
+            }
+            out.extend_from_slice(format!("\x1b[{}m", codes.join(";")).as_bytes());
+            out.extend_from_slice(span.text.as_bytes());
+        }
+        out.extend_from_slice(b"\x1b[0m\r\n");
+    }
+    out
 }
 
 /// A screen row that changed after a `VtLogBuffer::process()` call.
@@ -751,3 +813,36 @@ impl VtLogBuffer {
 }
 
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sgr_color_codes_uses_short_form_below_16() {
+        assert_eq!(sgr_color_codes(LogColor::Idx(1), false), vec!["31"]);
+        assert_eq!(sgr_color_codes(LogColor::Idx(1), true), vec!["41"]);
+        assert_eq!(sgr_color_codes(LogColor::Idx(9), false), vec!["91"]);
+        assert_eq!(sgr_color_codes(LogColor::Idx(9), true), vec!["101"]);
+    }
+
+    #[test]
+    fn sgr_color_codes_uses_indexed_form_at_and_above_16() {
+        assert_eq!(
+            sgr_color_codes(LogColor::Idx(16), false),
+            vec!["38", "5", "16"]
+        );
+        assert_eq!(
+            sgr_color_codes(LogColor::Idx(255), true),
+            vec!["48", "5", "255"]
+        );
+    }
+
+    #[test]
+    fn sgr_color_codes_uses_truecolor_form_for_rgb() {
+        assert_eq!(
+            sgr_color_codes(LogColor::Rgb(1, 2, 3), false),
+            vec!["38", "2", "1", "2", "3"]
+        );
+    }
+}
