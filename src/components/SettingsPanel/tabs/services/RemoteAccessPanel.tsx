@@ -8,6 +8,7 @@ import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
+import { randomUuid } from "../../../../utils/randomId";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
@@ -612,7 +613,7 @@ export const RemoteAccessPanel: Component = () => {
 					onChange={(val) => {
 						setRelayEnabled(val);
 						if (val && !relaySessionId()) {
-							const id = crypto.randomUUID();
+							const id = randomUuid();
 							setRelaySessionId(id);
 							saveConfigField((c) => {
 								c.services.relay.enabled = val;
@@ -696,7 +697,7 @@ export const RemoteAccessPanel: Component = () => {
 								data-non-setting="Rotate the runtime relay-session identity through its existing owner"
 								class={s.toggleBtn}
 								onClick={() => {
-									const id = crypto.randomUUID();
+									const id = randomUuid();
 									setRelaySessionId(id);
 									saveConfigField((c) => {
 										c.services.relay.session_id = id;

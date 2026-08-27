@@ -12,6 +12,7 @@ import {
 } from "../../../../transport";
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { handleOpenUrl } from "../../../../utils/openUrl";
+import { randomUuid } from "../../../../utils/randomId";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
@@ -114,7 +115,7 @@ const HeaderRows: Component<{
 				class={s.copyBtn}
 				title="Add secret header"
 				onClick={() =>
-					props.onChange([...props.rows, { name: "", credential_ref: crypto.randomUUID(), value: "", saved: false }])
+					props.onChange([...props.rows, { name: "", credential_ref: randomUuid(), value: "", saved: false }])
 				}
 			>
 				+
@@ -354,7 +355,7 @@ export const UpstreamMcpPanel: Component = () => {
 	async function saveHeaderRows(name: string, url: string, rows: HeaderRow[]): Promise<UpstreamHeader[]> {
 		const headers: UpstreamHeader[] = [];
 		for (const row of rows) {
-			const header = { name: row.name, credential_ref: row.value ? crypto.randomUUID() : row.credential_ref };
+			const header = { name: row.name, credential_ref: row.value ? randomUuid() : row.credential_ref };
 			if (row.value) await rpc("save_mcp_upstream_credential", { name, url, token: row.value, header }, machine());
 			headers.push(header);
 		}
@@ -401,7 +402,9 @@ export const UpstreamMcpPanel: Component = () => {
 					};
 
 		const server: UpstreamMcpServer = {
-			id: crypto.randomUUID(),
+			// `randomUuid`, not `randomId`: the backend's `UpstreamMcpServer.id` field is documented
+			// as a UUID.
+			id: randomUuid(),
 			name: f.name.trim(),
 			transport,
 			enabled: true,
@@ -413,7 +416,7 @@ export const UpstreamMcpPanel: Component = () => {
 		const credentials: { server_id: string; token: string; header?: UpstreamHeader }[] = [];
 		if (f.transportType === "http") {
 			server.headers = f.headers.map((row) => {
-				const header = { name: row.name, credential_ref: row.value ? crypto.randomUUID() : row.credential_ref };
+				const header = { name: row.name, credential_ref: row.value ? randomUuid() : row.credential_ref };
 				if (row.value) credentials.push({ server_id: server.id, token: row.value, header });
 				return header;
 			});

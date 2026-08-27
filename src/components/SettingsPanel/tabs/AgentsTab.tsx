@@ -1255,9 +1255,10 @@ export const AgentRow: Component<{
 							value={configStore.state.agents[props.agentType]?.intent_tab_title ?? null}
 						>
 							<div class={a.expandedSection}>
-								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-									<span>Track agent intent</span>
+								<div class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+									<label>Track agent intent</label>
 									<Select
+										aria-label="Track agent intent"
 										data-setting-id="agents.agents.{key}.intent_tab_title"
 										compact
 										value={overrideToValue(configStore.getIntentTabTitle(props.agentType))}
@@ -1269,7 +1270,7 @@ export const AgentRow: Component<{
 										<option value="true">On</option>
 										<option value="false">Off</option>
 									</Select>
-								</label>
+								</div>
 								<p class={s.hint}>
 									Ask the model to emit <code>intent:</code> markers at task start and phase changes. The current intent
 									appears in the terminal Context bar and may update the tab name. Turn off if parsing misbehaves on
@@ -1308,9 +1309,10 @@ export const AgentRow: Component<{
 							value={configStore.state.agents[props.agentType]?.suggest_followups ?? null}
 						>
 							<div class={a.expandedSection}>
-								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-									<span>Show suggested follow-ups</span>
+								<div class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+									<label>Show suggested follow-ups</label>
 									<Select
+										aria-label="Show suggested follow-ups"
 										data-setting-id="agents.agents.{key}.suggest_followups"
 										compact
 										value={overrideToValue(configStore.getSuggestFollowups(props.agentType))}
@@ -1324,7 +1326,7 @@ export const AgentRow: Component<{
 										<option value="true">On</option>
 										<option value="false">Off</option>
 									</Select>
-								</label>
+								</div>
 								<p class={s.hint}>
 									Emit <code>suggest:</code> markers for clickable follow-up actions
 								</p>

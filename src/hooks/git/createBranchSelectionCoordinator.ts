@@ -11,6 +11,7 @@ import type { SavedTerminal } from "../../types";
 import { resolveAgentResume, verifyAndBuildResumeCommand } from "../../utils/agentSession";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { markPerf } from "../../utils/perfTrace";
+import { randomUuid } from "../../utils/randomId";
 import { filterValidTerminals } from "../../utils/terminalFilter";
 import { disarmEagerResume, isEagerResumeArmed } from "../../utils/updateRestart";
 
@@ -72,7 +73,9 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// worktree has its own path, everything else is the repo checkout.
 			cwd: branch?.worktreePath || repoPath,
 			awaitingInput: null,
-			tuicSession: crypto.randomUUID(),
+			// `randomUuid`, not `randomId`: tuicSession must stay a bare canonical UUID for the
+			// backend's `is_valid_uuid` prompt-injection guard.
+			tuicSession: randomUuid(),
 		});
 		if (label) terminalsStore.update(id, { nameIsCustom: true });
 
@@ -140,7 +143,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				name: terminal.name,
 				cwd: terminal.cwd,
 				awaitingInput: null,
-				tuicSession: terminal.tuicSession ?? crypto.randomUUID(),
+				tuicSession: terminal.tuicSession ?? randomUuid(),
 				agentType: terminal.agentType ?? null,
 				agentSessionId: terminal.agentSessionId ?? null,
 				agentLaunchCommand: terminal.agentLaunchCommand ?? null,

@@ -1,6 +1,7 @@
 import { appLogger } from "../stores/appLogger";
 import { dictationStore } from "../stores/dictation";
 import { toastsStore } from "../stores/toasts";
+import { randomUuid } from "../utils/randomId";
 import { captureDictationTarget, type DictationTarget } from "./dictationTarget";
 
 /** Transcription result from the Rust backend */
@@ -49,7 +50,7 @@ export function useDictation(deps: DictationDeps) {
 
 	const handleDictationStart = async (source = "hotkey") => {
 		if (!deps.dictation.state.enabled || starting) return;
-		const captured = { id: crypto.randomUUID(), target: captureDictationTarget() };
+		const captured = { id: randomUuid(), target: captureDictationTarget() };
 		starting = true;
 		startPromise = (async () => {
 			// The hotkey also stops hands-free; refresh before trusting its cached flag.

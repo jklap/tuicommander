@@ -14,6 +14,7 @@ import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
 import { openDialog } from "../../../utils/nativeDialog";
+import { randomUuid } from "../../../utils/randomId";
 import { Input } from "../../ui/Input";
 import { Textarea } from "../../ui/Textarea";
 import { ExpertSetting } from "../ExpertSetting";
@@ -147,7 +148,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 	const addLauncher = () =>
 		settingsStore.setCustomLaunchers([
 			...launchers(),
-			{ id: crypto.randomUUID(), name: "New tool", executable: "", args: [], enabled: true },
+			{ id: randomUuid(), name: "New tool", executable: "", args: [], enabled: true },
 		]);
 	const removeLauncher = (id: string) => settingsStore.setCustomLaunchers(launchers().filter((l) => l.id !== id));
 

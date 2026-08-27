@@ -12,6 +12,7 @@ import {
 	type SshAgentInfo,
 	type SshHostStatus,
 } from "../../../../stores/remoteConnections";
+import { randomUuid } from "../../../../utils/randomId";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import { ContextualHelp } from "../../ContextualHelp";
@@ -169,7 +170,9 @@ export const RemoteMachinesPanel: Component = () => {
 				: { type: "Direct", url: f.directUrl.trim() };
 
 		const conn: RemoteConnection = {
-			id: crypto.randomUUID(),
+			// `randomUuid`, not `randomId`: the backend's `validate()` requires `id` to be a bare
+			// UUID (`Uuid::parse_str`), rejecting anything else.
+			id: randomUuid(),
 			name,
 			transport,
 			auth_username: f.authUsername.trim(),
