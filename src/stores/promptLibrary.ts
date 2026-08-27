@@ -1,9 +1,9 @@
 import { createMemo, createRoot } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { AGENT_TYPES } from "../agents";
 import { SMART_PROMPTS_BUILTIN } from "../data/smartPromptsBuiltIn";
 import { invoke } from "../invoke";
 import { isTauri } from "../transport";
+import { sanitizePrompt } from "../utils/promptSanitize";
 import { appLogger } from "./appLogger";
 
 /** Prompt category */
@@ -133,48 +133,11 @@ function createPromptLibraryStore() {
 					for (const entry of loaded.prompts) {
 						// Try to parse full SavedPrompt from text field (migration format)
 						try {
-							const full = JSON.parse(entry.text) as SavedPrompt;
-							// Validate security-relevant fields before trusting deserialized data
-							if (
-								full.executionMode &&
-								full.executionMode !== "inject" &&
-								full.executionMode !== "headless" &&
-								full.executionMode !== "api" &&
-								full.executionMode !== "shell"
-							) {
-								appLogger.warn(
-									"store",
-									`Prompt "${entry.id}" has invalid executionMode "${full.executionMode}", resetting to inject`,
-								);
-								full.executionMode = "inject";
-							}
-							if (full.injectTarget && full.injectTarget !== "terminal" && full.injectTarget !== "compose") {
-								appLogger.warn(
-									"store",
-									`Prompt "${entry.id}" has invalid injectTarget "${full.injectTarget}", removing`,
-								);
-								full.injectTarget = undefined;
-							}
-							if (full.preferredAgent) {
-								if (!AGENT_TYPES.includes(full.preferredAgent)) {
-									appLogger.warn(
-										"store",
-										`Prompt "${entry.id}" has invalid preferredAgent "${full.preferredAgent}", removing`,
-									);
-									delete full.preferredAgent;
-								}
-							}
-							if (full.placement && !Array.isArray(full.placement)) {
-								full.placement = undefined;
-							}
-							// Migrate legacy placement name: tab-context → terminal-context
-							if (Array.isArray(full.placement) && full.placement.some((p) => (p as string) === "tab-context")) {
-								full.placement = full.placement.map((p) =>
-									(p as string) === "tab-context" ? "terminal-context" : p,
-								) as SmartPlacement[];
-								migrated = true;
-							}
-							restored[full.id] = full;
+							const parsed = JSON.parse(entry.text) as SavedPrompt;
+							const { prompt, warnings, migratedPlacement } = sanitizePrompt(parsed);
+							for (const warning of warnings) appLogger.warn("store", warning);
+							if (migratedPlacement) migrated = true;
+							restored[prompt.id] = prompt;
 						} catch (err) {
 							appLogger.warn("store", `Prompt "${entry.id}" has non-JSON text field, using simple format`, err);
 							restored[entry.id] = {
@@ -273,6 +236,38 @@ function createPromptLibraryStore() {
 			setState("prompts", prompt.id, prompt);
 			savePrompts(state.prompts);
 			return prompt;
+		},
+
+		/** Batch-upsert prompts from an import file in a single store update (avoids N separate
+		 *  `updatePrompt` calls, each of which would reconcile the whole store and re-debounce
+		 *  the save). Shell/API prompts land disabled — imported content is untrusted and
+		 *  shouldn't execute until the user has reviewed it. A conflicting id keeps its
+		 *  existing `createdAt`; a forged `builtIn: true` on an id that isn't an actual
+		 *  built-in is cleared so an imported file can't fake the built-in badge (which would
+		 *  leave the prompt with no default to reset to). */
+		importPrompts(prompts: SavedPrompt[]): { imported: number; disabled: string[] } {
+			const builtinIds = new Set(SMART_PROMPTS_BUILTIN.map((p) => p.id));
+			const disabled: string[] = [];
+			const now = Date.now();
+			const next = { ...state.prompts };
+
+			for (const incoming of prompts) {
+				const existing = next[incoming.id];
+				const runsCode = incoming.executionMode === "shell" || incoming.executionMode === "api";
+				if (runsCode) disabled.push(incoming.name);
+
+				next[incoming.id] = {
+					...incoming,
+					builtIn: incoming.builtIn && builtinIds.has(incoming.id),
+					enabled: runsCode ? false : incoming.enabled,
+					createdAt: existing?.createdAt ?? incoming.createdAt ?? now,
+					updatedAt: now,
+				};
+			}
+
+			setState("prompts", reconcile(next));
+			savePrompts(state.prompts);
+			return { imported: prompts.length, disabled };
 		},
 
 		/** Update an existing prompt */

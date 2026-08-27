@@ -5,8 +5,19 @@ import { useAgentDetection } from "../../../hooks/useAgentDetection";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
 import { agentConfigsStore } from "../../../stores/agentConfigs";
 import { promptLibraryStore, type SavedPrompt, type SmartPlacement } from "../../../stores/promptLibrary";
+import { toastsStore } from "../../../stores/toasts";
 import { onClickKeyDown } from "../../../utils/a11y";
+import {
+	buildExportFile,
+	classifyImport,
+	type ExportScope,
+	type ImportCandidate,
+	parseExportFile,
+	selectForExport,
+} from "../../../utils/promptExport";
+import { downloadPromptExport, pickPromptImportFile } from "../../../utils/promptTransfer";
 import { ConfirmDialog } from "../../ConfirmDialog";
+import { PromptImportDialog } from "../../PromptImportDialog/PromptImportDialog";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import s from "../Settings.module.css";
 import sp from "./SmartPromptsTab.module.css";
@@ -651,6 +662,58 @@ export const SmartPromptsTab: Component = () => {
 	const detection = useAgentDetection();
 	const groups = createMemo(() => groupByCategory(getAllSmartPrompts()));
 
+	const [exportScope, setExportScope] = createSignal<ExportScope>("all");
+	const [importState, setImportState] = createSignal<{ candidates: ImportCandidate[]; warnings: string[] } | null>(
+		null,
+	);
+
+	/** Counts shown in the export scope dropdown, so the choice is obvious before a file is written. */
+	const scopeCounts = createMemo(() => {
+		const all = promptLibraryStore.getAllPrompts();
+		return {
+			all: all.length,
+			modified: selectForExport(all, "modified", BUILTIN_BY_ID).length,
+			custom: selectForExport(all, "custom", BUILTIN_BY_ID).length,
+		};
+	});
+
+	const handleExport = () => {
+		const scope = exportScope();
+		const prompts = selectForExport(promptLibraryStore.getAllPrompts(), scope, BUILTIN_BY_ID);
+		const file = buildExportFile(prompts, scope);
+		downloadPromptExport(file, `smart-prompts-${scope}.json`);
+	};
+
+	const handleImportFile = async () => {
+		const text = await pickPromptImportFile();
+		if (text === null) return;
+		const { prompts, warnings, error } = parseExportFile(text);
+		if (error) {
+			toastsStore.add("Import failed", error, "error");
+			return;
+		}
+		if (prompts.length === 0) {
+			toastsStore.add("Nothing to import", warnings[0] ?? "The file contained no prompts", "warn");
+			return;
+		}
+		const candidates = classifyImport(prompts, promptLibraryStore.state.prompts);
+		setImportState({ candidates, warnings });
+	};
+
+	const handleImportConfirm = (selectedIds: string[]) => {
+		const state = importState();
+		if (!state) return;
+		const selected = new Set(selectedIds);
+		const toImport = state.candidates.filter((c) => selected.has(c.prompt.id)).map((c) => c.prompt);
+		const { imported, disabled } = promptLibraryStore.importPrompts(toImport);
+		setImportState(null);
+		toastsStore.add(
+			`Imported ${imported} prompt${imported === 1 ? "" : "s"}`,
+			disabled.length > 0 ? `Imported disabled (review before enabling): ${disabled.join(", ")}` : "",
+			disabled.length > 0 ? "warn" : "info",
+		);
+	};
+
 	onMount(() => {
 		detection.detectAll();
 	});
@@ -695,6 +758,25 @@ export const SmartPromptsTab: Component = () => {
 				AI-powered actions that can be triggered from the toolbar, context menus, and command palette. Enable, disable,
 				or customize the prompt content and placement for each action.
 			</p>
+
+			<div class={sp.transferRow}>
+				<select
+					class={sp.transferSelect}
+					data-testid="export-scope-select"
+					value={exportScope()}
+					onChange={(e) => setExportScope(e.currentTarget.value as ExportScope)}
+				>
+					<option value="all">Everything ({scopeCounts().all})</option>
+					<option value="modified">Modified only ({scopeCounts().modified})</option>
+					<option value="custom">Custom only ({scopeCounts().custom})</option>
+				</select>
+				<button class={sp.transferBtn} data-testid="export-btn" onClick={handleExport}>
+					Export…
+				</button>
+				<button class={sp.transferBtn} data-testid="import-btn" onClick={handleImportFile}>
+					Import…
+				</button>
+			</div>
 
 			<div class={s.group}>
 				<label>Headless Agent</label>
@@ -745,6 +827,17 @@ export const SmartPromptsTab: Component = () => {
 			<button class={sp.addBtn} onClick={handleNewPrompt}>
 				+ New Smart Prompt
 			</button>
+
+			<Show when={importState()}>
+				{(state) => (
+					<PromptImportDialog
+						candidates={state().candidates}
+						warnings={state().warnings}
+						onImport={handleImportConfirm}
+						onCancel={() => setImportState(null)}
+					/>
+				)}
+			</Show>
 		</div>
 	);
 };
