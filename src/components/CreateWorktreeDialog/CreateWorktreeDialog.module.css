@@ -33,6 +33,11 @@
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+  transition: opacity 0.15s;
+}
+
+.baseRefRow[data-disabled] {
+  opacity: 0.5;
 }
 
 .baseRefRow label {
@@ -72,6 +77,10 @@
   border-color: var(--accent);
 }
 
+.dropdownTrigger:disabled {
+  cursor: not-allowed;
+}
+
 .dropdownValue {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -88,13 +97,39 @@
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  max-height: 160px;
+  max-height: 200px;
   overflow-y: auto;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-popup);
   z-index: 10;
+}
+
+.dropdownSearch {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  font-size: var(--font-md);
+  font-family: var(--font-ui);
+}
+
+.dropdownSearch:focus {
+  outline: none;
+}
+
+.dropdownEmpty {
+  padding: 8px 10px;
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  font-style: italic;
 }
 
 .dropdownItem {
@@ -119,6 +154,16 @@
   background: var(--accent-hover);
 }
 
+/* The keyboard cursor — distinct from dropdownItemActive, which marks the
+ * currently-chosen value. Both can apply to the same row at once. */
+.dropdownItemSelected {
+  background: var(--bg-highlight);
+}
+
+.dropdownItemActive.dropdownItemSelected {
+  background: var(--accent-hover);
+}
+
 .dropdownSectionHeader {
   padding: 4px 10px 2px;
   font-size: var(--font-xs);
@@ -130,7 +175,12 @@
 }
 
 .branchList {
-  max-height: 150px;
+  /* Fixed (not max-) height: the number of matches changes on every keystroke
+   * while filtering, and a max-height that merely caps growth still lets the
+   * box shrink to fit fewer matches — producing a dialog that visibly resizes
+   * as the user types. A constant height keeps the popover's overall size
+   * stable regardless of how many branches currently match. */
+  height: 150px;
   overflow-y: auto;
   margin-top: 8px;
   border: 1px solid var(--border);
@@ -164,19 +214,62 @@
   color: var(--text-on-accent);
 }
 
+/* The keyboard cursor — distinct from .selected, which marks the row matching
+ * what's currently typed. Both can apply to the same row at once. */
+.branchItem.branchItemHighlighted {
+  background: var(--bg-highlight);
+}
+
+.branchItem.selected.branchItemHighlighted {
+  background: var(--accent-hover);
+}
+
 .worktreeTag {
   font-size: var(--font-sm);
   color: var(--fg-muted);
   font-style: italic;
 }
 
+.matchHighlight {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-radius: 2px;
+}
+
+/* Wraps .statusLine, .pathPreview, and the .error paragraph (still each
+ * individually conditional — see CreateWorktreeDialog.tsx). A fixed min-height
+ * covering their combined worst case (all three showing at once) keeps the
+ * dialog's overall size constant as they individually appear/disappear per
+ * keystroke, without changing any of their own conditional-mount semantics.
+ *
+ * The three rows' current worst-case stacked height is ~78px at today's
+ * --font-sm/--font-md and margins (statusLine ~25px + pathPreview ~29px +
+ * .error ~26px) — 100px leaves ~22px of slack deliberately, since nothing
+ * automatically re-derives this number if a row's font-size, padding, or
+ * copy changes later. If you touch any of those three rows' sizing, re-check
+ * this value visually (see to-test.md's "UI tweaks" entry) rather than
+ * assuming the existing slack still covers it. */
+.previewFooter {
+  min-height: 100px;
+}
+
+/* Single line, ellipsized, so a long message can't wrap to a second line and
+ * grow past .previewFooter's reserved height. */
 .statusLine {
   margin-top: 8px;
   font-size: var(--font-sm);
   color: var(--fg-secondary);
   font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* Truncation to show the informative tail happens in JS (see
+ * pathPreviewDisplay in CreateWorktreeDialog.tsx) rather than via the
+ * CSS direction:rtl start-ellipsis trick, which risks the Unicode Bidi
+ * Algorithm reordering digit runs in an otherwise strong-LTR path. nowrap +
+ * ellipsis here is only a backstop in case that JS estimate runs long. */
 .pathPreview {
   margin-top: 4px;
   padding: 4px 8px;
@@ -185,5 +278,16 @@
   color: var(--fg-muted);
   background: var(--bg-tertiary);
   border-radius: var(--radius-md);
-  word-break: break-all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Applied alongside the shared .error from dialog.module.css; single line so a
+ * long error message can't wrap to a second line and grow past
+ * .previewFooter's reserved height. */
+.errorLine {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
