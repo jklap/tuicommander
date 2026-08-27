@@ -70,3 +70,51 @@ listed here.
 - **Trade-offs:** Investigation-only until resolved; no code change implied yet.
 - **Estimated complexity:** S (investigation) — unknown for the follow-up work.
 - **Recommended priority:** P2 (could reshape the block-detection plan).
+### Smart Prompts `icon` field is a display bug, and has no UI to set it
+- **Problem/opportunity:** Every built-in Smart Prompt carries an `icon: string` (e.g.
+  `"git-commit"`, `"sparkle"`, `"shield"` — 24 unique names across 27 prompts, set as a
+  required positional argument to the `builtin()` helper in
+  `src/data/smartPromptsBuiltIn.ts`), but nothing in the codebase ever interprets those
+  names as icons. The only place `.icon` is read anywhere is
+  `src/components/SettingsPanel/tabs/SmartPromptsTab.tsx:590`, which prints the raw string
+  as text inside a 20px muted-gray box (`SmartPromptsTab.module.css:71-77`, sized for one
+  glyph) — the surrounding comment literally calls it a "placeholder." So today it reads
+  the word "sparkle" instead of a sparkle glyph. Separately, neither prompt editor
+  (`SmartPromptsTab`'s `PromptEditor` nor `PromptDrawer`'s `PromptEditor`) exposes an icon
+  field, and `promptLibraryStore.createPrompt()` never defaults one — so every custom
+  prompt has `icon: undefined` permanently, with no way for a user to ever set one.
+- **Proposed solution:** Build a small icon-name → glyph lookup (à la `AgentIcon.tsx`'s
+  `AGENT_PATHS` map, but keyed by the free-form icon-name strings instead of a closed
+  union) and render through it at the one call site instead of the raw string. Two open
+  decisions before implementing, deliberately left open rather than pre-decided:
+  1. **Scope** — fix the built-in display only (small, self-contained), or also add a
+     picker to both prompt editors so custom prompts stop being permanently icon-less —
+     modeled on `ColorSwatchPicker`/`colorPresets.ts` (`src/components/shared/`), the
+     existing "pick one of N fixed presets, active-state highlight, click to select"
+     pattern already used for accent color and per-repo sidebar color. *Leaning toward
+     doing both* — fixing only the built-ins would make the asymmetry more visible, not
+     less: built-ins get real icons while every custom prompt shows a blank gap next to
+     them.
+  2. **Glyph style** — the render context (`.promptIcon`) is explicitly
+     `color: var(--fg-muted)` at `font-size: var(--font-xs)`, which only affects
+     monochrome/text-presentation Unicode glyphs, not full-color emoji (emoji ignore CSS
+     `color`). Monochrome-only (e.g. `●` `↑` `✎` `✦` `◎` `✓` `▶` `⚙` `⚠`) stays visually
+     consistent with the row's other muted chrome and can reuse two symbols already
+     established elsewhere in the app (Toolbar's `▶` for "running", `⚠` for PR conflicts).
+     Mixing in a few colorful emoji where no decent monochrome symbol exists (🔍 magnifier,
+     👀 review, 🛡 shield) is more instantly recognizable at the cost of a few icons not
+     matching the row's muted styling. *Leaning toward monochrome-only* for visual
+     consistency with the badges/text already in that row.
+- **Expected benefits:** Fixes a visibly broken settings screen (raw words instead of
+  icons); if the picker is included, closes a real feature gap (custom prompts can never
+  be visually distinguished today) and removes the future asymmetry of "built-ins look
+  nice, customs look blank."
+- **Trade-offs:** The glyph map is a values judgment with no objectively correct answer —
+  reversible, but worth a quick look before landing. Adding the picker touches two editor
+  components (`SmartPromptsTab.tsx`'s and `PromptDrawer.tsx`'s `PromptEditor`) plus
+  `createPrompt`/`updatePrompt` call sites, roughly doubling the change size versus the
+  display-only fix.
+- **Estimated complexity:** S (display fix only) or M (display fix + picker in both
+  editors).
+- **Recommended priority:** P3 (cosmetic; not a regression, the field was always
+  unwired).
