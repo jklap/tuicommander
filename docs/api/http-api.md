@@ -2040,8 +2040,13 @@ DELETE /worktrees/:workspaceId?repoPath=/path&deleteBranch=true
 
 Query parameters:
 - `repoPath` (required) -- base repository path
-- `deleteBranch` (optional, default `true`) -- when `true`, also deletes the local git branch
-- `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree state and uses forced worktree removal and branch deletion
+- `deleteBranch` (optional, default `true`) -- when `true`, also deletes the local git branch (always via the safe `git branch -d` -- see below)
+- `force` (optional, default `false`) -- when `true`, uses forced (double `--force`) worktree removal, overriding both an uncommitted-work refusal and a `git worktree lock`
+- `overrideBusy` (optional, default `false`) -- when `true`, skips the check that refuses to remove a worktree with a live PTY/agent session attached. Independent of `force`: overriding a live session never also escalates dirty-file or lock handling
+
+Without `force`, removal refuses with a `4xx`/`5xx` error body `{ "error": "worktree_dirty:<git stderr>" }` for uncommitted work, or `{ "error": "worktree_locked:<git stderr>" }` for a `git worktree lock`ed worktree (taken automatically while a session is attached — see `docs/backend/git.md`). Independently of `force`, a live session attached to the worktree refuses with `{ "error": "worktree_busy:<n> session(s) attached: ..." }` unless `overrideBusy=true`.
+
+Branch deletion **always** uses the safe `git branch -d`, regardless of `force`/`overrideBusy` -- a worktree removal never force-deletes the branch (the branch surviving as `branch_delete_warning` is what made the 2026-08-26 incident's orphaned commits recoverable; see `plans/worktree-removal-incident-2026-08-26.md`).
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 

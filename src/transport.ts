@@ -138,7 +138,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: "/system/notification-sound",
 			// `device` rides along: notifications.ts always sends it, so dropping it
 			// here would play every browser-mode sound on the default output.
-			body: { sound: args.sound, volume: args.volume, device: args.device ?? null },
+			// `choice` rides along too: notifications.ts always sends it, so dropping
+			// it here would ignore per-sound preset/custom-file selection in browser mode.
+			body: { sound: args.sound, volume: args.volume, device: args.device ?? null, choice: args.choice ?? null },
 		}),
 	},
 	// --- Relay ---
@@ -203,12 +205,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		}),
 	},
 	acp_session_list: {
+		// Query params are appended via `path +=`, not interpolated into the base template
+		// literal below — extractPathTemplate's static extraction only captures that base
+		// assignment, so folding the querystring into it (e.g. `${suffix}` inline) makes
+		// normalizeRouteShape collapse it into a second, spurious `:param` glued onto
+		// "sessions" with no separator. Match the convention every other optional-query
+		// mapper in this file already uses (get_recent_branches, get_tunnel_audit, etc).
 		map: (args, p) => {
 			const query = new URLSearchParams();
 			if (args.cwd !== undefined && args.cwd !== null) query.set("cwd", String(args.cwd));
 			if (args.cursor !== undefined && args.cursor !== null) query.set("cursor", String(args.cursor));
-			const suffix = query.toString() ? `?${query.toString()}` : "";
-			return { method: "GET", path: `/acp/connections/${p("connectionId")}/sessions${suffix}` };
+			let path = `/acp/connections/${p("connectionId")}/sessions`;
+			if (query.toString()) path += `?${query.toString()}`;
+			return { method: "GET", path };
 		},
 	},
 	acp_session_load: {
@@ -1554,9 +1563,10 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	remove_worktree: {
 		map: (args, p) => {
 			const force = args.force === true ? "&force=true" : "";
+			const overrideBusy = args.overrideBusy === true ? "&overrideBusy=true" : "";
 			return {
 				method: "DELETE",
-				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${args.deleteBranch ?? true}${force}`,
+				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${args.deleteBranch ?? true}${force}${overrideBusy}`,
 			};
 		},
 	},

@@ -620,6 +620,7 @@ pub(super) async fn delete_local_branch_http(
             &branch_name,
             &workspace_id,
             keep_worktree.unwrap_or(false),
+            Some(&state),
         )?;
         state.invalidate_repo_caches(&repo_path);
         Ok::<(), String>(())
@@ -658,7 +659,64 @@ pub(super) async fn update_from_base_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::tests_support::create_temp_git_repo;
+    use axum::extract::State;
     use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn delete_local_branch_http_deletes_a_bare_branch() {
+        // This whole file had zero tests before this — the `Some(&state)`
+        // this handler now threads into `delete_local_branch_impl` (so the
+        // worktree-removal liveness gate reaches this transport too) was
+        // previously untested along with everything else here.
+        let repo = create_temp_git_repo();
+        std::process::Command::new("git")
+            .args(["branch", "bare-branch"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = delete_local_branch_http(
+            State(state),
+            Json(GitDeleteLocalBranchRequest {
+                repo_path: repo.path().to_string_lossy().to_string(),
+                branch_name: "bare-branch".to_string(),
+                workspace_id: "bare-branch".to_string(),
+                keep_worktree: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let out = std::process::Command::new("git")
+            .args(["branch", "--list", "bare-branch"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+            "branch should be deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_local_branch_http_rejects_a_relative_repo_path() {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = delete_local_branch_http(
+            State(state),
+            Json(GitDeleteLocalBranchRequest {
+                repo_path: "relative/path".to_string(),
+                branch_name: "feature".to_string(),
+                workspace_id: "feature".to_string(),
+                keep_worktree: None,
+            }),
+        )
+        .await;
+
+        assert_ne!(response.status(), StatusCode::OK);
+    }
 
     /// A remote that completes the TCP handshake and then answers nothing, so a
     /// `git fetch` aimed at it blocks reading the ref advertisement. It

@@ -3,6 +3,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
+import { branchActivitySummary } from "../../utils/activitySnapshot";
 import type { RemoveWorktreeResult } from "../useRepository";
 
 interface WorktreeRemovalCoordinatorDeps {
@@ -12,6 +13,7 @@ interface WorktreeRemovalCoordinatorDeps {
 			workspaceId: string,
 			deleteBranch: boolean,
 			force?: boolean,
+			overrideBusy?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		getWorkspaceLifecycle: (repoPath: string, workspaceId: string) => Promise<WorkspaceLifecycleStatus>;
 	};
@@ -21,8 +23,15 @@ interface WorktreeRemovalCoordinatorDeps {
 			status: WorkspaceLifecycleStatus,
 			deleteBranch: boolean,
 		) => Promise<boolean>;
-		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
+		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean, isDirty?: boolean) => Promise<boolean>;
+		confirmRemoveBusyWorktree?: (
+			branchName: string,
+			summary: ReturnType<typeof branchActivitySummary>,
+		) => Promise<boolean>;
+		confirmForceRemoveDirtyWorktree?: (branchName: string) => Promise<boolean>;
 	};
+	/** `null` when the backend can't answer — treated as "don't know," not clean. */
+	checkWorktreeDirty: (repoPath: string, branchName: string) => Promise<boolean | null>;
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
 	setStatusInfo: (message: string) => void;
 	removingBranches: Accessor<Set<string>>;
@@ -85,7 +94,16 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			return;
 		}
 
-		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, deleteBranch);
+		// Computed from the workspace's terminal list as of THIS click, before
+		// anything is closed. This is what stops the class of incident where a
+		// worktree with a live (even idle) terminal attached got deleted: a busy
+		// workspace gets a dialog that says so, BEFORE the close-terminal loop
+		// below ever runs. See plans/worktree-removal-incident-2026-08-26.md.
+		const activity = branchActivitySummary(branch.terminals);
+		const confirmed = activity.isBusy
+			? await (deps.dialogs.confirmRemoveBusyWorktree?.(branchName, activity) ??
+					deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, deleteBranch))
+			: await deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, deleteBranch);
 		if (!confirmed) {
 			clearLock();
 			return;
@@ -119,39 +137,140 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		});
 
 		// Tracks whether to remove the branch from the store at the end.
-		// Set to true on success or non-fatal non-lock errors (old "remove from UI" behavior).
-		// Stays false when: locked+cancelled, or force-remove failed (worktree still in git).
+		// Set to true on success only — an unrecognized failure now KEEPS the
+		// branch row (see the final `else` arm below). It used to remove the row
+		// unconditionally on any non-lock error ("remove from UI only"), which
+		// silently hid a worktree that was still on disk the moment `worktree_dirty:`
+		// became a real refusal instead of being masked by the removed stray
+		// `--force` (2026-08-26 incident, root cause #1/#4 in the writeup).
 		let shouldRemoveFromStore = false;
 		let shouldClearBranchLabel = true;
 		try {
-			// The user confirmed knowing the count, so the backend guard would only
-			// bounce a decision that has already been made.
-			const outcome = await deps.repo.removeWorktree(
-				repoPath,
-				workspaceId,
-				deleteBranch,
-				lifecycle.removalSafety === "requires_force",
-			);
+			// First attempt never overrides anything: Safe mode, no busy override.
+			// The terminal-close loop above already released everything THIS
+			// instance knew about, so this fails only when git itself refuses
+			// (dirty/locked) or another session neither the frontend nor this
+			// close loop knew about is still attached.
+			const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch);
 			appLogger.info("git", `handleRemoveWorkspace: remove_worktree SUCCESS`, { workspaceId });
 			shouldRemoveFromStore = true;
 			shouldClearBranchLabel = !outcome?.branch_delete_warning;
 			deps.setStatusInfo(describeRemoveWorktreeSuccess(branchName, outcome));
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
-			if (reason.startsWith("worktree_locked:")) {
-				// Worktree is locked by a Claude agent — ask user to confirm force removal
+			if (reason.startsWith("worktree_busy:")) {
+				// A session is attached that this instance's terminal-close loop
+				// didn't reach — e.g. an MCP/HTTP-spawned session, or one that
+				// attached in the race between the confirm dialog and this call.
+				// This is the backend's own backstop; ask again, now with what the
+				// backend actually found attached.
 				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
-				appLogger.warn("git", `handleRemoveWorkspace: worktree locked — showing confirmation dialog`, {
+				appLogger.warn("git", `handleRemoveWorkspace: worktree busy — showing confirmation dialog`, {
 					workspaceId,
 					reason,
 				});
-				// Pass deleteBranch so the dialog can warn about unmerged-commit loss
-				// when force=true causes `git branch -D` to run on a branch with
-				// unpushed work. Catch dialog rejection so the removingBranches
-				// lock is released even when the modal subsystem errors out.
+				let overrideConfirmed = false;
+				try {
+					overrideConfirmed = await (deps.dialogs.confirmRemoveBusyWorktree?.(branchName, activity) ?? false);
+				} catch (dialogErr) {
+					appLogger.error("git", `handleRemoveWorkspace: confirmRemoveBusyWorktree threw`, {
+						workspaceId,
+						error: dialogErr instanceof Error ? dialogErr.message : String(dialogErr),
+					});
+					deps.setStatusInfo(`Failed to confirm busy-override for ${branchName}`);
+					clearLock();
+					return;
+				}
+				if (!overrideConfirmed) {
+					appLogger.info("git", `handleRemoveWorkspace: user cancelled busy-override removal`, { workspaceId });
+					clearLock();
+					return;
+				}
+				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: true });
+				try {
+					const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, false, true);
+					appLogger.info("git", `handleRemoveWorkspace: override-busy remove_worktree SUCCESS`, { workspaceId });
+					shouldRemoveFromStore = true;
+					shouldClearBranchLabel = !outcome?.branch_delete_warning;
+					deps.setStatusInfo(describeRemoveWorktreeSuccess(branchName, outcome));
+				} catch (overrideErr) {
+					const overrideReason = overrideErr instanceof Error ? overrideErr.message : String(overrideErr);
+					appLogger.error("git", `handleRemoveWorkspace: override-busy remove_worktree FAILED`, {
+						workspaceId,
+						reason: overrideReason,
+					});
+					deps.setStatusInfo(`Failed to remove ${branchName}: ${overrideReason}`);
+					repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
+					clearLock();
+					return;
+				}
+			} else if (reason.startsWith("worktree_dirty:")) {
+				// Safe mode was refused because the worktree has uncommitted work.
+				// `overrideBusy` is not involved here — this is purely the
+				// dirty-file confirmation, independent of whether anything is
+				// attached (root cause #1: the old code silently discarded
+				// uncommitted work here instead of asking).
+				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
+				appLogger.warn("git", `handleRemoveWorkspace: worktree dirty — showing confirmation dialog`, {
+					workspaceId,
+					reason,
+				});
 				let forceConfirmed = false;
 				try {
-					forceConfirmed = await (deps.dialogs.confirmRemoveLockedWorktree?.(branchName, deleteBranch) ?? false);
+					forceConfirmed = await (deps.dialogs.confirmForceRemoveDirtyWorktree?.(branchName) ?? false);
+				} catch (dialogErr) {
+					appLogger.error("git", `handleRemoveWorkspace: confirmForceRemoveDirtyWorktree threw`, {
+						workspaceId,
+						error: dialogErr instanceof Error ? dialogErr.message : String(dialogErr),
+					});
+					deps.setStatusInfo(`Failed to confirm force-remove for ${branchName}`);
+					clearLock();
+					return;
+				}
+				if (!forceConfirmed) {
+					appLogger.info("git", `handleRemoveWorkspace: user cancelled dirty-worktree removal`, { workspaceId });
+					clearLock();
+					return;
+				}
+				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: true });
+				try {
+					const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, true);
+					appLogger.info("git", `handleRemoveWorkspace: force remove_worktree SUCCESS`, { workspaceId });
+					shouldRemoveFromStore = true;
+					shouldClearBranchLabel = !outcome?.branch_delete_warning;
+					deps.setStatusInfo(describeRemoveWorktreeSuccess(branchName, outcome));
+				} catch (forceErr) {
+					const forceReason = forceErr instanceof Error ? forceErr.message : String(forceErr);
+					appLogger.error("git", `handleRemoveWorkspace: force remove_worktree FAILED`, {
+						workspaceId,
+						reason: forceReason,
+					});
+					deps.setStatusInfo(`Failed to remove ${branchName}: ${forceReason}`);
+					repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
+					clearLock();
+					return;
+				}
+			} else if (reason.startsWith("worktree_locked:")) {
+				// Worktree is locked (git-level lock, taken on session attach — see
+				// `lock_worktree_for_session`) — ask user to confirm force removal.
+				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
+				appLogger.warn("git", `handleRemoveWorkspace: worktree locked — showing confirmation dialog`, {
+					branchName,
+					reason,
+				});
+				// Force-removing a locked worktree uses Forced (double --force),
+				// which overrides a dirty-worktree refusal too — so confirming
+				// "Force Remove" here can silently discard uncommitted work with
+				// no warning of its own. Check dirtiness so the dialog can say so.
+				// An unanswered check (`null`) is treated as possibly dirty —
+				// fail toward warning, not toward silence.
+				const isDirty = (await deps.checkWorktreeDirty(repoPath, branchName)) !== false;
+				// Catch dialog rejection so the removingBranches lock is released
+				// even when the modal subsystem errors out.
+				let forceConfirmed = false;
+				try {
+					forceConfirmed = await (deps.dialogs.confirmRemoveLockedWorktree?.(branchName, deleteBranch, isDirty) ??
+						false);
 				} catch (dialogErr) {
 					appLogger.error("git", `handleRemoveWorkspace: confirmRemoveLockedWorktree threw`, {
 						workspaceId,
@@ -195,6 +314,9 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 				clearLock();
 				return;
 			} else {
+				// Unrecognized failure: the worktree is presumably still on disk.
+				// Keep the sidebar row and report the failure instead of silently
+				// dropping it — see the comment on `shouldRemoveFromStore` above.
 				appLogger.error("git", `handleRemoveWorkspace: remove_worktree FAILED — workspace kept`, {
 					workspaceId,
 					reason,

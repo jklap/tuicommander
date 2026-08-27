@@ -3431,9 +3431,13 @@ async fn handle_worktree(
                     return serde_json::json!({"error": "Action 'worktree_remove' requires 'workspace_id' parameter"});
                 }
             };
-            let force = args["force"].as_bool().unwrap_or(false);
             let path_for_remove = path.clone();
             let workspace_id_for_remove = workspace_id.clone();
+            let state_for_remove = std::sync::Arc::clone(state);
+            // Safe mode, no busy override: an MCP-connected agent gets the same
+            // liveness gate as everyone else and no way to bypass it — this
+            // surface must never be able to tear down a live session's worktree
+            // out from under it (see the 2026-08-26 incident writeup).
             let result = tokio::task::spawn_blocking(move || {
                 let archive = crate::worktree::resolve_archive_script(&path_for_remove);
                 crate::worktree::remove_worktree_by_workspace_id(
@@ -3441,7 +3445,9 @@ async fn handle_worktree(
                     &workspace_id_for_remove,
                     true,
                     archive.as_deref(),
-                    force,
+                    crate::worktree::RemovalMode::Safe,
+                    Some(&state_for_remove),
+                    false,
                 )
             })
             .await;
@@ -6891,6 +6897,7 @@ mod tests {
     // Only the cfg(unix) PTY tests below buffer real output.
     #[cfg(unix)]
     use crate::OutputRingBuffer;
+    use crate::state::tests_support::create_temp_git_repo as create_temp_git_repo_for_mcp_test;
     use base64::Engine;
 
     fn upstream_passthrough_result() -> serde_json::Value {
@@ -7401,6 +7408,79 @@ mod tests {
                 && body.contains("archive.as_deref(),\n                    force,"),
             "native MCP removal must default force to false and forward an explicit true"
         );
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_remove_actually_removes_a_real_worktree() {
+        // No existing test exercised `handle_worktree`'s "remove" arm against a
+        // real repo/worktree — only the missing-branch-param error path
+        // (mcp_http/mod.rs's test_repo_worktree_remove_missing_branch) and this
+        // file's response-shaping helper were covered.
+        let repo = create_temp_git_repo_for_mcp_test();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = crate::worktree::WorktreeConfig {
+            task_name: "mcp-remove".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("mcp-remove".to_string()),
+            create_branch: true,
+        };
+        let wt = crate::worktree::create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("create worktree");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "remove",
+                "path": repo.path().to_string_lossy(),
+                "branch": "mcp-remove",
+            }),
+            false,
+        )
+        .await;
+
+        assert_eq!(response["ok"], true, "response: {response}");
+        assert!(!wt.path.exists(), "worktree directory should be removed");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handle_worktree_remove_refuses_a_worktree_with_a_live_session() {
+        // The MCP transport is exactly the surface the incident writeup singled
+        // out as unable to reach the desktop UI's confirm dialogs — it must get
+        // the backend's own liveness gate as its only protection, with no way
+        // to override it (see the "remove" arm's `override_busy: false`, hardcoded).
+        let repo = create_temp_git_repo_for_mcp_test();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = crate::worktree::WorktreeConfig {
+            task_name: "mcp-busy".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("mcp-busy".to_string()),
+            create_branch: true,
+        };
+        let wt = crate::worktree::create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("create worktree");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session_attached_to(&state, "s1", wt.clone());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "remove",
+                "path": repo.path().to_string_lossy(),
+                "branch": "mcp-busy",
+            }),
+            false,
+        )
+        .await;
+
+        let error = response["error"].as_str().expect("error field");
+        assert!(
+            error.starts_with("worktree_busy:"),
+            "expected worktree_busy: prefix, got: {error}"
+        );
+        assert!(wt.path.exists(), "worktree must survive a refused removal");
     }
 
     #[tokio::test]

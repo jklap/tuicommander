@@ -889,7 +889,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Archive script: runs before a worktree is archived or deleted; non-zero exit blocks the operation
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools
-- Remove via sidebar `×` button or context menu (with confirmation)
+- Remove via sidebar `×` button or context menu (with confirmation). Removal is refused outright while a terminal/agent is attached, with a distinct "in use" confirmation shown BEFORE any terminal is closed; uncommitted work and a git-level lock each get their own follow-up confirmation instead of being silently overridden. Branch deletion always uses safe `git branch -d`, never a forced delete, regardless of how the worktree itself was removed.
 - **Warm linked worktrees**: every workspace shares refs and objects with the parent. After `git worktree add`, ignored directories such as `node_modules`, `target`, and `.venv` are copied with clonefile/reflink when supported; tracked paths, ignored files, nested repositories, and the destination ancestor are never copied
   - Capability is measured against the actual source/destination pair. Unsupported filesystems produce one warning and a valid cold worktree
   - Parent tracked and untracked changes are not carried into the new checkout
