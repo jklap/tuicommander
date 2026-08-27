@@ -233,8 +233,12 @@ pub(crate) async fn create_pty_with_worktree(
     let (session_id, master, child, writer, reader, shell) = match pty_result {
         Ok(result) => result,
         Err(e) => {
-            // Clean up the worktree since PTY creation failed
-            if let Err(cleanup_err) = remove_worktree_internal(&worktree, false) {
+            // Clean up the worktree since PTY creation failed. Dirty (not Safe):
+            // the worktree was just created and never attached to a session, so
+            // only a setup script's output could be lost here, never user work.
+            if let Err(cleanup_err) =
+                remove_worktree_internal(&worktree, crate::worktree::RemovalMode::Dirty)
+            {
                 tracing::warn!("Failed to cleanup worktree after PTY failure: {cleanup_err}");
             }
             return Err(e);
@@ -243,6 +247,12 @@ pub(crate) async fn create_pty_with_worktree(
 
     let branch = worktree.branch.clone();
     let worktree_cwd = Some(worktree.path.to_string_lossy().to_string());
+
+    // Lock the worktree for this session so a bare `git worktree remove` (or a
+    // removal that skips the live-session gate for some other reason) refuses
+    // by default. Defense in depth — the primary gate is the live-session check
+    // in `remove_worktree_by_workspace_id`. Best-effort: never blocks the spawn.
+    crate::worktree::lock_worktree_for_session(&worktree.base_repo, &worktree.path, &session_id);
 
     // Store session with worktree info (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
@@ -529,8 +539,13 @@ pub(crate) async fn close_pty(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tokio::task::spawn_blocking(move || {
+    // Safe: closing a tab must never discard uncommitted work. If the worktree
+    // is dirty or another session is still attached elsewhere, this fails and
+    // the worktree (already detached from `state.sessions` by `close_pty_core`)
+    // is simply left in place — same as any other failed cleanup here, which
+    // has always been warn-only.
         if let Some(worktree) = close_pty_core(&state, &session_id, cleanup_worktree)
-            && let Err(e) = remove_worktree_internal(&worktree, false)
+            && let Err(e) = remove_worktree_internal(&worktree, crate::worktree::RemovalMode::Safe)
         {
             tracing::warn!("Failed to cleanup worktree: {e}");
         }

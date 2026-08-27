@@ -10483,9 +10483,22 @@ pub(crate) fn close_pty_core(
     } else {
         None
     };
+    // Independent of `cleanup_worktree`: if this was the last session attached
+    // to the worktree, drop the lock taken on attach (`lock_worktree_for_session`
+    // in `create_pty_with_worktree`) regardless of whether the worktree itself
+    // is being removed or just detached from.
+    let worktree_to_unlock = session.worktree.clone();
 
     // Drop session to release file handles (forcibly kills if still running)
     drop(session);
+
+    if let Some(wt) = worktree_to_unlock {
+        // `state.sessions.remove` above already dropped this session, so any
+        // remaining hit here is a genuinely different, still-live session.
+        if state.live_sessions_in_worktree(&wt.path).is_empty() {
+            crate::worktree::unlock_worktree(&wt.base_repo, &wt.path);
+        }
+    }
 
     worktree_to_cleanup
 }
