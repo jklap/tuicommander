@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "../../stores/appLogger";
 
 // Shared, hoisted RPC stub + mutable account list so add/remove round-trip.
 const h = vi.hoisted(() => {
@@ -82,6 +83,7 @@ const h = vi.hoisted(() => {
 				return Promise.resolve(undefined);
 		}
 	});
+	const writeClipboard = vi.fn().mockResolvedValue(undefined);
 	return {
 		events: { handlers: {} as Record<string, (payload: unknown) => void> },
 		rpc,
@@ -89,6 +91,7 @@ const h = vi.hoisted(() => {
 		accounts,
 		resolutions,
 		repos,
+		writeClipboard,
 		get circleCiStatus() {
 			return circleCiStatus;
 		},
@@ -116,6 +119,7 @@ vi.mock("../../stores/repositories", () => ({
 vi.mock("../../stores/appLogger", () => ({
 	appLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+vi.mock("../../utils/clipboard", () => ({ writeClipboard: h.writeClipboard }));
 vi.mock("../../stores/github", () => ({ githubStore: { setIssueFilter: vi.fn(), setPrHideDrafts: vi.fn() } }));
 vi.mock("../../stores/settings", () => ({ settingsStore: { state: {} } }));
 vi.mock("../../stores/repoDefaults", () => ({ repoDefaultsStore: { state: {} } }));
@@ -137,6 +141,8 @@ function resetState() {
 	h.circleCiStatus = { configured: false, source: "none" };
 	h.rpc.mockReset();
 	h.rpc.mockImplementation(h.defaultRpc);
+	h.writeClipboard.mockClear().mockResolvedValue(undefined);
+	vi.mocked(appLogger.warn).mockClear();
 }
 
 describe("GitHubTab — single-account collapse (006)", () => {
@@ -275,6 +281,33 @@ describe("GitHubTab — additional accounts", () => {
 		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("github_start_login"));
 		// The polling card shows the "add account" variant.
 		expect(getByText(/Add another account — enter this code/)).toBeTruthy();
+	});
+
+	it("logs (not throws) when the device-flow auto-copy of the code is denied", async () => {
+		const err = new DOMException("Write permission denied.", "NotAllowedError");
+		h.writeClipboard.mockRejectedValueOnce(err);
+		const { findByText, getByText } = render(() => <GitHubTab />);
+		fireEvent.click(await findByText("Add another GitHub account"));
+		fireEvent.click(await findByText("Add github.com account"));
+
+		// Login proceeds (code card still renders) despite the clipboard failure.
+		await waitFor(() => expect(getByText(/Add another account — enter this code/)).toBeTruthy());
+		await waitFor(() => expect(appLogger.warn).toHaveBeenCalledWith("github", "Clipboard auto-copy failed", err));
+	});
+
+	it("copyCode leaves the button unchanged (no 'Copied!') when the clipboard write fails", async () => {
+		h.writeClipboard.mockRejectedValue(new DOMException("Write permission denied.", "NotAllowedError"));
+		const { findByText, getByText, queryByText } = render(() => <GitHubTab />);
+		fireEvent.click(await findByText("Add another GitHub account"));
+		fireEvent.click(await findByText("Add github.com account"));
+		await findByText(/Add another account — enter this code/);
+
+		fireEvent.click(getByText("Copy code"));
+
+		// Give the rejected promise a tick to settle, then confirm no false "Copied!" state.
+		await waitFor(() => expect(h.writeClipboard).toHaveBeenCalledWith("WDJB-MJHT"));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(queryByText("Copied!")).toBeNull();
 	});
 
 	it("removes an account via github_remove_account(id) and re-collapses", async () => {

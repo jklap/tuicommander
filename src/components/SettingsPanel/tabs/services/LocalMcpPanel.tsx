@@ -14,6 +14,19 @@ import layout from "./ServiceRestyle.module.css";
 import { type AppConfig, type McpCapability, saveConfigField, useMcpStatusPoll } from "./servicesShared";
 import { UpstreamMcpPanel } from "./UpstreamMcpPanel";
 
+/** Copy the MCP client config snippet to clipboard, logging on failure. Returns
+ *  whether the write succeeded so the caller only shows the "Copied" indicator
+ *  on actual success. */
+export async function copyMcpSnippet(snippet: string): Promise<boolean> {
+	try {
+		await writeClipboard(snippet);
+		return true;
+	} catch (err) {
+		appLogger.warn("settings", "Clipboard write failed", { error: String(err) });
+		return false;
+	}
+}
+
 /**
  * Local MCP page: HTTP/MCP server status, the manual bridge configuration
  * snippet, and capability controls. Upstream (remote) MCP
@@ -112,15 +125,11 @@ export const LocalMcpPanel: Component = () => {
 								<button
 									data-non-setting="Copy the existing MCP bridge integration snippet"
 									class={s.mcpSnippetCopy}
-									onClick={() => {
-										writeClipboard(bridgeInfo()!.config_snippet)
-											.then(() => {
-												setSnippetCopied(true);
-												setTimeout(() => setSnippetCopied(false), 2000);
-											})
-											.catch((err) => {
-												appLogger.warn("settings", "Clipboard write failed", { error: String(err) });
-											});
+									onClick={async () => {
+										if (await copyMcpSnippet(bridgeInfo()!.config_snippet)) {
+											setSnippetCopied(true);
+											setTimeout(() => setSnippetCopied(false), 2000);
+										}
 									}}
 								>
 									{snippetCopied() ? "Copied" : "Copy"}

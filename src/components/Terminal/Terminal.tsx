@@ -23,11 +23,9 @@ import { paneLayoutStore } from "../../stores/paneLayout";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { settingsStore } from "../../stores/settings";
 import { type AwaitingInputType, isShellState, terminalsStore } from "../../stores/terminals";
-import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, isTauri, subscribePty, type Unsubscribe } from "../../transport";
 import { getSessionConnection } from "../../transportRuntime";
 import { onClickKeyDown } from "../../utils/a11y";
-import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { randomUuid } from "../../utils/randomId";
@@ -44,6 +42,7 @@ import { focusIsInsideOwnInput } from "./focusGuards";
 import { getSharedMetrics } from "./glyphCache";
 import { handleIntentEvent, shouldApplyOscTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
+import { handleOsc52ClipboardStore } from "./osc52Clipboard";
 import { trackQuestionReminder } from "./questionReminder";
 import s from "./Terminal.module.css";
 import { ChatViewFallbackBanner, TerminalChatView, ViewModeToggle } from "./TerminalChatView";
@@ -791,9 +790,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			// per-byte parse hot path — this fires once per actual OSC 52 sequence.)
 			unlistenClipboardStore = await listen<string>(`pty-clipboard-store-${targetSessionId}`, (event) => {
 				if (!settingsStore.state.osc52Clipboard) return;
-				writeClipboard(event.payload).catch(() => {});
 				const name = terminalsStore.get(props.id)?.name || "terminal";
-				toastsStore.add("Clipboard updated", `by ${name}`, "info");
+				handleOsc52ClipboardStore(event.payload, name);
 			});
 			if (disposed) {
 				safeUnlisten(unlistenClipboardStore);
