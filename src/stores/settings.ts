@@ -1,6 +1,15 @@
 import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 import appChoiceOptions from "../../src-tauri/src/settings/app_choice_options.json";
+import type { LinkActivation } from "../components/Terminal/canvasTerminalLinks";
+import {
+	type DoubleClickAction,
+	type RustSmartSelectionRule,
+	ruleFromWire,
+	ruleToWire,
+	type SmartSelectionRule,
+	type WordSelectionMode,
+} from "../components/Terminal/smartSelectionTypes";
 import { setLocale } from "../i18n";
 import { invoke } from "../invoke";
 import { settingNumberDefault } from "../services/settingsCatalogue";
@@ -81,6 +90,13 @@ interface RustAppConfig {
 	scrollback_reflow?: boolean;
 	cursor_style?: string;
 	terminal_renderer?: string;
+	terminal_link_activation?: string;
+	smart_selection_enabled?: boolean;
+	double_click_action?: string;
+	word_selection_mode?: string;
+	word_separators?: string;
+	word_selection_regex?: string;
+	smart_selection_rules?: RustSmartSelectionRule[];
 	show_block_timestamps?: boolean;
 	show_scrollbar_marks?: boolean;
 	show_block_marks?: boolean;
@@ -220,6 +236,39 @@ function validateTerminalRenderer(value: string | null): TerminalRenderer {
 	return value && (VALID_RENDERERS as readonly string[]).includes(value) ? (value as TerminalRenderer) : "webgl";
 }
 
+/** Valid link-activation values */
+const VALID_LINK_ACTIVATIONS: readonly LinkActivation[] = ["click", "modifier", "never"];
+
+function validateLinkActivation(value: string | null): LinkActivation {
+	return value && (VALID_LINK_ACTIVATIONS as readonly string[]).includes(value) ? (value as LinkActivation) : "click";
+}
+
+/** Default punctuation separators for "characters" word-selection mode —
+ *  matches `WORD_SEPARATOR_RE` in `canvasTerminalSelection.ts` and the Rust
+ *  `default_word_separators()` exactly, so the default preserves today's
+ *  double-click behavior losslessly. Whitespace/control chars are always
+ *  separators regardless of this string. Exported for the Settings UI's
+ *  "Restore default" action. */
+export const DEFAULT_WORD_SEPARATORS = " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\";
+
+/** Valid double-click-action values */
+const VALID_DOUBLE_CLICK_ACTIONS: readonly DoubleClickAction[] = ["word", "smart"];
+
+function validateDoubleClickAction(value: string | null): DoubleClickAction {
+	return value && (VALID_DOUBLE_CLICK_ACTIONS as readonly string[]).includes(value)
+		? (value as DoubleClickAction)
+		: "smart";
+}
+
+/** Valid word-selection-mode values */
+const VALID_WORD_SELECTION_MODES: readonly WordSelectionMode[] = ["characters", "regex"];
+
+function validateWordSelectionMode(value: string | null): WordSelectionMode {
+	return value && (VALID_WORD_SELECTION_MODES as readonly string[]).includes(value)
+		? (value as WordSelectionMode)
+		: "characters";
+}
+
 /** Split tab mode */
 export type SplitTabMode = "separate" | "unified";
 
@@ -279,6 +328,13 @@ interface SettingsStoreState {
 	scrollbackReflow: boolean;
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
+	linkActivation: LinkActivation;
+	smartSelectionEnabled: boolean;
+	doubleClickAction: DoubleClickAction;
+	wordSelectionMode: WordSelectionMode;
+	wordSeparators: string;
+	wordSelectionRegex: string;
+	smartSelectionRules: SmartSelectionRule[];
 	showBlockTimestamps: boolean;
 	/** Master toggle for the scrollbar history ticks; the two below pick the categories. */
 	showScrollbarMarks: boolean;
@@ -350,6 +406,13 @@ function createSettingsStore() {
 		scrollbackReflow: true,
 		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
 		terminalRenderer: "webgl",
+		linkActivation: "click",
+		smartSelectionEnabled: true,
+		doubleClickAction: "smart",
+		wordSelectionMode: "characters",
+		wordSeparators: DEFAULT_WORD_SEPARATORS,
+		wordSelectionRegex: "",
+		smartSelectionRules: [],
 		showBlockTimestamps: true,
 		showScrollbarMarks: true,
 		showBlockMarks: true,
@@ -431,6 +494,13 @@ function createSettingsStore() {
 		const cs = config.cursor_style;
 		values.cursorStyle = cs === "block" || cs === "underline" ? cs : "bar";
 		values.terminalRenderer = validateTerminalRenderer(config.terminal_renderer || null);
+		values.linkActivation = validateLinkActivation(config.terminal_link_activation ?? null);
+		values.smartSelectionEnabled = config.smart_selection_enabled ?? true;
+		values.doubleClickAction = validateDoubleClickAction(config.double_click_action ?? null);
+		values.wordSelectionMode = validateWordSelectionMode(config.word_selection_mode ?? null);
+		values.wordSeparators = config.word_separators ?? DEFAULT_WORD_SEPARATORS;
+		values.wordSelectionRegex = config.word_selection_regex ?? "";
+		values.smartSelectionRules = (config.smart_selection_rules ?? []).map(ruleFromWire);
 		values.showBlockTimestamps = config.show_block_timestamps ?? true;
 		values.showScrollbarMarks = config.show_scrollbar_marks ?? true;
 		values.showBlockMarks = config.show_block_marks ?? true;
@@ -499,6 +569,13 @@ function createSettingsStore() {
 			scrollback_reflow: values.scrollbackReflow,
 			cursor_style: values.cursorStyle,
 			terminal_renderer: values.terminalRenderer,
+			terminal_link_activation: values.linkActivation,
+			smart_selection_enabled: values.smartSelectionEnabled,
+			double_click_action: values.doubleClickAction,
+			word_selection_mode: values.wordSelectionMode,
+			word_separators: values.wordSeparators,
+			word_selection_regex: values.wordSelectionRegex,
+			smart_selection_rules: values.smartSelectionRules.map(ruleToWire),
 			show_block_timestamps: values.showBlockTimestamps,
 			show_scrollbar_marks: values.showScrollbarMarks,
 			show_block_marks: values.showBlockMarks,
@@ -989,6 +1066,44 @@ function createSettingsStore() {
 			save();
 		},
 
+		setLinkActivation(mode: LinkActivation): void {
+			setState("linkActivation", mode);
+			save();
+		},
+
+		setSmartSelectionEnabled(enabled: boolean): void {
+			setState("smartSelectionEnabled", enabled);
+			save();
+		},
+
+		setDoubleClickAction(action: DoubleClickAction): void {
+			setState("doubleClickAction", action);
+			save();
+		},
+
+		setWordSelectionMode(mode: WordSelectionMode): void {
+			setState("wordSelectionMode", mode);
+			save();
+		},
+
+		setWordSeparators(separators: string): void {
+			setState("wordSeparators", separators);
+			save();
+		},
+
+		setWordSelectionRegex(regex: string): void {
+			setState("wordSelectionRegex", regex);
+			save();
+		},
+
+		/** Replace the full list of smart-selection rules (add/edit/remove/reorder
+		 *  all go through here) — same whole-array-replacement pattern as
+		 *  `setCustomLaunchers`. */
+		setSmartSelectionRules(rules: SmartSelectionRule[]): void {
+			setState("smartSelectionRules", rules);
+			save();
+		},
+
 		setShowBlockMarks(enabled: boolean): void {
 			setState("showBlockMarks", enabled);
 			save();
@@ -1088,5 +1203,10 @@ registerDebugSnapshot("settings", () => {
 		preventSleepWhenBusy: s.preventSleepWhenBusy,
 		issueFilter: s.issueFilter,
 		terminalRenderer: s.terminalRenderer,
+		linkActivation: s.linkActivation,
+		smartSelectionEnabled: s.smartSelectionEnabled,
+		doubleClickAction: s.doubleClickAction,
+		wordSelectionMode: s.wordSelectionMode,
+		smartSelectionRuleCount: s.smartSelectionRules.length,
 	};
 });
