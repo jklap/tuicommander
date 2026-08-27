@@ -79,7 +79,7 @@ export interface AIChatPanelProps {
 }
 
 /** Copy text to clipboard, return true on success */
-async function copyToClipboard(text: string): Promise<boolean> {
+export async function copyToClipboard(text: string): Promise<boolean> {
 	try {
 		await writeClipboard(text);
 		return true;
@@ -191,10 +191,12 @@ const ToolCallCard: Component<{ entry: ToolCallEntry }> = (props) => {
 		outputExpanded() || !isLong() ? fullOutput() : fullOutput().slice(0, TOOL_OUTPUT_TRUNCATE) + "…";
 
 	const handleCopy = () => {
-		void writeClipboard(fullOutput()).then(() => {
-			setCopied(true);
-			setTimeout(() => setCopied(false), 1500);
-		});
+		writeClipboard(fullOutput())
+			.then(() => {
+				setCopied(true);
+				setTimeout(() => setCopied(false), 1500);
+			})
+			.catch((err) => appLogger.error("ai-chat", "Failed to copy tool output", err));
 	};
 
 	return (

@@ -60,7 +60,7 @@ function kindBadgeClass(kind: string): string {
 	}
 }
 
-async function copyToClipboard(text: string): Promise<void> {
+export async function copyToClipboard(text: string): Promise<void> {
 	try {
 		await writeClipboard(text);
 	} catch (e) {

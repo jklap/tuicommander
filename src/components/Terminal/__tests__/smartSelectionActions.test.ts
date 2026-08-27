@@ -27,6 +27,14 @@ describe("runSmartSelectionAction", () => {
 		expect(deps.copyToClipboard).toHaveBeenCalledWith("a1b2c3d");
 	});
 
+	it("copy: propagates a rejected copyToClipboard — CanvasTerminal's runSmartAction is the one that catches and logs it", async () => {
+		const deps = makeDeps();
+		const err = new DOMException("Write permission denied.", "NotAllowedError");
+		deps.copyToClipboard = vi.fn().mockRejectedValue(err);
+
+		await expect(runSmartSelectionAction(action({ kind: "copy", parameter: "\\0" }), ctx, deps)).rejects.toBe(err);
+	});
+
 	it("open_url: allowlisted scheme calls openUrl", async () => {
 		const deps = makeDeps();
 		await runSmartSelectionAction(action({ kind: "open_url", parameter: "https://\\0" }), ctx, deps);

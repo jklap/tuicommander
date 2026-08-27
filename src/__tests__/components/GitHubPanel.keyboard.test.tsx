@@ -1,7 +1,7 @@
 import { fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../mocks/tauri";
 import type { BranchPrStatus, GitHubIssue } from "../../types";
+import { mockInvoke } from "../mocks/tauri";
 
 const ISSUES: GitHubIssue[] = [
 	{ number: 11, title: "First issue", state: "OPEN", author: "a", url: "", labels: [], comments_count: 0 },
@@ -196,5 +196,48 @@ describe("GitHubPanel section collapse persistence", () => {
 		// An empty PR list defaults to collapsed; a populated one defaults to open.
 		render(() => <GitHubPanel {...baseProps} />);
 		expect(rows().length).toBe(PRS.length + ISSUES.length);
+	});
+});
+
+describe("GitHubPanel — copy issue number", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetCollapse();
+		mockInvoke.mockReset().mockResolvedValue(undefined);
+	});
+
+	afterEach(() => {
+		document.body.innerHTML = "";
+		uiStore._testCancelPendingSave();
+	});
+
+	// The panel renders through a Portal (see `panel()`/`rows()` above), so queries
+	// must go through `document`, not the render() container.
+	function expandFirstIssue() {
+		const row = rows().find((r) => r.textContent?.includes("First issue"));
+		fireEvent.click(row!);
+	}
+
+	it("writes the issue number to the clipboard via the native plugin", () => {
+		render(() => <GitHubPanel {...baseProps} />);
+		// The copy button only renders once the issue row is expanded.
+		expandFirstIssue();
+		fireEvent.click(document.querySelector('[title="Copy issue number"]')!);
+		expect(mockInvoke).toHaveBeenCalledWith("plugin:clipboard-manager|write_text", {
+			text: "#11",
+			label: undefined,
+		});
+	});
+
+	it("does not throw or crash the panel when the clipboard write is denied", async () => {
+		mockInvoke.mockRejectedValue(new DOMException("Write permission denied.", "NotAllowedError"));
+		render(() => <GitHubPanel {...baseProps} />);
+		expandFirstIssue();
+
+		expect(() => fireEvent.click(document.querySelector('[title="Copy issue number"]')!)).not.toThrow();
+		// Let the swallowed rejection settle — it has no success/failure UI, so the
+		// only assertion available is that the panel is still intact afterward.
+		await new Promise((r) => setTimeout(r, 0));
+		expect(panel()).not.toBeNull();
 	});
 });

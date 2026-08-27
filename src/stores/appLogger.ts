@@ -158,10 +158,17 @@ function ringClear(r: Ring): void {
  * `{}` for an Error because name/message/stack are non-enumerable — which is why
  * mirrored logs showed `"error":{}`. Extract them so the Rust ring buffer (and the
  * /logs HTTP endpoint) carry the actual failure.
+ *
+ * DOMException (e.g. clipboard API rejections) has the same non-enumerable
+ * name/message shape but doesn't extend Error, so it needs its own branch —
+ * otherwise it still collapses to `{}`.
  */
 function logDataReplacer(_key: string, value: unknown): unknown {
 	if (value instanceof Error) {
 		return { name: value.name, message: value.message, stack: value.stack };
+	}
+	if (value instanceof DOMException) {
+		return { name: value.name, message: value.message };
 	}
 	return value;
 }

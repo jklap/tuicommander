@@ -217,6 +217,24 @@ describe("appLogger", () => {
 		expect(typeof parsed.error.stack).toBe("string");
 	});
 
+	it("serializes DOMException data with name and message", async () => {
+		const err = new DOMException("Write permission denied.", "NotAllowedError");
+		testInScope(() => {
+			appLogger.error("terminal", "Failed to paste", err);
+		});
+
+		await vi.waitFor(() => {
+			expect(mockRpc).toHaveBeenCalledWith("push_log", expect.objectContaining({ level: "error", source: "terminal" }));
+		});
+		const call = mockRpc.mock.calls.find((c) => c[0] === "push_log");
+		expect(call).toBeDefined();
+		const parsed = JSON.parse((call![1] as { dataJson: string }).dataJson);
+		// Plain JSON.stringify would emit {} here (DOMException doesn't extend Error,
+		// and name/message are non-enumerable) — the replacer must surface the failure.
+		expect(parsed.name).toBe("NotAllowedError");
+		expect(parsed.message).toBe("Write permission denied.");
+	});
+
 	it("push sends null dataJson when no data provided", async () => {
 		testInScope(() => {
 			appLogger.warn("app", "plain message");
