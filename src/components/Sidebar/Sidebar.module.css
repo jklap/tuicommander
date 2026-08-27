@@ -737,6 +737,10 @@
   color: var(--success);
 }
 
+.branchIconBranch {
+  color: var(--accent);
+}
+
 /* Terminal state colors — applied directly via BranchIcon colorClass prop */
 .branchIconError {
   color: var(--error);
