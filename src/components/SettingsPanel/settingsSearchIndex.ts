@@ -81,6 +81,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "telegram", section: "Telegram", label: "Enable Telegram", labelKey: "telegram.enabled" },
 	// tabs/GeneralTab.tsx
 	{ tab: "general", section: "General", sectionKey: "general.heading.general" },
+	{ tab: "general", section: "Window", sectionKey: "general.heading.window", platform: "desktop" },
 	{ tab: "general", section: "Confirmations", sectionKey: "general.heading.confirmations" },
 	{ tab: "general", section: "Power Management", sectionKey: "general.heading.powerManagement" },
 	{ tab: "general", section: "Updates", sectionKey: "general.heading.updates" },
@@ -102,6 +103,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "general", section: "Experimental Features", sectionKey: "general.heading.experimental" },
 	{ tab: "general", section: "General", label: "Language", labelKey: "general.label.language" },
 	{ tab: "general", section: "General", label: "Show agent context bar" },
+	{
+		tab: "general",
+		section: "Window",
+		label: "Restore window size and position on launch",
+		labelKey: "general.toggle.restoreWindowGeometry",
+		platform: "desktop",
+	},
 	{
 		tab: "general",
 		section: "Confirmations",
@@ -178,6 +186,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/TerminalTab.tsx
 	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },
 	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
+	{ tab: "terminal", section: "Session Restore", sectionKey: "terminal.heading.sessionRestore" },
 	{ tab: "terminal", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
 	{
 		tab: "terminal",
@@ -253,6 +262,24 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "general.toggle.scrollbackReflow",
 		expert: true,
 		configKey: "app.scrollback_reflow",
+	},
+	{
+		tab: "terminal",
+		section: "Session Restore",
+		label: "Restore open terminals on launch",
+		labelKey: "terminal.toggle.restoreShellTerminals",
+	},
+	{
+		tab: "terminal",
+		section: "Session Restore",
+		label: "Save terminal scrollback",
+		labelKey: "terminal.toggle.restoreScrollback",
+	},
+	{
+		tab: "terminal",
+		section: "Session Restore",
+		label: "Scrollback lines to save",
+		labelKey: "terminal.label.restoreScrollbackLines",
 	},
 	// tabs/AppearanceTab.tsx
 	{ tab: "appearance", section: "Tabs", sectionKey: "appearance.heading.tabs" },

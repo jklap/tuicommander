@@ -1984,6 +1984,16 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps clear_saved_scrollback to DELETE /scrollback, scoping to one session or clearing all", () => {
+			const scoped = mapCommandToHttp("clear_saved_scrollback", { session: "tuic-1" });
+			expect(scoped.method).toBe("DELETE");
+			expect(scoped.path).toBe("/scrollback");
+			expect(scoped.body).toEqual({ session: "tuic-1" });
+
+			const all = mapCommandToHttp("clear_saved_scrollback", {});
+			expect(all.body).toEqual({ session: null });
+		});
+
 		it("maps agent detection and spawn aliases to HTTP", () => {
 			const launchArgs = mapCommandToHttp("prepare_agent_launch_args", {
 				agentType: "codex",

@@ -1914,6 +1914,15 @@ pub struct SessionMaps {
     /// Updated by PTY reader on every non-empty chunk. Used to derive shell_state:
     /// "busy" when now - last < 500ms, "idle" otherwise (matches desktop model).
     pub(crate) last_output_ms: DashMap<String, AtomicU64>,
+    /// `scrollback_store::capture_fingerprint()` of this session's `VtLogBuffer`
+    /// as of its last scrollback-restore capture write (see `scrollback_store.rs`).
+    /// Combines `total_lines()` with a hash of the current on-screen rows —
+    /// `total_lines()` alone never moves for a full-screen app that redraws via
+    /// cursor addressing without scrolling, which would otherwise freeze its
+    /// saved scrollback at whatever was on screen at the first capture. Lets the
+    /// periodic sweep skip an idle session's write entirely instead of rewriting
+    /// an unchanged file every tick.
+    pub(crate) scrollback_capture_marks: DashMap<String, u64>,
     /// Per-session timestamp of last user input written to the PTY (epoch ms).
     /// Stamped by `write_pty`. The grid ticker reads it to throttle frame sends
     /// while the user is actively typing AND the system CPU is saturated, so the
@@ -2239,6 +2248,13 @@ pub struct AppState {
     /// alerts. Set to true on focus and at startup; set to false on blur or
     /// window minimize. Push notifications fire only when this is false.
     pub(crate) desktop_window_focused: std::sync::atomic::AtomicBool,
+    /// Live geometry of the main window, seeded at startup and updated by the
+    /// `main` window's `on_window_event` handler. Flushed to
+    /// `window-geometry.json` on a timer and at exit — see `window_geometry.rs`
+    /// for why this bypasses `tauri-plugin-window-state`'s SIZE flag. Present
+    /// unconditionally (like `desktop_window_focused`) so the remote/headless
+    /// build compiles the same `AppState`; it is only ever mutated in desktop.
+    pub(crate) window_geometry: crate::window_geometry::WindowGeometryTracker,
     /// Server start time for uptime calculation in health endpoint.
     pub(crate) server_start_time: std::time::Instant,
     /// TUIC's own AI agent: per-session knowledge, sandboxes, the watcher
@@ -3293,6 +3309,17 @@ impl AppState {
         orphaned
     }
 
+    /// Read-only counterpart to `unbind_live_pty`: the `$TUIC_SESSION` identity
+    /// currently backed by `session_id`, if any, without removing the binding.
+    /// Used to capture a session's scrollback under its stable identity right
+    /// before `unbind_live_pty` drops the mapping on close.
+    pub(crate) fn tuic_session_for_live_pty(&self, session_id: &str) -> Option<String> {
+        self.session_maps.live_pty_by_tuic_session
+            .iter()
+            .find(|entry| entry.value() == session_id)
+            .map(|entry| entry.key().clone())
+    }
+
     /// Drop the waiter leases of a bridge that a reconnect just replaced.
     ///
     /// Leases carry no owning MCP session, but on a reconnect the distinction is
@@ -3477,6 +3504,9 @@ impl AppState {
             acp_push_last_ms: DashMap::new(),
             push_store,
             desktop_window_focused: std::sync::atomic::AtomicBool::new(cfg!(feature = "desktop")),
+            window_geometry: crate::window_geometry::WindowGeometryTracker::new(
+                crate::window_geometry::WindowGeometry::default(),
+            ),
             server_start_time: std::time::Instant::now(),
             tunnel_manager,
             remote: Default::default(),
@@ -5210,6 +5240,12 @@ pub(crate) struct PtyConfig {
     /// malformed or taken value is ignored. See `AppState::assign_term_alias`.
     #[serde(default)]
     pub(crate) alias: Option<String>,
+    /// When true and saved scrollback exists for `tuic_session`, seed the new
+    /// PTY's grid with it (via `log_lines_to_ansi` + `VtLogBuffer::process`)
+    /// before the reader thread starts. No-op when `tuic_session` is absent or
+    /// nothing was saved for it.
+    #[serde(default)]
+    pub(crate) restore_scrollback: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -6655,6 +6691,37 @@ mod tests {
             state.live_pty_for_peer("tuic-session-uuid"),
             None,
             "a stale binding must not offer a terminal that is gone"
+        );
+    }
+
+    #[test]
+    fn tuic_session_for_live_pty_finds_the_identity_backing_a_session() {
+        let state = tests_support::make_test_app_state();
+        state.bind_live_pty("tuic-uuid-1", "pty-key");
+
+        assert_eq!(
+            state.tuic_session_for_live_pty("pty-key"),
+            Some("tuic-uuid-1".to_string())
+        );
+    }
+
+    #[test]
+    fn tuic_session_for_live_pty_returns_none_for_an_unbound_session() {
+        let state = tests_support::make_test_app_state();
+        assert_eq!(state.tuic_session_for_live_pty("no-such-session"), None);
+    }
+
+    #[test]
+    fn tuic_session_for_live_pty_does_not_remove_the_binding() {
+        let state = tests_support::make_test_app_state();
+        state.bind_live_pty("tuic-uuid-1", "pty-key");
+
+        state.tuic_session_for_live_pty("pty-key");
+
+        assert_eq!(
+            state.tuic_session_for_live_pty("pty-key"),
+            Some("tuic-uuid-1".to_string()),
+            "the read-only lookup must not unbind, unlike unbind_live_pty"
         );
     }
 

@@ -81,6 +81,7 @@ never all expert: in basic mode it would show an empty page.
 |---------|-------------|
 | **Language** | UI language. The list offers the locales that ship with a message catalog, each named in its own language, and the pick applies immediately — no reload. A locale without a catalog is never offered, because it would render English while claiming to be translated. The picker is hidden while only one catalog ships — today that is English alone — because a list of one is not a choice. |
 | **Show agent context bar** | Show the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent. |
+| **Restore window size and position on launch** | Reopen the app window at the same size and position as when it was last closed (desktop app only) |
 | **Confirm before quitting** | Show dialog when closing app with active terminals |
 | **Confirm before closing a tab** | Ask before closing terminal tab |
 | **Prevent sleep when busy** | Keep the machine awake while agents are working (**Power Management** section) |
@@ -209,6 +210,17 @@ See [Command Blocks](terminals.md#command-blocks) for what the block settings co
 
 The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control in
 Settings. Set `bell_style` in `config.json` (see [Terminal Bell](terminals.md#terminal-bell)).
+
+### Session Restore
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Restore open terminals on launch** | On | Reopen plain shell tabs (not just agent tabs) in their saved directory when you relaunch. Off restores only agent tabs, matching pre-1.8 behavior. |
+| **Save terminal scrollback** | Off | Persist each terminal's recent output to disk and replay it above a fresh prompt when the tab is restored. Stored as plain text in the app's config directory — leave off if that output may contain secrets. |
+| **Scrollback lines to save** | 1000 | Maximum lines of output saved per terminal when scrollback saving is on |
+| **Clear saved scrollback** button | — | Deletes every saved scrollback file immediately |
+
+See [Session Restore](terminals.md#session-restore) for how restore behaves across a relaunch.
 
 ### Selection
 

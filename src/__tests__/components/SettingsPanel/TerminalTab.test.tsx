@@ -135,6 +135,53 @@ describe("TerminalTab placement", () => {
 		expect(savedConfigs()[0].terminal_link_activation).toBe("modifier");
 	});
 
+	function toggleByLabel(container: HTMLElement, label: string): HTMLInputElement {
+		const span = Array.from(container.querySelectorAll("span")).find((el) => el.textContent === label);
+		const input = span?.parentElement?.querySelector("input[type=checkbox]");
+		if (!input) throw new Error(`toggle "${label}" not found`);
+		return input as HTMLInputElement;
+	}
+
+	it("renders the Session Restore section with its toggles, slider and clear button", async () => {
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+
+		expect(headingExists(container, "Session Restore")).toBe(true);
+		expect(toggleByLabel(container, "Restore open terminals on launch").checked).toBe(true);
+		expect(toggleByLabel(container, "Save terminal scrollback").checked).toBe(false);
+		expect(labelExists(container, "Scrollback lines to save")).toBe(true);
+		expect(container.textContent).toContain("Clear saved scrollback");
+	});
+
+	it("persists the session-restore toggles under restore_shell_terminals / restore_scrollback", async () => {
+		vi.useFakeTimers();
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggleByLabel(container, "Restore open terminals on launch"), { target: { checked: false } });
+		fireEvent.change(toggleByLabel(container, "Save terminal scrollback"), { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.restoreShellTerminals).toBe(false);
+		expect(settingsStore.state.restoreScrollback).toBe(true);
+		const last = savedConfigs().at(-1);
+		expect(last?.restore_shell_terminals).toBe(false);
+		expect(last?.restore_scrollback).toBe(true);
+	});
+
+	it("invokes clear_saved_scrollback from the Clear saved scrollback button", async () => {
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const button = Array.from(container.querySelectorAll("button")).find(
+			(el) => el.textContent === "Clear saved scrollback",
+		);
+		if (!button) throw new Error("Clear saved scrollback button not found");
+		fireEvent.click(button);
+
+		expect(mockInvoke).toHaveBeenCalledWith("clear_saved_scrollback", {});
+	});
+
 	describe("modifier-symbol-dependent label/hint text", () => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
 

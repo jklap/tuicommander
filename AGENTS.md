@@ -303,6 +303,35 @@ Top-level sessions only. Subagents (Task tool) and in-process teammates must NEV
 
 **A worktree with a submodule checked out is a third refusal, but a plain `--force` DOES lift it** — `fatal: working trees containing submodules cannot be moved or removed`. Confirmed empirically (git 2.55.0): `git worktree remove --force` succeeds outright here, even on an otherwise-dirty worktree, and the refusal fires *before* git's own dirty-worktree check — so a caller that relies on git to report dirtiness without `--force` never gets that report. This is why tuic-git's `remove_worktree_internal_with_lock` proves cleanliness itself (`dirty_files_at`, `verify_submodules_at`, recheck after) and then always passes one `--force` (a second `--force` would also override a lock, which needs `override_lock`). `git submodule deinit --force` does **not** help (the gitlink stays in the index). Before asserting a git force flag does or doesn't lift a given refusal, verify by actually running every relevant combination — don't reason from a flag's name or partial testing.
 
+## Window Geometry Restore
+
+`main` is permanently denylisted from `tauri-plugin-window-state`'s `SIZE` flag (`lib.rs`
+plugin registration) — it owns its own size/position/maximized/fullscreen persistence via
+`window_geometry.rs` instead. **Never re-enable `SIZE` for `main`**: the plugin round-trips
+through `set_size()`/`outer_size()`, which drift under `titleBarStyle: Overlay`, and
+re-enabling it silently reintroduces a compounding visual regression on every restart.
+
+`apply_window_geometry`'s measure-and-correct step (`corrected_size`, a one-step Newton
+correction for the `set_size`-sets-inner/`outer_size()`-reads-outer drift) must stay bounded
+by `is_frame_offset_plausible` (`MAX_TRUSTED_FRAME_OFFSET`, 256px). This is not a cosmetic
+guard: `wait_for_geometry_to_settle` can return believing geometry has settled while it's
+actually still reading the window's stale pre-resize size (a real, reproduced race against
+an async compositor/WM, not just a theoretical Wayland concern — see `settle_loop`'s tests).
+Without the plausibility bound, a single stale read feeds a wildly wrong "correction" back
+through `record_size` into persisted geometry, and because each restart's correction is
+computed relative to the previous (already wrong) saved value, the error compounds
+**geometrically** across restarts. This produced a real corrupted `window-geometry.json`
+(`width: 4944, height: 2368` on a `3456x2234` physical display — window far wider than the
+screen, off the edge) despite the feature shipping with unit tests; the tests covered only
+plausible/small offsets, never an implausible one.
+
+`window_geometry_fix` (the `ensure_window_visible` safety net) must check for **three**
+independent failure modes, not two: too-small, off-screen-by-center, AND larger than the
+combined bounding box of every monitor. The oversized case is easy to miss — a corrupted
+window's *center* can still land on-screen even though the window itself dwarfs the
+display, so folding "too large" into the on-screen check misses it entirely (this is
+exactly how the corrupted value above sailed through validation on every launch).
+
 ## IPC / HTTP Parity
 
 **Every Tauri IPC surface MUST have an HTTP/WS equivalent, and the two MUST stay consistent.** The desktop app talks over Tauri IPC; browser/PWA/remote clients talk over HTTP+SSE+WS. They are two transports for the *same* backend — never let them drift.

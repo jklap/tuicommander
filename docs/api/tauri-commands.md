@@ -117,6 +117,12 @@ to `armed` or `stopped`. The backend also emits `design-mode-changed` with a
 snake_case event payload `{ repo_path, session_id, status }`; browser clients
 receive it on `/events`.
 
+## Scrollback Restore (`scrollback_store.rs`)
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `clear_saved_scrollback` | `session: Option<String>` | `()` | Delete saved scrollback for one `tuic_session`, or every saved tab when `session` is omitted |
+
 ## Generators (`generators.rs`)
 
 | Command | Args | Returns | Description |
