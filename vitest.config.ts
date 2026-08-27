@@ -61,14 +61,17 @@ export default defineConfig({
       // harness plus targeted backfills brought lines to 52.84%, statements 49.56%, functions
       // 47.12%, branches 45.88%). Ratcheted up again as of 2026-08-25 (Smart Selection rule
       // editor cleanup — SelectionTab/ContextMenu/SettingFields backfills brought lines to
-      // 53.77%, statements 50.57%, functions 48.24%, branches 46.7%). Set just under that new
+      // 53.77%, statements 50.57%, functions 48.24%, branches 46.7%). Ratcheted up again as of
+      // 2026-08-26 (Activity Dashboard idle-ordering + keyboard-navigation plan — closing the
+      // pre-existing test-coverage gaps first, per that plan's Phase 0, brought lines to
+      // 58.49%, statements 55.37%, functions 53.27%, branches 51.18%). Set just under that new
       // floor so CI can keep enforcing "don't regress" — ratchet up incrementally as coverage
       // genuinely improves, rather than lowering them again if a change makes CI red.
       thresholds: {
-        lines: 53,
-        functions: 48,
-        branches: 46,
-        statements: 50,
+        lines: 58,
+        functions: 53,
+        branches: 51,
+        statements: 55,
       },
     },
   },

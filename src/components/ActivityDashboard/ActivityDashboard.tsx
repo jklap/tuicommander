@@ -111,6 +111,21 @@ export function reconcileTerminalRows(next: TerminalRow[], prev?: readonly Termi
 	return rows;
 }
 
+/** Move a keyboard selection cursor over `ids`. From no selection, "down" (delta=1)
+ *  picks the first row and "up" (delta=-1) picks the last — matching CommandPalette /
+ *  GitHubPanel. Clamps at both ends; never wraps. Returns `current` unchanged if it is
+ *  no longer present (caller is responsible for clearing a stale selection first) other
+ *  than the no-selection case, which always resolves to an end of the list. */
+export function moveActivitySelection(ids: readonly string[], current: string | null, delta: 1 | -1): string | null {
+	if (ids.length === 0) return null;
+	if (current === null) return delta > 0 ? ids[0] : ids[ids.length - 1];
+	const i = ids.indexOf(current);
+	if (i === -1) return delta > 0 ? ids[0] : ids[ids.length - 1];
+	const next = i + delta;
+	if (next < 0 || next >= ids.length) return ids[i];
+	return ids[next];
+}
+
 interface ActivityDashboardProps {
 	onSelect?: (id: string) => void;
 	onPromote?: (id: string) => void;
@@ -190,9 +205,11 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 	};
 
 	// Persistent display spine: each terminal keeps its slot so rows never
-	// reshuffle while their working/idle state is unchanged. A terminal moves ONLY
-	// when it crosses the working/idle boundary (a real state change). No timers,
-	// no recency re-sort — position is a pure function of (working, spine index).
+	// reshuffle while their working/idle state is unchanged. A working terminal moves
+	// ONLY when it crosses the working/idle boundary (a real state change); an idle
+	// terminal is additionally ordered by idleSince (most-recently-active first), which
+	// itself only changes on that same boundary crossing — so there is still no
+	// recency-tick reshuffling.
 	const spine: string[] = [];
 	const orderedIds = createMemo(() => {
 		const isWorking = (id: string): boolean => {
@@ -205,7 +222,8 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 				)
 			);
 		};
-		return reconcileActivityOrder(spine, terminalsStore.getAttachedIds(), isWorking);
+		const idleSortKey = (id: string): number | null => terminalsStore.get(id)?.idleSince ?? null;
+		return reconcileActivityOrder(spine, terminalsStore.getAttachedIds(), isWorking, idleSortKey);
 	});
 
 	let prevRows: TerminalRow[] | undefined;
@@ -215,6 +233,77 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 	});
 
 	const terminals = () => (props.terminals ? props.terminals() : storeTerminals());
+
+	// Keyboard cursor, tracked by terminal id rather than row index: the list itself
+	// reorders (a working/idle transition, an idle row's spot in the idleSince sort)
+	// independently of any keypress, so an index cursor could silently slide onto a
+	// different terminal between a keypress and the following Return.
+	const [selectedId, setSelectedId] = createSignal<string | null>(null);
+	let listRef: HTMLDivElement | undefined;
+
+	createEffect(() => {
+		if (!isOpen() && !props.embedded) setSelectedId(null);
+	});
+
+	// Drop the selection if its terminal leaves the list (closed, detached, etc.) —
+	// "no selection" is already a first-class state, so there is nothing else to reconcile.
+	createEffect(() => {
+		const ids = terminals().map((t) => t.id);
+		if (selectedId() !== null && !ids.includes(selectedId() as string)) setSelectedId(null);
+	});
+
+	createEffect(() => {
+		const id = selectedId();
+		if (!id || !listRef) return;
+		listRef.querySelector(`[data-term-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" });
+	});
+
+	// Arrow/Enter/digit navigation is local to the dashboard, following the same split
+	// CommandPalette/BranchSwitcher use: Escape stays owned by the central modalStack
+	// (registered above), everything else is a local capture-phase listener so it can
+	// preventDefault + stopPropagation before useKeyboardRedirect's bubble-phase listener
+	// ever sees the key (bare digits are otherwise plain printable characters that would
+	// get written straight to the active terminal's PTY).
+	createEffect(() => {
+		if (!isOpen() && !props.embedded) return;
+
+		const handleKeydown = (e: KeyboardEvent) => {
+			const ids = terminals().map((t) => t.id);
+
+			if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+				e.preventDefault();
+				e.stopPropagation();
+				setSelectedId(moveActivitySelection(ids, selectedId(), e.key === "ArrowDown" ? 1 : -1));
+				return;
+			}
+
+			if (e.key === "Enter") {
+				const id = selectedId();
+				if (id && ids.includes(id)) {
+					e.preventDefault();
+					e.stopPropagation();
+					handleRowClick(id);
+				}
+				return;
+			}
+
+			// Bare digits 1-9 jump straight to that row. Modified digits (Cmd+1, Cmd+Ctrl+1,
+			// …) are left alone — those are the global switch-tab-N / switch-branch-N
+			// shortcuts and must keep working while the dashboard is open.
+			if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key >= "1" && e.key <= "9") {
+				e.preventDefault();
+				e.stopPropagation();
+				const id = ids[Number(e.key) - 1];
+				if (id) {
+					setSelectedId(id);
+					handleRowClick(id);
+				}
+			}
+		};
+
+		document.addEventListener("keydown", handleKeydown, true);
+		onCleanup(() => document.removeEventListener("keydown", handleKeydown, true));
+	});
 
 	const dashboardContent = () => (
 		<>
@@ -229,19 +318,23 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 				</div>
 			</div>
 
-			<div class={s.list}>
+			<div class={s.list} ref={listRef}>
 				<Show when={terminals().length === 0}>
 					<div class={s.empty}>No active terminals</div>
 				</Show>
 
 				<For each={terminals()}>
-					{(term) => (
+					{(term, index) => (
 						<div
-							class={`${s.row} ${term.isActive ? s.activeRow : ""} ${!term.isWorking ? s.idleRow : ""}`}
+							class={`${s.row} ${term.isActive ? s.activeRow : ""} ${!term.isWorking ? s.idleRow : ""} ${term.id === selectedId() ? s.selectedRow : ""}`}
+							data-term-id={term.id}
 							onClick={() => handleRowClick(term.id)}
 						>
 							<div class={s.rowMain}>
 								<div class={s.nameCell}>
+									<Show when={index() < 9}>
+										<span class={s.rowNumber}>{index() + 1}</span>
+									</Show>
 									<span class={s.termName}>{term.name}</span>
 									<Show when={term.project}>
 										<span class={s.project} style={term.projectColor ? { color: term.projectColor } : undefined}>
@@ -307,7 +400,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			<div class={s.footer}>
 				<span>{terminals().length} terminal(s)</span>
 				<Show when={!props.embedded}>
-					<span style={{ "margin-left": "auto" }}>Click to switch • Esc to close</span>
+					<span style={{ "margin-left": "auto" }}>↑↓ select • Return switch • 1-9 jump • Esc close</span>
 				</Show>
 			</div>
 		</>

@@ -358,6 +358,59 @@ describe("useKeyboardRedirect", () => {
 		});
 	});
 
+	describe("digit keys", () => {
+		// Baseline: a bare digit is a printable single character, so with nothing else
+		// listening it reaches the PTY exactly like a letter would. This is the specific
+		// hazard an overlay's "press 1-9 to jump" hotkey must guard against — see the next
+		// block.
+		it("redirects a bare digit when nothing intercepts it", async () => {
+			await testInScopeAsync(async () => {
+				useKeyboardRedirect();
+				await flushEffects();
+
+				dispatchKeydown("1");
+
+				expect(mockWrite).toHaveBeenCalledWith("1");
+			});
+		});
+	});
+
+	describe("interception by a capture-phase listener", () => {
+		// useKeyboardRedirect listens on `document` at the BUBBLE phase (the hook's
+		// document.addEventListener call passes no `useCapture` flag). An overlay that
+		// wants to consume a key (e.g. digit-to-jump) before it reaches the PTY must
+		// register a document-level CAPTURE listener and call stopPropagation — the same
+		// pattern stores/modalStack.ts uses for Escape.
+		//
+		// The event must be dispatched on a DESCENDANT of document, not on document
+		// itself: per the DOM spec, listeners registered on the event's own target fire in
+		// registration order regardless of capture/bubble phase, so dispatching on
+		// `document` would make this test pass even if capture-ordering were broken.
+		it("capture-phase stopPropagation prevents the redirect from ever seeing the key", async () => {
+			await testInScopeAsync(async () => {
+				useKeyboardRedirect();
+				await flushEffects();
+
+				const target = document.createElement("div");
+				document.body.appendChild(target);
+
+				const intercept = (e: KeyboardEvent) => {
+					e.preventDefault();
+					e.stopPropagation();
+				};
+				document.addEventListener("keydown", intercept, true);
+
+				const event = new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true });
+				target.dispatchEvent(event);
+
+				expect(mockWrite).not.toHaveBeenCalled();
+
+				document.removeEventListener("keydown", intercept, true);
+				target.remove();
+			});
+		});
+	});
+
 	describe("cleanup", () => {
 		it("removes event listener on dispose", async () => {
 			// Raw createRoot: we need to call dispose() mid-test to verify cleanup
