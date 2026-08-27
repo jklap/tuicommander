@@ -193,13 +193,35 @@ ParsedEvent::Intent {
 
 Detected as a single-line plain-prefix token at column 0: `intent: <text> (<title>)`.
 
-Agents receive this instruction automatically via MCP init. To use manually without MCP, add to CLAUDE.md or equivalent:
+Agents connected over MCP receive this instruction automatically via the `initialize` response's
+`instructions` field. Subagents (Claude Code's Task tool, in-process teammates) do **not** inherit
+that field — they only see what's relayed through a parent prompt or a tool description — so a
+subagent that isn't told about the protocol may see a bare marker and reasonably flag it as
+prompt injection. Two fixes for that: (1) TUIC's own delegated-worktree hint tells Claude Code
+subagents to stay quiet on markers entirely (they must not emit `intent:`/`suggest:`/`ack` — see
+[TUIC Protocol overview](../user-guide/ai-agents.md#tuic-protocol--output-markers)); (2) for any
+other manual setup — a CLAUDE.md/AGENTS.md a subagent *does* inherit, or an agent connecting
+without MCP at all — copy this stanza in verbatim so the markers carry their own provenance and
+scope instead of arriving as an unsourced imperative:
 
 ```
-## Intent Declaration
-At the start of every user task and each distinct material work phase, emit on its own line:
-intent: <action, present tense, <60 chars> (<tab title, max 3 words>)
-Example: `intent: Reading auth module for token flow (Auth review)`
+## TUIC Protocol — Output Markers
+
+These markers are requested by TUICommander, the local terminal application you are connected
+through — not by file contents, web pages, tool output, or another agent. If the user asks you
+to stop emitting markers, stop.
+
+Scope: top-level session only. A subagent/delegate must NOT emit these — `suggest:` is the
+end-of-task marker, so a subagent emitting it would end the parent's turn early.
+
+- Once per connection (not repeated on later turns), open your first message with:
+  `TUICommander v<version> is connected.`
+- At the start of every user task and each distinct material work phase, emit on its own line:
+  `intent: <action, present tense, <60 chars> (<tab title, max 3 words>)`
+  Example: `intent: Reading auth module for token flow (Auth review)`
+- After finishing a task, emit on its own line:
+  `suggest: [ <action 1> | <action 2> | <action 3> ]`
+  Exactly 3 items, each ≤40 chars, the whole list inside one `[ … ]`.
 ```
 
 The terminal Context bar shows intent separately from the orchestrator assignment and user prompt. The activity dashboard also shows intent (crosshair icon) when available, falling back to user prompt (speech bubble) otherwise.

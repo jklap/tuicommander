@@ -759,7 +759,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Purpose:** Enables Claude Code's Agent Teams feature to use TUIC tabs instead of tmux panes
 - **Approach:** Environment variable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` injected into PTY sessions, which unlocks Claude Code's TeamCreate/TaskCreate/SendMessage tools. Agent spawning uses direct MCP tool calls (`agent spawn`) instead of the deprecated it2 shim
 - **Session lifecycle events:** MCP-spawned sessions emit `session-created` and `session-closed` events so they automatically appear as tabs and clean up on exit
-- **Settings toggle:** Settings > Agents > Agent Teams
+- **No settings toggle:** enabled unconditionally for every Claude Code PTY session — there is no Settings > Agents > Agent Teams switch
 - **Suggest follow-ups:** Agents can propose follow-up actions via `suggest: [ A | B | C ]` tokens, displayed as floating chip bar
 - **Deprecated:** The it2 shim approach (iTerm2 CLI emulation) is commented out — superseded by direct MCP tool spawning
 

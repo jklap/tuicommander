@@ -108,11 +108,40 @@ The dashboard opens as a tab in the Activity Center. You can also reach it by cl
 
 ## Agent Teams
 
-Agent Teams lets Claude Code spawn teammate agents as TUIC terminal tabs. Enable it in **Settings** > **Agents** > **Agent Teams**.
+Agent Teams lets Claude Code spawn teammate agents as TUIC terminal tabs. No configuration needed — it's enabled by default for all Claude Code sessions launched from TUICommander (see [Agent Teams](agent-teams.md) for the full picture, including how spawned-PTY teammates differ from in-process teammates).
 
-When enabled, PTY sessions receive the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` environment variable, which unlocks Claude Code's `TeamCreate`, `TaskCreate`, and `SendMessage` tools. Agent spawning uses direct MCP tool calls (`agent spawn`) — the earlier it2 shim approach (iTerm2 CLI emulation) is deprecated.
+PTY sessions receive the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` environment variable, which unlocks Claude Code's `TeamCreate`, `TaskCreate`, and `SendMessage` tools. Agent spawning uses direct MCP tool calls (`agent spawn`) — the earlier it2 shim approach (iTerm2 CLI emulation) is deprecated.
 
 Spawned sessions automatically emit lifecycle events (`session-created`, `session-closed`) so they appear as tabs and clean up on exit.
+
+## TUIC Protocol — Output Markers
+
+TUICommander asks the top-level agent in each session to emit three wire markers so the UI can
+reflect what the agent is doing: an `ack` (which version connected), `intent:` (current work,
+shown as the tab title), and `suggest:` (follow-up actions, shown as a chip bar). These arrive
+over MCP in the `initialize` response's `instructions` field — the same channel that carries
+this app's tool descriptions — with their own provenance and scope statement, not as a bare
+directive. See [`docs/backend/output-parser.md`](../backend/output-parser.md#intent) for the
+exact grammar and a copy-paste stanza for setups that don't go through MCP.
+
+**Scope:** markers belong to the top-level session only. Delegated subagents (Claude Code's Task
+tool) are explicitly told not to emit them — `suggest:` is the end-of-task marker, so a subagent
+emitting it would flip the *parent* session to `completed` mid-work. In-process teammates share
+the lead's MCP connection and must stay quiet on markers for the same reason; spawned-PTY
+teammates get their own `initialize` call (and therefore their own markers) — see
+[Agent Teams](agent-teams.md).
+
+**Toggles:**
+- Global: **Settings** > **Agents** > "Track agent intent" and "Show suggested follow-up
+  actions" — these gate `intent:`/`suggest:` for every agent.
+- Per-agent override: **Settings** > **Agents** > expand an agent — overrides the global toggle
+  for just that agent. A marker shows only when **both** the global toggle and the per-agent
+  override (if set) allow it; leaving the per-agent override unset just follows the global
+  toggle.
+- The `ack` marker has no toggle — it's the one-line "which version connected" courtesy message.
+
+Check `GET /diagnostics/markers` to see, per session, whether markers are enabled and how many
+have actually been observed — useful for confirming a session is emitting rather than refusing.
 
 ## Session Binding (TUIC_SESSION)
 

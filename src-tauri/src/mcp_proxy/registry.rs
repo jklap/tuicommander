@@ -1543,7 +1543,7 @@ mod tests {
         assert_eq!(desc, "Search the upstream index once.");
         assert!(!desc.contains("TUICommander"));
         assert!(!desc.contains("TUIC Protocol"));
-        assert!(!desc.contains("Required Output Markers"));
+        assert!(!desc.contains("Output Markers"));
     }
 
     #[test]

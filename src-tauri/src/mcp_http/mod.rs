@@ -4088,6 +4088,13 @@ mod tests {
                 .contains("absolute paths"),
             "hint prompt should mention absolute paths"
         );
+        assert!(
+            hint["suggested_prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Do not emit TUICommander `intent:` / `suggest:` / ack markers"),
+            "delegated subagent prompt must tell the subagent to stay quiet on markers"
+        );
         // Cleanup
         let wt_path = result["worktree_path"].as_str().unwrap();
         let _ = std::process::Command::new("git")
