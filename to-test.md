@@ -1226,3 +1226,20 @@ Requires a `make dev` restart — the change is in `src-tauri/src/pty.rs`.
   cause.
 - [ ] An agent tab (Claude, Codex) is unaffected: its badge still follows the
   ready-screen adapter, not this probe.
+
+## Clickable URL followed by punctuation
+
+Frontend only — Vite reloads it, no restart needed.
+
+- [ ] Print `see http://192.168.0.165:5000, then reload` in a shell tab and click
+  the URL. It opens. Before, the match swallowed the comma and `new URL()`
+  rejected it — the click did nothing and only a log line
+  (`Blocked malformed URL`) said why.
+- [ ] The underline stops before the comma, so what is highlighted is exactly
+  what opens.
+- [ ] A trailing slash and a query string survive: `http://127.0.0.1:5000/` and
+  `https://example.com/s?q=1` still open in full.
+- [ ] A wiki link keeps its own parenthesis:
+  `https://en.wikipedia.org/wiki/Rust_(programming_language)`.
+- [ ] A URL soft-wrapped across two rows still opens whole (the regression the
+  edge-of-row deferral exists for).
