@@ -1,10 +1,13 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
+import { IndicatorIcon } from "../../indicators/IndicatorIcon";
+import { resolveIconId } from "../../indicators/registry";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { isDiffStatus } from "../../stores/diffTabs";
 import { promptLibraryStore } from "../../stores/promptLibrary";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { toastsStore } from "../../stores/toasts";
 import { cx, globToRegex } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
@@ -110,6 +113,7 @@ export function isDirEntry(filePath: string): boolean {
 export const ChangesTab: Component<ChangesTabProps> = (props) => {
 	const [staged, setStaged] = createSignal<FileEntry[]>([]);
 	const [unstaged, setUnstaged] = createSignal<FileEntry[]>([]);
+	const [conflicted, setConflicted] = createSignal<FileEntry[]>([]);
 	const [stagedExpanded, setStagedExpanded] = createSignal(true);
 	const [unstagedExpanded, setUnstagedExpanded] = createSignal(true);
 	const [confirmDiscard, setConfirmDiscard] = createSignal<FileEntry | null>(null);
@@ -179,6 +183,7 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 		if (!repoPath) {
 			setStaged([]);
 			setUnstaged([]);
+			setConflicted([]);
 			return;
 		}
 
@@ -189,6 +194,7 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 		if (!repositoriesStore.isGitRepo(storeKey() || repoPath)) {
 			setStaged([]);
 			setUnstaged([]);
+			setConflicted([]);
 			return;
 		}
 
@@ -220,12 +226,22 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 					...status.untracked.map((p) => ({ path: p, status: "?", additions: 0, deletions: 0 })),
 				];
 				setUnstaged(combined);
+
+				setConflicted(
+					(status.conflicted ?? []).map((e) => ({
+						path: e.path,
+						status: e.status,
+						additions: e.additions ?? 0,
+						deletions: e.deletions ?? 0,
+					})),
+				);
 			})
 			.catch((err) => {
 				if (cancelled) return;
 				appLogger.error("git", "Failed to get working tree status", err);
 				setStaged([]);
 				setUnstaged([]);
+				setConflicted([]);
 			});
 	});
 
@@ -852,8 +868,47 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 				<div class={s.empty}>No repository selected</div>
 			</Show>
 
-			<Show when={props.repoPath && staged().length === 0 && unstaged().length === 0}>
+			<Show
+				when={
+					props.repoPath &&
+					staged().length === 0 &&
+					unstaged().length === 0 &&
+					// A hidden conflicts banner (showGitState off) must not leave the tab
+					// blank — treat conflicts as invisible, not as "there are changes",
+					// when the toggle that would otherwise surface them is off.
+					(conflicted().length === 0 || !settingsStore.state.showGitState)
+				}
+			>
 				<div class={s.empty}>No changes</div>
+			</Show>
+
+			<Show when={settingsStore.state.showGitState && conflicted().length > 0}>
+				<div class={s.conflictsBanner}>
+					<IndicatorIcon
+						id={resolveIconId(settingsStore.state.indicatorOverrides, "gitState.conflicts")}
+						size={14}
+						class={s.conflictsIcon}
+					/>
+					<span>
+						{conflicted().length} conflicted file{conflicted().length === 1 ? "" : "s"}
+					</span>
+				</div>
+				<For each={conflicted()}>
+					{(file) => {
+						const { dir, base } = splitPath(file.path);
+						return (
+							<div class={s.conflictEntry} title={`${file.path} (${file.status})`}>
+								<span class={s.statusBadge}>{file.status}</span>
+								<span class={s.filePath}>
+									<Show when={dir}>
+										<span class={s.fileDir}>{dir}</span>
+									</Show>
+									<span class={s.fileBasename}>{base}</span>
+								</span>
+							</div>
+						);
+					}}
+				</For>
 			</Show>
 
 			{/* Filter input */}

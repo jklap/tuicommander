@@ -57,6 +57,12 @@ const TABS = [
 		// there is no longer a master on/off switch), dropping this from 5 to 4.
 		minControls: 4,
 	},
+	{
+		name: "Appearance",
+		heading: "## Appearance Tab",
+		path: "src/components/SettingsPanel/tabs/AppearanceTab.tsx",
+		minControls: 7,
+	},
 ];
 
 describe.each(TABS)("settings.md $name Tab reference", ({ heading, path, minControls }) => {

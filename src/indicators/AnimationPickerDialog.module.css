@@ -1,0 +1,41 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: var(--font-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--bg-highlight);
+}
+
+.active {
+  border-color: var(--accent);
+}
+
+.preview {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.label {
+  color: var(--fg-primary);
+}

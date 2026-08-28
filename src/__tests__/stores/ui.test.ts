@@ -425,6 +425,30 @@ describe("uiStore", () => {
 				});
 			});
 		});
+
+		describe("resetLayout()", () => {
+			it("restores sidebar and settings-nav width to their defaults", () => {
+				testInScope(() => {
+					store.setSidebarWidth(450);
+					store.setSettingsNavWidth(220);
+					store.resetLayout();
+					expect(store.state.sidebarWidth).toBe(300);
+					expect(store.state.settingsNavWidth).toBe(180);
+				});
+			});
+
+			it("persists the reset widths", () => {
+				testInScope(() => {
+					store.setSidebarWidth(450);
+					mockInvoke.mockClear();
+					store.resetLayout();
+					flushPersist();
+					expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+						config: expect.objectContaining({ sidebar_width: 300, settings_nav_width: 180 }),
+					});
+				});
+			});
+		});
 	});
 
 	describe("AI Chat panel", () => {

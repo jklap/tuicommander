@@ -30,7 +30,7 @@ function syncHotRepos(repositories: Record<string, RepositoryState>): void {
 	);
 }
 
-export type { WorkspaceId, WorkspaceKind, WorkspaceState } from "./workspaceIdentity";
+export type { GitOpKind, WorkspaceId, WorkspaceKind, WorkspaceState } from "./workspaceIdentity";
 
 /** Repository with workspaces */
 export interface RepositoryState {

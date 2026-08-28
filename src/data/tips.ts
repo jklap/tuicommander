@@ -460,4 +460,10 @@ export const TIPS: Tip[] = [
 			"Per-repo on/off settings have a third position between On and Off — click it to inherit the global default instead of overriding it, without resetting every other setting for that repo.",
 		shortcut: null,
 	},
+	{
+		feature: "Customize the UI Legend",
+		description:
+			"Settings → Appearance → UI Legend isn't just a reference — pick a color, icon, or animation for any status dot, badge, or symbol, and toggle whole groups (tab tint, PR badges, git status, diff stats) on or off.",
+		shortcut: null,
+	},
 ];

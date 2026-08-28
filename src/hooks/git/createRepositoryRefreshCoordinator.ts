@@ -2,7 +2,7 @@ import { batch } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
-import { type RepositoryState, repositoriesStore } from "../../stores/repositories";
+import { type GitOpKind, type RepositoryState, repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
 
@@ -32,8 +32,8 @@ interface RepositoryRefreshCoordinatorDeps {
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, import("../useRepository").WorkspaceWorktree>;
 			merged_branches: string[];
-			/** Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress. */
-			in_progress_worktrees: string[];
+			/** Worktrees with a rebase/merge/cherry-pick/revert/bisect in progress, and which one. */
+			in_progress_ops: Array<{ path: string; kind: GitOpKind }>;
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
 			diff_stats: Record<string, { additions: number; deletions: number }>;
@@ -202,11 +202,11 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		const worktreePaths = structure.worktree_paths;
 		const mergedSet = new Set(structure.merged_branches);
-		// Worktree dirs with a rebase/merge/cherry-pick/revert/bisect in progress. Such a
-		// worktree already keeps its row (the backend recovers its branch from git's own
-		// state files), so this is purely a signal for the sidebar to show why the row
+		// Worktrees with a rebase/merge/cherry-pick/revert/bisect in progress, and which one.
+		// Such a worktree already keeps its row (the backend recovers its branch from git's
+		// own state files), so this is purely a signal for the sidebar to show why the row
 		// looks the way it does — the removal logic above never needs to consult it.
-		const inProgressSet = new Set<string>(structure.in_progress_worktrees ?? []);
+		const inProgressOps = new Map<string, GitOpKind>((structure.in_progress_ops ?? []).map((op) => [op.path, op.kind]));
 
 		const currentRepo = repositoriesStore.get(repoPath);
 		if (!currentRepo) return;
@@ -354,10 +354,10 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 						branchName: wt.branch,
 						kind: wt.path === repoPath ? "main" : wt.kind,
 						isMerged: mergedSet.has(wt.branch),
-						// Covers both "rebase just finished" (clear) and "merge conflict
+						// Covers both "operation just finished" (clear) and "merge conflict
 						// without a detached HEAD" (set, even though the branch stayed in
 						// worktreePaths the whole time).
-						isRebasing: inProgressSet.has(wt.path),
+						gitOp: inProgressOps.get(wt.path),
 					};
 					repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 				}

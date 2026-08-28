@@ -28,6 +28,9 @@ export interface WorkingTreeStatus {
 	staged: StatusEntry[];
 	unstaged: StatusEntry[];
 	untracked: string[];
+	/** Unmerged (conflicted) files from a `u` porcelain-v2 record. `status` holds the raw
+	 *  2-char XY code (e.g. "UU", "AA") — not a single-letter status like the other lists. */
+	conflicted: StatusEntry[];
 }
 
 /** Mirrors the Rust ChangedFile struct from git.rs */
