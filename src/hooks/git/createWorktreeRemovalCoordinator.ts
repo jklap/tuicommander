@@ -2,8 +2,9 @@ import type { Accessor, Setter } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
-import { closeWorktreeTerminals, removeWorktreeWorkspace } from "../../stores/terminalOwnership";
+import { closeWorktreeTerminals, removeWorktreeWorkspace, worktreeTerminalIds } from "../../stores/terminalOwnership";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
+import { branchActivitySummary } from "../../utils/activitySnapshot";
 import { reportActionError } from "../../utils/reportActionError";
 import type { RemoveWorktreeResult } from "../useRepository";
 
@@ -35,6 +36,10 @@ interface WorktreeRemovalCoordinatorDeps {
 			deleteBranch: boolean,
 		) => Promise<boolean | "delete" | "archive">;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
+		confirmRemoveBusyWorktree?: (
+			branchName: string,
+			summary: ReturnType<typeof branchActivitySummary>,
+		) => Promise<boolean>;
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
 	setStatusInfo: (message: string) => void;
@@ -124,6 +129,30 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, deleteBranch);
 			if (!confirmed) {
 				return;
+			}
+
+			// Computed from the terminals inside the checkout as of THIS click (the same
+			// cwd authority the close below uses), before anything is closed: a worktree
+			// with a live (even idle) terminal gets a second, Cancel-by-default dialog
+			// that says so, BEFORE the close-terminal loop below ever runs (2026-08-26
+			// incident). The outer finally releases the lock.
+			const activity = branchActivitySummary(worktreeTerminalIds(branch.worktreePath));
+			if (activity.isBusy && deps.dialogs.confirmRemoveBusyWorktree) {
+				let busyConfirmed = false;
+				try {
+					busyConfirmed = await deps.dialogs.confirmRemoveBusyWorktree(branchName, activity);
+				} catch (dialogErr) {
+					appLogger.error("git", `handleRemoveWorkspace: confirmRemoveBusyWorktree threw`, {
+						workspaceId,
+						error: dialogErr instanceof Error ? dialogErr.message : String(dialogErr),
+					});
+				}
+				if (!busyConfirmed) {
+					appLogger.info("git", `handleRemoveWorkspace: user cancelled removal of a workspace in use`, {
+						workspaceId,
+					});
+					return;
+				}
 			}
 
 			// Show "Removing…" in sidebar as soon as the user confirms — before
