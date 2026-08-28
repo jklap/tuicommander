@@ -30,6 +30,10 @@ export interface WorkspaceLifecycleStatus {
 }
 
 /** One workspace with its terminals. */
+/** Which multi-step git operation a worktree is in the middle of. Mirrors the Rust
+ *  `worktree::GitOpKind` enum's kebab-case wire format exactly. */
+export type GitOpKind = "rebase" | "merge" | "cherry-pick" | "revert" | "bisect";
+
 export interface WorkspaceState {
 	/** Stable and opaque. Equal to the key that holds this record. */
 	workspaceId: WorkspaceId;
@@ -40,7 +44,8 @@ export interface WorkspaceState {
 	isMain: boolean; // true for main/master/develop
 	isShell?: boolean; // true for non-git directory shell entries
 	isRemoving?: boolean;
-	isRebasing?: boolean; // true while the worktree has a rebase/merge/cherry-pick/revert/bisect in progress // true while worktree removal is in progress
+	/** Set while the worktree has a rebase/merge/cherry-pick/revert/bisect in progress; which one. */
+	gitOp?: GitOpKind; // true while worktree removal is in progress
 	worktreePath: string | null; // Path to worktree directory (null for main branch)
 	terminals: string[]; // terminal IDs belonging to this workspace
 	hadTerminals: boolean; // true once a terminal has been created — suppresses auto-spawn after close-all

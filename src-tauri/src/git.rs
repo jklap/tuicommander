@@ -1442,11 +1442,12 @@ pub(crate) struct RepoStructure {
     /// share one (#726-5ac7).
     worktree_paths: HashMap<String, crate::worktree::WorkspaceWorktree>,
     merged_branches: Vec<String>,
-    /// Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress.
+    /// Worktrees with a rebase/merge/cherry-pick/revert/bisect in progress, and which one.
     /// Such a worktree already keeps its row (its branch is recovered from git's own state
     /// files, see `worktree::operation_head_branch`) — this is purely a signal for the
-    /// frontend to show why the row looks the way it does (e.g. a "Rebasing" badge).
-    in_progress_worktrees: Vec<String>,
+    /// frontend to show why the row looks the way it does (e.g. a "Rebasing" badge). Includes
+    /// the main worktree, not just linked ones.
+    in_progress_ops: Vec<crate::worktree::InProgressOp>,
 }
 
 /// Per-worktree diff stats + last-commit timestamps.
@@ -1643,7 +1644,7 @@ pub(crate) async fn get_repo_structure_impl(
 
     // Best-effort: a worktree listing failure here shouldn't fail the whole structure
     // snapshot — fall back to "none in progress" rather than surfacing an error.
-    let in_progress_worktrees = in_progress_handle
+    let in_progress_ops = in_progress_handle
         .await
         .unwrap_or_else(|_| Ok(Vec::new()))
         .unwrap_or_default();
@@ -1651,7 +1652,7 @@ pub(crate) async fn get_repo_structure_impl(
     Ok(RepoStructure {
         worktree_paths: worktree_paths?,
         merged_branches: merged_branches?,
-        in_progress_worktrees,
+        in_progress_ops,
     })
 }
 
@@ -4651,11 +4652,11 @@ mod tests {
         (dir, path)
     }
 
-    // --- get_repo_structure_impl / in_progress_worktrees wiring ---
+    // --- get_repo_structure_impl / in_progress_ops wiring ---
 
     #[tokio::test]
     async fn repo_structure_surfaces_a_busy_worktree() {
-        // Regression guard for the `in_progress_worktrees` field: it's easy to
+        // Regression guard for the `in_progress_ops` field: it's easy to
         // rebuild get_repo_structure_impl (e.g. around a cached/joined worktree
         // read) and forget to carry this field through, since nothing else in
         // the function signature would catch the omission — the frontend types
@@ -4697,15 +4698,21 @@ mod tests {
             .unwrap_or(wt_path)
             .to_string_lossy()
             .to_string();
-        assert!(
-            structure.in_progress_worktrees.contains(&wt_real),
-            "busy worktree must be reported in_progress, got {:?}",
-            structure.in_progress_worktrees
-        );
+        let op = structure
+            .in_progress_ops
+            .iter()
+            .find(|op| op.path == wt_real)
+            .unwrap_or_else(|| {
+                panic!(
+                    "busy worktree must be reported in_progress, got {:?}",
+                    structure.in_progress_ops
+                )
+            });
+        assert_eq!(op.kind, crate::worktree::GitOpKind::Rebase);
     }
 
     #[tokio::test]
-    async fn repo_structure_reports_no_in_progress_worktrees_when_none_are_busy() {
+    async fn repo_structure_reports_no_in_progress_ops_when_none_are_busy() {
         let (_dir, repo_path) = setup_test_repo_with_commit();
 
         let state = crate::state::tests_support::make_test_app_state();
@@ -4714,9 +4721,9 @@ mod tests {
             .expect("get_repo_structure_impl");
 
         assert!(
-            structure.in_progress_worktrees.is_empty(),
+            structure.in_progress_ops.is_empty(),
             "got {:?}",
-            structure.in_progress_worktrees
+            structure.in_progress_ops
         );
     }
 
@@ -4958,6 +4965,38 @@ mod tests {
 
         let info = get_repo_info_impl(&path.to_string_lossy());
         assert_eq!(info.status, "conflict", "an unmerged file.rs is a conflict");
+    }
+
+    #[tokio::test]
+    async fn repo_structure_surfaces_the_main_worktree_when_mid_rebase() {
+        // Regression guard for the exact bug this phase fixes: previously the main checkout's
+        // `.git` (a directory, not the `gitdir:`-file a linked worktree has) meant an
+        // in-progress operation there was never detected at all.
+        let (_dir, repo_path) = setup_test_repo_with_commit();
+        std::fs::create_dir_all(repo_path.join(".git").join("rebase-merge"))
+            .expect("create rebase-merge marker in main .git");
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let structure = get_repo_structure_impl(&state, repo_path.to_string_lossy().to_string())
+            .await
+            .expect("get_repo_structure_impl");
+
+        let repo_real = repo_path
+            .canonicalize()
+            .unwrap_or(repo_path)
+            .to_string_lossy()
+            .to_string();
+        let op = structure
+            .in_progress_ops
+            .iter()
+            .find(|op| op.path == repo_real)
+            .unwrap_or_else(|| {
+                panic!(
+                    "main worktree must be reported in_progress, got {:?}",
+                    structure.in_progress_ops
+                )
+            });
+        assert_eq!(op.kind, crate::worktree::GitOpKind::Rebase);
     }
 
     #[tokio::test]
