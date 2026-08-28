@@ -1407,12 +1407,20 @@ All data persisted to platform config directory via Rust:
   generates and serves a self-signed TLS cert instead of falling back to plain HTTP — LAN/remote
   access gets HTTPS by default, since some browser APIs (e.g. the async Clipboard API) are
   gated behind a secure context
-- Cert covers `localhost`, `127.0.0.1`, `::1`, and every current LAN IP; 10-year validity
-  (a locally-trusted-by-exception cert accepted via a one-time browser warning per device gets no
+- Cert covers `localhost`, `127.0.0.1`, `::1`, every current LAN IP, and (macOS only) the
+  machine's existing Bonjour/mDNS hostname (`<name>.local`) — no new mDNS infrastructure, just
+  reading the name macOS's built-in mDNSResponder already answers for anything listening on the
+  machine, the same mechanism AirDrop/file sharing rely on; 10-year validity (a
+  locally-trusted-by-exception cert accepted via a one-time browser warning per device gets no
   security benefit from short rotation)
 - Cached under the app's config directory; regenerates on expiry-within-30-days or when the
-  machine's LAN IPs no longer match the cached SAN list (checked at boot/restart, and via a 60s
-  background re-check loop that hot-reloads the live TLS config for network changes mid-session)
+  machine's LAN IPs or Bonjour hostname no longer match the cached SAN list (checked at
+  boot/restart, and via a 60s background re-check loop that hot-reloads the live TLS config for
+  network changes mid-session)
+- The Bonjour hostname also appears as an extra "mDNS" entry (alongside the IP entries) in the
+  network picker (`RemoteQrDialog`, Settings → Services), letting a device connect via
+  `https://<name>.local` instead of a raw IP — appended last so it never displaces the existing
+  Tailscale/Wi-Fi/LAN auto-select preference
 - Plain `http://` requests on the same port automatically 301-redirect to `https://` while the
   self-signed fallback (not Tailscale) is the active TLS source — old bookmarks/QR codes keep working
 - Settings panel (Services → Self-Signed HTTPS) shows status (active/generated/expiry), a SHA-256

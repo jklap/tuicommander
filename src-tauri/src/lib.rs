@@ -664,6 +664,16 @@ fn get_local_ips(state: State<'_, Arc<AppState>>) -> Vec<LocalIpEntry> {
 }
 
 fn get_local_ips_with_config(ipv6_enabled: bool) -> Vec<LocalIpEntry> {
+    let mut result = get_local_ip_entries(ipv6_enabled);
+    append_mdns_entry(&mut result, selfsigned::local_mdns_hostname());
+    result
+}
+
+/// The IP-only entries, without the mDNS entry `get_local_ips_with_config`
+/// adds on top. Split out so `current_lan_ips` (TLS SAN coverage, which only
+/// cares about parseable IPs) doesn't pay for a `scutil` shell-out whose
+/// result it would immediately discard via `entry.ip.parse().ok()`.
+fn get_local_ip_entries(ipv6_enabled: bool) -> Vec<LocalIpEntry> {
     #[cfg(unix)]
     {
         enumerate_unix_ips(ipv6_enabled)
@@ -698,6 +708,21 @@ fn get_local_ips_with_config(ipv6_enabled: bool) -> Vec<LocalIpEntry> {
             }
         }
         result
+    }
+}
+
+/// "Free tier" mDNS: macOS's built-in mDNSResponder already answers this name
+/// for anything listening on the machine (see selfsigned.rs), so it's
+/// surfaced here as an extra, non-preferred entry — appended last so it never
+/// displaces the existing Tailscale/Wi-Fi/LAN auto-select preference in
+/// RemoteQrDialog/ServicesTab. Split out from `get_local_ips_with_config` so
+/// it's testable without depending on real network interfaces/`scutil`.
+fn append_mdns_entry(result: &mut Vec<LocalIpEntry>, hostname: Option<String>) {
+    if let Some(hostname) = hostname {
+        result.push(LocalIpEntry {
+            ip: hostname,
+            label: "mDNS".to_string(),
+        });
     }
 }
 
@@ -1283,8 +1308,11 @@ fn get_self_signed_cert_status(state: State<'_, Arc<AppState>>) -> SelfSignedCer
 fn regenerate_self_signed_cert(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     selfsigned::clear_cached_cert().map_err(|e| e.to_string())?;
     let ipv6_enabled = state.config.read().services.server.ipv6_enabled;
-    selfsigned::ensure_self_signed_cert(&current_lan_ips(ipv6_enabled))
-        .map_err(|e| e.to_string())?;
+    selfsigned::ensure_self_signed_cert(
+        &current_lan_ips(ipv6_enabled),
+        selfsigned::local_mdns_hostname().as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
     restart_server(state.inner(), "self-signed cert regeneration requested");
     Ok(())
 }
@@ -1336,8 +1364,20 @@ async fn provision_tls_config(
         return None;
     }
 
-    match selfsigned::ensure_self_signed_cert(&current_lan_ips(ipv6_enabled)) {
-        Ok((cert_pem, key_pem)) => {
+    // File I/O + rcgen crypto work (ensure_self_signed_cert) and the scutil
+    // shell-out (local_mdns_hostname) don't belong directly on a tokio worker
+    // thread, matching the spawn_blocking(tailscale::detect) convention used
+    // for an equivalent shell-out elsewhere in this file.
+    let cert_result = tokio::task::spawn_blocking(move || {
+        selfsigned::ensure_self_signed_cert(
+            &current_lan_ips(ipv6_enabled),
+            selfsigned::local_mdns_hostname().as_deref(),
+        )
+    })
+    .await;
+
+    match cert_result {
+        Ok(Ok((cert_pem, key_pem))) => {
             match axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem).await {
                 Ok(config) => {
                     tracing::info!(
@@ -1358,10 +1398,17 @@ async fn provision_tls_config(
                 }
             }
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::error!(
                 source = "selfsigned",
                 "Failed to generate self-signed TLS cert: {e}"
+            );
+            None
+        }
+        Err(join_err) => {
+            tracing::error!(
+                source = "selfsigned",
+                "Self-signed cert generation task failed: {join_err}"
             );
             None
         }
@@ -1373,7 +1420,7 @@ async fn provision_tls_config(
 /// surface deals in strings via `LocalIpEntry`; TLS SAN-coverage checks need
 /// the parsed form).
 fn current_lan_ips(ipv6_enabled: bool) -> Vec<std::net::IpAddr> {
-    get_local_ips_with_config(ipv6_enabled)
+    get_local_ip_entries(ipv6_enabled)
         .into_iter()
         .filter_map(|entry| entry.ip.parse().ok())
         .collect()
@@ -1399,8 +1446,18 @@ pub(crate) async fn self_signed_recheck_loop(
         tokio::time::sleep(CHECK_INTERVAL).await;
 
         let ipv6_enabled = state.config.read().services.server.ipv6_enabled;
-        match selfsigned::ensure_self_signed_cert(&current_lan_ips(ipv6_enabled)) {
-            Ok((cert_pem, key_pem)) => {
+        // See provision_tls_config's matching comment: keep this off the
+        // async runtime, not just at boot but on every 60s tick forever.
+        let cert_result = tokio::task::spawn_blocking(move || {
+            selfsigned::ensure_self_signed_cert(
+                &current_lan_ips(ipv6_enabled),
+                selfsigned::local_mdns_hostname().as_deref(),
+            )
+        })
+        .await;
+
+        match cert_result {
+            Ok(Ok((cert_pem, key_pem))) => {
                 if let Err(e) = tls_config.reload_from_pem(cert_pem, key_pem).await {
                     tracing::error!(
                         source = "selfsigned",
@@ -1408,9 +1465,13 @@ pub(crate) async fn self_signed_recheck_loop(
                     );
                 }
             }
-            Err(e) => tracing::error!(
+            Ok(Err(e)) => tracing::error!(
                 source = "selfsigned",
                 "Failed to check/regenerate self-signed cert: {e}"
+            ),
+            Err(join_err) => tracing::error!(
+                source = "selfsigned",
+                "Self-signed cert recheck task failed: {join_err}"
             ),
         }
     }
@@ -3451,6 +3512,46 @@ mod tests {
         );
     }
 
+    // --- append_mdns_entry ---
+
+    #[test]
+    fn append_mdns_entry_adds_labeled_entry_when_hostname_present() {
+        let mut result = vec![LocalIpEntry {
+            ip: "192.168.1.50".to_string(),
+            label: "Wi-Fi / LAN (en0)".to_string(),
+        }];
+        append_mdns_entry(&mut result, Some("MyMac.local".to_string()));
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[1].ip, "MyMac.local");
+        assert_eq!(result[1].label, "mDNS");
+    }
+
+    #[test]
+    fn append_mdns_entry_appends_last_not_first() {
+        // Auto-select in RemoteQrDialog/ServicesTab falls back to `ips[0]`
+        // when no Tailscale/Wi-Fi/LAN label matches — the mDNS entry must not
+        // become that default by landing at the front of the list.
+        let mut result = vec![LocalIpEntry {
+            ip: "192.168.1.50".to_string(),
+            label: "Wi-Fi / LAN (en0)".to_string(),
+        }];
+        append_mdns_entry(&mut result, Some("MyMac.local".to_string()));
+
+        assert_eq!(result[0].ip, "192.168.1.50");
+    }
+
+    #[test]
+    fn append_mdns_entry_no_op_when_hostname_absent() {
+        let mut result = vec![LocalIpEntry {
+            ip: "192.168.1.50".to_string(),
+            label: "Wi-Fi / LAN (en0)".to_string(),
+        }];
+        append_mdns_entry(&mut result, None);
+
+        assert_eq!(result.len(), 1);
+    }
+
     // --- resolve_connect_target ---
 
     #[test]
@@ -3583,6 +3684,52 @@ mod tests {
             .await
             .expect("self-signed fallback must activate when Tailscale HTTPS isn't active");
         assert!(provisioned.self_signed);
+    }
+
+    // --- self-signed cert generation must not block the async runtime ---
+    // Source-text scans (like `run_remote_applies_its_computed_tls_config`
+    // below) rather than a timing-based execution test, since "did this run
+    // on a blocking-pool thread instead of a tokio worker" isn't reliably
+    // observable from the outside — `ensure_self_signed_cert`'s file I/O +
+    // rcgen crypto work and `local_mdns_hostname`'s `scutil` shell-out belong
+    // off the async runtime, matching the existing
+    // `tokio::task::spawn_blocking(tailscale::detect)` convention used for an
+    // equivalent shell-out elsewhere in this file.
+
+    #[test]
+    fn provision_tls_config_generates_self_signed_cert_via_spawn_blocking() {
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("async fn provision_tls_config(")
+            .expect("provision_tls_config must exist");
+        let end = source[start..]
+            .find("\nfn current_lan_ips(")
+            .map(|i| start + i)
+            .expect("current_lan_ips must immediately follow provision_tls_config");
+        let body = &source[start..end];
+        assert!(
+            body.contains("spawn_blocking"),
+            "provision_tls_config must run ensure_self_signed_cert/local_mdns_hostname \
+             via tokio::task::spawn_blocking, not directly on the async runtime"
+        );
+    }
+
+    #[test]
+    fn self_signed_recheck_loop_generates_self_signed_cert_via_spawn_blocking() {
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("async fn self_signed_recheck_loop(")
+            .expect("self_signed_recheck_loop must exist");
+        let end = source[start..]
+            .find("\nfn restart_server(")
+            .map(|i| start + i)
+            .expect("restart_server must immediately follow self_signed_recheck_loop");
+        let body = &source[start..end];
+        assert!(
+            body.contains("spawn_blocking"),
+            "self_signed_recheck_loop must run ensure_self_signed_cert/local_mdns_hostname \
+             via tokio::task::spawn_blocking, not directly on the async runtime"
+        );
     }
 
     // --- run_remote must actually serve the TLS config it computes ---
