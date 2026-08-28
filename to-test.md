@@ -159,6 +159,31 @@ Three related features. `main` is now denylisted from `tauri-plugin-window-state
   (owner-only permissions) and that the directory doesn't exist at all when scrollback
   saving has never been turned on.
 
+**Follow-up fix (2026-08-27, `size-restore` branch, Rust change — needs `make dev`
+restart):** the "resize/restart three times" item above is exactly what should have
+caught a real bug that shipped with the original feature — a live install's
+`window-geometry.json` was found corrupted to `width: 4944, height: 2368` on a
+`3456x2234` physical display (window far wider than the screen, off the edge). Root
+cause: `apply_window_geometry`'s measure-and-correct step (`corrected_size`) could act
+on a stale pre-resize `outer_size()` read (`wait_for_geometry_to_settle` returning
+early on a compositor that hadn't started applying the resize yet), computing a wildly
+wrong "correction" that then got persisted and compounded larger on each subsequent
+restart. Fixed with a plausibility bound (`is_frame_offset_plausible`, skips the
+correction if the observed/requested gap exceeds 256px) and a missing safety-net check
+(`window_geometry_fix` now also resets geometry wider/taller than every monitor
+combined, not just too-small or off-screen-by-center — the corrupted window's *center*
+was still on-screen, which is why the old check never caught it).
+
+- [ ] **[MANUAL]** After restart on this fix: resize the window noticeably (e.g. drag
+  much wider than default), quit, relaunch — confirm the restored size matches. Repeat
+  several times in a row, including at least once right after a fresh `make dev` start
+  (cold start is when the original race was most likely to hit) — this is the scenario
+  that produced the real corrupted value above.
+- [ ] **[MANUAL]** With TUICommander closed, manually edit `window-geometry.json` in the
+  app's config dir and set `width`/`height` larger than your actual display (e.g. 2x),
+  then launch — confirm the app resets to the ~1200×800 fallback centered on-screen
+  instead of opening oversized/off-screen.
+
 ## Create Worktree dialog: searchable base-ref picker + keyboard nav (2026-08-26, frontend only)
 
 The "Start from" base-ref dropdown gained a search box, `↑`/`↓`/`Enter` navigation, and
