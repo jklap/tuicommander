@@ -6835,3 +6835,22 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Telegram desktop owner: after a manual `make dev` restart or `make build`, enable a checked bot token with no tuic-remote running; confirm Connected (this app), link a private chat, and ask an agent to call Telegram MCP `register`. Start tuic-remote first in a separate check; confirm the desktop reports Connected (tuic-remote) and leaves its registration intact. Close the owner and confirm the standby takes over. Rust changes require restart; no desktop build was launched by the managed peer.
 - [ ] After rebuilding/restarting `tuic-remote`, start it before tailscaled, then verify its FQDN `/health` changes from 403 to 200 within 30.5 seconds plus scheduler delay after tailscaled becomes ready, provided detection completes within its 500 ms budget; verify stop/rename removes the former FQDN. Rust changes require a manual restart to load; coordinator owns mac-mint deployment.
 - [ ] Discord community links: Help → Resources → Discord Community opens TUICommander & Co; website footers and README badge use the permanent invite, with bugs directed to GitHub issues.
+
+## Worktree removal with a submodule checked out — after `make dev` restart
+
+Rust (`tuic-git` `remove_worktree_internal_with_lock`): needs a TUIC restart.
+
+Reported bug (wip): clicking the "X" in the sidebar to delete a worktree whose
+checkout has an initialized git submodule (e.g. `plugins/`) failed with
+`fatal: working trees containing submodules cannot be moved or removed`. On main
+this is handled by tuic-git's removal (cleanliness + submodule check, then one
+`--force`); wip's own Safe-mode retry was not carried over — verify main's path.
+
+- [ ] Create a worktree from a repo that has the `plugins/` submodule
+  initialized inside it (or any repo with a submodule checked out in the
+  worktree), then delete it via the sidebar "X". It should succeed and the
+  row should disappear — no more "cannot be moved or removed" error in the
+  logs.
+- [ ] Same, but first add/modify a file in the worktree (uncommitted change)
+  before deleting — the app should show the normal "discard uncommitted
+  changes?" confirmation instead of silently deleting.
