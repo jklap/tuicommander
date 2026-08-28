@@ -6582,3 +6582,22 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] AI Chat setup (#1406-06f2): with an empty ego executable, confirm the inactive explanation and Configure ego button in inline and detached panels. The button opens Settings → General at the ego controls; selecting the executable shows the composer without restart. Return to the detached window after saving to refresh its settings. _(Automated behavior tests cover routing and activation; agent-browser screenshot attempt was blocked by the locked macOS screen.)_
 
 - [ ] AI Chat message fork: after rebuilding/restarting Rust, fork the second of four ego replies and check the child cutoff while the parent retains all replies. The backend capability and metadata changes require a manual restart.
+
+## Worktree removal with a submodule checked out — after `make dev` restart
+
+Rust (`tuic-git` `remove_worktree_internal_with_lock`): needs a TUIC restart.
+
+Reported bug (wip): clicking the "X" in the sidebar to delete a worktree whose
+checkout has an initialized git submodule (e.g. `plugins/`) failed with
+`fatal: working trees containing submodules cannot be moved or removed`. On main
+this is handled by tuic-git's removal (cleanliness + submodule check, then one
+`--force`); wip's own Safe-mode retry was not carried over — verify main's path.
+
+- [ ] Create a worktree from a repo that has the `plugins/` submodule
+  initialized inside it (or any repo with a submodule checked out in the
+  worktree), then delete it via the sidebar "X". It should succeed and the
+  row should disappear — no more "cannot be moved or removed" error in the
+  logs.
+- [ ] Same, but first add/modify a file in the worktree (uncommitted change)
+  before deleting — the app should show the normal "discard uncommitted
+  changes?" confirmation instead of silently deleting.
