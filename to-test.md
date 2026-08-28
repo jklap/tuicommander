@@ -46,6 +46,30 @@ manual item covers only the rebuilt live Codex integration.
 - [ ] **[MANUAL]** After changing the Mac's local hostname (System Settings → General → Sharing → Local hostname) and waiting for the 60s self-signed recheck loop (or restarting), confirm the cert regenerates to cover the new name — the old `.local` name should stop being covered and the new one should appear in the SAN list (checkable via the SHA-256 fingerprint changing in Settings → Services → Self-Signed HTTPS, or `openssl s_client -connect <ip>:<port> -servername localhost </dev/null 2>/dev/null | openssl x509 -noout -text | grep -A2 "Subject Alternative Name"`).
 - [ ] **[HUMAN]** On Windows and on Linux (with and without Avahi running), confirm the network picker does NOT show an "mDNS" entry and `/system/local-ips` does not include one — `local_mdns_hostname()` is `#[cfg(target_os = "macos")]`-gated to return `None` on both platforms, but this has only been exercised by code inspection + the compile-time cfg, never run on real Windows/Linux hardware (Windows CI never builds/tests this crate per the native-hooks section above).
 
+## New Worktree dialog: fixed-height branch list + "Start from" click-select fix (2026-08-27)
+
+Frontend-only change (no Rust touched), verified by 64 passing vitest cases (3 of them
+regression tests confirmed to fail against the pre-fix code) plus `/code-review`, `biome`,
+and `tsc --noEmit` — all clean. Not verified visually because this worktree has no Rust
+build yet (no `src-tauri/target`) and a screenshot pass would require a full fresh build;
+deferred per the user's own call when asked. Escalation ladder: code inspection done, tests
+done, CLI/typecheck done — only the visual/browser step (rungs 4-5) is outstanding.
+
+- [ ] **[MANUAL]** In the "New Worktree" dialog, type a branch name character-by-character and
+      confirm the dialog's overall size stays visually constant as the number of matching
+      branches changes (was: the box visibly grew/shrank per keystroke —
+      `CreateWorktreeDialog.module.css`'s `.branchList` is now a fixed `height: 150px` instead of
+      `max-height`).
+- [ ] **[MANUAL]** Type a name that matches no existing branch and confirm the branch list shows
+      "No existing branches match" rather than a blank tinted box.
+- [ ] **[MANUAL]** Open the "Start from" base-ref dropdown, type a search query that filters out
+      an earlier-listed ref, then click a ref further down the (now-shorter) list: confirm it
+      populates the trigger and closes the list (was: silently did nothing the first time you
+      typed then clicked, only working after closing/reopening the dropdown once — see the
+      `<For>` index-staleness note added to `AGENTS.md`).
+- [ ] **[MANUAL]** Same as above but hover (don't click) the ref after filtering, then press Enter:
+      confirm it selects the hovered ref.
+
 ## DECCKM app-cursor keys, DECSCUSR cursor shape, and wide-glyph cursor width (2026-08-20)
 
 - [ ] **[MANUAL]** In a real `zsh` prompt with `bindkey -v` (vi mode) and a non-empty prompt line, press Home/End and arrow keys: cursor moves without dropping into vi normal mode (visible via the block cursor NOT appearing after Home/End).

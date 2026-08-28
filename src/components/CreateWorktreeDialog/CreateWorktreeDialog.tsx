@@ -174,15 +174,29 @@ const BaseRefDropdown: Component<{
 		}
 	};
 
-	const renderItem = (option: BaseRefOption, index: number) => (
+	// `<For>` only invokes this mapping callback once per distinct option (keyed by
+	// reference) — it does NOT re-invoke it when filtering merely shifts that same
+	// option to a different position in the list. So the index must be read fresh
+	// on every use via the accessor `<For>` hands us, not captured once as a plain
+	// number: a closure over a snapshot index goes stale the moment typing removes
+	// an earlier match, and a click/hover then acts on the wrong (or out-of-bounds)
+	// slot in `filteredRefs()` and silently no-ops. `index` here is a lazy accessor
+	// (never called until something actually needs the current value), mirroring
+	// how the branch list below reads its own `<For>` index — do not eagerly
+	// resolve it to a number at the call site, and do not resolve it via a
+	// linear `indexOf` scan either (recomputing on every row, every keystroke).
+	const renderItem = (option: BaseRefOption, index: () => number) => (
 		<div
-			data-index={index}
+			data-index={index()}
 			data-testid="base-ref-item"
 			class={`${s.dropdownItem} ${option.name === props.value ? s.dropdownItemActive : ""} ${
-				index === selectedIndex() ? s.dropdownItemSelected : ""
+				index() === selectedIndex() ? s.dropdownItemSelected : ""
 			}`}
-			onClick={() => commitSelection(index)}
-			onMouseEnter={() => setSelectedIndex(index)}
+			onClick={() => {
+				props.onChange(option.name);
+				setOpen(false);
+			}}
+			onMouseEnter={() => setSelectedIndex(index())}
 		>
 			{option.name}
 			{option.is_default ? ` (${t("createWorktree.default", "default")})` : ""}
@@ -226,12 +240,12 @@ const BaseRefDropdown: Component<{
 						>
 							<Show when={filteredLocalRefs().length > 0}>
 								<div class={s.dropdownSectionHeader}>{t("createWorktree.localBranches", "Local")}</div>
-								<For each={filteredLocalRefs()}>{(option, i) => renderItem(option, i())}</For>
+								<For each={filteredLocalRefs()}>{(option, i) => renderItem(option, i)}</For>
 							</Show>
 							<Show when={filteredRemoteRefs().length > 0}>
 								<div class={s.dropdownSectionHeader}>{t("createWorktree.remoteBranches", "Remote")}</div>
 								<For each={filteredRemoteRefs()}>
-									{(option, i) => renderItem(option, filteredLocalRefs().length + i())}
+									{(option, i) => renderItem(option, () => filteredLocalRefs().length + i())}
 								</For>
 							</Show>
 						</Show>
@@ -469,29 +483,36 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 						</Show>
 
 						<div class={s.branchList} ref={branchListRef}>
-							<For each={filteredBranches()}>
-								{(branch, index) => {
-									const isDisabled = () => props.worktreeBranches.includes(branch);
-									return (
-										<div
-											data-index={index()}
-											data-testid="worktree-branch-item"
-											class={`${s.branchItem} ${isDisabled() ? s.disabled : ""} ${trimmedName() === branch ? s.selected : ""} ${
-												index() === branchIndex() ? s.branchItemHighlighted : ""
-											}`}
-											onClick={() => handleBranchClick(branch)}
-											onMouseEnter={() => setBranchIndex(isDisabled() ? branchIndex() : index())}
-										>
-											<span>
-												<HighlightMatch text={branch} query={trimmedName()} />
-											</span>
-											<Show when={isDisabled()}>
-												<span class={s.worktreeTag}>{t("createWorktree.hasWorktree", "(has worktree)")}</span>
-											</Show>
-										</div>
-									);
-								}}
-							</For>
+							<Show
+								when={filteredBranches().length > 0}
+								fallback={
+									<div class={s.dropdownEmpty}>{t("createWorktree.noBranchesMatch", "No existing branches match")}</div>
+								}
+							>
+								<For each={filteredBranches()}>
+									{(branch, index) => {
+										const isDisabled = () => props.worktreeBranches.includes(branch);
+										return (
+											<div
+												data-index={index()}
+												data-testid="worktree-branch-item"
+												class={`${s.branchItem} ${isDisabled() ? s.disabled : ""} ${trimmedName() === branch ? s.selected : ""} ${
+													index() === branchIndex() ? s.branchItemHighlighted : ""
+												}`}
+												onClick={() => handleBranchClick(branch)}
+												onMouseEnter={() => setBranchIndex(isDisabled() ? branchIndex() : index())}
+											>
+												<span>
+													<HighlightMatch text={branch} query={trimmedName()} />
+												</span>
+												<Show when={isDisabled()}>
+													<span class={s.worktreeTag}>{t("createWorktree.hasWorktree", "(has worktree)")}</span>
+												</Show>
+											</div>
+										);
+									}}
+								</For>
+							</Show>
 						</div>
 
 						<Show when={trimmedName()}>
