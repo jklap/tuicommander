@@ -366,6 +366,14 @@ sealed ignored evidence remains available and the new worktree stays removable.
 
 Shared-store linking checks the main checkout with `git check-ignore` before adding a root-anchored entry to the common `info/exclude`. This file is shared by all worktrees: adding an entry is safe only for a store the main checkout already ignores. Stores not ignored there are skipped with a warning. A worktree-local negation also prevents linking. Existing paths are never replaced. No `extensions.worktreeConfig` or `core.excludesFile` configuration is changed.
 
+## Worktree Removal Safety
+Removal never collapses git's two independent refusals into one flag: `force` only
+permits discarding dirty files (and needs the confirmed `expected_fingerprint`), while a
+`git worktree lock` needs the separate `override_lock`. Branch deletion after a removal
+always uses the safe `git branch -d`. Live sessions in a checkout (`live_sessions_in`)
+are reported by the removal preview and block orphan cleanup; the desktop removal flow
+additionally asks a Cancel-by-default "in use" question before closing any attached
+terminal (`createWorktreeRemovalCoordinator`).
 ## Tauri Commands
 
 ### Repository Info

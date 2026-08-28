@@ -3131,6 +3131,7 @@ pub(crate) fn design_review_agents(
 mod tests {
     use super::*;
     use crate::MAX_CONCURRENT_SESSIONS;
+    use crate::state::tests_support::create_temp_git_repo;
     use axum::body::Body;
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::{Request, StatusCode};
@@ -7909,11 +7910,6 @@ mod tests {
         assert!(allowed.contains(&serde_json::json!("list")));
         assert!(allowed.contains(&serde_json::json!("worktree_list")));
         assert!(!allowed.contains(&serde_json::json!("commit")));
-    }
-
-    /// Helper: create a temporary git repo with an initial commit for worktree tests.
-    fn create_temp_git_repo() -> tempfile::TempDir {
-        create_git_repo_at(tempfile::tempdir().expect("create temp dir"))
     }
 
     /// Ordinary orphan fixtures must not qualify for the temporary-path exclusion.
