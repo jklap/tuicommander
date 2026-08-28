@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRepositoryRefreshCoordinator } from "../../hooks/git/createRepositoryRefreshCoordinator";
 import { appLogger } from "../../stores/appLogger";
+import type { GitOpKind } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
 
 describe("repository refresh interval (#1491)", () => {
@@ -8,7 +9,7 @@ describe("repository refresh interval (#1491)", () => {
 	const structure = vi.fn(async (path: string) => ({
 		worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } },
 		merged_branches: [],
-		in_progress_worktrees: [] as string[],
+		in_progress_ops: [] as { path: string; kind: GitOpKind }[],
 	}));
 	const stats = vi.fn(async (path: string) => ({
 		diff_stats: { [path]: { additions, deletions: 0 } },
@@ -102,7 +103,7 @@ describe("repository refresh interval (#1491)", () => {
 			return {
 				worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } },
 				merged_branches: [],
-				in_progress_worktrees: [],
+				in_progress_ops: [],
 			};
 		});
 		const first = refresh("/repo");
@@ -167,7 +168,7 @@ describe("repository refresh interval (#1491)", () => {
 			return {
 				worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } },
 				merged_branches: [],
-				in_progress_worktrees: [],
+				in_progress_ops: [],
 			};
 		});
 		const active = refresh("/repo");

@@ -21,7 +21,9 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { error: vi.fn() } }));
 vi.mock("../../stores/repositories", () => ({
 	repositoriesStore: { state: { activeRepoPath: "/repo" }, getActive: () => null },
 }));
-vi.mock("../../stores/settings", () => ({ settingsStore: { state: { theme: "dark", font: "JetBrains Mono" } } }));
+vi.mock("../../stores/settings", () => ({
+	settingsStore: { state: { theme: "dark", font: "JetBrains Mono", indicatorOverrides: [] } },
+}));
 vi.mock("../../themes", () => ({
 	applyAppTheme: mockAppearance.applyTheme,
 	applyFontFamily: mockAppearance.applyFont,
