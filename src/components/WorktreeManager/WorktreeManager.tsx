@@ -5,8 +5,10 @@ import { githubStore } from "../../stores/github";
 import { registerModal } from "../../stores/modalStack";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
+import { worktreeTerminalIds } from "../../stores/terminalOwnership";
 import { worktreeManagerStore } from "../../stores/worktreeManager";
 import type { BranchPrStatus } from "../../types";
+import { branchActivitySummary } from "../../utils/activitySnapshot";
 import { formatRelativeTime } from "../../utils/time";
 import b from "../shared/branch.module.css";
 import { Button } from "../ui/Button";
@@ -215,7 +217,32 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 
 	function handleBatchDelete() {
 		if (!props.actions) return;
-		for (const row of selectedRows()) props.actions.onDelete(row.repoPath, row.workspaceId);
+		const rows = selectedRows();
+
+		// `onDelete` → `handleRemoveWorkspace` already gates each busy workspace behind
+		// its own confirmRemoveBusyWorktree dialog (defaultButton: "cancel", so
+		// clicking through a stack of near-identical prompts can't destroy live
+		// work) — that per-item gate is what makes batch delete safe at all, not
+		// this ordering. This just keeps the disruptive prompts from blocking the
+		// uncontroversial deletions: safe (no attached terminal) workspaces go
+		// first, busy ones last, so an accidental Enter through the leading
+		// prompts can only fast-forward past removals nothing was using.
+		const busy: WorktreeRow[] = [];
+		const safe: WorktreeRow[] = [];
+		for (const row of rows) {
+			// Same cwd authority as the removal coordinator's own busy check.
+			const worktreePath = repositoriesStore.get(row.repoPath)?.workspaces[row.workspaceId]?.worktreePath;
+			const terminals = worktreePath ? worktreeTerminalIds(worktreePath) : [];
+			(branchActivitySummary(terminals).isBusy ? busy : safe).push(row);
+		}
+		if (busy.length > 0) {
+			appLogger.info("git", `handleBatchDelete: ${busy.length} of ${rows.length} selected worktrees are in use`, {
+				busy: busy.map((row) => row.branch),
+			});
+		}
+		for (const row of [...safe, ...busy]) {
+			props.actions.onDelete(row.repoPath, row.workspaceId);
+		}
 		worktreeManagerStore.clearSelection();
 	}
 

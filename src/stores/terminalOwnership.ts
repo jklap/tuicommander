@@ -132,6 +132,16 @@ export function reclaimParkedTerminal(terminalId: string): void {
 	reconcileTerminalOwnership(terminalId);
 }
 
+/** Terminals currently inside `worktreePath`, by the same cwd authority as
+ * `closeWorktreeTerminals` — a snapshot, for asking before anything is closed. */
+export function worktreeTerminalIds(worktreePath: string): string[] {
+	if (!worktreePath) return [];
+	return terminalsStore.getIds().filter((id) => {
+		const cwd = terminalsStore.get(id)?.cwd;
+		return !!cwd && pathStartsWith(cwd, worktreePath);
+	});
+}
+
 /** Removal authority comes from current cwd, never sidebar membership or a declaration.
  * Re-read each terminal after every await: another tab may cd while a close is pending. */
 export async function closeWorktreeTerminals(
