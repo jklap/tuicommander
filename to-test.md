@@ -4938,3 +4938,22 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Library cleanup (#2115-1333)
 
 - [ ] After the next manual backend restart, confirm shell activity, inline-TUI classification and plugin output watchers still work. The write-only command knowledge recorder no longer writes history files. Existing files remain untouched. Do not restart the daily app for this check.
+
+## Worktree removal with a submodule checked out — after `make dev` restart
+
+Rust (`tuic-git` `remove_worktree_internal_with_lock`): needs a TUIC restart.
+
+Reported bug (wip): clicking the "X" in the sidebar to delete a worktree whose
+checkout has an initialized git submodule (e.g. `plugins/`) failed with
+`fatal: working trees containing submodules cannot be moved or removed`. On main
+this is handled by tuic-git's removal (cleanliness + submodule check, then one
+`--force`); wip's own Safe-mode retry was not carried over — verify main's path.
+
+- [ ] Create a worktree from a repo that has the `plugins/` submodule
+  initialized inside it (or any repo with a submodule checked out in the
+  worktree), then delete it via the sidebar "X". It should succeed and the
+  row should disappear — no more "cannot be moved or removed" error in the
+  logs.
+- [ ] Same, but first add/modify a file in the worktree (uncommitted change)
+  before deleting — the app should show the normal "discard uncommitted
+  changes?" confirmation instead of silently deleting.
