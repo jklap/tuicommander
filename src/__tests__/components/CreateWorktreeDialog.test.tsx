@@ -513,6 +513,69 @@ describe("CreateWorktreeDialog", () => {
 			expect(container.querySelector("[class*='dropdownList']")).toBeNull();
 		});
 
+		it("clicking an item after filtering selects it (index doesn't go stale when an earlier match drops out)", () => {
+			// Regression test: filtering to "dev" removes "main" (index 0), shifting
+			// "develop" from index 1 to index 0 within the filtered list. A click must
+			// resolve against the option's live position, not a position captured when
+			// the row was first rendered.
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+			fireEvent.click(trigger);
+
+			const search = container.querySelector("[data-testid='base-ref-search']") as HTMLInputElement;
+			fireEvent.input(search, { target: { value: "dev" } });
+
+			const developItem = Array.from(container.querySelectorAll("[class*='dropdownItem']")).find(
+				(el) => el.textContent?.trim() === "develop",
+			)!;
+			fireEvent.click(developItem);
+
+			expect(container.querySelector("[class*='dropdownList']")).toBeNull();
+			expect(trigger.textContent).toContain("develop");
+		});
+
+		it("clicking a remote item survives all local matches being filtered out (index recomputed across the whole list, not just its own group)", () => {
+			// Regression test: the remote group's index used to be computed once as
+			// `filteredLocalRefs().length + i()` at render time. Filtering the local
+			// group down to zero changes that offset without re-rendering the remote
+			// row, so a stale offset must not cause the click to miss or select wrong.
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+			fireEvent.click(trigger);
+
+			const search = container.querySelector("[data-testid='base-ref-search']") as HTMLInputElement;
+			fireEvent.input(search, { target: { value: "feature" } });
+
+			const remoteItem = Array.from(container.querySelectorAll("[class*='dropdownItem']")).find((el) =>
+				el.textContent?.includes("origin/feature/x"),
+			)!;
+			fireEvent.click(remoteItem);
+
+			expect(container.querySelector("[class*='dropdownList']")).toBeNull();
+			expect(trigger.textContent).toContain("origin/feature/x");
+		});
+
+		it("hovering an item after filtering moves the keyboard cursor to its live position, so Enter selects the hovered option", () => {
+			// Regression test: onMouseEnter had the same stale-index bug as onClick —
+			// covered separately since it drives a different code path (setSelectedIndex
+			// feeding the keyboard Enter handler, not a direct onChange call).
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+			fireEvent.click(trigger);
+
+			const search = container.querySelector("[data-testid='base-ref-search']") as HTMLInputElement;
+			fireEvent.input(search, { target: { value: "dev" } });
+
+			const developItem = Array.from(container.querySelectorAll("[class*='dropdownItem']")).find(
+				(el) => el.textContent?.trim() === "develop",
+			)!;
+			fireEvent.mouseEnter(developItem);
+			fireEvent.keyDown(search, { key: "Enter" });
+
+			expect(container.querySelector("[class*='dropdownList']")).toBeNull();
+			expect(trigger.textContent).toContain("develop");
+		});
+
 		it("hovering an item moves the keyboard cursor onto it", () => {
 			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
 			fireEvent.click(container.querySelector("[class*='dropdownTrigger']")!);
@@ -688,6 +751,20 @@ describe("CreateWorktreeDialog", () => {
 			const input = container.querySelector("input[type='text']") as HTMLInputElement;
 			fireEvent.input(input, { target: { value: "zzz-no-match" } });
 			expect(container.querySelectorAll("[class*='branchItem']").length).toBe(0);
+		});
+
+		it("shows an empty-state message instead of a bare void when typing a brand-new branch name", () => {
+			// Regression test: the branch list box has a fixed height (so it doesn't
+			// resize while filtering — see the base ref dropdown tests below for the
+			// matching bug), which means a zero-match state must render *something*
+			// in that space, not a blank tinted box, for the common "type a brand new
+			// branch name" flow.
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} />);
+			const input = container.querySelector("input[type='text']") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "zzz-no-match" } });
+
+			const branchList = container.querySelector("[class*='branchList']")!;
+			expect(branchList.textContent).toContain("No existing branches match");
 		});
 	});
 

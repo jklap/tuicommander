@@ -166,7 +166,12 @@
 }
 
 .branchList {
-  max-height: 150px;
+  /* Fixed (not max-) height: the number of matches changes on every keystroke
+   * while filtering, and a max-height that merely caps growth still lets the
+   * box shrink to fit fewer matches — producing a dialog that visibly resizes
+   * as the user types. A constant height keeps the popover's overall size
+   * stable regardless of how many branches currently match. */
+  height: 150px;
   overflow-y: auto;
   margin-top: 8px;
   border: 1px solid var(--border);
