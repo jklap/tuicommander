@@ -17,7 +17,7 @@ import { findOrphanTerminals } from "../utils/terminalOrphans";
 import { createBranchSelectionCoordinator } from "./git/createBranchSelectionCoordinator";
 import { createRepositoryRefreshCoordinator, type OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 import { createTerminalWorktreeCoordinator } from "./git/createTerminalWorktreeCoordinator";
-import { createWorktreeCreationCoordinator } from "./git/createWorktreeCreationCoordinator";
+import { createWorktreeCreationCoordinator, type WorktreeDialogState } from "./git/createWorktreeCreationCoordinator";
 import { createWorktreeRemovalCoordinator } from "./git/createWorktreeRemovalCoordinator";
 import { createWorktreeWorkflowCoordinator } from "./git/createWorktreeWorkflowCoordinator";
 import type { RemoveWorktreeResult } from "./useRepository";
@@ -152,6 +152,13 @@ export interface GitOperationsDeps {
 			deleteBranch: boolean,
 		) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
+		/** Terminals are attached to this worktree — shown after the removal
+		 *  confirmation and BEFORE any terminal is closed (using the terminals
+		 *  inside the checkout by live cwd). See `createWorktreeRemovalCoordinator`. */
+		confirmRemoveBusyWorktree?: (
+			branchName: string,
+			summary: import("../utils/activitySnapshot").BranchActivitySummary,
+		) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (
 			repoPath: string,
@@ -213,14 +220,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	// Key: `${repoPath}::${branchName}` — prevents concurrent remove calls for same branch
 	const [removingBranches, setRemovingBranches] = createSignal<Set<string>>(new Set());
 
-	const [worktreeDialogState, setWorktreeDialogState] = createSignal<{
-		repoPath: string;
-		suggestedName: string;
-		existingBranches: string[];
-		worktreeBranches: string[];
-		worktreesDir: string;
-		baseRefs: import("./useRepository").BaseRefOption[];
-	} | null>(null);
+	const [worktreeDialogState, setWorktreeDialogState] = createSignal<WorktreeDialogState | null>(null);
 
 	/** Pending merge context — set when afterMerge=ask; cleared once the user picks or skips cleanup */
 	const [mergePendingCtx, setMergePendingCtx] = createSignal<{
