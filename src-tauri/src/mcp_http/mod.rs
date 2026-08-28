@@ -1648,6 +1648,17 @@ fn evict_peers_for_reaped_mcp_session(
 /// Start IPC + TCP listeners. Returns `true` if TCP bound successfully (or
 /// wasn't requested). Returns `false` only when `remote_enabled` is true and
 /// TCP bind failed on all port attempts.
+///
+/// `upgrade_http`: whether plain `http://` requests on this port should
+/// 301-redirect to `https://` (`axum_server_dual_protocol`'s `.set_upgrade`,
+/// below). This is a plain redirect toggle, independent of *which* TLS source
+/// is active — it is NOT synonymous with "self-signed cert is active" even
+/// though every desktop caller currently passes `self_signed_active` here.
+/// That's a caller-side policy choice (today, only the self-signed fallback —
+/// not Tailscale, not a future manually-configured cert — wants the
+/// redirect), not a constraint this parameter enforces. A future TLS source
+/// that also wants the redirect should just pass `true`; it does not need to
+/// (and should not) route through `self_signed_active` to do so.
 pub async fn start_server(
     state: Arc<AppState>,
     mcp_enabled: bool,

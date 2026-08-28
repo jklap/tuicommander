@@ -129,6 +129,21 @@ When adding routes or changing server behavior:
 | `docs/user-guide/remote-access.md` | User setup guide |
 | `src-tauri/src/mcp_http/plugin_docs.rs` | PLUGIN_DOCS (if plugin-facing) |
 
+### Self-Signed HTTPS & Network Reachability (mDNS/Bonjour, custom hostname)
+When modifying `selfsigned.rs`'s SAN/cache-coverage logic, `get_local_ips`'s entry list, or
+`get_connect_url`/`resolve_connect_target`'s scheme/host resolution:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/selfsigned.rs` | SAN computation (`generate_and_cache`), cache-coverage check (`load_cached`) — every new SAN source needs a matching coverage check or the cache goes stale silently |
+| `src-tauri/src/lib.rs` | `get_local_ips_with_config`/`append_mdns_entry` (network-picker entries), `current_lan_ips`, the 3 `ensure_self_signed_cert` call sites |
+| `docs/FEATURES.md` | Section 14.11 (Self-Signed HTTPS Fallback) |
+| `docs/user-guide/remote-access.md` | HTTPS section — sources of SAN coverage, how to connect by each entry type |
+| `docs/api/tauri-commands.md` | `get_local_ips` entry shape/description |
+| `docs/api/http-api.md` | `GET /system/local-ips` description |
+| `to-test.md` | Any new SAN source needs a manual cert-regeneration/connectivity check — this class of change can't be exercised by `cargo test` alone (real network/OS state) |
+| `plans/network-aware-remote-access.md` (main checkout only, gitignored) | Living plan for trusted-network gating / mDNS Tier B / custom hostname — update phase status as each ships |
+
 ### Diagnostics
 When modifying `cpu_watchdog.rs` or the `/diagnostics` HTTP endpoint:
 

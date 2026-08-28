@@ -25,6 +25,10 @@ Once enabled, the settings panel shows the access URL: `https://<your-ip>:<port>
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
 
+### Connecting by name instead of IP (macOS)
+
+On macOS, the network picker (in the QR dialog and Settings → Services) also lists an **mDNS** entry — your Mac's existing Bonjour hostname (e.g. `MyMac.local`), the same name AirDrop and file sharing already use. Select it to get a URL like `https://MyMac.local:9876` instead of a raw IP; it keeps working even if your IP changes after a network switch. This isn't available on Windows/Linux, since those platforms don't guarantee an mDNS responder is running for the hostname out of the box.
+
 ## HTTPS
 
 Browsers only expose some features — notably the Clipboard API used for copy/paste — to a "secure context": `https://` or `http://localhost`. A plain `http://<lan-ip>` URL doesn't qualify, so TUICommander serves HTTPS for remote/LAN access using one of two sources, in this priority order:

@@ -41,27 +41,67 @@ struct CertMeta {
 }
 
 /// Generate (or load a cached) self-signed cert covering localhost + all
-/// current LAN IPs. Regenerates if missing, expiring within 30 days (matching
+/// current LAN IPs (+ the machine's Bonjour/mDNS hostname, when available).
+/// Regenerates if missing, expiring within 30 days (matching
 /// `tailscale::cert_renewal_loop`'s renewal threshold), or if the SAN list no
-/// longer covers the machine's current IPs.
-pub(crate) fn ensure_self_signed_cert(lan_ips: &[IpAddr]) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-    ensure_self_signed_cert_in(&crate::config::config_dir(), lan_ips)
+/// longer covers the machine's current IPs/hostname.
+pub(crate) fn ensure_self_signed_cert(
+    lan_ips: &[IpAddr],
+    mdns_hostname: Option<&str>,
+) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+    ensure_self_signed_cert_in(&crate::config::config_dir(), lan_ips, mdns_hostname)
 }
 
 fn ensure_self_signed_cert_in(
     dir: &Path,
     lan_ips: &[IpAddr],
+    mdns_hostname: Option<&str>,
 ) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     let _guard = GENERATION_LOCK.lock();
     let cert_path = dir.join(CERT_FILE);
     let key_path = dir.join(KEY_FILE);
     let meta_path = dir.join(META_FILE);
 
-    if let Some(cached) = load_cached(&cert_path, &key_path, &meta_path, lan_ips) {
+    if let Some(cached) = load_cached(&cert_path, &key_path, &meta_path, lan_ips, mdns_hostname) {
         return Ok(cached);
     }
 
-    generate_and_cache(&cert_path, &key_path, &meta_path, lan_ips)
+    generate_and_cache(&cert_path, &key_path, &meta_path, lan_ips, mdns_hostname)
+}
+
+/// Read the machine's current Bonjour/mDNS hostname (`<name>.local`) — the
+/// name macOS's built-in mDNSResponder already answers for anything listening
+/// on this machine (the same mechanism AirDrop/file sharing rely on), so
+/// adding it to the cert's SAN list gets `.local` reachability with no new
+/// infra. macOS only: unlike Bonjour, neither Windows nor most Linux distros
+/// guarantee an mDNS responder is running for this hostname out of the box.
+pub(crate) fn local_mdns_hostname() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("scutil")
+            .args(["--get", "LocalHostName"])
+            .output()
+            .ok()?;
+        parse_local_hostname_output(output.status.success(), &output.stdout)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// Pure parsing half of [`local_mdns_hostname`], split out so it's testable
+/// without shelling out to `scutil`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_local_hostname_output(success: bool, stdout: &[u8]) -> Option<String> {
+    if !success {
+        return None;
+    }
+    let name = String::from_utf8_lossy(stdout).trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    Some(format!("{name}.local"))
 }
 
 /// Cert cache status for the Settings UI — never generates, only reports.
@@ -137,6 +177,7 @@ fn load_cached(
     key_path: &Path,
     meta_path: &Path,
     lan_ips: &[IpAddr],
+    mdns_hostname: Option<&str>,
 ) -> Option<(Vec<u8>, Vec<u8>)> {
     let meta: CertMeta = serde_json::from_slice(&std::fs::read(meta_path).ok()?).ok()?;
 
@@ -153,6 +194,12 @@ fn load_cached(
         return None;
     }
 
+    if let Some(name) = mdns_hostname
+        && !meta.sans.iter().any(|san| san == name)
+    {
+        return None;
+    }
+
     let cert_pem = std::fs::read(cert_path).ok()?;
     let key_pem = std::fs::read(key_path).ok()?;
     Some((cert_pem, key_pem))
@@ -163,6 +210,7 @@ fn generate_and_cache(
     key_path: &Path,
     meta_path: &Path,
     lan_ips: &[IpAddr],
+    mdns_hostname: Option<&str>,
 ) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     let mut sans: Vec<String> = vec![
         "localhost".to_string(),
@@ -170,6 +218,9 @@ fn generate_and_cache(
         "::1".to_string(),
     ];
     sans.extend(lan_ips.iter().map(IpAddr::to_string));
+    if let Some(name) = mdns_hostname {
+        sans.push(name.to_string());
+    }
     // SAN entries must be unique per rcgen; lan_ips could in principle repeat
     // 127.0.0.1 on odd network configs.
     sans.sort_unstable();
@@ -231,7 +282,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ips = [lan_ip(192, 168, 1, 50)];
 
-        let (cert_pem, key_pem) = ensure_self_signed_cert_in(dir.path(), &ips).unwrap();
+        let (cert_pem, key_pem) = ensure_self_signed_cert_in(dir.path(), &ips, None).unwrap();
 
         let cert_str = String::from_utf8(cert_pem).unwrap();
         assert!(cert_str.starts_with("-----BEGIN CERTIFICATE-----"));
@@ -261,8 +312,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ips = [lan_ip(192, 168, 1, 50)];
 
-        let (cert_pem_1, key_pem_1) = ensure_self_signed_cert_in(dir.path(), &ips).unwrap();
-        let (cert_pem_2, key_pem_2) = ensure_self_signed_cert_in(dir.path(), &ips).unwrap();
+        let (cert_pem_1, key_pem_1) = ensure_self_signed_cert_in(dir.path(), &ips, None).unwrap();
+        let (cert_pem_2, key_pem_2) = ensure_self_signed_cert_in(dir.path(), &ips, None).unwrap();
 
         assert_eq!(cert_pem_1, cert_pem_2, "cached cert must be reused as-is");
         assert_eq!(key_pem_1, key_pem_2, "cached key must be reused as-is");
@@ -289,7 +340,7 @@ mod tests {
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
                     barrier.wait();
-                    ensure_self_signed_cert_in(&dir_path, &ips).unwrap()
+                    ensure_self_signed_cert_in(&dir_path, &ips, None).unwrap()
                 })
             })
             .collect();
@@ -312,11 +363,11 @@ mod tests {
     fn regenerates_when_current_ips_are_no_longer_covered() {
         let dir = tempfile::tempdir().unwrap();
         let first_ips = [lan_ip(192, 168, 1, 50)];
-        let (cert_pem_1, _) = ensure_self_signed_cert_in(dir.path(), &first_ips).unwrap();
+        let (cert_pem_1, _) = ensure_self_signed_cert_in(dir.path(), &first_ips, None).unwrap();
 
         // Laptop moved to a new network — old SAN list no longer covers it.
         let second_ips = [lan_ip(10, 0, 0, 5)];
-        let (cert_pem_2, _) = ensure_self_signed_cert_in(dir.path(), &second_ips).unwrap();
+        let (cert_pem_2, _) = ensure_self_signed_cert_in(dir.path(), &second_ips, None).unwrap();
 
         assert_ne!(
             cert_pem_1, cert_pem_2,
@@ -332,7 +383,7 @@ mod tests {
     fn regenerates_when_cached_cert_is_expired() {
         let dir = tempfile::tempdir().unwrap();
         let ips = [lan_ip(192, 168, 1, 50)];
-        let (cert_pem_1, _) = ensure_self_signed_cert_in(dir.path(), &ips).unwrap();
+        let (cert_pem_1, _) = ensure_self_signed_cert_in(dir.path(), &ips, None).unwrap();
 
         // Simulate an expired cache by rewriting the metadata sidecar with a
         // `not_after` in the past.
@@ -342,7 +393,7 @@ mod tests {
         meta.not_after_unix = time::OffsetDateTime::now_utc().unix_timestamp() - 1;
         std::fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
 
-        let (cert_pem_2, _) = ensure_self_signed_cert_in(dir.path(), &ips).unwrap();
+        let (cert_pem_2, _) = ensure_self_signed_cert_in(dir.path(), &ips, None).unwrap();
 
         assert_ne!(
             cert_pem_1, cert_pem_2,
@@ -362,7 +413,7 @@ mod tests {
     fn cert_status_reports_expiry_after_generation() {
         let dir = tempfile::tempdir().unwrap();
         let ips = [lan_ip(192, 168, 1, 50)];
-        ensure_self_signed_cert_in(dir.path(), &ips).unwrap();
+        ensure_self_signed_cert_in(dir.path(), &ips, None).unwrap();
 
         let status = cert_status_in(dir.path());
         assert!(status.generated);
@@ -373,12 +424,12 @@ mod tests {
     fn clear_cached_cert_forces_regeneration() {
         let dir = tempfile::tempdir().unwrap();
         let ips = [lan_ip(192, 168, 1, 50)];
-        let (cert_pem_1, _) = ensure_self_signed_cert_in(dir.path(), &ips).unwrap();
+        let (cert_pem_1, _) = ensure_self_signed_cert_in(dir.path(), &ips, None).unwrap();
 
         clear_cached_cert_in(dir.path()).unwrap();
         assert!(!cert_status_in(dir.path()).generated);
 
-        let (cert_pem_2, _) = ensure_self_signed_cert_in(dir.path(), &ips).unwrap();
+        let (cert_pem_2, _) = ensure_self_signed_cert_in(dir.path(), &ips, None).unwrap();
         assert_ne!(
             cert_pem_1, cert_pem_2,
             "clearing the cache must force a fresh cert on next ensure"
@@ -391,7 +442,92 @@ mod tests {
         let ips = [lan_ip(192, 168, 1, 50)];
 
         // No prior cache at all — must generate fresh rather than error.
-        let result = ensure_self_signed_cert_in(dir.path(), &ips);
+        let result = ensure_self_signed_cert_in(dir.path(), &ips, None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sans_include_mdns_hostname_when_provided() {
+        let dir = tempfile::tempdir().unwrap();
+        let ips = [lan_ip(192, 168, 1, 50)];
+
+        ensure_self_signed_cert_in(dir.path(), &ips, Some("MyMac.local")).unwrap();
+
+        let meta: CertMeta =
+            serde_json::from_slice(&std::fs::read(dir.path().join(META_FILE)).unwrap()).unwrap();
+        assert!(meta.sans.contains(&"MyMac.local".to_string()));
+    }
+
+    #[test]
+    fn reuses_cache_when_mdns_hostname_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let ips = [lan_ip(192, 168, 1, 50)];
+
+        let (cert_pem_1, _) =
+            ensure_self_signed_cert_in(dir.path(), &ips, Some("MyMac.local")).unwrap();
+        let (cert_pem_2, _) =
+            ensure_self_signed_cert_in(dir.path(), &ips, Some("MyMac.local")).unwrap();
+
+        assert_eq!(
+            cert_pem_1, cert_pem_2,
+            "unchanged mDNS hostname must not force regeneration"
+        );
+    }
+
+    #[test]
+    fn regenerates_when_mdns_hostname_newly_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let ips = [lan_ip(192, 168, 1, 50)];
+
+        let (cert_pem_1, _) = ensure_self_signed_cert_in(dir.path(), &ips, None).unwrap();
+        // Bonjour name becomes available after the cert was already cached
+        // without it (e.g. upgrading from a pre-Tier-A cache).
+        let (cert_pem_2, _) =
+            ensure_self_signed_cert_in(dir.path(), &ips, Some("MyMac.local")).unwrap();
+
+        assert_ne!(
+            cert_pem_1, cert_pem_2,
+            "a newly available mDNS hostname not covered by the cached SAN list must trigger regeneration"
+        );
+        let meta: CertMeta =
+            serde_json::from_slice(&std::fs::read(dir.path().join(META_FILE)).unwrap()).unwrap();
+        assert!(meta.sans.contains(&"MyMac.local".to_string()));
+    }
+
+    #[test]
+    fn regenerates_when_mdns_hostname_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ips = [lan_ip(192, 168, 1, 50)];
+
+        let (cert_pem_1, _) =
+            ensure_self_signed_cert_in(dir.path(), &ips, Some("OldName.local")).unwrap();
+        let (cert_pem_2, _) =
+            ensure_self_signed_cert_in(dir.path(), &ips, Some("NewName.local")).unwrap();
+
+        assert_ne!(
+            cert_pem_1, cert_pem_2,
+            "a changed mDNS hostname must trigger regeneration"
+        );
+    }
+
+    #[test]
+    fn parse_local_hostname_output_appends_dot_local() {
+        assert_eq!(
+            parse_local_hostname_output(true, b"Jasons-MacBook-Pro\n"),
+            Some("Jasons-MacBook-Pro.local".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_local_hostname_output_none_on_command_failure() {
+        assert_eq!(
+            parse_local_hostname_output(false, b"Jasons-MacBook-Pro\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_local_hostname_output_none_on_empty_name() {
+        assert_eq!(parse_local_hostname_output(true, b"\n"), None);
     }
 }
