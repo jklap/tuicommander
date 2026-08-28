@@ -1684,3 +1684,25 @@ runs in the backend, so nothing changes until the Rust process is rebuilt.
   fires): detection still happens — the pattern anchors on `API Error: 5xx`.
 - [ ] A 429/overload (`API Error: 529` or "temporarily limiting requests") is
   still logged as a rate limit, not as a server error, and injects nothing.
+
+## Worktree removal with a submodule checked out — after `make dev` restart
+
+Rust change (`src-tauri/src/worktree.rs::remove_worktree_internal`): needs a TUIC
+restart to take effect.
+
+Reported bug: clicking the "X" in the sidebar to delete a worktree whose
+checkout has an initialized git submodule (e.g. `plugins/`) failed with
+`fatal: working trees containing submodules cannot be moved or removed` — a
+git refusal that is NOT lifted by `--force`/`--force --force`. Fixed by
+falling back to manually deleting the worktree directory (+ `git worktree
+prune`) when this specific error is detected, while still refusing (with the
+usual confirm-to-discard prompt) if the worktree also has uncommitted changes.
+
+- [ ] Create a worktree from a repo that has the `plugins/` submodule
+  initialized inside it (or any repo with a submodule checked out in the
+  worktree), then delete it via the sidebar "X". It should succeed and the
+  row should disappear — no more "cannot be moved or removed" error in the
+  logs.
+- [ ] Same, but first add/modify a file in the worktree (uncommitted change)
+  before deleting — the app should show the normal "discard uncommitted
+  changes?" confirmation instead of silently deleting.
