@@ -238,6 +238,31 @@ fn window_geometry_fix(
 
     let size_invalid = width < MIN_WINDOW_WIDTH || height < MIN_WINDOW_HEIGHT;
 
+    // A window larger than the combined bounding box of every available
+    // monitor cannot be a legitimate size — it's corrupted geometry (e.g. a
+    // runaway `corrected_size` correction from a stale pre-resize read). Its
+    // center can still land on-screen despite this, so this must be checked
+    // independently of `on_screen` below rather than folded into it.
+    let size_oversized = if monitors.is_empty() {
+        false
+    } else {
+        let min_x = monitors.iter().map(|(mp, _)| mp.0).min().unwrap_or(0);
+        let min_y = monitors.iter().map(|(mp, _)| mp.1).min().unwrap_or(0);
+        let max_x = monitors
+            .iter()
+            .map(|(mp, ms)| mp.0.saturating_add(ms.0 as i32))
+            .max()
+            .unwrap_or(0);
+        let max_y = monitors
+            .iter()
+            .map(|(mp, ms)| mp.1.saturating_add(ms.1 as i32))
+            .max()
+            .unwrap_or(0);
+        let bounding_width = max_x.saturating_sub(min_x).max(0) as u32;
+        let bounding_height = max_y.saturating_sub(min_y).max(0) as u32;
+        width > bounding_width || height > bounding_height
+    };
+
     // Check whether the window center is on any available monitor.
     // Use saturating conversion to avoid arithmetic overflow on corrupted dimensions.
     let half_w = i32::try_from(width / 2).unwrap_or(i32::MAX);
@@ -251,7 +276,7 @@ fn window_geometry_fix(
             && center_y < mp.1.saturating_add(ms.1 as i32)
     });
 
-    if size_invalid || !on_screen {
+    if size_invalid || size_oversized || !on_screen {
         Some(GeometryFix {
             width: FALLBACK_WINDOW_WIDTH,
             height: FALLBACK_WINDOW_HEIGHT,
@@ -317,6 +342,71 @@ fn corrected_size(requested: u32, observed: u32) -> u32 {
     corrected.clamp(1, i64::from(u32::MAX)) as u32
 }
 
+/// Real OS window-chrome (title bar/border) offsets between inner and outer
+/// size are always small: ~0 under `titleBarStyle: Overlay`'s full-size
+/// content view (macOS), and a native decorated title bar plus borders
+/// (Windows/Linux — `Overlay`/`hiddenTitle` are macOS-only builder options,
+/// see the `#[cfg(target_os = "macos")]` split around window creation) elsewhere
+/// — generous headroom is kept here for that case at high DPI scale factors,
+/// well short of the multi-hundred-to-thousand-pixel deltas a stale read
+/// actually produces (see the test below reproducing the field bug's ~1000px
+/// gap). A post-`set_size` read that disagrees with what was requested by
+/// more than this is not a legitimate frame offset; it means the read raced
+/// an async compositor and caught the window's stale pre-resize geometry
+/// (see `wait_for_geometry_to_settle`'s doc comment). Trusting a stale
+/// reading here would feed a wrong "correction" back through `record_size`
+/// into persisted geometry, and because each restart's correction is
+/// computed relative to the previous (already wrong) saved value, the error
+/// compounds geometrically across restarts instead of converging — this is
+/// how a window ends up saved far wider than any monitor. Skip the
+/// correction outright rather than act on an implausible reading.
+const MAX_TRUSTED_FRAME_OFFSET: u32 = 256;
+
+/// Whether an `observed` outer size is close enough to `requested` to trust
+/// the gap as a real OS frame offset worth correcting for. See
+/// `MAX_TRUSTED_FRAME_OFFSET`.
+fn is_frame_offset_plausible(requested: (u32, u32), observed: (u32, u32)) -> bool {
+    observed.0.abs_diff(requested.0) <= MAX_TRUSTED_FRAME_OFFSET
+        && observed.1.abs_diff(requested.1) <= MAX_TRUSTED_FRAME_OFFSET
+}
+
+#[cfg(feature = "desktop")]
+/// One `(outer_size, outer_position)` sample, as read from a live window or
+/// supplied synthetically in tests.
+type GeometryReading = (
+    Option<tauri::PhysicalSize<u32>>,
+    Option<tauri::PhysicalPosition<i32>>,
+);
+
+#[cfg(feature = "desktop")]
+/// Pure core of [`wait_for_geometry_to_settle`]: starting from `initial` (the
+/// reading taken the instant the wait begins, before any sleep), pull
+/// readings from `next_reading` — one per iteration, up to `max_iters` — and
+/// stop as soon as two consecutive readings agree.
+///
+/// Generic over `next_reading` (rather than taking a `&WebviewWindow`
+/// directly) specifically so this loop — not just a paraphrase of it — can be
+/// driven with a scripted sequence of synthetic readings in tests, to
+/// reproduce the exact race described on `wait_for_geometry_to_settle`: two
+/// consecutive readings agreeing is treated as proof the change is complete
+/// and stable, but an async compositor that hasn't started applying the
+/// change yet produces the exact same signal (both readings are the stale
+/// pre-change value) — this loop cannot tell the two cases apart.
+fn settle_loop(
+    initial: GeometryReading,
+    max_iters: u32,
+    mut next_reading: impl FnMut() -> GeometryReading,
+) {
+    let mut last = initial;
+    for _ in 0..max_iters {
+        let current = next_reading();
+        if current == last {
+            return;
+        }
+        last = current;
+    }
+}
+
 #[cfg(feature = "desktop")]
 /// Poll `window`'s outer geometry until two consecutive reads agree, or a
 /// small iteration budget is exhausted.
@@ -329,19 +419,16 @@ fn corrected_size(requested: u32, observed: u32) -> u32 {
 /// `apply_window_geometry` and the immediately-following
 /// `ensure_window_visible` act on stale data. This is a best-effort mitigation
 /// bounded to ~50ms worst case, not a guarantee: a compositor slower than that
-/// still races it.
+/// still races it — see `settle_loop`'s doc comment and its `settle_loop_*`
+/// tests below for exactly how that plays out.
 fn wait_for_geometry_to_settle(window: &WebviewWindow) {
     const MAX_ITERS: u32 = 5;
     const DELAY: std::time::Duration = std::time::Duration::from_millis(10);
-    let mut last = (window.outer_size().ok(), window.outer_position().ok());
-    for _ in 0..MAX_ITERS {
+    let initial = (window.outer_size().ok(), window.outer_position().ok());
+    settle_loop(initial, MAX_ITERS, || {
         std::thread::sleep(DELAY);
-        let current = (window.outer_size().ok(), window.outer_position().ok());
-        if current == last {
-            return;
-        }
-        last = current;
-    }
+        (window.outer_size().ok(), window.outer_position().ok())
+    });
 }
 
 #[cfg(feature = "desktop")]
@@ -365,14 +452,28 @@ fn apply_window_geometry(window: &WebviewWindow, saved: window_geometry::WindowG
     if let Ok(observed) = window.outer_size()
         && (observed.width != saved.width || observed.height != saved.height)
     {
-        let corrected = PhysicalSize::new(
-            corrected_size(saved.width, observed.width),
-            corrected_size(saved.height, observed.height),
-        );
-        if let Err(e) = window.set_size(corrected) {
-            tracing::warn!("Failed to apply corrected window size: {e}");
+        if !is_frame_offset_plausible(
+            (saved.width, saved.height),
+            (observed.width, observed.height),
+        ) {
+            tracing::warn!(
+                requested_width = saved.width,
+                requested_height = saved.height,
+                observed_width = observed.width,
+                observed_height = observed.height,
+                "Skipping window size correction — observed size implausibly far from requested, \
+                 likely a stale pre-resize read rather than a real frame offset"
+            );
+        } else {
+            let corrected = PhysicalSize::new(
+                corrected_size(saved.width, observed.width),
+                corrected_size(saved.height, observed.height),
+            );
+            if let Err(e) = window.set_size(corrected) {
+                tracing::warn!("Failed to apply corrected window size: {e}");
+            }
+            wait_for_geometry_to_settle(window);
         }
-        wait_for_geometry_to_settle(window);
     }
 
     if saved.maximized {
@@ -3001,6 +3102,29 @@ mod tests {
         assert!(fix.is_none());
     }
 
+    #[test]
+    fn window_geometry_fix_resets_when_wider_than_every_monitor() {
+        // Reproduces the real corrupted geometry seen in the field: a
+        // 4944x2368 window on a single 3456x2234 display, positioned so its
+        // center still lands on-screen (x=334,y=126) — `on_screen` alone
+        // would miss this entirely.
+        let monitors = [((0, 0), (3456, 2234))];
+        let fix = window_geometry_fix((4944, 2368), (334, 126), &monitors);
+        let fix = fix.expect("oversized window must be corrected even with an on-screen center");
+        assert_eq!(fix.width, FALLBACK_WINDOW_WIDTH);
+        assert_eq!(fix.height, FALLBACK_WINDOW_HEIGHT);
+    }
+
+    #[test]
+    fn window_geometry_fix_allows_window_spanning_multiple_monitors() {
+        // A window sized to span two side-by-side monitors is legitimate —
+        // the oversized check must compare against the combined bounding box,
+        // not any single monitor.
+        let monitors = [((0, 0), (1920, 1080)), ((1920, 0), (1920, 1080))];
+        let fix = window_geometry_fix((3840, 1080), (0, 0), &monitors);
+        assert!(fix.is_none());
+    }
+
     // --- corrected_size ---
 
     #[test]
@@ -3026,6 +3150,100 @@ mod tests {
     fn corrected_size_never_returns_zero_or_negative() {
         // A huge positive offset must clamp to a sane minimum, not underflow.
         assert_eq!(corrected_size(10, 10_000), 1);
+    }
+
+    // --- is_frame_offset_plausible ---
+
+    #[test]
+    fn frame_offset_plausible_for_small_real_chrome_offset() {
+        assert!(is_frame_offset_plausible((1200, 800), (1228, 828)));
+    }
+
+    #[test]
+    fn frame_offset_implausible_for_stale_pre_resize_read() {
+        // Reproduces the field bug: a stale read far from what was requested
+        // must be rejected, not fed into `corrected_size`.
+        assert!(!is_frame_offset_plausible((3456, 2234), (2400, 1600)));
+    }
+
+    #[test]
+    fn frame_offset_plausible_at_exact_threshold() {
+        assert!(is_frame_offset_plausible((1200, 800), (1456, 1056)));
+    }
+
+    #[test]
+    fn frame_offset_implausible_just_past_threshold() {
+        assert!(!is_frame_offset_plausible((1200, 800), (1457, 800)));
+    }
+
+    // --- settle_loop ---
+
+    #[cfg(feature = "desktop")]
+    fn reading(width: u32, height: u32, x: i32, y: i32) -> GeometryReading {
+        (
+            Some(tauri::PhysicalSize::new(width, height)),
+            Some(tauri::PhysicalPosition::new(x, y)),
+        )
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn settle_loop_converges_once_two_consecutive_polls_agree() {
+        // The documented synchronous case: the first poll already shows the
+        // real new geometry, and the second poll confirms it's stable.
+        let stale = reading(2400, 1600, 0, 0);
+        let new = reading(3456, 2234, 334, 126);
+        let mut polls = [new, new].into_iter();
+        let mut iters = 0;
+        settle_loop(stale, 5, || {
+            iters += 1;
+            polls.next().expect("test provided enough polls")
+        });
+        assert_eq!(iters, 2, "should settle as soon as two polls agree");
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn settle_loop_reports_settled_on_a_stale_reading_that_never_actually_changed() {
+        // Reproduces the real race this loop cannot detect: the compositor
+        // hasn't started applying the resize by the time of the first poll,
+        // so `initial` and the first poll are both the STALE pre-change
+        // geometry. The loop has no way to distinguish "no change has
+        // happened yet" from "the change is complete and stable" — it
+        // returns after just one poll, having never observed the real new
+        // geometry (`real_new`) that appears only afterward in the sequence.
+        let stale = reading(2400, 1600, 0, 0);
+        let real_new = reading(3456, 2234, 334, 126);
+        let mut polls = [stale, real_new, real_new].into_iter();
+        let mut iters = 0;
+        settle_loop(stale, 5, || {
+            iters += 1;
+            polls.next().expect("test provided enough polls")
+        });
+        assert_eq!(
+            iters, 1,
+            "settled after a single poll — on the stale reading, before the real change ever appeared"
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn settle_loop_gives_up_after_max_iters_when_geometry_never_stabilizes() {
+        // A pathological compositor that keeps reporting a different value
+        // on every poll must not loop forever — the iteration budget bounds
+        // the wait even when nothing ever settles.
+        let stale = reading(0, 0, 0, 0);
+        let mut i = 0u32;
+        let mut iters = 0;
+        settle_loop(stale, 5, || {
+            iters += 1;
+            i += 1;
+            reading(i, i, i as i32, i as i32)
+        });
+        assert_eq!(
+            iters, 5,
+            "must stop at the iteration budget, not loop indefinitely"
+        );
     }
 
     #[test]
