@@ -2,7 +2,7 @@ import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
-import type { BranchState, RepositoryState } from "../../stores/repositories";
+import type { BranchState, GitOpKind, RepositoryState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { writeClipboard } from "../../utils/clipboard";
@@ -12,6 +12,8 @@ import { effectiveMergeMethod } from "../../utils/prMerge";
 export { effectiveMergeMethod };
 
 import { t } from "../../i18n";
+import { IndicatorIcon } from "../../indicators/IndicatorIcon";
+import { resolveIconId } from "../../indicators/registry";
 import { invoke } from "../../invoke";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { repoSettingsStore } from "../../stores/repoSettings";
@@ -42,6 +44,24 @@ const BRANCH_ICON_CLASSES: Record<string, string> = {
 	activity: s.branchIconActivity,
 	unseen: s.branchIconUnseen,
 	idle: s.branchIconIdle,
+};
+
+/** Registry id backing each icon-customizable BranchIcon shape — "error"/"question" render a
+ *  literal glyph, not an IndicatorIcon, so they have no registry id of their own. */
+const SHAPE_INDICATOR_ID: Record<"shell" | "star" | "worktree" | "branch", string> = {
+	shell: "sidebar.shell",
+	star: "sidebar.main",
+	worktree: "sidebar.worktree",
+	branch: "sidebar.branch",
+};
+
+/** Label + CSS class per in-progress git operation kind, shown on a worktree's branch row. */
+const GIT_OP_BADGE: Record<GitOpKind, { label: string; cls: string }> = {
+	rebase: { label: "Rebasing", cls: s.gitOpRebase },
+	merge: { label: "Merging", cls: s.gitOpMerge },
+	"cherry-pick": { label: "Cherry-picking", cls: s.gitOpCherryPick },
+	revert: { label: "Reverting", cls: s.gitOpRevert },
+	bisect: { label: "Bisecting", cls: s.gitOpBisect },
 };
 
 /** Branch icon component — icon shape and color driven by terminal state.
@@ -106,42 +126,11 @@ export const BranchIcon: Component<{
 	return (
 		<span class={cx(s.branchIcon, BRANCH_ICON_CLASSES[colorClass()])}>
 			{(() => {
-				switch (iconShape()) {
-					case "error":
-						return "!";
-					case "question":
-						return "?";
-					case "shell":
-						return (
-							<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
-								<path d="M1 3l5 5-5 5h2l5-5-5-5H1zm7 9h7v2H8v-2z" />
-							</svg>
-						);
-					case "star":
-						return (
-							<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
-								<path d="M9.2 1.2v4.4L13 3.2a1.3 1.3 0 1 1 1.3 2.3L10.5 8l3.8 2.5a1.3 1.3 0 1 1-1.3 2.3L9.2 10.4v4.4a1.2 1.2 0 0 1-2.4 0v-4.4L3 13a1.3 1.3 0 1 1-1.3-2.3L5.5 8 1.7 5.5A1.3 1.3 0 0 1 3 3.2l3.8 2.4V1.2a1.2 1.2 0 0 1 2.4 0z" />
-							</svg>
-						);
-					case "worktree":
-						return (
-							<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
-								<path
-									d="M5 1.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm0 10a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm6-4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM5 5v2.5a2 2 0 0 0 2 2h2.5M5 10.5V8"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="1.5"
-									stroke-linecap="round"
-								/>
-							</svg>
-						);
-					default:
-						return (
-							<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
-								<path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z" />
-							</svg>
-						);
-				}
+				const shape = iconShape();
+				if (shape === "error") return "!";
+				if (shape === "question") return "?";
+				const registryId = SHAPE_INDICATOR_ID[shape as "shell" | "star" | "worktree" | "branch"];
+				return <IndicatorIcon id={resolveIconId(settingsStore.state.indicatorOverrides, registryId)} size={12} />;
 			})()}
 		</span>
 	);
@@ -181,7 +170,7 @@ function getBranchTabsAvailable(branch: BranchState): boolean {
 }
 
 /** Collapsible list of terminal tabs under a branch row */
-const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
+export const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
 			<For each={props.terminalIds}>
@@ -471,13 +460,15 @@ export const BranchItem: Component<{
 						</span>
 					</Show>
 				</div>
-				<Show when={props.branch.isRebasing && !props.branch.isMain}>
-					<span
-						class={s.rebasingBadge}
-						title="This worktree has a rebase/merge/cherry-pick in progress — it will not be auto-cleaned up until it's resolved"
-					>
-						Rebasing
-					</span>
+				<Show when={settingsStore.state.showGitState ? props.branch.gitOp : undefined}>
+					{(kind) => (
+						<span
+							class={cx(s.gitOpBadge, GIT_OP_BADGE[kind()].cls)}
+							title={`This worktree has a ${GIT_OP_BADGE[kind()].label.toLowerCase()} in progress — it will not be auto-cleaned up until it's resolved`}
+						>
+							{GIT_OP_BADGE[kind()].label}
+						</span>
+					)}
 				</Show>
 				<Show
 					when={
@@ -491,7 +482,7 @@ export const BranchItem: Component<{
 						Merged
 					</span>
 				</Show>
-				<Show when={pr()}>
+				<Show when={pr() && settingsStore.state.showPrBadges}>
 					<span
 						class={(() => {
 							const st = pr()?.state?.toLowerCase();
@@ -515,22 +506,24 @@ export const BranchItem: Component<{
 						/>
 					</span>
 				</Show>
-				<StatsBadge
-					additions={props.branch.additions}
-					deletions={props.branch.deletions}
-					onClick={
-						props.onShowChanges
-							? (e) => {
-									e.stopPropagation();
-									// Select this branch/worktree first so the Git panel targets it
-									// (it follows activeWorktreePath), then open the changes tab —
-									// otherwise the badge always shows the active branch's diff.
-									props.onSelect();
-									props.onShowChanges?.();
-								}
-							: undefined
-					}
-				/>
+				<Show when={settingsStore.state.showDiffStats}>
+					<StatsBadge
+						additions={props.branch.additions}
+						deletions={props.branch.deletions}
+						onClick={
+							props.onShowChanges
+								? (e) => {
+										e.stopPropagation();
+										// Select this branch/worktree first so the Git panel targets it
+										// (it follows activeWorktreePath), then open the changes tab —
+										// otherwise the badge always shows the active branch's diff.
+										props.onSelect();
+										props.onShowChanges?.();
+									}
+								: undefined
+						}
+					/>
+				</Show>
 				<div class={s.branchActions} style={{ display: props.shortcutIndex !== undefined ? "none" : undefined }}>
 					<button
 						class={s.branchAddBtn}

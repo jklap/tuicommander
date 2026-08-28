@@ -160,6 +160,189 @@ Settings panel's actual rendering — needs a live `make dev` restart to check:
   should regenerate/hot-reload the cert to cover the new IP; confirm connecting from the new
   network doesn't hit a hostname-mismatch error. (Hard to force reliably — best-effort check.)
 
+## Indicator customization — icon + animation pickers (2026-08-27, frontend only — Vite HMR is enough)
+
+Phase 3 of the indicator customization work: expanded `src/indicators/icons.ts` from 5 to 18
+curated shapes, added `IconPickerDialog`/`AnimationPickerDialog`, and wired `setIndicatorIcon`/
+`setIndicatorAnimation` into the editable UI Legend. No Rust/config-schema change (rides the same
+`indicator_overrides` field from Phase 2) — a running `make dev` picks this up via Vite HMR alone.
+
+- [x] Opened a `make dev` debug instance, drove it live with Playwright: opened the icon picker
+  on the "Busy" row (all 18 shapes rendered correctly, live, in a grid), picked "ring" — the row's
+  icon button updated from a filled dot to a ring outline immediately. Opened the animation picker
+  on the same row (6 options for a dot-shaped indicator: None/Pulse/Pulse (slow)/Blink/Breathe/Glow
+  — correctly excludes Spin), picked "Breathe" — `getComputedStyle` confirmed
+  `--ind-anim-terminal-busy` resolved to `tuic-breathe 3s ease-in-out infinite` with no reload.
+  Confirmed the PR Conflict row's animation picker is narrower (4 options: None/Pulse/Pulse
+  (slow)/Breathe — no Blink/Glow/Spin), and that the reset "×" appears for an icon+animation-only
+  override with no color set. Cleaned up the test overrides via the HTTP config API afterward.
+  _(verified live, 2026-08-27; screenshots in `.screenshots/phase3-icon-animation-pickers/`.)_
+- [ ] **[MANUAL]** Set the "spin" animation on an icon that visually reads well rotating (e.g. the
+  `arc` shape, meant to pair with it) and confirm it actually spins smoothly rather than jittering
+  — not exercised in the automated pass above (only Breathe was checked end-to-end).
+- [ ] **[MANUAL]** Confirm the icon picker's grid is keyboard-navigable / doesn't trap focus
+  awkwardly, and that both new dialogs close on Escape like the existing `ColorPickerDialog`
+  (they share `registerModal`, which should cover this, but wasn't explicitly re-checked).
+
+## Indicator customization — persisted color overrides (2026-08-27, **Rust change — needs `make dev` restart**)
+
+`AppConfig.indicator_overrides` (`src-tauri/src/config.rs`) is new — a `Vec<IndicatorOverride>`
+holding per-indicator color/icon/animation overrides for the terminal status dots, tab types,
+sidebar symbols, PR badges, and diff stats documented in Settings → Appearance → UI Legend, which
+is now the editor for it (a swatch button + reset `×` per color-capable row, "Reset all
+indicators" at the bottom). Covered by Rust round-trip/backward-compat/doc-parity tests and
+frontend tests for the store actions, the sanitize-on-hydrate path, `apply.ts`'s DOM writes, and
+the legend's editable-mode interactions (all passing against a fresh `cargo build`), but none of
+that proves the *running* app picks up the new config field or applies overrides to the live UI —
+needs a `make dev` restart to check:
+
+- [x] Opened a `make dev` debug instance of this worktree, drove it live with Playwright (real
+  browser, real clicks — the same class of check the MCP maccontrol escalation step calls for),
+  clicked the "Busy" row's color swatch in Settings → Appearance → UI Legend, picked the "Red"
+  preset, and read `getComputedStyle(document.documentElement).getPropertyValue("--ind-terminal-busy")`
+  immediately after — resolved to `#FF6B6B` with no reload needed, and the row's own preview +
+  reset "×" updated live in the same pass. _(verified live, 2026-08-27; screenshots in
+  `.screenshots/phase2-indicator-color-editor/`.)_ **Not** separately caught: an actual busy
+  terminal's tab dot rendering red mid-session — the test terminal had gone idle by the time of
+  the check, so this confirms the CSS var updates live (the only thing the dot's color rule
+  reads), not a red pixel in a screenshot. `sidebar branch icon` / nested-tab-dot sharing of the
+  same override — not re-checked live; still open below.
+- [ ] **[MANUAL]** Confirm an override is reflected in the sidebar branch icon for a busy
+  branch (terminalStatus colors are deliberately shared between the tab dot and the branch icon —
+  see the registry.ts comment on why) and in the branch's nested terminal-tab dot when Nested
+  Terminal Tabs is on.
+- [x] Restarted is stronger than tested: after setting the "Busy" override above, read
+  `~/Library/Application Support/com.tuic.commander/config.json` directly off disk (not just a
+  frontend reload) and found `"indicator_overrides": [{"id": "terminal.busy", "color":
+  "#FF6B6B"}]` written there — proves it reaches disk, which is what any future launch reads.
+  _(verified live, 2026-08-27.)_ Cleaned up immediately after via `PUT /config
+  {"indicator_overrides":[]}` against the same running debug instance, and confirmed the file
+  reverted to `"indicator_overrides": []` — this worktree's testing must never leave a stray
+  override in Boss's real, shared config.json.
+- [ ] **[MANUAL]** Click the reset "×" on a row with an active override *in the running app* and
+  confirm the color reverts to the theme default live (the click-through interaction itself is
+  unit-tested against the real store in `UiLegend.test.tsx`, but not yet exercised in a live
+  browser session — the cleanup above used the HTTP config API directly, not the button).
+- [ ] **[MANUAL]** Switch terminal themes while an override is active — confirm the override
+  survives the theme switch (it re-applies from `themes.ts`'s `applyAppTheme` tail) rather than
+  reverting to the new theme's unoverridden default.
+- [ ] **[MANUAL]** Hand-edit `config.json`'s `indicator_overrides` array to add an invalid entry
+  (e.g. `{"id": "not.real", "color": "#fff"}` or `{"id": "terminal.busy", "color":
+  "javascript:alert(1)"}`), restart, and confirm the app doesn't crash and silently drops the bad
+  entry rather than applying it — `sanitizeIndicatorOverrides` should catch it on hydrate.
+
+## Git repo status indicators — rebasing/merging/conflicts (2026-08-27, **Rust change — needs `make dev` restart**)
+
+Phase 5 of the indicator customization work: `worktree::operation_in_progress()` (new) resolves
+a worktree's admin dir for **both** the main checkout (`.git` as a directory) and a linked
+worktree (`.git` as a `gitdir:` file) — the plain `has_operation_in_progress` this replaces
+only ever worked for linked worktrees, so an in-progress rebase/merge/etc in the main checkout
+was silently invisible before this. `RepoStructure.in_progress_ops: Vec<{path, kind}>` (was
+`in_progress_worktrees: Vec<String>`) now names *which* operation — `GitOpKind::Rebase | Merge |
+CherryPick | Revert | Bisect` — instead of just flagging "busy". `RepoSection.tsx` renders a
+distinct colored badge per kind (dropped the old `!isMain` gate, so the main checkout's row can
+show one too), gated by Phase 4's `showGitState` toggle. Separately, `ChangesTab.tsx` now reads
+`WorkingTreeStatus.conflicted` (a field the Rust side always returned but the frontend silently
+dropped) and renders a conflicts banner + file list when non-empty — no new backend work needed
+for that part. New `gitState` registry entries (`rebasing`/`merging`/`cherryPicking`/`reverting`/
+`bisecting`/`conflicts`) back both. Deliberately **not** added: `detached`/`ahead`/`behind`/
+`diverged`/`stashes` — nothing in the running app renders those yet (their would-be home,
+`GitPanel/SyncRow.tsx`, is dead code per the plan's own "Known follow-up" note), and adding
+inert legend rows for them would repeat the exact mistake Phase 1 fixed when it deleted the old
+"Panels" section. Covered by 5 new Rust tests (marker→kind mapping, main-worktree detection,
+`get_repo_structure_impl` regression) and Rust/frontend suites all green (`cargo nextest`: 5274
+passed; vitest: 6606 passed — the plugins-submodule failure is pre-existing environment drift,
+not this change).
+
+- [x] Started a `make dev` debug instance (port 9877), created a scratch git repo (not one of
+  Boss's real repos) with a diverged `main`/`feature` history, ran `git rebase main` from
+  `feature` to produce a real content conflict, and queried the running debug instance directly:
+  `GET /repo/structure?path=<scratch>` returned `in_progress_ops: [{"kind":"rebase","path":
+  "<scratch>"}]` — the **main worktree** (no linked worktrees existed for this repo), proving
+  the exact bug this phase fixes, live, against real git state. `GET
+  /repo/working-tree-status?path=<scratch>` returned `conflicted: [{"path":"file.txt",
+  "status":"UU",...}]`, proving the ChangesTab wiring's data source end-to-end.
+  _(verified live, 2026-08-27.)_
+- [ ] **[MANUAL]** The actual sidebar badge (`.gitOpBadge`/`.gitOpRebase` etc.) and the
+  `ChangesTab.tsx` conflicts banner were **not** visually confirmed in a running browser this
+  pass — see the incident note below. Confirm live: add the scratch repo above (or any repo mid-
+  rebase-with-conflict) via Settings → "Add Repository", and check (a) the sidebar row shows a
+  colored "Rebasing" pill, including on the **main** branch row (previously suppressed by the
+  dropped `!isMain` gate), (b) the Changes tab shows the conflicts banner + `file.txt (UU)` row,
+  (c) toggling "Show git repo status indicators" off in Settings → Appearance hides both.
+- [ ] **[MANUAL]** Repeat live-verification for merge/cherry-pick/revert/bisect (only rebase was
+  exercised above) — confirm each shows its own distinct color/label, not all defaulting to
+  "Rebasing".
+
+**Incident during this pass, for awareness:** driving the "Add Repository" dialog with
+Playwright, a blind `input:not([type])` selector matched a **real terminal's hidden keyboard-
+capture input** instead of the dialog's path field (the dialog's own input never received the
+text, which is why "Add" stayed disabled) — the scratch repo's absolute path got typed into two
+of Boss's real terminal sessions' shell prompts. Nothing was executed (no Enter was sent in
+either case), and both were cleaned by sending Ctrl+U over the session `/write` HTTP endpoint and
+confirming via `/terminal/lines` that each prompt returned to a bare `❯` with no residual text.
+Given two near-misses now (this one, and Phase 4's accidental "Rename Branch" dialog open), any
+future live UI verification pass should scope Playwright selectors much more narrowly — target
+elements inside a specific dialog/modal container, never a bare `input`/text-label selector
+against the whole page.
+
+## Indicator customization — visibility toggles (2026-08-27, **Rust change — needs `make dev` restart**)
+
+Phase 4 of the indicator customization work: four new `AppConfig` bools
+(`show_diff_stats`, `show_pr_badges`, `show_git_state`, `tab_type_highlighting`, all
+`#[serde(default = "default_true")]`), each rendered as a group-header toggle in the editable UI
+Legend (Settings → Appearance). `show_diff_stats`/`show_pr_badges` gate `RepoSection.tsx`'s
+sidebar badges; `tab_type_highlighting` sets `document.documentElement.dataset.tabTypeTint`,
+neutralized by new `:global(:root[data-tab-type-tint="off"])` blocks in `TabBar.module.css` and
+`PaneTree.css`; `show_git_state` ships inert (gates Phase 5's not-yet-built indicators). Covered
+by Rust round-trip/backward-compat/doc-parity tests and frontend tests for the four setters, the
+sidebar gating (`Sidebar.test.tsx`), the `data-tab-type-tint` effect (`useAppearanceSync.test.ts`),
+and the legend's four group toggles (presence/absence by `editable`, correct setter wired, empty
+`gitState` section) — full suite green (6593 passed; `ChangelogModal.test.tsx`'s known
+pre-existing async-leak flake is the only "failed" file) and `./scripts/check-gate.sh` fully green
+(rustfmt/clippy/5271 rust tests/tsc/biome all ✓). Live-verified against a `make dev` debug
+instance on port 9877:
+
+- [x] Opened Settings → Appearance and confirmed all four group-header toggles render in the
+  right place — "Show tab type highlighting" under Tab Types, "Show PR status badges" under PR
+  Status Badges, "Show git repo status indicators" under a new "Git Repo Status" section (heading
+  + hint text, zero rows beneath it — correct, since Phase 5 hasn't populated it), "Show diff
+  stats" under Diff Stats. _(verified live, 2026-08-27; screenshots in
+  `.screenshots/phase4-visibility-toggles/`.)_
+- [x] Toggled "Show PR status badges" and "Show diff stats" off together in the running app and
+  confirmed the sidebar's diff-stat badges (`+N -N` next to `unity`, `main`, `icon-customization`,
+  etc.) disappeared immediately with no reload, then toggled back on and confirmed they
+  reappeared. _(verified live, 2026-08-27.)_ No branch in this sidebar currently has an open PR,
+  so the PR-badge-specific disappearance wasn't independently visible in this pass — covered
+  instead by `Sidebar.test.tsx`'s two new unit tests (`hides StatsBadge when showDiffStats is
+  off...` / `hides the PR badge when showPrBadges is off...`), which do construct PR data.
+- [x] Confirmed via the config HTTP API (`GET /config`) that `show_git_state` and the resolved
+  state of all four toggles read back correctly after live UI interaction, and restored all four
+  to `true` (plus `indicator_overrides: []`) before stopping the debug instance — this worktree's
+  testing must never leave a toggle flipped in Boss's real, shared config.json.
+- [ ] **[MANUAL]** The tab-type-tint neutralization itself (`TabBar.module.css`/`PaneTree.css`'s
+  `data-tab-type-tint="off"` blocks removing the per-type background gradient and border-bottom,
+  restoring the accent bar on the active tab) was not conclusively confirmed by screenshot in this
+  pass — the only type-colored tab readily reachable without touching Boss's real repos more than
+  necessary was a git-changes panel tab, where the tint is a subtle gradient that didn't show up
+  clearly at screenshot resolution. The underlying mechanism (`data-tab-type-tint` attribute
+  toggling) is unit-tested in `useAppearanceSync.test.ts`, and the CSS rules were manually
+  re-reviewed line-by-line (catching and fixing a real bug — see the plan's Phase 4 notes on the
+  `PaneTree.css` active-border-color mistake — before this pass), but a live pixel check on an
+  actual `diffTab`/`editTab`/`mdTab` (not a panel tab) in both light and dark themes is still
+  outstanding.
+- [ ] **[MANUAL]** Confirm the active tab of a type-tinted tab still shows *some* visual
+  indicator (the restored default accent bar) when tint is off, rather than looking identical to
+  an inactive tab — this was a deliberate proactive fix (`TabBar.module.css`'s
+  `.active::before { display: block; }` override) but not live-verified.
+
+**Also noted during this verification pass**: driving the sidebar's branch rows with Playwright,
+clicking directly on a branch name label is a double-click-to-rename target — it opened a real
+"Rename Branch" dialog on Boss's actual `wip` worktree. No rename was confirmed (the dialog was
+closed without clicking "Rename"), and the branch name was confirmed unchanged afterward, but
+future live verification against the sidebar should click the diff-stat badge or row background
+instead of the branch label text.
+
 ## Window geometry restore, shell tab restore, and scrollback restore (2026-08-26, **Rust change — needs `make dev` restart**)
 
 Three related features. `main` is now denylisted from `tauri-plugin-window-state` and owns its own size/position/maximized/fullscreen persistence (`window-geometry.json`, `src-tauri/src/window_geometry.rs`) with a measure-and-correct restore step working around the plugin's `set_size`/`outer_size` inner/outer drift under `titleBarStyle: Overlay`. `createBranchSelectionCoordinator.ts` now restores plain shell tabs (not just agent tabs) on branch select, behind Settings → Terminal → "Restore open terminals on launch" (default on). A new opt-in "Save terminal scrollback" setting (default off) persists each terminal's recent output (`scrollback_store.rs`) and replays it above a fresh prompt on restore.

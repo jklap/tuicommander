@@ -568,6 +568,30 @@ pub(crate) struct AppConfig {
     /// (only when a branch has more than one terminal). Opt-in, off by default.
     #[serde(default)]
     pub(crate) tab_tree_enabled: bool,
+    /// User overrides for the indicator registry (src/indicators/registry.ts
+    /// on the frontend — terminal status dots, tab types, sidebar symbols, PR
+    /// badges, diff stats). A `Vec`, not a map keyed by id: `commit_config_change`
+    /// merges objects key-by-key but replaces arrays wholesale, so a map would
+    /// have no way to express "remove this override" — an empty/absent entry
+    /// would be indistinguishable from "never set". Rust is deliberately
+    /// agnostic about which ids are valid; the frontend registry owns that.
+    #[serde(default)]
+    pub(crate) indicator_overrides: Vec<IndicatorOverride>,
+    /// Show the sidebar branch row's diff stat badge (+N/-N). On by default.
+    #[serde(default = "default_true")]
+    pub(crate) show_diff_stats: bool,
+    /// Show the sidebar PR status badge. On by default.
+    #[serde(default = "default_true")]
+    pub(crate) show_pr_badges: bool,
+    /// Show git repo status indicators: the sidebar's per-worktree
+    /// rebase/merge/cherry-pick/revert/bisect badge and the Changes tab's
+    /// conflicts banner. On by default.
+    #[serde(default = "default_true")]
+    pub(crate) show_git_state: bool,
+    /// Tint tab backgrounds/borders by type (diff/editor/markdown/panel/etc).
+    /// On by default. Off neutralizes the tint but keeps each type's icon color.
+    #[serde(default = "default_true")]
+    pub(crate) tab_type_highlighting: bool,
     /// Auto-show PR detail popover when a branch has PR data
     #[serde(default = "default_true")]
     pub(crate) auto_show_pr_popover: bool,
@@ -789,6 +813,22 @@ pub(crate) struct SmartSelectionAction {
     pub(crate) is_default: bool,
 }
 
+/// One user override of a registry entry's default color/icon/animation.
+/// `id` is a frontend registry id (e.g. "terminal.busy") — validated against
+/// the registry on the frontend (`src/indicators/validate.ts`), not here;
+/// Rust just carries the bytes. All three fields optional so an override can
+/// change just the color while leaving icon/animation at their default.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub(crate) struct IndicatorOverride {
+    pub(crate) id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) animation: Option<String>,
+}
+
 fn default_language() -> String {
     "en".to_string()
 }
@@ -910,6 +950,11 @@ impl Default for AppConfig {
             tab_ordering_mode: TabOrderingMode::default(),
             tab_cycling_all_types: false,
             tab_tree_enabled: false,
+            indicator_overrides: Vec::new(),
+            show_diff_stats: true,
+            show_pr_badges: true,
+            show_git_state: true,
+            tab_type_highlighting: true,
             auto_show_pr_popover: true,
             pr_hide_drafts: false,
             pr_hide_conflicting: false,
@@ -3232,6 +3277,16 @@ mod tests {
             tab_ordering_mode: TabOrderingMode::TerminalsFirst,
             tab_cycling_all_types: true,
             tab_tree_enabled: true,
+            indicator_overrides: vec![IndicatorOverride {
+                id: "terminal.busy".to_string(),
+                color: Some("#ff00ff".to_string()),
+                icon: None,
+                animation: Some("blink".to_string()),
+            }],
+            show_diff_stats: false,
+            show_pr_badges: false,
+            show_git_state: false,
+            tab_type_highlighting: false,
             auto_show_pr_popover: true,
             pr_hide_drafts: true,
             pr_hide_conflicting: true,
@@ -3312,6 +3367,24 @@ mod tests {
         );
         assert_eq!(loaded.max_tab_name_length, 40);
         assert_eq!(loaded.split_tab_mode, SplitTabMode::Unified);
+        assert_eq!(loaded.tab_ordering_mode, TabOrderingMode::TerminalsFirst);
+        assert!(loaded.tab_cycling_all_types);
+        assert!(loaded.tab_tree_enabled);
+        assert_eq!(loaded.indicator_overrides.len(), 1);
+        assert_eq!(loaded.indicator_overrides[0].id, "terminal.busy");
+        assert_eq!(
+            loaded.indicator_overrides[0].color,
+            Some("#ff00ff".to_string())
+        );
+        assert_eq!(loaded.indicator_overrides[0].icon, None);
+        assert_eq!(
+            loaded.indicator_overrides[0].animation,
+            Some("blink".to_string())
+        );
+        assert!(!loaded.show_diff_stats);
+        assert!(!loaded.show_pr_badges);
+        assert!(!loaded.show_git_state);
+        assert!(!loaded.tab_type_highlighting);
         assert!(loaded.pr_hide_drafts);
         assert!(loaded.pr_hide_conflicting);
         assert!(!loaded.pr_hide_ci_failing);
@@ -3389,6 +3462,20 @@ mod tests {
         );
         assert_eq!(loaded.max_tab_name_length, 25);
         assert_eq!(loaded.split_tab_mode, SplitTabMode::Separate);
+        assert_eq!(loaded.tab_ordering_mode, TabOrderingMode::GroupedByType);
+        assert!(!loaded.tab_cycling_all_types);
+        assert!(!loaded.tab_tree_enabled);
+        assert!(
+            loaded.indicator_overrides.is_empty(),
+            "a config.json predating this field must land on an empty Vec, not error"
+        );
+        assert!(
+            loaded.show_diff_stats
+                && loaded.show_pr_badges
+                && loaded.show_git_state
+                && loaded.tab_type_highlighting,
+            "a config.json predating these fields must default every visibility toggle to on"
+        );
         assert!(!loaded.prevent_sleep_when_busy);
         assert!(loaded.auto_update_enabled);
         assert_eq!(loaded.language, "en");
@@ -4312,6 +4399,56 @@ mod tests {
         let json = serde_json::to_string(&cfg).unwrap();
         let loaded: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded.tab_ordering_mode, TabOrderingMode::Free);
+    }
+
+    #[test]
+    fn indicator_override_omits_unset_fields_instead_of_serializing_null() {
+        // Keeps a color-only override small on disk, and lets the frontend
+        // distinguish "never set" from an explicit null on the wire.
+        let cfg = AppConfig {
+            indicator_overrides: vec![IndicatorOverride {
+                id: "terminal.busy".to_string(),
+                color: Some("#ff00ff".to_string()),
+                icon: None,
+                animation: None,
+            }],
+            ..AppConfig::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains(r#""id":"terminal.busy""#));
+        assert!(json.contains("\"color\":\"#ff00ff\""));
+        assert!(!json.contains("\"icon\""));
+        assert!(!json.contains("\"animation\""));
+    }
+
+    #[test]
+    fn indicator_overrides_round_trip_and_default_to_empty() {
+        let dir = TempDir::new().unwrap();
+        let cfg = AppConfig {
+            indicator_overrides: vec![
+                IndicatorOverride {
+                    id: "terminal.busy".to_string(),
+                    color: Some("#ff00ff".to_string()),
+                    icon: Some("ring".to_string()),
+                    animation: Some("blink".to_string()),
+                },
+                IndicatorOverride {
+                    id: "pr.conflict".to_string(),
+                    color: Some("var(--error)".to_string()),
+                    icon: None,
+                    animation: None,
+                },
+            ],
+            ..AppConfig::default()
+        };
+        let loaded: AppConfig = round_trip_in_dir(dir.path(), "config.json", &cfg);
+        assert_eq!(loaded.indicator_overrides.len(), 2);
+        assert_eq!(loaded.indicator_overrides[0].id, "terminal.busy");
+        assert_eq!(loaded.indicator_overrides[0].icon, Some("ring".to_string()));
+        assert_eq!(loaded.indicator_overrides[1].id, "pr.conflict");
+        assert_eq!(loaded.indicator_overrides[1].icon, None);
+
+        assert!(AppConfig::default().indicator_overrides.is_empty());
     }
 
     #[test]

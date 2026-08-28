@@ -36,6 +36,12 @@
   min-height: 24px;
 }
 
+/* Generic dot/pill preview swatch — used when the entry has no icon of its
+ * own (e.g. sidebar.idle, a merged/remote badge). Animation is set inline
+ * per entry (var(--ind-anim-*)), not a class — every animated preview here
+ * now uses the exact same keyframe as the real component (global.css's
+ * tuic-* set), so it can no longer visually disagree with what it's
+ * previewing. */
 .dot {
   width: 8px;
   height: 8px;
@@ -43,9 +49,12 @@
   flex-shrink: 0;
 }
 
-.dotPulsing {
-  composes: dot;
-  animation: pulse-opacity 1.5s ease-in-out infinite;
+/* IndicatorIcon preview — the real SVG shape the app renders, colored and
+ * animated inline per entry. Replaces the old hardcoded "✱"/"⎇"/"?" text
+ * glyphs, which the sidebar stopped rendering a while ago. */
+.previewIcon {
+  width: 14px;
+  flex-shrink: 0;
 }
 
 .symbol {
@@ -76,20 +85,96 @@
 
 .badge {
   display: inline-block;
-  padding: 1px 6px;
+  width: 18px;
+  height: 12px;
   border-radius: var(--radius-sm);
-  font-size: var(--font-2xs);
-  font-weight: 600;
-  line-height: 1.4;
   flex-shrink: 0;
 }
 
-.badgePulsing {
-  composes: badge;
-  animation: pulse-opacity 1.5s ease-in-out infinite;
+/* Editable-mode controls (Settings → Appearance) — HelpPanel's reference
+ * view never passes editable, so these never render there. */
+.editSwatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0;
+  transition: transform 0.1s;
 }
 
-@keyframes pulse-opacity {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+.editSwatch:hover {
+  transform: scale(1.1);
+}
+
+.editIconBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.editIconBtn:hover {
+  border-color: var(--fg-secondary);
+}
+
+.editAnimBtn {
+  padding: 2px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  font-size: var(--font-2xs);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.editAnimBtn:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-secondary);
+}
+
+.resetSwatch {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--font-md);
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.resetSwatch:hover {
+  color: var(--fg-primary);
+}
+
+.resetAllBtn {
+  align-self: flex-start;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.resetAllBtn:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-secondary);
 }

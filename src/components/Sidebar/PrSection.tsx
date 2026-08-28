@@ -8,6 +8,7 @@ import type { SavedPrompt } from "../../stores/promptLibrary";
 import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { toastsStore } from "../../stores/toasts";
 import type { BranchPrStatus } from "../../types";
 import { cx } from "../../utils";
@@ -190,16 +191,18 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 									>
 										<span class={s.ghItemNum}>#{pr.number}</span>
 										<span class={s.ghItemTitle}>{pr.title}</span>
-										<PrStateBadge
-											prNumber={pr.number}
-											state={pr.state}
-											isDraft={pr.is_draft}
-											mergeable={pr.mergeable}
-											conflictState={pr.conflict_state}
-											reviewDecision={pr.review_decision}
-											ciFailed={pr.checks?.failed}
-											ciPending={pr.checks?.pending}
-										/>
+										<Show when={settingsStore.state.showPrBadges}>
+											<PrStateBadge
+												prNumber={pr.number}
+												state={pr.state}
+												isDraft={pr.is_draft}
+												mergeable={pr.mergeable}
+												conflictState={pr.conflict_state}
+												reviewDecision={pr.review_decision}
+												ciFailed={pr.checks?.failed}
+												ciPending={pr.checks?.pending}
+											/>
+										</Show>
 									</div>
 									<Show when={props.expandedKey === pr.branch}>
 										<div class={s.ghItemDetail} data-compact>

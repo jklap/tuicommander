@@ -1,11 +1,14 @@
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../i18n";
+import { IndicatorIcon } from "../../indicators/IndicatorIcon";
+import { resolveIconId } from "../../indicators/registry";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
@@ -85,6 +88,27 @@ const AWAITING_CLASSES: Record<string, string> = {
 	error: s.awaitingError,
 };
 
+/** Registry id for the terminal tab dot's current state, in the same priority order as the CSS
+ *  classes applied alongside it (`awaitingQuestion`/`awaitingError` > `shellBusy` > `shellUnseen`
+ *  > `shellIdle` > `shellExited` > default). Color/animation already flow through automatically
+ *  via the `--ind-terminal-*` CSS vars those classes reference — only the icon SHAPE needs a
+ *  JS-side lookup, since swapping SVG geometry isn't expressible as a CSS custom property. */
+function terminalStatusIndicatorId(
+	awaitingInput: string | null | undefined,
+	isBusy: boolean,
+	isUnseen: boolean,
+	isIdle: boolean,
+	isExited: boolean,
+): string {
+	if (awaitingInput === "question") return "terminal.question";
+	if (awaitingInput === "error") return "terminal.error";
+	if (isBusy) return "terminal.busy";
+	if (isUnseen) return "terminal.unseen";
+	if (isIdle) return "terminal.idle";
+	if (isExited) return "terminal.exited";
+	return "terminal.none";
+}
+
 interface TerminalTabViewProps extends SharedTabViewProps {
 	index: number;
 	quickSwitcherActive: boolean;
@@ -104,6 +128,11 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 	const isExited = () => terminal()?.shellState === "exited";
 	const isUnseen = () => !isActive() && terminal()?.unseen;
 	const awaitingInput = () => terminal()?.awaitingInput;
+	const statusIconId = () =>
+		resolveIconId(
+			settingsStore.state.indicatorOverrides,
+			terminalStatusIndicatorId(awaitingInput(), isBusy(), !!isUnseen(), isIdle(), isExited()),
+		);
 	const progress = () => terminal()?.progress;
 	const isPromoted = () => globalWorkspaceStore.isPromoted(props.id);
 	const [hovered, setHovered] = createSignal(false);
@@ -156,7 +185,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					props.onStartEditing(props.id);
 				}}
 			>
-				<span class={s.tabIcon}>●</span>
+				<IndicatorIcon id={statusIconId()} class={s.tabIcon} />
 				<Show
 					when={props.isEditing}
 					fallback={
@@ -310,6 +339,27 @@ export const DiffTabView: Component<FileTabViewProps> = (props) => {
 	);
 };
 
+/** Tab-type class per mdTabsStore tab kind. `html-preview` used to fall into
+ *  the `else` branch (rendered as a purple panelTab) since nothing checked
+ *  for it — the "--tab-html-rgb is defined and referenced nowhere" gap
+ *  flagged in the customization plan. Now a real, distinct type.
+ *
+ *  Duplicated in `PaneTree.tsx`'s `tabColorClass()` for the pane-tree's own
+ *  mini tab bar — the exact split that let `html-preview` go untinted in ONE
+ *  of the two places once already. A new md-tab kind must be added to BOTH. */
+function mdTabTypeClass(type: string | undefined): string {
+	switch (type) {
+		case "file":
+			return s.mdTab;
+		case "pr-diff":
+			return s.diffTab;
+		case "html-preview":
+			return s.htmlTab;
+		default:
+			return s.panelTab;
+	}
+}
+
 export const MarkdownTabView: Component<FileTabViewProps> = (props) => {
 	const tab = () => mdTabsStore.get(props.id);
 	const title = () => {
@@ -329,7 +379,7 @@ export const MarkdownTabView: Component<FileTabViewProps> = (props) => {
 			<div
 				class={cx(
 					s.tab,
-					tab()?.type === "file" ? s.mdTab : tab()?.type === "pr-diff" ? s.diffTab : s.panelTab,
+					mdTabTypeClass(tab()?.type),
 					mdTabsStore.state.activeId === props.id && s.active,
 					...dragClasses(props),
 				)}

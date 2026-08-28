@@ -7,7 +7,7 @@ import { editorTabsStore } from "../stores/editorTabs";
 import { clearForRepo as clearFocusForRepo } from "../stores/focusRegistry";
 import { mdTabsStore } from "../stores/mdTabs";
 import { repoSettingsStore } from "../stores/repoSettings";
-import { repositoriesStore } from "../stores/repositories";
+import { type GitOpKind, repositoriesStore } from "../stores/repositories";
 import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri, rpc } from "../transport";
@@ -43,8 +43,8 @@ export interface GitOperationsDeps {
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, string>;
 			merged_branches: string[];
-			/** Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress. */
-			in_progress_worktrees: string[];
+			/** Worktrees with a rebase/merge/cherry-pick/revert/bisect in progress, and which one. */
+			in_progress_ops: Array<{ path: string; kind: GitOpKind }>;
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
 			diff_stats: Record<string, { additions: number; deletions: number }>;

@@ -80,7 +80,7 @@ describe("useGitOperations", () => {
 		getRepoSummary: vi
 			.fn()
 			.mockResolvedValue({ worktree_paths: {}, merged_branches: [], diff_stats: {}, last_commit_ts: {} }),
-		getRepoStructure: vi.fn().mockResolvedValue({ worktree_paths: {}, merged_branches: [], in_progress_worktrees: [] }),
+		getRepoStructure: vi.fn().mockResolvedValue({ worktree_paths: {}, merged_branches: [], in_progress_ops: [] }),
 		getRepoDiffStats: vi.fn().mockResolvedValue({ diff_stats: {}, last_commit_ts: {} }),
 		removeWorktree: vi.fn().mockResolvedValue(undefined),
 		createWorktree: vi.fn(),
@@ -1320,13 +1320,13 @@ describe("useGitOperations", () => {
 			merged_branches: string[];
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
-			/** Worktree dirs with a rebase/merge/cherry-pick in progress. Defaults to none. */
-			in_progress_worktrees?: string[];
+			/** Worktrees with a rebase/merge/cherry-pick in progress, and which one. Defaults to none. */
+			in_progress_ops?: Array<{ path: string; kind: "rebase" | "merge" | "cherry-pick" | "revert" | "bisect" }>;
 		}) {
 			mockRepo.getRepoStructure.mockResolvedValue({
 				worktree_paths: summary.worktree_paths,
 				merged_branches: summary.merged_branches,
-				in_progress_worktrees: summary.in_progress_worktrees ?? [],
+				in_progress_ops: summary.in_progress_ops ?? [],
 			});
 			mockRepo.getRepoDiffStats.mockResolvedValue({
 				diff_stats: summary.diff_stats,
@@ -1353,9 +1353,9 @@ describe("useGitOperations", () => {
 
 		// The backend keeps a mid-rebase worktree's branch in worktree_paths (it recovers
 		// the pre-rebase branch from git's own state files), so the row and its terminals
-		// are never at risk of removal here. in_progress_worktrees is purely a signal for
+		// are never at risk of removal here. in_progress_ops is purely a signal for
 		// the sidebar to show *why* the row looks the way it does.
-		it("marks a branch isRebasing when its worktree has an operation in progress", async () => {
+		it("marks a branch's gitOp when its worktree has an operation in progress", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt-feature" });
@@ -1367,24 +1367,24 @@ describe("useGitOperations", () => {
 				merged_branches: [],
 				diff_stats: { "/repo": { additions: 0, deletions: 0 }, "/repo/wt-feature": { additions: 0, deletions: 0 } },
 				last_commit_ts: {},
-				in_progress_worktrees: ["/repo/wt-feature"],
+				in_progress_ops: [{ path: "/repo/wt-feature", kind: "rebase" }],
 			});
 
 			await gitOps.refreshAllBranchStats();
 
 			const branch = repositoriesStore.get("/repo")?.branches["feature"];
 			expect(branch).toBeDefined();
-			expect(branch?.isRebasing).toBe(true);
+			expect(branch?.gitOp).toBe("rebase");
 			expect(branch?.terminals).toContain(tid);
 			expect(mockCloseTerminal).not.toHaveBeenCalled();
 		});
 
-		it("clears isRebasing once the worktree's operation is no longer in progress", async () => {
+		it("clears gitOp once the worktree's operation is no longer in progress", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setBranch("/repo", "feature", {
 				worktreePath: "/repo/wt-feature",
-				isRebasing: true,
+				gitOp: "rebase",
 			});
 
 			// Rebase finished — the worktree no longer has an operation in progress.
@@ -1393,12 +1393,38 @@ describe("useGitOperations", () => {
 				merged_branches: [],
 				diff_stats: { "/repo": { additions: 0, deletions: 0 }, "/repo/wt-feature": { additions: 0, deletions: 0 } },
 				last_commit_ts: {},
-				in_progress_worktrees: [],
+				in_progress_ops: [],
 			});
 
 			await gitOps.refreshAllBranchStats();
 
-			expect(repositoriesStore.get("/repo")?.branches["feature"]?.isRebasing).toBe(false);
+			expect(repositoriesStore.get("/repo")?.branches["feature"]?.gitOp).toBeUndefined();
+		});
+
+		// Edge case: `in_progress_ops` is typed as required, but a response that omits it
+		// entirely (rather than sending `[]`) — an older cached payload shape, a hand-rolled
+		// mock elsewhere — must not crash refreshAllBranchStats and must still clear a
+		// previously-set gitOp, the same as an explicit empty array would.
+		it("clears gitOp when the backend response omits `in_progress_ops` entirely", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setBranch("/repo", "feature", {
+				worktreePath: "/repo/wt-feature",
+				gitOp: "rebase",
+			});
+
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: { main: "/repo", feature: "/repo/wt-feature" },
+				merged_branches: [],
+			});
+			mockRepo.getRepoDiffStats.mockResolvedValue({
+				diff_stats: { "/repo": { additions: 0, deletions: 0 }, "/repo/wt-feature": { additions: 0, deletions: 0 } },
+				last_commit_ts: {},
+			});
+
+			await expect(gitOps.refreshAllBranchStats()).resolves.not.toThrow();
+
+			expect(repositoriesStore.get("/repo")?.branches["feature"]?.gitOp).toBeUndefined();
 		});
 
 		it("refreshes the active repo first and caps repo fan-out", async () => {

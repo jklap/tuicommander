@@ -385,6 +385,21 @@ When adding config fields or settings UI:
 | `docs/user-guide/settings.md` | Settings tab breakdown |
 | `docs/FEATURES.md` | Section 11 (Settings) |
 
+### Indicator Registry (customizable colors/icons/animations)
+When adding, removing, or changing a customizable visual indicator (terminal status dots, tab
+types, sidebar symbols, PR badges, git repo status, diff stats):
+
+| File | What to update |
+|------|----------------|
+| `src/indicators/registry.ts` | `INDICATORS` — the single source of truth. Add/edit an entry here, never a hardcoded color/label elsewhere |
+| `src/global.css` | `:root` default for every `colorVar`/`animVar` the entry names (always `var()`-of-a-token, never a raw hex) |
+| Consuming CSS (`TabBar.module.css`, `Sidebar.module.css`, `PaneTree.css`, `ChangesTab.module.css`) | Read `var(--ind-*)`, never the underlying palette token directly |
+| `src/components/HelpPanel/UiLegend.tsx` | Renders `<For each={INDICATORS}>` automatically — no manual update needed for a new entry, but a new **group** needs a `GROUP_LABELS`/`GROUP_HINTS` entry and, if it should be independently hideable, a `groupToggleBinding` case + a `show*` bool in `AppConfig`/`SettingsStoreState` |
+| `src/__tests__/indicators/registryParity.test.ts` | Source-text-parity test enforcing the above — will fail the build on a missed step, not just remind you |
+| `docs/frontend/STYLE_GUIDE.md` | "Indicator Customization" section — describes the `--ind-*`/`tuic-*` layer conceptually; do not hand-copy a color table here (it will drift) |
+| `docs/user-guide/settings.md` | Appearance Tab section — the UI Legend prose + the visibility-toggle table, if a new group toggle was added |
+| `docs/backend/config.md` | `indicator_overrides` row's group list, and any new `show_*` bool |
+
 ### Agent Detection
 When adding agents or changing detection logic:
 

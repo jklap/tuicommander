@@ -1,211 +1,278 @@
-import { type Component, For } from "solid-js";
+import { type Component, createSignal, For, Show } from "solid-js";
+import { t } from "../../i18n";
+import { AnimationPickerDialog } from "../../indicators/AnimationPickerDialog";
+import { IconPickerDialog } from "../../indicators/IconPickerDialog";
+import { IndicatorIcon } from "../../indicators/IndicatorIcon";
+import {
+	GROUP_HINTS,
+	GROUP_LABELS,
+	getIndicator,
+	type IndicatorDef,
+	type IndicatorGroup,
+	indicatorsByGroup,
+	resolveAnimationId,
+	resolveIconId,
+} from "../../indicators/registry";
+import { settingsStore } from "../../stores/settings";
+import { SettingToggle } from "../SettingsPanel/SettingFields";
+import { ColorPickerDialog } from "../shared/ColorPickerDialog";
 import s from "./UiLegend.module.css";
 
-// ---------------------------------------------------------------------------
-// Legend data
-// ---------------------------------------------------------------------------
+const GROUP_ORDER: readonly IndicatorGroup[] = [
+	"terminalStatus",
+	"tabType",
+	"sidebarSymbol",
+	"prBadge",
+	"gitState",
+	"diffStat",
+];
 
-interface LegendEntry {
-	color: string;
-	label: string;
-	description: string;
-	pulsing?: boolean;
+/** Binds a group's visibility toggle to its settingsStore field. Groups not
+ *  listed here (terminalStatus, sidebarSymbol) have no show/hide setting —
+ *  those indicators aren't optional the way a whole badge/tint/section is. */
+function groupToggleBinding(
+	group: IndicatorGroup,
+): { checked: boolean; onChange: (v: boolean) => void; label: string } | undefined {
+	switch (group) {
+		case "tabType":
+			return {
+				checked: settingsStore.state.tabTypeHighlighting,
+				onChange: (v) => settingsStore.setTabTypeHighlighting(v),
+				label: t("uiLegend.toggle.tabTypeHighlighting", "Show tab type highlighting"),
+			};
+		case "prBadge":
+			return {
+				checked: settingsStore.state.showPrBadges,
+				onChange: (v) => settingsStore.setShowPrBadges(v),
+				label: t("uiLegend.toggle.showPrBadges", "Show PR status badges"),
+			};
+		case "gitState":
+			return {
+				checked: settingsStore.state.showGitState,
+				onChange: (v) => settingsStore.setShowGitState(v),
+				label: t("uiLegend.toggle.showGitState", "Show git repo status indicators"),
+			};
+		case "diffStat":
+			return {
+				checked: settingsStore.state.showDiffStats,
+				onChange: (v) => settingsStore.setShowDiffStats(v),
+				label: t("uiLegend.toggle.showDiffStats", "Show diff stats"),
+			};
+		default:
+			return undefined;
+	}
 }
 
-const TERMINAL_DOT_LEGEND: LegendEntry[] = [
-	{ color: "var(--fg-muted)", label: "No session", description: "Terminal never ran or was reset" },
-	{ color: "var(--accent)", label: "Busy", description: "Producing output", pulsing: true },
-	{ color: "var(--success)", label: "Idle", description: "Agent waiting, no recent output" },
-	{ color: "var(--unseen)", label: "Unseen", description: "Went idle while not viewed" },
-	{ color: "var(--attention)", label: "Question", description: "Agent needs input", pulsing: true },
-	{ color: "var(--error)", label: "Error", description: "API error or agent stuck", pulsing: true },
-];
+/** diffStat previews are a literal glyph (+N / -N), not a shape — the only
+ *  group where the "preview" is the thing users actually see in the UI
+ *  rather than a stand-in for it. Presentation-only; doesn't need
+ *  registry-level modeling. */
+const DIFF_STAT_GLYPH: Record<string, string> = {
+	"diffStat.additions": "+N",
+	"diffStat.deletions": "-N",
+};
 
-interface TabTypeEntry {
-	color: string;
-	label: string;
-	description: string;
+/** tabType's colorVar is a raw "r, g, b" triple (consumed inside rgba() so
+ *  tint gradients can vary alpha) — every other group's colorVar is a
+ *  ready-to-use color. */
+function resolvedColor(entry: IndicatorDef): string | undefined {
+	if (!entry.colorVar) return undefined;
+	return entry.group === "tabType" ? `rgb(var(${entry.colorVar}))` : `var(${entry.colorVar})`;
 }
 
-const TAB_TYPE_LEGEND: TabTypeEntry[] = [
-	{ color: "rgb(var(--tab-diff-rgb))", label: "Diff", description: "Git diff viewer" },
-	{ color: "rgb(var(--tab-edit-rgb))", label: "Editor", description: "Code editor" },
-	{ color: "rgb(var(--tab-md-rgb))", label: "Markdown", description: "Markdown viewer" },
-	{ color: "rgb(var(--tab-panel-rgb))", label: "Panel", description: "Dashboard / plugin panel" },
-	{ color: "rgb(var(--tab-remote-rgb))", label: "PTY", description: "Remote session (HTTP/MCP)" },
-];
-
-const PANEL_COLOR_LEGEND: TabTypeEntry[] = [
-	{ color: "rgb(var(--tab-diff-rgb))", label: "Diff Panel", description: "Git diff summary" },
-	{ color: "rgb(var(--tab-md-rgb))", label: "Markdown Panel", description: "Markdown browser" },
-	{ color: "rgb(var(--tab-edit-rgb))", label: "File Browser", description: "File explorer" },
-	{ color: "rgb(var(--tab-panel-rgb))", label: "Panel", description: "Dashboard / plugin panel" },
-];
-
-interface SymbolEntry {
-	symbol: string;
-	label: string;
-	description: string;
-	color?: string;
+function resolvedAnimation(entry: IndicatorDef): string | undefined {
+	return entry.animVar ? `var(${entry.animVar})` : undefined;
 }
 
-const SIDEBAR_SYMBOL_LEGEND: SymbolEntry[] = [
-	{ symbol: "\u2731", label: "Main branch", description: "Primary branch (main/master)", color: "var(--warning)" },
-	{ symbol: "\u2387", label: "Feature branch", description: "Feature or topic branch", color: "var(--fg-muted)" },
-	{ symbol: "?", label: "Awaiting input", description: "A terminal needs input", color: "var(--warning)" },
-];
+/**
+ * One legend row's preview swatch. Shape follows `entry.preview`, but an
+ * entry with an icon always renders its REAL shape (IndicatorIcon) instead
+ * of a generic dot — this is what fixed the old legend showing "✱"/"⎇" text
+ * glyphs while the sidebar actually renders SVG paths.
+ */
+const IndicatorPreview: Component<{ entry: IndicatorDef }> = (props) => {
+	const color = () => resolvedColor(props.entry);
+	const animation = () => resolvedAnimation(props.entry);
 
-interface BadgeEntry {
-	label: string;
-	description: string;
-	bg: string;
-	fg: string;
-	border?: string;
-	pulsing?: boolean;
-}
+	return (
+		<Show
+			when={props.entry.group !== "diffStat"}
+			fallback={
+				<span class={s.symbol} style={{ color: color() }}>
+					{DIFF_STAT_GLYPH[props.entry.id]}
+				</span>
+			}
+		>
+			<Show
+				when={props.entry.defaultIconId}
+				fallback={
+					props.entry.preview === "bar" ? (
+						<span class={s.colorBar} style={{ background: color() }} />
+					) : props.entry.preview === "badge" ? (
+						<span class={s.badge} style={{ background: color(), animation: animation() }} />
+					) : (
+						<span class={s.dot} style={{ background: color(), animation: animation() }} />
+					)
+				}
+			>
+				{(iconId) => (
+					<IndicatorIcon
+						id={iconId()}
+						size={14}
+						class={s.previewIcon}
+						style={{ color: color(), animation: animation() }}
+					/>
+				)}
+			</Show>
+		</Show>
+	);
+};
 
-const PR_BADGE_LEGEND: BadgeEntry[] = [
-	{ label: "#N", description: "Open PR (number)", bg: "var(--accent)", fg: "#000" },
-	{ label: "Ready", description: "Approved and mergeable", bg: "var(--success)", fg: "#000" },
-	{ label: "Draft", description: "PR is a draft", bg: "transparent", fg: "var(--fg-muted)", border: "var(--fg-muted)" },
-	{ label: "Conflicts", description: "Merge conflicts", bg: "var(--error)", fg: "#000", pulsing: true },
-	{ label: "CI Failed", description: "CI checks failed", bg: "var(--error)", fg: "#000" },
-	{ label: "Changes Req.", description: "Changes requested", bg: "#d29922", fg: "#000" },
-	{ label: "Review Req.", description: "Awaiting review", bg: "transparent", fg: "#d29922", border: "#d29922" },
-	{
-		label: "CI Running",
-		description: "CI in progress",
-		bg: "transparent",
-		fg: "#e3b341",
-		border: "#e3b341",
-		pulsing: true,
-	},
-	{ label: "Merged", description: "PR merged", bg: "#a371f7", fg: "#000" },
-];
+/**
+ * Visual reference for every color, icon, and animation used throughout
+ * the app — rendered FROM `src/indicators/registry.ts`, the single source
+ * of truth. Previously this component hand-maintained its own copy of
+ * every color/label/description, which is exactly what let it drift from
+ * the real components (see the customization plan's Context section for
+ * the specific mismatches that caused — Busy shown as the wrong blue, PR
+ * "Open" shown as the wrong color, sidebar symbols shown as text glyphs
+ * the app hasn't rendered in a while, a whole "Panels" section describing
+ * colors no panel applies, and more).
+ *
+ * `editable` turns each color/icon/animation-capable row into an editor — a
+ * swatch button per capability, opening the matching picker dialog, plus a
+ * reset "×" that clears the whole override — used by Settings → Appearance.
+ * `HelpPanel.tsx`'s reference view stays read-only.
+ */
+export const UiLegend: Component<{ editable?: boolean }> = (props) => {
+	const [editingColorId, setEditingColorId] = createSignal<string | null>(null);
+	const [editingIconId, setEditingIconId] = createSignal<string | null>(null);
+	const [editingAnimationId, setEditingAnimationId] = createSignal<string | null>(null);
 
-const STATS_LEGEND: SymbolEntry[] = [
-	{ symbol: "+N", label: "Additions", description: "Lines added vs main", color: "var(--success)" },
-	{ symbol: "-N", label: "Deletions", description: "Lines removed vs main", color: "var(--error)" },
-];
+	const overrideFor = (id: string) => settingsStore.state.indicatorOverrides.find((o) => o.id === id);
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
+	const overrideColorFor = (id: string): string => overrideFor(id)?.color ?? "";
 
-export const UiLegend: Component = () => {
+	const currentIconIdFor = (id: string) => resolveIconId(settingsStore.state.indicatorOverrides, id);
+
+	const currentAnimationIdFor = (id: string) => resolveAnimationId(settingsStore.state.indicatorOverrides, id);
+
+	/** Any field set at all — not just color — so the reset "×" also shows
+	 *  for an icon-only or animation-only override. */
+	const hasOverride = (id: string): boolean => {
+		const o = overrideFor(id);
+		return !!o && (o.color !== undefined || o.icon !== undefined || o.animation !== undefined);
+	};
+
 	return (
 		<div class={s.legend}>
-			{/* Terminal dot states */}
-			<div class={s.group}>
-				<label class={s.groupLabel}>Terminal Status Dots</label>
-				<p class={s.hint}>The colored dot on each terminal tab</p>
-				<div class={s.grid}>
-					<For each={TERMINAL_DOT_LEGEND}>
-						{(entry) => (
-							<div class={s.row}>
-								<span class={entry.pulsing ? s.dotPulsing : s.dot} style={{ background: entry.color }} />
-								<span class={s.label}>{entry.label}</span>
-								<span class={s.desc}>{entry.description}</span>
-							</div>
-						)}
-					</For>
-				</div>
-			</div>
+			<For each={GROUP_ORDER}>
+				{(group) => (
+					<div class={s.group}>
+						<label class={s.groupLabel}>{GROUP_LABELS[group]}</label>
+						<Show when={GROUP_HINTS[group]}>
+							<p class={s.hint}>{GROUP_HINTS[group]}</p>
+						</Show>
+						<Show when={props.editable && groupToggleBinding(group)}>
+							{(toggle) => (
+								<SettingToggle checked={toggle().checked} onChange={toggle().onChange} label={toggle().label} />
+							)}
+						</Show>
+						<div class={s.grid}>
+							<For each={indicatorsByGroup(group)}>
+								{(entry) => (
+									<div class={s.row}>
+										<IndicatorPreview entry={entry} />
+										<span class={s.label}>{entry.label}</span>
+										<span class={s.desc}>{entry.description}</span>
+										<Show when={props.editable}>
+											<Show when={entry.capabilities.includes("color")}>
+												<button
+													class={s.editSwatch}
+													style={{ background: resolvedColor(entry) }}
+													onClick={() => setEditingColorId(entry.id)}
+													title={t("uiLegend.btn.changeColor", "Change color")}
+												/>
+											</Show>
+											<Show when={entry.capabilities.includes("icon")}>
+												<button
+													class={s.editIconBtn}
+													onClick={() => setEditingIconId(entry.id)}
+													title={t("uiLegend.btn.changeIcon", "Change icon")}
+												>
+													<IndicatorIcon id={currentIconIdFor(entry.id)} size={14} />
+												</button>
+											</Show>
+											<Show when={entry.capabilities.includes("animation")}>
+												<button
+													class={s.editAnimBtn}
+													onClick={() => setEditingAnimationId(entry.id)}
+													title={t("uiLegend.btn.changeAnimation", "Change animation")}
+												>
+													{currentAnimationIdFor(entry.id)}
+												</button>
+											</Show>
+											<Show when={hasOverride(entry.id)}>
+												<button
+													class={s.resetSwatch}
+													onClick={() => settingsStore.clearIndicatorOverride(entry.id)}
+													title={t("uiLegend.btn.resetOverride", "Reset to default")}
+												>
+													&times;
+												</button>
+											</Show>
+										</Show>
+									</div>
+								)}
+							</For>
+						</div>
+					</div>
+				)}
+			</For>
 
-			{/* Tab type colors */}
-			<div class={s.group}>
-				<label class={s.groupLabel}>Tab Types</label>
-				<p class={s.hint}>Background tint and bottom border color by tab type</p>
-				<div class={s.grid}>
-					<For each={TAB_TYPE_LEGEND}>
-						{(entry) => (
-							<div class={s.row}>
-								<span class={s.colorBar} style={{ background: entry.color }} />
-								<span class={s.label}>{entry.label}</span>
-								<span class={s.desc}>{entry.description}</span>
-							</div>
-						)}
-					</For>
-				</div>
-			</div>
-
-			{/* Panel colors */}
-			<div class={s.group}>
-				<label class={s.groupLabel}>Panels</label>
-				<p class={s.hint}>Right-side panel accent colors</p>
-				<div class={s.grid}>
-					<For each={PANEL_COLOR_LEGEND}>
-						{(entry) => (
-							<div class={s.row}>
-								<span class={s.colorBar} style={{ background: entry.color }} />
-								<span class={s.label}>{entry.label}</span>
-								<span class={s.desc}>{entry.description}</span>
-							</div>
-						)}
-					</For>
-				</div>
-			</div>
-
-			{/* Sidebar branch icons */}
-			<div class={s.group}>
-				<label class={s.groupLabel}>Sidebar Symbols</label>
-				<div class={s.grid}>
-					<For each={SIDEBAR_SYMBOL_LEGEND}>
-						{(entry) => (
-							<div class={s.row}>
-								<span class={s.symbol} style={{ color: entry.color }}>
-									{entry.symbol}
-								</span>
-								<span class={s.label}>{entry.label}</span>
-								<span class={s.desc}>{entry.description}</span>
-							</div>
-						)}
-					</For>
-				</div>
-			</div>
-
-			{/* PR badges */}
-			<div class={s.group}>
-				<label class={s.groupLabel}>PR Status Badges</label>
-				<p class={s.hint}>Shown next to branches with a pull request</p>
-				<div class={s.grid}>
-					<For each={PR_BADGE_LEGEND}>
-						{(entry) => (
-							<div class={s.row}>
-								<span
-									class={entry.pulsing ? s.badgePulsing : s.badge}
-									style={{
-										background: entry.bg,
-										color: entry.fg,
-										border: entry.border ? `1px solid ${entry.border}` : undefined,
-									}}
-								>
-									{entry.label}
-								</span>
-								<span class={s.desc}>{entry.description}</span>
-							</div>
-						)}
-					</For>
-				</div>
-			</div>
-
-			{/* Stats */}
-			<div class={s.group}>
-				<label class={s.groupLabel}>Diff Stats</label>
-				<div class={s.grid}>
-					<For each={STATS_LEGEND}>
-						{(entry) => (
-							<div class={s.row}>
-								<span class={s.symbol} style={{ color: entry.color }}>
-									{entry.symbol}
-								</span>
-								<span class={s.label}>{entry.label}</span>
-								<span class={s.desc}>{entry.description}</span>
-							</div>
-						)}
-					</For>
-				</div>
-			</div>
+			<Show when={props.editable}>
+				<button class={s.resetAllBtn} onClick={() => settingsStore.resetAllIndicators()}>
+					{t("uiLegend.btn.resetAll", "Reset all indicators")}
+				</button>
+				<ColorPickerDialog
+					visible={editingColorId() !== null}
+					title={t("uiLegend.dialog.indicatorColor", "Indicator Color")}
+					currentColor={editingColorId() ? overrideColorFor(editingColorId()!) : ""}
+					onClose={() => setEditingColorId(null)}
+					onConfirm={(color) => {
+						const id = editingColorId();
+						if (!id) return;
+						if (color) settingsStore.setIndicatorColor(id, color);
+						else settingsStore.clearIndicatorOverride(id);
+						setEditingColorId(null);
+					}}
+				/>
+				<IconPickerDialog
+					visible={editingIconId() !== null}
+					title={t("uiLegend.dialog.indicatorIcon", "Indicator Icon")}
+					currentIconId={editingIconId() ? currentIconIdFor(editingIconId()!) : "dot"}
+					onClose={() => setEditingIconId(null)}
+					onConfirm={(iconId) => {
+						const id = editingIconId();
+						if (!id) return;
+						settingsStore.setIndicatorIcon(id, iconId);
+						setEditingIconId(null);
+					}}
+				/>
+				<AnimationPickerDialog
+					visible={editingAnimationId() !== null}
+					title={t("uiLegend.dialog.indicatorAnimation", "Indicator Animation")}
+					currentAnimationId={editingAnimationId() ? currentAnimationIdFor(editingAnimationId()!) : "none"}
+					allowedAnimationIds={editingAnimationId() ? getIndicator(editingAnimationId()!)?.animations : undefined}
+					onClose={() => setEditingAnimationId(null)}
+					onConfirm={(animationId) => {
+						const id = editingAnimationId();
+						if (!id) return;
+						settingsStore.setIndicatorAnimation(id, animationId);
+						setEditingAnimationId(null);
+					}}
+				/>
+			</Show>
 		</div>
 	);
 };
