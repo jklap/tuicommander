@@ -387,8 +387,9 @@ struct ChangedFile {
 struct RepoStructure {
     worktree_paths: HashMap<String, String>,  // branch → worktree path
     merged_branches: Vec<String>,             // branches merged into default
-    in_progress_worktrees: Vec<String>,       // worktree dirs with a rebase/merge/cherry-pick/
-                                               // revert/bisect in progress (see worktree::list_in_progress_worktrees)
+    in_progress_ops: Vec<InProgressOp>,       // { path, kind } per worktree (main checkout included) with a
+                                               // rebase/merge/cherry-pick/revert/bisect in progress; kind is a
+                                               // kebab-case GitOpKind (see worktree::list_in_progress_worktrees)
 }
 ```
 

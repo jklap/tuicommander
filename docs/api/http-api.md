@@ -945,7 +945,7 @@ Aggregate snapshot: worktree paths, merged branches, and per-path diff stats in 
 GET /repo/structure?path=/path/to/repo
 ```
 
-Returns `{ "worktree_paths": { "branch": "/path", ... }, "merged_branches": ["branch", ...] }`. Fast path — no diff stats computation.
+Returns `{ "worktree_paths": { "branch": "/path", ... }, "merged_branches": ["branch", ...], "in_progress_ops": [{ "path": "/path", "kind": "rebase" }, ...] }`. Fast path — no diff stats computation. `in_progress_ops` names every worktree (including the main checkout) with a rebase/merge/cherry-pick/revert/bisect in progress and which one (`kind` is one of `rebase`/`merge`/`cherry-pick`/`revert`/`bisect`).
 
 ### Repo Diff Stats (Progressive Phase 2)
 

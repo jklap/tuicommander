@@ -80,8 +80,8 @@ per cell and the configured history limit still apply.
 - Rename: double-click tab name (inline editing)
 - Reorder: drag-and-drop with visual drop indicators (works for all tab types: terminal, diff, editor, markdown, plugin panels)
 - Tab status dot (left of name): grey=idle, blue-pulse=busy, green=done, purple=unseen (completed while not viewed), orange-pulse=question (needs input), red-pulse=error
-- Tab type colors: red gradient=diff, blue gradient=editor, teal gradient=markdown, purple gradient=panel, amber gradient=remote PTY session
-- Remote PTY sessions (created via HTTP/MCP) show "PTY:" prefix and amber styling
+- Tab type colors: red gradient=diff, blue gradient=editor, green gradient=markdown, purple gradient=panel, amber gradient=HTML preview, cyan gradient=remote PTY session. Toggle the tint (background gradient + border) on/off with **Show tab type highlighting** in Settings → Appearance — off keeps each type's icon color but removes the background/border. Every color/icon/animation above is customizable via the UI Legend (see **11.2**)
+- Remote PTY sessions (created via HTTP/MCP) show "PTY:" prefix and cyan styling
 - Progress bar (OSC 9;4)
 - Context menu (right-click): Close Tab, Close Other Tabs, Close Tabs to the Right, Detach to Window, Copy Path
   - Copy Path appears on every file-backed tab — diff, editor, markdown, HTML preview, and a plugin panel opened from a `file://` url — and copies the ABSOLUTE path with `$HOME` shortened to `~`. The tab stores keep `filePath` relative to the tab's filesystem root, so the root is joined back on before copying
@@ -319,8 +319,9 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Background Git actions share a subcommand and per-command flag policy across desktop IPC and HTTP.
 - `+` button: click opens a terminal in that branch; long press (500 ms) lists the enabled agents and opens a tab running the chosen one (a shell row has no agents, so there a long press acts as it did before: a click, or the row menu on touch); right-click opens the row menu
 - CI ring: proportional arc segments (green=passed, red=failed, yellow=pending)
-- PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover
-- Diff stats: `+N / -N` additions/deletions. Clicking the stats chip or the `N dirty` chip selects that workspace and opens the Git panel on the Changes tab (it stays open if already there)
+- PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover. Toggle with **Show PR status badges** (Settings → Appearance)
+- Diff stats: `+N / -N` additions/deletions. Clicking the stats chip or the `N dirty` chip selects that workspace and opens the Git panel on the Changes tab (it stays open if already there). Toggle with **Show diff stats** (Settings → Appearance)
+- Git repo status badge: "Rebasing"/"Merging"/"Cherry-picking"/"Reverting"/"Bisecting" when the worktree has that operation in progress — see **7.2**. Toggle with **Show git repo status indicators** (Settings → Appearance)
 - Merged badge: branches merged into main show a "Merged" badge
 - Unmerged mark: a small neutral outlined square shows commits outside the default branch even when the diff and dirty counts are zero
 - Question indicator: `?` icon (orange, pulsing) when agent asks a question
@@ -1016,7 +1017,7 @@ re-derived later.
 - Three creation flows: dialog (with base ref dropdown), instant (auto-name), right-click branch (quick-clone with hybrid `{branch}--{random}` name)
 - Base ref selection: choose which branch to start from when creating new worktrees. The "Start from" dropdown has its own search box and full keyboard navigation (`↑`/`↓`/`Enter`/`Esc`), grouped into Local/Remote sections; the existing-branch list below the name input also supports `↑`/`↓`/`Enter` navigation and highlights the matched substring as you type. The last base ref used successfully in the dialog is remembered per repo for the rest of the session (not persisted across restarts) and preselected next time
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup (safe orphan countdown defaults to 10 seconds), PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
-- A worktree with a rebase, merge, cherry-pick, revert, or bisect in progress shows a **Rebasing** badge in the sidebar and is never archived or deleted by the merge cleanup flows (Merge & Archive, auto-archive-merged) — even when confirmed — until the operation is resolved.
+- A worktree with a rebase, merge, cherry-pick, revert, or bisect in progress shows a distinct colored badge in the sidebar naming which one ("Rebasing", "Merging", "Cherry-picking", "Reverting", "Bisecting" — including on the **main** checkout's own row, not just linked worktrees) and is never archived or deleted by the merge cleanup flows (Merge & Archive, auto-archive-merged) — even when confirmed — until the operation is resolved. Toggle visibility with **Show git repo status indicators** in Settings → Appearance; colors/animations are customizable via the UI Legend (see **11.2**).
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
 - Removal previews distinguish untouched branch history from merged commits, name live sessions, and count uncommitted and untracked files. Automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees.
@@ -1060,6 +1061,7 @@ re-derived later.
 
 ### 7.5 Diff
 - Working tree diff and per-commit diff via Git Panel Changes tab
+- **Conflicts banner** — when the working tree has unmerged (conflicted) files, the Changes tab shows a banner naming the count plus a read-only list of each conflicted path and its raw 2-char status code (e.g. `UU`). Gated by **Show git repo status indicators** (Settings → Appearance); not yet interactive — conflicted files aren't diffable or stage/discard-able from this list.
 - Per-file diff counts (additions/deletions) shown inline in Changes tab
 - Click a file row to view its diff
 - **Side-by-side (split), unified (inline), and scroll (all files) view modes** — toggle in toolbar, preference persisted
@@ -1492,7 +1494,12 @@ The navigation groups the global pages by task. Each group is a static label row
 - Max tab name length: 10-60 slider
 - Repository groups: create, rename, delete, color-coded
 - Layout: reset panel sizes (restore sidebar and panel widths to defaults)
-- UI legend: reference for colors, symbols and badges
+- Bell style: none / visual / sound / both
+- UI legend: reference for colors, symbols and badges — rendered with the real sidebar components (branch icons, unmerged marker, compact PR markers) — that doubles as their editor (**UI Legend indicator customization**): a color swatch, an 18-shape icon picker, and an animation
+  picker (narrowed per indicator — e.g. badges don't offer "glow") per capable row, plus a reset
+  "×" and a "Reset all indicators" button. Overriding a PR state recolors that state's marker on every branch row and its badge in the GitHub panel. Overrides persist in `config.json` and apply live, no
+  restart, surviving theme switches. Four group headings (Tab Types, PR Status Badges, Git Repo
+  Status, Diff Stats) additionally carry a show/hide toggle for that whole group. Help → UI Legend shows the same reference read-only.
 
 ### 11.3 MCP, Remote Access and Remote Machines
 Three pages under **Integrations**. They were one "Services & MCP" tab; each page now mounts only its own content, and the MCP and Remote Access pages share one status poll.
