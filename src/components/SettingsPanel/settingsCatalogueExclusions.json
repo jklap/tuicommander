@@ -4,6 +4,7 @@
   "app.ai_chat_launches.{key}.workspace": "Per-conversation workspace snapshot; existing conversations retain their workspace.",
   "app.attachment_retention_days": "Legacy ignored field: the Rust descriptor states uploads have session lifetime regardless of this value.",
   "app.custom_launchers.{id}.id": "Read-only stable identity assigned by the launcher editor; changing it would replace record identity.",
+  "app.indicator_overrides.{id}.id": "Read-only registry identity of the overridden indicator; the UI Legend editor adds and removes overrides by id (src/indicators/registry.ts).",
   "app.services.auth.session_token": "Generated credential; the Remote Access page rotates it through regenerate_session_token, never an arbitrary editable token field.",
   "app.services.push.vapid_private_key": "Generated P-256 credential paired with vapid_public_key by push::generate_vapid_keys; no independent private-key editor.",
   "app.smart_selection_rules.{id}.id": "Read-only stable identity assigned by the smart-selection rule editor; changing it would replace record identity.",

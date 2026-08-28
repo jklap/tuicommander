@@ -9,6 +9,10 @@ const {
 	mockSetTabCyclingAllTypes,
 	mockSetTabTreeEnabled,
 	mockSetMaxTabNameLength,
+	mockSetBellStyle,
+	mockSetIndicatorColor,
+	mockClearIndicatorOverride,
+	mockResetAllIndicators,
 	mockResetLayout,
 	mockRenameGroup,
 	mockDeleteGroup,
@@ -21,6 +25,10 @@ const {
 	mockSetTabCyclingAllTypes: vi.fn(),
 	mockSetTabTreeEnabled: vi.fn(),
 	mockSetMaxTabNameLength: vi.fn(),
+	mockSetBellStyle: vi.fn(),
+	mockSetIndicatorColor: vi.fn(),
+	mockClearIndicatorOverride: vi.fn(),
+	mockResetAllIndicators: vi.fn(),
 	mockResetLayout: vi.fn(),
 	mockRenameGroup: vi.fn().mockReturnValue(true),
 	mockDeleteGroup: vi.fn(),
@@ -37,6 +45,8 @@ vi.mock("../../../stores/settings", () => ({
 			tabCyclingAllTypes: false,
 			tabTreeEnabled: true,
 			maxTabNameLength: 30,
+			bellStyle: "visual",
+			indicatorOverrides: [],
 		},
 		setTheme: mockSetTheme,
 		setSplitTabMode: mockSetSplitTabMode,
@@ -44,6 +54,10 @@ vi.mock("../../../stores/settings", () => ({
 		setTabCyclingAllTypes: mockSetTabCyclingAllTypes,
 		setTabTreeEnabled: mockSetTabTreeEnabled,
 		setMaxTabNameLength: mockSetMaxTabNameLength,
+		setBellStyle: mockSetBellStyle,
+		setIndicatorColor: mockSetIndicatorColor,
+		clearIndicatorOverride: mockClearIndicatorOverride,
+		resetAllIndicators: mockResetAllIndicators,
 	},
 }));
 
@@ -70,53 +84,89 @@ vi.mock("../../../themes", () => ({
 
 import { AppearanceTab } from "../../../components/SettingsPanel/tabs/AppearanceTab";
 
+/** The control bound to a settings-catalogue id. main's SettingRow layout puts
+ *  label and control in separate cells, and every control carries
+ *  `data-setting-id`, so tests look controls up by id rather than by position
+ *  or by walking from the label. */
+const LABEL_TO_SETTING: Record<string, string> = {
+	"Split Tab Mode": "app.split_tab_mode",
+	"Tab Ordering": "app.tab_ordering_mode",
+	"Cycle All Tab Types": "app.tab_cycling_all_types",
+	"Nested Terminal Tabs": "app.tab_tree_enabled",
+	"Max Tab Name Length": "app.max_tab_name_length",
+	"Bell Style": "app.bell_style",
+};
+function controlByLabel<T extends HTMLElement>(container: HTMLElement, label: string, kind: string): T {
+	const id = LABEL_TO_SETTING[label];
+	const bound = id ? container.querySelector(`[data-setting-id="${id}"]`) : null;
+	// The id sits on the control itself or on its field wrapper.
+	const el = bound?.matches("input, select") ? bound : bound?.querySelector("input, select");
+	if (!el) throw new Error(`No ${kind} found for label "${label}"`);
+	expect(container.textContent).toContain(label);
+	return el as T;
+}
+const toggleByLabel = (c: HTMLElement, label: string) => controlByLabel<HTMLInputElement>(c, label, "toggle");
+const sliderByLabel = (c: HTMLElement, label: string) => controlByLabel<HTMLInputElement>(c, label, "slider");
+const selectByLabel = (c: HTMLElement, label: string) => controlByLabel<HTMLSelectElement>(c, label, "select");
+
 describe("AppearanceTab", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it("renders the Tabs, Chat, Repository Groups, Layout, and UI Legend headings in order", () => {
+	it("renders the Tabs, Chat, Repository Groups, Layout, Bell, and UI Legend headings in order", () => {
 		const { container } = render(() => <AppearanceTab />);
 		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.textContent);
 		// The terminal theme select lives in the Terminal tab (main moved it there), not here.
-		expect(headings).toEqual(["Tabs", "Chat", "Repository Groups", "Layout", "UI Legend"]);
+		expect(headings).toEqual(["Tabs", "Chat", "Repository Groups", "Layout", "Bell", "UI Legend"]);
 	});
 
 	it("calls setSplitTabMode when the split-tab-mode select changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
-		const select = selects.find((sel) => Array.from(sel.options).some((o) => o.value === "unified"))!;
+		const select = selectByLabel(container, "Split Tab Mode");
 		fireEvent.change(select, { target: { value: "unified" } });
 		expect(mockSetSplitTabMode).toHaveBeenCalledWith("unified");
 	});
 
 	it("calls setTabOrderingMode when the tab-ordering select changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
-		const select = selects.find((sel) => Array.from(sel.options).some((o) => o.value === "free"))!;
+		const select = selectByLabel(container, "Tab Ordering");
 		fireEvent.change(select, { target: { value: "free" } });
 		expect(mockSetTabOrderingMode).toHaveBeenCalledWith("free");
 	});
 
 	it("calls setTabCyclingAllTypes when its toggle changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
-		fireEvent.change(checkboxes[0], { target: { checked: true } });
+		const checkbox = toggleByLabel(container, "Cycle All Tab Types");
+		fireEvent.change(checkbox, { target: { checked: true } });
 		expect(mockSetTabCyclingAllTypes).toHaveBeenCalledWith(true);
 	});
 
 	it("calls setTabTreeEnabled when its toggle changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
-		fireEvent.change(checkboxes[1], { target: { checked: false } });
+		const checkbox = toggleByLabel(container, "Nested Terminal Tabs");
+		fireEvent.change(checkbox, { target: { checked: false } });
 		expect(mockSetTabTreeEnabled).toHaveBeenCalledWith(false);
 	});
 
 	it("calls setMaxTabNameLength when the slider changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const slider = container.querySelector('input[type="range"]') as HTMLInputElement;
+		const slider = sliderByLabel(container, "Max Tab Name Length");
 		fireEvent.input(slider, { target: { value: "45" } });
 		expect(mockSetMaxTabNameLength).toHaveBeenCalledWith(45);
+	});
+
+	it("shows the bell style select with the current value", () => {
+		const { container } = render(() => <AppearanceTab />);
+		const select = selectByLabel(container, "Bell Style");
+		expect(select.value).toBe("visual");
+	});
+
+	it("calls setBellStyle when the bell style select changes", () => {
+		const { container } = render(() => <AppearanceTab />);
+		const select = selectByLabel(container, "Bell Style");
+		fireEvent.change(select, { target: { value: "both" } });
+		expect(mockSetBellStyle).toHaveBeenCalledWith("both");
 	});
 
 	it("renders existing repository groups and adds a new one via the Add Group button", () => {

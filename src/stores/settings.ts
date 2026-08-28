@@ -11,6 +11,13 @@ import {
 	type WordSelectionMode,
 } from "../components/Terminal/smartSelectionTypes";
 import { setLocale } from "../i18n";
+import type { IndicatorOverride } from "../indicators/registry";
+import {
+	isSafeIndicatorAnimationId,
+	isSafeIndicatorColor,
+	isSafeIndicatorIconId,
+	sanitizeIndicatorOverrides,
+} from "../indicators/validate";
 import { invoke } from "../invoke";
 import { settingNumberDefault } from "../services/settingsCatalogue";
 import { settingsRefresh } from "../services/settingsRefresh";
@@ -112,6 +119,11 @@ interface RustAppConfig {
 	/** Optional ego user-config profile for AI Chat ACP launches. */
 	ego_profile?: string;
 	ai_chat_workspace?: string;
+	indicator_overrides?: IndicatorOverride[];
+	show_diff_stats?: boolean;
+	show_pr_badges?: boolean;
+	show_git_state?: boolean;
+	tab_type_highlighting?: boolean;
 }
 
 // Default values
@@ -355,6 +367,11 @@ interface SettingsStoreState {
 	egoExecutable: string;
 	egoProfile: string;
 	aiChatWorkspace: string;
+	indicatorOverrides: IndicatorOverride[];
+	showDiffStats: boolean;
+	showPrBadges: boolean;
+	showGitState: boolean;
+	tabTypeHighlighting: boolean;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -425,6 +442,11 @@ function createSettingsStore() {
 		egoExecutable: "",
 		egoProfile: "",
 		aiChatWorkspace: "",
+		indicatorOverrides: [],
+		showDiffStats: true,
+		showPrBadges: true,
+		showGitState: true,
+		tabTypeHighlighting: true,
 	});
 
 	// Cache of the last loaded config, refreshed on hydrate and each persist.
@@ -513,6 +535,13 @@ function createSettingsStore() {
 		values.egoExecutable = config.ego_executable ?? "";
 		values.egoProfile = config.ego_profile ?? "";
 		values.aiChatWorkspace = config.ai_chat_workspace ?? "";
+		// Revalidated here, not just on write — a hand-edited config.json is
+		// untrusted input reaching document.documentElement.style (apply.ts).
+		values.indicatorOverrides = sanitizeIndicatorOverrides(config.indicator_overrides ?? []);
+		values.showDiffStats = config.show_diff_stats ?? true;
+		values.showPrBadges = config.show_pr_badges ?? true;
+		values.showGitState = config.show_git_state ?? true;
+		values.tabTypeHighlighting = config.tab_type_highlighting ?? true;
 		return values;
 	}
 
@@ -585,6 +614,11 @@ function createSettingsStore() {
 			ego_executable: values.egoExecutable,
 			ego_profile: values.egoProfile,
 			ai_chat_workspace: values.aiChatWorkspace,
+			indicator_overrides: values.indicatorOverrides.map((o) => ({ ...o })),
+			show_diff_stats: values.showDiffStats,
+			show_pr_badges: values.showPrBadges,
+			show_git_state: values.showGitState,
+			tab_type_highlighting: values.tabTypeHighlighting,
 		} satisfies Partial<RustAppConfig>;
 	}
 
@@ -680,6 +714,18 @@ function createSettingsStore() {
 			saveTimer = null;
 			void persist();
 		}, SAVE_DEBOUNCE_MS);
+	}
+
+	/** Set (or replace) one field of one indicator's override, appending a new
+	 *  override row if this id has none yet. Shared by setIndicatorColor/Icon/Animation. */
+	function upsertIndicatorField(id: string, field: "color" | "icon" | "animation", value: string): void {
+		const existing = state.indicatorOverrides.find((o) => o.id === id);
+		if (existing) {
+			setState("indicatorOverrides", (o) => o.id === id, field, value);
+		} else {
+			setState("indicatorOverrides", state.indicatorOverrides.length, { id, [field]: value });
+		}
+		save();
 	}
 
 	const actions = {
@@ -1051,6 +1097,79 @@ function createSettingsStore() {
 			save();
 		},
 
+		/** Set (or replace) one indicator's color override. Silently rejects an
+		 *  unsafe value — see indicators/validate.ts's isSafeIndicatorColor. */
+		setIndicatorColor(id: string, color: string): void {
+			if (!isSafeIndicatorColor(color)) {
+				appLogger.warn("config", `Rejected unsafe indicator color for "${id}"`, { color });
+				return;
+			}
+			upsertIndicatorField(id, "color", color);
+		},
+
+		/** Set (or replace) one indicator's icon override. Silently rejects an
+		 *  id this build's icon set doesn't know about. */
+		setIndicatorIcon(id: string, iconId: string): void {
+			if (!isSafeIndicatorIconId(iconId)) {
+				appLogger.warn("config", `Rejected unknown indicator icon id for "${id}"`, { iconId });
+				return;
+			}
+			upsertIndicatorField(id, "icon", iconId);
+		},
+
+		/** Set (or replace) one indicator's animation override. Silently rejects
+		 *  an id this build's animation set doesn't know about. */
+		setIndicatorAnimation(id: string, animationId: string): void {
+			if (!isSafeIndicatorAnimationId(animationId)) {
+				appLogger.warn("config", `Rejected unknown indicator animation id for "${id}"`, { animationId });
+				return;
+			}
+			upsertIndicatorField(id, "animation", animationId);
+		},
+
+		/** Clear every field of one indicator's override, reverting it to the
+		 *  registry default. */
+		clearIndicatorOverride(id: string): void {
+			setState(
+				"indicatorOverrides",
+				state.indicatorOverrides.filter((o) => o.id !== id),
+			);
+			save();
+		},
+
+		/** Clear every indicator override — the legend's "Reset all indicators" button. */
+		resetAllIndicators(): void {
+			setState("indicatorOverrides", []);
+			save();
+		},
+
+		/** Show/hide the sidebar branch row's diff stat badge (+N/-N). */
+		setShowDiffStats(enabled: boolean): void {
+			setState("showDiffStats", enabled);
+			save();
+		},
+
+		/** Show/hide the sidebar PR status badge. */
+		setShowPrBadges(enabled: boolean): void {
+			setState("showPrBadges", enabled);
+			save();
+		},
+
+		/** Show/hide git repo status indicators: the sidebar's per-worktree
+		 *  rebase/merge/cherry-pick/revert/bisect badge and the Changes tab's
+		 *  conflicts banner. */
+		setShowGitState(enabled: boolean): void {
+			setState("showGitState", enabled);
+			save();
+		},
+
+		/** Tint tab backgrounds/borders by type. Off neutralizes the tint but
+		 *  keeps each type's icon color (see useAppearanceSync.ts). */
+		setTabTypeHighlighting(enabled: boolean): void {
+			setState("tabTypeHighlighting", enabled);
+			save();
+		},
+
 		setCursorStyle(style: SettingsStoreState["cursorStyle"]): void {
 			setState("cursorStyle", style);
 			save();
@@ -1200,5 +1319,10 @@ registerDebugSnapshot("settings", () => {
 		doubleClickAction: s.doubleClickAction,
 		wordSelectionMode: s.wordSelectionMode,
 		smartSelectionRuleCount: s.smartSelectionRules.length,
+		indicatorOverrideCount: s.indicatorOverrides.length,
+		showDiffStats: s.showDiffStats,
+		showPrBadges: s.showPrBadges,
+		showGitState: s.showGitState,
+		tabTypeHighlighting: s.tabTypeHighlighting,
 	};
 });

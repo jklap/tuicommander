@@ -229,11 +229,29 @@ export const AppearanceTab: Component = () => {
 					<p class={s.hint}>{t("appearance.hint.resetLayout", "Reset sidebar and panel widths to default values")}</p>
 				</div>
 			</SectionCard>
+			<SectionCard title={t("appearance.heading.bell", "Bell")}>
+				<SettingSelect
+					settingId="app.bell_style"
+					row
+					label={t("appearance.label.bellStyle", "Bell Style")}
+					value={settingsStore.state.bellStyle}
+					onChange={(v) => {
+						if (v === "none" || v === "visual" || v === "sound" || v === "both") settingsStore.setBellStyle(v);
+					}}
+					options={[
+						{ value: "none", label: t("appearance.bellStyle.none", "None") },
+						{ value: "visual", label: t("appearance.bellStyle.visual", "Visual") },
+						{ value: "sound", label: t("appearance.bellStyle.sound", "Sound") },
+						{ value: "both", label: t("appearance.bellStyle.both", "Both") },
+					]}
+					hint={t("appearance.hint.bellStyle", "How the terminal bell (\\a / BEL) is signaled")}
+				/>
+			</SectionCard>
 			<SectionCard title={t("appearance.heading.uiLegend", "UI Legend")}>
 				<p class={s.hint} style={{ "margin-bottom": "12px" }}>
 					{t("appearance.hint.uiLegend", "Visual reference for colors, symbols, and badges used throughout the app")}
 				</p>
-				<UiLegend />
+				<UiLegend editable />
 			</SectionCard>
 		</div>
 	);
