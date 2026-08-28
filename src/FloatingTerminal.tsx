@@ -175,12 +175,20 @@ export const FloatingTerminal: Component = () => {
 	const shellState = () => terminal()?.shellState;
 	const awaitingInput = () => terminal()?.awaitingInput;
 
+	// Was reading undefined vars (--text-muted, --text-secondary — never
+	// defined anywhere in global.css) for the exited/default cases, so this
+	// window's status dot always rendered the literal hex fallback instead
+	// of following the theme. Also collapsed question and error into the
+	// same color, unlike every other terminal-state indicator in the app —
+	// fixed to distinguish them now that both flow through the same
+	// registry vars as the main tab bar.
 	const statusColor = () => {
-		if (awaitingInput()) return "var(--warning, #d29922)";
-		if (isBusy()) return "var(--activity, #58a6ff)";
-		if (shellState() === "idle") return "var(--success, #3fb950)";
-		if (shellState() === "exited") return "var(--text-muted, #666)";
-		return "var(--text-secondary, #848d97)";
+		if (awaitingInput() === "error") return "var(--ind-terminal-error)";
+		if (awaitingInput()) return "var(--ind-terminal-question)";
+		if (isBusy()) return "var(--ind-terminal-busy)";
+		if (shellState() === "idle") return "var(--ind-terminal-idle)";
+		if (shellState() === "exited") return "var(--ind-terminal-exited)";
+		return "var(--ind-terminal-none)";
 	};
 
 	const statusLabel = () => {

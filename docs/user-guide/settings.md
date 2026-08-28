@@ -25,12 +25,47 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 |---------|------|---------|-------------|
 | **Terminal theme** | — | — | Color theme with preview swatches |
 | **Split tab mode** | — | — | Separate or unified tab appearance |
+| **Tab Ordering** | `grouped-by-type/terminals-first/free` | `grouped-by-type` | How tabs are ordered: grouped by type, terminals first, or freely interleaved |
 | **Cycle All Tab Types** | — | Off | When on, next/prev-tab shortcuts also cycle file/diff/markdown/editor tabs (ordered like the tab bar). Off cycles terminals only. |
 | **Nested Terminal Tabs** | — | Off | When on, a branch with more than one terminal shows a collapsible list of its terminals under its sidebar row, each with a status dot. Off by default. |
 | **Max tab name length** | — | — | 10–60 slider |
 | **Repository groups** | — | — | Create, rename, delete, and color-code groups |
 | **Reset panel sizes** | — | — | Restore sidebar and panel widths to defaults |
 | **Bell Style** | `none/visual/sound/both` | `visual` | Terminal bell behavior |
+
+At the bottom of the tab, the **UI Legend** documents every color/icon/animation the app uses
+(terminal status dots, tab types, sidebar symbols, PR badges, git repo status, diff stats) — and
+doubles as the editor for them. Each row offers a control per capability it has:
+
+- **Color** — a swatch button opens the same preset/custom color picker used for repository groups.
+- **Icon** — a small icon button opens a grid of 18 curated monochrome shapes (dot, star, ring,
+  square, triangle, diamond, chevron, spinner arc, bell, question mark, exclamation, pause bars,
+  clock, checkmark, cross, and the branch/worktree/shell shapes) — every option renders live so
+  you're picking the actual glyph, not a name.
+- **Animation** — a text button (showing the current animation, e.g. "pulse") opens a list where
+  every option animates its own preview dot. Some indicators (e.g. PR badges) offer a narrower set
+  than others — a badge doesn't offer "glow", a spinning-halo effect meant for a small dot.
+
+Every row also gets a reset "×" once any of its fields is overridden, and a "Reset all indicators"
+button at the bottom clears everything at once. Overrides are stored in `indicator_overrides` in
+`config.json` and apply live — no restart needed — and survive a theme switch. The read-only
+reference view in Help → UI Legend shows the same information without the edit controls. See
+`src/indicators/registry.ts` for the full list of customizable entries.
+
+Four of the legend's group headings also carry a show/hide toggle for that whole group, stored
+in `config.json` alongside the color/icon/animation overrides:
+
+| Toggle | Default | Effect when off |
+|---|---|---|
+| **Show tab type highlighting** | On | Tab bar and mini pane-tree bar lose their per-type background tint and border color, but keep each type's icon color |
+| **Show PR status badges** | On | Hides the sidebar's PR status pill next to a branch with an open pull request |
+| **Show git repo status indicators** | On | Hides the sidebar's rebase/merge/cherry-pick/revert/bisect badge and the Changes tab's conflicts banner |
+| **Show diff stats** | On | Hides the sidebar's `+N/-N` diff stat badge next to a branch |
+
+**Git repo status** — when a worktree (including the main checkout) has a rebase, merge,
+cherry-pick, revert, or bisect in progress, its sidebar row shows a colored badge naming which
+one. The Changes tab (Git panel) separately shows a conflicts banner listing every unmerged file
+when the working tree has one, regardless of which operation caused it.
 
 ## Terminal Tab
 

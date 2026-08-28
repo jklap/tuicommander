@@ -1,0 +1,28 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+
+.swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-primary);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.swatch:hover {
+  background: var(--bg-highlight);
+}
+
+.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}

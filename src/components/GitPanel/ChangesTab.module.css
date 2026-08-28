@@ -290,6 +290,38 @@
   color: var(--fg-primary);
 }
 
+/* Conflicts banner — shown above Staged/Unstaged when the working tree has unmerged files
+ * (a merge/cherry-pick/revert conflict). Read-only: conflicted files aren't yet diffable or
+ * stage/discard-able from here (see the indicator customization plan's Phase 5 "free win"
+ * scope note), so entries below skip the interactive fileEntry affordances. */
+.conflictsBanner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: var(--font-sm);
+  font-family: var(--font-ui);
+  font-weight: 600;
+  color: var(--ind-gitstate-conflicts);
+  background: color-mix(in srgb, var(--ind-gitstate-conflicts) 12%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+
+.conflictsIcon {
+  animation: var(--ind-anim-gitstate-conflicts);
+  flex-shrink: 0;
+}
+
+.conflictEntry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 3px 20px;
+  font-size: var(--font-md);
+  font-family: var(--font-ui);
+  cursor: default;
+}
+
 /* File entries */
 .fileEntry {
   position: relative;

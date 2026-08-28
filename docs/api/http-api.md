@@ -456,7 +456,7 @@ Aggregate snapshot: worktree paths, merged branches, and per-path diff stats in 
 GET /repo/structure?path=/path/to/repo
 ```
 
-Returns `{ "worktree_paths": { "branch": "/path", ... }, "merged_branches": ["branch", ...] }`. Fast path — no diff stats computation.
+Returns `{ "worktree_paths": { "branch": "/path", ... }, "merged_branches": ["branch", ...], "in_progress_ops": [{ "path": "/path", "kind": "rebase" }, ...] }`. Fast path — no diff stats computation. `in_progress_ops` names every worktree (including the main checkout) with a rebase/merge/cherry-pick/revert/bisect in progress and which one (`kind` is one of `rebase`/`merge`/`cherry-pick`/`revert`/`bisect`).
 
 ### Repo Diff Stats (Progressive Phase 2)
 
@@ -716,7 +716,7 @@ Returns the remote origin URL.
 GET /repo/working-tree-status?path=/path/to/repo
 ```
 
-Returns porcelain v2 working tree status.
+Returns porcelain v2 working tree status: `branch`, `upstream`, `ahead`/`behind`, `stash_count`, `staged`/`unstaged`/`untracked` file lists, and `conflicted` — unmerged files from a `u` porcelain record (each entry's `status` is the raw 2-char XY code, e.g. `"UU"`, not the single-letter code the other lists use).
 
 ### Panel Context
 

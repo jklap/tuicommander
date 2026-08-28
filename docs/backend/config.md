@@ -142,6 +142,11 @@ cleartext copy does not survive on disk.
 | `tab_ordering_mode` | `TabOrderingMode` | `"grouped-by-type"` | Tab ordering mode: `"grouped-by-type"`, `"terminals-first"`, or `"free"` |
 | `tab_cycling_all_types` | `bool` | `false` | When true, next/prev-tab shortcuts cycle file/diff/markdown/editor tabs too (default cycles terminals only) |
 | `tab_tree_enabled` | `bool` | `false` | When true, a branch with >1 terminal shows a collapsible nested list of its terminals under the branch row in the sidebar |
+| `indicator_overrides` | `Vec<IndicatorOverride>` | `[]` | User overrides for the indicator registry (`src/indicators/registry.ts` — terminal status dots, tab types, sidebar symbols, PR badges, git repo status, diff stats). Each entry is `{ id, color?, icon?, animation? }`; `id` is a frontend registry id (e.g. `"terminal.busy"`), unvalidated on the Rust side — the frontend registry owns which ids are meaningful. A `Vec`, not a map keyed by id, because `commit_config_change` merges objects key-by-key but replaces arrays wholesale — a map would have no way to express removing an override. |
+| `show_diff_stats` | `bool` | `true` | Show the sidebar branch row's diff stat badge (+N/-N) |
+| `show_pr_badges` | `bool` | `true` | Show the sidebar PR status badge |
+| `show_git_state` | `bool` | `true` | Show git repo status indicators — the sidebar's per-branch rebase/merge/cherry-pick/revert/bisect badge and the Changes tab's conflicts banner |
+| `tab_type_highlighting` | `bool` | `true` | Tint tab backgrounds/borders by type (diff/editor/markdown/panel/etc). Off neutralizes the tint but keeps each type's icon color |
 | `prevent_sleep_when_busy` | `bool` | `false` | Prevent macOS sleep when terminal is busy |
 | `standby_timeout_minutes` | `u16` | `5` | Minutes of idle + unfocused before SIGSTOP on the process group. `0` disables it |
 | `custom_launchers` | `Vec<CustomLauncher>` | `[]` | User-defined launchers shown in the "Open in" menu alongside built-ins |

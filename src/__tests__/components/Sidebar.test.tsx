@@ -203,6 +203,11 @@ describe("Sidebar", () => {
 		// Nested terminal tabs are opt-in and off by default — reset per test so the
 		// feature-behavior block can enable it and the gating block can rely on off.
 		settingsStore.setTabTreeEnabled(false);
+		// Visibility toggles default to true — reset per test so a gating test that
+		// flips one to false doesn't leak into every test that runs after it.
+		settingsStore.setShowDiffStats(true);
+		settingsStore.setShowPrBadges(true);
+		settingsStore.setShowGitState(true);
 		_resetMergedActivityAccum();
 	});
 
@@ -1080,6 +1085,115 @@ describe("Sidebar", () => {
 			expect(prBadge).not.toBeNull();
 			expect(prBadge!.classList.contains("prOpen")).toBe(true);
 			expect(prBadge!.textContent).toBe("#44");
+		});
+
+		it("hides StatsBadge when showDiffStats is off, even with nonzero additions/deletions", () => {
+			settingsStore.setShowDiffStats(false);
+			setRepos({
+				"/repo1": makeRepo({
+					branches: {
+						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 10, deletions: 5 },
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelector(".branchStats")).toBeNull();
+		});
+
+		it("hides the PR badge when showPrBadges is off, even with PR data", () => {
+			settingsStore.setShowPrBadges(false);
+			setRepos({
+				"/repo1": makeRepo({
+					branches: {
+						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					},
+				}),
+			});
+			mockGetPrStatus.mockReturnValue({ state: "OPEN", number: 44, title: "Test", url: "https://example.com" });
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelector(".prBadge")).toBeNull();
+		});
+
+		it.each([
+			["rebase", "gitOpRebase", "Rebasing"],
+			["merge", "gitOpMerge", "Merging"],
+			["cherry-pick", "gitOpCherryPick", "Cherry-picking"],
+			["revert", "gitOpRevert", "Reverting"],
+			["bisect", "gitOpBisect", "Bisecting"],
+		] as const)("shows a %s badge with the %s class and label", (kind, cls, label) => {
+			setRepos({
+				"/repo1": makeRepo({
+					branches: {
+						main: {
+							name: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							gitOp: kind,
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const badge = container.querySelector(".gitOpBadge");
+			expect(badge).not.toBeNull();
+			expect(badge!.classList.contains(cls)).toBe(true);
+			expect(badge!.textContent).toBe(label);
+		});
+
+		it("shows the git-op badge on the MAIN branch too (the !isMain gate was dropped)", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					branches: {
+						main: {
+							name: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							gitOp: "rebase",
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelector(".gitOpBadge")).not.toBeNull();
+		});
+
+		it("hides the git-op badge when showGitState is off, even with an operation in progress", () => {
+			settingsStore.setShowGitState(false);
+			setRepos({
+				"/repo1": makeRepo({
+					branches: {
+						main: {
+							name: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							gitOp: "rebase",
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelector(".gitOpBadge")).toBeNull();
+		});
+
+		it("shows no git-op badge when no operation is in progress", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					branches: {
+						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelector(".gitOpBadge")).toBeNull();
 		});
 	});
 
@@ -2141,6 +2255,33 @@ describe("Sidebar", () => {
 			const path = container.querySelector("svg path");
 			expect(path?.getAttribute("d")).toMatch(/^M5 1\.5a1\.5 1\.5/);
 			expect(container.querySelector(".branchIconWorktree")).not.toBeNull();
+		});
+
+		describe("icon overrides", () => {
+			afterEach(() => {
+				settingsStore.resetAllIndicators();
+			});
+
+			it("respects an icon override for the main-branch (star) shape", () => {
+				settingsStore.setIndicatorIcon("sidebar.main", "diamond");
+				const { container } = render(() => <BranchIcon isMainBranch={true} isMainWorktree={true} />);
+				const path = container.querySelector("svg path");
+				expect(path?.getAttribute("d")).toBe("M8 1.2 14.8 8 8 14.8 1.2 8z");
+			});
+
+			it("respects an icon override for the linked-worktree shape", () => {
+				settingsStore.setIndicatorIcon("sidebar.worktree", "diamond");
+				const { container } = render(() => <BranchIcon isMainBranch={false} isMainWorktree={false} />);
+				const path = container.querySelector("svg path");
+				expect(path?.getAttribute("d")).toBe("M8 1.2 14.8 8 8 14.8 1.2 8z");
+			});
+
+			it("respects an icon override for the non-git shell shape", () => {
+				settingsStore.setIndicatorIcon("sidebar.shell", "diamond");
+				const { container } = render(() => <BranchIcon isMainBranch={false} isMainWorktree={false} isShell={true} />);
+				const path = container.querySelector("svg path");
+				expect(path?.getAttribute("d")).toBe("M8 1.2 14.8 8 8 14.8 1.2 8z");
+			});
 		});
 
 		it("colors busy over unseen when both are set", () => {

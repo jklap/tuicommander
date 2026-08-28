@@ -24,6 +24,10 @@ function syncHotRepos(repositories: Record<string, RepositoryState>): void {
 	);
 }
 
+/** Which multi-step git operation a worktree is in the middle of. Mirrors the Rust
+ *  `worktree::GitOpKind` enum's kebab-case wire format exactly. */
+export type GitOpKind = "rebase" | "merge" | "cherry-pick" | "revert" | "bisect";
+
 /** Branch with its terminals */
 export interface BranchState {
 	name: string;
@@ -31,7 +35,8 @@ export interface BranchState {
 	isShell?: boolean; // true for non-git directory shell entries
 	isPreparing?: boolean; // true while stale worktree is being cleaned up and recreated in background
 	isRemoving?: boolean; // true while worktree removal is in progress
-	isRebasing?: boolean; // true while the worktree has a rebase/merge/cherry-pick/revert/bisect in progress
+	/** Set while the worktree has a rebase/merge/cherry-pick/revert/bisect in progress; which one. */
+	gitOp?: GitOpKind;
 	worktreePath: string | null; // Path to worktree directory (null for main branch)
 	terminals: string[]; // terminal IDs belonging to this branch
 	hadTerminals: boolean; // true once a terminal has been created — suppresses auto-spawn after close-all

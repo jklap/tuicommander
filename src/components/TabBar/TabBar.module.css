@@ -149,7 +149,14 @@
 
 .tabIcon {
   font-size: 6px;
-  color: var(--fg-muted);
+  /* IndicatorIcon (an <svg>, replacing the old "●" text glyph) is sized via
+   * `width/height: 1em` so it still tracks font-size — including the state
+   * classes below that bump font-size to var(--font-3xs). */
+  width: 1em;
+  height: 1em;
+  display: inline-block;
+  color: var(--ind-terminal-none);
+  animation: var(--ind-anim-terminal-none);
   flex-shrink: 0;
   opacity: 0.3;
 }
@@ -280,28 +287,31 @@
 
 /* Tab busy/idle indicators */
 .tab.shellBusy .tabIcon {
-  color: var(--activity);
+  color: var(--ind-terminal-busy);
   opacity: 1;
   font-size: var(--font-3xs);
-  animation: pulse-opacity 1.5s ease-in-out infinite;
+  animation: var(--ind-anim-terminal-busy);
 }
 
 .tab.shellIdle .tabIcon {
-  color: var(--success);
+  color: var(--ind-terminal-idle);
   opacity: 1;
   font-size: var(--font-3xs);
+  animation: var(--ind-anim-terminal-idle);
 }
 
 .tab.shellUnseen .tabIcon {
-  color: var(--unseen);
+  color: var(--ind-terminal-unseen);
   opacity: 1;
   font-size: var(--font-3xs);
+  animation: var(--ind-anim-terminal-unseen);
 }
 
 .tab.shellExited .tabIcon {
-  color: var(--fg-muted);
+  color: var(--ind-terminal-exited);
   opacity: 0.45;
   font-size: var(--font-3xs);
+  animation: var(--ind-anim-terminal-exited);
 }
 
 .tab.standby {
@@ -314,20 +324,24 @@
   vertical-align: middle;
 }
 
-/* Awaiting input — override tabIcon to show state via left dot */
+/* Awaiting input — override tabIcon to show state via left dot.
+ * `.awaitingInput` only ever pairs with `.awaitingQuestion` or
+ * `.awaitingError` (AwaitingInputType has no other non-null value), so
+ * color+animation live entirely on those two — each independently
+ * customizable rather than inheriting one shared value. */
 .tab.awaitingInput .tabIcon {
   opacity: 1;
   font-size: var(--font-3xs);
-  color: var(--warning);
-  animation: pulse-opacity 1.5s ease-in-out infinite;
 }
 
 .tab.awaitingQuestion .tabIcon {
-  color: var(--attention);
+  color: var(--ind-terminal-question);
+  animation: var(--ind-anim-terminal-question);
 }
 
 .tab.awaitingError .tabIcon {
-  color: var(--error);
+  color: var(--ind-terminal-error);
+  animation: var(--ind-anim-terminal-error);
 }
 
 
@@ -347,19 +361,19 @@
 
 /* Diff tabs */
 .tab.diffTab {
-  background: linear-gradient(to bottom, rgba(var(--tab-diff-rgb), 0.1), rgba(var(--tab-diff-rgb), 0.05));
-  border-bottom: 2px solid rgba(var(--tab-diff-rgb), 0.3);
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-diff-rgb), 0.1), rgba(var(--ind-tabtype-diff-rgb), 0.05));
+  border-bottom: 2px solid rgba(var(--ind-tabtype-diff-rgb), 0.3);
 }
 
 @media (hover: hover) {
   .tab.diffTab:hover {
-    background: linear-gradient(to bottom, rgba(var(--tab-diff-rgb), 0.15), rgba(var(--tab-diff-rgb), 0.08));
+    background: linear-gradient(to bottom, rgba(var(--ind-tabtype-diff-rgb), 0.15), rgba(var(--ind-tabtype-diff-rgb), 0.08));
   }
 }
 
 .tab.diffTab.active {
-  background: linear-gradient(to bottom, rgba(var(--tab-diff-rgb), 0.25), rgba(var(--tab-diff-rgb), 0.15));
-  border-bottom-color: rgb(var(--tab-diff-rgb));
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-diff-rgb), 0.25), rgba(var(--ind-tabtype-diff-rgb), 0.15));
+  border-bottom-color: rgb(var(--ind-tabtype-diff-rgb));
 }
 
 .tab.diffTab.active::before {
@@ -367,7 +381,7 @@
 }
 
 .tab.diffTab .tabIcon {
-  color: rgb(var(--tab-diff-rgb));
+  color: rgb(var(--ind-tabtype-diff-rgb));
   opacity: 0.8;
   display: flex;
   align-items: center;
@@ -375,19 +389,22 @@
 
 /* Editor tabs */
 .tab.editTab {
-  background: linear-gradient(to bottom, rgba(var(--tab-edit-rgb), 0.1), rgba(var(--tab-edit-rgb), 0.05));
-  border-bottom: 2px solid rgba(var(--tab-edit-rgb), 0.3);
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-editor-rgb), 0.1), rgba(var(--ind-tabtype-editor-rgb), 0.05));
+  border-bottom: 2px solid rgba(var(--ind-tabtype-editor-rgb), 0.3);
 }
 
 @media (hover: hover) {
   .tab.editTab:hover {
-    background: linear-gradient(to bottom, rgba(var(--tab-edit-rgb), 0.15), rgba(var(--tab-edit-rgb), 0.08));
+    background: linear-gradient(to bottom, rgba(var(--ind-tabtype-editor-rgb), 0.15), rgba(var(--ind-tabtype-editor-rgb), 0.08));
   }
 }
 
 .tab.editTab.active {
-  background: linear-gradient(to bottom, rgba(var(--tab-edit-rgb), 0.25), rgba(var(--tab-edit-rgb), 0.15));
-  border-bottom-color: var(--accent);
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-editor-rgb), 0.25), rgba(var(--ind-tabtype-editor-rgb), 0.15));
+  /* Was hardcoded to var(--accent) — a DIFFERENT blue than this type's own
+   * tint var, so the active border and the tint disagreed (STYLE_GUIDE.md
+   * bug flagged in the customization plan). Now uses its own type color. */
+  border-bottom-color: rgb(var(--ind-tabtype-editor-rgb));
 }
 
 .tab.editTab.active::before {
@@ -395,7 +412,7 @@
 }
 
 .tab.editTab .tabIcon {
-  color: var(--accent);
+  color: rgb(var(--ind-tabtype-editor-rgb));
   opacity: 0.8;
   display: flex;
   align-items: center;
@@ -403,20 +420,21 @@
 
 /* Markdown tabs */
 .tab.mdTab {
-  background: linear-gradient(135deg, rgba(var(--tab-md-rgb), 0.1) 0%, rgba(var(--tab-md-rgb), 0.05) 100%);
-  border-bottom: 2px solid rgba(var(--tab-md-rgb), 0.3);
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-markdown-rgb), 0.1) 0%, rgba(var(--ind-tabtype-markdown-rgb), 0.05) 100%);
+  border-bottom: 2px solid rgba(var(--ind-tabtype-markdown-rgb), 0.3);
 }
 
 @media (hover: hover) {
   .tab.mdTab:hover {
-    background: linear-gradient(135deg, rgba(var(--tab-md-rgb), 0.15) 0%, rgba(var(--tab-md-rgb), 0.08) 100%);
-    border-bottom-color: rgba(var(--tab-md-rgb), 0.5);
+    background: linear-gradient(135deg, rgba(var(--ind-tabtype-markdown-rgb), 0.15) 0%, rgba(var(--ind-tabtype-markdown-rgb), 0.08) 100%);
+    border-bottom-color: rgba(var(--ind-tabtype-markdown-rgb), 0.5);
   }
 }
 
 .tab.mdTab.active {
-  background: linear-gradient(135deg, rgba(var(--tab-md-rgb), 0.2) 0%, rgba(var(--tab-md-rgb), 0.1) 100%);
-  border-bottom-color: var(--success);
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-markdown-rgb), 0.2) 0%, rgba(var(--ind-tabtype-markdown-rgb), 0.1) 100%);
+  /* Was hardcoded to var(--success) — see the .editTab note above. */
+  border-bottom-color: rgb(var(--ind-tabtype-markdown-rgb));
 }
 
 .tab.mdTab.active::before {
@@ -424,7 +442,7 @@
 }
 
 .tab.mdTab .tabIcon {
-  color: var(--success);
+  color: rgb(var(--ind-tabtype-markdown-rgb));
   opacity: 0.8;
   display: flex;
   align-items: center;
@@ -432,20 +450,21 @@
 
 /* Panel tabs (non-file md tabs: Claude Usage, plugins, etc.) */
 .tab.panelTab {
-  background: linear-gradient(135deg, rgba(var(--tab-panel-rgb), 0.1) 0%, rgba(var(--tab-panel-rgb), 0.05) 100%);
-  border-bottom: 2px solid rgba(var(--tab-panel-rgb), 0.3);
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-panel-rgb), 0.1) 0%, rgba(var(--ind-tabtype-panel-rgb), 0.05) 100%);
+  border-bottom: 2px solid rgba(var(--ind-tabtype-panel-rgb), 0.3);
 }
 
 @media (hover: hover) {
   .tab.panelTab:hover {
-    background: linear-gradient(135deg, rgba(var(--tab-panel-rgb), 0.15) 0%, rgba(var(--tab-panel-rgb), 0.08) 100%);
-    border-bottom-color: rgba(var(--tab-panel-rgb), 0.5);
+    background: linear-gradient(135deg, rgba(var(--ind-tabtype-panel-rgb), 0.15) 0%, rgba(var(--ind-tabtype-panel-rgb), 0.08) 100%);
+    border-bottom-color: rgba(var(--ind-tabtype-panel-rgb), 0.5);
   }
 }
 
 .tab.panelTab.active {
-  background: linear-gradient(135deg, rgba(var(--tab-panel-rgb), 0.2) 0%, rgba(var(--tab-panel-rgb), 0.1) 100%);
-  border-bottom-color: var(--merged);
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-panel-rgb), 0.2) 0%, rgba(var(--ind-tabtype-panel-rgb), 0.1) 100%);
+  /* Was hardcoded to var(--merged) — see the .editTab note above. */
+  border-bottom-color: rgb(var(--ind-tabtype-panel-rgb));
 }
 
 .tab.panelTab.active::before {
@@ -453,7 +472,38 @@
 }
 
 .tab.panelTab .tabIcon {
-  color: var(--merged);
+  color: rgb(var(--ind-tabtype-panel-rgb));
+  opacity: 0.8;
+  display: flex;
+  align-items: center;
+}
+
+/* HTML preview tabs — previously fell into .panelTab (the "--tab-html-rgb
+ * is defined and referenced nowhere" bug flagged in the customization
+ * plan); now a real, distinct type. */
+.tab.htmlTab {
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-html-rgb), 0.1) 0%, rgba(var(--ind-tabtype-html-rgb), 0.05) 100%);
+  border-bottom: 2px solid rgba(var(--ind-tabtype-html-rgb), 0.3);
+}
+
+@media (hover: hover) {
+  .tab.htmlTab:hover {
+    background: linear-gradient(135deg, rgba(var(--ind-tabtype-html-rgb), 0.15) 0%, rgba(var(--ind-tabtype-html-rgb), 0.08) 100%);
+    border-bottom-color: rgba(var(--ind-tabtype-html-rgb), 0.5);
+  }
+}
+
+.tab.htmlTab.active {
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-html-rgb), 0.2) 0%, rgba(var(--ind-tabtype-html-rgb), 0.1) 100%);
+  border-bottom-color: rgb(var(--ind-tabtype-html-rgb));
+}
+
+.tab.htmlTab.active::before {
+  display: none;
+}
+
+.tab.htmlTab .tabIcon {
+  color: rgb(var(--ind-tabtype-html-rgb));
   opacity: 0.8;
   display: flex;
   align-items: center;
@@ -461,11 +511,11 @@
 
 /* Remote/PTY tabs — subtle cyan tint */
 .tab.remoteTab {
-  border-bottom: 2px solid rgba(var(--tab-remote-rgb), 0.3);
+  border-bottom: 2px solid rgba(var(--ind-tabtype-remote-rgb), 0.3);
 }
 
 .tab.remoteTab.active {
-  border-bottom-color: rgb(var(--tab-remote-rgb));
+  border-bottom-color: rgb(var(--ind-tabtype-remote-rgb));
 }
 
 .tab.remoteTab.active::before {
@@ -473,8 +523,55 @@
 }
 
 .tab.remoteTab:not(.shellBusy):not(.shellIdle):not(.shellUnseen):not(.shellExited) .tabIcon {
-  color: rgb(var(--tab-remote-rgb));
+  color: rgb(var(--ind-tabtype-remote-rgb));
   opacity: 0.8;
+}
+
+/* Tab-type highlighting toggle (Settings → Appearance → UI Legend → Tab Types
+ * group toggle, settingsStore.state.tabTypeHighlighting). Neutralizes the
+ * per-type background tint and border-bottom color while leaving each
+ * type's .tabIcon color rule untouched — that's a separate selector, not
+ * part of this override, so the icon still shows its type color even with
+ * the tint off. Higher specificity than the base rules above (the extra
+ * :root[attr] ancestor), so no !important needed. The default active-tab
+ * accent bar (::before) is restored here too — without it, an active tab
+ * would show no visual "active" indicator at all with the tint off. */
+:global(:root[data-tab-type-tint="off"]) .tab.diffTab,
+:global(:root[data-tab-type-tint="off"]) .tab.editTab,
+:global(:root[data-tab-type-tint="off"]) .tab.mdTab,
+:global(:root[data-tab-type-tint="off"]) .tab.panelTab,
+:global(:root[data-tab-type-tint="off"]) .tab.htmlTab,
+:global(:root[data-tab-type-tint="off"]) .tab.remoteTab {
+  background: transparent;
+  border-bottom-color: transparent;
+}
+
+:global(:root[data-tab-type-tint="off"]) .tab.diffTab:hover,
+:global(:root[data-tab-type-tint="off"]) .tab.editTab:hover,
+:global(:root[data-tab-type-tint="off"]) .tab.mdTab:hover,
+:global(:root[data-tab-type-tint="off"]) .tab.panelTab:hover,
+:global(:root[data-tab-type-tint="off"]) .tab.htmlTab:hover,
+:global(:root[data-tab-type-tint="off"]) .tab.remoteTab:hover {
+  background: var(--bg-highlight);
+}
+
+:global(:root[data-tab-type-tint="off"]) .tab.diffTab.active,
+:global(:root[data-tab-type-tint="off"]) .tab.editTab.active,
+:global(:root[data-tab-type-tint="off"]) .tab.mdTab.active,
+:global(:root[data-tab-type-tint="off"]) .tab.panelTab.active,
+:global(:root[data-tab-type-tint="off"]) .tab.htmlTab.active,
+:global(:root[data-tab-type-tint="off"]) .tab.remoteTab.active {
+  background: var(--bg-primary);
+  border-bottom-color: transparent;
+}
+
+:global(:root[data-tab-type-tint="off"]) .tab.diffTab.active::before,
+:global(:root[data-tab-type-tint="off"]) .tab.editTab.active::before,
+:global(:root[data-tab-type-tint="off"]) .tab.mdTab.active::before,
+:global(:root[data-tab-type-tint="off"]) .tab.panelTab.active::before,
+:global(:root[data-tab-type-tint="off"]) .tab.htmlTab.active::before,
+:global(:root[data-tab-type-tint="off"]) .tab.remoteTab.active::before {
+  display: block;
 }
 
 /* Detached to floating window — dim name but keep status dot colors */

@@ -457,41 +457,47 @@
 }
 
 .branchIconMain {
-  color: var(--warning);
+  color: var(--ind-sidebar-main);
 }
 
 .branchIconWorktree {
-  color: var(--success);
+  color: var(--ind-sidebar-worktree);
 }
 
 .branchIconBranch {
-  color: var(--accent);
+  color: var(--ind-sidebar-branch);
 }
 
-/* Terminal state colors — applied directly via BranchIcon colorClass prop */
+/* Terminal state colors — applied directly via BranchIcon colorClass prop.
+ * Same semantic state as the terminalStatus indicator group (Terminal
+ * Status Dots), so these deliberately reuse its --ind-terminal-* color
+ * vars rather than duplicating them — one override then applies to both
+ * the tab dot and this sidebar icon. Animation stays as its own literal
+ * value here (not customization-wired) — the tab dot is the state's
+ * "canonical" animated preview. */
 .branchIconError {
-  color: var(--error);
+  color: var(--ind-terminal-error);
   animation: pulse-opacity 1s ease-in-out infinite;
   font-weight: bold;
 }
 
 .branchIconActivity {
-  color: var(--activity);
+  color: var(--ind-terminal-busy);
   animation: pulse-opacity 1.5s ease-in-out infinite;
 }
 
 .branchIconQuestion {
-  color: var(--attention);
+  color: var(--ind-terminal-question);
   animation: pulse-opacity 1s ease-in-out infinite;
   font-weight: bold;
 }
 
 .branchIconIdle {
-  color: var(--fg-muted);
+  color: var(--ind-sidebar-idle);
 }
 
 .branchIconUnseen {
-  color: var(--unseen);
+  color: var(--ind-terminal-unseen);
 }
 
 .branchContent {
@@ -529,17 +535,17 @@
 }
 
 .statAdd {
-  color: var(--success);
+  color: var(--ind-diffstat-additions);
 }
 
 .statDel {
-  color: var(--error);
+  color: var(--ind-diffstat-deletions);
 }
 
 /* Git merged badge — branch fully merged into main */
 .remoteBadge {
   font-size: 9px;
-  color: var(--fg-muted);
+  color: var(--ind-sidebar-remote);
   margin-left: 4px;
   flex-shrink: 0;
   white-space: nowrap;
@@ -646,35 +652,40 @@
   opacity: 0.4;
 }
 
+/* Same terminalStatus states as the tab-bar dot — see the .branchIconError
+ * block above for why these reuse --ind-terminal-* instead of their own
+ * vars. Animation is left as each site already had it (busy pulses here
+ * too; error/question intentionally do not — a pre-existing legend/reality
+ * mismatch, not something this refactor changes). */
 .branchTabDotBusy {
-  background: var(--activity);
+  background: var(--ind-terminal-busy);
   opacity: 1;
-  box-shadow: 0 0 4px var(--activity);
+  box-shadow: 0 0 4px var(--ind-terminal-busy);
   animation: pulse-opacity 1.5s ease-in-out infinite;
 }
 
 .branchTabDotIdle {
-  background: var(--success);
+  background: var(--ind-terminal-idle);
   opacity: 1;
-  box-shadow: 0 0 4px var(--success);
+  box-shadow: 0 0 4px var(--ind-terminal-idle);
 }
 
 .branchTabDotUnseen {
-  background: var(--unseen);
+  background: var(--ind-terminal-unseen);
   opacity: 1;
-  box-shadow: 0 0 4px var(--unseen);
+  box-shadow: 0 0 4px var(--ind-terminal-unseen);
 }
 
 .branchTabDotError {
-  background: var(--error);
+  background: var(--ind-terminal-error);
   opacity: 1;
-  box-shadow: 0 0 4px var(--error);
+  box-shadow: 0 0 4px var(--ind-terminal-error);
 }
 
 .branchTabDotQuestion {
-  background: var(--attention);
+  background: var(--ind-terminal-question);
   opacity: 1;
-  box-shadow: 0 0 4px var(--attention);
+  box-shadow: 0 0 4px var(--ind-terminal-question);
 }
 
 .branchTabName {
@@ -694,15 +705,17 @@
   border-radius: var(--radius-pill);
   white-space: nowrap;
   flex-shrink: 0;
-  background: var(--fg-muted);
+  background: var(--ind-sidebar-merged);
   color: var(--bg-primary);
   opacity: 0.7;
 }
 
 /* Shown while a worktree has a rebase/merge/cherry-pick/revert/bisect in progress —
  * deliberately NOT dimmed like .mergedBadge: this is an attention-needed state, not a
- * passive one, and must stay visible even when the branch has live terminals. */
-.rebasingBadge {
+ * passive one, and must stay visible even when the branch has live terminals. One class per
+ * GitOpKind so each is independently customizable via the indicator registry, matching the
+ * PR badge split (.prOpen/.prReady/etc) below. */
+.gitOpBadge {
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
@@ -713,8 +726,32 @@
   border-radius: var(--radius-pill);
   white-space: nowrap;
   flex-shrink: 0;
-  background: var(--attention);
   color: var(--bg-primary);
+}
+
+.gitOpRebase {
+  background: var(--ind-gitstate-rebasing);
+  animation: var(--ind-anim-gitstate-rebasing);
+}
+
+.gitOpMerge {
+  background: var(--ind-gitstate-merging);
+  animation: var(--ind-anim-gitstate-merging);
+}
+
+.gitOpCherryPick {
+  background: var(--ind-gitstate-cherry-picking);
+  animation: var(--ind-anim-gitstate-cherry-picking);
+}
+
+.gitOpRevert {
+  background: var(--ind-gitstate-reverting);
+  animation: var(--ind-anim-gitstate-reverting);
+}
+
+.gitOpBisect {
+  background: var(--ind-gitstate-bisecting);
+  animation: var(--ind-anim-gitstate-bisecting);
 }
 
 /* PR state badge */
@@ -732,19 +769,26 @@
   flex-shrink: 0;
 }
 
-.prReady,
+/* Ready and Open share a rule today, but the registry gives them independent
+ * ids (they can drift apart once overrides exist) — split so each has its
+ * own var, even though both default to the same color. */
+.prReady {
+  background: var(--ind-pr-ready);
+  color: var(--text-on-success);
+}
+
 .prOpen {
-  background: var(--success);
+  background: var(--ind-pr-open);
   color: var(--text-on-success);
 }
 
 .prMerged {
-  background: var(--merged);
+  background: var(--ind-pr-merged);
   color: var(--text-on-accent);
 }
 
 .prClosed {
-  background: var(--error);
+  background: var(--ind-pr-closed);
   color: var(--text-on-error);
 }
 
@@ -754,37 +798,47 @@
 
 .prDraft {
   background: transparent;
-  border: 1px dashed var(--fg-secondary);
-  color: var(--fg-secondary);
+  border: 1px dashed var(--ind-pr-draft);
+  color: var(--ind-pr-draft);
 }
 
 .prConflict {
-  background: var(--error);
+  background: var(--ind-pr-conflict);
   color: var(--text-on-error);
-  animation: pulse-opacity 1.5s ease-in-out infinite;
+  animation: var(--ind-anim-pr-conflict);
 }
 
 .prCiFailed {
-  background: var(--error);
+  background: var(--ind-pr-ci-failed);
   color: var(--text-on-error);
 }
 
 .prChangesRequested {
-  background: var(--changes);
+  background: var(--ind-pr-changes-requested);
   color: var(--text-on-accent);
 }
 
 .prReviewRequired {
   background: transparent;
-  box-shadow: inset 0 0 0 1px var(--changes);
-  color: var(--changes);
+  box-shadow: inset 0 0 0 1px var(--ind-pr-review-required);
+  color: var(--ind-pr-review-required);
+}
+
+/* Checking used to share this exact class with CI Running (ci-pending) —
+ * split into its own class below so each is independently customizable
+ * (the plan's explicit reason for splitting the registry ids). */
+.prChecking {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ind-pr-checking);
+  color: var(--ind-pr-checking);
+  animation: var(--ind-anim-pr-checking);
 }
 
 .prCiPending {
   background: transparent;
-  box-shadow: inset 0 0 0 1px var(--changes);
-  color: var(--changes);
-  animation: pulse-opacity 2s ease-in-out infinite;
+  box-shadow: inset 0 0 0 1px var(--ind-pr-ci-pending);
+  color: var(--ind-pr-ci-pending);
+  animation: var(--ind-anim-pr-ci-pending);
 }
 
 /* Branch actions */

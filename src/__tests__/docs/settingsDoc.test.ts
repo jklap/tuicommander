@@ -55,6 +55,12 @@ const TABS = [
 		path: "src/components/SettingsPanel/tabs/SelectionTab.tsx",
 		minControls: 5,
 	},
+	{
+		name: "Appearance",
+		heading: "## Appearance Tab",
+		path: "src/components/SettingsPanel/tabs/AppearanceTab.tsx",
+		minControls: 7,
+	},
 ];
 
 describe.each(TABS)("settings.md $name Tab reference", ({ heading, path, minControls }) => {

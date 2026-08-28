@@ -517,11 +517,21 @@ const EditorPane: Component<{ tabId: string; onClose: (id: string) => void }> = 
 
 // ---- Helpers ----
 
-/** CSS class suffix for tab-type coloring in mini tab bar */
-function tabColorClass(tab: PaneTab): string {
+/** CSS class suffix for tab-type coloring in mini tab bar.
+ *  Previously gave remote/PTY terminal tabs and html-preview tabs no tint
+ *  at all here (unlike the main TabBar, which does distinguish them) —
+ *  brought to parity as part of wiring these onto the indicator registry.
+ *
+ *  The `markdown` branch below duplicates `TabViews.tsx`'s `mdTabTypeClass()`
+ *  for this component's own mini tab bar — the exact split that let
+ *  `html-preview` go untinted in ONE of the two places once already. A new
+ *  md-tab kind must be added to BOTH. */
+export function tabColorClass(tab: PaneTab): string {
 	switch (tab.type) {
-		case "terminal":
-			return "";
+		case "terminal": {
+			const term = terminalsStore.get(tab.id);
+			return term?.isRemote ? "pane-tab-remote" : "";
+		}
 		case "diff":
 			return "pane-tab-diff";
 		case "editor":
@@ -531,6 +541,7 @@ function tabColorClass(tab: PaneTab): string {
 			if (!m) return "pane-tab-panel";
 			if (m.type === "file") return "pane-tab-md";
 			if (m.type === "pr-diff") return "pane-tab-diff";
+			if (m.type === "html-preview") return "pane-tab-html";
 			return "pane-tab-panel";
 		}
 	}

@@ -1462,18 +1462,6 @@ pub(crate) fn sweep_stale_tuic_locks(repo_path: &str) -> usize {
     swept
 }
 
-/// Marker files git writes into a worktree's admin dir while a multi-step operation is in
-/// flight. Rebase and bisect detach HEAD, so `git worktree list --porcelain` emits no branch
-/// line and the worktree reads as dead to anything keyed on that line (GH #112).
-const IN_PROGRESS_MARKERS: [&str; 6] = [
-    "rebase-merge",
-    "rebase-apply",
-    "MERGE_HEAD",
-    "CHERRY_PICK_HEAD",
-    "REVERT_HEAD",
-    "BISECT_LOG",
-];
-
 /// Admin dir of a linked worktree: its `.git` is a *file* holding
 /// `gitdir: <repo>/.git/worktrees/<name>`. Returns `None` for the main worktree (where `.git`
 /// is a directory) and for paths that no longer exist.
@@ -1483,14 +1471,60 @@ fn worktree_admin_dir(worktree_path: &str) -> Option<PathBuf> {
     Some(PathBuf::from(gitdir))
 }
 
+/// Admin dir of *any* worktree, main or linked. The main worktree's `.git` is itself the
+/// admin dir (a directory); a linked worktree's is resolved via `worktree_admin_dir`. Without
+/// this, in-progress-operation detection only ever worked for linked worktrees — a rebase
+/// started in the main checkout was invisible (GH #112's other half).
+fn resolve_admin_dir(worktree_path: &str) -> Option<PathBuf> {
+    if let Some(admin) = worktree_admin_dir(worktree_path) {
+        return Some(admin);
+    }
+    let dot_git = Path::new(worktree_path).join(".git");
+    dot_git.is_dir().then_some(dot_git)
+}
+
+/// Which multi-step git operation a worktree is in the middle of. Rebase and bisect detach
+/// HEAD; merge/cherry-pick/revert don't, but all five leave the working tree mid-operation in
+/// a way that blocks a clean removal or an automatic archive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum GitOpKind {
+    Rebase,
+    Merge,
+    CherryPick,
+    Revert,
+    Bisect,
+}
+
+/// Which operation (if any) the worktree is in the middle of, detected from the marker files
+/// git writes into its admin dir while the operation is in flight. Rebase and bisect detach
+/// HEAD, so `git worktree list --porcelain` emits no branch line and the worktree reads as
+/// dead to anything keyed on that line (GH #112). Git only ever leaves one marker at a time,
+/// so the check order below only matters in the (shouldn't-happen) case of leftover markers
+/// from an aborted operation.
+fn operation_in_progress(worktree_path: &str) -> Option<GitOpKind> {
+    let admin = resolve_admin_dir(worktree_path)?;
+    if admin.join("rebase-merge").exists() || admin.join("rebase-apply").exists() {
+        return Some(GitOpKind::Rebase);
+    }
+    if admin.join("MERGE_HEAD").exists() {
+        return Some(GitOpKind::Merge);
+    }
+    if admin.join("CHERRY_PICK_HEAD").exists() {
+        return Some(GitOpKind::CherryPick);
+    }
+    if admin.join("REVERT_HEAD").exists() {
+        return Some(GitOpKind::Revert);
+    }
+    if admin.join("BISECT_LOG").exists() {
+        return Some(GitOpKind::Bisect);
+    }
+    None
+}
+
 /// True when the worktree is in the middle of a rebase / merge / cherry-pick / revert / bisect.
 fn has_operation_in_progress(worktree_path: &str) -> bool {
-    let Some(admin) = worktree_admin_dir(worktree_path) else {
-        return false;
-    };
-    IN_PROGRESS_MARKERS
-        .iter()
-        .any(|marker| admin.join(marker).exists())
+    operation_in_progress(worktree_path).is_some()
 }
 
 /// Branch a detached worktree was on before the in-flight operation started. Git records it in
@@ -1559,12 +1593,20 @@ fn parse_orphan_worktrees(porcelain: &str) -> Vec<String> {
         .collect()
 }
 
-/// List worktree directory paths that currently have a git operation in progress
-/// (rebase/merge/cherry-pick/revert/bisect). `map_worktree_branch_paths` already recovers a
-/// mid-rebase worktree's branch, so its sidebar row survives on its own — this is purely a
-/// signal for the frontend to explain *why* the row looks the way it does (e.g. a "Rebasing"
-/// badge), not something the removal logic needs to consult.
-pub(crate) fn list_in_progress_worktrees(repo_path: &str) -> Result<Vec<String>, String> {
+/// A worktree directory with a git operation currently in progress, and which one.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct InProgressOp {
+    pub path: String,
+    pub kind: GitOpKind,
+}
+
+/// List worktrees that currently have a git operation in progress
+/// (rebase/merge/cherry-pick/revert/bisect), and which one each is in. `map_worktree_branch_paths`
+/// already recovers a mid-rebase worktree's branch, so its sidebar row survives on its own —
+/// this is purely a signal for the frontend to explain *why* the row looks the way it does (e.g.
+/// a "Rebasing" badge), not something the removal logic needs to consult. Includes the main
+/// worktree — `operation_in_progress` resolves its admin dir just like a linked one's.
+pub(crate) fn list_in_progress_worktrees(repo_path: &str) -> Result<Vec<InProgressOp>, String> {
     let out = git_cmd(Path::new(repo_path))
         .args(["worktree", "list", "--porcelain"])
         .run()
@@ -1572,8 +1614,10 @@ pub(crate) fn list_in_progress_worktrees(repo_path: &str) -> Result<Vec<String>,
 
     Ok(parse_worktree_entries(&out.stdout)
         .into_iter()
-        .filter(|e| has_operation_in_progress(&e.path))
-        .map(|e| e.path)
+        .filter_map(|e| {
+            let kind = operation_in_progress(&e.path)?;
+            Some(InProgressOp { path: e.path, kind })
+        })
         .collect())
 }
 
@@ -4290,13 +4334,133 @@ mod tests {
             .to_string_lossy()
             .to_string();
 
+        let busy_op = in_progress
+            .iter()
+            .find(|op| op.path == busy_real)
+            .unwrap_or_else(|| {
+                panic!("busy worktree should be reported in progress: {in_progress:?}")
+            });
+        assert_eq!(busy_op.kind, GitOpKind::Rebase);
         assert!(
-            in_progress.contains(&busy_real),
-            "busy worktree should be reported in progress: {in_progress:?}"
-        );
-        assert!(
-            !in_progress.contains(&idle_real),
+            !in_progress.iter().any(|op| op.path == idle_real),
             "idle worktree must not be reported in progress: {in_progress:?}"
+        );
+    }
+
+    #[test]
+    fn list_in_progress_worktrees_reports_the_correct_kind_per_marker() {
+        // Each marker file maps to a distinct GitOpKind — a regression guard against the
+        // priority-ordered `if` chain in `operation_in_progress` silently misclassifying one
+        // (e.g. a stray leftover MERGE_HEAD shadowing an actual cherry-pick).
+        let cases: &[(&str, GitOpKind)] = &[
+            ("rebase-merge", GitOpKind::Rebase),
+            ("rebase-apply", GitOpKind::Rebase),
+            ("MERGE_HEAD", GitOpKind::Merge),
+            ("CHERRY_PICK_HEAD", GitOpKind::CherryPick),
+            ("REVERT_HEAD", GitOpKind::Revert),
+            ("BISECT_LOG", GitOpKind::Bisect),
+        ];
+
+        for (marker, expected_kind) in cases {
+            let repo = setup_test_repo();
+            let repo_path = repo.path().to_string_lossy().to_string();
+            let wt = worktree_with(repo.path(), "busy-branch", true);
+            let admin = worktree_admin_dir(&wt.to_string_lossy()).expect("resolve admin dir");
+            if *marker == "rebase-merge" || *marker == "rebase-apply" {
+                fs::create_dir_all(admin.join(marker)).expect("create marker dir");
+            } else {
+                fs::write(admin.join(marker), "").expect("create marker file");
+            }
+
+            let in_progress =
+                list_in_progress_worktrees(&repo_path).expect("list_in_progress_worktrees");
+            let wt_real = wt
+                .canonicalize()
+                .unwrap_or(wt)
+                .to_string_lossy()
+                .to_string();
+            let op = in_progress
+                .iter()
+                .find(|op| op.path == wt_real)
+                .unwrap_or_else(|| {
+                    panic!("marker {marker} should be reported in progress: {in_progress:?}")
+                });
+            assert_eq!(
+                op.kind, *expected_kind,
+                "marker {marker} mapped to the wrong GitOpKind"
+            );
+        }
+    }
+
+    #[test]
+    fn list_in_progress_worktrees_detects_the_main_worktree_too() {
+        // Regression guard: `worktree_admin_dir` alone returns None for the main worktree
+        // (its `.git` is a directory, not a file), which meant the main checkout could never
+        // report an in-progress operation. `resolve_admin_dir` fixes this by also handling the
+        // `.git`-as-directory case.
+        let repo = setup_test_repo();
+        let repo_path_str = repo.path().to_string_lossy().to_string();
+        let main_admin = repo.path().join(".git");
+        assert!(
+            main_admin.is_dir(),
+            "main worktree's .git must be a directory"
+        );
+        fs::create_dir_all(main_admin.join("rebase-merge")).expect("create rebase-merge marker");
+
+        let in_progress =
+            list_in_progress_worktrees(&repo_path_str).expect("list_in_progress_worktrees");
+
+        let main_real = repo
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| repo.path().to_path_buf())
+            .to_string_lossy()
+            .to_string();
+        let op = in_progress
+            .iter()
+            .find(|op| op.path == main_real)
+            .unwrap_or_else(|| {
+                panic!("main worktree should be reported in progress: {in_progress:?}")
+            });
+        assert_eq!(op.kind, GitOpKind::Rebase);
+    }
+
+    #[test]
+    fn operation_in_progress_prefers_rebase_when_multiple_markers_coexist() {
+        // Git only ever leaves one marker in normal operation, but a botched abort (e.g. a
+        // crash mid `git rebase --abort`) can leave a stale marker behind alongside a fresh
+        // one. `operation_in_progress`'s check order must be deterministic rather than
+        // accidentally depending on filesystem iteration order — rebase wins because rebase
+        // and bisect are the two operations that detach HEAD, which is the higher-severity
+        // case for the worktree-removal-safety consumers of this function.
+        let repo = setup_test_repo();
+        let wt = worktree_with(repo.path(), "busy-branch", true);
+        let admin = worktree_admin_dir(&wt.to_string_lossy()).expect("resolve admin dir");
+        fs::create_dir_all(admin.join("rebase-merge")).expect("create rebase-merge marker");
+        fs::write(admin.join("MERGE_HEAD"), "").expect("create stale MERGE_HEAD marker");
+        fs::write(admin.join("CHERRY_PICK_HEAD"), "")
+            .expect("create stale CHERRY_PICK_HEAD marker");
+
+        assert_eq!(
+            operation_in_progress(&wt.to_string_lossy()),
+            Some(GitOpKind::Rebase),
+            "rebase must win when multiple markers coexist"
+        );
+    }
+
+    #[test]
+    fn operation_in_progress_is_none_for_a_clean_worktree() {
+        let repo = setup_test_repo();
+        let wt = worktree_with(repo.path(), "clean-branch", true);
+        assert_eq!(operation_in_progress(&wt.to_string_lossy()), None);
+    }
+
+    #[test]
+    fn operation_in_progress_is_none_for_a_nonexistent_path() {
+        assert_eq!(
+            operation_in_progress("/no/such/path/anywhere"),
+            None,
+            "a path that doesn't exist must not be misreported as in-progress"
         );
     }
 

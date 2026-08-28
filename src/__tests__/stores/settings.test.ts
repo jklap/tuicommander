@@ -162,6 +162,10 @@ describe("settingsStore", () => {
 				expect(store.state.restoreShellTerminals).toBe(true);
 				expect(store.state.restoreScrollback).toBe(false);
 				expect(store.state.restoreScrollbackLines).toBe(1000);
+				expect(store.state.tabOrderingMode).toBe("grouped-by-type");
+				expect(store.state.tabCyclingAllTypes).toBe(false);
+				expect(store.state.tabTreeEnabled).toBe(false);
+				expect(store.state.maxTabNameLength).toBe(25);
 			});
 		});
 	});
@@ -703,6 +707,401 @@ describe("settingsStore", () => {
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
 					config: expect.objectContaining({ split_tab_mode: "unified" }),
 				});
+			});
+		});
+	});
+
+	describe("setTabOrderingMode()", () => {
+		it("sets tab ordering mode and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setTabOrderingMode("terminals-first");
+				expect(store.state.tabOrderingMode).toBe("terminals-first");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ tab_ordering_mode: "terminals-first" }),
+				});
+			});
+		});
+	});
+
+	describe("setTabTreeEnabled()", () => {
+		it("sets tab tree enabled and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setTabTreeEnabled(true);
+				expect(store.state.tabTreeEnabled).toBe(true);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ tab_tree_enabled: true }),
+				});
+			});
+		});
+	});
+
+	describe("setTabCyclingAllTypes()", () => {
+		it("sets tab cycling all types and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setTabCyclingAllTypes(true);
+				expect(store.state.tabCyclingAllTypes).toBe(true);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ tab_cycling_all_types: true }),
+				});
+			});
+		});
+	});
+
+	describe("setMaxTabNameLength()", () => {
+		it("sets max tab name length and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setMaxTabNameLength(45);
+				expect(store.state.maxTabNameLength).toBe(45);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ max_tab_name_length: 45 }),
+				});
+			});
+		});
+
+		it("clamps to the 10-60 range", () => {
+			testInScope(() => {
+				store.setMaxTabNameLength(5);
+				expect(store.state.maxTabNameLength).toBe(10);
+				store.setMaxTabNameLength(100);
+				expect(store.state.maxTabNameLength).toBe(60);
+			});
+		});
+	});
+
+	describe("setIndicatorColor()", () => {
+		it("adds a new override and persists it via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", color: "#ff00ff" }]);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({
+						indicator_overrides: [{ id: "terminal.busy", color: "#ff00ff" }],
+					}),
+				});
+			});
+		});
+
+		it("replaces an existing override's color in place rather than duplicating it", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.setIndicatorColor("terminal.busy", "#00ff00");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", color: "#00ff00" }]);
+			});
+		});
+
+		it("rejects an unsafe color and leaves state untouched", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "javascript:alert(1)");
+				expect(store.state.indicatorOverrides).toEqual([]);
+			});
+		});
+
+		it("accepts var(--...) references so a theme keeps flowing through", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "var(--accent)");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", color: "var(--accent)" }]);
+			});
+		});
+
+		it("tracks independent overrides for different indicator ids", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.setIndicatorColor("pr.conflict", "#00ff00");
+				expect(store.state.indicatorOverrides).toEqual([
+					{ id: "terminal.busy", color: "#ff00ff" },
+					{ id: "pr.conflict", color: "#00ff00" },
+				]);
+			});
+		});
+	});
+
+	describe("setIndicatorIcon()", () => {
+		it("adds a new override with the icon field and persists it", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setIndicatorIcon("terminal.busy", "ring");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", icon: "ring" }]);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ indicator_overrides: [{ id: "terminal.busy", icon: "ring" }] }),
+				});
+			});
+		});
+
+		it("adds an icon override alongside an existing color override on the same id", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.setIndicatorIcon("terminal.busy", "square");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", color: "#ff00ff", icon: "square" }]);
+			});
+		});
+
+		it("replaces an existing icon override in place rather than duplicating it", () => {
+			testInScope(() => {
+				store.setIndicatorIcon("terminal.busy", "ring");
+				store.setIndicatorIcon("terminal.busy", "square");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", icon: "square" }]);
+			});
+		});
+
+		it("rejects an unknown icon id and leaves state untouched", () => {
+			testInScope(() => {
+				store.setIndicatorIcon("terminal.busy", "not-a-real-icon");
+				expect(store.state.indicatorOverrides).toEqual([]);
+			});
+		});
+	});
+
+	describe("setIndicatorAnimation()", () => {
+		it("adds a new override with the animation field and persists it", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setIndicatorAnimation("terminal.busy", "blink");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", animation: "blink" }]);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ indicator_overrides: [{ id: "terminal.busy", animation: "blink" }] }),
+				});
+			});
+		});
+
+		it("replaces an existing animation override in place rather than duplicating it", () => {
+			testInScope(() => {
+				store.setIndicatorAnimation("terminal.busy", "blink");
+				store.setIndicatorAnimation("terminal.busy", "breathe");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", animation: "breathe" }]);
+			});
+		});
+
+		it("rejects an unknown animation id and leaves state untouched", () => {
+			testInScope(() => {
+				store.setIndicatorAnimation("terminal.busy", "not-a-real-animation");
+				expect(store.state.indicatorOverrides).toEqual([]);
+			});
+		});
+	});
+
+	describe("clearIndicatorOverride()", () => {
+		it("removes exactly the named override, leaving others untouched", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.setIndicatorColor("pr.conflict", "#00ff00");
+				store.clearIndicatorOverride("terminal.busy");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "pr.conflict", color: "#00ff00" }]);
+			});
+		});
+
+		it("persists the removal via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.clearIndicatorOverride("terminal.busy");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenLastCalledWith("save_config", {
+					config: expect.objectContaining({ indicator_overrides: [] }),
+				});
+			});
+		});
+
+		it("is a no-op when the id has no override", () => {
+			testInScope(() => {
+				store.clearIndicatorOverride("terminal.busy");
+				expect(store.state.indicatorOverrides).toEqual([]);
+			});
+		});
+	});
+
+	describe("resetAllIndicators()", () => {
+		it("clears every override at once", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.setIndicatorColor("pr.conflict", "#00ff00");
+				store.resetAllIndicators();
+				expect(store.state.indicatorOverrides).toEqual([]);
+			});
+		});
+
+		it("persists the reset via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.resetAllIndicators();
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenLastCalledWith("save_config", {
+					config: expect.objectContaining({ indicator_overrides: [] }),
+				});
+			});
+		});
+	});
+
+	describe("visibility toggles default to true", () => {
+		it("has correct defaults", () => {
+			testInScope(() => {
+				expect(store.state.showDiffStats).toBe(true);
+				expect(store.state.showPrBadges).toBe(true);
+				expect(store.state.showGitState).toBe(true);
+				expect(store.state.tabTypeHighlighting).toBe(true);
+			});
+		});
+	});
+
+	describe("setShowDiffStats()", () => {
+		it("updates state and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setShowDiffStats(false);
+				expect(store.state.showDiffStats).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ show_diff_stats: false }),
+				});
+			});
+		});
+	});
+
+	describe("setShowPrBadges()", () => {
+		it("updates state and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setShowPrBadges(false);
+				expect(store.state.showPrBadges).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ show_pr_badges: false }),
+				});
+			});
+		});
+	});
+
+	describe("setShowGitState()", () => {
+		it("updates state and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setShowGitState(false);
+				expect(store.state.showGitState).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ show_git_state: false }),
+				});
+			});
+		});
+	});
+
+	describe("setTabTypeHighlighting()", () => {
+		it("updates state and persists via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setTabTypeHighlighting(false);
+				expect(store.state.tabTypeHighlighting).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ tab_type_highlighting: false }),
+				});
+			});
+		});
+	});
+
+	describe("hydrate() sanitizes indicator overrides from disk", () => {
+		it("drops an override for an id the registry doesn't know about", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					ide: "vscode",
+					default_font_size: 13,
+					indicator_overrides: [{ id: "not.a.real.indicator", color: "#ff00ff" }],
+				});
+				await store.hydrate();
+				expect(store.state.indicatorOverrides).toEqual([]);
+			});
+		});
+
+		it("drops an unsafe color from a hand-edited config.json", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					ide: "vscode",
+					default_font_size: 13,
+					indicator_overrides: [{ id: "terminal.busy", color: "javascript:alert(1)" }],
+				});
+				await store.hydrate();
+				expect(store.state.indicatorOverrides).toEqual([]);
+			});
+		});
+
+		it("drops an unknown icon id, keeping the rest of the same override", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					ide: "vscode",
+					default_font_size: 13,
+					indicator_overrides: [{ id: "terminal.busy", color: "#ff00ff", icon: "not-a-real-icon" }],
+				});
+				await store.hydrate();
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", color: "#ff00ff" }]);
+			});
+		});
+
+		it("drops an unknown animation id, keeping the rest of the same override", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					ide: "vscode",
+					default_font_size: 13,
+					indicator_overrides: [{ id: "terminal.busy", color: "#ff00ff", animation: "not-a-real-animation" }],
+				});
+				await store.hydrate();
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", color: "#ff00ff" }]);
+			});
+		});
+
+		it("keeps a valid override from disk", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					ide: "vscode",
+					default_font_size: 13,
+					indicator_overrides: [{ id: "terminal.busy", color: "#ff00ff" }],
+				});
+				await store.hydrate();
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", color: "#ff00ff" }]);
 			});
 		});
 	});

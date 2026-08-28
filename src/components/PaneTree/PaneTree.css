@@ -225,51 +225,110 @@
 /* ---- Tab type coloring (mirrors main TabBar) ---- */
 
 .pane-tab-diff {
-  background: linear-gradient(to bottom, rgba(var(--tab-diff-rgb), 0.1), rgba(var(--tab-diff-rgb), 0.05));
-  border-bottom: 2px solid rgba(var(--tab-diff-rgb), 0.3);
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-diff-rgb), 0.1), rgba(var(--ind-tabtype-diff-rgb), 0.05));
+  border-bottom: 2px solid rgba(var(--ind-tabtype-diff-rgb), 0.3);
 }
 .pane-tab-diff:hover {
-  background: linear-gradient(to bottom, rgba(var(--tab-diff-rgb), 0.15), rgba(var(--tab-diff-rgb), 0.08));
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-diff-rgb), 0.15), rgba(var(--ind-tabtype-diff-rgb), 0.08));
 }
 .pane-tab-diff.pane-tab-active {
-  background: linear-gradient(to bottom, rgba(var(--tab-diff-rgb), 0.25), rgba(var(--tab-diff-rgb), 0.15));
-  border-bottom-color: rgb(var(--tab-diff-rgb));
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-diff-rgb), 0.25), rgba(var(--ind-tabtype-diff-rgb), 0.15));
+  border-bottom-color: rgb(var(--ind-tabtype-diff-rgb));
 }
 
 .pane-tab-edit {
-  background: linear-gradient(to bottom, rgba(var(--tab-edit-rgb), 0.1), rgba(var(--tab-edit-rgb), 0.05));
-  border-bottom: 2px solid rgba(var(--tab-edit-rgb), 0.3);
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-editor-rgb), 0.1), rgba(var(--ind-tabtype-editor-rgb), 0.05));
+  border-bottom: 2px solid rgba(var(--ind-tabtype-editor-rgb), 0.3);
 }
 .pane-tab-edit:hover {
-  background: linear-gradient(to bottom, rgba(var(--tab-edit-rgb), 0.15), rgba(var(--tab-edit-rgb), 0.08));
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-editor-rgb), 0.15), rgba(var(--ind-tabtype-editor-rgb), 0.08));
 }
 .pane-tab-edit.pane-tab-active {
-  background: linear-gradient(to bottom, rgba(var(--tab-edit-rgb), 0.25), rgba(var(--tab-edit-rgb), 0.15));
-  border-bottom-color: var(--accent);
+  background: linear-gradient(to bottom, rgba(var(--ind-tabtype-editor-rgb), 0.25), rgba(var(--ind-tabtype-editor-rgb), 0.15));
+  /* Was hardcoded to var(--accent) — see TabBar.module.css's .editTab.active note. */
+  border-bottom-color: rgb(var(--ind-tabtype-editor-rgb));
 }
 
 .pane-tab-md {
-  background: linear-gradient(135deg, rgba(var(--tab-md-rgb), 0.1), rgba(var(--tab-md-rgb), 0.05));
-  border-bottom: 2px solid rgba(var(--tab-md-rgb), 0.3);
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-markdown-rgb), 0.1), rgba(var(--ind-tabtype-markdown-rgb), 0.05));
+  border-bottom: 2px solid rgba(var(--ind-tabtype-markdown-rgb), 0.3);
 }
 .pane-tab-md:hover {
-  background: linear-gradient(135deg, rgba(var(--tab-md-rgb), 0.15), rgba(var(--tab-md-rgb), 0.08));
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-markdown-rgb), 0.15), rgba(var(--ind-tabtype-markdown-rgb), 0.08));
 }
 .pane-tab-md.pane-tab-active {
-  background: linear-gradient(135deg, rgba(var(--tab-md-rgb), 0.2), rgba(var(--tab-md-rgb), 0.1));
-  border-bottom-color: var(--success);
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-markdown-rgb), 0.2), rgba(var(--ind-tabtype-markdown-rgb), 0.1));
+  border-bottom-color: rgb(var(--ind-tabtype-markdown-rgb));
 }
 
 .pane-tab-panel {
-  background: linear-gradient(135deg, rgba(var(--tab-panel-rgb), 0.1), rgba(var(--tab-panel-rgb), 0.05));
-  border-bottom: 2px solid rgba(var(--tab-panel-rgb), 0.3);
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-panel-rgb), 0.1), rgba(var(--ind-tabtype-panel-rgb), 0.05));
+  border-bottom: 2px solid rgba(var(--ind-tabtype-panel-rgb), 0.3);
 }
 .pane-tab-panel:hover {
-  background: linear-gradient(135deg, rgba(var(--tab-panel-rgb), 0.15), rgba(var(--tab-panel-rgb), 0.08));
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-panel-rgb), 0.15), rgba(var(--ind-tabtype-panel-rgb), 0.08));
 }
 .pane-tab-panel.pane-tab-active {
-  background: linear-gradient(135deg, rgba(var(--tab-panel-rgb), 0.2), rgba(var(--tab-panel-rgb), 0.1));
-  border-bottom-color: var(--merged);
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-panel-rgb), 0.2), rgba(var(--ind-tabtype-panel-rgb), 0.1));
+  border-bottom-color: rgb(var(--ind-tabtype-panel-rgb));
+}
+
+/* HTML preview — previously fell into .pane-tab-panel (same gap as the main
+ * TabBar's .panelTab, see TabBar.module.css). */
+.pane-tab-html {
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-html-rgb), 0.1), rgba(var(--ind-tabtype-html-rgb), 0.05));
+  border-bottom: 2px solid rgba(var(--ind-tabtype-html-rgb), 0.3);
+}
+.pane-tab-html:hover {
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-html-rgb), 0.15), rgba(var(--ind-tabtype-html-rgb), 0.08));
+}
+.pane-tab-html.pane-tab-active {
+  background: linear-gradient(135deg, rgba(var(--ind-tabtype-html-rgb), 0.2), rgba(var(--ind-tabtype-html-rgb), 0.1));
+  border-bottom-color: rgb(var(--ind-tabtype-html-rgb));
+}
+
+/* Remote/PTY terminal tabs — the main TabBar has this tint, PaneTree's mini
+ * tab bar never did (tabColorClass() returned "" unconditionally). */
+.pane-tab-remote {
+  border-bottom: 2px solid rgba(var(--ind-tabtype-remote-rgb), 0.3);
+}
+.pane-tab-remote.pane-tab-active {
+  border-bottom-color: rgb(var(--ind-tabtype-remote-rgb));
+}
+
+/* Tab-type highlighting toggle — mirrors TabBar.module.css's block. Plain
+ * global CSS here (PaneTree.css isn't a CSS Module — see PaneTree.tsx's
+ * plain side-effect import), so no :global() wrapper is needed. */
+:root[data-tab-type-tint="off"] .pane-tab-diff,
+:root[data-tab-type-tint="off"] .pane-tab-edit,
+:root[data-tab-type-tint="off"] .pane-tab-md,
+:root[data-tab-type-tint="off"] .pane-tab-panel,
+:root[data-tab-type-tint="off"] .pane-tab-html,
+:root[data-tab-type-tint="off"] .pane-tab-remote {
+  background: transparent;
+  border-bottom-color: transparent;
+}
+
+:root[data-tab-type-tint="off"] .pane-tab-diff:hover,
+:root[data-tab-type-tint="off"] .pane-tab-edit:hover,
+:root[data-tab-type-tint="off"] .pane-tab-md:hover,
+:root[data-tab-type-tint="off"] .pane-tab-panel:hover,
+:root[data-tab-type-tint="off"] .pane-tab-html:hover,
+:root[data-tab-type-tint="off"] .pane-tab-remote:hover {
+  background: var(--bg-highlight);
+}
+
+/* .pane-tab-active's own base rule (above) already draws a
+ * `2px solid var(--accent)` border-bottom — restore that default here
+ * rather than transparent, or the active tab would show no bottom border
+ * at all once its higher-specificity type-tint color is neutralized. */
+:root[data-tab-type-tint="off"] .pane-tab-diff.pane-tab-active,
+:root[data-tab-type-tint="off"] .pane-tab-edit.pane-tab-active,
+:root[data-tab-type-tint="off"] .pane-tab-md.pane-tab-active,
+:root[data-tab-type-tint="off"] .pane-tab-panel.pane-tab-active,
+:root[data-tab-type-tint="off"] .pane-tab-html.pane-tab-active,
+:root[data-tab-type-tint="off"] .pane-tab-remote.pane-tab-active {
+  border-bottom-color: var(--accent);
 }
 
 /* ---- Tab Content (mount all, show active) ---- */

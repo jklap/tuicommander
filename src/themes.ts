@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { applyIndicatorOverrides } from "./indicators/apply";
 import { invoke, listen } from "./invoke";
 import { appLogger } from "./stores/appLogger";
 import { FONT_FAMILIES, type FontType, settingsStore } from "./stores/settings";
@@ -333,5 +334,11 @@ export function applyAppTheme(key: string): void {
 			appLogger.warn("app", "Failed to sync ANSI colors to backend", { error: e });
 		});
 	}
+	// Re-apply indicator overrides on every theme switch: applyAppTheme just
+	// rewrote this same inline style block, which would otherwise silently
+	// drop any --ind-* override back to the new theme's (unoverridden)
+	// default. Runs at every applyAppTheme call site (main window, detached
+	// panel windows, FloatingTerminal) for free.
+	applyIndicatorOverrides(settingsStore.state.indicatorOverrides);
 	bumpThemeGeneration((g) => g + 1);
 }

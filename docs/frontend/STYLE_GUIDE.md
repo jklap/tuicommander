@@ -187,29 +187,65 @@ Three levels only. Never invent new shadow values.
 Defined in each CSS Module file that uses it (not in `global.css` — CSS Modules scope animation names).
 Used for: active branch icon, CI pending badge, rate limit indicator.
 
-**`pulse-question`**: Box-shadow 0 → `0 0 12px 4px rgba(122,162,247,0.4)` → 0.
-Variants exist with red (error) and orange (confirm) colors.
-Used for: terminal tab glow when agent awaits input.
+**`tuic-*` indicator animations**: `tuic-pulse`/`tuic-pulse-slow`/`tuic-blink`/`tuic-breathe`/
+`tuic-glow`/`tuic-spin`, defined once in `global.css` (unlike `pulse-opacity` above, these are
+deliberately global rather than per-module, since a customizable indicator's animation choice
+must resolve to the same keyframe regardless of which CSS Module consumes its `--ind-anim-*`
+var). See "Indicator Customization" below.
 
 **`pendulum`**: Translates text from 0 to `-overflow-px` and back. Duration computed dynamically from overflow width (~50px/s, minimum 4s cycle). Uses CSS custom properties `--overflow-px` and `--ticker-duration`.
 Used for: status bar notification text that overflows its container.
 
-**Tab status dot color scheme** (single `●` indicator left of tab name):
-- Grey (opacity 0.3): idle — no session or command never ran
-- Blue (`--activity`, pulse infinite): busy — producing output now
-- Green (`--success`): done — command completed
-- Purple (`--unseen`, static): completed while user wasn't viewing (clears on view)
-- Orange (`--attention`, pulse infinite): agent needs user input (question)
-- Red (`--error`, pulse infinite): API error or agent stuck
-
-**Tab type color scheme** (gradient background + colored border-bottom):
-- Red (`#ef4444`): diff tabs
-- Blue (`--accent` / `#7aa2f7`): editor tabs
-- Teal (`#2dd4bf`): markdown tabs
-- Purple (`#a78bfa`): panel tabs
-- Amber (`#fbbf24`): remote PTY sessions (created via HTTP/MCP)
+**Tab status dot color scheme** (single `●` indicator left of tab name) and **tab type color
+scheme** (gradient background + colored border-bottom) are both driven by the indicator
+registry — see "Indicator Customization" below for the authoritative, always-current list of
+colors/icons/animations. Don't hardcode a color table here; it will drift the moment someone
+changes a default or adds an override, the way this section's old copy did (verified stale
+during the 2026-08 indicator customization work — it listed teal for markdown tabs and amber
+for remote/PTY sessions, both wrong, and a `pulse-question` keyframe that doesn't exist).
 
 Always use `ease` timing. Respect `prefers-reduced-motion`. Never `transition: all`.
+
+## Indicator Customization
+
+Every customizable color/icon/animation in the app — terminal status dots, tab types, sidebar
+symbols, PR badges, git repo status, diff stats — is defined **once**, in
+`src/indicators/registry.ts`, and nowhere else. Before this existed, colors were hand-copied
+into `UiLegend.tsx` as a second source of truth and drifted from the real components (wrong
+badge colors, a whole legend section describing colors no component applied). Do not reintroduce
+that pattern: if you're adding a new customizable visual state, add a registry entry, not a
+standalone hardcoded value.
+
+**The `--ind-*` token layer.** Each registry entry names a `colorVar` (e.g.
+`--ind-terminal-busy`) and, if animatable, an `animVar` (e.g. `--ind-anim-terminal-busy`).
+`global.css`'s `:root` defines every one of these as its default — always a `var()` reference to
+an existing palette token (`--activity`, `--error`, etc.), never a raw hex, so a theme switch
+keeps flowing through untouched. The consuming CSS (`TabBar.module.css`, `Sidebar.module.css`,
+`PaneTree.css`, `ChangesTab.module.css`) reads `var(--ind-*)`, never the underlying palette
+token directly — reading `--activity` instead of `--ind-terminal-busy` is exactly the mistake
+that made the busy dot uncustomizable before this existed.
+
+**The `tuic-*` keyframes.** Six global keyframes (`tuic-pulse`, `tuic-blink`, `tuic-breathe`,
+`tuic-glow`, `tuic-spin`, plus `none`) live in `global.css`, deliberately *outside* any CSS
+Module — `@keyframes` names are module-scoped, so a per-module `pulse-opacity` (see above)
+could never be referenced by a shared `--ind-anim-*` var consumed from six different files.
+`src/indicators/animations.ts` maps each `AnimationId` to the full `animation:` shorthand
+(duration, easing, iteration count) referencing one of these keyframes.
+
+**Enforcement.** `src/__tests__/indicators/registryParity.test.ts` is a source-text-parity test
+(reads the real files off disk, in the same genre as `transport.test.ts`/`settingsDoc.test.ts`)
+that fails the build if: a registry `colorVar`/`animVar` has no `:root` default, a `:root`
+default has no registry entry (dead default), any consuming CSS file references a `--ind-*` var
+the registry doesn't know about, or a CSS file hardcodes a core palette var where an `--ind-*`
+var belongs. It also carries a `KNOWN_UNREGISTERED` allowlist for the small number of duplicate
+renderers deliberately left alone (see the test file for the current list and why).
+
+**Adding a new customizable indicator:** add an entry to `INDICATORS` in `registry.ts` (id,
+group, label, description, `colorVar`/`defaultColor`, optionally `animVar`/`defaultAnimation`/
+`animations`, optionally `defaultIconId`, `capabilities`, `preview` shape) → add its `--ind-*`
+default(s) to `global.css` → point the consuming CSS/TSX at the new var. The legend
+(`UiLegend.tsx`) and its editor controls update automatically — it renders `<For each={INDICATORS}>`,
+never a hand-maintained copy.
 
 ## Component Reference
 

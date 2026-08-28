@@ -229,6 +229,86 @@
   --tab-html-rgb: 251, 191, 36;      /* amber */
   --tab-remote-rgb: 34, 211, 238;    /* cyan — remote/network */
 
+  /* ------------------------------------------------------------------
+   * Indicator customization layer (src/indicators/registry.ts)
+   *
+   * Every customizable visual indicator (terminal status dots, tab type
+   * tint, sidebar branch symbols, PR badges, diff stats) resolves through
+   * one of these --ind-* vars rather than a core palette var directly.
+   * Defaults below equal today's values exactly — wiring this layer in is
+   * a no-op until src/indicators/apply.ts (added when overrides ship)
+   * starts rewriting these on document.documentElement.style.
+   *
+   * src/__tests__/indicators/registryParity.test.ts enforces that this
+   * block and registry.ts never drift apart.
+   * ------------------------------------------------------------------ */
+
+  /* Terminal Status Dots */
+  --ind-terminal-none: var(--fg-muted);
+  --ind-anim-terminal-none: none;
+  --ind-terminal-busy: var(--activity);
+  --ind-anim-terminal-busy: tuic-pulse 1.5s ease-in-out infinite;
+  --ind-terminal-idle: var(--success);
+  --ind-anim-terminal-idle: none;
+  --ind-terminal-unseen: var(--unseen);
+  --ind-anim-terminal-unseen: none;
+  --ind-terminal-exited: var(--fg-muted);
+  --ind-anim-terminal-exited: none;
+  --ind-terminal-question: var(--attention);
+  --ind-anim-terminal-question: tuic-pulse 1.5s ease-in-out infinite;
+  --ind-terminal-error: var(--error);
+  --ind-anim-terminal-error: tuic-pulse 1.5s ease-in-out infinite;
+
+  /* Tab Types — raw RGB triples, consumed inside rgba() */
+  --ind-tabtype-diff-rgb: var(--tab-diff-rgb);
+  --ind-tabtype-editor-rgb: var(--tab-edit-rgb);
+  --ind-tabtype-markdown-rgb: var(--tab-md-rgb);
+  --ind-tabtype-panel-rgb: var(--tab-panel-rgb);
+  --ind-tabtype-html-rgb: var(--tab-html-rgb);
+  --ind-tabtype-remote-rgb: var(--tab-remote-rgb);
+
+  /* Sidebar Symbols */
+  --ind-sidebar-main: var(--warning);
+  --ind-sidebar-worktree: var(--success);
+  --ind-sidebar-branch: var(--accent);
+  --ind-sidebar-idle: var(--fg-muted);
+  --ind-sidebar-merged: var(--fg-muted);
+  --ind-sidebar-remote: var(--fg-muted);
+
+  /* PR Status Badges */
+  --ind-pr-open: var(--success);
+  --ind-pr-ready: var(--success);
+  --ind-pr-draft: var(--fg-secondary);
+  --ind-pr-conflict: var(--error);
+  --ind-anim-pr-conflict: tuic-pulse 1.5s ease-in-out infinite;
+  --ind-pr-ci-failed: var(--error);
+  --ind-pr-changes-requested: var(--changes);
+  --ind-pr-review-required: var(--changes);
+  --ind-pr-checking: var(--changes);
+  --ind-anim-pr-checking: tuic-pulse 2s ease-in-out infinite;
+  --ind-pr-ci-pending: var(--changes);
+  --ind-anim-pr-ci-pending: tuic-pulse 2s ease-in-out infinite;
+  --ind-pr-merged: var(--merged);
+  --ind-pr-closed: var(--error);
+
+  /* Git Repo Status */
+  --ind-gitstate-rebasing: var(--attention);
+  --ind-anim-gitstate-rebasing: tuic-pulse 2s ease-in-out infinite;
+  --ind-gitstate-merging: var(--merged);
+  --ind-anim-gitstate-merging: tuic-pulse 2s ease-in-out infinite;
+  --ind-gitstate-cherry-picking: var(--changes);
+  --ind-anim-gitstate-cherry-picking: tuic-pulse 2s ease-in-out infinite;
+  --ind-gitstate-reverting: var(--warning);
+  --ind-anim-gitstate-reverting: tuic-pulse 2s ease-in-out infinite;
+  --ind-gitstate-bisecting: var(--unseen);
+  --ind-anim-gitstate-bisecting: tuic-pulse 2s ease-in-out infinite;
+  --ind-gitstate-conflicts: var(--error);
+  --ind-anim-gitstate-conflicts: tuic-pulse 1.5s ease-in-out infinite;
+
+  /* Diff Stats */
+  --ind-diffstat-additions: var(--success);
+  --ind-diffstat-deletions: var(--error);
+
   /* Border radius scale */
   --radius-xs: 2px;
   --radius-sm: 3px;
@@ -375,6 +455,44 @@ html, body {
 button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------
+ * Indicator animation keyframes (src/indicators/animations.ts)
+ *
+ * Defined here — unscoped — rather than inside a CSS Module, because
+ * `@keyframes` names ARE scoped per module: a name written in one module
+ * is invisible from another. Every indicator's `--ind-anim-*` var supplies
+ * a full `animation:` shorthand referencing one of these, and that
+ * shorthand must resolve identically no matter which CSS Module consumes
+ * it. This is also why `pulse-opacity` used to be copy-pasted into 6
+ * different module files instead of shared — this layer replaces that
+ * copy-paste for every indicator (non-indicator uses of pulse-opacity are
+ * untouched).
+ * ------------------------------------------------------------------ */
+@keyframes tuic-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes tuic-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+@keyframes tuic-breathe {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+@keyframes tuic-glow {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 0.85; }
+  50% { box-shadow: 0 0 6px 1px currentColor; opacity: 1; }
+}
+
+@keyframes tuic-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Reduce compositor work for users who prefer reduced motion */

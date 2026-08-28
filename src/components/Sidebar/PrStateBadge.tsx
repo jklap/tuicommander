@@ -9,7 +9,10 @@ const PR_BADGE_CLASSES: Record<string, string> = {
 	closed: s.prClosed,
 	draft: s.prDraft,
 	conflict: s.prConflict,
-	checking: s.prCiPending,
+	// Was s.prCiPending (shared with "ci-pending") — split so each is
+	// independently customizable (indicators/registry.ts pr.checking vs
+	// pr.ci-pending). Same default appearance either way.
+	checking: s.prChecking,
 	"ci-failed": s.prCiFailed,
 	"changes-requested": s.prChangesRequested,
 	"review-required": s.prReviewRequired,

@@ -322,6 +322,70 @@ describe("TabBar", () => {
 		expect(tabs[1].classList.contains("shellIdle")).toBe(false);
 	});
 
+	describe("terminal tab status icon respects indicator overrides", () => {
+		afterEach(() => {
+			settingsStore.resetAllIndicators();
+		});
+
+		it("renders the default 'dot' shape (a <circle>) with no override", () => {
+			const id = addTerminal({ name: "Busy" });
+			terminalsStore.setActive(id);
+			terminalsStore.update(id, { shellState: "busy" });
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			const icon = container.querySelector(".tabIcon")!;
+			expect(icon.querySelector("circle")).not.toBeNull();
+			expect(icon.querySelector("rect")).toBeNull();
+		});
+
+		it("renders the overridden icon shape (a <rect> for 'square') for the busy state", () => {
+			settingsStore.setIndicatorIcon("terminal.busy", "square");
+			const id = addTerminal({ name: "Busy" });
+			terminalsStore.setActive(id);
+			terminalsStore.update(id, { shellState: "busy" });
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			const icon = container.querySelector(".tabIcon")!;
+			expect(icon.querySelector("rect")).not.toBeNull();
+			expect(icon.querySelector("circle")).toBeNull();
+		});
+
+		it("prioritizes the awaiting-question icon override over a busy shellState", () => {
+			settingsStore.setIndicatorIcon("terminal.question", "square");
+			const id = addTerminal({ name: "Waiting", awaitingInput: "question" });
+			terminalsStore.setActive(id);
+			terminalsStore.update(id, { shellState: "busy" });
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			const icon = container.querySelector(".tabIcon")!;
+			expect(icon.querySelector("rect")).not.toBeNull();
+		});
+	});
+
 	it("tab with progress shows bar at correct width (no label)", () => {
 		const id = addTerminal({ name: "Progress" });
 		terminalsStore.update(id, { progress: 50 });
