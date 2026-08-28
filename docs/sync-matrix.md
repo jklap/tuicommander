@@ -561,6 +561,22 @@ When adding config fields or settings UI:
 | `src/components/SettingsPanel/settingsSearchIndex.ts` | Search index rows for every new label; the drift test re-derives them from the JSX |
 | `src/components/SettingsPanel/ExpertSetting.tsx`, `src/stores/settingsExpert.ts` | Wrap a control in `ExpertSetting` only with a `configKey` that `get_config_defaults` can resolve; update the Expert Mode section of `docs/user-guide/settings.md` if the visibility rule changes |
 
+### Indicator Registry (customizable colors/icons/animations)
+When adding, removing, or changing a customizable visual indicator (terminal status dots, tab
+types, sidebar symbols, PR badges, git repo status, diff stats):
+
+| File | What to update |
+|------|----------------|
+| `src/indicators/registry.ts` | `INDICATORS` — the single source of truth. Add/edit an entry here, never a hardcoded color/label elsewhere |
+| `src/global.css` | `:root` default for every `colorVar`/`animVar` the entry names (always `var()`-of-a-token, never a raw hex) |
+| Consuming CSS (`TabBar.module.css`, `Sidebar.module.css`, `PaneTree.css`, `ChangesTab.module.css`) | Read `var(--ind-*)`, never the underlying palette token directly |
+| `src/components/HelpPanel/UiLegend.tsx` | Swatch groups (terminal dots, tab types, git repo status, diff stats) render from the registry automatically. Sidebar-symbol and PR rows render the real components (`SIDEBAR_SYMBOL_LEGEND`/`PR_BADGE_LEGEND`, each row's `indicatorId` names the entry it edits); a new PR/sidebar entry needs a row there or it is listed after them as a plain swatch. A new **group** needs a `GROUP_LABELS`/`GROUP_HINTS` entry and, if it should be independently hideable, a `groupToggleBinding` case + a `show*` bool in `AppConfig`/`SettingsStoreState` |
+| `src/components/Sidebar/PrStateBadge.tsx` + `Sidebar.module.css` | A new PR state needs a `PR_BADGE_CLASSES` pill class AND a `PR_MARK_CLASSES` compact-marker class reading its `--ind-pr-*` var (`markColorVar` when the marker's default differs) |
+| `src/__tests__/indicators/registryParity.test.ts` | Source-text-parity test enforcing the above — will fail the build on a missed step, not just remind you |
+| `docs/frontend/STYLE_GUIDE.md` | "Indicator Customization" section — describes the `--ind-*`/`tuic-*` layer conceptually; do not hand-copy a color table here (it will drift) |
+| `docs/user-guide/settings.md` | Appearance Tab section — the UI Legend prose + the visibility-toggle table, if a new group toggle was added |
+| `docs/backend/config.md` | `indicator_overrides` row's group list, and any new `show_*` bool |
+
 ### Agent Detection
 
 Launch-scoped Claude/Codex status changes must keep `agent_hook_launch.rs`, `shell_integration.rs`, direct/MCP spawn assembly, agent config types, Settings, HTTP/Tauri transport parity, the route snapshot, AI-agent/config/settings docs, FEATURES and CHANGELOG synchronized.

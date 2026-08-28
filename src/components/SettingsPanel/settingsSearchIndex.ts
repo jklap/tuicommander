@@ -258,6 +258,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "appearance", section: "Tabs", sectionKey: "appearance.heading.tabs" },
 	{ tab: "appearance", section: "Repository Groups", sectionKey: "appearance.heading.groups" },
 	{ tab: "appearance", section: "Layout", sectionKey: "appearance.heading.layout" },
+	{ tab: "appearance", section: "Bell", sectionKey: "appearance.heading.bell" },
 	{ tab: "appearance", section: "UI Legend", sectionKey: "appearance.heading.uiLegend" },
 	{
 		tab: "appearance",
@@ -284,6 +285,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Max Tab Name Length",
 		labelKey: "appearance.label.maxTabNameLength",
 	},
+	{ tab: "appearance", section: "Bell", label: "Bell Style", labelKey: "appearance.label.bellStyle" },
 	// tabs/NotificationsTab.tsx
 	{ tab: "notifications", section: "Notification Settings", sectionKey: "notifications.heading.notificationSettings" },
 	{

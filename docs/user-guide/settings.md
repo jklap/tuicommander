@@ -107,9 +107,46 @@ never all expert: in basic mode it would show an empty page.
 | **Max Tab Name Length** | — | 10–60 slider |
 | **Repository Groups** | — | Create, rename, delete, and color-code groups |
 | **Reset Panel Sizes** | — | Restore sidebar and panel widths to defaults (**Layout** section) |
-| **UI Legend** | — | Visual reference for colors, symbols, and badges used in the app |
+| **Bell Style** | Visual | How the terminal bell (BEL) is signaled: None, Visual, Sound, or Both (**Bell** section) |
+| **UI Legend** | — | Visual reference for colors, symbols, and badges used in the app, and the editor for them (see below) |
 
 The terminal and app color theme is on the [Terminal](#terminal) page. The mobile PWA offers a separate Dark/Light choice in its Settings screen, saved on the server for connected mobile clients; the screen also shows app and server versions.
+
+At the bottom of the tab, the **UI Legend** documents every color/icon/animation the app uses
+(terminal status dots, tab types, sidebar symbols, branch markers, PR markers, git repo status,
+toolbar counts, diff stats) — the sidebar rows are drawn with the real sidebar components — and
+doubles as the editor for them. A PR state's override recolors that state's marker on every
+branch row as well as its badge in the GitHub panel. Each row offers a control per capability it has:
+
+- **Color** — a swatch button opens the same preset/custom color picker used for repository groups.
+- **Icon** — a small icon button opens a grid of 18 curated monochrome shapes (dot, star, ring,
+  square, triangle, diamond, chevron, spinner arc, bell, question mark, exclamation, pause bars,
+  clock, checkmark, cross, and the branch/worktree/shell shapes) — every option renders live so
+  you're picking the actual glyph, not a name.
+- **Animation** — a text button (showing the current animation, e.g. "pulse") opens a list where
+  every option animates its own preview dot. Some indicators (e.g. PR badges) offer a narrower set
+  than others — a badge doesn't offer "glow", a spinning-halo effect meant for a small dot.
+
+Every row also gets a reset "×" once any of its fields is overridden, and a "Reset all indicators"
+button at the bottom clears everything at once. Overrides are stored in `indicator_overrides` in
+`config.json` and apply live — no restart needed — and survive a theme switch. The read-only
+reference view in Help → UI Legend shows the same information without the edit controls. See
+`src/indicators/registry.ts` for the full list of customizable entries.
+
+Four of the legend's group headings also carry a show/hide toggle for that whole group, stored
+in `config.json` alongside the color/icon/animation overrides:
+
+| Toggle | Default | Effect when off |
+|---|---|---|
+| **Show tab type highlighting** | On | Tab bar and mini pane-tree bar lose their per-type background tint and border color, but keep each type's icon color |
+| **Show PR status badges** | On | Hides the PR marker on a sidebar branch row with a pull request, and the state badge in the GitHub panel's PR list |
+| **Show git repo status indicators** | On | Hides the sidebar's rebase/merge/cherry-pick/revert/bisect badge and the Changes tab's conflicts banner |
+| **Show diff stats** | On | Hides the sidebar's `+N/-N` diff stat badge next to a branch |
+
+**Git repo status** — when a worktree (including the main checkout) has a rebase, merge,
+cherry-pick, revert, or bisect in progress, its sidebar row shows a colored badge naming which
+one. The Changes tab (Git panel) separately shows a conflicts banner listing every unmerged file
+when the working tree has one, regardless of which operation caused it.
 
 #### Show agents under branches
 
