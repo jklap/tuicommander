@@ -1791,7 +1791,9 @@ before launch to select another directory. A relative value returns
 GET /system/local-ips
 ```
 
-Returns list of local network interfaces and addresses.
+Returns list of local network interfaces and addresses. On macOS, also includes an extra
+`{ ip: "<name>.local", label: "mDNS" }` entry for the machine's existing Bonjour hostname,
+appended last.
 
 ### Local IP (Primary)
 
