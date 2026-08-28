@@ -542,6 +542,74 @@ pub(crate) fn remove_worktree_internal(
             );
             return Err(format!("{MAIN_WORKTREE_PREFIX}{stderr}"));
         }
+        Err(crate::git_cli::GitError::NonZeroExit { ref stderr, .. })
+            if stderr.contains("cannot be moved or removed") =>
+        {
+            // Git refuses a plain (no-force) `worktree remove` when the
+            // worktree's checked-out tree contains a submodule reference — but
+            // unlike the dirty/lock refusals above, a single `--force` DOES
+            // lift this one (confirmed empirically on git 2.55.0: `git
+            // worktree remove --force` succeeds outright here, even on an
+            // otherwise-dirty worktree). That means `RemovalMode::Dirty` and
+            // `::Forced` never even reach this arm — their first attempt above
+            // already used `--force` and would have succeeded directly; only
+            // `::Safe` (no force at all) hits it.
+            //
+            // It still fires BEFORE git's own dirty-worktree check, so a
+            // Safe-mode caller never gets a chance to learn separately whether
+            // the worktree is also dirty — replicate that check ourselves
+            // before retrying with `--force`, so uncommitted/untracked work
+            // isn't silently discarded just because a submodule happens to be
+            // present too.
+            tracing::warn!(
+                source = "worktree",
+                branch = %worktree.name,
+                stderr = %stderr,
+                "git worktree remove: worktree tree contains a submodule — retrying with --force"
+            );
+
+            if mode == RemovalMode::Safe {
+                match git_cmd(&worktree.path)
+                    .args(["status", "--porcelain", "--untracked-files=all"])
+                    .run()
+                {
+                    Ok(out) if !out.stdout.trim().is_empty() => {
+                        tracing::warn!(
+                            source = "worktree",
+                            branch = %worktree.name,
+                            "git worktree remove: worktree (with submodule) has uncommitted/untracked changes — returning error for JS confirmation prompt"
+                        );
+                        return Err(format!(
+                            "{DIRTY_WORKTREE_PREFIX}worktree contains modified or untracked files"
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!(source = "worktree", branch = %worktree.name, "git status check (submodule fallback) failed: {e}");
+                        return Err(format!(
+                            "Git worktree remove failed: could not verify worktree is clean before retrying: {e}"
+                        ));
+                    }
+                }
+            }
+
+            // Clean (or the caller already confirmed Dirty/Forced removal):
+            // retry with `--force`, which lifts the submodule refusal. This
+            // is a real `git worktree remove`, not a manual fallback, so it
+            // leaves git's own administrative bookkeeping consistent — the
+            // directory-existence check and prune below are just the same
+            // safety net every other path already falls through.
+            if let Err(e) = git_cmd(&worktree.base_repo)
+                .args(["worktree", "remove", "--force", &wt_path_str])
+                .run()
+            {
+                tracing::error!(source = "worktree", branch = %worktree.name, "git worktree remove --force retry (submodule) FAILED: {e}");
+                return Err(format!(
+                    "Git worktree remove failed after retrying with --force to clear the submodule refusal: {e}"
+                ));
+            }
+            tracing::info!(source = "worktree", branch = %worktree.name, "git worktree remove --force (submodule retry): OK");
+        }
         Err(e) => {
             tracing::error!(source = "worktree", branch = %worktree.name, "git worktree remove FAILED: {e}");
             return Err(format!("Git worktree remove failed: {e}"));
@@ -2969,6 +3037,121 @@ mod tests {
         assert!(
             !worktree.path.exists(),
             "Worktree path should not exist after removal"
+        );
+    }
+
+    /// Creates a worktree, off a repo with a submodule, that has the submodule
+    /// initialized inside it — the exact state that triggers git's unconditional
+    /// "working trees containing submodules cannot be moved or removed" refusal.
+    fn setup_worktree_with_initialized_submodule(task_name: &str) -> (TempDir, WorktreeInfo) {
+        let submodule_src = setup_test_repo();
+
+        let repo = setup_test_repo();
+        let repo_path = repo.path();
+
+        let submodule_url = submodule_src.path().to_string_lossy().to_string();
+        git_cmd(repo_path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &submodule_url,
+                "sub",
+            ])
+            .run()
+            .expect("Failed to add submodule");
+        git_cmd(repo_path)
+            .args(["commit", "-m", "Add submodule"])
+            .run()
+            .expect("Failed to commit submodule addition");
+
+        let worktrees_dir = repo_path.join("worktrees");
+        let config = WorktreeConfig {
+            task_name: task_name.to_string(),
+            base_repo: repo_path.to_string_lossy().to_string(),
+            branch: None,
+            create_branch: false,
+        };
+        let worktree = create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+
+        // Initialize the submodule inside the new worktree — this is what
+        // actually triggers git's "cannot be moved or removed" refusal.
+        git_cmd(&worktree.path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .expect("Failed to init submodule in worktree");
+
+        // `submodule_src` and `repo` (the temp dirs) must outlive `worktree`
+        // for the base repo / submodule origin to remain resolvable.
+        (repo, worktree)
+    }
+
+    #[test]
+    fn remove_worktree_internal_retries_with_force_when_worktree_has_submodule() {
+        // Regression test for the reported failure: deleting a clean worktree
+        // whose checkout has an initialized submodule fails with git's
+        // "working trees containing submodules cannot be moved or removed" —
+        // a refusal that `RemovalMode::Safe` (no `--force`) hits but that a
+        // plain `--force` retry lifts. `remove_worktree_internal` must detect
+        // this and retry with `--force` rather than surfacing the error.
+        let (_repo, worktree) = setup_worktree_with_initialized_submodule("with-submodule-clean");
+
+        let result = remove_worktree_internal(&worktree, RemovalMode::Safe);
+        assert!(
+            result.is_ok(),
+            "remove_worktree_internal should retry with --force and succeed: {result:?}"
+        );
+        assert!(
+            !worktree.path.exists(),
+            "Worktree path should not exist after removal"
+        );
+    }
+
+    #[test]
+    fn remove_worktree_internal_still_refuses_dirty_worktree_with_submodule_in_safe_mode() {
+        // Git's submodule-refusal check runs BEFORE its own dirty-worktree
+        // check, so once we retry past the former with `--force` we could
+        // otherwise silently discard uncommitted work the latter would have
+        // protected (a plain `--force` retry lifts BOTH refusals at once —
+        // confirmed empirically). Safe mode must still refuse and return the
+        // same DIRTY_WORKTREE_PREFIX the caller already knows how to turn
+        // into a confirmation prompt.
+        let (_repo, worktree) = setup_worktree_with_initialized_submodule("with-submodule-dirty");
+
+        fs::write(worktree.path.join("uncommitted.txt"), "not yet committed")
+            .expect("Failed to write uncommitted file");
+
+        let result = remove_worktree_internal(&worktree, RemovalMode::Safe);
+        let err = result.expect_err("Safe removal of a dirty worktree should fail");
+        assert!(
+            err.starts_with(DIRTY_WORKTREE_PREFIX),
+            "Error should start with DIRTY_WORKTREE_PREFIX, got: {err}"
+        );
+        assert!(
+            worktree.path.exists(),
+            "Worktree should be left in place after a refused Safe removal"
+        );
+
+        // Dirty mode already passes `--force` on its first attempt, which
+        // lifts the submodule refusal directly — it never even reaches the
+        // retry arm under test above, but this confirms the end-to-end
+        // behavior an actual "confirm discard" caller relies on.
+        let result = remove_worktree_internal(&worktree, RemovalMode::Dirty);
+        assert!(
+            result.is_ok(),
+            "Dirty-mode removal should succeed despite uncommitted changes: {result:?}"
+        );
+        assert!(
+            !worktree.path.exists(),
+            "Worktree path should not exist after Dirty-mode removal"
         );
     }
 
