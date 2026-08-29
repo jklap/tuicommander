@@ -381,8 +381,9 @@ export type AgentHookState = "installed" | "outdated" | "notInstalled" | "unsupp
 /** Full agents config (matches Rust AgentsConfig) */
 export interface AgentsConfig {
 	agents: Record<string, AgentSettingsConfig>;
-	/** Which agent CLI to use for headless prompt execution when no agent is in the active terminal */
-	headless_agent?: AgentType;
+	/** Which agent CLI to use for headless prompt execution when no agent is in the active
+	 * terminal. A plain `AgentType`, or `"agentType:configName"` selecting a named run config. */
+	headless_agent?: string;
 }
 
 /** Which agents support MCP configuration */

@@ -73,6 +73,10 @@ const BaseRefDropdown: Component<{
 	value: string;
 	options: BaseRefOption[];
 	onChange: (value: string) => void;
+	/** Disabled while the typed name matches an existing branch (nothing to base it from) —
+	 * the row stays mounted rather than unmounting, so the dialog doesn't resize as the
+	 * typed name crosses in and out of an exact match. */
+	disabled?: boolean;
 }> = (props) => {
 	const [open, setOpen] = createSignal(false);
 	const [query, setQuery] = createSignal("");
@@ -100,6 +104,15 @@ const BaseRefDropdown: Component<{
 			setOpen(false);
 		}
 	};
+
+	// Force-close if the row becomes disabled while open (typed name became an exact
+	// existing-branch match while the list was open) — the `<Show>` below already
+	// hides the list from the DOM in that case, but without also resetting `open`
+	// here, the list would silently reappear on its own the moment the row becomes
+	// enabled again (e.g. typing past the exact match), with no new click.
+	createEffect(() => {
+		if (props.disabled) setOpen(false);
+	});
 
 	createEffect(() => {
 		if (!open()) return;
@@ -204,7 +217,7 @@ const BaseRefDropdown: Component<{
 	);
 
 	return (
-		<div class={s.baseRefRow}>
+		<div class={s.baseRefRow} data-disabled={props.disabled ? "" : undefined}>
 			<label>{t("createWorktree.startFrom", "Start from")}</label>
 			<div class={s.dropdownWrapper}>
 				<button
@@ -212,6 +225,7 @@ const BaseRefDropdown: Component<{
 					type="button"
 					class={s.dropdownTrigger}
 					data-testid="base-ref-trigger"
+					disabled={props.disabled}
 					onClick={() => setOpen(!open())}
 				>
 					<span class={s.dropdownValue}>{props.value}</span>
@@ -219,7 +233,7 @@ const BaseRefDropdown: Component<{
 						<path d="M4 6l4 4 4-4" />
 					</svg>
 				</button>
-				<Show when={open()}>
+				<Show when={open() && !props.disabled}>
 					<div ref={listRef} class={s.dropdownList}>
 						<input
 							ref={searchRef}
@@ -314,6 +328,22 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 		if (!name || !props.worktreesDir) return "";
 		const dir = props.worktreesDir.replace(/\/$/, "");
 		return `${dir}/${sanitizeForPath(name)}/`;
+	});
+
+	// Truncated for display only — shows the tail (the branch-derived directory
+	// name), the informative part, rather than the shared worktrees-dir prefix.
+	// A fixed character budget (not CSS text-overflow / direction:rtl) is used
+	// deliberately: the common "ellipsize at the start" CSS trick reorders the
+	// text via the Unicode Bidi Algorithm, which can visually scramble digit
+	// runs in an otherwise strong-LTR string — e.g. a path ending in a
+	// date/number segment (`.../worktree-2026-08-28`) — even with no RTL
+	// characters anywhere in it. Truncating the actual string sidesteps that
+	// entirely; text-overflow: ellipsis in the CSS stays only as a backstop.
+	const PATH_PREVIEW_MAX_CHARS = 48;
+	const pathPreviewDisplay = createMemo(() => {
+		const full = pathPreview();
+		if (full.length <= PATH_PREVIEW_MAX_CHARS) return full;
+		return `…${full.slice(full.length - PATH_PREVIEW_MAX_CHARS + 1)}`;
 	});
 
 	// Reset state when dialog opens
@@ -478,8 +508,13 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 							</Show>
 						</div>
 
-						<Show when={availableBaseRefs().length > 1 && !isExistingBranch()}>
-							<BaseRefDropdown value={baseRef()} options={availableBaseRefs()} onChange={setBaseRef} />
+						<Show when={availableBaseRefs().length > 1}>
+							<BaseRefDropdown
+								value={baseRef()}
+								options={availableBaseRefs()}
+								onChange={setBaseRef}
+								disabled={isExistingBranch()}
+							/>
 						</Show>
 
 						<div class={s.branchList} ref={branchListRef}>
@@ -515,19 +550,25 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 							</Show>
 						</div>
 
-						<Show when={trimmedName()}>
-							<div class={s.statusLine}>
-								{isExistingBranch()
-									? t("createWorktree.statusExisting", "Will check out existing branch into new worktree")
-									: t("createWorktree.statusNew", "Will create new branch and worktree")}
-							</div>
-						</Show>
+						{/* Wrapped in a fixed-min-height footer (rather than making each row
+						    always-mounted) so the dialog's overall height stays constant as
+						    these rows individually appear/disappear/change per keystroke —
+						    each row keeps its original conditional-Show semantics. */}
+						<div class={s.previewFooter}>
+							<Show when={trimmedName()}>
+								<div class={s.statusLine}>
+									{isExistingBranch()
+										? t("createWorktree.statusExisting", "Will check out existing branch into new worktree")
+										: t("createWorktree.statusNew", "Will create new branch and worktree")}
+								</div>
+							</Show>
 
-						<Show when={pathPreview()}>
-							<div class={s.pathPreview}>{pathPreview()}</div>
-						</Show>
+							<Show when={pathPreview()}>
+								<div class={s.pathPreview}>{pathPreviewDisplay()}</div>
+							</Show>
 
-						{error() && <p class={d.error}>{error()}</p>}
+							{error() && <p class={`${d.error} ${s.errorLine}`}>{error()}</p>}
+						</div>
 					</div>
 					<div class={d.actions}>
 						<button class={d.cancelBtn} onClick={props.onClose}>

@@ -11,6 +11,7 @@ import {
 	providerRegistryStore,
 	type SlotName,
 } from "../../../stores/providerRegistry";
+import { HeadlessAgentSelect } from "../HeadlessAgentSelect";
 import s from "../Settings.module.css";
 
 // ---------------------------------------------------------------------------
@@ -478,38 +479,11 @@ const SlotAssignments: Component<{ detection: ReturnType<typeof useAgentDetectio
 						?<span class={s.infoBadgeTip}>{SLOT_DESCRIPTIONS.headless}</span>
 					</span>
 				</label>
-				<select
-					value={agentConfigsStore.getHeadlessAgent() ?? ""}
-					onChange={(e) => {
-						const val = e.currentTarget.value;
-						agentConfigsStore.setHeadlessAgent(val ? (val as AgentType) : null);
-					}}
-				>
-					<option value="">— Not configured —</option>
-					<For
-						each={ALL_AGENT_TYPES.filter((t) => props.detection.isAvailable(t) && AGENTS[t]?.defaultHeadlessTemplate)}
-					>
-						{(type) => {
-							const configs = () => agentConfigsStore.getRunConfigs(type);
-							return (
-								<Show when={configs().length > 0} fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}>
-									<optgroup label={AGENTS[type]?.name ?? type}>
-										<option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
-										<For each={configs()}>
-											{(cfg) => (
-												<option value={`${type}:${cfg.name}`}>
-													{cfg.name}
-													{cfg.is_default ? " (default)" : ""}
-												</option>
-											)}
-										</For>
-									</optgroup>
-								</Show>
-							);
-						}}
-					</For>
-					<option value="api">External API</option>
-				</select>
+				<HeadlessAgentSelect
+					agentTypes={ALL_AGENT_TYPES.filter(
+						(t) => props.detection.isAvailable(t) && AGENTS[t]?.defaultHeadlessTemplate,
+					)}
+				/>
 				<Show when={isExternalApi()}>
 					{(() => {
 						const headlessModelId = () => providerRegistryStore.state.registry.slots["headless"];

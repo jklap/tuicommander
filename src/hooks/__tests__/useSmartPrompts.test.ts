@@ -22,6 +22,7 @@ vi.mock("../../stores/agentConfigs", () => ({
 	agentConfigsStore: {
 		getHeadlessAgent: vi.fn(),
 		getHeadlessTemplate: vi.fn(),
+		getRunConfigs: vi.fn(),
 	},
 }));
 
@@ -90,6 +91,7 @@ const mockedResolveSlot = vi.mocked(providerRegistryStore.resolveSlot);
 const mockedWarn = vi.mocked(appLogger.warn);
 const mockedGetActive = vi.mocked(terminalsStore.getActive);
 const mockedIsBusy = vi.mocked(terminalsStore.isBusy);
+const mockedGetRunConfigs = vi.mocked(agentConfigsStore.getRunConfigs);
 
 /** Build a minimal SavedPrompt fixture with headless executionMode */
 function makePrompt(overrides: Partial<SavedPrompt> = {}): SavedPrompt {
@@ -367,5 +369,58 @@ describe("executeInject — routing by inject target", () => {
 		expect(ptyMocks.sendCommand).toHaveBeenCalledOnce();
 		expect(ptyMocks.sendCommand).toHaveBeenCalledWith("s1", PROCESSED, "claude", false);
 		expect(ptyMocks.write).not.toHaveBeenCalled();
+	});
+});
+
+describe("executeHeadless — 'agentType:configName' composite value parsing", () => {
+	const mockedInvoke = vi.mocked(invoke);
+	const mockedProcess = vi.mocked(promptLibraryStore.processContent);
+	const PROCESSED = "PROCESSED CONTENT";
+
+	beforeEach(() => {
+		mockedIsBusy.mockReturnValue(false);
+		mockedProcess.mockResolvedValue(PROCESSED);
+		mockedInvoke.mockImplementation(async (cmd: string) => {
+			if (cmd === "resolve_prompt_variables") return { vars: {}, needed: [] };
+			if (cmd === "execute_headless_prompt") return "headless output";
+			return undefined;
+		});
+	});
+
+	it("resolves a run config whose name itself contains a colon", async () => {
+		// Regression: `"agentType:configName".split(":", 2)` is NOT "split into at
+		// most 2 parts" in JS — it splits on every colon and truncates the result
+		// array afterward, so a config named "My:Config" (nothing prevents a colon
+		// in a run config name) used to have its name silently mangled to "My",
+		// failing the `configs.find(...)` lookup and falling back to the agent's
+		// bare template instead of the selected config's command/args.
+		mockedGetHeadlessAgent.mockReturnValue("claude:My:Config");
+		mockedGetRunConfigs.mockReturnValue([
+			{ name: "My:Config", command: "my-custom-claude", args: ["--flag", "{prompt}"], env: {}, is_default: false },
+		]);
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ preferredAgent: undefined }));
+
+		expect(res.ok).toBe(true);
+		expect(mockedInvoke).toHaveBeenCalledWith(
+			"execute_headless_prompt",
+			expect.objectContaining({ command: "my-custom-claude", args: ["--flag"] }),
+		);
+	});
+
+	it("falls back to the agent's template when the composite value's config name isn't found", async () => {
+		mockedGetHeadlessAgent.mockReturnValue("claude:Nonexistent Config");
+		mockedGetRunConfigs.mockReturnValue([]);
+		mockedGetHeadlessTemplate.mockReturnValue('claude --print "{prompt}"');
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ preferredAgent: undefined }));
+
+		expect(res.ok).toBe(true);
+		expect(mockedInvoke).toHaveBeenCalledWith(
+			"execute_headless_prompt",
+			expect.objectContaining({ command: "claude", args: ["--print"] }),
+		);
 	});
 });

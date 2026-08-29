@@ -306,8 +306,14 @@ export function useSmartPrompts() {
 		let envVars: Record<string, string> | undefined;
 		let fallbackTemplate: string | undefined;
 		if (headlessVal.includes(":")) {
-			// Run config selected — parse "agentType:configName"
-			const [agentType, configName] = headlessVal.split(":", 2);
+			// Run config selected — parse "agentType:configName". Split on the FIRST
+			// colon only: `str.split(":", 2)` is NOT "split into at most 2 parts" in
+			// JS — it splits on every colon and then truncates the result array to 2
+			// elements, silently dropping anything after a second colon in the config
+			// name itself (nothing prevents a colon in a run config's name).
+			const colonIdx = headlessVal.indexOf(":");
+			const agentType = headlessVal.slice(0, colonIdx);
+			const configName = headlessVal.slice(colonIdx + 1);
 			const configs = agentConfigsStore.getRunConfigs(agentType as import("../agents").AgentType);
 			const cfg = configs.find((c) => c.name === configName);
 			if (cfg) {

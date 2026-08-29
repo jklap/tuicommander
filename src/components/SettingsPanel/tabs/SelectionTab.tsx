@@ -23,7 +23,7 @@ import type {
 	SmartSelectionRule,
 	WordSelectionMode,
 } from "../../Terminal/smartSelectionTypes";
-import { SettingInput, SettingSelect, SettingToggle } from "../SettingFields";
+import { SettingInput, SettingSelect } from "../SettingFields";
 import s from "../Settings.module.css";
 
 /** Built-in default rules indexed by id, for export scope classification and the import
@@ -125,6 +125,7 @@ const RuleRow: Component<{
 						<label class={s.ruleFieldLabel}>Name</label>
 						<input
 							type="text"
+							class={s.ruleName}
 							value={props.rule.name}
 							placeholder="Name"
 							onInput={(e) => props.onUpdate({ name: e.currentTarget.value })}
@@ -359,7 +360,7 @@ export const SelectionTab: Component = () => {
 					{ value: "word", label: "Word selection" },
 					{ value: "smart", label: "Smart selection" },
 				]}
-				hint="Word selection expands to the character-class boundary below. Smart selection tries the rule list first, falling back to word selection when nothing matches. Quad-click (4 rapid clicks) always tries smart selection, regardless of this setting."
+				hint="Word selection expands to the character-class boundary below. Smart selection tries the rule list first, falling back to word selection when nothing matches. Quad-click (4 rapid clicks) and the right-click smart-selection menu always try the rule list, regardless of this setting."
 			/>
 
 			<h3>Word Boundaries</h3>
@@ -399,13 +400,6 @@ export const SelectionTab: Component = () => {
 					<p class={s.warning}>One or more alternates are not valid regular expressions and will be skipped.</p>
 				</Show>
 			</Show>
-
-			<SettingToggle
-				checked={settingsStore.state.smartSelectionEnabled}
-				onChange={(v) => settingsStore.setSmartSelectionEnabled(v)}
-				label="Enable smart selection"
-				hint="Try the rule list below before falling back to plain word-boundary selection. Word-boundary customization still applies when this is off."
-			/>
 
 			<h3>Smart Selection Rules</h3>
 			<p class={s.hint}>

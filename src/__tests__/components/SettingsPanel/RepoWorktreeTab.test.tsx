@@ -134,16 +134,12 @@ describe("RepoWorktreeTab", () => {
 		expect(onUpdate).toHaveBeenCalledWith("autoFetchIntervalMinutes", 30);
 	});
 
-	/** Find the tri-state radiogroup for a given row label. */
+	/** Find the tri-state cycling switch for a given row label. */
 	function triGroup(container: HTMLElement, label: string): HTMLElement {
-		return container.querySelector(`[role="radiogroup"][aria-label="${label}"]`) as HTMLElement;
+		return container.querySelector(`[role="checkbox"][aria-label="${label}"]`) as HTMLElement;
 	}
 
-	function triSegment(group: HTMLElement, kind: "off" | "global" | "on"): HTMLElement {
-		return group.querySelector(`[data-kind="${kind}"]`) as HTMLElement;
-	}
-
-	/** The row's full text (segments + trailing label/hint), for hint assertions. */
+	/** The row's full text (switch + trailing label/hint), for hint assertions. */
 	function triRowText(group: HTMLElement): string {
 		return group.closest(".triToggle")?.textContent ?? "";
 	}
@@ -159,11 +155,12 @@ describe("RepoWorktreeTab", () => {
 		// copyIgnoredFiles inherits defaults.copyIgnoredFiles=true, copyUntrackedFiles inherits false.
 		const ignoredGroup = triGroup(container, "Copy ignored files");
 		const untrackedGroup = triGroup(container, "Copy untracked files");
-		expect(triSegment(ignoredGroup, "global").getAttribute("aria-checked")).toBe("true");
-		expect(triSegment(untrackedGroup, "global").getAttribute("aria-checked")).toBe("true");
+		expect(ignoredGroup.getAttribute("aria-checked")).toBe("mixed");
+		expect(untrackedGroup.getAttribute("aria-checked")).toBe("mixed");
 
-		fireEvent.click(triSegment(ignoredGroup, "off"));
-		expect(onUpdate).toHaveBeenCalledWith("copyIgnoredFiles", false);
+		// Cycle order is Global -> On -> Off -> Global; from null (Global) one click selects On.
+		fireEvent.click(ignoredGroup);
+		expect(onUpdate).toHaveBeenCalledWith("copyIgnoredFiles", true);
 	});
 
 	it("shows the 'Use global default' hint only while the field is null, and clears it once overridden", () => {
@@ -212,16 +209,28 @@ describe("RepoWorktreeTab", () => {
 		expect(onUpdate).toHaveBeenCalledWith("autoDeleteOnPrClose", "auto");
 	});
 
-	it("selecting a PR-visibility segment calls onUpdate with the matching nullable bool", () => {
-		const { container } = render(() => (
+	it("clicking the switch cycles Global -> On -> Off -> Global, calling onUpdate at each step", () => {
+		// The switch is fully controlled by props.settings, which this test does not
+		// feed back after onUpdate — so each starting value is asserted with its own
+		// render rather than chaining clicks against a value that never advances.
+		const nullCase = render(() => (
 			<RepoWorktreeTab settings={makeSettings({ prHideDrafts: null })} defaults={defaults} onUpdate={onUpdate} />
 		));
-		const group = triGroup(container, "Hide Draft PRs");
-		fireEvent.click(triSegment(group, "on"));
+		fireEvent.click(triGroup(nullCase.container, "Hide Draft PRs"));
 		expect(onUpdate).toHaveBeenCalledWith("prHideDrafts", true);
-		fireEvent.click(triSegment(group, "off"));
+		nullCase.unmount();
+
+		const onCase = render(() => (
+			<RepoWorktreeTab settings={makeSettings({ prHideDrafts: true })} defaults={defaults} onUpdate={onUpdate} />
+		));
+		fireEvent.click(triGroup(onCase.container, "Hide Draft PRs"));
 		expect(onUpdate).toHaveBeenCalledWith("prHideDrafts", false);
-		fireEvent.click(triSegment(group, "global"));
+		onCase.unmount();
+
+		const offCase = render(() => (
+			<RepoWorktreeTab settings={makeSettings({ prHideDrafts: false })} defaults={defaults} onUpdate={onUpdate} />
+		));
+		fireEvent.click(triGroup(offCase.container, "Hide Draft PRs"));
 		expect(onUpdate).toHaveBeenCalledWith("prHideDrafts", null);
 	});
 
@@ -256,7 +265,8 @@ describe("RepoWorktreeTab", () => {
 		// terminalMetaHotkeys has no real global setting — its "global" resolves to a
 		// hardcoded true (On), unlike the other tri-state rows above.
 		expect(triRowText(group)).toContain("Use global default: On");
-		fireEvent.click(triSegment(group, "off"));
-		expect(onUpdate).toHaveBeenCalledWith("terminalMetaHotkeys", false);
+		// Cycle order is Global -> On -> Off -> Global; from null (Global) one click selects On.
+		fireEvent.click(group);
+		expect(onUpdate).toHaveBeenCalledWith("terminalMetaHotkeys", true);
 	});
 });
