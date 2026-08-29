@@ -276,6 +276,16 @@ A terminal tab can be suspended from its context menu (**Suspend Tab**) or with 
 - **MCP verdict** — `session action=suspend` waits (up to 20 s) for the tab's answer and returns `{ok:true}` or `Cannot suspend: <reason>` when the tab refuses. With no UI attached (a headless `tuic-remote` with no open client) it returns an error instead of reporting success.
 - **Event** — `session-suspend-requested` (`{ session_id, request_id }`) from MCP `session action=suspend`; the UI owns the tab and performs the suspend
 
+### 1.22 Smart Selection
+
+Configurable, rule-driven double/quad-click word selection, mirroring iTerm2's Smart Selection. Settings > Selection.
+
+- **Word boundaries** — "Character list" (a literal separator set, customizable; defaults to today's punctuation class) or "Regular expression" (`|`-joined alternates; the longest match at each position joins onto the adjacent word — e.g. adding `https://` lets a double-click on a URL's host include the scheme)
+- **Smart selection rules** — a precision-scored (`very_low`…`very_high`) regex rule list; the highest `precision × matchLength` score spanning the click wins. Ships with iTerm2's built-in ten plus dev-terminal extras (git commit SHA, `file:line:col`, semver, IPv4/IPv6, UUID, issue key, `#NNN` issue ref)
+- **Double-click performs** — "Word" (character-class expansion) or "Smart" (default: try the rule list first, fall back to word). Quad-click (4 rapid clicks) always tries smart selection regardless of this setting
+- **Rule actions** — Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI — surfaced in the right-click context menu when the click lands on a match (link detection's own Open/Copy-link pair takes priority over a rule's when both apply to the same span). One action per rule may be marked default — Option/Alt+double-click runs it directly, in addition to selecting the match
+- See [terminal-features.md](frontend/terminal-features.md#smart-selection) for the scoring/dispatch details
+
 ---
 
 ## 2. Sidebar
@@ -1552,6 +1562,10 @@ ego's own configuration; the `ego_executable` path and the `ai_chat_workspace` f
 - A search result for an expert setting carries an **Expert** badge; opening it opens the page, reveals the setting and scrolls to it. The reveal lasts until Settings is opened again and does not change the switch
 - Expert settings per page: General (auto-standby timeout, content indexing, update channel); Notifications (master volume, audio output device); Terminal (shell, font weight, OSC 52 clipboard, block folding, scrollbar marks, scrollback reflow); Git & GitHub (auto-delete on PR close, copy ignored files, copy untracked files, storage strategy, auto-archive merged, orphan cleanup, after-merge behavior, auto-fetch interval, the "Add another GitHub account" button while no additional account exists); Agents (collect project progress, and per agent idle-close delay, auto-retry, native status signals, install hooks globally, track intent, collect progress, suggested follow-ups, headless command template, Claude environment flags); Voice (long-press threshold, auto-send, input device, level gate, speech confidence gate, hold-back, notify model on hands-free, start notice); MCP (collapse tools); Remote Access (port, session token duration, IPv6). Full table: [Settings → Expert Mode](user-guide/settings.md#expert-mode)
 - Every section keeps at least one basic setting, so no heading and no page hides in basic mode
+
+### 11.9 Selection
+- Word boundaries: character list or regex, plus a precision-scored smart-selection rule list with actions
+- See **1.22 Smart Selection** for full details
 
 ---
 

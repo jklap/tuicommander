@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPlatformCache } from "../../../platform";
 
 // Story 858: Shell, the terminal theme/font/cursor fields and the terminal
 // display/power-management toggles moved off GeneralTab/AppearanceTab onto a
@@ -132,5 +133,85 @@ describe("TerminalTab placement", () => {
 		expect(settingsStore.state.linkActivation).toBe("modifier");
 		expect(savedConfigs()).toHaveLength(1);
 		expect(savedConfigs()[0].terminal_link_activation).toBe("modifier");
+	});
+
+	describe("modifier-symbol-dependent label/hint text", () => {
+		const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
+
+		afterEach(() => {
+			if (originalPlatform) Object.defineProperty(navigator, "platform", originalPlatform);
+			resetPlatformCache();
+		});
+
+		function setPlatform(value: string) {
+			Object.defineProperty(navigator, "platform", { value, configurable: true });
+			// The component reads isMacOS(), which memoizes detectPlatform() —
+			// without this, whichever platform an earlier test in this file (or an
+			// earlier file in the same worker) set first sticks for every render.
+			resetPlatformCache();
+		}
+
+		it("labels the modifier option ⌘Click and says Cmd in the hint on macOS", () => {
+			setPlatform("MacIntel");
+			const { container, getByText } = render(() => <TerminalTab />);
+			const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+			const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+			const modifierOption = Array.from(linkSelect.options).find((o) => o.value === "modifier")!;
+
+			expect(modifierOption.textContent).toBe("⌘Click");
+			expect(getByText(/only while Cmd is held/)).toBeTruthy();
+		});
+
+		it("labels the modifier option Ctrl+Click and says Ctrl in the hint off macOS", () => {
+			setPlatform("Win32");
+			const { container, getByText } = render(() => <TerminalTab />);
+			const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+			const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+			const modifierOption = Array.from(linkSelect.options).find((o) => o.value === "modifier")!;
+
+			expect(modifierOption.textContent).toBe("Ctrl+Click");
+			expect(getByText(/only while Ctrl is held/)).toBeTruthy();
+		});
+	});
+
+	describe("modifier-symbol-dependent label/hint text", () => {
+		const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
+
+		afterEach(() => {
+			if (originalPlatform) Object.defineProperty(navigator, "platform", originalPlatform);
+			resetPlatformCache();
+		});
+
+		function setPlatform(value: string) {
+			Object.defineProperty(navigator, "platform", { value, configurable: true });
+			// The component reads isMacOS(), which memoizes detectPlatform() —
+			// without this, whichever platform an earlier test in this file (or an
+			// earlier file in the same worker) set first sticks for every render.
+			resetPlatformCache();
+		}
+
+		it("labels the modifier option ⌘Click and says Cmd in the hint on macOS", async () => {
+			setPlatform("MacIntel");
+			await settingsStore.hydrate();
+			const { container, getByText } = render(() => <TerminalTab />);
+			const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+			const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+			const modifierOption = Array.from(linkSelect.options).find((o) => o.value === "modifier")!;
+
+			expect(modifierOption.textContent).toBe("⌘Click");
+			expect(getByText(/only while Cmd is held/)).toBeTruthy();
+		});
+
+		it("labels the modifier option Ctrl+Click and says Ctrl in the hint off macOS", async () => {
+			setPlatform("Win32");
+			await settingsStore.hydrate();
+			const { container, getByText } = render(() => <TerminalTab />);
+			const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+			const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+			const modifierOption = Array.from(linkSelect.options).find((o) => o.value === "modifier")!;
+
+			expect(modifierOption.textContent).toBe("Ctrl+Click");
+			expect(getByText(/only while Ctrl is held/)).toBeTruthy();
+		});
 	});
 });

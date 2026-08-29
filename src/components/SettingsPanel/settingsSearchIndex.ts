@@ -455,6 +455,16 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "dictation.hands_free_start_notice",
 	},
 	// tabs/KeyboardShortcutsTab.tsx
+	{ tab: "selection", section: "Behavior" },
+	{ tab: "selection", section: "Word Boundaries" },
+	{ tab: "selection", section: "Smart Selection Rules" },
+	{ tab: "selection", section: "Behavior", label: "Enable smart selection" },
+	{ tab: "selection", section: "Behavior", label: "Double-click performs" },
+	{ tab: "selection", section: "Word Boundaries", label: "Word boundaries" },
+	{ tab: "selection", section: "Word Boundaries", label: "Word separators" },
+	{ tab: "selection", section: "Word Boundaries", label: "Word pattern" },
+	{ tab: "selection", section: "Smart Selection Rules", label: "Pattern" },
+	{ tab: "selection", section: "Smart Selection Rules", label: "Precision" },
 	{ tab: "keyboard-shortcuts", section: "Keyboard Shortcuts", sectionKey: "settings.keyboardShortcuts" },
 	{
 		tab: "keyboard-shortcuts",
