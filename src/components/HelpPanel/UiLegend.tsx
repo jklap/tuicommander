@@ -1,8 +1,7 @@
 import { type Component, createSignal, For, type JSX, Show } from "solid-js";
 import { t } from "../../i18n";
-import { AnimationPickerDialog } from "../../indicators/AnimationPickerDialog";
-import { IconPickerDialog } from "../../indicators/IconPickerDialog";
-import { IndicatorIcon } from "../../indicators/IndicatorIcon";
+import { IndicatorEditorDialog } from "../../indicators/IndicatorEditorDialog";
+import { IndicatorPreview } from "../../indicators/IndicatorPreview";
 import {
 	GROUP_HINTS,
 	GROUP_LABELS,
@@ -10,14 +9,11 @@ import {
 	type IndicatorDef,
 	type IndicatorGroup,
 	indicatorsByGroup,
-	resolveAnimationId,
-	resolveIconId,
 } from "../../indicators/registry";
 import { settingsStore } from "../../stores/settings";
 import { SettingToggle } from "../SettingsPanel/SettingFields";
 import { PrStateBadge } from "../Sidebar/PrStateBadge";
 import { BranchIcon, type BranchIconProps, UnmergedMarker } from "../Sidebar/RepoSection";
-import { ColorPickerDialog } from "../shared/ColorPickerDialog";
 import s from "./UiLegend.module.css";
 
 // ---------------------------------------------------------------------------
@@ -27,9 +23,9 @@ import s from "./UiLegend.module.css";
 // legend cannot drift from what a branch row shows). Rows that are pure
 // swatches (terminal dots, tab types, git repo status, diff stats) render from
 // `src/indicators/registry.ts`. Either kind may carry an `indicatorId`: in
-// editable mode (Settings > Appearance) that row gets the registry entry's
-// color/icon/animation editor, and the override flows into the real component
-// the row renders.
+// editable mode (Settings > Appearance) clicking that row's preview opens the
+// entry's combined color/icon/animation editor, and the override flows into
+// the real component the row renders.
 // ---------------------------------------------------------------------------
 
 /** Sidebar row icons. Each entry renders the real `BranchIcon` with the props
@@ -208,70 +204,6 @@ function groupToggleBinding(
 	}
 }
 
-/** diffStat previews are a literal glyph (+N / -N), not a shape — the only
- *  group where the "preview" is the thing users actually see in the UI
- *  rather than a stand-in for it. Presentation-only; doesn't need
- *  registry-level modeling. */
-const DIFF_STAT_GLYPH: Record<string, string> = {
-	"diffStat.additions": "+N",
-	"diffStat.deletions": "-N",
-};
-
-/** tabType's colorVar is a raw "r, g, b" triple (consumed inside rgba() so
- *  tint gradients can vary alpha) — every other group's colorVar is a
- *  ready-to-use color. A compact-marker var, when present, is what the
- *  legend's real-component row shows, so the swatch matches it. */
-function resolvedColor(entry: IndicatorDef): string | undefined {
-	const colorVar = entry.markColorVar ?? entry.colorVar;
-	if (!colorVar) return undefined;
-	return entry.group === "tabType" ? `rgb(var(${colorVar}))` : `var(${colorVar})`;
-}
-
-function resolvedAnimation(entry: IndicatorDef): string | undefined {
-	return entry.animVar ? `var(${entry.animVar})` : undefined;
-}
-
-/**
- * One registry row's preview swatch. Shape follows `entry.preview`, but an
- * entry with an icon always renders its REAL shape (IndicatorIcon) instead
- * of a generic dot, with the user's icon override applied.
- */
-const IndicatorPreview: Component<{ entry: IndicatorDef }> = (props) => {
-	const color = () => resolvedColor(props.entry);
-	const animation = () => resolvedAnimation(props.entry);
-
-	return (
-		<Show
-			when={props.entry.group !== "diffStat"}
-			fallback={
-				<span class={s.symbol} style={{ color: color() }}>
-					{DIFF_STAT_GLYPH[props.entry.id]}
-				</span>
-			}
-		>
-			<Show
-				when={props.entry.defaultIconId}
-				fallback={
-					props.entry.preview === "bar" ? (
-						<span class={s.colorBar} style={{ background: color() }} />
-					) : props.entry.preview === "badge" ? (
-						<span class={s.badge} style={{ background: color(), animation: animation() }} />
-					) : (
-						<span class={s.dot} style={{ background: color(), animation: animation() }} />
-					)
-				}
-			>
-				<IndicatorIcon
-					id={resolveIconId(settingsStore.state.indicatorOverrides, props.entry.id)}
-					size={14}
-					class={s.previewIcon}
-					style={{ color: color(), animation: animation() }}
-				/>
-			</Show>
-		</Show>
-	);
-};
-
 /**
  * Visual reference for every color, icon, and animation used throughout the
  * app. Marker rows render the real sidebar components (BranchIcon,
@@ -279,24 +211,18 @@ const IndicatorPreview: Component<{ entry: IndicatorDef }> = (props) => {
  * `src/indicators/registry.ts`, the single source of truth for every
  * customizable indicator.
  *
- * `editable` turns each row backed by a registry entry into an editor — a
- * swatch button per capability, opening the matching picker dialog, plus a
- * reset "×" that clears the whole override — and adds each group's show/hide
- * toggle; used by Settings → Appearance. `HelpPanel.tsx`'s reference view
- * stays read-only.
+ * `editable` turns each row backed by a registry entry into an editor: the
+ * row's own preview (the real BranchIcon / PR marker, or the registry swatch)
+ * becomes a button opening `IndicatorEditorDialog` — one combined dialog
+ * holding that entry's color, icon, and animation controls, whichever it has
+ * — plus a reset "×" that clears the whole override; it also adds each
+ * group's show/hide toggle. Used by Settings → Appearance. `HelpPanel.tsx`'s
+ * reference view stays read-only: the preview there is inert, not a button.
  */
 export const UiLegend: Component<{ editable?: boolean }> = (props) => {
-	const [editingColorId, setEditingColorId] = createSignal<string | null>(null);
-	const [editingIconId, setEditingIconId] = createSignal<string | null>(null);
-	const [editingAnimationId, setEditingAnimationId] = createSignal<string | null>(null);
+	const [editingId, setEditingId] = createSignal<string | null>(null);
 
 	const overrideFor = (id: string) => settingsStore.state.indicatorOverrides.find((o) => o.id === id);
-
-	const overrideColorFor = (id: string): string => overrideFor(id)?.color ?? "";
-
-	const currentIconIdFor = (id: string) => resolveIconId(settingsStore.state.indicatorOverrides, id);
-
-	const currentAnimationIdFor = (id: string) => resolveAnimationId(settingsStore.state.indicatorOverrides, id);
 
 	/** Any field set at all — not just color — so the reset "×" also shows
 	 *  for an icon-only or animation-only override. */
@@ -305,47 +231,33 @@ export const UiLegend: Component<{ editable?: boolean }> = (props) => {
 		return !!o && (o.color !== undefined || o.icon !== undefined || o.animation !== undefined);
 	};
 
-	/** Editor buttons for one registry entry; nothing when read-only. */
-	const EditControls: Component<{ id?: string }> = (p) => (
-		<Show when={props.editable && p.id ? getIndicator(p.id) : undefined}>
-			{(entry) => (
-				<>
-					<Show when={entry().capabilities.includes("color")}>
-						<button
-							class={s.editSwatch}
-							style={{ background: resolvedColor(entry()) }}
-							onClick={() => setEditingColorId(entry().id)}
-							title={t("uiLegend.btn.changeColor", "Change color")}
-						/>
-					</Show>
-					<Show when={entry().capabilities.includes("icon")}>
-						<button
-							class={s.editIconBtn}
-							onClick={() => setEditingIconId(entry().id)}
-							title={t("uiLegend.btn.changeIcon", "Change icon")}
-						>
-							<IndicatorIcon id={currentIconIdFor(entry().id)} size={14} />
-						</button>
-					</Show>
-					<Show when={entry().capabilities.includes("animation")}>
-						<button
-							class={s.editAnimBtn}
-							onClick={() => setEditingAnimationId(entry().id)}
-							title={t("uiLegend.btn.changeAnimation", "Change animation")}
-						>
-							{currentAnimationIdFor(entry().id)}
-						</button>
-					</Show>
-					<Show when={hasOverride(entry().id)}>
-						<button
-							class={s.resetSwatch}
-							onClick={() => settingsStore.clearIndicatorOverride(entry().id)}
-							title={t("uiLegend.btn.resetOverride", "Reset to default")}
-						>
-							&times;
-						</button>
-					</Show>
-				</>
+	/** A row's preview. In editable mode, a row backed by a registry entry
+	 *  turns it into the button that opens that entry's editor dialog. */
+	const EditablePreview: Component<{ id?: string; children: JSX.Element }> = (p) => (
+		<Show when={props.editable && p.id && getIndicator(p.id) ? p.id : undefined} fallback={p.children}>
+			{(id) => (
+				<button
+					class={s.previewBtn}
+					onClick={() => setEditingId(id())}
+					title={t("uiLegend.btn.customize", "Customize")}
+				>
+					{p.children}
+				</button>
+			)}
+		</Show>
+	);
+
+	/** Reset "×" for a row whose entry has an override; editable mode only. */
+	const ResetButton: Component<{ id?: string }> = (p) => (
+		<Show when={props.editable && p.id && hasOverride(p.id) ? p.id : undefined}>
+			{(id) => (
+				<button
+					class={s.resetSwatch}
+					onClick={() => settingsStore.clearIndicatorOverride(id())}
+					title={t("uiLegend.btn.resetOverride", "Reset to default")}
+				>
+					&times;
+				</button>
 			)}
 		</Show>
 	);
@@ -369,10 +281,12 @@ export const UiLegend: Component<{ editable?: boolean }> = (props) => {
 
 	const RegistryRow: Component<{ entry: IndicatorDef }> = (p) => (
 		<div class={s.row}>
-			<IndicatorPreview entry={p.entry} />
+			<EditablePreview id={p.entry.id}>
+				<IndicatorPreview entry={p.entry} />
+			</EditablePreview>
 			<span class={s.label}>{p.entry.label}</span>
 			<span class={s.desc}>{p.entry.description}</span>
-			<EditControls id={p.entry.id} />
+			<ResetButton id={p.entry.id} />
 		</div>
 	);
 
@@ -398,12 +312,14 @@ export const UiLegend: Component<{ editable?: boolean }> = (props) => {
 				<For each={SIDEBAR_SYMBOL_LEGEND}>
 					{(entry) => (
 						<div class={s.row}>
-							<span class={s.symbol}>
-								<BranchIcon {...entry.icon} />
-							</span>
+							<EditablePreview id={entry.indicatorId}>
+								<span class={s.symbol}>
+									<BranchIcon {...entry.icon} />
+								</span>
+							</EditablePreview>
 							<span class={s.label}>{entry.label}</span>
 							<span class={s.desc}>{entry.description}</span>
-							<EditControls id={entry.indicatorId} />
+							<ResetButton id={entry.indicatorId} />
 						</div>
 					)}
 				</For>
@@ -432,10 +348,12 @@ export const UiLegend: Component<{ editable?: boolean }> = (props) => {
 				<For each={PR_BADGE_LEGEND}>
 					{(entry) => (
 						<div class={s.row}>
-							<PrStateBadge compact prNumber={42} {...entry.badge} />
+							<EditablePreview id={entry.indicatorId}>
+								<PrStateBadge compact prNumber={42} {...entry.badge} />
+							</EditablePreview>
 							<span class={s.label}>{entry.label}</span>
 							<span class={s.desc}>{entry.description}</span>
-							<EditControls id={entry.indicatorId} />
+							<ResetButton id={entry.indicatorId} />
 						</div>
 					)}
 				</For>
@@ -467,44 +385,7 @@ export const UiLegend: Component<{ editable?: boolean }> = (props) => {
 				<button class={s.resetAllBtn} onClick={() => settingsStore.resetAllIndicators()}>
 					{t("uiLegend.btn.resetAll", "Reset all indicators")}
 				</button>
-				<ColorPickerDialog
-					visible={editingColorId() !== null}
-					title={t("uiLegend.dialog.indicatorColor", "Indicator Color")}
-					currentColor={editingColorId() ? overrideColorFor(editingColorId()!) : ""}
-					onClose={() => setEditingColorId(null)}
-					onConfirm={(color) => {
-						const id = editingColorId();
-						if (!id) return;
-						if (color) settingsStore.setIndicatorColor(id, color);
-						else settingsStore.clearIndicatorOverride(id);
-						setEditingColorId(null);
-					}}
-				/>
-				<IconPickerDialog
-					visible={editingIconId() !== null}
-					title={t("uiLegend.dialog.indicatorIcon", "Indicator Icon")}
-					currentIconId={editingIconId() ? currentIconIdFor(editingIconId()!) : "dot"}
-					onClose={() => setEditingIconId(null)}
-					onConfirm={(iconId) => {
-						const id = editingIconId();
-						if (!id) return;
-						settingsStore.setIndicatorIcon(id, iconId);
-						setEditingIconId(null);
-					}}
-				/>
-				<AnimationPickerDialog
-					visible={editingAnimationId() !== null}
-					title={t("uiLegend.dialog.indicatorAnimation", "Indicator Animation")}
-					currentAnimationId={editingAnimationId() ? currentAnimationIdFor(editingAnimationId()!) : "none"}
-					allowedAnimationIds={editingAnimationId() ? getIndicator(editingAnimationId()!)?.animations : undefined}
-					onClose={() => setEditingAnimationId(null)}
-					onConfirm={(animationId) => {
-						const id = editingAnimationId();
-						if (!id) return;
-						settingsStore.setIndicatorAnimation(id, animationId);
-						setEditingAnimationId(null);
-					}}
-				/>
+				<IndicatorEditorDialog indicatorId={editingId()} onClose={() => setEditingId(null)} />
 			</Show>
 		</div>
 	);
