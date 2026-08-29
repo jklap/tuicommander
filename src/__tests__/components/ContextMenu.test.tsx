@@ -46,6 +46,70 @@ describe("ContextMenu", () => {
 		expect(shortcuts[0].textContent).toBe("\u2318C");
 	});
 
+	it("renders a header item as a non-interactive label, not a clickable button", () => {
+		const action = vi.fn();
+		const items: ContextMenuItem[] = [
+			{ label: "Git commit SHA", header: true, action },
+			{ label: "Copy", action: vi.fn() },
+		];
+		const { container, getByText } = render(() => (
+			<ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />
+		));
+		// Only the real ("Copy") item renders as a clickable `.item` button.
+		expect(container.querySelectorAll(".item").length).toBe(1);
+		const header = getByText("Git commit SHA");
+		expect(header.tagName).not.toBe("BUTTON");
+		expect(header.classList.contains("header")).toBe(true);
+	});
+
+	it("a header item combined with separator still renders its trailing divider", () => {
+		const items: ContextMenuItem[] = [
+			{ label: "Section", header: true, separator: true, action: () => {} },
+			{ label: "Below", action: vi.fn() },
+		];
+		const { container, getByText } = render(() => (
+			<ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />
+		));
+		expect(getByText("Section").classList.contains("header")).toBe(true);
+		expect(container.querySelectorAll(".separator").length).toBe(1);
+	});
+
+	it("a header item's trailing separator is suppressed when it is the LAST item", () => {
+		const items: ContextMenuItem[] = [
+			{ label: "Above", action: vi.fn() },
+			{ label: "Section", header: true, separator: true, action: () => {} },
+		];
+		const { container } = render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
+		expect(container.querySelectorAll(".separator").length).toBe(0);
+	});
+
+	it("clicking a header item's label does nothing — no action, no close", () => {
+		const action = vi.fn();
+		const handleClose = vi.fn();
+		const items: ContextMenuItem[] = [{ label: "Git commit SHA", header: true, action }];
+		const { getByText } = render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={handleClose} />);
+		fireEvent.click(getByText("Git commit SHA"));
+		expect(action).not.toHaveBeenCalled();
+		expect(handleClose).not.toHaveBeenCalled();
+	});
+
+	it("a header item is skipped by shortcut-key matching (its label isn't a runnable shortcut hint)", () => {
+		const headerAction = vi.fn();
+		const copyAction = vi.fn();
+		const handleClose = vi.fn();
+		const items: ContextMenuItem[] = [
+			// A header with a `shortcut` set would be a caller bug, but the header
+			// filter must still win over the shortcut lookup rather than firing it.
+			{ label: "Git commit SHA", header: true, shortcut: "C", action: headerAction },
+			{ label: "Copy", shortcut: "C", action: copyAction },
+		];
+		render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={handleClose} />);
+		fireEvent.keyDown(document, { key: "c" });
+		expect(headerAction).not.toHaveBeenCalled();
+		expect(copyAction).toHaveBeenCalledOnce();
+		expect(handleClose).toHaveBeenCalledOnce();
+	});
+
 	it("fires action and closes on item click", () => {
 		const action = vi.fn();
 		const handleClose = vi.fn();
@@ -194,6 +258,79 @@ describe("ContextMenu", () => {
 			Object.defineProperty(window, "innerWidth", { value: 1024, writable: true, configurable: true });
 			Object.defineProperty(window, "innerHeight", { value: 768, writable: true, configurable: true });
 		}
+	});
+
+	it("closes on Escape without firing any shortcut action, even before checking other keys", () => {
+		const action = vi.fn();
+		const handleClose = vi.fn();
+		const items: ContextMenuItem[] = [{ label: "Delete", shortcut: "⌫", action }];
+		render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={handleClose} />);
+		fireEvent.keyDown(document, { key: "Escape" });
+		expect(action).not.toHaveBeenCalled();
+		expect(handleClose).toHaveBeenCalledOnce();
+	});
+
+	it("ignores a bare modifier keydown (Shift/Control/Alt/Meta) so chords can still form", () => {
+		const handleClose = vi.fn();
+		render(() => <ContextMenu items={sampleItems} x={0} y={0} visible={true} onClose={handleClose} />);
+		fireEvent.keyDown(document, { key: "Shift" });
+		fireEvent.keyDown(document, { key: "Control" });
+		fireEvent.keyDown(document, { key: "Alt" });
+		fireEvent.keyDown(document, { key: "Meta" });
+		expect(handleClose).not.toHaveBeenCalled();
+	});
+
+	it("matches a ⌘-modified shortcut and fires that item's action", () => {
+		const action = vi.fn();
+		const handleClose = vi.fn();
+		const items: ContextMenuItem[] = [{ label: "Copy", shortcut: "⌘C", action }];
+		render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={handleClose} />);
+		fireEvent.keyDown(document, { key: "c", metaKey: true });
+		expect(action).toHaveBeenCalledOnce();
+		expect(handleClose).toHaveBeenCalledOnce();
+	});
+
+	it("does not match a shortcut when the required modifier is missing", () => {
+		const action = vi.fn();
+		const handleClose = vi.fn();
+		const items: ContextMenuItem[] = [{ label: "Copy", shortcut: "⌘C", action }];
+		render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={handleClose} />);
+		fireEvent.keyDown(document, { key: "c" }); // no meta
+		expect(action).not.toHaveBeenCalled();
+		// Falls through to "any other key closes the menu".
+		expect(handleClose).toHaveBeenCalledOnce();
+	});
+
+	it("does not match a shortcut when an EXTRA modifier is held (exact modifier match required)", () => {
+		const action = vi.fn();
+		const items: ContextMenuItem[] = [{ label: "Copy", shortcut: "⌘C", action }];
+		render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
+		fireEvent.keyDown(document, { key: "c", metaKey: true, shiftKey: true });
+		expect(action).not.toHaveBeenCalled();
+	});
+
+	it("matches a shortcut combining ⇧⌃⌥ modifiers together", () => {
+		const action = vi.fn();
+		const items: ContextMenuItem[] = [{ label: "Weird", shortcut: "⇧⌃⌥X", action }];
+		render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
+		fireEvent.keyDown(document, { key: "x", shiftKey: true, ctrlKey: true, altKey: true });
+		expect(action).toHaveBeenCalledOnce();
+	});
+
+	it("matches the ⏎ glyph against the Enter key", () => {
+		const action = vi.fn();
+		const items: ContextMenuItem[] = [{ label: "Confirm", shortcut: "⏎", action }];
+		render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
+		fireEvent.keyDown(document, { key: "Enter" });
+		expect(action).toHaveBeenCalledOnce();
+	});
+
+	it("does not match a disabled item's shortcut", () => {
+		const action = vi.fn();
+		const items: ContextMenuItem[] = [{ label: "Delete", shortcut: "D", action, disabled: true }];
+		render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
+		fireEvent.keyDown(document, { key: "d" });
+		expect(action).not.toHaveBeenCalled();
 	});
 
 	it("positions menu at x,y coordinates", () => {
