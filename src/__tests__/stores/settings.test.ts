@@ -325,6 +325,129 @@ describe("settingsStore", () => {
 		});
 	});
 
+	describe("smart selection settings", () => {
+		it("defaults smart selection on, double-click action to smart, and word mode to characters", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.state.smartSelectionEnabled).toBe(true);
+				expect(store.state.doubleClickAction).toBe("smart");
+				expect(store.state.wordSelectionMode).toBe("characters");
+				expect(store.state.wordSelectionRegex).toBe("");
+				expect(store.state.smartSelectionRules).toEqual([]);
+				// Matches WORD_SEPARATOR_RE's punctuation class exactly.
+				expect(store.state.wordSeparators).toBe(" \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\");
+			});
+		});
+
+		it("persists setSmartSelectionEnabled", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setSmartSelectionEnabled(false);
+				expect(store.state.smartSelectionEnabled).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ smart_selection_enabled: false }),
+				});
+			});
+		});
+
+		it("persists setDoubleClickAction and falls back to smart for an invalid persisted value", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setDoubleClickAction("word");
+				expect(store.state.doubleClickAction).toBe("word");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ double_click_action: "word" }),
+				});
+
+				mockInvoke.mockResolvedValueOnce({ double_click_action: "bogus" });
+				await store.hydrate();
+				expect(store.state.doubleClickAction).toBe("smart");
+			});
+		});
+
+		it("persists setWordSelectionMode and falls back to characters for an invalid persisted value", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setWordSelectionMode("regex");
+				expect(store.state.wordSelectionMode).toBe("regex");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ word_selection_mode: "regex" }),
+				});
+
+				mockInvoke.mockResolvedValueOnce({ word_selection_mode: "bogus" });
+				await store.hydrate();
+				expect(store.state.wordSelectionMode).toBe("characters");
+			});
+		});
+
+		it("persists setWordSeparators and setWordSelectionRegex", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setWordSeparators("-_");
+				store.setWordSelectionRegex("https://|[a-z]+");
+				expect(store.state.wordSeparators).toBe("-_");
+				expect(store.state.wordSelectionRegex).toBe("https://|[a-z]+");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ word_separators: "-_", word_selection_regex: "https://|[a-z]+" }),
+				});
+			});
+		});
+
+		it("round-trips smart-selection rules (including nested actions) through hydrate and save", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({
+					smart_selection_rules: [
+						{
+							id: "r1",
+							name: "Git SHA",
+							regex: "[0-9a-f]{7,40}",
+							precision: "high",
+							enabled: true,
+							actions: [{ kind: "run_command", title: "Show commit", parameter: "git show \\0", is_default: true }],
+						},
+					],
+				});
+				await store.hydrate();
+				expect(store.state.smartSelectionRules).toEqual([
+					{
+						id: "r1",
+						name: "Git SHA",
+						regex: "[0-9a-f]{7,40}",
+						precision: "high",
+						enabled: true,
+						actions: [{ kind: "run_command", title: "Show commit", parameter: "git show \\0", isDefault: true }],
+					},
+				]);
+
+				store.setSmartSelectionRules([
+					{
+						...store.state.smartSelectionRules[0],
+						actions: [{ ...store.state.smartSelectionRules[0].actions[0], isDefault: false }],
+					},
+				]);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({
+						smart_selection_rules: [
+							expect.objectContaining({
+								actions: [expect.objectContaining({ is_default: false })],
+							}),
+						],
+					}),
+				});
+			});
+		});
+	});
+
 	describe("getFontFamily()", () => {
 		it("returns CSS font family string", () => {
 			testInScope(() => {

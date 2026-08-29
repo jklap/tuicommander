@@ -17,6 +17,12 @@ vi.mock("../../stores/settings", () => ({
 			osc52Clipboard: true,
 			showLastPrompt: true,
 			linkActivation: "click",
+			smartSelectionEnabled: true,
+			doubleClickAction: "smart",
+			wordSelectionMode: "characters",
+			wordSeparators: " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\",
+			wordSelectionRegex: "",
+			smartSelectionRules: [],
 			showBlockTimestamps: true,
 			showBlockMarks: true,
 			showPromptMarks: true,
@@ -33,6 +39,12 @@ vi.mock("../../stores/settings", () => ({
 		setOsc52Clipboard: vi.fn(),
 		setShowLastPrompt: vi.fn(),
 		setLinkActivation: vi.fn(),
+		setSmartSelectionEnabled: vi.fn(),
+		setDoubleClickAction: vi.fn(),
+		setWordSelectionMode: vi.fn(),
+		setWordSeparators: vi.fn(),
+		setWordSelectionRegex: vi.fn(),
+		setSmartSelectionRules: vi.fn(),
 		setShowBlockTimestamps: vi.fn(),
 		setShowBlockMarks: vi.fn(),
 		setShowPromptMarks: vi.fn(),
@@ -163,6 +175,17 @@ describe("SettingsPanel", () => {
 		expect(toggleLabels).toContain("Show block marks");
 		expect(toggleLabels).toContain("Show prompt marks");
 		expect(toggleLabels).toContain("Enable block folding");
+	});
+
+	it("shows the Selection nav item and its content when active", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		const navItems = container.querySelectorAll(".navItem");
+		const selectionItem = Array.from(navItems).find((n) => n.textContent === "Selection")!;
+		expect(selectionItem).toBeTruthy();
+		fireEvent.click(selectionItem);
+
+		const headings = Array.from(container.querySelectorAll(".section h3")).map((h) => h.textContent);
+		expect(headings).toEqual(["Behavior", "Word Boundaries", "Smart Selection Rules"]);
 	});
 
 	it("close button calls onClose", () => {

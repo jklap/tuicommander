@@ -117,6 +117,19 @@ How a detected link (URL, file path, `file://`, or OSC 8 hyperlink) opens is con
 - **⌘Click / Ctrl+Click** — the underline is hidden until Cmd (macOS) or Ctrl (Windows/Linux) is held; holding it reveals the underline and pointer cursor, and modifier+click opens the link.
 - **Never** — click never opens a link; right-click's Open/Copy-link menu is the only way to activate one.
 
+### Smart Selection
+Double-click word selection is configurable and rule-driven, mirroring iTerm2's Smart Selection. Configurable via the **Selection** settings tab (see [Settings — Selection Tab](../user-guide/settings.md#selection-tab)).
+
+**Word boundaries** — what a double-click expands to when no smart rule matches (`word_selection_mode`, default `characters`):
+- **Character list** (`word_separators`) — a literal set of characters that break a word. Whitespace/control characters are always separators regardless of this list.
+- **Regular expression** (`word_selection_regex`) — `|`-joined alternates; the longest match at each position joins onto the adjacent alnum/underscore run (e.g. adding `https://` lets a double-click on a URL's host include the scheme).
+
+**Smart selection rules** (`smart_selection_rules`, default: the built-in set) — each rule has a regex and a precision class (`very_low`…`very_high`, weighted `0.00001`…`1000000`). At the click position, every enabled rule's matches spanning it are scored `precision × matchLength`; the highest score wins (`findSmartMatch` in `smartSelection.ts`, ported from iTerm2's `iTermTextExtractor.m`). `double_click_action` (`word`/`smart`, default `smart`) decides whether a plain double-click tries the rule engine first; quad-click (4 rapid clicks) always does, regardless of that setting. The scanned text window spans `SMART_SELECTION_RADIUS` (2) rows above/below the click, joined across soft-wrapped rows.
+
+An empty `smart_selection_rules` means "use the built-in default set" (`DEFAULT_SMART_SELECTION_RULES` in `smartSelectionDefaults.ts`): iTerm2's ten built-in rules (word, C++ `namespace::identifier`, path, quoted string, Java/Python include path, `mailto:` URL, Objective-C selector, email address, HTTP URL, SSH URL, Telnet URL) plus dev-terminal extras (git commit SHA, `file:line:col`, semver, IPv4, IPv6, UUID, issue key like `ABC-123`, and `#NNN` issue reference — the last disabled by default as too generic).
+
+**Rule actions** — a rule may offer actions (Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI), each with a parameter template supporting `\0`-`\9` (match/capture groups), `\d`/`\u`/`\h` (cwd/user/host) substitution (`substituteActionParameter`). Actions surface in the right-click context menu when the click lands on a match (link-detection's own Open/Copy-link pair takes priority when both apply to the same span, to avoid duplicate menu items). When a rule's actions are shown, the matched rule's name appears above them as a non-interactive header (`ContextMenuItem.header`) so it's clear which rule fired — omitted for a rule left with a blank name. At most one action per rule may be marked default — Option/Alt+double-click runs it directly, in addition to selecting the match. `run_command`'s auto-submit is gated by `shouldAutoSubmitSuggestion` (same metacharacter-safety heuristic as OSC 7770 suggestion chips); `send_text` never auto-submits.
+
 ### URL Click
 URLs in terminal output open in the system browser (via the allowlisted `openUrl` helper — `http`/`https`/`mailto` only). URL detection is regex-based.
 
