@@ -94,6 +94,25 @@ previously-built worktree but fail in a fresh one:
    second `ls -la` or re-running the build (which is a no-op) shows the correct size with the same
    mtime. If `golden_wire_output` tests fail with empty-output assertions right after a build
    that already succeeded once, re-check the file size before assuming a real regression.
+4. **If you later run `make dev`/`pnpm build:sidecar` in the same fresh worktree, the step-2
+   placeholders can leave `tuic-bridge` and `tuic-hook` permanently broken instead of getting
+   replaced by a real build** — this also snapped the `tuicommander` MCP connection for a
+   Claude Code session running out of that worktree (`ENOEXEC` spawning
+   `target/debug/tuic-bridge`, a 0-byte file, not a valid Mach-O). Root cause:
+   `build-sidecar.mjs` skips its `cargo build --release` step whenever
+   `src-tauri/binaries/<bin>-<target>`'s size already equals `target/release/<bin>`'s size — and
+   the same transient-0-byte-read described in point 3 can hit the *release* profile too, so if
+   that read lands while the step-2 placeholder is still an untouched 0-byte stub, the script
+   sees "0 == 0", logs `Sidecar built: ... (skipped)` (or `up to date`), and leaves both the
+   `binaries/` copy AND `target/debug/<bin>` empty — silently, with no error, and it does not
+   self-correct on a later `ls`/rebuild the way point 3's case does, because nothing re-invokes
+   the build. Fix: `pnpm build:sidecar --force` (rebuilds `tuic-bridge`/`tuic`/`tuic-hook`
+   unconditionally), then separately `cargo build --package tuic-bridge` and
+   `cargo build --package tuic-hook` (from `src-tauri/`) to populate their **debug** binaries too
+   — `build-sidecar.mjs` only ever builds the `--release` profile, but `target/debug/tuic-bridge`
+   is what an MCP client spawns directly. If a `tuicommander` MCP server fails to connect with an
+   `ENOEXEC` on a `target/debug/*` path in a worktree you've been building in, check that file's
+   size before assuming a code regression.
 
 The `plugins/` git submodule is also frequently out of sync in worktrees — either pinned to a
 stale commit (`src/__tests__/plugins/buildCleaner.test.ts` fails to resolve an import) or not
