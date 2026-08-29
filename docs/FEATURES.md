@@ -232,6 +232,16 @@ Idle, unfocused terminals are suspended to stop them consuming CPU and battery. 
 - **Event** — `session-standby` (`{ session_id, standby }`) emitted on stop/wake
 - **Settings** — Settings > General > Auto-Standby Timeout (default 5 min; `0` disables)
 
+### 1.22 Smart Selection
+
+Configurable, rule-driven double/quad-click word selection, mirroring iTerm2's Smart Selection. Settings > Selection.
+
+- **Word boundaries** — "Character list" (a literal separator set, customizable; defaults to today's punctuation class) or "Regular expression" (`|`-joined alternates; the longest match at each position joins onto the adjacent word — e.g. adding `https://` lets a double-click on a URL's host include the scheme)
+- **Smart selection rules** — a precision-scored (`very_low`…`very_high`) regex rule list; the highest `precision × matchLength` score spanning the click wins. Ships with iTerm2's built-in ten plus dev-terminal extras (git commit SHA, `file:line:col`, semver, IPv4/IPv6, UUID, issue key, `#NNN` issue ref)
+- **Double-click performs** — "Word" (character-class expansion) or "Smart" (default: try the rule list first, fall back to word). Quad-click (4 rapid clicks) always tries smart selection regardless of this setting
+- **Rule actions** — Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI — surfaced in the right-click context menu when the click lands on a match (link detection's own Open/Copy-link pair takes priority over a rule's when both apply to the same span). One action per rule may be marked default — Option/Alt+double-click runs it directly, in addition to selecting the match
+- See [terminal-features.md](frontend/terminal-features.md#smart-selection) for the scoring/dispatch details
+
 ---
 
 ## 2. Sidebar
@@ -1272,6 +1282,10 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 ### 11.8 Providers
 - Settings > Providers tab for centralized AI provider management
 - See **6.16 Provider Registry** for full details
+
+### 11.9 Selection
+- Word boundaries: character list or regex, plus a precision-scored smart-selection rule list with actions
+- See **1.22 Smart Selection** for full details
 
 ---
 

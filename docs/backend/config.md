@@ -159,6 +159,12 @@ cleartext copy does not survive on disk.
 | `cursor_style` | `String` | `"bar"` | Terminal cursor style: `"bar"`, `"block"`, `"underline"` |
 | `terminal_renderer` | `String` | `"webgl"` | Terminal renderer: `"webgl"` (GPU-accelerated) or `"canvas"` (CPU, no atlas bugs) |
 | `terminal_link_activation` | `String` | `"click"` | How terminal links activate: `"click"` (opens on plain click), `"modifier"` (Cmd/Ctrl+click opens; underline only while held), or `"never"` (right-click Open/Copy-link menu only) |
+| `smart_selection_enabled` | `bool` | `true` | Master toggle for the smart-selection rule engine (regex-rule-driven double/quad-click expansion + rule actions). Word-boundary customization below applies regardless of this flag |
+| `double_click_action` | `String` | `"smart"` | What a plain double-click selects: `"word"` (character-class expansion) or `"smart"` (try the rule engine first, fall back to word). Quad-click always runs the rule engine |
+| `word_selection_mode` | `String` | `"characters"` | How double-click word boundaries are defined: `"characters"` (a literal separator character class) or `"regex"` (`\|`-joined alternates, longest match wins — mirrors iTerm2's word-selection regex mode) |
+| `word_separators` | `String` | `` " \"'`(){}[]<>\|;:,.!?@#$%^&*~=+/\\" `` | `"characters"` mode: characters that BREAK a word (the inverse of iTerm2's "additional word characters" — preserves today's default double-click behavior losslessly) |
+| `word_selection_regex` | `String` | `""` (empty) | `"regex"` mode: `\|`-joined alternates. At each character, the longest anchored match becomes one word-class run (e.g. adding `https://` lets a double-click expand across a URL's scheme) |
+| `smart_selection_rules` | `Vec<SmartSelectionRule>` | `[]` | User-defined smart-selection rules (regex, precision, actions). Empty means "use the built-in default set" (iTerm2's ten plus dev-terminal extras) — the frontend owns that default list |
 | `show_block_timestamps` | `bool` | `true` | Show the hold-`Ctrl+Cmd` relative-time overlay on command blocks |
 | `show_block_marks` | `bool` | `true` | Draw command-block boundary tick marks (blue/red) on the terminal scrollbar |
 | `show_prompt_marks` | `bool` | `true` | Draw a tick mark on the terminal scrollbar for each line where the user submitted a prompt |

@@ -144,9 +144,12 @@ Primary and alternate grids can reuse identical numeric row coordinates while re
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Mouse drag selection | OK | |
-| Double-click word select | OK | `terminal_select_start` with `word:true` |
+| Double-click word/smart select | OK | Frontend-only — `canvasTerminalGestures.ts`/`canvasTerminalSelection.ts` (word bounds) + `smartSelection.ts` (rule engine); no `terminal_select_start` IPC command exists |
+| Quad-click smart select | OK | Always runs the smart-selection rule engine (`smartSelection.ts`), regardless of `double_click_action` |
 | Triple-click line select | OK | |
+| Option/Alt+double-click rule action | OK | Runs a matched rule's default action (`smartSelectionActions.ts`) in addition to selecting |
 | Cmd+C copy with selection | OK | `terminal_get_selection_text` IPC/HTTP parity path |
+| Trailing-space trim on copy | OK | `line.replace(/\s+$/, "")` |
 | Selection normalization | OK | Rust unwraps soft-wrapped rows, trims row padding, and removes coherent Claude `NBSP NBSP ▎` gutter runs |
 | Copy-on-select | OK | `copySelection()` called from `onMouseUp` |
 | getSelection() ref method | OK | Returns the cached backend selection; `getLocalSelectionText()` is the transient fallback |

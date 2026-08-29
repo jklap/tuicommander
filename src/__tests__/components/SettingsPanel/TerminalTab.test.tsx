@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 import { fireEvent, render } from "@solidjs/testing-library";
 
@@ -169,5 +169,39 @@ describe("TerminalTab", () => {
 		const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
 		fireEvent.change(linkSelect, { target: { value: "modifier" } });
 		expect(mockSetLinkActivation).toHaveBeenCalledWith("modifier");
+	});
+
+	describe("modifier-symbol-dependent label/hint text", () => {
+		const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
+
+		afterEach(() => {
+			if (originalPlatform) Object.defineProperty(navigator, "platform", originalPlatform);
+		});
+
+		function setPlatform(value: string) {
+			Object.defineProperty(navigator, "platform", { value, configurable: true });
+		}
+
+		it("labels the modifier option ⌘Click and says Cmd in the hint on macOS", () => {
+			setPlatform("MacIntel");
+			const { container, getByText } = render(() => <TerminalTab />);
+			const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+			const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+			const modifierOption = Array.from(linkSelect.options).find((o) => o.value === "modifier")!;
+
+			expect(modifierOption.textContent).toBe("⌘Click");
+			expect(getByText(/Cmd is held/)).toBeTruthy();
+		});
+
+		it("labels the modifier option Ctrl+Click and says Ctrl in the hint off macOS", () => {
+			setPlatform("Win32");
+			const { container, getByText } = render(() => <TerminalTab />);
+			const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+			const linkSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "modifier"))!;
+			const modifierOption = Array.from(linkSelect.options).find((o) => o.value === "modifier")!;
+
+			expect(modifierOption.textContent).toBe("Ctrl+Click");
+			expect(getByText(/Ctrl is held/)).toBeTruthy();
+		});
 	});
 });

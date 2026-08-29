@@ -248,6 +248,17 @@ Two sources feed blocks, and a session only ever uses one:
 
 When enabled (Settings > General > Terminal or Settings > Appearance), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar. This is enabled by default.
 
+## Smart Selection
+
+Double-clicking a word tries to select something *useful*, not just characters between whitespace — a URL, a file path, a git commit SHA, a version number, and more. Click anywhere inside one and the whole thing gets selected, not just the fragment your click happened to land on.
+
+- **Double-click** — tries the smart-selection rules first, falling back to plain word selection if nothing matches
+- **Quadruple-click** (4 rapid clicks) — always tries smart selection, even if you've turned double-click's smart behavior off
+- **Option/Alt+double-click** — runs the matched item's default action directly (e.g. opening a URL) instead of just selecting it
+- **Right-click** a matched item for more actions (Copy, Open, Run Command, Ask AI, and others depending on what matched)
+
+Customize the rule list, or the plain word-boundary characters double-click falls back to, in Settings > Selection. See [Settings — Selection Tab](settings.md#selection-tab) for every control.
+
 ## Clear Terminal
 
 `Cmd+L` clears the terminal display. Running processes are unaffected.

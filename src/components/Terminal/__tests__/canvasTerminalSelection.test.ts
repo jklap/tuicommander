@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_WORD_SEPARATORS } from "../../../stores/settings";
 import {
+	buildSmartSelectionWindow,
 	createCanvasSearchController,
 	createCanvasSelectionController,
+	createWordBoundaryResolver,
 	extendSelectionDrag,
 	wordBoundsAt,
 } from "../canvasTerminalSelection";
@@ -260,5 +263,177 @@ describe("extendSelectionDrag", () => {
 			{ row: 1, col: 3 },
 		);
 		expect(result).toEqual({ start: { row: 1, col: 3 }, end: { row: 2, col: 9 } });
+	});
+});
+
+describe("buildSmartSelectionWindow", () => {
+	function rowsMap(rows: Record<number, DecodedRow>): (absRow: number) => DecodedRow | null {
+		return (absRow) => rows[absRow] ?? null;
+	}
+
+	it("joins rows with a newline and maps each character back to its grid coordinate", () => {
+		const rows = { 9: row("foo"), 10: row("bar"), 11: row("baz") };
+		const win = buildSmartSelectionWindow(10, 1, 2, rowsMap(rows));
+		expect(win.text).toBe("foo\nbar\nbaz");
+		expect(win.coords[0]).toEqual({ row: 9, col: 0 });
+		// The middle row's "b" (index 4 in "foo\nbar\nbaz") maps back to row 10, col 0.
+		expect(win.coords[win.text.indexOf("bar")]).toEqual({ row: 10, col: 0 });
+	});
+
+	it("computes targetOffset at the click's position within the joined text", () => {
+		const rows = { 9: row("foo"), 10: row("bar"), 11: row("baz") };
+		const win = buildSmartSelectionWindow(10, 1, 2, rowsMap(rows));
+		// offset of "bar"'s col 1 ('a') within "foo\nbar\nbaz"
+		expect(win.targetOffset).toBe("foo\n".length + 1);
+		expect(win.text[win.targetOffset]).toBe("a");
+	});
+
+	it("skips missing rows near the edge of scrollback without inserting a blank line", () => {
+		const rows = { 0: row("first"), 1: row("second") };
+		const win = buildSmartSelectionWindow(0, 0, 2, rowsMap(rows));
+		expect(win.text).toBe("first\nsecond");
+	});
+
+	it("joins a wrapped row's continuation with no separator", () => {
+		const wrappedRow = row("abc");
+		wrappedRow.wrapped = true;
+		const rows = { 5: wrappedRow, 6: row("def") };
+		const win = buildSmartSelectionWindow(5, 1, 1, rowsMap(rows));
+		expect(win.text).toBe("abcdef");
+		// "def"'s 'd' maps to row 6 col 0, not shifted by a phantom newline.
+		expect(win.coords[3]).toEqual({ row: 6, col: 0 });
+	});
+
+	it("returns targetOffset -1 when the clicked row itself is missing (defensive; shouldn't happen in practice)", () => {
+		const rows = { 10: row("bar") };
+		const win = buildSmartSelectionWindow(99, 0, 2, rowsMap(rows));
+		expect(win.targetOffset).toBe(-1);
+	});
+
+	it("renders NUL cells as spaces, matching getLocalText's convention", () => {
+		const withGap = row("ab\0cd");
+		const rows = { 0: withGap };
+		const win = buildSmartSelectionWindow(0, 0, 0, rowsMap(rows));
+		expect(win.text).toBe("ab cd");
+	});
+});
+
+describe("createWordBoundaryResolver", () => {
+	describe("characters mode", () => {
+		it("with the default separator string, matches wordBoundsAt exactly across the shared test table", () => {
+			const resolver = createWordBoundaryResolver({
+				mode: "characters",
+				separators: DEFAULT_WORD_SEPARATORS,
+				regexAlternates: "",
+			});
+			const cases: [DecodedRow, number][] = [
+				[row("foo bar baz"), 5],
+				[row("foo bar baz"), 0],
+				[row("foo bar baz"), 10],
+				[row("foo bar"), 3],
+				[row("a.b.c"), 1],
+				[row("abc"), -1],
+				[row("abc"), 3],
+				[row(`say "hello" now`), 5],
+			];
+			for (const [r, col] of cases) {
+				expect(resolver(r, col)).toEqual(wordBoundsAt(r, col));
+			}
+		});
+
+		it("with an empty separator string, falls back to wordBoundsAt's identity (not just equivalent behavior)", () => {
+			const resolver = createWordBoundaryResolver({ mode: "characters", separators: "", regexAlternates: "" });
+			expect(resolver).toBe(wordBoundsAt);
+		});
+
+		it("a custom separator string changes what breaks a word — e.g. treating '-' as a separator", () => {
+			const resolver = createWordBoundaryResolver({
+				mode: "characters",
+				separators: `${DEFAULT_WORD_SEPARATORS}-`,
+				regexAlternates: "",
+			});
+			expect(resolver(row("foo-bar"), 1)).toEqual({ left: 0, right: 2 });
+		});
+
+		it("a custom separator string can also REMOVE a default separator — e.g. letting '.' join a word", () => {
+			const resolver = createWordBoundaryResolver({
+				mode: "characters",
+				separators: DEFAULT_WORD_SEPARATORS.replace(".", ""),
+				regexAlternates: "",
+			});
+			expect(resolver(row("app.config.ts"), 1)).toEqual({ left: 0, right: 12 });
+		});
+
+		it("still treats whitespace and control characters as separators regardless of the custom string", () => {
+			const resolver = createWordBoundaryResolver({ mode: "characters", separators: "", regexAlternates: "" });
+			expect(resolver(row("foo bar"), 3)).toBeNull();
+		});
+	});
+
+	describe("regex mode", () => {
+		it("the motivating case: adding 'https://' as an alternate makes a double-click on the host include the scheme", () => {
+			// Word-boundary regex mode does fine per-character joining (like
+			// iTerm2's own "-|+|_|~" defaults) — extending a click's run onto an
+			// adjacent literal match. Selecting an entire URL regardless of the
+			// "."/"/" separators inside it is the smart-selection RULE engine's
+			// job (see smartSelection.test.ts's identically-named case, which
+			// uses a full `https://[^\s]+` pattern as a RULE, not a word alternate).
+			const text = "cloning https://github now";
+			const clickCol = text.indexOf("github") + 2;
+
+			const withoutAlternate = createWordBoundaryResolver({ mode: "regex", separators: "", regexAlternates: "" });
+			expect(withoutAlternate(row(text), clickCol)).toEqual({
+				left: text.indexOf("github"),
+				right: text.indexOf("github") + "github".length - 1,
+			});
+
+			const withAlternate = createWordBoundaryResolver({
+				mode: "regex",
+				separators: "",
+				regexAlternates: "https://",
+			});
+			expect(withAlternate(row(text), clickCol)).toEqual({
+				left: text.indexOf("https://"),
+				right: text.indexOf("github") + "github".length - 1,
+			});
+		});
+
+		it("with no alternates configured, falls back to a plain alnum/underscore word class", () => {
+			const resolver = createWordBoundaryResolver({ mode: "regex", separators: "", regexAlternates: "" });
+			expect(resolver(row("foo.bar_baz"), 1)).toEqual({ left: 0, right: 2 });
+			expect(resolver(row("foo.bar_baz"), 5)).toEqual({ left: 4, right: 10 });
+		});
+
+		it("returns null when the click lands on a character outside any word/atom class", () => {
+			const resolver = createWordBoundaryResolver({ mode: "regex", separators: "", regexAlternates: "" });
+			expect(resolver(row("foo.bar"), 3)).toBeNull();
+		});
+
+		it("skips an invalid alternate instead of throwing", () => {
+			const resolver = createWordBoundaryResolver({
+				mode: "regex",
+				separators: "",
+				regexAlternates: "(unterminated|foo",
+			});
+			expect(() => resolver(row("foobar"), 0)).not.toThrow();
+			expect(resolver(row("foobar"), 0)).toEqual({ left: 0, right: 5 });
+		});
+
+		it("multiple alternates all contribute to the word class", () => {
+			const resolver = createWordBoundaryResolver({
+				mode: "regex",
+				separators: "",
+				regexAlternates: "https://|-",
+			});
+			const text = "https://my-site.example.com";
+			// Click inside "my" — the "https://" alternate joins the scheme onto
+			// the host, and the "-" alternate joins "my" through to "site"; the
+			// run still stops at "." (not covered by any alternate or the base
+			// alnum/underscore word class).
+			expect(resolver(row(text), text.indexOf("my") + 1)).toEqual({
+				left: 0,
+				right: text.indexOf(".") - 1,
+			});
+		});
 	});
 });

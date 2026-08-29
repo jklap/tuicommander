@@ -69,6 +69,15 @@ describe("handleOpenUrl", () => {
 			expect(mockOpenUrl).not.toHaveBeenCalled();
 			openSpy.mockRestore();
 		});
+
+		it("logs via appLogger.error when the Tauri opener plugin rejects", async () => {
+			const failure = new Error("no handler registered");
+			mockOpenUrl.mockRejectedValueOnce(failure);
+
+			handleOpenUrl("https://example.com");
+
+			await vi.waitFor(() => expect(mockError).toHaveBeenCalledWith("app", "Failed to open URL", failure));
+		});
 	});
 
 	describe("blocked schemes", () => {

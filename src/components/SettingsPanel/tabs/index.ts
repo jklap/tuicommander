@@ -9,6 +9,7 @@ export { PluginsTab } from "./PluginsTab";
 export { RepoScriptsTab } from "./RepoScriptsTab";
 export type { RepoTabProps } from "./RepoWorktreeTab";
 export { RepoWorktreeTab } from "./RepoWorktreeTab";
+export { SelectionTab } from "./SelectionTab";
 export { ServicesTab } from "./ServicesTab";
 export { SmartPromptsTab } from "./SmartPromptsTab";
 export { TerminalTab } from "./TerminalTab";

@@ -59,4 +59,16 @@ describe("linkModifier store", () => {
 		document.dispatchEvent(new Event("visibilitychange"));
 		expect(linkModifierHeld()).toBe(false);
 	});
+
+	it("is a no-op when a repeated keydown reports the same held state (key-repeat)", () => {
+		initLinkModifier();
+		mockPlatform("MacIntel");
+		document.dispatchEvent(new KeyboardEvent("keydown", { metaKey: true }));
+		expect(linkModifierHeld()).toBe(true);
+		// Held-key auto-repeat fires more keydowns with the same modifier state —
+		// the signal must not thrash (and must simply stay true).
+		document.dispatchEvent(new KeyboardEvent("keydown", { metaKey: true }));
+		document.dispatchEvent(new KeyboardEvent("keydown", { metaKey: true }));
+		expect(linkModifierHeld()).toBe(true);
+	});
 });
