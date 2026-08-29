@@ -169,6 +169,20 @@ See [Command Blocks](terminals.md#command-blocks) for what the block settings co
 The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control in
 Settings. Set `bell_style` in `config.json` (see [Terminal Bell](terminals.md#terminal-bell)).
 
+### Selection
+
+Controls double/quad-click word and smart selection in the terminal — see [Smart Selection](../frontend/terminal-features.md#smart-selection) for the underlying model (precision scoring, the built-in rule set, action dispatch).
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Enable smart selection** | On | Try the rule list below before falling back to plain word-boundary selection. Word-boundary customization still applies when this is off. |
+| **Double-click performs** | Smart | **Word** expands to the character-class boundary below. **Smart** tries the rule list first, falling back to word selection when nothing matches. Quad-click (4 rapid clicks) always tries smart selection, regardless of this setting. |
+| **Word boundaries** | Character list | **Character list**: a literal set of characters that break a word. **Regular expression**: `\|`-joined alternates — the longest match at each position joins onto the adjacent word, e.g. adding `https://` lets a double-click on a URL's host include the scheme. |
+| **Word separators** | `` " \"'`(){}[]<>\|;:,.!?@#$%^&*~=+/\\" `` | (Character-list mode) Characters that break a word for double-click selection. Whitespace and control characters are always separators regardless of this list. A "Restore default separators" button resets it. |
+| **Word pattern** | empty | (Regex mode) `\|`-joined alternates. Plain letters/digits/underscore are always word characters; alternates here join punctuation-containing spans onto them. Invalid alternates are flagged inline and skipped. |
+
+**Smart Selection Rules** is a list editor over the rule engine. Each rule is its own card with an enabled checkbox, a **Name** (shown as a header above its actions in the terminal's right-click menu, so you can tell which rule matched), a **Pattern** (the regular expression, flagged inline if invalid — that rule is then skipped), and a **Precision** (`Very Low`–`Very High`, which resolves overlapping matches — see [Smart Selection](../frontend/terminal-features.md#smart-selection)). Below that, zero or more actions, each with an **Action** kind (Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI), a **Menu label** (the text shown in the right-click menu), a **Parameter** template (supporting `\0`-`\9`/`\d`/`\u`/`\h` substitution), and a **Default** radio — at most one action per rule may be marked default, and that's what Option/Alt+double-click runs. The list starts populated with the built-in default rule set (iTerm2's ten plus dev-terminal extras); editing any rule materializes the full set into your saved configuration. A "Restore built-in defaults" button clears your customizations and reverts to the built-in set.
+
 ### Keyboard Shortcuts
 
 Browse and rebind all app actions. The same editor is also in the **Help panel**

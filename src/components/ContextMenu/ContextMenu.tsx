@@ -11,6 +11,9 @@ export interface ContextMenuItem {
 	children?: ContextMenuItem[];
 	/** Native tooltip shown on hover — e.g. the full path behind a "Copy Path" item */
 	title?: string;
+	/** Renders as a non-interactive section label (e.g. the smart-selection rule name above
+	 *  its actions) instead of a clickable button — no hover state, no click, no shortcut. */
+	header?: boolean;
 }
 
 export interface ContextMenuProps {
@@ -114,56 +117,68 @@ const MenuItem: Component<{
 
 	return (
 		<Show
-			when={!isPureSeparator()}
+			when={!props.item.header}
 			fallback={
-				<Show when={!props.isLast}>
-					<div class={s.separator} />
-				</Show>
+				<>
+					<div class={s.header}>{props.item.label}</div>
+					<Show when={props.item.separator && !props.isLast}>
+						<div class={s.separator} />
+					</Show>
+				</>
 			}
 		>
-			<div ref={wrapRef} class={s.itemWrap} onMouseEnter={openSubmenu} onMouseLeave={() => setSubmenuOpen(false)}>
-				<button
-					class={cx(s.item, props.item.disabled && s.disabled)}
-					title={props.item.title}
-					onClick={() => {
-						if (props.item.disabled) return;
-						if (hasChildren()) {
-							if (submenuOpen()) {
-								setSubmenuOpen(false);
-							} else {
-								openSubmenu();
+			<Show
+				when={!isPureSeparator()}
+				fallback={
+					<Show when={!props.isLast}>
+						<div class={s.separator} />
+					</Show>
+				}
+			>
+				<div ref={wrapRef} class={s.itemWrap} onMouseEnter={openSubmenu} onMouseLeave={() => setSubmenuOpen(false)}>
+					<button
+						class={cx(s.item, props.item.disabled && s.disabled)}
+						title={props.item.title}
+						onClick={() => {
+							if (props.item.disabled) return;
+							if (hasChildren()) {
+								if (submenuOpen()) {
+									setSubmenuOpen(false);
+								} else {
+									openSubmenu();
+								}
+								return;
 							}
-							return;
-						}
-						props.item.action();
-						props.onClose();
-					}}
-					disabled={props.item.disabled}
-				>
-					<span class={s.label}>{props.item.label}</span>
-					<Show when={props.item.shortcut}>
-						<span class={s.shortcut}>{props.item.shortcut}</span>
+							props.item.action();
+							props.onClose();
+						}}
+						disabled={props.item.disabled}
+					>
+						<span class={s.label}>{props.item.label}</span>
+						<Show when={props.item.shortcut}>
+							<span class={s.shortcut}>{props.item.shortcut}</span>
+						</Show>
+						<Show when={hasChildren()}>
+							<span class={s.arrow}>{"\u203A"}</span>
+						</Show>
+					</button>
+					<Show when={submenuOpen() && props.item.children}>
+						<div ref={submenuRef} class={s.submenu}>
+							<For each={props.item.children}>
+								{(child, i) => (
+									<MenuItem
+										item={child}
+										onClose={props.onClose}
+										isLast={i() === (props.item.children?.length ?? 0) - 1}
+									/>
+								)}
+							</For>
+						</div>
 					</Show>
-					<Show when={hasChildren()}>
-						<span class={s.arrow}>{"\u203A"}</span>
-					</Show>
-				</button>
-				<Show when={submenuOpen() && props.item.children}>
-					<div ref={submenuRef} class={s.submenu}>
-						<For each={props.item.children}>
-							{(child, i) => (
-								<MenuItem
-									item={child}
-									onClose={props.onClose}
-									isLast={i() === (props.item.children?.length ?? 0) - 1}
-								/>
-							)}
-						</For>
-					</div>
+				</div>
+				<Show when={props.item.separator && !props.isLast}>
+					<div class={s.separator} />
 				</Show>
-			</div>
-			<Show when={props.item.separator && !props.isLast}>
-				<div class={s.separator} />
 			</Show>
 		</Show>
 	);
@@ -187,7 +202,7 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
 			// Trigger a matching item's action while the menu is open (the shortcut
 			// hints shown next to each item). Top-level items only.
 			const hit = props.items.find(
-				(it) => !it.separator && !it.disabled && it.shortcut && matchesShortcut(e, it.shortcut),
+				(it) => !it.header && !it.separator && !it.disabled && it.shortcut && matchesShortcut(e, it.shortcut),
 			);
 			if (hit) {
 				e.preventDefault();

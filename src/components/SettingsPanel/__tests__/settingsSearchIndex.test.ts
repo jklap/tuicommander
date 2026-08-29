@@ -16,6 +16,7 @@ const TAB_SOURCES: Record<string, string[]> = {
 	appearance: ["tabs/AppearanceTab.tsx"],
 	notifications: ["tabs/NotificationsTab.tsx"],
 	terminal: ["tabs/TerminalTab.tsx"],
+	selection: ["tabs/SelectionTab.tsx"],
 	"keyboard-shortcuts": ["tabs/KeyboardShortcutsTab.tsx"],
 	dictation: ["DictationSettings.tsx"],
 	github: ["tabs/GitHubTab.tsx"],
@@ -41,6 +42,9 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	appearance: { dynamic: 0, orphans: 0 },
 	notifications: { dynamic: 0, orphans: 0 },
 	terminal: { dynamic: 0, orphans: 0 },
+	// SelectionTab: the per-rule "Enabled" and per-action "Default" labels, which wrap a
+	// nested input inside a runtime-rendered rule card (no stable scroll target).
+	selection: { dynamic: 2, orphans: 0 },
 	// The `<label>{section.title}</label>` over each group of the shortcut list —
 	// the groups and their bindings are built at runtime, so the page is indexed
 	// by its heading, the global hotkey and the plugin-commands group only.

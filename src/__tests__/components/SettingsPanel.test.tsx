@@ -10,11 +10,23 @@ vi.mock("../../stores/settings", () => ({
 			defaultFontSize: 12,
 			confirmBeforeQuit: true,
 			confirmBeforeClosingTab: true,
+			smartSelectionEnabled: true,
+			doubleClickAction: "smart",
+			wordSelectionMode: "characters",
+			wordSeparators: " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\",
+			wordSelectionRegex: "",
+			smartSelectionRules: [],
 		},
 		setIde: vi.fn(),
 		setFont: vi.fn(),
 		setConfirmBeforeQuit: vi.fn(),
 		setConfirmBeforeClosingTab: vi.fn(),
+		setSmartSelectionEnabled: vi.fn(),
+		setDoubleClickAction: vi.fn(),
+		setWordSelectionMode: vi.fn(),
+		setWordSeparators: vi.fn(),
+		setWordSelectionRegex: vi.fn(),
+		setSmartSelectionRules: vi.fn(),
 		isAiChatEnabled: vi.fn().mockReturnValue(false),
 		isAcpConfigured: vi.fn().mockReturnValue(false),
 	},
@@ -173,6 +185,17 @@ describe("SettingsPanel", () => {
 		expect(container.querySelectorAll("kbd").length).toBeGreaterThan(0);
 	});
 
+	it("shows the Selection nav item and its content when active", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		const navItems = container.querySelectorAll(".navItem");
+		const selectionItem = Array.from(navItems).find((n) => n.textContent === "Selection")!;
+		expect(selectionItem).toBeTruthy();
+		fireEvent.click(selectionItem);
+
+		const headings = Array.from(container.querySelectorAll(".section h3")).map((h) => h.textContent);
+		expect(headings).toEqual(["Behavior", "Word Boundaries", "Smart Selection Rules"]);
+	});
+
 	it("close button calls onClose", () => {
 		const onClose = vi.fn();
 		const { container } = render(() => <SettingsPanel visible={true} onClose={onClose} />);
@@ -226,7 +249,7 @@ describe("SettingsPanel", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		expect(navGroups(container)).toEqual({
 			Application: ["General", "Appearance", "Notifications"],
-			Workspace: ["Terminal", "Keyboard Shortcuts", "Git & GitHub"],
+			Workspace: ["Terminal", "Selection", "Keyboard Shortcuts", "Git & GitHub"],
 			AI: ["Agents", "Voice", "Smart Prompts"],
 			Integrations: ["MCP", "Remote Access", "Remote Machines", "Telegram", "Plugins"],
 			REPOSITORIES: ["Alpha", "Beta"],
