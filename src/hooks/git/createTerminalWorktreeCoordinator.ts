@@ -45,6 +45,16 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 		if (!target) return;
 		if (target.repoPath === currentRepoPath && target.branchName === currentBranchName) return;
 
+		// A cd across repos is navigation, not a placement. The tab belongs to the repo
+		// it was opened in — `repoPath` records that owner — and this path may only move
+		// it *within* that repo, which is what a worktree switch is. Re-homing an owned
+		// tab across repos is the regression Boss reported as "the app changes repo on
+		// its own": the tab left the strip, and the branch below even switched the
+		// sidebar to the other repo. A tab still parked (`repoPath === null`) has no
+		// owner to respect, so a cd may still settle it.
+		const owner = terminalsStore.get(terminalId)?.repoPath ?? null;
+		if (owner !== null && target.repoPath !== owner) return;
+
 		appLogger.info("terminal", `[CwdChange] ${terminalId} → ${target.repoPath}:${target.branchName} (cwd=${newCwd})`);
 		batch(() => {
 			if (currentRepoPath && currentBranchName) {

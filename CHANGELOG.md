@@ -12,6 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   it was opened in; only a tab still parked with no owner is settled by a `cd`.
   Re-homing an owned tab left the sidebar on one repo while the pane drew a
   terminal from another, with the tab itself missing from the strip.
+- Closed the second half of the same regression: the OSC 7 worktree coordinator
+  re-homed an owned tab across repos as well, and switched the sidebar to the
+  other repo when that tab was active. It now only follows a cwd *inside* the
+  owning repo, so a worktree switch still moves the tab and a cross-repo `cd`
+  does not.
 
 ## [1.7.5] - 2026-08-27
 
