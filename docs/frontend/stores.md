@@ -26,6 +26,7 @@ interface TerminalData {
   nameIsCustom: boolean;            // When true, OSC/status-line title changes are ignored
   fontSize: number;
   cwd: string | null;               // Current working directory (from OSC 7)
+  repoPath: string | null;          // Owning repo — the record. null = parked guess (see terminalOwnership)
   awaitingInput: AwaitingInputType; // "question" | "error" | null
   awaitingInputConfident: boolean;  // High-confidence detection — don't clear on idle→busy
   shellState: ShellState;           // "busy" | "idle" | null
@@ -427,6 +428,29 @@ Session activity history and timeline data.
 
 ### branchSwitcher (`branchSwitcher.ts`)
 Branch switch state and loading indicators.
+
+### terminalOwnership (`terminalOwnership.ts`)
+Which repo owns a terminal. `TerminalData.repoPath` is the record; the branch
+`terminals[]` arrays are a display index derived from it, so a wrong placement is
+repairable instead of permanent. `null` means no registered repo claimed the cwd —
+the tab is parked in whatever repo was active so it stays visible, and the null
+marks the placement as a guess.
+
+| Function | Use |
+|---|---|
+| `reconcileTerminalOwnership(terminalId?)` | Ask "who owns this?" again. For answers that genuinely changed: repos loaded, one added or removed, a worktree appeared, a branch renamed. Omit the id to sweep every terminal. |
+| `reclaimParkedTerminal(terminalId)` | The only thing an OSC 7 cwd change may trigger. No-op unless `repoPath === null`. |
+
+**A `cd` does not re-home an owned tab.** The tab belongs to the repo it was
+opened in; the directory the shell sits in does not revoke that. Calling the full
+reconcile from the cwd handler moved tabs out from under the user, because three
+states answer "where am I" and only one moved: `activeRepoPath` stayed put, so the
+sidebar and the tab bar (which filters on it) kept showing the old repo while the
+tab left the strip — and `TerminalArea` renders on `terminalsStore.activeId` alone,
+so the pane went on drawing a terminal belonging to a repo nobody had selected.
+Agents `cd` across repos constantly, which is why it read as the app switching repo
+on its own. Only a parked tab is settled by a `cd`, because for it the question was
+still open.
 
 ### contextMenuActionsStore (`contextMenuActionsStore.ts`)
 Dynamic context menu action registration.

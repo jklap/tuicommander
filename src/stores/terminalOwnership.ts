@@ -60,3 +60,29 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 
 	if (moved > 0) appLogger.info("terminal", `[Reconcile] re-homed ${moved} terminal(s)`);
 }
+
+/**
+ * What a terminal's new cwd is allowed to change about its placement: nothing,
+ * unless nobody had claimed it yet.
+ *
+ * A `cd` is navigation, not a misplacement. The tab belongs to the repo it was
+ * opened in — every deliberate placement records that owner in `repoPath` — and
+ * the directory the shell happens to sit in does not revoke it. Calling the full
+ * reconcile here instead moved the tab out from under the user, because the three
+ * states that describe "where am I" are updated by different code and only this
+ * one moved: `activeRepoPath` stayed on the old repo, so the sidebar and the tab
+ * bar (which filters on it) kept showing it while the tab itself vanished from
+ * the strip, and TerminalArea renders on `activeId` alone — so the pane went on
+ * drawing a terminal that now belonged to a repo the user was not looking at.
+ * Agents `cd` across repos constantly, which is why it read as the app switching
+ * repo on its own.
+ *
+ * `repoPath === null` is the one case worth acting on. That tab is parked in
+ * whatever repo was active because no registered repo claimed its cwd, and the
+ * null records that the placement is a guess. A cd into a repo we do know answers
+ * the open question, so the parked tab finally goes home.
+ */
+export function reclaimParkedTerminal(terminalId: string): void {
+	if (terminalsStore.get(terminalId)?.repoPath != null) return;
+	reconcileTerminalOwnership(terminalId);
+}
