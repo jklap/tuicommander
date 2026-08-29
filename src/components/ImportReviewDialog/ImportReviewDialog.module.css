@@ -1,4 +1,5 @@
-/* PromptImportDialog — per-prompt review list shown before applying a Smart Prompts import */
+/* ImportReviewDialog — generic per-item review list shown before applying an import
+   (Smart Prompts, Smart Selection rules) */
 
 .wide {
   width: 480px;
@@ -8,6 +9,12 @@
 .subtitle {
   margin: 0 0 10px;
   font-size: var(--font-md);
+  color: var(--fg-muted);
+}
+
+.footnote {
+  margin: 0 0 10px;
+  font-size: var(--font-xs);
   color: var(--fg-muted);
 }
 
