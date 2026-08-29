@@ -130,6 +130,21 @@ An empty `smart_selection_rules` means "use the built-in default set" (`DEFAULT_
 
 **Rule actions** — a rule may offer actions (Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI), each with a parameter template supporting `\0`-`\9` (match/capture groups), `\d`/`\u`/`\h` (cwd/user/host) substitution (`substituteActionParameter`). Actions surface in the right-click context menu when the click lands on a match (link-detection's own Open/Copy-link pair takes priority when both apply to the same span, to avoid duplicate menu items). When a rule's actions are shown, the matched rule's name appears above them as a non-interactive header (`ContextMenuItem.header`) so it's clear which rule fired — omitted for a rule left with a blank name. At most one action per rule may be marked default — Option/Alt+double-click runs it directly, in addition to selecting the match. `run_command`'s auto-submit is gated by `shouldAutoSubmitSuggestion` (same metacharacter-safety heuristic as OSC 7770 suggestion chips); `send_text` never auto-submits.
 
+**Export/Import** (`smartSelectionExport.ts`) — the Selection tab's toolbar exports the
+effective rule set (`all`/`modified`/`custom`, same scope semantics as Smart Prompts) to a
+`tuicommander-smart-selection-rules`-kinded JSON file via the native Save dialog, and imports one
+through a NEW/CONFLICT review dialog (`RuleImportDialog`, built on the shared
+`ImportReviewDialog` — see `docs/user-guide/smart-prompts.md`'s Import & Export section for the
+UI this mirrors). Built-in/custom/modified is derived from `DEFAULT_SMART_SELECTION_RULES` id
+membership rather than a stored flag; `differsFromDefaultRule`'s `actions` comparison is
+positional (order is the menu order and decides which action is default), not set-like. A rule
+carrying a `run_command`, `run_command_new_terminal`, or `send_text` action always imports with
+`enabled: false`, mirroring how a `shell`/`api` Smart Prompt imports disabled. Because the
+stored `smart_selection_rules` is `[]` until the user customizes something (meaning "use the
+defaults"), merging an import always writes back the full effective list — importing even one
+custom rule permanently materializes every built-in rule into `config.json`, same as editing a
+single rule already does; "Restore built-in defaults" remains the escape hatch.
+
 ### URL Click
 URLs in terminal output open in the system browser (via the allowlisted `openUrl` helper — `http`/`https`/`mailto` only). URL detection is regex-based.
 

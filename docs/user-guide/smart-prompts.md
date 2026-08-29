@@ -56,8 +56,10 @@ Open **Settings > Smart Prompts** to manage prompts:
 The toolbar at the top of **Settings > Smart Prompts** lets you move prompts between machines
 or share them with a teammate:
 
-- **Export scope** — choose what to include, then click **Export…** to download a `.json` file:
-  - **Everything** — every built-in and custom prompt
+- **Export scope** — choose what to include, then click **Export…** to open the OS Save dialog
+  and choose a name and location for the `.json` file:
+  - **All prompts** — your entire prompt library, including any prompt not tagged "smart" and
+    so not shown in the list below
   - **Modified only** — built-ins you've changed (content, placement, enabled state, or any
     other setting) plus all of your custom prompts
   - **Custom only** — just the prompts you created, no built-ins
@@ -69,6 +71,10 @@ or share them with a teammate:
 Exported files never include per-machine usage data (last-used timestamps). Prompts that run
 shell commands or call an external API directly are imported **disabled** — review their
 content in the list before turning them on.
+
+Smart Selection rules (Settings > Selection) have the same Export/Import toolbar and review
+dialog — see [Smart Selection Rules](settings.md#smart-selection-rules) for the rule-specific
+scope definitions and import safety notes.
 
 ## Status Feedback
 
