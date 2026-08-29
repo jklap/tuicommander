@@ -1,0 +1,28 @@
+.previewRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.desc {
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.section:last-child {
+  margin-bottom: 0;
+}
+
+.sectionLabel {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
