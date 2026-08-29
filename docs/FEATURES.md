@@ -241,6 +241,7 @@ Configurable, rule-driven double/quad-click word selection, mirroring iTerm2's S
 - **Smart selection rules** — a precision-scored (`very_low`…`very_high`) regex rule list; the highest `precision × matchLength` score spanning the click wins. Ships with iTerm2's built-in ten plus dev-terminal extras (git commit SHA, `file:line:col`, semver, IPv4/IPv6, UUID, issue key, `#NNN` issue ref)
 - **Double-click performs** — "Word" (character-class expansion) or "Smart" (default: try the rule list first, fall back to word). Quad-click (4 rapid clicks) always tries smart selection regardless of this setting
 - **Rule actions** — Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI — surfaced in the right-click context menu when the click lands on a match (link detection's own Open/Copy-link pair takes priority over a rule's when both apply to the same span). One action per rule may be marked default — Option/Alt+double-click runs it directly, in addition to selecting the match
+- **Export/Import** — a scope dropdown (All rules / Modified only / Custom only) plus Export…/Import…, mirroring Smart Prompts' toolbar; export opens the native Save dialog, import reviews NEW/CONFLICT rules before applying and forces any rule with a command-running or text-sending action to import disabled
 - See [terminal-features.md](frontend/terminal-features.md#smart-selection) for the scoring/dispatch details
 
 ---
@@ -1215,7 +1216,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Variable insertion dropdown below content textarea: grouped by Git/GitHub/Terminal, click to insert `{variable}` at cursor
 - Create custom smart prompts with `+ New Prompt` button
 - Built-in prompts show a "Reset to Default" button when content is overridden
-- Import/export: export scope picker (Everything / Modified only / Custom only) downloads a portable `.json`; Import reads a file and shows a per-prompt review dialog (NEW/CONFLICT badges, select which to apply) before anything is overwritten. Imported `shell`/`api` prompts land disabled pending review.
+- Import/export: export scope picker (All prompts / Modified only / Custom only — "All prompts" covers the entire prompt library, not just what's shown in the drawer) opens the native Save dialog to write a portable `.json`; Import reads a file and shows a per-prompt review dialog (NEW/CONFLICT badges, select which to apply) before anything is overwritten. Imported `shell`/`api` prompts land disabled pending review. Smart Selection rules (Settings > Selection) have the identical toolbar and review dialog.
 
 ### 10.11 Headless Template Configuration
 

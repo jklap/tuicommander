@@ -39,6 +39,46 @@ manual item covers only the rebuilt live Codex integration.
   precise non-retryable timeout; it must not require a `status`/`output` poll,
   leave `/clear` in the composer, or run it twice. Close only the throwaway
   session after observing the result.
+## Smart Selection rule export/import + native Save dialog for both Export toolbars (2026-08-28)
+
+Frontend-only change (no Rust touched) — `write_external_file` (the command the Save dialog
+writes through) and its HTTP/IPC parity already existed and are unmodified. Verified by 177
+passing vitest cases across the new/updated files (`smartSelectionExport.test.ts`,
+`jsonFileTransfer.test.ts`, `SelectionTab.transfer.test.tsx`, `SmartPromptsTab.transfer.test.tsx`,
+plus the untouched `PromptImportDialog.test.tsx`/`SelectionTab.test.tsx` passing unchanged after
+the `PromptImportDialog`→`ImportReviewDialog` generalization), `tsc --noEmit`, `biome check`, and
+`cargo nextest run --workspace` (5300 rust tests, unaffected). The native OS Save dialog itself
+cannot be driven by vitest, `agent-browser`, or Playwright (it's outside the WebView/DOM), so the
+actual file-picker UX needs a human pass in the real desktop app.
+
+- [ ] **[MANUAL]** Settings → Smart Prompts → Export…: confirm the OS Save dialog opens with a
+      suggested filename of `prompts-<scope>.json`, that saving actually writes the file to the
+      chosen location with valid JSON content, and that Cancel produces no toast and writes
+      nothing.
+- [ ] **[MANUAL]** Settings → Selection → Export…: same checks, filename
+      `smart-selection-rules-<scope>.json`.
+- [ ] **[MANUAL]** Save an export to a location outside your home folder (e.g. an external drive,
+      or `/tmp` on macOS/Linux) with an existing parent directory, and confirm it actually
+      **succeeds** — `write_external_file`'s `validate_external_write_path` (`fs.rs`) requires an
+      absolute path, rejects `..` traversal, and requires the parent to already exist, but is
+      **not** home-directory-restricted (confirmed via its own
+      `validate_external_write_accepts_path_outside_home` test — its doc comment claiming a
+      home-only allowlist is stale/incorrect, unrelated to this feature). Separately confirm that
+      picking a path whose parent directory does **not** exist produces a clear "Export failed"
+      toast rather than a silent no-op.
+- [ ] **[MANUAL]** Load the app in browser mode (per AGENTS.md's web-UI section) and confirm both
+      Export buttons fall back to a normal browser download (no native dialog, since `save()` is
+      Tauri-only) instead of failing silently.
+- [ ] **[MANUAL]** Settings → Selection: export "Modified only" after editing one built-in rule's
+      pattern, then "Restore built-in defaults", then Import that file — confirm the review
+      dialog's footnote about materializing built-ins into your configuration appears (only shown
+      when your stored rule list is currently empty), that a rule with a Run Command/Send Text
+      action shows the review warning and lands disabled after import, and that
+      `config.json`'s `smart_selection_rules` is populated correctly afterward.
+- [ ] **[MANUAL]** Repeat the above Save-dialog checks on Windows and Linux — only exercised on
+      macOS so far; the Tauri dialog plugin is cross-platform but its native picker chrome and
+      default-directory behavior differ per OS.
+
 ## mDNS Tier A — Bonjour hostname in self-signed cert SAN + network picker (2026-08-27, **Rust change — needs `make dev` restart**)
 
 - [x] On macOS, Settings → Services & MCP's "Network Interface" picker includes an "mDNS — `<name>.local`" entry after the IP entries, is NOT auto-selected over the existing Wi-Fi/LAN entry, and is a real choosable `<option>` (selecting it resolves to the hostname value) _(verified: Playwright against a throwaway `make dev` test instance on :9877 — screenshot shows "mDNS — DJW0791KX5.local" both listed after "Wi-Fi / LAN (en0)"/"VPN (utun4)" and, once selected, rendered as the picker's chosen value with no layout/overflow issues)_

@@ -181,6 +181,44 @@ Any per-repo or per-agent boolean setting that can inherit a global default (Rep
 
 **Resolution is always `override ?? globalDefault`** (see `src/stores/repoSettings.ts`'s `resolvers` map, e.g. `copyIgnoredFiles: (s, local) => s.copyIgnoredFiles ?? local()?.copy_ignored_files ?? repoDefaultsStore.state.copyIgnoredFiles`). Never invert this order — resolving `globalDefault ?? override` silently makes every explicit "Off" override unreachable whenever the global default is `true`. Any new inheritable field must go through `RepoSettingsEntry`/`AgentConfig`'s `Option<bool>` (Rust) / `boolean | null` (TS) shape and a `resolvers` entry, not a bare `bool`/`boolean` — a bare boolean silently drops the "use global" state.
 
+## Export/Import Settings Collections & Native File Save
+
+Smart Prompts and Smart Selection rules both have a Settings toolbar for moving a user-editable
+collection between machines: a scope dropdown (`all`/`modified`/`custom`), **Export…**, and
+**Import…** with a NEW/CONFLICT review dialog before anything is applied. Building a third one
+(keybindings, theme presets, etc.) should reuse this infrastructure rather than re-implementing it:
+
+- **`src/utils/jsonFileTransfer.ts`** — `saveJsonFile`/`exportJsonWithToast` open the native OS
+  Save dialog on desktop (`@tauri-apps/plugin-dialog`'s `save()`, imported *dynamically* so browser
+  mode never pulls the plugin in and so `vi.mock("@tauri-apps/plugin-dialog", ...)` is honored)
+  then write through the existing `write_external_file` command — already path-validated
+  (`fs.rs`'s `validate_external_write_path`: absolute path, no `..` traversal, parent must
+  already exist — NOT home-dir-restricted despite that function's own doc comment; see its
+  `validate_external_write_accepts_path_outside_home` test) and already has full IPC/HTTP
+  parity, so a new export feature needs **no new Rust and no new `transport.ts` entry**. Falls back
+  to a Blob + `<a download>` (`downloadText`) in browser mode, where the native dialog is
+  unavailable. `pickJsonImportFile` is the matching `<input type="file">` picker for import.
+- **`src/components/ImportReviewDialog/ImportReviewDialog.tsx`** — generic checkbox-list review
+  dialog (NEW/CONFLICT badges, All/None/New-only bulk select, Escape-to-close via
+  `stores/modalStack`) that `PromptImportDialog` and `RuleImportDialog` both adapt via `meta`/
+  `conflictNote`/`reviewWarning`/`footnote` props. Add a new thin adapter, not a copy of the whole
+  dialog — the shared component is what keeps a future accessibility/Escape-handling fix from
+  drifting between copies.
+- **Classify "modified" against your own defaults, don't reuse another feature's compare
+  function.** `promptExport.ts`'s array-field compare (`normalizeField`) sorts before comparing —
+  correct for a *set* field like `placement`, wrong for anything positional. `smartSelectionExport.ts`'s
+  `actions` compare is deliberately unsorted because action order is the right-click menu order and
+  decides which action is default; copy that positional-vs-set distinction, not the sort.
+- **A collection stored as `[] means use built-in defaults`** (no `builtIn` flag on the item type)
+  needs its own merge helper, not the prompt library's — see `mergeImportedRules` in
+  `smartSelectionExport.ts`: it resolves to the *effective* list first, then upserts, and the
+  caller must know that importing anything therefore materializes the full default set into
+  `config.json` (same as editing one item already does for Smart Selection rules).
+- **Any imported item that can run a command or write into a live PTY must import disabled** and
+  be flagged `needsReview` in the dialog — the direct analogue of Smart Prompts' `shell`/`api`
+  execution-mode handling. Force this at the actual write boundary (the merge/apply step), not
+  just in the classifier that only drives the dialog's badge.
+
 ## TUIC Protocol Markers (ack / intent: / suggest:)
 
 Top-level sessions only. Subagents (Task tool) and in-process teammates must NEVER emit `ack`, `intent:`, or `suggest:` — `suggest:` is the end-of-task signal, so a subagent emitting it flips the *parent* session to `completed` mid-work. See `docs/user-guide/ai-agents.md#tuic-protocol--output-markers` for the full protocol and `src-tauri/src/mcp_http/mcp_transport.rs`'s `build_mcp_instructions_for_mode` / `cc_agent_hint.suggested_prompt` for where this is enforced today.

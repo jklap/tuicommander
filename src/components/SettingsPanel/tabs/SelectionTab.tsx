@@ -1,8 +1,21 @@
 import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { DEFAULT_WORD_SEPARATORS, settingsStore } from "../../../stores/settings";
+import { toastsStore } from "../../../stores/toasts";
 import { onClickKeyDown } from "../../../utils/a11y";
+import { isValidRegex } from "../../../utils/isValidRegex";
+import { exportJsonWithToast, pickJsonImportFile } from "../../../utils/jsonFileTransfer";
+import type { ExportScope } from "../../../utils/promptExport";
 import { randomId } from "../../../utils/randomId";
-import { resolveSmartSelectionRules } from "../../Terminal/smartSelectionDefaults";
+import {
+	buildRulesExportFile,
+	classifyRuleImport,
+	mergeImportedRules,
+	parseRulesExportFile,
+	type RuleImportCandidate,
+	selectRulesForExport,
+} from "../../../utils/smartSelectionExport";
+import { RuleImportDialog } from "../../RuleImportDialog/RuleImportDialog";
+import { DEFAULT_SMART_SELECTION_RULES, resolveSmartSelectionRules } from "../../Terminal/smartSelectionDefaults";
 import type {
 	SmartSelectionAction,
 	SmartSelectionActionKind,
@@ -12,6 +25,10 @@ import type {
 } from "../../Terminal/smartSelectionTypes";
 import { SettingInput, SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+
+/** Built-in default rules indexed by id, for export scope classification and the import
+ *  dialog's built-in-vs-custom conflict note. */
+const DEFAULT_RULES_BY_ID = new Map(DEFAULT_SMART_SELECTION_RULES.map((r) => [r.id, r]));
 
 const PRECISION_OPTIONS: { value: SmartSelectionPrecision; label: string }[] = [
 	{ value: "very_low", label: "Very Low" },
@@ -30,15 +47,6 @@ const ACTION_KIND_OPTIONS: { value: SmartSelectionActionKind; label: string }[] 
 	{ value: "run_command_new_terminal", label: "Run Command in New Terminal" },
 	{ value: "ask_ai", label: "Ask AI" },
 ];
-
-function isValidRegex(pattern: string): boolean {
-	try {
-		new RegExp(pattern);
-		return true;
-	} catch {
-		return false;
-	}
-}
 
 function newRule(): SmartSelectionRule {
 	return {
@@ -239,11 +247,17 @@ export const SelectionTab: Component = () => {
 	// rule that's missing the field. Returns `r` itself (not a copy) whenever
 	// `actions` is already present, so unmodified rules keep a stable object
 	// reference across edits, which spares every OTHER row's `RuleRow`
-	// instance (and its DOM) from an unnecessary remount.
-	const rules = (): SmartSelectionRule[] =>
+	// instance (and its DOM) from an unnecessary remount. Memoized (not a plain
+	// function) so the several handlers/computations that each call `rules()`
+	// per interaction — updateRule/removeRule/addRule/updateAction (which calls
+	// it twice: once via `.find`, again inside `updateRule`), `scopeCounts`, and
+	// export/import — share one resolve+map instead of redoing it per call;
+	// Solid recomputes only when `smartSelectionRules` itself changes.
+	const rules = createMemo((): SmartSelectionRule[] =>
 		resolveSmartSelectionRules(settingsStore.state.smartSelectionRules).map((r) =>
 			r.actions ? r : { ...r, actions: [] },
-		);
+		),
+	);
 
 	const updateRule = (id: string, patch: Partial<SmartSelectionRule>) =>
 		settingsStore.setSmartSelectionRules(rules().map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -272,6 +286,65 @@ export const SelectionTab: Component = () => {
 		const rule = rules().find((r) => r.id === ruleId);
 		if (!rule) return;
 		updateRule(ruleId, { actions: rule.actions.filter((_, i) => i !== index) });
+	};
+
+	const [exportScope, setExportScope] = createSignal<ExportScope>("all");
+	const [importState, setImportState] = createSignal<{ candidates: RuleImportCandidate[]; warnings: string[] } | null>(
+		null,
+	);
+
+	/** Counts shown in the export scope dropdown, so the choice is obvious before a file is written. */
+	const scopeCounts = createMemo(() => {
+		const all = rules();
+		return {
+			all: all.length,
+			modified: selectRulesForExport(all, "modified", DEFAULT_RULES_BY_ID).length,
+			custom: selectRulesForExport(all, "custom", DEFAULT_RULES_BY_ID).length,
+		};
+	});
+
+	const handleExport = async () => {
+		const scope = exportScope();
+		const selected = selectRulesForExport(rules(), scope, DEFAULT_RULES_BY_ID);
+		const file = buildRulesExportFile(selected, scope);
+		await exportJsonWithToast(
+			`smart-selection-rules-${scope}.json`,
+			file,
+			"Export Smart Selection Rules",
+			"Exported Smart Selection rules",
+		);
+	};
+
+	const handleImportFile = async () => {
+		const text = await pickJsonImportFile();
+		if (text === null) return;
+		const { rules: parsedRules, warnings, error } = parseRulesExportFile(text);
+		if (error) {
+			toastsStore.add("Import failed", error, "error");
+			return;
+		}
+		if (parsedRules.length === 0) {
+			toastsStore.add("Nothing to import", warnings[0] ?? "The file contained no rules", "warn");
+			return;
+		}
+		const existingIds = new Set(rules().map((r) => r.id));
+		const candidates = classifyRuleImport(parsedRules, existingIds);
+		setImportState({ candidates, warnings });
+	};
+
+	const handleImportConfirm = (selectedIds: string[]) => {
+		const state = importState();
+		if (!state) return;
+		const selected = new Set(selectedIds);
+		const toImport = state.candidates.filter((c) => selected.has(c.rule.id)).map((c) => c.rule);
+		const { merged, disabled } = mergeImportedRules(rules(), toImport);
+		settingsStore.setSmartSelectionRules(merged);
+		setImportState(null);
+		toastsStore.add(
+			`Imported ${toImport.length} rule${toImport.length === 1 ? "" : "s"}`,
+			disabled.length > 0 ? `Imported disabled (review before enabling): ${disabled.join(", ")}` : "",
+			disabled.length > 0 ? "warn" : "info",
+		);
 	};
 
 	return (
@@ -341,6 +414,25 @@ export const SelectionTab: Component = () => {
 				runs on Option/Alt+double-click.
 			</p>
 
+			<div class={s.transferRow}>
+				<select
+					class={s.transferSelect}
+					data-testid="rule-export-scope-select"
+					value={exportScope()}
+					onChange={(e) => setExportScope(e.currentTarget.value as ExportScope)}
+				>
+					<option value="all">All rules ({scopeCounts().all})</option>
+					<option value="modified">Modified only ({scopeCounts().modified})</option>
+					<option value="custom">Custom only ({scopeCounts().custom})</option>
+				</select>
+				<button class={s.transferBtn} data-testid="rule-export-btn" onClick={handleExport}>
+					Export…
+				</button>
+				<button class={s.transferBtn} data-testid="rule-import-btn" onClick={handleImportFile}>
+					Import…
+				</button>
+			</div>
+
 			<For each={rules()}>
 				{(rule) => (
 					<RuleRow
@@ -363,6 +455,19 @@ export const SelectionTab: Component = () => {
 					Restore built-in defaults
 				</button>
 			</div>
+
+			<Show when={importState()}>
+				{(state) => (
+					<RuleImportDialog
+						candidates={state().candidates}
+						warnings={state().warnings}
+						willMaterializeDefaults={settingsStore.state.smartSelectionRules.length === 0}
+						isBuiltIn={(id) => DEFAULT_RULES_BY_ID.has(id)}
+						onImport={handleImportConfirm}
+						onCancel={() => setImportState(null)}
+					/>
+				)}
+			</Show>
 		</div>
 	);
 };
