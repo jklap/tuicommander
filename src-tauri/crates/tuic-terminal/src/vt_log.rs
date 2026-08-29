@@ -640,6 +640,11 @@ impl VtLogBuffer {
         self.grid.drain_events()
     }
 
+    /// See `TerminalGrid::drain_pty_write_events`.
+    pub fn grid_drain_pty_write_events(&self) -> Vec<String> {
+        self.grid.drain_pty_write_events()
+    }
+
     // --- Scroll delegates ---
 
     pub fn grid_scroll(&mut self, delta: i32) {
