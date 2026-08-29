@@ -299,12 +299,5 @@ button.varItem[data-control-layout="row"]:hover {
   .promptMeta { flex-wrap: wrap; }
 }
 
-/* Import / export toolbar */
-
-.transferRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
+/* Import / export toolbar classes (.transferRow/.transferSelect/.transferBtn) moved to the
+   shared Settings.module.css — SelectionTab uses them too. */
