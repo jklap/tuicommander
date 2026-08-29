@@ -137,6 +137,18 @@ Controls double/quad-click word and smart selection in the terminal — see [Sma
 
 A list editor over the rule engine. Each rule is a single-line row (enabled checkbox, name, and precision) that expands into its full editor on click — matching the Smart Prompts settings pattern. The row header shows the **Name** (also shown as a header above its actions in the terminal's right-click menu, so you can tell which rule matched); expanding it reveals the **Pattern** (the regular expression, flagged inline if invalid — that rule is then skipped) and **Precision** (`Very Low`–`Very High`, which resolves overlapping matches — see [Smart Selection](terminal-features.md#smart-selection)). Below that, zero or more actions, each with an **Action** kind (Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI), a **Menu label** (the text shown in the right-click menu), a **Parameter** template (supporting `\0`-`\9`/`\d`/`\u`/`\h` substitution), and a **Default** radio — at most one action per rule may be marked default, and that's what Option/Alt+double-click runs. The list starts populated with the built-in default rule set (iTerm2's ten plus dev-terminal extras); editing any rule materializes the full set into your saved configuration. A "Restore built-in defaults" button clears your customizations and reverts to the built-in set.
 
+A toolbar above the rule list mirrors Smart Prompts' Export/Import: a scope dropdown (**All
+rules**, **Modified only** — a built-in you've changed plus every custom rule, or **Custom
+only**), an **Export…** button that opens the OS Save dialog, and an **Import…** button that
+opens a review dialog listing every rule in the file as **NEW** or **CONFLICT**. Because a rule
+with no default to compare against (any custom rule, or an id the file doesn't recognize as
+built-in) counts as modified by definition, "Modified only" always includes every custom rule.
+Importing anything — even a single custom rule — materializes the full built-in set into your
+saved configuration, exactly like editing one rule does; "Restore built-in defaults" undoes
+this. A rule with a **Run Command**, **Run Command in New Terminal**, or **Send Text** action
+imports **disabled**, the same treatment Smart Prompts gives a shell/API prompt — review its
+pattern and parameter before enabling it.
+
 ## Agents Tab
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.
@@ -249,6 +261,9 @@ Install, manage, and browse plugins. See [Plugins](plugins.md) for the full guid
 
 Manage the AI-powered actions surfaced in the toolbar, context menus, and command palette. Reachable from the nav or directly via "Manage Smart Prompts..." in the Smart Prompts drawer.
 
+- **Export/Import toolbar** — a scope dropdown (**All prompts**, **Modified only**, **Custom
+  only**) plus **Export…**/**Import…**; export covers your entire prompt library (a hint under
+  the toolbar says so), not just the prompt list below, which shows only prompts tagged "smart"
 - **Headless Agent** — default agent for headless prompts; individual prompts can override it
 - **Prompt list** — grouped by category, with enable/disable toggle and placement/mode badges
 - **Editor** (click a row) — name, description, content with variable insertion, placement checkboxes, Execution Mode, inject target, Auto-execute, output target, system prompt, keyboard shortcut

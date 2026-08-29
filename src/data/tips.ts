@@ -318,7 +318,13 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Smart Prompts Import/Export",
 		description:
-			"Export your Smart Prompts (everything, modified only, or custom only) to a file, or import someone else's — you'll review each one before it's applied.",
+			"Export your Smart Prompts (all prompts, modified only, or custom only) to a file, or import someone else's — you'll review each one before it's applied.",
+		shortcut: null,
+	},
+	{
+		feature: "Smart Selection Rules Import/Export",
+		description:
+			"Move your Smart Selection rules (Settings > Selection) to another machine or share them with a teammate — export to a file, or import and review each rule before it's applied.",
 		shortcut: null,
 	},
 	{

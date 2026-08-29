@@ -60,8 +60,8 @@ const fixtures = vi.hoisted(() => {
 		makeLibraryPrompts,
 		importPrompts: vi.fn().mockReturnValue({ imported: 0, disabled: [] }),
 		toastAdd: vi.fn(),
-		downloadPromptExport: vi.fn(),
-		pickPromptImportFile: vi.fn(),
+		exportJsonWithToast: vi.fn().mockResolvedValue(undefined),
+		pickJsonImportFile: vi.fn(),
 	};
 });
 
@@ -87,9 +87,9 @@ vi.mock("../../../stores/promptLibrary", () => ({
 	},
 }));
 
-vi.mock("../../../utils/promptTransfer", () => ({
-	downloadPromptExport: (...args: unknown[]) => fixtures.downloadPromptExport(...args),
-	pickPromptImportFile: (...args: unknown[]) => fixtures.pickPromptImportFile(...args),
+vi.mock("../../../utils/jsonFileTransfer", () => ({
+	exportJsonWithToast: (...args: unknown[]) => fixtures.exportJsonWithToast(...args),
+	pickJsonImportFile: (...args: unknown[]) => fixtures.pickJsonImportFile(...args),
 }));
 
 vi.mock("../../../stores/toasts", () => ({
@@ -114,7 +114,7 @@ vi.mock("../../../stores/agentConfigs", () => ({
 
 import { SmartPromptsTab } from "../../../components/SettingsPanel/tabs/SmartPromptsTab";
 
-const { importPrompts, toastAdd, downloadPromptExport, pickPromptImportFile } = fixtures;
+const { importPrompts, toastAdd, exportJsonWithToast, pickJsonImportFile } = fixtures;
 
 function exportEnvelope(prompts: Partial<SavedPrompt>[], overrides: Record<string, unknown> = {}) {
 	return JSON.stringify({
@@ -137,35 +137,42 @@ describe("SmartPromptsTab — import/export toolbar", () => {
 		const { getByTestId } = render(() => <SmartPromptsTab />);
 		const select = getByTestId("export-scope-select") as HTMLSelectElement;
 		const labels = Array.from(select.options).map((o) => o.textContent);
-		expect(labels).toContain("Everything (3)");
+		expect(labels).toContain("All prompts (3)");
 		expect(labels).toContain("Modified only (2)");
 		expect(labels).toContain("Custom only (1)");
 	});
 
-	it("exports 'all' by default with the right filename", () => {
+	it("shows a hint that the export covers the whole prompt library", () => {
+		const { getByText } = render(() => <SmartPromptsTab />);
+		expect(getByText(/Exports your entire prompt library, including prompts not listed below/)).toBeTruthy();
+	});
+
+	it("exports 'all' by default with the right filename", async () => {
 		const { getByTestId } = render(() => <SmartPromptsTab />);
 		fireEvent.click(getByTestId("export-btn"));
+		await Promise.resolve();
 
-		expect(downloadPromptExport).toHaveBeenCalledOnce();
-		const [file, filename] = downloadPromptExport.mock.calls[0];
-		expect(filename).toBe("smart-prompts-all.json");
+		expect(exportJsonWithToast).toHaveBeenCalledOnce();
+		const [filename, file] = exportJsonWithToast.mock.calls[0];
+		expect(filename).toBe("prompts-all.json");
 		expect(file.scope).toBe("all");
 		expect(file.prompts).toHaveLength(3);
 	});
 
-	it("exports only the selected scope after changing the dropdown", () => {
+	it("exports only the selected scope after changing the dropdown", async () => {
 		const { getByTestId } = render(() => <SmartPromptsTab />);
 		fireEvent.change(getByTestId("export-scope-select"), { target: { value: "custom" } });
 		fireEvent.click(getByTestId("export-btn"));
+		await Promise.resolve();
 
-		const [file, filename] = downloadPromptExport.mock.calls[0];
-		expect(filename).toBe("smart-prompts-custom.json");
+		const [filename, file] = exportJsonWithToast.mock.calls[0];
+		expect(filename).toBe("prompts-custom.json");
 		expect(file.scope).toBe("custom");
 		expect(file.prompts.map((p: SavedPrompt) => p.id)).toEqual(["custom-1"]);
 	});
 
 	it("opens the review dialog with correct NEW/CONFLICT classification for a valid file", async () => {
-		pickPromptImportFile.mockResolvedValue(
+		pickJsonImportFile.mockResolvedValue(
 			exportEnvelope([
 				{ id: "custom-1", name: "My Custom Prompt", content: "custom content", category: "custom", isFavorite: false },
 				{ id: "brand-new", name: "Brand New", content: "new content", category: "custom", isFavorite: false },
@@ -180,7 +187,7 @@ describe("SmartPromptsTab — import/export toolbar", () => {
 	});
 
 	it("shows an error toast and no dialog for an invalid file", async () => {
-		pickPromptImportFile.mockResolvedValue("not json");
+		pickJsonImportFile.mockResolvedValue("not json");
 		const { getByTestId, queryByTestId } = render(() => <SmartPromptsTab />);
 		fireEvent.click(getByTestId("import-btn"));
 
@@ -190,7 +197,7 @@ describe("SmartPromptsTab — import/export toolbar", () => {
 	});
 
 	it("shows a warning toast for a file with no prompts", async () => {
-		pickPromptImportFile.mockResolvedValue(exportEnvelope([]));
+		pickJsonImportFile.mockResolvedValue(exportEnvelope([]));
 		const { getByTestId, queryByTestId } = render(() => <SmartPromptsTab />);
 		fireEvent.click(getByTestId("import-btn"));
 
@@ -200,7 +207,7 @@ describe("SmartPromptsTab — import/export toolbar", () => {
 	});
 
 	it("does nothing when the file picker is cancelled", async () => {
-		pickPromptImportFile.mockResolvedValue(null);
+		pickJsonImportFile.mockResolvedValue(null);
 		const { getByTestId, queryByTestId } = render(() => <SmartPromptsTab />);
 		fireEvent.click(getByTestId("import-btn"));
 
@@ -212,7 +219,7 @@ describe("SmartPromptsTab — import/export toolbar", () => {
 
 	it("confirming the dialog imports the selected prompts and closes it", async () => {
 		importPrompts.mockReturnValue({ imported: 2, disabled: [] });
-		pickPromptImportFile.mockResolvedValue(
+		pickJsonImportFile.mockResolvedValue(
 			exportEnvelope([
 				{ id: "custom-1", name: "My Custom Prompt", content: "custom content", category: "custom", isFavorite: false },
 				{ id: "brand-new", name: "Brand New", content: "new content", category: "custom", isFavorite: false },
@@ -232,7 +239,7 @@ describe("SmartPromptsTab — import/export toolbar", () => {
 	});
 
 	it("cancelling the dialog closes it without importing", async () => {
-		pickPromptImportFile.mockResolvedValue(exportEnvelope([{ id: "brand-new", name: "Brand New", content: "c" }]));
+		pickJsonImportFile.mockResolvedValue(exportEnvelope([{ id: "brand-new", name: "Brand New", content: "c" }]));
 		const { getByTestId, queryByTestId } = render(() => <SmartPromptsTab />);
 		fireEvent.click(getByTestId("import-btn"));
 		await waitFor(() => expect(getByTestId("import-cancel-btn")).toBeTruthy());
@@ -245,7 +252,7 @@ describe("SmartPromptsTab — import/export toolbar", () => {
 
 	it("reports a warning toast naming any prompts imported disabled", async () => {
 		importPrompts.mockReturnValue({ imported: 1, disabled: ["Prune Branches"] });
-		pickPromptImportFile.mockResolvedValue(
+		pickJsonImportFile.mockResolvedValue(
 			exportEnvelope([
 				{
 					id: "shell-prompt",

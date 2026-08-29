@@ -7,6 +7,7 @@ import { agentConfigsStore } from "../../../stores/agentConfigs";
 import { promptLibraryStore, type SavedPrompt, type SmartPlacement } from "../../../stores/promptLibrary";
 import { toastsStore } from "../../../stores/toasts";
 import { onClickKeyDown } from "../../../utils/a11y";
+import { exportJsonWithToast, pickJsonImportFile } from "../../../utils/jsonFileTransfer";
 import {
 	buildExportFile,
 	classifyImport,
@@ -15,7 +16,6 @@ import {
 	parseExportFile,
 	selectForExport,
 } from "../../../utils/promptExport";
-import { downloadPromptExport, pickPromptImportFile } from "../../../utils/promptTransfer";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { PromptImportDialog } from "../../PromptImportDialog/PromptImportDialog";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
@@ -677,15 +677,15 @@ export const SmartPromptsTab: Component = () => {
 		};
 	});
 
-	const handleExport = () => {
+	const handleExport = async () => {
 		const scope = exportScope();
 		const prompts = selectForExport(promptLibraryStore.getAllPrompts(), scope, BUILTIN_BY_ID);
 		const file = buildExportFile(prompts, scope);
-		downloadPromptExport(file, `smart-prompts-${scope}.json`);
+		await exportJsonWithToast(`prompts-${scope}.json`, file, "Export Smart Prompts", "Exported Smart Prompts");
 	};
 
 	const handleImportFile = async () => {
-		const text = await pickPromptImportFile();
+		const text = await pickJsonImportFile();
 		if (text === null) return;
 		const { prompts, warnings, error } = parseExportFile(text);
 		if (error) {
@@ -759,24 +759,27 @@ export const SmartPromptsTab: Component = () => {
 				or customize the prompt content and placement for each action.
 			</p>
 
-			<div class={sp.transferRow}>
+			<div class={s.transferRow}>
 				<select
-					class={sp.transferSelect}
+					class={s.transferSelect}
 					data-testid="export-scope-select"
 					value={exportScope()}
 					onChange={(e) => setExportScope(e.currentTarget.value as ExportScope)}
 				>
-					<option value="all">Everything ({scopeCounts().all})</option>
+					<option value="all">All prompts ({scopeCounts().all})</option>
 					<option value="modified">Modified only ({scopeCounts().modified})</option>
 					<option value="custom">Custom only ({scopeCounts().custom})</option>
 				</select>
-				<button class={sp.transferBtn} data-testid="export-btn" onClick={handleExport}>
+				<button class={s.transferBtn} data-testid="export-btn" onClick={handleExport}>
 					Export…
 				</button>
-				<button class={sp.transferBtn} data-testid="import-btn" onClick={handleImportFile}>
+				<button class={s.transferBtn} data-testid="import-btn" onClick={handleImportFile}>
 					Import…
 				</button>
 			</div>
+			<p class={s.hint} style={{ "margin-bottom": "16px" }}>
+				Exports your entire prompt library, including prompts not listed below.
+			</p>
 
 			<div class={s.group}>
 				<label>Headless Agent</label>
