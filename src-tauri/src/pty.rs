@@ -5745,16 +5745,74 @@ impl ChunkProcessor {
             physical_prefix,
             history_size,
         ): VtProcessResult = if let Some(vt_log) = state.grid.vt_log_buffers.get(session_id) {
-            let mut vt = vt_log.lock();
-            let mut changed = vt.process(data.as_bytes());
-            // Publish the real sync state (a nested BSU keeps it open) so the
-            // frame ticker knows whether this session can have a stalled
-            // synchronized update worth taking the lock for.
-            if let Some(flag) = state.grid.sync_update_active.get(session_id) {
-                flag.store(vt.is_sync_update_active(), Ordering::Relaxed);
+            // Phase 1: process the chunk and drain events under the lock,
+            // but do NOT write any reply while holding it — write_terminal_reply's
+            // write_all/flush can block (a SIGSTOP'd/standby child, or a full
+            // PTY input queue), and blocking here would stall every other
+            // consumer of this session's grid (the frame ticker, HTTP
+            // terminal reads) for as long as the write is stuck. Collect
+            // replies to flush once the lock is dropped, below.
+            use crate::terminal_grid::TermEvent;
+            let (mut changed, total, hist, alt_screen, mouse_reporting, tevts, pending_replies) = {
+                let mut vt = vt_log.lock();
+                let changed = vt.process(data.as_bytes());
+                // Publish the real sync state (a nested BSU keeps it open) so the
+                // frame ticker knows whether this session can have a stalled
+                // synchronized update worth taking the lock for.
+                if let Some(flag) = state.grid.sync_update_active.get(session_id) {
+                    flag.store(vt.is_sync_update_active(), Ordering::Relaxed);
+                }
+                let total = vt.total_lines();
+                let hist = vt.grid_history_size();
+                let alt_screen = vt.is_alternate_screen();
+                let mouse_reporting = vt.is_mouse_reporting();
+                let tevts = vt.grid_drain_events();
+                let mut pending_replies: Vec<String> = Vec::new();
+                let tevts: Vec<TermEvent> = tevts
+                    .into_iter()
+                    .filter(|evt| {
+                        let TermEvent::PtyWrite(response) = evt else {
+                            return true;
+                        };
+                        // Four substring scans of a terminal reply, for a
+                        // diagnostic error line only. Behind the toggle.
+                        if crate::cpu_watchdog::diagnostic_mode()
+                            && (response.contains("\x1b[?1049")
+                                || response.contains("\x1b[?1047")
+                                || response.contains("\x1b[?47l")
+                                || response.contains("\x1b[?25h"))
+                        {
+                            tracing::error!(source = "terminal", session_id = %session_id,
+                                "PtyWrite contains DEC private mode sequences! response={:?}",
+                                response.as_bytes().iter().take(200).collect::<Vec<_>>());
+                        }
+                        pending_replies.push(response.clone());
+                        false
+                    })
+                    .collect();
+                (
+                    changed,
+                    total,
+                    hist,
+                    alt_screen,
+                    mouse_reporting,
+                    tevts,
+                    pending_replies,
+                )
+            };
+
+            // CPR/DSR/DA1 replies (`device_status`/`identify_terminal` in the
+            // alacritty fork's Handler impl) are latency-sensitive: a pager
+            // like `leaf` sets a short internal deadline waiting on the
+            // cursor-position reply and prints the raw escape sequence as
+            // text once that deadline passes. Flush them to the child's
+            // stdin now — lock-free, and before the chrome-filter/
+            // classification work below, which clones the full screen on a
+            // chunk's first paint, exactly the case where a freshly-launched
+            // TUI queries cursor position.
+            for response in &pending_replies {
+                write_terminal_reply(state, session_id, response.as_bytes(), "PtyWrite");
             }
-            let total = vt.total_lines();
-            let hist = vt.grid_history_size();
             // Did this chunk produce real output, or merely repaint rows that were
             // already there (SIGWINCH reflow, cursor blink, statusline)? In the
             // PRIMARY screen a repaint never grows the durable log while real work
@@ -5770,16 +5828,12 @@ impl ChunkProcessor {
             // re-armed the grace on every chunk, so a single resize suppressed
             // low-confidence questions, rate-limit and API-error events and the
             // BUSY transition until the agent paused for a full second.
-            let vt_output_grew = vt.is_alternate_screen() || total > self.last_vt_log_total;
+            let vt_output_grew = alt_screen || total > self.last_vt_log_total;
             self.last_vt_log_total = self.last_vt_log_total.max(total);
             // Grid is the source of truth for mouse DECSET (including combined
             // `?1000;1002;1006h`). String-matching the chunk would miss grok.
-            self.apply_inline_tui_mode(
-                vt.is_alternate_screen(),
-                vt.is_mouse_reporting(),
-                agent_type.as_deref(),
-            );
-            let tevts = vt.grid_drain_events();
+            self.apply_inline_tui_mode(alt_screen, mouse_reporting, agent_type.as_deref());
+
             // Did ANYTHING on screen move? Taken before the chrome filter below,
             // because that filter drops rows under the input-area border and a
             // choice dialog can render there.
@@ -5793,6 +5847,14 @@ impl ChunkProcessor {
             // from `["slash-menu"]` into `[]`. Any future attempt needs a
             // per-consumer gate, not one shared flag.
             let any_row_changed = !changed.is_empty();
+
+            // Phase 2: re-lock for the screen-diff/classification work below.
+            // Nothing else mutates this session's grid between phase 1 and
+            // here (each session has exactly one reader thread), so this is
+            // just a second short, uncontended acquisition — the point above
+            // was only to keep the potentially-blocking write out of the
+            // critical section, not to avoid a second lock/unlock.
+            let vt = vt_log.lock();
 
             // ONE borrow of the rendered screen, shared by all three consumers
             // below (chrome cutoff, screen classification, snapshot refill).
@@ -5895,20 +5957,15 @@ impl ChunkProcessor {
             use crate::terminal_grid::{Osc133Event, TermEvent};
             for evt in term_events {
                 match evt {
-                    TermEvent::PtyWrite(response) => {
-                        // Four substring scans of a terminal reply, for a
-                        // diagnostic error line only. Behind the toggle.
-                        if crate::cpu_watchdog::diagnostic_mode()
-                            && (response.contains("\x1b[?1049")
-                                || response.contains("\x1b[?1047")
-                                || response.contains("\x1b[?47l")
-                                || response.contains("\x1b[?25h"))
-                        {
-                            tracing::error!(source = "terminal", session_id = %session_id,
-                                "PtyWrite contains DEC private mode sequences! response={:?}",
-                                response.as_bytes().iter().take(200).collect::<Vec<_>>());
-                        }
-                        write_terminal_reply(state, session_id, response.as_bytes(), "PtyWrite");
+                    TermEvent::PtyWrite(_) => {
+                        // Flushed synchronously right after grid_drain_events,
+                        // above, before the screen diff/classification —
+                        // CPR/DSR replies are latency-sensitive and must not
+                        // wait behind that work. Unreachable in practice; log
+                        // if it isn't, since it means the early flush above
+                        // was skipped.
+                        tracing::error!(source = "terminal", session_id = %session_id,
+                            "PtyWrite reached the deferred event loop instead of being flushed early");
                     }
                     TermEvent::Title(title) => {
                         #[cfg(feature = "desktop")]
@@ -9246,6 +9303,7 @@ pub(crate) fn spawn_reader_thread(
             // coming — so it must run BEFORE the non-dirty early return. The
             // atomic hint keeps idle sessions from touching the vt lock at all.
             let mut sync_timeout_flush = false;
+            let mut stalled_replies: Vec<String> = Vec::new();
             if ticker_sync_active
                 .as_ref()
                 .is_some_and(|f| f.load(Ordering::Relaxed))
@@ -9255,12 +9313,27 @@ pub(crate) fn spawn_reader_thread(
                 if g.flush_sync_timeout_if_needed() {
                     sync_timeout_flush = true;
                     effective_dirty = true;
+                    // A DSR/CPR or DA1/DA2 query buried inside the stalled
+                    // update is replayed by the flush above and queues a
+                    // PtyWrite reply — but this ticker only forwards screen
+                    // frames below, it never runs the ordinary process_chunk
+                    // path that would otherwise flush that reply. Without
+                    // this, the reply sits queued until an unrelated later
+                    // PTY chunk happens to arrive (or forever, if no more
+                    // output ever comes). Only the PtyWrite events are
+                    // drained here — other kinds (title, OSC 133, TUIC) stay
+                    // queued for the next real chunk, which is the only
+                    // place equipped to act on them.
+                    stalled_replies = g.grid_drain_pty_write_events();
                 }
                 let still_active = g.is_sync_update_active();
                 drop(g);
                 if let Some(f) = ticker_sync_active.as_ref() {
                     f.store(still_active, Ordering::Relaxed);
                 }
+            }
+            for reply in &stalled_replies {
+                write_terminal_reply(&ticker_state, &ticker_sid, reply.as_bytes(), "PtyWrite");
             }
             if !effective_dirty {
                 // Idle tick: leave sustained-animation mode so the next burst
