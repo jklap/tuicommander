@@ -640,6 +640,37 @@ pub(crate) struct AppConfig {
     /// "never" (right-click Open/Copy-link menu only).
     #[serde(default = "default_link_activation")]
     pub(crate) terminal_link_activation: String,
+    /// Master toggle for smart selection (regex-rule-driven double/quad-click
+    /// expansion + rule actions). Word-boundary customization (below) applies
+    /// regardless of this flag — only the rule engine is gated.
+    #[serde(default = "default_true")]
+    pub(crate) smart_selection_enabled: bool,
+    /// What a plain double-click selects: "word" (today's character-class
+    /// expansion) or "smart" (try the rule engine first, fall back to word).
+    /// Quad-click always runs the rule engine regardless of this setting.
+    #[serde(default = "default_double_click_action")]
+    pub(crate) double_click_action: String,
+    /// How double-click word boundaries are defined: "characters" (a literal
+    /// separator character class) or "regex" (a set of `|`-joined alternates,
+    /// each matched span treated as one word — mirrors iTerm2's word-selection
+    /// regex mode).
+    #[serde(default = "default_word_selection_mode")]
+    pub(crate) word_selection_mode: String,
+    /// "characters" mode: characters that BREAK a word (the inverse of
+    /// iTerm2's "additional word characters" — this list keeps today's
+    /// default losslessly by naming what already breaks a word).
+    #[serde(default = "default_word_separators")]
+    pub(crate) word_separators: String,
+    /// "regex" mode: `|`-joined alternates. At each character, the longest
+    /// anchored match becomes one word-class run (e.g. adding `https://` here
+    /// lets a double-click expand across the URL scheme).
+    #[serde(default = "default_word_selection_regex")]
+    pub(crate) word_selection_regex: String,
+    /// User-defined smart-selection rules. Empty means "use the built-in
+    /// default set" (iTerm2's ten plus dev-terminal extras) — the frontend
+    /// owns that default list so it lives in exactly one place.
+    #[serde(default)]
+    pub(crate) smart_selection_rules: Vec<SmartSelectionRule>,
     /// Show the hold-Ctrl+Cmd relative-time overlay on command blocks.
     #[serde(default = "default_true")]
     pub(crate) show_block_timestamps: bool,
@@ -693,6 +724,42 @@ pub(crate) struct CustomLauncher {
     pub(crate) platform: Option<String>,
 }
 
+/// One smart-selection rule: a regex, a precision that resolves overlapping
+/// matches (mirrors iTerm2's `SmartSelectionController` precision classes —
+/// see `smartSelectionDefaults.ts` on the frontend for the exact weights),
+/// and the actions it offers. A rule with no actions still participates in
+/// selection expansion; it just contributes nothing to the context menu.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct SmartSelectionRule {
+    pub(crate) id: String,
+    /// Human-readable name, shown in the rule editor and as a fallback menu label.
+    pub(crate) name: String,
+    pub(crate) regex: String,
+    /// "very_low" | "low" | "normal" | "high" | "very_high"
+    pub(crate) precision: String,
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) actions: Vec<SmartSelectionAction>,
+}
+
+/// One action a smart-selection rule offers. `parameter` may reference the
+/// match via `\0`-`\9` (whole match / capture groups), `\d` (cwd), `\u`
+/// (user), `\h` (host) — substituted by `substituteActionParameter` on the
+/// frontend before dispatch.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct SmartSelectionAction {
+    /// "copy" | "open_url" | "open_file" | "send_text" | "run_command" |
+    /// "run_command_new_terminal" | "ask_ai"
+    pub(crate) kind: String,
+    pub(crate) title: String,
+    #[serde(default)]
+    pub(crate) parameter: String,
+    /// At most one action per rule may set this — it's what Option/Alt+double-click runs.
+    #[serde(default)]
+    pub(crate) is_default: bool,
+}
+
 fn default_language() -> String {
     "en".to_string()
 }
@@ -739,6 +806,30 @@ fn default_terminal_renderer() -> String {
 
 fn default_link_activation() -> String {
     "click".to_string()
+}
+
+fn default_double_click_action() -> String {
+    "smart".to_string()
+}
+
+fn default_word_selection_mode() -> String {
+    "characters".to_string()
+}
+
+/// Punctuation separators matching the frontend's hardcoded `WORD_SEPARATOR_RE`
+/// (`canvasTerminalSelection.ts`) exactly, so the default preserves today's
+/// double-click behavior losslessly. Whitespace and control characters are
+/// always separators regardless of this string — it only covers the
+/// additional punctuation.
+fn default_word_separators() -> String {
+    " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\".to_string()
+}
+
+/// Empty by default — "regex" word-selection mode with no alternates falls
+/// back to a plain alphanumeric word-class run (see `createWordBoundaryResolver`
+/// on the frontend). Users opt in by adding alternates like `https://`.
+fn default_word_selection_regex() -> String {
+    String::new()
 }
 
 fn default_mcp_port() -> u16 {
@@ -809,6 +900,12 @@ impl Default for AppConfig {
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
             terminal_link_activation: default_link_activation(),
+            smart_selection_enabled: true,
+            double_click_action: default_double_click_action(),
+            word_selection_mode: default_word_selection_mode(),
+            word_separators: default_word_separators(),
+            word_selection_regex: default_word_selection_regex(),
+            smart_selection_rules: Vec::new(),
             show_block_timestamps: true,
             show_block_marks: true,
             show_prompt_marks: true,
@@ -3081,6 +3178,24 @@ mod tests {
             cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
             terminal_link_activation: "modifier".to_string(),
+            smart_selection_enabled: false,
+            double_click_action: "word".to_string(),
+            word_selection_mode: "regex".to_string(),
+            word_separators: "-_".to_string(),
+            word_selection_regex: "https://|[a-z0-9]+".to_string(),
+            smart_selection_rules: vec![SmartSelectionRule {
+                id: "r1".to_string(),
+                name: "Git SHA".to_string(),
+                regex: "[0-9a-f]{7,40}".to_string(),
+                precision: "high".to_string(),
+                enabled: true,
+                actions: vec![SmartSelectionAction {
+                    kind: "run_command".to_string(),
+                    title: "Show commit".to_string(),
+                    parameter: "git show \\0".to_string(),
+                    is_default: true,
+                }],
+            }],
             show_block_timestamps: false,
             show_block_marks: false,
             show_prompt_marks: false,
@@ -3127,6 +3242,20 @@ mod tests {
         assert!(!loaded.show_prompt_marks);
         assert!(!loaded.block_folding_enabled);
         assert_eq!(loaded.terminal_link_activation, "modifier");
+        assert!(!loaded.smart_selection_enabled);
+        assert_eq!(loaded.double_click_action, "word");
+        assert_eq!(loaded.word_selection_mode, "regex");
+        assert_eq!(loaded.word_separators, "-_");
+        assert_eq!(loaded.word_selection_regex, "https://|[a-z0-9]+");
+        assert_eq!(loaded.smart_selection_rules.len(), 1);
+        assert_eq!(loaded.smart_selection_rules[0].id, "r1");
+        assert_eq!(loaded.smart_selection_rules[0].precision, "high");
+        assert_eq!(loaded.smart_selection_rules[0].actions.len(), 1);
+        assert!(loaded.smart_selection_rules[0].actions[0].is_default);
+        assert_eq!(
+            loaded.smart_selection_rules[0].actions[0].kind,
+            "run_command"
+        );
     }
 
     #[test]
@@ -3164,6 +3293,12 @@ mod tests {
         assert!(loaded.show_prompt_marks); // defaults to true
         assert!(loaded.block_folding_enabled); // defaults to true
         assert_eq!(loaded.terminal_link_activation, "click"); // defaults to "click"
+        assert!(loaded.smart_selection_enabled); // defaults to true
+        assert_eq!(loaded.double_click_action, "smart"); // defaults to "smart"
+        assert_eq!(loaded.word_selection_mode, "characters"); // defaults to "characters"
+        assert_eq!(loaded.word_separators, " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\");
+        assert_eq!(loaded.word_selection_regex, "");
+        assert!(loaded.smart_selection_rules.is_empty());
     }
 
     /// `docs/backend/config.md` promises a row for every top-level `AppConfig` field. Mirrors

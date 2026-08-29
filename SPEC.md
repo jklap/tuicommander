@@ -397,6 +397,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Remote completion muting survives reconnects and deduplicates idle/exit signals per busy cycle
 - [x] IDE launcher with app icons
 - [x] Configurable link click activation — Click / ⌘Click/Ctrl+Click / Never — for detected terminal links
+- [x] Rule-driven Smart Selection for double-click word boundaries, configurable character-list or regex-alternate boundaries, precision-scored rule matching, and per-rule actions surfaced in the right-click menu
 
 ### Pending (P2)
 - [ ] Error handling strategy config

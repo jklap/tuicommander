@@ -64,6 +64,29 @@ A live preview reflects these as you change them.
 
 See [Command Blocks](terminals.md#command-blocks) for what each of these controls.
 
+## Selection Tab
+
+Controls double/quad-click word and smart selection in the terminal — see [Smart Selection](terminal-features.md#smart-selection) for the underlying model (precision scoring, the built-in rule set, action dispatch).
+
+### Behavior
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Enable smart selection** | `boolean` | `true` | Try the rule list below before falling back to plain word-boundary selection. Word-boundary customization still applies when this is off. |
+| **Double-click performs** | `word/smart` | `smart` | `Word` expands to the character-class boundary below. `Smart` tries the rule list first, falling back to word selection when nothing matches. Quad-click (4 rapid clicks) always tries smart selection, regardless of this setting. |
+
+### Word Boundaries
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Word boundaries** | `characters/regex` | `characters` | `Character list`: a literal set of characters that break a word. `Regular expression`: `\|`-joined alternates — the longest match at each position joins onto the adjacent word, e.g. adding `https://` lets a double-click on a URL's host include the scheme. |
+| **Word separators** | `string` | `` " \"'`(){}[]<>\|;:,.!?@#$%^&*~=+/\\" `` | (Character-list mode) Characters that break a word for double-click selection. Whitespace and control characters are always separators regardless of this list. A "Restore default separators" button resets it. |
+| **Word pattern** | `string` | `""` (empty) | (Regex mode) `\|`-joined alternates. Plain letters/digits/underscore are always word characters; alternates here join punctuation-containing spans onto them. Invalid alternates are flagged inline and skipped. |
+
+### Smart Selection Rules
+
+A list editor over the rule engine. Each rule is its own card with an enabled checkbox, a **Name** (shown as a header above its actions in the terminal's right-click menu, so you can tell which rule matched), a **Pattern** (the regular expression, flagged inline if invalid — that rule is then skipped), and a **Precision** (`Very Low`–`Very High`, which resolves overlapping matches — see [Smart Selection](terminal-features.md#smart-selection)). Below that, zero or more actions, each with an **Action** kind (Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI), a **Menu label** (the text shown in the right-click menu), a **Parameter** template (supporting `\0`-`\9`/`\d`/`\u`/`\h` substitution), and a **Default** radio — at most one action per rule may be marked default, and that's what Option/Alt+double-click runs. The list starts populated with the built-in default rule set (iTerm2's ten plus dev-terminal extras); editing any rule materializes the full set into your saved configuration. A "Restore built-in defaults" button clears your customizations and reverts to the built-in set.
+
 ## Agents Tab
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.

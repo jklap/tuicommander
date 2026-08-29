@@ -47,6 +47,15 @@
   cursor: not-allowed;
 }
 
+.header {
+  padding: 8px 12px;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  user-select: none;
+}
+
 .label {
   flex: 1;
 }

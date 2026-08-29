@@ -1,12 +1,16 @@
 import { type Component, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { usePty } from "../../hooks/usePty";
 import { lastMenuActionTime } from "../../menuDedup";
 import { isLinkModifier, isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { appLogger } from "../../stores/appLogger";
+import { conversationStore } from "../../stores/conversationStore";
 import { initLinkModifier, linkModifierHeld } from "../../stores/linkModifier";
 import { settingsStore } from "../../stores/settings";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
+import { uiStore } from "../../stores/ui";
 import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
 import { pickBlock } from "../../utils/blockNav";
 import { filterMatchesToBlock } from "../../utils/blockSearchFilter";
@@ -14,11 +18,15 @@ import { writeClipboard } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
 import { ensureKeyboardViewportTracking, keyboardOcclusion } from "../../utils/keyboardViewport";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
+import { getShellFamily, sendCommand, shouldAutoSubmitSuggestion } from "../../utils/sendCommand";
+import { switchToTerminalBySession } from "../../utils/switchToTerminalBySession";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
+import { type ClickCounterState, classifyClick, decideMousedownSelection } from "./canvasTerminalGestures";
 import {
 	createCanvasLinkController,
 	linkModifierEffectDecision,
@@ -30,9 +38,13 @@ import {
 import { type ScrollbarMarksInput, scrollbarMarksHtml, scrollbarMarksKey } from "./canvasTerminalMarks";
 import { createCanvasScrollController, gestureAccelFactor, ROW_CACHE_CHUNK } from "./canvasTerminalScroll";
 import {
+	buildSmartSelectionWindow,
 	createCanvasSearchController,
 	createCanvasSelectionController,
+	createWordBoundaryResolver,
 	extendSelectionDrag,
+	type SelectionPoint,
+	type WordBoundaryFn,
 	wordBoundsAt,
 } from "./canvasTerminalSelection";
 import { installTouchHandlers } from "./canvasTerminalTouch";
@@ -73,6 +85,10 @@ import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } fr
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
+import { findSmartMatch, SMART_SELECTION_RADIUS, type SmartMatch } from "./smartSelection";
+import { runSmartSelectionAction, type SmartSelectionActionDeps } from "./smartSelectionActions";
+import { resolveSmartSelectionRules } from "./smartSelectionDefaults";
+import type { SmartSelectionAction as SmartSelectionActionType } from "./smartSelectionTypes";
 import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./suggestOverlay";
 import {
 	altSequenceFromCode,
@@ -272,6 +288,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	type LinkTarget = { path: string; line?: number; col?: number };
 	const linkMenu = createContextMenu();
 	const [linkMenuTarget, setLinkMenuTarget] = createSignal<LinkTarget | null>(null);
+	/** Smart-selection rule match under the last right-click, if any — its
+	 *  actions are merged into the same link-menu popup (see the JSX below
+	 *  and the "contextmenu" listener). Cleared whenever the menu closes so a
+	 *  stale rule's actions can't linger into an unrelated right-click. */
+	const [smartMenuMatch, setSmartMenuMatch] = createSignal<ResolvedSmartMatch | null>(null);
 
 	const openLink = (link: LinkTarget) => {
 		if (link.path.startsWith("http://") || link.path.startsWith("https://")) {
@@ -286,6 +307,89 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const text = link.path.startsWith("file://") ? link.path.slice(7) : link.path;
 		writeClipboard(text).catch(() => {});
 	};
+
+	const pty = usePty();
+
+	function currentTerminalCwd(): string {
+		const termId = terminalsStore.getTerminalForSession(props.sessionId);
+		return (termId ? terminalsStore.get(termId)?.cwd : null) ?? "";
+	}
+
+	/** Real `SmartSelectionActionDeps` for this terminal — each a thin wrapper
+	 *  around an existing utility, bound to the current session. Built fresh
+	 *  per dispatch (cheap closures, not a hot path). */
+	function smartSelectionActionDeps(): SmartSelectionActionDeps {
+		return {
+			copyToClipboard: (text) => writeClipboard(text),
+			openUrl: handleOpenUrl,
+			openFile: (pathSpec) => {
+				// Optional trailing ":line" / ":line:col" — e.g. the dev-file-line-col rule's match.
+				const parsed = /^(.+?)(?::(\d+))?(?::(\d+))?$/.exec(pathSpec);
+				const path = parsed?.[1] ?? pathSpec;
+				const line = parsed?.[2] ? Number(parsed[2]) : undefined;
+				const col = parsed?.[3] ? Number(parsed[3]) : undefined;
+				props.onOpenFilePath?.(path, line, col);
+			},
+			sendText: async (text, autoSubmitAllowed) => {
+				const agentType = terminalsStore.getAgentTypeForSession(props.sessionId);
+				const shellFamily = await getShellFamily(props.sessionId);
+				const submit = autoSubmitAllowed && shouldAutoSubmitSuggestion(agentType, text);
+				await sendCommand(
+					async (data) => {
+						await invokeRef?.("write_pty", { sessionId: props.sessionId, data });
+					},
+					text,
+					agentType,
+					shellFamily,
+					submit,
+				);
+			},
+			runInNewTerminal: async (text) => {
+				const canSpawn = await pty.canSpawn();
+				if (!canSpawn) {
+					toastsStore.add("Can't run in a new terminal", "Max sessions reached (50)", "warn");
+					return;
+				}
+				const id = terminalsStore.add({
+					sessionId: null,
+					fontSize: settingsStore.state.defaultFontSize,
+					name: terminalsStore.nextDefaultName(),
+					cwd: currentTerminalCwd() || null,
+					awaitingInput: null,
+				});
+				assignTabToActiveGroup(id, "terminal");
+				terminalsStore.update(id, { pendingInitCommand: text });
+				terminalsStore.setActive(id);
+			},
+			askAi: (text) => {
+				uiStore.setAiChatPanelVisible(true);
+				switchToTerminalBySession(props.sessionId);
+				conversationStore.sendMessage(text, props.sessionId);
+			},
+			onBlockedUrl: (url) => {
+				toastsStore.add("Blocked URL", `Disallowed scheme: ${url.slice(0, 80)}`, "warn");
+			},
+		};
+	}
+
+	/** A `SmartMatch` with its text-offset span already mapped to grid coordinates. */
+	type ResolvedSmartMatch = SmartMatch & { startCoord: SelectionPoint; endCoord: SelectionPoint };
+
+	/** Dispatch a smart-selection rule's action — Alt+double-click's default
+	 *  action, or a context-menu item for any of a matched rule's actions. */
+	function runSmartAction(action: SmartSelectionActionType, match: ResolvedSmartMatch): void {
+		runSmartSelectionAction(
+			action,
+			{
+				matchText: match.text,
+				groups: match.groups,
+				cwd: currentTerminalCwd(),
+				user: undefined,
+				host: undefined,
+			},
+			smartSelectionActionDeps(),
+		).catch((error) => appLogger.warn("terminal", "Smart selection action failed", { error }));
+	}
 
 	// Cached CSS custom properties (re-read on remeasure, not every frame)
 	let cachedBgDefault = "#1e1e1e";
@@ -2592,8 +2696,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		});
 
 		// --- Mouse selection ---
-		let clickCount = 0;
-		let lastClickTime = 0;
+		const clickCounter: ClickCounterState = { count: 0, lastClickTime: 0 };
 		/** Buttons this canvas reported down, so their release is owed to the app. */
 		const reportedDown = new Set<number>();
 		// Set alongside selection.mode at mousedown (word/line respectively); the
@@ -2602,6 +2705,48 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// staleness across gestures can't leak in.
 		let wordAnchor: { row: number; left: number; right: number } | null = null;
 		let lineAnchorRow: number | null = null;
+
+		// Rebuilt only when the underlying settings actually change (regex mode
+		// recompiles every alternate) — cheap key comparison on every call
+		// otherwise. Falls back to the plain `wordBoundsAt` import when the user
+		// is on "characters" mode with the default separator string, so the
+		// zero-configuration case pays no indirection cost either.
+		let cachedWordResolverKey = "";
+		let cachedWordResolver: WordBoundaryFn = wordBoundsAt;
+		function getWordBoundaryResolver(): WordBoundaryFn {
+			const mode = settingsStore.state.wordSelectionMode;
+			const separators = mode === "characters" ? settingsStore.state.wordSeparators : "";
+			const regexAlternates = mode === "regex" ? settingsStore.state.wordSelectionRegex : "";
+			const key = `${mode}\u0000${separators}\u0000${regexAlternates}`;
+			if (key !== cachedWordResolverKey) {
+				cachedWordResolverKey = key;
+				cachedWordResolver = createWordBoundaryResolver({ mode, separators, regexAlternates });
+			}
+			return cachedWordResolver;
+		}
+
+		/** Row accessor for `buildSmartSelectionWindow` — absolute row → viewport row → rowMap. */
+		function getRowByAbs(absRow: number): DecodedRow | null {
+			const vpRow = absRowToViewport(absRow);
+			return vpRow !== null ? (rowMap.get(vpRow) ?? null) : null;
+		}
+
+		/** Try smart-selection matching at a click position; null if disabled,
+		 *  no rules configured/enabled, or nothing matched (caller falls back
+		 *  to word-boundary selection in every case). */
+		function trySmartMatch(absRow: number, col: number): ResolvedSmartMatch | null {
+			if (!settingsStore.state.smartSelectionEnabled) return null;
+			const win = buildSmartSelectionWindow(absRow, col, SMART_SELECTION_RADIUS, getRowByAbs);
+			if (win.targetOffset < 0) return null;
+			const rules = resolveSmartSelectionRules(settingsStore.state.smartSelectionRules);
+			const match = findSmartMatch(win.text, win.targetOffset, rules);
+			if (!match) return null;
+			// Map the match's text-offset span back to grid coordinates via the
+			// window's per-character coordinate map.
+			const startCoord = win.coords[match.startOffset];
+			const endCoord = win.coords[match.endOffset - 1];
+			return { ...match, startCoord, endCoord };
+		}
 
 		bindings.listen(canvasRef, "mousedown", (e: MouseEvent) => {
 			keyInputRef.focus({ preventScroll: true });
@@ -2666,43 +2811,44 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				return;
 			}
 
-			const now = Date.now();
+			const { kind: clickKind } = classifyClick(Date.now(), clickCounter);
 
-			if (now - lastClickTime < 400) {
-				clickCount++;
+			// Double-click tries smart selection first when the user has opted in
+			// ("smart" double-click action); quad-click always tries it. Either
+			// way, no match falls through to the same word/line logic as before —
+			// see decideMousedownSelection's doc comment.
+			const tryingSmart =
+				(clickKind === "double" && settingsStore.state.doubleClickAction === "smart") || clickKind === "quad";
+			const smartMatch = tryingSmart ? trySmartMatch(absRow, pos.col) : null;
+
+			if (smartMatch) {
+				const singleRow = smartMatch.startCoord.row === smartMatch.endCoord.row;
+				selection.start = smartMatch.startCoord;
+				selection.end = smartMatch.endCoord;
+				selection.mode = singleRow ? "word" : "char";
+				wordAnchor = singleRow
+					? { row: smartMatch.startCoord.row, left: smartMatch.startCoord.col, right: smartMatch.endCoord.col }
+					: null;
+				// Alt/Option+double-click runs the match's default action, if it has
+				// one — checked here (mousedown) rather than the eventual `click`
+				// event, since a double-click's 2nd mousedown is what carries the
+				// click count to "double" in the first place.
+				if (e.altKey && clickKind === "double") {
+					const defaultAction = smartMatch.rule.actions.find((a) => a.isDefault);
+					if (defaultAction) runSmartAction(defaultAction, smartMatch);
+				}
 			} else {
-				clickCount = 1;
-			}
-			lastClickTime = now;
-
-			if (clickCount === 2) {
 				const vpRow = absRowToViewport(absRow);
 				const row = vpRow !== null ? rowMap.get(vpRow) : null;
-				const bounds = row ? wordBoundsAt(row, pos.col) : null;
-				if (bounds) {
-					selection.start = { col: bounds.left, row: absRow };
-					selection.end = { col: bounds.right, row: absRow };
-					wordAnchor = { row: absRow, left: bounds.left, right: bounds.right };
-					selection.mode = "word";
-				} else {
-					// Landed on whitespace/punctuation — nothing to hold fixed on drag,
-					// so fall back to plain cell-wise extension for this gesture.
-					selection.start = absPos;
-					selection.end = absPos;
-					wordAnchor = null;
-					selection.mode = "char";
-				}
-			} else if (clickCount >= 3) {
-				const maxCol = lastGridColForRect(canvasRef.getBoundingClientRect());
-				selection.start = { col: 0, row: absRow };
-				selection.end = { col: maxCol, row: absRow };
-				lineAnchorRow = absRow;
-				selection.mode = "line";
-				clickCount = 3;
-			} else {
-				selection.start = absPos;
-				selection.end = null;
-				selection.mode = "char";
+				const wordBounds = clickKind === "double" && row ? getWordBoundaryResolver()(row, pos.col) : null;
+				const maxCol =
+					clickKind === "triple" || clickKind === "quad" ? lastGridColForRect(canvasRef.getBoundingClientRect()) : 0;
+				const decision = decideMousedownSelection({ clickKind, absPos, wordBounds, maxCol });
+				selection.start = decision.start;
+				selection.end = decision.end;
+				selection.mode = decision.mode;
+				wordAnchor = decision.wordAnchor;
+				if (decision.lineAnchorRow !== null) lineAnchorRow = decision.lineAnchorRow;
 			}
 			selection.selecting = true;
 			// Cache the canvas rect for the whole drag — its position doesn't move
@@ -2741,7 +2887,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// see extendSelectionDrag's doc comment for why.
 			const vpRow = absRowToViewport(absRow);
 			const dragRow = vpRow !== null ? rowMap.get(vpRow) : null;
-			const dragBounds = dragRow ? wordBoundsAt(dragRow, pos.col) : null;
+			const dragBounds = dragRow ? getWordBoundaryResolver()(dragRow, pos.col) : null;
 			const extended = extendSelectionDrag(
 				selection.mode,
 				{ wordAnchor, lineAnchorRow },
@@ -2875,19 +3021,35 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			openLink(hoveredLink);
 		});
 
-		// Right-click on a detected link → context menu (Open / Copy link).
-		// Only when the click lands on a link span; elsewhere the default is left alone.
+		// Right-click on a detected link and/or a smart-selection rule match
+		// (with actions — iTerm2's "actionRequired" mode) → context menu. Only
+		// when at least one of the two applies; elsewhere the default is left
+		// alone. Rule actions surface here regardless of `linkActivation` —
+		// "never" only disables click-to-open, not the right-click menu.
 		bindings.listen(canvasRef, "contextmenu", async (e: MouseEvent) => {
 			const pos = canvasToGrid(e);
 			const onLink = detectedLinks.get(pos.row)?.some((sp) => pos.col >= sp.colStart && pos.col < sp.colEnd);
-			if (!onLink) return;
+			const absRow = viewportRowToAbs(pos.row);
+			const smartMatch = absRow !== null ? trySmartMatch(absRow, pos.col) : null;
+			const hasSmartActions = smartMatch && smartMatch.rule.actions.length > 0;
+			if (!onLink && !hasSmartActions) return;
 			e.preventDefault();
 			// Stop the App-level terminal context menu (#terminal-panes onContextMenu)
-			// from also opening and covering our Open/Copy-link menu.
+			// from also opening and covering our menu.
 			e.stopPropagation();
-			await checkLinksAtRow(pos.row, pos.col);
-			if (!hoveredLink) return;
-			setLinkMenuTarget({ path: hoveredLink.path, line: hoveredLink.line, col: hoveredLink.col });
+			setSmartMenuMatch(hasSmartActions ? smartMatch : null);
+			if (onLink) {
+				await checkLinksAtRow(pos.row, pos.col);
+				setLinkMenuTarget(
+					hoveredLink ? { path: hoveredLink.path, line: hoveredLink.line, col: hoveredLink.col } : null,
+				);
+			} else {
+				// Not on a link this time — clear any stale target from a
+				// previous right-click so a smart-only menu can't also show a
+				// leftover Open/Copy-link pair.
+				setLinkMenuTarget(null);
+			}
+			if (!linkMenuTarget() && !hasSmartActions) return;
 			linkMenu.openAt(e.clientX, e.clientY);
 		});
 
@@ -3533,25 +3695,52 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			</div>
 			<ContextMenu
 				items={[
-					{
-						label: "Open",
-						action: () => {
-							const t = linkMenuTarget();
-							if (t) openLink(t);
-						},
-					},
-					{
-						label: "Copy link",
-						action: () => {
-							const t = linkMenuTarget();
-							if (t) copyLink(t);
-						},
-					},
+					// Link detection takes priority when both apply to the same
+					// click (e.g. a URL is both a detected link AND matches the
+					// built-in iterm-http-url rule) — its Open/Copy-link pair
+					// already covers that span, so showing the rule's own
+					// Open/Copy actions too would just duplicate the label.
+					...(() => {
+						const match = smartMenuMatch();
+						if (!match || linkMenuTarget()) return [];
+						const ruleName = match.rule.name.trim();
+						return [
+							// Non-actionable header naming which rule matched, so the
+							// actions below aren't a mystery list. Skipped for a
+							// user-added rule left with a blank (or whitespace-only) name.
+							...(ruleName ? [{ label: ruleName, header: true, action: () => {} }] : []),
+							...match.rule.actions.map((action) => ({
+								label: action.title,
+								action: () => runSmartAction(action, match),
+							})),
+						];
+					})(),
+					...(linkMenuTarget()
+						? [
+								{
+									label: "Open",
+									action: () => {
+										const t = linkMenuTarget();
+										if (t) openLink(t);
+									},
+								},
+								{
+									label: "Copy link",
+									action: () => {
+										const t = linkMenuTarget();
+										if (t) copyLink(t);
+									},
+								},
+							]
+						: []),
 				]}
 				x={linkMenu.position().x}
 				y={linkMenu.position().y}
 				visible={linkMenu.visible()}
-				onClose={() => linkMenu.close()}
+				onClose={() => {
+					linkMenu.close();
+					setSmartMenuMatch(null);
+				}}
 			/>
 		</div>
 	);

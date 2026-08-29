@@ -406,6 +406,21 @@ display-only metadata from the original spawn prompt.
 
 - [ ] **After a `make dev` restart**: a Codex collaboration subagent shows its task description above the terminal.
 
+## Smart Selection (2026-08-24)
+
+- [x] `findSmartMatch` scores every enabled rule's matches spanning the click offset by `precision × matchLength`, highest wins; a match not spanning the offset is rejected; an invalid rule regex is skipped, not thrown _(verified: `src/components/Terminal/__tests__/smartSelection.test.ts`, 17/17 pass)_
+- [x] Every shipped default rule (iTerm2's built-in set + git SHA/`file:line:col`/semver/IPv4/IPv6/UUID/issue-key/`#NNN` extras) matches a representative line, has no duplicate ids, and at most one default action per rule _(verified: `src/components/Terminal/__tests__/smartSelectionDefaults.test.ts`, 25/25 pass)_
+- [x] `createWordBoundaryResolver`'s "characters" mode with the default separator string is behaviorally identical to the pre-existing `wordBoundsAt`; "regex" mode's `https://` alternate example (the original feature request) joins the scheme onto an adjacent word run _(verified: `src/components/Terminal/__tests__/canvasTerminalSelection.test.ts`, 40/40 pass)_
+- [x] `runSmartSelectionAction` dispatches each of the 7 action kinds to the right injected dep with the substituted `\0`-`\9`/`\d`/`\u`/`\h` parameter; `open_url` refuses a non-http/https/mailto scheme _(verified: `src/components/Terminal/__tests__/smartSelectionActions.test.ts`, 10/10 pass)_
+- [x] End-to-end through a real mount: double-click (smart vs. word mode), quad-click (always smart, falls back to whole-line when nothing matches), Alt+double-click running a matched rule's default action (and doing nothing when Alt isn't held, or the rule has no default action), and the right-click menu surfacing a rule's actions (deduplicated against the link-detection Open/Copy-link pair when both apply to the same span) _(verified: `src/components/Terminal/__tests__/canvasTerminalGestures.pin.test.ts` + `canvasTerminalSmartSelection.mount.test.ts`, 34/34 pass combined)_
+- [x] Settings > Selection tab: every control persists via `settingsStore`, the rule editor add/remove/edit round-trips through `resolveSmartSelectionRules`, marking one action default clears any other in the same rule _(verified: `src/__tests__/components/SettingsPanel/SelectionTab.test.tsx`, 15/15 pass)_
+- [ ] Manual click-through in a real terminal: double-click a URL like `https://github.com/foo/bar.git` selects the whole thing (not just `https`); double-click a git log's short SHA selects the whole SHA; Option/Alt+double-click a git SHA runs "Show commit" (`git show <sha>`) in the terminal; quad-click still selects the whole line when nothing matches.
+- [ ] Manual: Settings > Selection > switch "Word boundaries" to "Regular expression", add `https://` as the pattern, confirm a double-click on a bare word elsewhere still works (falls back to the plain alnum/underscore word class) and a double-click on a URL's host now includes the scheme.
+- [ ] Manual: right-click a matched rule (e.g. a UUID or semver in real output) and confirm the Copy action actually puts the right text on the system clipboard (`Cmd+V` into another app) — the mount-harness tests assert the Tauri invoke call shape, not a real OS clipboard round-trip.
+- [ ] Manual: `run_command_new_terminal` action — trigger it via a custom rule, confirm a new terminal tab appears, is focused, and the command types + submits once the shell is idle.
+- [ ] Manual: `ask_ai` action opens the AI Chat panel focused on the right session with the substituted text as the outgoing message.
+- [ ] **Rust restart required** — `smart_selection_enabled`/`double_click_action`/`word_selection_mode`/`word_separators`/`word_selection_regex`/`smart_selection_rules` are new `AppConfig` fields; per `AGENTS.md`, `make dev`'s `--no-watch` backend won't pick up `config.rs` changes without a manual restart.
+
 ## Smart Prompts import & export (2026-08-24)
 
 - [x] Export scope selection (`selectForExport`): "all" returns every prompt, "custom" returns only non-built-in prompts, "modified" returns changed built-ins plus every custom prompt, and comparison ignores placement order and volatile fields (`createdAt`/`updatedAt`/`lastUsed`/`builtInVersion`) _(verified: `src/__tests__/utils/promptExport.test.ts`, 22/22 pass)_

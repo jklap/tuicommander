@@ -1272,3 +1272,104 @@
   display: block;
 }
 
+/* ── Smart Selection rule editor ──
+ * Deliberately NOT `.group` — `.group select, .group input[type="text"] { width: 100% }`
+ * above forces every control in a rule row to claim full width, which is what made the
+ * name/menu-label/parameter fields collapse to near-nothing next to the precision select. */
+.ruleCard {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.ruleCard select,
+.ruleCard input[type="text"] {
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+  height: 32px;
+  box-sizing: border-box;
+}
+
+.ruleCard select:focus,
+.ruleCard input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ruleHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.ruleHeaderEnabled {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+}
+
+.ruleName {
+  flex: 1;
+}
+
+.ruleFieldLabel {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+
+.ruleField {
+  margin-bottom: 8px;
+}
+
+.ruleRegex {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
+.rulePrecision {
+  width: auto;
+  min-width: 150px;
+}
+
+.actionGrid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.9fr) minmax(110px, 1fr) minmax(130px, 1.6fr) auto auto;
+  gap: 6px 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.actionGridHeader {
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+}
+
+.actionGrid select,
+.actionGrid input[type="text"] {
+  width: 100%;
+}
+
+.actionParameter {
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+}
+
+.actionDefault {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: var(--font-sm);
+}
+
