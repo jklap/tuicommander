@@ -35,22 +35,25 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 
 At the bottom of the tab, the **UI Legend** documents every color/icon/animation the app uses
 (terminal status dots, tab types, sidebar symbols, PR badges, git repo status, diff stats) — and
-doubles as the editor for them. Each row offers a control per capability it has:
+doubles as the editor for them. Clicking a row's own preview icon opens one combined dialog for
+that indicator, showing only the sections it actually has:
 
-- **Color** — a swatch button opens the same preset/custom color picker used for repository groups.
-- **Icon** — a small icon button opens a grid of 18 curated monochrome shapes (dot, star, ring,
-  square, triangle, diamond, chevron, spinner arc, bell, question mark, exclamation, pause bars,
-  clock, checkmark, cross, and the branch/worktree/shell shapes) — every option renders live so
-  you're picking the actual glyph, not a name.
-- **Animation** — a text button (showing the current animation, e.g. "pulse") opens a list where
-  every option animates its own preview dot. Some indicators (e.g. PR badges) offer a narrower set
-  than others — a badge doesn't offer "glow", a spinning-halo effect meant for a small dot.
+- **Color** — the same preset/custom color picker used for repository groups.
+- **Icon** — a grid of 18 curated monochrome shapes (dot, star, ring, square, triangle, diamond,
+  chevron, spinner arc, bell, question mark, exclamation, pause bars, clock, checkmark, cross, and
+  the branch/worktree/shell shapes) — every option renders live so you're picking the actual glyph,
+  not a name.
+- **Animation** — a list where every option animates its own preview dot. Some indicators (e.g. PR
+  badges) offer a narrower set than others — a badge doesn't offer "glow", a spinning-halo effect
+  meant for a small dot.
 
-Every row also gets a reset "×" once any of its fields is overridden, and a "Reset all indicators"
-button at the bottom clears everything at once. Overrides are stored in `indicator_overrides` in
-`config.json` and apply live — no restart needed — and survive a theme switch. The read-only
-reference view in Help → UI Legend shows the same information without the edit controls. See
-`src/indicators/registry.ts` for the full list of customizable entries.
+Every change applies immediately, updating the row's own preview as you pick — there's no separate
+OK/Cancel. The dialog has a "Reset to default" button once any of its fields is overridden, and the
+row itself gets a reset "×"; a "Reset all indicators" button at the bottom of the legend clears
+everything at once. Overrides are stored in `indicator_overrides` in `config.json` and apply live —
+no restart needed — and survive a theme switch. The read-only reference view in Help → UI Legend
+shows the same information without the edit controls. See `src/indicators/registry.ts` for the full
+list of customizable entries.
 
 Four of the legend's group headings also carry a show/hide toggle for that whole group, stored
 in `config.json` alongside the color/icon/animation overrides:

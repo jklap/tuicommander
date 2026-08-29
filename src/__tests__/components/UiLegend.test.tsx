@@ -131,23 +131,17 @@ describe("UiLegend editable mode (Settings → Appearance)", () => {
 
 	it("shows no edit controls when not editable (HelpPanel's read-only reference view)", () => {
 		const { container } = render(() => <UiLegend />);
-		expect(container.querySelectorAll(".editSwatch").length).toBe(0);
+		expect(container.querySelectorAll(".previewBtn").length).toBe(0);
 		expect(container.querySelector(".resetAllBtn")).toBeNull();
 	});
 
-	it("shows an edit swatch for every color-capable row when editable", () => {
+	it("wraps every row's preview in one clickable button when editable — no more separate per-capability buttons", () => {
 		const { container } = render(() => <UiLegend editable />);
-		// terminalStatus(7) + tabType(6) + sidebarSymbol color-capable(6, all but
-		// "shell") + prBadge(11) + gitState(6) + diffStat(2) = 38
-		expect(container.querySelectorAll(".editSwatch").length).toBe(38);
-	});
-
-	it("does not show an edit swatch for an icon-only entry (sidebar.shell has no color)", () => {
-		const { container } = render(() => <UiLegend editable />);
-		const shellRow = Array.from(container.querySelectorAll(".row")).find((row) =>
-			row.textContent?.includes("Shell (non-git)"),
-		);
-		expect(shellRow?.querySelector(".editSwatch")).toBeNull();
+		// terminalStatus(7) + tabType(6) + sidebarSymbol(7) + prBadge(11) + gitState(6) + diffStat(2) = 39
+		expect(container.querySelectorAll(".previewBtn").length).toBe(39);
+		expect(container.querySelectorAll(".editSwatch").length).toBe(0);
+		expect(container.querySelectorAll(".editIconBtn").length).toBe(0);
+		expect(container.querySelectorAll(".editAnimBtn").length).toBe(0);
 	});
 
 	it("shows the 'Reset all indicators' button when editable", () => {
@@ -155,26 +149,46 @@ describe("UiLegend editable mode (Settings → Appearance)", () => {
 		expect(getByText("Reset all indicators")).toBeTruthy();
 	});
 
-	it("clicking a preset in the opened color picker calls setIndicatorColor with that indicator's id", () => {
+	it("clicking a row's preview opens the combined dialog with that indicator's label as the title", () => {
+		const { container, getByRole } = render(() => <UiLegend editable />);
+		const busyRow = Array.from(container.querySelectorAll(".row")).find((row) => row.textContent?.includes("Busy"));
+		fireEvent.click(busyRow?.querySelector(".previewBtn") as HTMLButtonElement);
+
+		expect(getByRole("heading", { name: "Busy" })).toBeTruthy();
+	});
+
+	it("clicking a preset in the opened combined dialog calls setIndicatorColor with that indicator's id", () => {
 		const { container, getByTitle } = render(() => <UiLegend editable />);
 		const busyRow = Array.from(container.querySelectorAll(".row")).find((row) => row.textContent?.includes("Busy"));
-		const swatch = busyRow?.querySelector(".editSwatch") as HTMLButtonElement;
-		fireEvent.click(swatch);
+		fireEvent.click(busyRow?.querySelector(".previewBtn") as HTMLButtonElement);
 
 		fireEvent.click(getByTitle("Blue"));
 
 		expect(settingsStore.state.indicatorOverrides).toEqual([{ id: "terminal.busy", color: "#4A9EFF" }]);
 	});
 
-	it("clicking 'No color' in the opened picker clears the override instead of setting an empty color", () => {
+	it("clicking 'No color' in the opened dialog clears only the color, not a sibling icon override", () => {
 		settingsStore.setIndicatorColor("terminal.busy", "#ff00ff");
+		settingsStore.setIndicatorIcon("terminal.busy", "ring");
 		const { container, getByTitle } = render(() => <UiLegend editable />);
 		const busyRow = Array.from(container.querySelectorAll(".row")).find((row) => row.textContent?.includes("Busy"));
-		fireEvent.click(busyRow?.querySelector(".editSwatch") as HTMLButtonElement);
+		fireEvent.click(busyRow?.querySelector(".previewBtn") as HTMLButtonElement);
 
 		fireEvent.click(getByTitle("No color"));
 
-		expect(settingsStore.state.indicatorOverrides).toEqual([]);
+		expect(settingsStore.state.indicatorOverrides).toEqual([{ id: "terminal.busy", icon: "ring" }]);
+	});
+
+	it("the combined dialog for the icon-only 'shell' row shows an icon grid but no color swatches or animation list", () => {
+		const { container, getByTitle } = render(() => <UiLegend editable />);
+		const shellRow = Array.from(container.querySelectorAll(".row")).find((row) =>
+			row.textContent?.includes("Shell (non-git)"),
+		);
+		fireEvent.click(shellRow?.querySelector(".previewBtn") as HTMLButtonElement);
+
+		expect(getByTitle("shellTerminal")).toBeTruthy();
+		expect(container.querySelector(".colorSwatch")).toBeNull();
+		expect(container.querySelectorAll(".list .row").length).toBe(0);
 	});
 
 	it("shows a reset '×' only for a row with an active override", () => {
@@ -206,42 +220,32 @@ describe("UiLegend editable mode (Settings → Appearance)", () => {
 		expect(settingsStore.state.indicatorOverrides).toEqual([]);
 	});
 
-	it("shows an icon-edit button for the icon-only 'shell' row but no color swatch or animation button", () => {
-		const { container } = render(() => <UiLegend editable />);
-		const shellRow = Array.from(container.querySelectorAll(".row")).find((row) =>
-			row.textContent?.includes("Shell (non-git)"),
-		);
-		expect(shellRow?.querySelector(".editIconBtn")).not.toBeNull();
-		expect(shellRow?.querySelector(".editSwatch")).toBeNull();
-		expect(shellRow?.querySelector(".editAnimBtn")).toBeNull();
-	});
-
-	it("clicking an icon in the opened icon picker calls setIndicatorIcon with that indicator's id", () => {
+	it("clicking an icon in the opened combined dialog calls setIndicatorIcon with that indicator's id", () => {
 		const { container, getByTitle } = render(() => <UiLegend editable />);
 		const busyRow = Array.from(container.querySelectorAll(".row")).find((row) => row.textContent?.includes("Busy"));
-		fireEvent.click(busyRow?.querySelector(".editIconBtn") as HTMLButtonElement);
+		fireEvent.click(busyRow?.querySelector(".previewBtn") as HTMLButtonElement);
 
 		fireEvent.click(getByTitle("ring"));
 
 		expect(settingsStore.state.indicatorOverrides).toEqual([{ id: "terminal.busy", icon: "ring" }]);
 	});
 
-	it("clicking an option in the opened animation picker calls setIndicatorAnimation with that indicator's id", () => {
+	it("clicking an option in the opened combined dialog calls setIndicatorAnimation with that indicator's id", () => {
 		const { container, getByText } = render(() => <UiLegend editable />);
 		const busyRow = Array.from(container.querySelectorAll(".row")).find((row) => row.textContent?.includes("Busy"));
-		fireEvent.click(busyRow?.querySelector(".editAnimBtn") as HTMLButtonElement);
+		fireEvent.click(busyRow?.querySelector(".previewBtn") as HTMLButtonElement);
 
 		fireEvent.click(getByText("Blink"));
 
 		expect(settingsStore.state.indicatorOverrides).toEqual([{ id: "terminal.busy", animation: "blink" }]);
 	});
 
-	it("restricts the animation picker to a badge entry's narrower animations list (no Glow/Spin for pr.conflict)", () => {
+	it("restricts the combined dialog's animation list to a badge entry's narrower set (no Glow/Spin for pr.conflict)", () => {
 		const { container, queryByText } = render(() => <UiLegend editable />);
 		const conflictRow = Array.from(container.querySelectorAll(".row")).find((row) =>
 			row.textContent?.includes("Conflicts"),
 		);
-		fireEvent.click(conflictRow?.querySelector(".editAnimBtn") as HTMLButtonElement);
+		fireEvent.click(conflictRow?.querySelector(".previewBtn") as HTMLButtonElement);
 
 		expect(queryByText("Pulse")).toBeTruthy();
 		expect(queryByText("Glow")).toBeNull();
@@ -306,6 +310,17 @@ describe("UiLegend editable mode (Settings → Appearance)", () => {
 		const checkbox = group.querySelector('input[type="checkbox"]') as HTMLInputElement;
 		fireEvent.click(checkbox);
 		expect(settingsStore.state.showDiffStats).toBe(false);
+	});
+
+	it("reflects an icon override in the row's own left-hand preview, not just the picker", () => {
+		// Regression guard: IndicatorPreview previously rendered entry.defaultIconId
+		// verbatim instead of resolving the override, so changing an indicator's icon
+		// left the legend's own preview showing the old shape.
+		settingsStore.setIndicatorIcon("terminal.busy", "diamond");
+		const { container } = render(() => <UiLegend />);
+		const busyRow = Array.from(container.querySelectorAll(".row")).find((row) => row.textContent?.includes("Busy"));
+		const path = busyRow?.querySelector(".previewIcon path");
+		expect(path?.getAttribute("d")).toBe("M8 1.2 14.8 8 8 14.8 1.2 8z");
 	});
 
 	it("the Git Repo Status group lists every in-progress-operation kind plus conflicts", () => {

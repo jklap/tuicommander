@@ -1066,6 +1066,30 @@ function createSettingsStore() {
 			save();
 		},
 
+		/** Clear one field of one indicator's override, leaving any other
+		 *  overridden fields on that same indicator untouched — unlike
+		 *  `clearIndicatorOverride`, which drops the whole row. Needed once
+		 *  color/icon/animation are edited from one combined dialog: clearing
+		 *  just the color (e.g. via "No color") must not also drop an icon or
+		 *  animation override on the same indicator. Drops the row entirely
+		 *  once no field remains, matching what `sanitizeIndicatorOverrides`
+		 *  already does to a bare `{ id }` row on hydrate. */
+		clearIndicatorField(id: string, field: "color" | "icon" | "animation"): void {
+			const existing = state.indicatorOverrides.find((o) => o.id === id);
+			if (!existing) return;
+			const updated: IndicatorOverride = { ...existing };
+			delete updated[field];
+			const stillOverridden =
+				updated.color !== undefined || updated.icon !== undefined || updated.animation !== undefined;
+			setState(
+				"indicatorOverrides",
+				stillOverridden
+					? state.indicatorOverrides.map((o) => (o.id === id ? updated : o))
+					: state.indicatorOverrides.filter((o) => o.id !== id),
+			);
+			save();
+		},
+
 		/** Clear every indicator override — the legend's "Reset all indicators" button. */
 		resetAllIndicators(): void {
 			setState("indicatorOverrides", []);

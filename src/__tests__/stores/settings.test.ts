@@ -929,6 +929,62 @@ describe("settingsStore", () => {
 		});
 	});
 
+	describe("clearIndicatorField()", () => {
+		it("clears one field and leaves sibling fields on the same override standing", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.setIndicatorIcon("terminal.busy", "diamond");
+				store.clearIndicatorField("terminal.busy", "color");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", icon: "diamond" }]);
+			});
+		});
+
+		it("drops the override row entirely once its last field is cleared", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.clearIndicatorField("terminal.busy", "color");
+				expect(store.state.indicatorOverrides).toEqual([]);
+			});
+		});
+
+		it("leaves other indicators' overrides untouched", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.setIndicatorColor("pr.conflict", "#00ff00");
+				store.clearIndicatorField("terminal.busy", "color");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "pr.conflict", color: "#00ff00" }]);
+			});
+		});
+
+		it("persists the field removal via debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.clearIndicatorField("terminal.busy", "color");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenLastCalledWith("save_config", {
+					config: expect.objectContaining({ indicator_overrides: [] }),
+				});
+			});
+		});
+
+		it("is a no-op for an id with no override", () => {
+			testInScope(() => {
+				store.clearIndicatorField("terminal.busy", "color");
+				expect(store.state.indicatorOverrides).toEqual([]);
+			});
+		});
+
+		it("is a no-op when clearing a field that was never set on an existing override", () => {
+			testInScope(() => {
+				store.setIndicatorColor("terminal.busy", "#ff00ff");
+				store.clearIndicatorField("terminal.busy", "animation");
+				expect(store.state.indicatorOverrides).toEqual([{ id: "terminal.busy", color: "#ff00ff" }]);
+			});
+		});
+	});
+
 	describe("resetAllIndicators()", () => {
 		it("clears every override at once", () => {
 			testInScope(() => {
