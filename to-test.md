@@ -1925,3 +1925,26 @@ usual confirm-to-discard prompt) if the worktree also has uncommitted changes.
 - [ ] Same, but first add/modify a file in the worktree (uncommitted change)
   before deleting — the app should show the normal "discard uncommitted
   changes?" confirmation instead of silently deleting.
+
+## DSR/CPR reply latency — `leaf` and other cursor-position-querying tools (2026-08-29, **Rust change — needs `make dev` restart**)
+
+Reported bug: running `leaf <file.md>` (a terminal markdown pager) in a
+TUICommander tab printed `^[[3;1RError: The cursor position could not be read
+within a normal duration` instead of rendering the file. Root cause: TUIC's
+cursor-position (DSR/CPR, `ESC[6n`) reply was only flushed to the child's
+stdin *after* an expensive per-chunk screen-diff, which raced against `leaf`'s
+own short internal deadline on a session's first paint. Fixed in
+`pty.rs::process_chunk` (flush immediately after draining VT events) and in
+the frame ticker's stalled-sync-update flush path (`terminal_grid.rs`'s new
+`drain_pty_write_events`), which had the same class of bug for a rarer trigger
+(a BSU/DEC-2026 block that never sees its ESU within 150ms).
+
+- [ ] After restart, run `leaf <any-markdown-file>` in a TUIC tab. It should
+  render the file normally — no raw `ESC[...R` text printed before/instead of
+  the rendered output.
+- [ ] Same, but on a large file (so the pager's first paint is a big,
+  multi-row repaint) — this is the specific case that raced before the fix.
+- [ ] Any other tool that queries cursor position on startup (e.g. some
+  readline-based REPLs, `tput`-driven scripts) still gets a correct reply and
+  behaves normally — this fix changes reply *timing*, not content, so nothing
+  should look different, only faster/more reliable.

@@ -5040,28 +5040,88 @@ impl ChunkProcessor {
             physical_prefix,
             history_size,
         ): VtProcessResult = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
-            let mut vt = vt_log.lock();
-            let changed = vt.process(data.as_bytes());
-            // Publish the real sync state (a nested BSU keeps it open) so the
-            // frame ticker knows whether this session can have a stalled
-            // synchronized update worth taking the lock for.
-            if let Some(flag) = state.sync_update_active.get(session_id) {
-                flag.store(vt.is_sync_update_active(), Ordering::Relaxed);
+            // Phase 1: process the chunk and drain events under the lock,
+            // but do NOT write any reply while holding it — write_terminal_reply's
+            // write_all/flush can block (a SIGSTOP'd/standby child, or a full
+            // PTY input queue), and blocking here would stall every other
+            // consumer of this session's grid (the frame ticker, HTTP
+            // terminal reads) for as long as the write is stuck. Collect
+            // replies to flush once the lock is dropped, below.
+            use crate::terminal_grid::TermEvent;
+            let (changed, total, hist, alt_screen, mouse_reporting, tevts, pending_replies) = {
+                let mut vt = vt_log.lock();
+                let changed = vt.process(data.as_bytes());
+                // Publish the real sync state (a nested BSU keeps it open) so the
+                // frame ticker knows whether this session can have a stalled
+                // synchronized update worth taking the lock for.
+                if let Some(flag) = state.sync_update_active.get(session_id) {
+                    flag.store(vt.is_sync_update_active(), Ordering::Relaxed);
+                }
+                let total = vt.total_lines();
+                let hist = vt.grid_history_size();
+                let alt_screen = vt.is_alternate_screen();
+                let mouse_reporting = vt.is_mouse_reporting();
+                let tevts = vt.grid_drain_events();
+                let mut pending_replies: Vec<String> = Vec::new();
+                let tevts: Vec<TermEvent> = tevts
+                    .into_iter()
+                    .filter(|evt| {
+                        let TermEvent::PtyWrite(response) = evt else {
+                            return true;
+                        };
+                        if response.contains("\x1b[?1049")
+                            || response.contains("\x1b[?1047")
+                            || response.contains("\x1b[?47l")
+                            || response.contains("\x1b[?25h")
+                        {
+                            tracing::error!(source = "terminal", session_id = %session_id,
+                                "PtyWrite contains DEC private mode sequences! response={:?}",
+                                response.as_bytes().iter().take(200).collect::<Vec<_>>());
+                        }
+                        pending_replies.push(response.clone());
+                        false
+                    })
+                    .collect();
+                (
+                    changed,
+                    total,
+                    hist,
+                    alt_screen,
+                    mouse_reporting,
+                    tevts,
+                    pending_replies,
+                )
+            };
+
+            // CPR/DSR/DA1 replies (`device_status`/`identify_terminal` in the
+            // alacritty fork's Handler impl) are latency-sensitive: a pager
+            // like `leaf` sets a short internal deadline waiting on the
+            // cursor-position reply and prints the raw escape sequence as
+            // text once that deadline passes. Flush them to the child's
+            // stdin now — lock-free, and before the chrome-filter/
+            // classification work below, which clones the full screen on a
+            // chunk's first paint, exactly the case where a freshly-launched
+            // TUI queries cursor position.
+            for response in &pending_replies {
+                write_terminal_reply(state, session_id, response.as_bytes(), "PtyWrite");
             }
-            let total = vt.total_lines();
-            let hist = vt.grid_history_size();
+
             // Grid is the source of truth for mouse DECSET (including combined
             // `?1000;1002;1006h`). String-matching the chunk would miss grok.
-            self.apply_inline_tui_mode(
-                vt.is_alternate_screen(),
-                vt.is_mouse_reporting(),
-                agent_type.as_deref(),
-            );
-            let tevts = vt.grid_drain_events();
+            self.apply_inline_tui_mode(alt_screen, mouse_reporting, agent_type.as_deref());
+
             // Did ANYTHING on screen move? Taken before the chrome filter below,
             // because that filter drops rows under the input-area border and a
             // choice dialog can render there.
             let any_row_changed = !changed.is_empty();
+
+            // Phase 2: re-lock for the screen-diff/classification work below.
+            // Nothing else mutates this session's grid between phase 1 and
+            // here (each session has exactly one reader thread), so this is
+            // just a second short, uncontended acquisition — the point above
+            // was only to keep the potentially-blocking write out of the
+            // critical section, not to avoid a second lock/unlock.
+            let vt = vt_log.lock();
 
             // Filter out changed rows below the input area border (horizontal rule).
             // Claude Code (and similar agents) render a quota/budget status bar below
@@ -5164,17 +5224,15 @@ impl ChunkProcessor {
             use crate::terminal_grid::{Osc133Event, TermEvent};
             for evt in term_events {
                 match evt {
-                    TermEvent::PtyWrite(response) => {
-                        if response.contains("\x1b[?1049")
-                            || response.contains("\x1b[?1047")
-                            || response.contains("\x1b[?47l")
-                            || response.contains("\x1b[?25h")
-                        {
-                            tracing::error!(source = "terminal", session_id = %session_id,
-                                "PtyWrite contains DEC private mode sequences! response={:?}",
-                                response.as_bytes().iter().take(200).collect::<Vec<_>>());
-                        }
-                        write_terminal_reply(state, session_id, response.as_bytes(), "PtyWrite");
+                    TermEvent::PtyWrite(_) => {
+                        // Flushed synchronously right after grid_drain_events,
+                        // above, before the screen diff/classification —
+                        // CPR/DSR replies are latency-sensitive and must not
+                        // wait behind that work. Unreachable in practice; log
+                        // if it isn't, since it means the early flush above
+                        // was skipped.
+                        tracing::error!(source = "terminal", session_id = %session_id,
+                            "PtyWrite reached the deferred event loop instead of being flushed early");
                     }
                     TermEvent::Title(title) => {
                         #[cfg(feature = "desktop")]
@@ -7984,6 +8042,7 @@ pub(crate) fn spawn_reader_thread(
             // coming — so it must run BEFORE the non-dirty early return. The
             // atomic hint keeps idle sessions from touching the vt lock at all.
             let mut sync_timeout_flush = false;
+            let mut stalled_replies: Vec<String> = Vec::new();
             if ticker_sync_active
                 .as_ref()
                 .is_some_and(|f| f.load(Ordering::Relaxed))
@@ -7993,12 +8052,27 @@ pub(crate) fn spawn_reader_thread(
                 if g.flush_sync_timeout_if_needed() {
                     sync_timeout_flush = true;
                     effective_dirty = true;
+                    // A DSR/CPR or DA1/DA2 query buried inside the stalled
+                    // update is replayed by the flush above and queues a
+                    // PtyWrite reply — but this ticker only forwards screen
+                    // frames below, it never runs the ordinary process_chunk
+                    // path that would otherwise flush that reply. Without
+                    // this, the reply sits queued until an unrelated later
+                    // PTY chunk happens to arrive (or forever, if no more
+                    // output ever comes). Only the PtyWrite events are
+                    // drained here — other kinds (title, OSC 133, TUIC) stay
+                    // queued for the next real chunk, which is the only
+                    // place equipped to act on them.
+                    stalled_replies = g.grid_drain_pty_write_events();
                 }
                 let still_active = g.is_sync_update_active();
                 drop(g);
                 if let Some(f) = ticker_sync_active.as_ref() {
                     f.store(still_active, Ordering::Relaxed);
                 }
+            }
+            for reply in &stalled_replies {
+                write_terminal_reply(&ticker_state, &ticker_sid, reply.as_bytes(), "PtyWrite");
             }
             if !effective_dirty {
                 // Idle tick: leave sustained-animation mode so the next burst
@@ -20609,6 +20683,28 @@ mod tests {
         }
     }
 
+    /// Simulates a stalled/backed-up PTY write (e.g. a SIGSTOP'd standby
+    /// child) — blocks on the first `write()` until the test sends on
+    /// `release_rx`, then records the bytes like `RecordingWriter`.
+    #[cfg(unix)]
+    struct BlockingWriter {
+        bytes: Arc<std::sync::Mutex<Vec<u8>>>,
+        release_rx: std::sync::mpsc::Receiver<()>,
+    }
+
+    #[cfg(unix)]
+    impl std::io::Write for BlockingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let _ = self.release_rx.recv();
+            self.bytes.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[cfg(unix)]
     fn insert_session_with_writer(
         state: &AppState,
@@ -20695,6 +20791,237 @@ mod tests {
         write_terminal_reply(&state, "reply-order", b"first", "test");
         write_terminal_reply(&state, "reply-order", b"second", "test");
         assert_eq!(*bytes.lock().unwrap(), b"firstsecond");
+    }
+
+    /// `leaf` (and other pagers) query cursor position with a DSR/CPR request
+    /// (`ESC[6n`) on their first paint and give up waiting for the reply after
+    /// a short internal deadline, printing it as raw text if it's late.
+    /// `process_chunk` must flush that reply to the child's stdin itself,
+    /// not merely produce it internally — regression coverage for the
+    /// early-flush ordering fixed alongside this test.
+    #[cfg(unix)]
+    #[test]
+    fn dsr_cursor_position_query_is_flushed_by_process_chunk() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "dsr-cpr-query";
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        insert_session_with_writer(
+            &state,
+            sid,
+            Box::new(RecordingWriter {
+                bytes: Arc::clone(&bytes),
+            }),
+        );
+
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+
+        let mut cp = ChunkProcessor::new(None, None);
+        // Cursor starts at (0,0) on a fresh grid, so the reply is 1-indexed row 1, col 1.
+        let _ = cp.process_chunk("\x1b[6n", &silence, sid, &state);
+
+        assert_eq!(
+            *bytes.lock().unwrap(),
+            b"\x1b[1;1R",
+            "the CPR reply must reach the session's real PTY writer"
+        );
+    }
+
+    /// Shared setup for the DSR/CPR edge-case tests below: a real PTY session
+    /// backed by a `RecordingWriter`, plus the per-session state `process_chunk`
+    /// requires.
+    #[cfg(unix)]
+    fn setup_dsr_test_session(
+        sid: &str,
+    ) -> (
+        crate::state::AppState,
+        Arc<std::sync::Mutex<Vec<u8>>>,
+        Arc<Mutex<SilenceState>>,
+    ) {
+        let state = crate::state::tests_support::make_test_app_state();
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        insert_session_with_writer(
+            &state,
+            sid,
+            Box::new(RecordingWriter {
+                bytes: Arc::clone(&bytes),
+            }),
+        );
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+        (state, bytes, silence)
+    }
+
+    /// `EscapeAwareBuffer` (the layer above `process_chunk`, in front of every
+    /// real PTY read) must hold back an incomplete CSI sequence rather than
+    /// let it reach `process_chunk` split in two — `n` (0x6E) is a valid CSI
+    /// final byte, so `ESC[6` with no final byte yet must not be mistaken for
+    /// a complete, unrelated sequence and must not produce a premature (or
+    /// duplicate) reply once the final byte arrives in the next PTY read.
+    #[cfg(unix)]
+    #[test]
+    fn dsr_query_split_across_two_pty_reads_is_not_dispatched_early() {
+        let sid = "dsr-split-read";
+        let (state, bytes, silence) = setup_dsr_test_session(sid);
+        let mut cp = ChunkProcessor::new(None, None);
+        let mut utf8_buf = Utf8ReadBuffer::new();
+        let mut esc_buf = EscapeAwareBuffer::new();
+
+        let utf8_data = utf8_buf.push(b"\x1b[6");
+        let esc_data = esc_buf.push(&utf8_data);
+        let _ = cp.process_chunk(&esc_data, &silence, sid, &state);
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "an incomplete CSI sequence must not be dispatched or answered early"
+        );
+
+        let utf8_data2 = utf8_buf.push(b"n");
+        let esc_data2 = esc_buf.push(&utf8_data2);
+        let _ = cp.process_chunk(&esc_data2, &silence, sid, &state);
+        assert_eq!(
+            *bytes.lock().unwrap(),
+            b"\x1b[1;1R",
+            "the reply must land once the split sequence completes"
+        );
+    }
+
+    /// Two CPR queries in the same chunk, with a cursor-moving byte between
+    /// them, must produce two distinct replies in order — each reflecting the
+    /// cursor position AT THE TIME its own query was dispatched, not the
+    /// position after the rest of the chunk (including the second query) has
+    /// been processed. `vt.process()` runs the whole chunk synchronously
+    /// before any reply is read back out, so this also guards against a
+    /// future refactor that re-reads cursor state lazily instead of at
+    /// dispatch time.
+    #[cfg(unix)]
+    #[test]
+    fn multiple_dsr_queries_in_one_chunk_report_distinct_positions_in_order() {
+        let sid = "dsr-multi-query";
+        let (state, bytes, silence) = setup_dsr_test_session(sid);
+        let mut cp = ChunkProcessor::new(None, None);
+
+        let _ = cp.process_chunk("\x1b[6nx\x1b[6n", &silence, sid, &state);
+        assert_eq!(
+            *bytes.lock().unwrap(),
+            b"\x1b[1;1R\x1b[1;2R".to_vec(),
+            "each reply must reflect the cursor position at its own query, in order"
+        );
+    }
+
+    /// `device_status` only answers arg 5 and 6; the DEC-private `ESC[?6n`
+    /// variant isn't even routed to it by the vte dispatch table (it requires
+    /// empty intermediates). Both must be silently ignored — no reply, no
+    /// panic — confirming a future change to that match can't start emitting
+    /// a bogus reply for an argument nothing actually asked for.
+    #[cfg(unix)]
+    #[test]
+    fn unsupported_dsr_variants_produce_no_reply_and_do_not_panic() {
+        let sid = "dsr-unsupported";
+        let (state, bytes, silence) = setup_dsr_test_session(sid);
+        let mut cp = ChunkProcessor::new(None, None);
+
+        let _ = cp.process_chunk("\x1b[99n\x1b[?6n", &silence, sid, &state);
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "unsupported DSR queries must not produce a reply"
+        );
+    }
+
+    /// `process_chunk` must not hold the session's `vt_log` lock while
+    /// flushing a `PtyWrite` reply — `write_terminal_reply`'s `write_all`/
+    /// `flush` can block (a SIGSTOP'd/standby child, or a full PTY input
+    /// queue), and blocking there while still holding the lock would stall
+    /// every other consumer of this session's grid (the frame ticker,
+    /// HTTP terminal reads) for as long as the write is stuck. Regression
+    /// coverage for the lock-scope fix alongside the early-flush ordering
+    /// fix: hangs a write mid-`process_chunk` and asserts the vt_log lock
+    /// is still acquirable (non-blocking) while it's stuck.
+    #[cfg(unix)]
+    #[test]
+    fn process_chunk_does_not_hold_the_vt_log_lock_while_flushing_a_reply() {
+        let sid = "dsr-lock-scope";
+        let state = crate::state::tests_support::make_test_app_state();
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        insert_session_with_writer(
+            &state,
+            sid,
+            Box::new(BlockingWriter {
+                bytes: Arc::clone(&bytes),
+                release_rx,
+            }),
+        );
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+
+        let state = Arc::new(state);
+        let worker_state = Arc::clone(&state);
+        let worker = std::thread::spawn(move || {
+            let mut cp = ChunkProcessor::new(None, None);
+            let _ = cp.process_chunk("\x1b[6n", &silence, sid, &worker_state);
+        });
+
+        // Give the worker time to reach the blocked write.
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "test setup: the write should still be blocked at this point"
+        );
+
+        let vt_log = state.vt_log_buffers.get(sid).expect("vt_log inserted");
+        assert!(
+            vt_log.try_lock().is_some(),
+            "vt_log lock must be free while a PtyWrite reply is stuck in write()"
+        );
+
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(*bytes.lock().unwrap(), b"\x1b[1;1R");
     }
 
     #[cfg(unix)]

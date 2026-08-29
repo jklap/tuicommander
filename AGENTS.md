@@ -294,6 +294,19 @@ exactly how the corrupted value above sailed through validation on every launch)
 
 NEVER write text + `\r` directly to a PTY. Always use `sendCommand()` from `src/utils/sendCommand.ts` — it handles agent-specific Enter semantics (Ink raw mode needs split writes). This applies to dictation, command palette, suggested actions, and any other feature that sends input to a terminal.
 
+## Terminal Query/Reply Latency (DSR/CPR, DA1/DA2, DECRQM)
+
+The alacritty fork's `Handler` impl (`patches/alacritty_terminal/src/term/mod.rs`) answers several terminal→app query sequences by queuing a `TermEvent::PtyWrite` — `device_status` (DSR-5/DSR-6 aka CPR), `identify_terminal` (DA1/DA2), `report_mode`/`report_private_mode` (DECRQM). These replies are latency-sensitive: real tools (pagers like `leaf`, readline libraries) set a short internal deadline waiting for them and print the raw escape sequence as visible garbage once it's late.
+
+**Every code path that calls `Term::process`/replays bytes through this `Handler` must drain and flush any resulting `PtyWrite` events itself — draining is not automatic, and forgetting it does not fail loudly, it just silently delays or drops the reply.** Two call sites need this today, found one bug apart (2026-08-29):
+
+- `pty.rs::process_chunk` — the ordinary per-PTY-read path. Flushes `PtyWrite` replies immediately after `grid_drain_events()`, *before* the chrome-filter/classification work below it (which clones the full screen on a chunk's first paint — exactly when a freshly-launched TUI queries cursor position, so this ordering is load-bearing, not cosmetic).
+- The frame ticker's stalled-synchronized-update timeout flush (`flush_sync_timeout_if_needed`, `pty.rs`) — replays buffered bytes through the same `Handler` when a BSU never sees its ESU within 150ms, but only forwards screen frames; it never runs `process_chunk`. Drains via `terminal_grid.rs::drain_pty_write_events()` (a `PtyWrite`-only drain — it must NOT take everything with a full `drain_events()`, since other event kinds queued there, e.g. title/OSC 133/TUIC, have no handler on the ticker and must stay queued for the next real chunk).
+
+If you add a third place that calls `.process()`/replays PTY bytes outside these two, check whether it can produce a `PtyWrite` and needs the same drain-and-flush. (The scrollback-restore replay path and session-teardown's `force_stop_sync_if_buffered` were checked and are NOT gaps: the former replays reconstructed SGR-styling bytes that can never contain a query sequence in the first place, since queries never left a trace in the stored `LogLine` screen model; the latter runs after the child has already exited, so there is nothing left to write a reply to.)
+
+**Flushing earlier must not mean flushing under a lock you didn't hold before.** The `process_chunk` fix above shipped once already holding the session's `vt_log` `Mutex` across the write — a real regression a review caught: `write_terminal_reply`'s `write_all`/`flush` can block (a SIGSTOP'd/standby child, a full PTY input queue), and blocking there while holding the lock stalls every other consumer of that session's grid (frame ticker, HTTP terminal reads). `process_chunk` now splits into two lock acquisitions — collect pending replies under the first, drop it, flush lock-free, re-lock for the screen-diff/classification work — specifically so the write is never inside a locked critical section. When moving a flush/write earlier in a hot path to fix a latency bug, check what lock is held at the new call site, not just that it now runs sooner.
+
 ## Agent Session Management
 
 TUIC tracks each agent's session ID for resume-after-restart. Two strategies coexist:

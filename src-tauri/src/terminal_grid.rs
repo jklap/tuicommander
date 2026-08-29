@@ -1190,6 +1190,38 @@ impl TerminalGrid {
         }
     }
 
+    /// Drain only queued `PtyWrite` replies, leaving every other queued event
+    /// (title, clipboard, OSC 133, TUIC) in place for the next `drain_events()`.
+    ///
+    /// The frame ticker's stalled synchronized-update timeout flush
+    /// (`flush_sync_timeout_if_needed`) can replay a buffered DSR/CPR or DA1/DA2
+    /// query and queue its `PtyWrite` reply, but the ticker only forwards
+    /// screen frames — it never calls the ordinary per-chunk `process_chunk`
+    /// path that would otherwise flush that reply. Without draining it here,
+    /// the reply sits queued until an unrelated later PTY chunk happens to
+    /// arrive (or forever, if the app is truly stuck with no further output).
+    /// A full `drain_events()` here would work too but silently discards the
+    /// other event kinds the ticker has no way to act on.
+    pub fn drain_pty_write_events(&self) -> Vec<String> {
+        match self.events.lock() {
+            Ok(mut guard) => {
+                let mut replies = Vec::new();
+                guard.retain(|evt| match evt {
+                    TermEvent::PtyWrite(text) => {
+                        replies.push(text.clone());
+                        false
+                    }
+                    _ => true,
+                });
+                replies
+            }
+            Err(e) => {
+                tracing::error!("terminal_grid: events mutex poisoned: {e}");
+                Vec::new()
+            }
+        }
+    }
+
     /// Get the OSC 8 hyperlink URI at a given viewport position, if any.
     pub fn hyperlink_at(&self, row: usize, col: usize) -> Option<String> {
         let grid = self.term.grid();

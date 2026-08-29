@@ -4267,6 +4267,11 @@ impl VtLogBuffer {
         self.grid.drain_events()
     }
 
+    /// See `TerminalGrid::drain_pty_write_events`.
+    pub(crate) fn grid_drain_pty_write_events(&self) -> Vec<String> {
+        self.grid.drain_pty_write_events()
+    }
+
     // --- Scroll delegates ---
 
     pub(crate) fn grid_scroll(&mut self, delta: i32) {
@@ -7691,6 +7696,31 @@ mod tests {
             buf.screen_rows_ref()
                 .is_some_and(|rows| rows.iter().any(|r| r.contains("STALLED"))),
             "flushed content reaches the cached screen rows"
+        );
+    }
+
+    /// A DSR/CPR (or DA1/DA2) query buried inside a synchronized-update block
+    /// that never sees its ESU is replayed once the 150ms timeout flush fires
+    /// — confirm the reply is queued and drainable via the PtyWrite-only path
+    /// the frame ticker uses, since the ticker has no other opportunity to
+    /// flush it (see `TerminalGrid::drain_pty_write_events`).
+    #[test]
+    fn test_vt_log_sync_timeout_flush_queues_cpr_reply() {
+        let mut buf = make_vt_log();
+        buf.process(b"\x1b[?2026h");
+        buf.process(b"\x1b[6n");
+        assert!(
+            buf.grid_drain_pty_write_events().is_empty(),
+            "no reply before the deadline — still buffered inside the sync update"
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(170));
+        assert!(buf.flush_sync_timeout_if_needed());
+
+        assert_eq!(
+            buf.grid_drain_pty_write_events(),
+            vec!["\x1b[1;1R".to_string()],
+            "the buried CPR query must be replayed and its reply queued"
         );
     }
 
