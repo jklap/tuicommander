@@ -16,24 +16,21 @@ agent, so it stays open forever and the backlog fills with stories nobody can
 close. Add an item here instead. When an item passes, delete it; a section with
 no items left goes too. What stays open must carry its own stated reason.
 
-> **The `make dev` restart gate is satisfied (2026-08-20 16:23).** Every section
-> below tagged "**After a `make dev` restart**" was waiting on a Rust rebuild.
-> The backend serving `:9876` is a debug build whose process started today at
-> 16:23:54 — later than every commit those sections describe (the newest is
-> 08-19 10:35). Two of those Rust changes were observed live end-to-end: OSC 133
-> events reach a browser client, and `pty-activity` frames arrive on `/events` at
-> the ~1/s throttle. So the gate is no longer a reason to leave an item open;
-> whatever stays open below has its own stated reason.
+> **Where the restart gate sits (measured 2026-08-29).** The backend serving
+> `:9876` is a debug build whose process started **2026-08-25 23:20:31**, so the
+> newest commit it can contain is `78d8dac2` (08-25 00:39). Everything Rust-side
+> up to and including the 08-24 batch **is live** — those sections no longer need
+> a restart to be tested, only their own reason to stay open. Everything from the
+> 08-26 batch onward (`c344e29f` … and all of 08-27) is **not** loaded. Its own
+> binary is already gone from `src-tauri/target/debug/`, so the build time cannot
+> be read back off disk; the process start time is the only bound.
 >
-> Side note for Boss: the on-disk `src-tauri/target/debug/tuicommander` was
-> rewritten at **16:25**, after the running process started at 16:23:54. The live
-> process is therefore one build behind the binary on disk.
->
-> **A new gate opened on 2026-08-21.** The process above is still the one serving
-> `:9876`, so every 08-21 Rust change — the repository delta contract and the
-> UTF-16 search offsets, both still uncommitted in the working tree — is *not*
-> loaded. That skew already cost the repo list once (first section below). The
-> 08-21 sections stay open until a `make dev` restart.
+> **The frontend has no such gate.** In a debug build the HTTP server reads
+> `dist/` from disk on every request (`static_files.rs:65-90`), not the
+> `include_dir!` copy, so a browser client at `:9876` picks up any frontend change
+> after a plain `pnpm build` + reload — no Rust rebuild, no restart. The desktop
+> WebView gets the same change over Vite HMR. If a browser check of a frontend fix
+> shows nothing, check `dist/index.html`'s mtime before blaming the code.
 
 ## Atomic MCP managed-agent submission (2026-08-27, **Rust change — needs `make dev` restart**)
 
@@ -1113,18 +1110,30 @@ Vite (which sits on `:1421`). A source edit is invisible there until
   shows `[Reconcile] <id> ... → <repo>:<branch>`. _(NOTE: not driven from the
   browser — unregistering and re-registering one of Boss's live repos writes to
   the shared `repositories.json`. Needs a scratch repo.)_
-- [ ] `cd` a terminal from one repo into another (OSC 7): the tab does NOT move.
+- [x] `cd` a terminal from one repo into another (OSC 7): the tab does NOT move.
   It stays under the repo it was opened in, keeps its place in the tab strip, and
   the sidebar counts do not change. _(REVERSED on 2026-08-29. This item once asked
   for the opposite and was ticked when the tab followed the `cd` — that was the
-  regression Boss reported as "the app changes repo on its own". Re-homing an
-  owned tab moved it out from under him: the sidebar stayed on the old repo, the
-  tab left the strip, and the pane kept drawing a terminal from a repo he was not
-  looking at. The cwd handler now calls `reclaimParkedTerminal`, which only acts
-  on a tab with `repoPath === null`.)_
-- [ ] `cd` a PARKED terminal (one whose cwd matched no registered repo) into a
+  regression Boss reported as "the app changes repo on its own". **Driven live in
+  the web UI on 2026-08-29 and it FAILED first: `reclaimParkedTerminal` was only
+  half the fix.** A throwaway session in `veritas` that cd'd to `mdkb` moved
+  anyway — veritas 3→2, mdkb 2→3 — and the sidebar followed it, because
+  `CanvasTerminal` also feeds the cwd to `onCwdChange` →
+  `performCwdReassignment`, a second re-homing path that additionally calls
+  `repositoriesStore.setActive` when the tab is the active one. Log evidence:
+  `[CwdChange] term-24 → …/mdkb:main`, and the same line for the desktop
+  client's own id `term-472`. Guarded now (`createTerminalWorktreeCoordinator.ts`)
+  so a cwd may only re-place a tab inside its owning repo. Re-driven after the
+  fix: cwd moved to mdkb, brainstorming stayed at 2, mdkb stayed at 2,
+  `activeRepoPath` unchanged, no `[CwdChange]` line at all.)_
+- [x] `cd` a PARKED terminal (one whose cwd matched no registered repo) into a
   repo that is registered: that one does move, and the log shows
   `[Reconcile] <id> ... → <repo>:<branch>`. This is the only case a `cd` settles.
+  _(verified live 2026-08-29 in the web UI: a session opened on `/tmp` parked in
+  the active repo — `cwd "/tmp" is owned by no registered repo` — then a `cd` into
+  `veritas` produced `[Reconcile] term-25 …/mdkb:main → …/veritas:main` and moved
+  the counts mdkb 4→3, veritas 2→3. The active repo did NOT change, which is the
+  difference between settling a parked tab and re-homing an owned one.)_
 
 ## Background file tab must not steal the pane
 
@@ -1231,19 +1240,3 @@ Requires a `make dev` restart — the change is in `src-tauri/src/pty.rs`.
 - [ ] An agent tab (Claude, Codex) is unaffected: its badge still follows the
   ready-screen adapter, not this probe.
 
-## Clickable URL followed by punctuation
-
-Frontend only — Vite reloads it, no restart needed.
-
-- [ ] Print `see http://192.168.0.165:5000, then reload` in a shell tab and click
-  the URL. It opens. Before, the match swallowed the comma and `new URL()`
-  rejected it — the click did nothing and only a log line
-  (`Blocked malformed URL`) said why.
-- [ ] The underline stops before the comma, so what is highlighted is exactly
-  what opens.
-- [ ] A trailing slash and a query string survive: `http://127.0.0.1:5000/` and
-  `https://example.com/s?q=1` still open in full.
-- [ ] A wiki link keeps its own parenthesis:
-  `https://en.wikipedia.org/wiki/Rust_(programming_language)`.
-- [ ] A URL soft-wrapped across two rows still opens whole (the regression the
-  edge-of-row deferral exists for).

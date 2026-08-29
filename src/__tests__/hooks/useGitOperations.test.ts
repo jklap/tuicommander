@@ -3138,6 +3138,55 @@ describe("useGitOperations", () => {
 			await vi.advanceTimersByTimeAsync(300);
 		});
 
+		it("keeps an owned tab in its own repo when the cwd moves to another repo", async () => {
+			repositoriesStore.add({ path: "/other", displayName: "Other" });
+			repositoriesStore.setBranch("/other", "main", { worktreePath: "/other" });
+			const id = addTerminal({ sessionId: "s9", cwd: "/repo" });
+			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			terminalsStore.setRepoPath(id, "/repo");
+			terminalsStore.setActive(id);
+			repositoriesStore.setActive("/repo");
+
+			gitOps.handleTerminalCwdChange(id, "/other/src");
+			await vi.advanceTimersByTimeAsync(300);
+
+			expect(repositoriesStore.get("/repo")?.branches["main"]?.terminals).toContain(id);
+			expect(repositoriesStore.get("/other")?.branches["main"]?.terminals).not.toContain(id);
+			expect(terminalsStore.get(id)?.repoPath).toBe("/repo");
+			// The sidebar must not follow a cd either — that is what read as the app
+			// switching repo on its own.
+			expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
+		});
+
+		it("still follows a worktree switch inside the owning repo", async () => {
+			const id = addTerminal({ sessionId: "s10", cwd: "/repo" });
+			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			terminalsStore.setRepoPath(id, "/repo");
+			terminalsStore.setActive(id);
+
+			gitOps.handleTerminalCwdChange(id, "/repo/.worktrees/feature-x");
+			await vi.advanceTimersByTimeAsync(300);
+
+			expect(repositoriesStore.get("/repo")?.branches["feature-x"]?.terminals).toContain(id);
+			expect(repositoriesStore.get("/repo")?.branches["main"]?.terminals).not.toContain(id);
+		});
+
+		it("still settles a parked tab that cds into a registered repo", async () => {
+			repositoriesStore.add({ path: "/other", displayName: "Other" });
+			repositoriesStore.setBranch("/other", "main", { worktreePath: "/other" });
+			const id = addTerminal({ sessionId: "s11", cwd: "/tmp" });
+			// Parked in whatever repo was active, with no owner recorded.
+			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			terminalsStore.setRepoPath(id, null);
+			terminalsStore.setActive(id);
+
+			gitOps.handleTerminalCwdChange(id, "/other");
+			await vi.advanceTimersByTimeAsync(300);
+
+			expect(repositoriesStore.get("/other")?.branches["main"]?.terminals).toContain(id);
+			expect(terminalsStore.get(id)?.repoPath).toBe("/other");
+		});
+
 		it("cancelCwdTracking cancels pending debounce timer", async () => {
 			const id = addTerminal({ sessionId: "s8", cwd: "/repo" });
 			repositoriesStore.addTerminalToBranch("/repo", "main", id);
