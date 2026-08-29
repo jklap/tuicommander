@@ -10959,6 +10959,274 @@ fn partial_write_is_uncertain_not_not_started() {
 }
 
 #[cfg(unix)]
+/// Simulates a stalled/backed-up PTY write (e.g. a SIGSTOP'd standby
+/// child) — blocks on the first `write()` until the test sends on
+/// `release_rx`, then records the bytes like `RecordingWriter`.
+#[cfg(unix)]
+struct BlockingWriter {
+    bytes: Arc<std::sync::Mutex<Vec<u8>>>,
+    release_rx: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(unix)]
+impl std::io::Write for BlockingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let _ = self.release_rx.recv();
+        self.bytes.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `leaf` (and other pagers) query cursor position with a DSR/CPR request
+/// (`ESC[6n`) on their first paint and give up waiting for the reply after
+/// a short internal deadline, printing it as raw text if it's late.
+/// `process_chunk` must flush that reply to the child's stdin itself,
+/// not merely produce it internally — regression coverage for the
+/// early-flush ordering fixed alongside this test.
+#[cfg(unix)]
+#[test]
+fn dsr_cursor_position_query_is_flushed_by_process_chunk() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "dsr-cpr-query";
+    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    insert_session_with_writer(
+        &state,
+        sid,
+        Box::new(RecordingWriter {
+            bytes: Arc::clone(&bytes),
+        }),
+        TtyMode::Cooked,
+    );
+
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.to_string(), silence.clone());
+    state.session_maps.shell_states.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_NULL),
+    );
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.to_string(), AtomicU64::new(0));
+
+    let mut cp = ChunkProcessor::new(None, None);
+    // Cursor starts at (0,0) on a fresh grid, so the reply is 1-indexed row 1, col 1.
+    let _ = cp.process_chunk("\x1b[6n", &silence, sid, &state);
+
+    assert_eq!(
+        *bytes.lock().unwrap(),
+        b"\x1b[1;1R",
+        "the CPR reply must reach the session's real PTY writer"
+    );
+}
+
+/// Shared setup for the DSR/CPR edge-case tests below: a real PTY session
+/// backed by a `RecordingWriter`, plus the per-session state `process_chunk`
+/// requires.
+#[cfg(unix)]
+fn setup_dsr_test_session(
+    sid: &str,
+) -> (
+    crate::state::AppState,
+    Arc<std::sync::Mutex<Vec<u8>>>,
+    Arc<Mutex<SilenceState>>,
+) {
+    let state = crate::state::tests_support::make_test_app_state();
+    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    insert_session_with_writer(
+        &state,
+        sid,
+        Box::new(RecordingWriter {
+            bytes: Arc::clone(&bytes),
+        }),
+        TtyMode::Cooked,
+    );
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.to_string(), silence.clone());
+    state.session_maps.shell_states.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_NULL),
+    );
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.to_string(), AtomicU64::new(0));
+    (state, bytes, silence)
+}
+
+/// `EscapeAwareBuffer` (the layer above `process_chunk`, in front of every
+/// real PTY read) must hold back an incomplete CSI sequence rather than
+/// let it reach `process_chunk` split in two — `n` (0x6E) is a valid CSI
+/// final byte, so `ESC[6` with no final byte yet must not be mistaken for
+/// a complete, unrelated sequence and must not produce a premature (or
+/// duplicate) reply once the final byte arrives in the next PTY read.
+#[cfg(unix)]
+#[test]
+fn dsr_query_split_across_two_pty_reads_is_not_dispatched_early() {
+    let sid = "dsr-split-read";
+    let (state, bytes, silence) = setup_dsr_test_session(sid);
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut utf8_buf = Utf8ReadBuffer::new();
+    let mut esc_buf = EscapeAwareBuffer::new();
+
+    let utf8_data = utf8_buf.push(b"\x1b[6");
+    let esc_data = esc_buf.push(&utf8_data);
+    let _ = cp.process_chunk(&esc_data, &silence, sid, &state);
+    assert!(
+        bytes.lock().unwrap().is_empty(),
+        "an incomplete CSI sequence must not be dispatched or answered early"
+    );
+
+    let utf8_data2 = utf8_buf.push(b"n");
+    let esc_data2 = esc_buf.push(&utf8_data2);
+    let _ = cp.process_chunk(&esc_data2, &silence, sid, &state);
+    assert_eq!(
+        *bytes.lock().unwrap(),
+        b"\x1b[1;1R",
+        "the reply must land once the split sequence completes"
+    );
+}
+
+/// Two CPR queries in the same chunk, with a cursor-moving byte between
+/// them, must produce two distinct replies in order — each reflecting the
+/// cursor position AT THE TIME its own query was dispatched, not the
+/// position after the rest of the chunk (including the second query) has
+/// been processed. `vt.process()` runs the whole chunk synchronously
+/// before any reply is read back out, so this also guards against a
+/// future refactor that re-reads cursor state lazily instead of at
+/// dispatch time.
+#[cfg(unix)]
+#[test]
+fn multiple_dsr_queries_in_one_chunk_report_distinct_positions_in_order() {
+    let sid = "dsr-multi-query";
+    let (state, bytes, silence) = setup_dsr_test_session(sid);
+    let mut cp = ChunkProcessor::new(None, None);
+
+    let _ = cp.process_chunk("\x1b[6nx\x1b[6n", &silence, sid, &state);
+    assert_eq!(
+        *bytes.lock().unwrap(),
+        b"\x1b[1;1R\x1b[1;2R".to_vec(),
+        "each reply must reflect the cursor position at its own query, in order"
+    );
+}
+
+/// `device_status` only answers arg 5 and 6; the DEC-private `ESC[?6n`
+/// variant isn't even routed to it by the vte dispatch table (it requires
+/// empty intermediates). Both must be silently ignored — no reply, no
+/// panic — confirming a future change to that match can't start emitting
+/// a bogus reply for an argument nothing actually asked for.
+#[cfg(unix)]
+#[test]
+fn unsupported_dsr_variants_produce_no_reply_and_do_not_panic() {
+    let sid = "dsr-unsupported";
+    let (state, bytes, silence) = setup_dsr_test_session(sid);
+    let mut cp = ChunkProcessor::new(None, None);
+
+    let _ = cp.process_chunk("\x1b[99n\x1b[?6n", &silence, sid, &state);
+    assert!(
+        bytes.lock().unwrap().is_empty(),
+        "unsupported DSR queries must not produce a reply"
+    );
+}
+
+/// `process_chunk` must not hold the session's `vt_log` lock while
+/// flushing a `PtyWrite` reply — `write_terminal_reply`'s `write_all`/
+/// `flush` can block (a SIGSTOP'd/standby child, or a full PTY input
+/// queue), and blocking there while still holding the lock would stall
+/// every other consumer of this session's grid (the frame ticker,
+/// HTTP terminal reads) for as long as the write is stuck. Regression
+/// coverage for the lock-scope fix alongside the early-flush ordering
+/// fix: hangs a write mid-`process_chunk` and asserts the vt_log lock
+/// is still acquirable (non-blocking) while it's stuck.
+#[cfg(unix)]
+#[test]
+fn process_chunk_does_not_hold_the_vt_log_lock_while_flushing_a_reply() {
+    let sid = "dsr-lock-scope";
+    let state = crate::state::tests_support::make_test_app_state();
+    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    insert_session_with_writer(
+        &state,
+        sid,
+        Box::new(BlockingWriter {
+            bytes: Arc::clone(&bytes),
+            release_rx,
+        }),
+        TtyMode::Cooked,
+    );
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.to_string(), silence.clone());
+    state.session_maps.shell_states.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_NULL),
+    );
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.to_string(), AtomicU64::new(0));
+
+    let state = Arc::new(state);
+    let worker_state = Arc::clone(&state);
+    let worker = std::thread::spawn(move || {
+        let mut cp = ChunkProcessor::new(None, None);
+        let _ = cp.process_chunk("\x1b[6n", &silence, sid, &worker_state);
+    });
+
+    // Give the worker time to reach the blocked write.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    assert!(
+        bytes.lock().unwrap().is_empty(),
+        "test setup: the write should still be blocked at this point"
+    );
+
+    let vt_log = state.grid.vt_log_buffers.get(sid).expect("vt_log inserted");
+    assert!(
+        vt_log.try_lock().is_some(),
+        "vt_log lock must be free while a PtyWrite reply is stuck in write()"
+    );
+
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+    assert_eq!(*bytes.lock().unwrap(), b"\x1b[1;1R");
+}
+
 struct RecordingWriter {
     bytes: Arc<std::sync::Mutex<Vec<u8>>>,
 }
