@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A `cd` no longer moves a terminal tab to another repo. The tab stays in the repo
+  it was opened in; only a tab still parked with no owner is settled by a `cd`.
+  Re-homing an owned tab left the sidebar on one repo while the pane drew a
+  terminal from another, with the tab itself missing from the strip.
+
 ## [1.7.5] - 2026-08-27
 
 ### Fixed

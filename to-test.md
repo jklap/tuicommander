@@ -1113,14 +1113,18 @@ Vite (which sits on `:1421`). A source edit is invisible there until
   shows `[Reconcile] <id> ... → <repo>:<branch>`. _(NOTE: not driven from the
   browser — unregistering and re-registering one of Boss's live repos writes to
   the shared `repositories.json`. Needs a scratch repo.)_
-- [x] `cd` a terminal from one repo into another (OSC 7): the tab moves and no
-  stale id is left behind in the old branch list. _(This was BROKEN when tested:
-  the cwd updated but the placement never followed, because nothing re-ran the
-  ownership question on an OSC 7. Fixed by calling
-  `reconcileTerminalOwnership(terminalId)` from the `cwd` handler in
-  `CanvasTerminal.tsx`. Verified live:
-  `[Reconcile] term-29 …/veritas:main → …/tuicommander:main`, and the sidebar
-  counts moved with it.)_
+- [ ] `cd` a terminal from one repo into another (OSC 7): the tab does NOT move.
+  It stays under the repo it was opened in, keeps its place in the tab strip, and
+  the sidebar counts do not change. _(REVERSED on 2026-08-29. This item once asked
+  for the opposite and was ticked when the tab followed the `cd` — that was the
+  regression Boss reported as "the app changes repo on its own". Re-homing an
+  owned tab moved it out from under him: the sidebar stayed on the old repo, the
+  tab left the strip, and the pane kept drawing a terminal from a repo he was not
+  looking at. The cwd handler now calls `reclaimParkedTerminal`, which only acts
+  on a tab with `repoPath === null`.)_
+- [ ] `cd` a PARKED terminal (one whose cwd matched no registered repo) into a
+  repo that is registered: that one does move, and the log shows
+  `[Reconcile] <id> ... → <repo>:<branch>`. This is the only case a `cd` settles.
 
 ## Background file tab must not steal the pane
 
