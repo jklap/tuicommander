@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import { VisibleIntersectionObserver } from "../../../../__tests__/helpers/visibleIntersectionObserver";
 import CanvasTerminal, { type CanvasTerminalProps, type CanvasTerminalRef } from "../../CanvasTerminal";
 import type { TerminalTransport } from "../../canvasTerminalTransport";
-import type { CellMetrics } from "../../canvasTerminalUtils";
+import { type CellMetrics, type DecodedRow, decodeBinaryFrame, rowText } from "../../canvasTerminalUtils";
 
 /**
  * Mount harness for CanvasTerminal — the component has never been rendered in
@@ -149,6 +149,7 @@ export function createFakeTransport(): FakeTransport {
 	const invokeHandlers = new Map<string, (args: Record<string, unknown>) => unknown>();
 	const invokeCalls: { cmd: string; args: Record<string, unknown> }[] = [];
 	const ackCalls: number[] = [];
+	const screenRows = new Map<number, DecodedRow>();
 
 	return {
 		invokeCalls,
@@ -162,7 +163,14 @@ export function createFakeTransport(): FakeTransport {
 		},
 		async invoke(cmd, args) {
 			invokeCalls.push({ cmd, args });
-			return invokeHandlers.get(cmd)?.(args);
+			const handler = invokeHandlers.get(cmd);
+			if (handler) return handler(args);
+			// Default backend emulation for the selection copy path: CanvasTerminal reads
+			// copied text through `terminal_get_selection_text` (no local fallback since
+			// projected copies may legitimately be empty), so answer it from the rows
+			// the test pushed — grid row == viewport row for these zero-history fixtures.
+			if (cmd === "terminal_get_selection_text") return selectionTextFromRows(screenRows, args);
+			return undefined;
 		},
 		ackFrame(received) {
 			ackCalls.push(received);
@@ -171,6 +179,8 @@ export function createFakeTransport(): FakeTransport {
 			eventHandlers.set(type, handler);
 		},
 		pushFrame(data: ArrayBuffer) {
+			const decoded = decodeBinaryFrame(data, screenRows);
+			if (decoded) for (const row of decoded.rows) screenRows.set(row.index, row);
 			onFrameHandler?.(data);
 		},
 		emitEvent(type, payload) {
@@ -227,4 +237,19 @@ export async function mountCanvasTerminal(
 	};
 
 	return { container, canvas, ref: capturedRef!, dispose };
+}
+
+/** Emulates the backend's inclusive-range selection read over the pushed screen rows. */
+function selectionTextFromRows(rows: ReadonlyMap<number, DecodedRow>, args: Record<string, unknown>): string {
+	const startRow = Number(args.startRow);
+	const endRow = Number(args.endRow);
+	const lines: string[] = [];
+	for (let r = startRow; r <= endRow; r++) {
+		const row = rows.get(r);
+		const text = row ? rowText(row) : "";
+		const from = r === startRow ? Number(args.startCol) : 0;
+		const to = r === endRow ? Number(args.endCol) + 1 : text.length;
+		lines.push(text.slice(from, to).replace(/\s+$/, ""));
+	}
+	return lines.join("\n");
 }

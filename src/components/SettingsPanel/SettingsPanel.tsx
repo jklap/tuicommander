@@ -40,6 +40,7 @@ import {
 	RemoteMachinesTab,
 	RepoScriptsTab,
 	RepoWorktreeTab,
+	SelectionTab,
 	SmartPromptsTab,
 	TelegramTab,
 	TerminalTab,
@@ -74,6 +75,7 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 		label: t("settings.group.workspace", "Workspace"),
 		tabs: [
 			{ key: "terminal", label: t("settings.terminal", "Terminal") },
+			{ key: "selection", label: t("settings.selection", "Selection") },
 			{ key: "keyboard-shortcuts", label: t("settings.keyboardShortcuts", "Keyboard Shortcuts") },
 			{ key: "github", label: "Git & GitHub" },
 		],
@@ -394,6 +396,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 					<SettingsHelpScope page="terminal">
 						<TerminalTab />
 					</SettingsHelpScope>
+				</Show>
+				<Show when={activeTab() === "selection"}>
+					<SelectionTab />
 				</Show>
 				<Show when={activeTab() === "keyboard-shortcuts"}>
 					<SettingsHelpScope page="keyboard-shortcuts">

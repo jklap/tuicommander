@@ -1428,7 +1428,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "block_folding_enabled",
-      "order": 84,
+      "order": 95,
       "path": "/block_folding_enabled",
       "labelKey": "settings.catalogue.app.block_folding_enabled.label",
       "helpKey": "settings.catalogue.app.block_folding_enabled.help",
@@ -1708,7 +1708,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 91,
+      "order": 102,
       "path": "/custom_launchers/{id}/args",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.args.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.args.help",
@@ -1742,7 +1742,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 92,
+      "order": 103,
       "path": "/custom_launchers/{id}/enabled",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.enabled.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.enabled.help",
@@ -1773,7 +1773,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 90,
+      "order": 101,
       "path": "/custom_launchers/{id}/executable",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.executable.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.executable.help",
@@ -1801,7 +1801,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 88,
+      "order": 99,
       "path": "/custom_launchers/{id}/id",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.id.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.id.help",
@@ -1828,7 +1828,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 89,
+      "order": 100,
       "path": "/custom_launchers/{id}/name",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.name.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.name.help",
@@ -1856,7 +1856,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 93,
+      "order": 104,
       "path": "/custom_launchers/{id}/platform",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.platform.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.platform.help",
@@ -2064,6 +2064,48 @@ export const settingsCatalogue = {
       "sensitivity": "public",
       "apply": "live",
       "effect": "Updates disabled plugin ids for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.double_click_action": {
+      "id": "app.double_click_action",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "double_click_action",
+      "order": 81,
+      "path": "/double_click_action",
+      "labelKey": "settings.catalogue.app.double_click_action.label",
+      "helpKey": "settings.catalogue.app.double_click_action.help",
+      "label": "double click action",
+      "schema": {
+        "description": "What a plain double-click selects: \"word\" (today's character-class\nexpansion) or \"smart\" (try the rule engine first, fall back to word).\nQuad-click always runs the rule engine regardless of this setting.",
+        "type": "string",
+        "default": "smart",
+        "enum": [
+          "word",
+          "smart"
+        ]
+      },
+      "nullable": false,
+      "default": "smart",
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "word",
+          "smart"
+        ]
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates double click action for the current owner.",
       "operations": [
         "get",
         "set",
@@ -2392,7 +2434,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "index_memory_budget_mb",
-      "order": 86,
+      "order": 97,
       "path": "/index_memory_budget_mb",
       "labelKey": "settings.catalogue.app.index_memory_budget_mb.label",
       "helpKey": "settings.catalogue.app.index_memory_budget_mb.help",
@@ -2426,7 +2468,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "index_strategy",
-      "order": 85,
+      "order": 96,
       "path": "/index_strategy",
       "labelKey": "settings.catalogue.app.index_strategy.label",
       "helpKey": "settings.catalogue.app.index_strategy.help",
@@ -2472,7 +2514,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "inline_blame_enabled",
-      "order": 94,
+      "order": 105,
       "path": "/inline_blame_enabled",
       "labelKey": "settings.catalogue.app.inline_blame_enabled.label",
       "helpKey": "settings.catalogue.app.inline_blame_enabled.help",
@@ -3664,7 +3706,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_block_marks",
-      "order": 82,
+      "order": 93,
       "path": "/show_block_marks",
       "labelKey": "settings.catalogue.app.show_block_marks.label",
       "helpKey": "settings.catalogue.app.show_block_marks.help",
@@ -3696,7 +3738,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_block_timestamps",
-      "order": 80,
+      "order": 91,
       "path": "/show_block_timestamps",
       "labelKey": "settings.catalogue.app.show_block_timestamps.label",
       "helpKey": "settings.catalogue.app.show_block_timestamps.help",
@@ -3760,7 +3802,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_prompt_marks",
-      "order": 83,
+      "order": 94,
       "path": "/show_prompt_marks",
       "labelKey": "settings.catalogue.app.show_prompt_marks.label",
       "helpKey": "settings.catalogue.app.show_prompt_marks.help",
@@ -3792,7 +3834,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_scrollbar_marks",
-      "order": 81,
+      "order": 92,
       "path": "/show_scrollbar_marks",
       "labelKey": "settings.catalogue.app.show_scrollbar_marks.label",
       "helpKey": "settings.catalogue.app.show_scrollbar_marks.help",
@@ -3815,6 +3857,264 @@ export const settingsCatalogue = {
         "get",
         "set",
         "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.smart_selection_enabled": {
+      "id": "app.smart_selection_enabled",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "smart_selection_enabled",
+      "order": 80,
+      "path": "/smart_selection_enabled",
+      "labelKey": "settings.catalogue.app.smart_selection_enabled.label",
+      "helpKey": "settings.catalogue.app.smart_selection_enabled.help",
+      "label": "smart selection enabled",
+      "schema": {
+        "description": "Master toggle for smart selection (regex-rule-driven double/quad-click\nexpansion + rule actions). Word-boundary customization (below) applies\nregardless of this flag — only the rule engine is gated.",
+        "type": "boolean",
+        "default": true
+      },
+      "nullable": false,
+      "default": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates smart selection enabled for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.smart_selection_rules.{id}.actions": {
+      "id": "app.smart_selection_rules.{id}.actions",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "smart_selection_rules",
+      "order": 90,
+      "path": "/smart_selection_rules/{id}/actions",
+      "labelKey": "settings.catalogue.app.smart_selection_rules.{id}.actions.label",
+      "helpKey": "settings.catalogue.app.smart_selection_rules.{id}.actions.help",
+      "label": "actions",
+      "schema": {
+        "type": "array",
+        "items": {
+          "description": "One action a smart-selection rule offers. `parameter` may reference the\nmatch via `\\0`-`\\9` (whole match / capture groups), `\\d` (cwd), `\\u`\n(user), `\\h` (host) — substituted by `substituteActionParameter` on the\nfrontend before dispatch.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "description": "\"copy\" | \"open_url\" | \"open_file\" | \"send_text\" | \"run_command\" |\n\"run_command_new_terminal\" | \"ask_ai\"",
+              "type": "string",
+              "enum": [
+                "copy",
+                "open_url",
+                "open_file",
+                "send_text",
+                "run_command",
+                "run_command_new_terminal",
+                "ask_ai"
+              ]
+            },
+            "title": {
+              "type": "string"
+            },
+            "parameter": {
+              "type": "string",
+              "default": ""
+            },
+            "is_default": {
+              "description": "At most one action per rule may set this — it's what Option/Alt+double-click runs.",
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "required": [
+            "kind",
+            "title"
+          ]
+        },
+        "default": []
+      },
+      "nullable": false,
+      "default": [],
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates actions for the current owner; actions can send text or run commands when chosen.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "execution_authority"
+    },
+    "app.smart_selection_rules.{id}.enabled": {
+      "id": "app.smart_selection_rules.{id}.enabled",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "smart_selection_rules",
+      "order": 89,
+      "path": "/smart_selection_rules/{id}/enabled",
+      "labelKey": "settings.catalogue.app.smart_selection_rules.{id}.enabled.label",
+      "helpKey": "settings.catalogue.app.smart_selection_rules.{id}.enabled.help",
+      "label": "enabled",
+      "schema": {
+        "type": "boolean",
+        "default": true
+      },
+      "nullable": false,
+      "default": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates enabled for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.smart_selection_rules.{id}.id": {
+      "id": "app.smart_selection_rules.{id}.id",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "smart_selection_rules",
+      "order": 85,
+      "path": "/smart_selection_rules/{id}/id",
+      "labelKey": "settings.catalogue.app.smart_selection_rules.{id}.id.label",
+      "helpKey": "settings.catalogue.app.smart_selection_rules.{id}.id.help",
+      "label": "id",
+      "schema": {
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates id for the current owner.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.smart_selection_rules.{id}.name": {
+      "id": "app.smart_selection_rules.{id}.name",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "smart_selection_rules",
+      "order": 86,
+      "path": "/smart_selection_rules/{id}/name",
+      "labelKey": "settings.catalogue.app.smart_selection_rules.{id}.name.label",
+      "helpKey": "settings.catalogue.app.smart_selection_rules.{id}.name.help",
+      "label": "name",
+      "schema": {
+        "description": "Human-readable name, shown in the rule editor and as a fallback menu label.",
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates name for the current owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.smart_selection_rules.{id}.precision": {
+      "id": "app.smart_selection_rules.{id}.precision",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "smart_selection_rules",
+      "order": 88,
+      "path": "/smart_selection_rules/{id}/precision",
+      "labelKey": "settings.catalogue.app.smart_selection_rules.{id}.precision.label",
+      "helpKey": "settings.catalogue.app.smart_selection_rules.{id}.precision.help",
+      "label": "precision",
+      "schema": {
+        "description": "\"very_low\" | \"low\" | \"normal\" | \"high\" | \"very_high\"",
+        "type": "string",
+        "enum": [
+          "very_low",
+          "low",
+          "normal",
+          "high",
+          "very_high"
+        ]
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "very_low",
+          "low",
+          "normal",
+          "high",
+          "very_high"
+        ]
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates precision for the current owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.smart_selection_rules.{id}.regex": {
+      "id": "app.smart_selection_rules.{id}.regex",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "smart_selection_rules",
+      "order": 87,
+      "path": "/smart_selection_rules/{id}/regex",
+      "labelKey": "settings.catalogue.app.smart_selection_rules.{id}.regex.label",
+      "helpKey": "settings.catalogue.app.smart_selection_rules.{id}.regex.help",
+      "label": "regex",
+      "schema": {
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates regex for the current owner.",
+      "operations": [
+        "get",
+        "set"
       ],
       "confirmationClass": "ordinary"
     },
@@ -3866,7 +4166,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "standby_timeout_minutes",
-      "order": 87,
+      "order": 98,
       "path": "/standby_timeout_minutes",
       "labelKey": "settings.catalogue.app.standby_timeout_minutes.label",
       "helpKey": "settings.catalogue.app.standby_timeout_minutes.help",
@@ -4197,6 +4497,112 @@ export const settingsCatalogue = {
       "sensitivity": "public",
       "apply": "live",
       "effect": "Updates update channel for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.word_selection_mode": {
+      "id": "app.word_selection_mode",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "word_selection_mode",
+      "order": 82,
+      "path": "/word_selection_mode",
+      "labelKey": "settings.catalogue.app.word_selection_mode.label",
+      "helpKey": "settings.catalogue.app.word_selection_mode.help",
+      "label": "word selection mode",
+      "schema": {
+        "description": "How double-click word boundaries are defined: \"characters\" (a literal\nseparator character class) or \"regex\" (a set of `|`-joined alternates,\neach matched span treated as one word — mirrors iTerm2's word-selection\nregex mode).",
+        "type": "string",
+        "default": "characters",
+        "enum": [
+          "characters",
+          "regex"
+        ]
+      },
+      "nullable": false,
+      "default": "characters",
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "characters",
+          "regex"
+        ]
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates word selection mode for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.word_selection_regex": {
+      "id": "app.word_selection_regex",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "word_selection_regex",
+      "order": 84,
+      "path": "/word_selection_regex",
+      "labelKey": "settings.catalogue.app.word_selection_regex.label",
+      "helpKey": "settings.catalogue.app.word_selection_regex.help",
+      "label": "word selection regex",
+      "schema": {
+        "description": "\"regex\" mode: `|`-joined alternates. At each character, the longest\nanchored match becomes one word-class run (e.g. adding `https://` here\nlets a double-click expand across the URL scheme).",
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates word selection regex for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.word_separators": {
+      "id": "app.word_separators",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "word_separators",
+      "order": 83,
+      "path": "/word_separators",
+      "labelKey": "settings.catalogue.app.word_separators.label",
+      "helpKey": "settings.catalogue.app.word_separators.help",
+      "label": "word separators",
+      "schema": {
+        "description": "\"characters\" mode: characters that BREAK a word (the inverse of\niTerm2's \"additional word characters\" — this list keeps today's\ndefault losslessly by naming what already breaks a word).",
+        "type": "string",
+        "default": " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\"
+      },
+      "nullable": false,
+      "default": " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates word separators for the current owner.",
       "operations": [
         "get",
         "set",
@@ -11473,6 +11879,88 @@ export const settingsCatalogue = {
   ],
   "gaps": [],
   "collections": [
+    {
+      "store": "app",
+      "path": "/smart_selection_rules",
+      "key": "id",
+      "schema": {
+        "description": "One smart-selection rule: a regex, a precision that resolves overlapping\nmatches (mirrors iTerm2's `SmartSelectionController` precision classes —\nsee `smartSelectionDefaults.ts` on the frontend for the exact weights),\nand the actions it offers. A rule with no actions still participates in\nselection expansion; it just contributes nothing to the context menu.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "description": "Human-readable name, shown in the rule editor and as a fallback menu label.",
+            "type": "string"
+          },
+          "regex": {
+            "type": "string"
+          },
+          "precision": {
+            "description": "\"very_low\" | \"low\" | \"normal\" | \"high\" | \"very_high\"",
+            "type": "string",
+            "enum": [
+              "very_low",
+              "low",
+              "normal",
+              "high",
+              "very_high"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "description": "One action a smart-selection rule offers. `parameter` may reference the\nmatch via `\\0`-`\\9` (whole match / capture groups), `\\d` (cwd), `\\u`\n(user), `\\h` (host) — substituted by `substituteActionParameter` on the\nfrontend before dispatch.",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "\"copy\" | \"open_url\" | \"open_file\" | \"send_text\" | \"run_command\" |\n\"run_command_new_terminal\" | \"ask_ai\"",
+                  "type": "string",
+                  "enum": [
+                    "copy",
+                    "open_url",
+                    "open_file",
+                    "send_text",
+                    "run_command",
+                    "run_command_new_terminal",
+                    "ask_ai"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "parameter": {
+                  "type": "string"
+                },
+                "is_default": {
+                  "description": "At most one action per rule may set this — it's what Option/Alt+double-click runs.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "title"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "regex",
+          "precision"
+        ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
     {
       "store": "app",
       "path": "/custom_launchers",
