@@ -162,6 +162,69 @@ When a commit resolves a **GitHub issue**, use a closing keyword so GitHub auto-
 - This is distinct from **mdkb story ids** (7-char hex like `#abc1234`): those follow the wiz convention — `(#abc1234)` for traceability, `(closes #abc1234)` on story completion — and are unrelated to GitHub issue auto-close.
 - **Enforced by the `pre-push` hook** (`scripts/hooks/pre-push`, installed by `make hooks` / `make dev`): a push to `main` is blocked if a pushed commit references an **open** issue with a bare `#N` and no closing keyword. Reference-only pushes bypass with `git push --no-verify` (or `TUIC_SKIP_ISSUE_CHECK=1`). The hook skips silently when `gh` is missing/unauthenticated/offline — it never blocks on a verification failure.
 
+## Fresh Worktree Setup
+
+A brand-new git worktree is missing gitignored build artifacts that `cargo test`/`cargo build`
+need — this is why the exact same commands "just work" in the main checkout or any
+previously-built worktree but fail in a fresh one:
+
+1. **Frontend `dist/` stub** — `src-tauri/src/mcp_http/static_files.rs` does
+   `include_dir!("$CARGO_MANIFEST_DIR/../dist")` at compile time. Without it: `mkdir -p dist &&
+   echo '<html></html>' > dist/index.html` (from the repo root).
+2. **Sidecar binary placeholders** — `tauri.conf.json`'s `externalBin` lists `binaries/tuic-bridge`,
+   `binaries/tuic`, `binaries/tuic-hook`; the build script checks these paths exist for the host
+   target triple. Empty files satisfy the resource-existence check: `target=$(rustc --print
+   host-tuple); mkdir -p src-tauri/binaries; touch src-tauri/binaries/tuic-bridge-$target
+   src-tauri/binaries/tuic-hook-$target; chmod +x src-tauri/binaries/tuic-bridge-$target
+   src-tauri/binaries/tuic-hook-$target` (the plain `tuic-$target` one needs to be a real binary
+   to actually run the app, but an empty file is enough for `cargo test`).
+3. **A real `tuic-hook` build** — unlike the other two, this can't be a stub.
+   `src-tauri/src/agent_hook.rs`'s `golden_wire_output` tests execute the compiled `tuic-hook`
+   binary and assert on its real output; a 0-byte placeholder fails every one of those tests with
+   `assertion failed: !text.is_empty()`. Fix: `cargo build --package tuic-hook` (from
+   `src-tauri/`) — small crate, few deps, fast — populates `src-tauri/target/debug/tuic-hook`,
+   which `agent_hook.rs` resolves at test time. This binary can transiently read as 0 bytes
+   (`ls -la`) immediately after a successful build reports "Finished"/"nothing to rebuild" — a
+   second `ls -la` or re-running the build (which is a no-op) shows the correct size with the same
+   mtime. If `golden_wire_output` tests fail with empty-output assertions right after a build
+   that already succeeded once, re-check the file size before assuming a real regression.
+4. **If you later run `make dev`/`pnpm build:sidecar` in the same fresh worktree, the step-2
+   placeholders can leave `tuic-bridge` and `tuic-hook` permanently broken instead of getting
+   replaced by a real build** — this also snapped the `tuicommander` MCP connection for a
+   Claude Code session running out of that worktree (`ENOEXEC` spawning
+   `target/debug/tuic-bridge`, a 0-byte file, not a valid Mach-O). Root cause:
+   `build-sidecar.mjs` skips its `cargo build --release` step whenever
+   `src-tauri/binaries/<bin>-<target>`'s size already equals `target/release/<bin>`'s size — and
+   the same transient-0-byte-read described in point 3 can hit the *release* profile too, so if
+   that read lands while the step-2 placeholder is still an untouched 0-byte stub, the script
+   sees "0 == 0", logs `Sidecar built: ... (skipped)` (or `up to date`), and leaves both the
+   `binaries/` copy AND `target/debug/<bin>` empty — silently, with no error, and it does not
+   self-correct on a later `ls`/rebuild the way point 3's case does, because nothing re-invokes
+   the build. Fix: `pnpm build:sidecar --force` (rebuilds `tuic-bridge`/`tuic`/`tuic-hook`
+   unconditionally), then separately `cargo build --package tuic-bridge` and
+   `cargo build --package tuic-hook` (from `src-tauri/`) to populate their **debug** binaries too
+   — `build-sidecar.mjs` only ever builds the `--release` profile, but `target/debug/tuic-bridge`
+   is what an MCP client spawns directly. If a `tuicommander` MCP server fails to connect with an
+   `ENOEXEC` on a `target/debug/*` path in a worktree you've been building in, check that file's
+   size before assuming a code regression.
+
+The `plugins/` git submodule is also frequently out of sync in worktrees — either pinned to a
+stale commit (`src/__tests__/plugins/buildCleaner.test.ts` fails to resolve an import) or not
+initialized at all (`git submodule status plugins` shows a leading `-`; `make check`'s `Plugin
+tests` step / `pnpm test:plugins` reports 0 tests collected and exits 1). Both are pre-existing
+environment drift, not a regression — don't spend time fixing the submodule pointer unless
+explicitly asked.
+
+`src/__tests__/components/ChangelogModal.test.tsx` has a flaky async leak (an uncleaned
+timer/effect from its `onMount`, unrelated to the file's own logic — confirmed pre-existing,
+untouched by recent commits) that vitest's leak detector marks as a failed test FILE even when
+every individual test in the run passes (`Test Files 1 failed | ... ` alongside
+`Tests  N passed (N)`). This fails the whole `vitest` step — and therefore all of `make check` —
+regardless of what else changed. Before treating a `make check`/vitest failure as a regression,
+run `pnpm exec vitest run` directly and check whether the `Tests` line shows 0 real failures; if
+so, this is that known flake, not your change. Use `./scripts/check-gate.sh` (or `make
+check-gate`), which detects and calls this out automatically.
+
 ## Building
 
 **NEVER use `cargo build --release` directly.** It produces a binary that points to the Vite dev server (`localhost:1420`) instead of embedding frontend assets — result: white screen. Always use `make build` or `pnpm tauri build`, which runs `beforeBuildCommand` (frontend build + sidecar) and embeds the dist/ into the binary.
