@@ -17,7 +17,6 @@ vi.mock("../../stores/settings", () => ({
 			osc52Clipboard: true,
 			showLastPrompt: true,
 			linkActivation: "click",
-			smartSelectionEnabled: true,
 			doubleClickAction: "smart",
 			wordSelectionMode: "characters",
 			wordSeparators: " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\",
@@ -27,7 +26,9 @@ vi.mock("../../stores/settings", () => ({
 			showBlockMarks: true,
 			showPromptMarks: true,
 			blockFoldingEnabled: true,
+			shell: "",
 		},
+		setShell: vi.fn(),
 		setIde: vi.fn(),
 		setFont: vi.fn(),
 		setDefaultFontSize: vi.fn(),
@@ -39,7 +40,6 @@ vi.mock("../../stores/settings", () => ({
 		setOsc52Clipboard: vi.fn(),
 		setShowLastPrompt: vi.fn(),
 		setLinkActivation: vi.fn(),
-		setSmartSelectionEnabled: vi.fn(),
 		setDoubleClickAction: vi.fn(),
 		setWordSelectionMode: vi.fn(),
 		setWordSeparators: vi.fn(),
@@ -159,14 +159,14 @@ describe("SettingsPanel", () => {
 		expect(labels).not.toContain("Groups");
 	});
 
-	it("shows the Rendering/Behavior/Blocks/Session Restore groups when the Terminal nav item is active", () => {
+	it("shows the Shell/Rendering/Behavior/Blocks/Session Restore groups when the Terminal nav item is active", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		const navItems = container.querySelectorAll(".navItem");
 		const terminalItem = Array.from(navItems).find((n) => n.textContent === "Terminal")!;
 		fireEvent.click(terminalItem);
 
 		const headings = Array.from(container.querySelectorAll(".section h3")).map((h) => h.textContent);
-		expect(headings).toEqual(["Rendering", "Behavior", "Blocks", "Session Restore"]);
+		expect(headings).toEqual(["Shell", "Rendering", "Behavior", "Blocks", "Session Restore"]);
 
 		const toggleLabels = Array.from(container.querySelectorAll(".toggle span")).map((n) => n.textContent);
 		expect(toggleLabels).toContain("Copy on select");

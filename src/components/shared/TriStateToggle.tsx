@@ -1,4 +1,4 @@
-import { type Component, For } from "solid-js";
+import type { Component } from "solid-js";
 import { t } from "../../i18n";
 import s from "./TriStateToggle.module.css";
 
@@ -15,84 +15,70 @@ export interface TriStateToggleProps {
 	offLabel?: string;
 }
 
-/** Left-to-right segment order: Off, Use global, On */
-const ORDER: (boolean | null)[] = [false, null, true];
+/** Cycle order: Global (inherit) -> On -> Off -> Global */
+function next(value: boolean | null): boolean | null {
+	if (value === null) return true;
+	if (value === true) return false;
+	return null;
+}
 
-function segmentText(value: boolean | null, props: TriStateToggleProps): string {
+function stateName(value: boolean | null, props: TriStateToggleProps): string {
 	if (value === null) return t("triStateToggle.global", "Global");
 	return value ? (props.onLabel ?? t("triStateToggle.on", "On")) : (props.offLabel ?? t("triStateToggle.off", "Off"));
 }
 
 /**
- * Three-position On / Use global / Off control for a boolean setting that can
- * inherit from a global default. Unlike a plain checkbox — which can only ever
- * write a concrete true/false and therefore has no way back to "inherit" once
- * touched — every state here, including "use global", is directly selectable.
+ * Single cycling switch for a boolean setting that can inherit from a global
+ * default. Unlike a plain checkbox — which can only ever write a concrete
+ * true/false and therefore has no way back to "inherit" once touched — this
+ * control cycles through all three states: Global -> On -> Off -> Global.
  *
- * A `role="radiogroup"` of three `role="radio"` segments with a roving
- * tabindex: Left/Right (or Up/Down) move AND select, matching native radio
- * button behavior, so screen readers announce both the group's label and
- * which of the three positions is checked.
+ * Visually mirrors the standard on/off `SettingToggle` pill switch (see
+ * `SettingFields.tsx`), with the inherited ("Global") position rendered
+ * dashed/dimmed partway along the track so it reads as neither firmly on nor
+ * off. `aria-checked="mixed"` is the ARIA-correct encoding for that inherited
+ * state (`role="switch"` does not support `mixed`, hence `role="checkbox"`).
  */
 export const TriStateToggle: Component<TriStateToggleProps> = (props) => {
-	// Roving tabindex per WAI-ARIA APG: an arrow key must move both the
-	// selection AND the DOM focus together, or the :focus-visible outline
-	// and the checked segment visibly desync (outline stays on the segment
-	// you started on; the highlight jumps to a different one).
-	const buttonRefs: (HTMLButtonElement | undefined)[] = [];
+	const state = () => (props.value === null ? "global" : props.value ? "on" : "off");
+	const ariaChecked = () => (props.value === null ? "mixed" : props.value ? "true" : "false");
 
+	const handleActivate = () => props.onChange(next(props.value));
+
+	// A real browser already synthesizes a `click` on Enter/Space for a native
+	// `<button>`, making this handler's own `onClick` call redundant there — but
+	// this project's test environment (happy-dom, via @solidjs/testing-library)
+	// does not implement that UA activation behavior: dispatching a raw
+	// `keydown` there fires no click at all (confirmed empirically). Keeping
+	// this explicit handler is what makes `fireEvent.keyDown` actually exercise
+	// keyboard activation in tests, not dead-weight duplication.
 	const handleKeyDown = (e: KeyboardEvent) => {
-		const idx = ORDER.indexOf(props.value);
-		let next = idx;
-		if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+		if (e.key === " " || e.key === "Enter") {
 			e.preventDefault();
-			next = Math.min(idx + 1, ORDER.length - 1);
-		} else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-			e.preventDefault();
-			next = Math.max(idx - 1, 0);
-		} else {
-			return;
-		}
-		if (next !== idx) {
-			props.onChange(ORDER[next]);
-			buttonRefs[next]?.focus();
+			handleActivate();
 		}
 	};
 
 	return (
 		<div class={s.triToggle}>
-			<div class={s.track} role="radiogroup" aria-label={props.label} onKeyDown={handleKeyDown}>
-				<For each={ORDER}>
-					{(segValue, index) => {
-						const selected = () => props.value === segValue;
-						const kind = segValue === null ? "global" : segValue ? "on" : "off";
-						return (
-							<button
-								ref={(el) => {
-									buttonRefs[index()] = el;
-								}}
-								type="button"
-								role="radio"
-								aria-checked={selected()}
-								tabIndex={selected() ? 0 : -1}
-								class={s.segment}
-								data-kind={kind}
-								data-selected={selected() ? "" : undefined}
-								onClick={() => props.onChange(segValue)}
-							>
-								{segmentText(segValue, props)}
-							</button>
-						);
-					}}
-				</For>
-			</div>
+			<button
+				type="button"
+				role="checkbox"
+				aria-checked={ariaChecked()}
+				aria-label={props.label}
+				title={`${props.label}: ${stateName(props.value, props)}`}
+				class={s.switch}
+				data-state={state()}
+				onClick={handleActivate}
+				onKeyDown={handleKeyDown}
+			/>
 			<span class={s.label}>
 				{props.label}
 				{props.value === null && (
 					<span class={s.stateHint}>
 						{" "}
 						{t("triStateToggle.useGlobalDefault", "(Use global default: {value})", {
-							value: segmentText(props.inherited, props),
+							value: stateName(props.inherited, props),
 						})}
 					</span>
 				)}

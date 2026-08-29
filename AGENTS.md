@@ -18,6 +18,7 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
 - `make check`'s "plugin tests" step is **currently expected to fail** — the `plugins` submodule has zero test files. This is known, tracked state (`c6cae61a`'s CI comment); don't spend time trying to "fix" a red `make check` caused by it.
 - **When touching `src-tauri/patches/{alacritty_terminal,vte}/`, verification MUST include `cargo nextest run --workspace` (or `make check`), not a package-scoped `cargo test --lib`/`cargo test -p tuicommander`.** The vendored crates are separate workspace members with their own regression suite (`patches/alacritty_terminal/tests/ref.rs`, ~44 fixture-replay tests) that a package-scoped run silently skips. `cargo nextest run`/`list` without `--workspace` also silently scopes to zero tests for a vendored crate instead of erroring — this exact mistake produced a false "these tests were never wired in" diagnosis in commit `47217d2c`'s own message. A background-color-erase fix landed in `6dd165f5` without running the workspace suite and shipped two regressions caught only later.
 - When resolving a rebase/merge conflict in a Rust function by taking one side's body wholesale, diff the full field set of any struct it returns — a dropped field can compile cleanly (mocked in the caller's own tests) while silently regressing a feature only an end-to-end test would catch. Prefer merging the logic, not picking a side outright, when the two versions diverge structurally.
+- **Before writing what you believe is a "new" test file, verify it doesn't already exist.** `Write`'s "must Read first" safeguard only fires for paths *outside* the current working directory, so it will not stop you from silently overwriting an existing in-repo test file with no warning. A 2026-08-28 session did exactly this to `CreateWorktreeDialog.test.tsx` — a subagent's exploration summary claimed "zero tests exist for this component," which was wrong (a 919-line file already existed from `c0547b53`), and `Write` clobbered it. Caught only by a routine final `git status --porcelain`/`git diff --stat` sweep before wrapping up, which is why that sweep is not optional on multi-file work. Run `ls`/`git status <path>` yourself before `Write`-ing a file whose non-existence you're only inferring from someone else's report.
 - **`[HUMAN]` is a last resort.** Before marking a to-test item `[HUMAN]`, you MUST attempt verification through this escalation ladder:
   1. **Code inspection** — read the source, confirm the logic exists at file:line
   2. **Test execution** — `cargo nextest run` (doctests: `cargo test --doc`), `vitest run` with relevant filter
@@ -170,6 +171,29 @@ Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath
 `<For>`'s mapping callback is invoked once per distinct item **reference**, not once per render — it does not re-run just because filtering/sorting shifted that same item to a new position. `<For>` hands the callback an `index` **accessor** (a function) specifically so consumers can read the item's current position later; calling it immediately (`i()`) and stashing the plain number in a closure throws that liveness away. Any handler built from that captured number (a click/hover callback that indexes back into the filtered array) goes stale the instant the array's composition changes without that item's own identity changing — the callback still runs, but against a now-wrong (sometimes out-of-bounds) slot, so it silently no-ops instead of throwing.
 
 This bit `BaseRefDropdown` in `CreateWorktreeDialog.tsx`: typing a query that filtered out an earlier match shifted a later option to a new index, and clicking or hovering it used the stale pre-filter index, so the click silently did nothing. Fixed by computing the index at use-time (`filteredRefs().indexOf(option)`) instead of caching it, and by having the click handler act on the option directly rather than through an index at all. The sibling branch list in the same file already did this correctly (it calls the accessor `index()` inline inside each handler rather than capturing `index()` up front) — use that as the reference pattern. When a `<For>`-rendered row's event handler needs its position, read the index accessor (or `array.indexOf(item)`) at the moment the handler runs, never before.
+
+## solid-js Signals Inside `vi.mock` Factories
+
+When a mocked hook (e.g. `useAgentDetection`) needs to expose a signal a test can flip **after** the component has mounted (simulating async data resolving), do not create that signal via a plain top-level `import { createSignal } from "solid-js"` referenced inside the `vi.mock(...)` factory. It silently resolves to a *different* solid-js module instance than the one `<For>`/the component's own reactive tracking uses under this project's Vite/Vitest config — the signal's value updates fine, but `<For>` never re-renders, because its tracking context lives in the other instance's module-scope globals. Confirmed empirically while writing the headless-agent `<select>` regression tests (`ProvidersTab.test.tsx`, `SmartPromptsTab.headlessAgent.test.tsx`, 2026-08-28): a first attempt using a top-level import produced a signal that updated but triggered zero re-renders.
+
+Fix: create the signal *inside* the `vi.mock` factory via a dynamic `await import("solid-js")` (the factory can be async), which resolves through the same module cache the rest of the app uses:
+
+```ts
+const detectionBox = vi.hoisted(() => ({
+  availableAgentTypes: (): string[] => [],
+  setAvailableAgentTypes: (_types: string[]) => {},
+}));
+
+vi.mock("../../hooks/useAgentDetection", async () => {
+  const { createSignal } = await import("solid-js"); // NOT a top-level import
+  const [availableAgentTypes, setAvailableAgentTypes] = createSignal<string[]>([]);
+  detectionBox.availableAgentTypes = availableAgentTypes;
+  detectionBox.setAvailableAgentTypes = setAvailableAgentTypes;
+  return { useAgentDetection: () => ({ /* ... */ }) };
+});
+```
+
+Use `vi.hoisted()` for the mutable box itself, not a plain module-scope `let` — `vi.mock` calls (and their factories' effects) are hoisted above other top-level statements in the file, so a plain `let` the factory assigns into hits a TDZ `ReferenceError`.
 
 ## Architecture
 

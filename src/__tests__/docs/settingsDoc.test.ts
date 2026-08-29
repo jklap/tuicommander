@@ -53,7 +53,9 @@ const TABS = [
 		name: "Selection",
 		heading: "## Selection Tab",
 		path: "src/components/SettingsPanel/tabs/SelectionTab.tsx",
-		minControls: 5,
+		// "Enable smart selection" was removed (folded into "Double-click performs" —
+		// there is no longer a master on/off switch), dropping this from 5 to 4.
+		minControls: 4,
 	},
 	{
 		name: "Appearance",

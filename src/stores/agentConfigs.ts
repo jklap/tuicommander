@@ -27,8 +27,11 @@ interface AgentConfigsState {
 			hook_instrumentation?: boolean;
 		}
 	>;
-	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
-	headless_agent: AgentType | null;
+	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings).
+	 * A plain `AgentType`, or `"agentType:configName"` selecting a named run config —
+	 * too wide a type here previously invited a guard that silently discarded the
+	 * composite form (see `setHeadlessAgent`'s doc comment). */
+	headless_agent: string | null;
 	loaded: boolean;
 }
 
@@ -194,14 +197,19 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 			return state.agents[type]?.headless_template ?? AGENTS[type]?.defaultHeadlessTemplate;
 		},
 
-		/** Get the globally configured headless agent */
-		getHeadlessAgent(): AgentType | null {
+		/** Get the globally configured headless agent — a plain `AgentType`, or
+		 * `"agentType:configName"` selecting a named run config. */
+		getHeadlessAgent(): string | null {
 			return state.headless_agent;
 		},
 
-		/** Set the globally configured headless agent */
-		async setHeadlessAgent(type: AgentType | null): Promise<void> {
-			setState("headless_agent", type);
+		/** Set the globally configured headless agent. Accepts a plain `AgentType`
+		 * or a `"agentType:configName"` composite (see `useSmartPrompts.ts`'s
+		 * `executeHeadless`, which parses the composite form back apart) — do not
+		 * narrow this to `AgentType`, that previously caused named run-config
+		 * selections to silently reset to "not configured". */
+		async setHeadlessAgent(value: string | null): Promise<void> {
+			setState("headless_agent", value);
 			try {
 				await saveToDisk();
 			} catch (_err) {

@@ -2752,11 +2752,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			return vpRow !== null ? (rowMap.get(vpRow) ?? null) : null;
 		}
 
-		/** Try smart-selection matching at a click position; null if disabled,
-		 *  no rules configured/enabled, or nothing matched (caller falls back
-		 *  to word-boundary selection in every case). */
+		/** Try smart-selection matching at a click position; null if no rules
+		 *  configured/enabled, or nothing matched (caller falls back to
+		 *  word-boundary selection in every case). Always attempted — there is
+		 *  no master on/off switch; "Double-click performs" only controls
+		 *  what double-click itself does, not quad-click or the context menu. */
 		function trySmartMatch(absRow: number, col: number): ResolvedSmartMatch | null {
-			if (!settingsStore.state.smartSelectionEnabled) return null;
 			const win = buildSmartSelectionWindow(absRow, col, SMART_SELECTION_RADIUS, getRowByAbs);
 			if (win.targetOffset < 0) return null;
 			const rules = resolveSmartSelectionRules(settingsStore.state.smartSelectionRules);

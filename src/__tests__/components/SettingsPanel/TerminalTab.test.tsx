@@ -19,6 +19,7 @@ const {
 	mockSetRestoreShellTerminals,
 	mockSetRestoreScrollback,
 	mockSetRestoreScrollbackLines,
+	mockSetShell,
 } = vi.hoisted(() => ({
 	mockSetShowBlockTimestamps: vi.fn(),
 	mockSetShowBlockMarks: vi.fn(),
@@ -35,6 +36,7 @@ const {
 	mockSetRestoreShellTerminals: vi.fn(),
 	mockSetRestoreScrollback: vi.fn(),
 	mockSetRestoreScrollbackLines: vi.fn(),
+	mockSetShell: vi.fn(),
 }));
 
 vi.mock("../../../stores/settings", () => ({
@@ -56,7 +58,9 @@ vi.mock("../../../stores/settings", () => ({
 			restoreShellTerminals: true,
 			restoreScrollback: false,
 			restoreScrollbackLines: 1000,
+			shell: "",
 		},
+		setShell: mockSetShell,
 		setFont: mockSetFont,
 		setDefaultFontSize: mockSetDefaultFontSize,
 		setFontWeight: mockSetFontWeight,
@@ -83,10 +87,17 @@ describe("TerminalTab", () => {
 		vi.clearAllMocks();
 	});
 
-	it("renders the Rendering, Behavior, Blocks, and Session Restore headings in order", () => {
+	it("renders the Shell, Rendering, Behavior, Blocks, and Session Restore headings in order", () => {
 		const { container } = render(() => <TerminalTab />);
 		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.textContent);
-		expect(headings).toEqual(["Rendering", "Behavior", "Blocks", "Session Restore"]);
+		expect(headings).toEqual(["Shell", "Rendering", "Behavior", "Blocks", "Session Restore"]);
+	});
+
+	it("calls setShell when the Shell field changes", () => {
+		const { getByPlaceholderText } = render(() => <TerminalTab />);
+		const shellInput = getByPlaceholderText("Default shell") as HTMLInputElement;
+		fireEvent.input(shellInput, { target: { value: "/bin/zsh" } });
+		expect(mockSetShell).toHaveBeenCalledWith("/bin/zsh");
 	});
 
 	it("shows all nine toggles with the correct checked state", () => {

@@ -6,7 +6,7 @@ import type { FontType } from "../../../stores/settings";
 import { FONT_FAMILIES, settingsStore } from "../../../stores/settings";
 import { getTerminalTheme } from "../../../themes";
 import type { LinkActivation } from "../../Terminal/canvasTerminalLinks";
-import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
+import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
 interface PreviewSpan {
@@ -299,6 +299,16 @@ export const TerminalTab: Component = () => {
 
 	return (
 		<div class={s.section}>
+			<h3>{t("terminal.heading.shell", "Shell")}</h3>
+
+			<SettingInput
+				label={t("terminal.label.shell", "Shell")}
+				value={settingsStore.state.shell ?? ""}
+				onInput={(v) => settingsStore.setShell(v)}
+				placeholder={t("terminal.placeholder.shell", "Default shell")}
+				hint={t("terminal.hint.shell", "Shell used in terminals (leave blank for system default)")}
+			/>
+
 			<h3>{t("terminal.heading.rendering", "Rendering")}</h3>
 
 			<div class={s.terminalSplit}>

@@ -59,32 +59,32 @@ describe("AgentRow per-agent tri-state overrides", () => {
 	}
 
 	function triGroup(container: HTMLElement, label: string): HTMLElement {
-		return container.querySelector(`[role="radiogroup"][aria-label="${label}"]`) as HTMLElement;
-	}
-	function triSegment(group: HTMLElement, kind: "off" | "global" | "on"): HTMLElement {
-		return group.querySelector(`[data-kind="${kind}"]`) as HTMLElement;
+		return container.querySelector(`[role="checkbox"][aria-label="${label}"]`) as HTMLElement;
 	}
 
 	it("renders both rows defaulted to 'use global' when the agent has no override", async () => {
 		const { container } = await renderExpandedRow();
-		expect(triSegment(triGroup(container, "Track agent intent"), "global").getAttribute("aria-checked")).toBe("true");
-		expect(triSegment(triGroup(container, "Show suggested follow-ups"), "global").getAttribute("aria-checked")).toBe(
-			"true",
-		);
+		expect(triGroup(container, "Track agent intent").getAttribute("aria-checked")).toBe("mixed");
+		expect(triGroup(container, "Show suggested follow-ups").getAttribute("aria-checked")).toBe("mixed");
 	});
 
 	it("selecting On/Off for intent_tab_title persists a concrete boolean, not undefined", async () => {
 		const { container, store } = await renderExpandedRow();
-		fireEvent.click(triSegment(triGroup(container, "Track agent intent"), "off"));
+		// Cycle order is Global -> On -> Off -> Global; two clicks from Global reaches Off.
+		const el = triGroup(container, "Track agent intent");
+		fireEvent.click(el);
+		fireEvent.click(el);
 		expect(store.getIntentTabTitle("claude")).toBe(false);
 	});
 
 	it("selecting 'Global' resets the override back to undefined (inherit)", async () => {
 		const { container, store } = await renderExpandedRow();
-		fireEvent.click(triSegment(triGroup(container, "Show suggested follow-ups"), "on"));
+		const el = triGroup(container, "Show suggested follow-ups");
+		fireEvent.click(el);
 		expect(store.getSuggestFollowups("claude")).toBe(true);
 
-		fireEvent.click(triSegment(triGroup(container, "Show suggested follow-ups"), "global"));
+		fireEvent.click(el);
+		fireEvent.click(el);
 		expect(store.getSuggestFollowups("claude")).toBeUndefined();
 	});
 });

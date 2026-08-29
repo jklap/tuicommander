@@ -7,7 +7,7 @@ import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
 import { randomId } from "../../../utils/randomId";
-import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
+import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
 interface CliStatus {
@@ -123,14 +123,6 @@ export const GeneralTab: Component = () => {
 	return (
 		<div class={s.section}>
 			<h3>{t("general.heading.general", "General")}</h3>
-
-			<SettingInput
-				label={t("general.label.shell", "Shell")}
-				value={settingsStore.state.shell ?? ""}
-				onInput={(v) => settingsStore.setShell(v)}
-				placeholder={t("general.placeholder.shell", "Default shell")}
-				hint={t("general.hint.shell", "Shell used in terminals (leave blank for system default)")}
-			/>
 
 			<Show when={isTauri() && cliStatus()}>
 				<h3>

@@ -270,6 +270,25 @@ describe("agentConfigsStore", () => {
 				);
 			});
 		});
+
+		it("accepts and round-trips a 'agentType:configName' composite value selecting a named run config", async () => {
+			// The store must not narrow this to a plain AgentType — SmartPromptsTab's
+			// grouped dropdown renders named run configs as composite values, and
+			// useSmartPrompts.ts's executeHeadless parses them back apart.
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {}, headless_agent: "claude:My Config" });
+				expect(store.getHeadlessAgent()).toBe("claude:My Config");
+
+				store.setHeadlessAgent("gemini:Other Config");
+				expect(store.getHeadlessAgent()).toBe("gemini:Other Config");
+				expect(mockInvoke).toHaveBeenCalledWith(
+					"save_agents_config",
+					expect.objectContaining({
+						config: expect.objectContaining({ headless_agent: "gemini:Other Config" }),
+					}),
+				);
+			});
+		});
 	});
 
 	describe("intent_tab_title override", () => {

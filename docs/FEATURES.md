@@ -55,7 +55,7 @@
 - Rename: double-click tab name (inline editing)
 - Reorder: drag-and-drop with visual drop indicators (works for all tab types: terminal, diff, editor, markdown, plugin panels)
 - Tab status dot (left of name): grey=idle, blue-pulse=busy, green=done, purple=unseen (completed while not viewed), orange-pulse=question (needs input), red-pulse=error
-- Tab type colors: red gradient=diff, blue gradient=editor, green gradient=markdown, purple gradient=panel, amber gradient=HTML preview, cyan gradient=remote PTY session. Toggle the tint (background gradient + border) on/off with **Show tab type highlighting** in Settings → Appearance — off keeps each type's icon color but removes the background/border. Every color/icon/animation above is customizable via the UI Legend (see **11.2**)
+- Tab type colors: red gradient=diff, blue gradient=editor, green gradient=markdown, purple gradient=panel, amber gradient=HTML preview, cyan gradient=remote PTY session. Toggle the tint (background gradient + border) on/off with **Show tab type highlighting** in Settings → Appearance — off keeps each type's icon color but removes the background/border. Every color/icon/animation above is customizable via the UI Legend (see **11.3**)
 - Remote PTY sessions (created via HTTP/MCP) show "PTY:" prefix and cyan styling
 - Progress bar (OSC 9;4)
 - Context menu (right-click): Close Tab, Close Other Tabs, Close Tabs to the Right, Detach to Window, Copy Path (on diff/editor/markdown file tabs)
@@ -873,7 +873,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Base ref selection: choose which branch to start from when creating new worktrees. The "Start from" dropdown has its own search box and full keyboard navigation (`↑`/`↓`/`Enter`/`Esc`), grouped into Local/Remote sections; the existing-branch list below the name input also supports `↑`/`↓`/`Enter` navigation and highlights the matched substring as you type. The last base ref used successfully in the dialog is remembered per repo for the rest of the session (not persisted across restarts) and preselected next time
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Orphan cleanup modes: Ask before archiving / Auto-archive / Auto-remove (delete, no archive) / Keep. Orphan detection (detached HEAD, no branch) is a heuristic that can misclassify a worktree that was never actually abandoned, so "Ask" and "Auto-archive" move the worktree aside into `__archived/` (recoverable) instead of deleting it outright; "Auto-remove" is a separate, deliberate opt-in for the old hard-delete behavior.
-- A worktree with a rebase, merge, cherry-pick, revert, or bisect in progress shows a distinct colored badge in the sidebar naming which one ("Rebasing", "Merging", "Cherry-picking", "Reverting", "Bisecting" — including on the **main** checkout's own row, not just linked worktrees) and is never auto-archived or auto-deleted by the merge cleanup flows (Merge & Archive, auto-archive-merged) — regardless of setting — until the operation is resolved. Toggle visibility with **Show git repo status indicators** in Settings → Appearance; colors/animations are customizable via the UI Legend (see **11.2**).
+- A worktree with a rebase, merge, cherry-pick, revert, or bisect in progress shows a distinct colored badge in the sidebar naming which one ("Rebasing", "Merging", "Cherry-picking", "Reverting", "Bisecting" — including on the **main** checkout's own row, not just linked worktrees) and is never auto-archived or auto-deleted by the merge cleanup flows (Merge & Archive, auto-archive-merged) — regardless of setting — until the operation is resolved. Toggle visibility with **Show git repo status indicators** in Settings → Appearance; colors/animations are customizable via the UI Legend (see **11.3**).
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before a worktree is archived or deleted; non-zero exit blocks the operation
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
@@ -1230,18 +1230,23 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 ## 11. Settings
 
 ### 11.1 General
-- Language, Default IDE, Shell
+- Language, Default IDE
 - Window: restore size and position on launch (desktop app only, default on)
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
 - Power management: prevent sleep when busy
 - Updates: auto-check, check now
 - Git integration: auto-show PR popover
-- Terminal: copy-on-select toggle (auto-copy selection to clipboard)
-- Terminal session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback
 - Experimental Features: master toggle + per-feature sub-flags (AI Chat, AI Triage, AI Watchers, Scrollback Reflow)
 - Repository defaults: base branch, file handling, setup/run scripts, worktree defaults (storage strategy, prompt on create, etc.)
 
-### 11.2 Appearance
+### 11.2 Terminal
+- Shell: custom shell override (platform default if blank)
+- Rendering: terminal font, default font size, font weight, cursor style — with a live preview
+- Behavior: copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, agent context bar, link activation mode (click/modifier/never)
+- Blocks: block timestamps, block boundary marks, prompt marks, block folding
+- Session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback
+
+### 11.3 Appearance
 - Terminal theme: multiple themes, color swatches. Bundled themes include **Deep Black** (near-true-black background with GitHub-style ANSI accents) and **Minimal Kiwi** (dark green-tinted background with muted warm accents)
 - Terminal font: 11 bundled monospace fonts (JetBrains Mono default)
 - Default font size: 8-32px slider
@@ -1260,7 +1265,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
   restart, surviving theme switches. Four group headings (Tab Types, PR Status Badges, Git Repo
   Status, Diff Stats) additionally carry a show/hide toggle for that whole group.
 
-### 11.3 Services
+### 11.4 Services
 - HTTP API server: always active on IPC listener (Unix domain socket on macOS/Linux, named pipe `\\.\pipe\tuicommander-mcp` on Windows). TCP port only for remote access
 - MCP connection info: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.)
 - TUIC native tool toggles: enable/disable individual MCP tools (`session`, `agent`, `task`, `repo`, `ui`, `plugin_dev_guide`, `config`, `debug`) to restrict what AI agents can access
@@ -1269,22 +1274,22 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Remote access: port, username, password (bcrypt hash), URL display, QR code, token duration, IPv6 dual-stack, LAN auth bypass
 - Voice dictation: full setup (see section 9)
 
-### 11.4 Repository Settings (per-repo)
+### 11.5 Repository Settings (per-repo)
 - Display name
 - Worktree tab: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge action (each overridable from global defaults)
 - PR Visibility (hide draft/conflicting/CI-failing) and, on macOS, Cmd+1-9 terminal hotkeys — also per-repo overridable
 - Scripts tab: setup script (post-worktree), run script (`Cmd+R`), archive script (pre-archive/delete hook)
 - Repo-local config: `.tuic.json` in repo root provides team-shared settings. Three-tier precedence: `.tuic.json` > per-repo app settings > global defaults. **Scripts (setup, run, archive) are intentionally excluded from `.tuic.json` merging** — arbitrary script execution by a checked-in file poses a security risk; scripts are always sourced from the local per-repo app settings only
-- **Tri-state overrides:** every on/off field above (plus the per-agent "Show intent as tab title" / "Show suggested follow-ups" overrides in **11.7**) uses a shared `TriStateToggle` control with three directly-selectable positions — On, Use global default, Off — instead of a checkbox that can only ever hold a concrete value. Selecting "Use global default" writes `null` (or, for the per-agent overrides, `undefined`) so the setting tracks the global value going forward, without needing the panel's "Reset to Defaults" button.
+- **Tri-state overrides:** every on/off field above (plus the per-agent "Show intent as tab title" / "Show suggested follow-ups" overrides in **11.8**) uses a shared `TriStateToggle` control with three directly-selectable positions — On, Use global default, Off — instead of a checkbox that can only ever hold a concrete value. Selecting "Use global default" writes `null` (or, for the per-agent overrides, `undefined`) so the setting tracks the global value going forward, without needing the panel's "Reset to Defaults" button.
 
-### 11.5 Notifications
+### 11.6 Notifications
 - Master toggle, volume (0-100%)
 - Per-event: question, error, completed, warning, info
 - Test buttons per sound
 - Reset to defaults
 - **Keep toasts in the bell** — mirrors toasts into the bell's Messages section (see **4.4**). Outside the audio block, because the bell is visual and must stay configurable without an audio device
 
-### 11.6 Keyboard Shortcuts
+### 11.7 Keyboard Shortcuts
 - Settings > Keyboard Shortcuts tab (`Cmd+,` to open Settings), also accessible from Help > Keyboard Shortcuts
 - All app actions listed with their current keybinding
 - Click the pencil icon to rebind — inline key recorder with pulsing accent border
@@ -1295,15 +1300,15 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Auto-populated from `actionRegistry.ts` (`ACTION_META` map) — new actions appear automatically
 - **Global Hotkey:** configurable OS-level shortcut to toggle window visibility from any application. Set in the "Global Hotkey" section at the top of the Keyboard Shortcuts tab. No default — user must configure. Toggle: hidden/minimized → show+focus, visible but unfocused → focus, focused → instant hide (no dock animation). Cmd and Ctrl are distinct modifiers. Uses `tauri-plugin-global-shortcut` (no Accessibility permission required on macOS). Hidden in browser/PWA mode.
 
-### 11.7 Agents
+### 11.8 Agents
 - See **6.9 Agent Configuration** for full details
 - Claude Usage Dashboard enable/disable toggle (under Claude agent section)
 
-### 11.8 Providers
+### 11.9 Providers
 - Settings > Providers tab for centralized AI provider management
 - See **6.16 Provider Registry** for full details
 
-### 11.9 Selection
+### 11.10 Selection
 - Word boundaries: character list or regex, plus a precision-scored smart-selection rule list with actions
 - See **1.22 Smart Selection** for full details
 

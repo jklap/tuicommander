@@ -334,29 +334,15 @@ describe("settingsStore", () => {
 	});
 
 	describe("smart selection settings", () => {
-		it("defaults smart selection on, double-click action to smart, and word mode to characters", async () => {
+		it("defaults double-click action to smart and word mode to characters", async () => {
 			await testInScopeAsync(async () => {
 				await hydrateStore();
-				expect(store.state.smartSelectionEnabled).toBe(true);
 				expect(store.state.doubleClickAction).toBe("smart");
 				expect(store.state.wordSelectionMode).toBe("characters");
 				expect(store.state.wordSelectionRegex).toBe("");
 				expect(store.state.smartSelectionRules).toEqual([]);
 				// Matches WORD_SEPARATOR_RE's punctuation class exactly.
 				expect(store.state.wordSeparators).toBe(" \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\");
-			});
-		});
-
-		it("persists setSmartSelectionEnabled", async () => {
-			await testInScopeAsync(async () => {
-				await hydrateStore();
-				store.setSmartSelectionEnabled(false);
-				expect(store.state.smartSelectionEnabled).toBe(false);
-				vi.advanceTimersByTime(600);
-				await vi.runAllTimersAsync();
-				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
-					config: expect.objectContaining({ smart_selection_enabled: false }),
-				});
 			});
 		});
 

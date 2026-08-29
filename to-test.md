@@ -110,6 +110,138 @@ done, CLI/typecheck done — only the visual/browser step (rungs 4-5) is outstan
 - [ ] **[MANUAL]** Same as above but hover (don't click) the ref after filtering, then press Enter:
       confirm it selects the hovered ref.
 
+## UI tweaks: tri-state switch restyle, worktree dialog resize, headless-agent select, Shell move (2026-08-28/29)
+
+Seven settings/UI fixes in one session: `TriStateToggle` restyled from a 3-segment
+radiogroup to a single cycling pill switch; `CreateWorktreeDialog`'s remaining
+resize-while-typing sources fixed — the base-ref row now stays mounted and disables
+instead of unmounting, while the status line/path preview/error message keep their
+original conditional-mount behavior but now live inside a fixed-min-height wrapper
+(`.previewFooter`) so the dialog's overall height stays constant regardless of
+which of the three is currently shown; the "Enable smart selection" toggle removed
+(Rust `smart_selection_enabled` field deleted); the Smart Selection rule Name field
+widened; the headless-agent `<select>` in Providers and Smart Prompts fixed to
+correctly display a persisted value once async agent detection resolves, plus a
+genuine save bug for named run-config selections in the Smart Prompts copy; and
+the Shell field moved from Settings → General to Settings → Terminal.
+
+A follow-up `/code-review` pass on this session's diff found and fixed four more
+issues before this landed: (1) `useSmartPrompts.ts`'s composite-value parser used
+`split(":", 2)`, which in JS truncates the full split's result array rather than
+doing a max-2-parts split — a run config named e.g. `"My:Config"` (nothing prevents
+a colon in a name) had its name silently mangled; fixed via `indexOf`/`slice`. (2)
+the path preview's "ellipsize at the start" CSS trick (`direction: rtl`) risked the
+Unicode Bidi Algorithm visually reordering digit runs in an otherwise-LTR path
+(e.g. `.../worktree-2026-08-28`); replaced with plain JS-side character-budget
+truncation, no bidi involved. (3) `.previewFooter`'s `min-height` had only ~6px of
+slack over the three rows' actual worst-case height with no test enforcing the
+number; bumped from 84px to 100px with a comment flagging it as unverified-by-test.
+(4) the headless-agent `<select>` markup was duplicated near-verbatim between
+`ProvidersTab.tsx` and `SmartPromptsTab.tsx` — extracted into a shared
+`HeadlessAgentSelect.tsx` (own test file, 6 tests) so a future fix can't apply to
+only one copy the way the composite-value guard bug originally did.
+
+Escalation ladder: code inspection done, tests done (6651/6651 vitest passing,
+including 9 regression tests individually confirmed to fail against each pre-fix
+file via `git stash`: 1 in `ProvidersTab.test.tsx`, 2 in
+`SmartPromptsTab.headlessAgent.test.tsx`, 5 in `CreateWorktreeDialog.test.tsx`, and
+1 in `useSmartPrompts.test.ts`), `cargo nextest run --workspace` (5300 passed),
+`clippy`, `rustfmt`, `biome`, `tsc --noEmit` all clean via `./scripts/check-gate.sh`
+— the only reported failures are the two pre-existing, documented ones
+(uninitialized `plugins/` submodule; `ChangelogModal.test.tsx`'s flaky leak marking
+its file failed with 0 real test failures inside it). The visual/browser step
+(rungs 4-5) was then completed too: Boss killed the process holding Vite's pinned
+port 1421, `make dev` ran clean for this worktree (fresh Rust build, so the
+`smart_selection_enabled` removal is included), and every item below except the
+last was verified live via `agent-browser` against `https://127.0.0.1:9877/` —
+screenshots in `.screenshots/ui-tweaks-verify/` (gitignored, not committed). The
+dev instance was shut down afterward and the port freed again.
+
+- [x] Settings → any repo → Worktree tab: confirm each on/off row (Copy ignored
+      files, Prompt for branch name, Hide Draft PRs, etc.) now renders as a single
+      30×16 pill switch matching the look of every plain `SettingToggle` elsewhere
+      in Settings, not three separate button segments. Click it and confirm it
+      cycles Use-global (dashed track, dimmed, knob centered) → On (accent, knob
+      right) → Off (grey, knob left) → back to Use-global, and that the "(Use
+      global default: X)" hint text still appears only in the Use-global position
+      _(verified: `aria-checked` read `mixed`/`true`/`false` at each step; a 4×
+      CSS-zoomed screenshot of "Prompt for branch name during creation" in the
+      Global position clearly shows the dashed border, dimmed opacity, and
+      centered knob — `.screenshots/ui-tweaks-verify/14-full-zoomed.png`)_.
+- [x] New Worktree dialog: type a name that becomes an exact match for an existing
+      branch (with 2+ base refs — used the real `export-smart-sel`/`wip`/etc.
+      branches in this repo) and confirm the "Start from" row stays visible but
+      grays out/disables instead of disappearing, and that the dialog's overall
+      height does not change at any point while typing
+      _(verified: typing "wip" — an existing branch — left the trigger present
+      with `disabled` set via `get attr aria-checked`/DOM inspection; the
+      Cancel/Create button row's y-position was identical across empty, existing-
+      match, and new-branch-name screenshots — `17`/`18`/`19` in the same dir)_.
+- [x] Settings → Selection: confirm "Enable smart selection" is gone, and that a
+      Smart Selection rule's Name field now visibly fills the row's width like the
+      Pattern field below it, instead of a narrow default-width box
+      _(verified: screenshot `03-selection-tab.png` shows only "Double-click
+      performs" under Behavior with the updated hint text; `07-name-field.png`
+      shows a newly-added rule's Name field spanning the full row width, matching
+      Pattern below it — test rule removed afterward)_.
+- [x] Settings → Providers → Headless Agent: pick "External API", close Settings,
+      reopen Settings → Providers: confirm it still reads "External API" (was:
+      silently reverted to "— Not configured —" on every reopen even though the
+      value was saved correctly). Repeat under Settings → Smart Prompts →
+      Headless Agent
+      _(verified: selected "External API" in Providers, closed/reopened Settings,
+      `get value` on the select read `api` and the option text read "External
+      API" — not reverted; Smart Prompts tab's copy of the select showed the same
+      persisted value without re-selecting anything, confirming the shared
+      `HeadlessAgentSelect` component and store. Reset back to "— Not configured
+      —" afterward)_.
+  - [ ] **[MANUAL]** The specific bug was about a *named agent binary* option
+        (e.g. "Claude Code") getting lost once agent detection resolves — not
+        reachable from this check, since agent binary detection is a no-op in
+        browser mode (`useAgentDetection.ts` returns early when `!isTauri()`),
+        so only the detection-independent "External API"/"— Not configured —"
+        options could be exercised here. The `selected`-per-option mechanism
+        this relies on is identical for every option kind and is covered by
+        `ProvidersTab.test.tsx`'s regression test (which mocks detection
+        resolving asynchronously and was confirmed to fail pre-fix), but an
+        actual installed agent binary + the real desktop (Tauri) app would
+        close this gap fully.
+- [x] Settings → Terminal: confirm a "Shell" field now appears as the first
+      section (above Rendering), and that Settings → General no longer has it.
+      Type a shell path, close and reopen Settings, confirm it persisted
+      _(verified: `02-terminal-tab.png` shows Shell as the first section above
+      Rendering; `01-after-settings-click.png` shows General without it; typed
+      `/bin/zsh`, closed/reopened Settings, field still read `/bin/zsh`. Cleared
+      back to empty afterward — confirmed via `config.json`'s `"shell": null`)_.
+- [x] New Worktree dialog with a long `worktreesDir` and a long typed branch name:
+      confirm the path preview truncates at the start with a single leading "…"
+      and no visual glitching (was CSS `direction: rtl`, replaced with plain JS
+      truncation)
+      _(verified: typed `totally-new-branch-name-test` with a deliberately long
+      `worktreesDir`; `eval`-read the `.pathPreview` element's `textContent` —
+      `"…mmander/worktrees/totally-new-branch-name-test/"`, a plain leading
+      ellipsis with no bidi reordering, matching the new JS-truncation logic
+      exactly)_.
+- [ ] **[MANUAL]** In the terminal, confirm quad-click (4 rapid clicks) and the
+      right-click smart-selection context menu still work exactly as before the
+      "Enable smart selection" toggle's removal — the Rust rebuild for this
+      verification pass *did* include the `smart_selection_enabled` field
+      removal, but checking this specific interaction needs an actual PTY session
+      with matchable content (a URL, a git SHA) and a multi-click gesture, which
+      wasn't set up during this pass; automated coverage
+      (`canvasTerminalSmartSelection.mount.test.ts`) already exercises both paths
+      post-fix and passes, but hasn't been double-checked against a live render.
+- [ ] **[MANUAL]** Same New Worktree dialog, but with all three footer rows
+      showing at once (type a name, then trigger a create error, e.g. an invalid
+      name, so status line + path preview + error all render together) — confirm
+      they don't visually overflow `.previewFooter`'s 100px reserved height (a
+      hand estimate with ~20px of slack, not derived from a real layout
+      measurement) and that the 48-character path-truncation budget doesn't cut
+      off mid-word in a way that looks wrong at the dialog's actual rendered
+      width/font (DOM `textContent`, which is what was checked in this pass, is
+      font/width-independent). This specific 3-rows-at-once combination wasn't
+      triggered during the verification pass above.
+
 ## DECCKM app-cursor keys, DECSCUSR cursor shape, and wide-glyph cursor width (2026-08-20)
 
 - [ ] **[MANUAL]** In a real `zsh` prompt with `bindkey -v` (vi mode) and a non-empty prompt line, press Home/End and arrow keys: cursor moves without dropping into vi normal mode (visible via the block cursor NOT appearing after Home/End).

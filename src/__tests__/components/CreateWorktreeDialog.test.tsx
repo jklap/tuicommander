@@ -111,6 +111,27 @@ describe("CreateWorktreeDialog", () => {
 		expect(path!.textContent).toContain("feature");
 	});
 
+	it("truncates a long path preview at the start (character budget, not CSS text-overflow) without reordering digits", () => {
+		// The path preview used to rely on the CSS `direction: rtl` start-ellipsis
+		// trick, which risks the Unicode Bidi Algorithm visually reordering digit
+		// runs in an otherwise strong-LTR path (e.g. a name ending in numbers).
+		// Truncation now happens in JS on the actual string, so the DOM text is
+		// always a plain, correctly-ordered substring — never CSS-reordered.
+		const { container } = render(() => (
+			<CreateWorktreeDialog
+				{...defaultProps}
+				worktreesDir="/Users/boss/very/deeply/nested/path/to/my/repositories/worktrees"
+			/>
+		));
+		const input = container.querySelector("input[type='text']") as HTMLInputElement;
+		fireEvent.input(input, { target: { value: "fix-issue-2026-08-28" } });
+
+		const path = container.querySelector("[class*='pathPreview']")!;
+		expect(path.textContent).toMatch(/^…/);
+		expect(path.textContent).toContain("fix-issue-2026-08-28");
+		expect(path.textContent!.length).toBeLessThan(50);
+	});
+
 	it("clicking a non-disabled branch populates input", () => {
 		const { container } = render(() => <CreateWorktreeDialog {...defaultProps} />);
 		const items = container.querySelectorAll("[class*='branchItem']");
@@ -226,6 +247,44 @@ describe("CreateWorktreeDialog", () => {
 		expect(path).toBeNull();
 	});
 
+	describe("resize fix: status/path/error footer reserves height", () => {
+		// Regression: the status line, path preview, and error message each
+		// individually appear/disappear as the typed name changes, which used to
+		// change the dialog's overall height per keystroke. They now live inside a
+		// fixed-min-height wrapper (`.previewFooter`) — always present regardless
+		// of which/how many of the three rows inside it are currently shown — so
+		// the dialog's height stays constant even though the rows themselves keep
+		// their original conditional-mount behavior.
+		it("the wrapper is present even when input is empty and nothing inside it is shown", () => {
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} />);
+			expect(container.querySelector("[class*='previewFooter']")).not.toBeNull();
+		});
+
+		it("the wrapper is present across empty -> new-name -> existing-branch-match transitions", () => {
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} />);
+			const input = container.querySelector("input[type='text']") as HTMLInputElement;
+			const footer = () => container.querySelector("[class*='previewFooter']");
+
+			expect(footer()).not.toBeNull();
+
+			fireEvent.input(input, { target: { value: "feature/new-thing" } });
+			expect(footer()).not.toBeNull();
+
+			fireEvent.input(input, { target: { value: "develop" } });
+			expect(footer()).not.toBeNull();
+		});
+
+		it("the wrapper is present even while an error message is showing", () => {
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} />);
+			const input = container.querySelector("input[type='text']") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "bad name" } });
+			fireEvent.click(container.querySelector(".primaryBtn")!);
+
+			expect(container.querySelector(".error")).not.toBeNull();
+			expect(container.querySelector("[class*='previewFooter']")).not.toBeNull();
+		});
+	});
+
 	describe("random name button", () => {
 		it("renders a generate-name button", () => {
 			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} />);
@@ -276,14 +335,45 @@ describe("CreateWorktreeDialog", () => {
 			expect(container.querySelector("[class*='dropdownTrigger']")).toBeNull();
 		});
 
-		it("is hidden once the typed name matches an existing branch", () => {
+		it("disables (but keeps mounted) once the typed name matches an existing branch", () => {
+			// Regression: this row used to unmount entirely on an exact existing-branch
+			// match, which was one of the sources of the dialog visibly resizing while
+			// typing (see CreateWorktreeDialog.module.css's .baseRefRow comment). It now
+			// stays mounted and disables instead, so the dialog's height never changes.
 			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
-			expect(container.querySelector("[class*='dropdownTrigger']")).not.toBeNull();
+			const trigger = () => container.querySelector("[class*='dropdownTrigger']") as HTMLButtonElement | null;
+			expect(trigger()).not.toBeNull();
+			expect(trigger()!.disabled).toBe(false);
 
 			const input = container.querySelector("input[type='text']") as HTMLInputElement;
 			fireEvent.input(input, { target: { value: "develop" } });
 
-			expect(container.querySelector("[class*='dropdownTrigger']")).toBeNull();
+			expect(trigger()).not.toBeNull();
+			expect(trigger()!.disabled).toBe(true);
+
+			fireEvent.input(input, { target: { value: "develop-2" } });
+			expect(trigger()!.disabled).toBe(false);
+		});
+
+		it("does not silently reopen once re-enabled after closing while disabled", () => {
+			// Edge case: the dropdown list can be open (search box focused) at the
+			// exact moment the name field's value crosses into an exact
+			// existing-branch match. The `<Show>` guard alone hides the list from
+			// the DOM while disabled, but without also resetting the internal
+			// `open` signal, the list would silently reappear on its own the
+			// instant the row re-enables (typing past the match) — with no new
+			// click reopening it.
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+			fireEvent.click(trigger);
+			expect(container.querySelector("[class*='dropdownList']")).not.toBeNull();
+
+			const input = container.querySelector("input[type='text']") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "develop" } }); // exact match -> disables, list hidden
+			expect(container.querySelector("[class*='dropdownList']")).toBeNull();
+
+			fireEvent.input(input, { target: { value: "develop-2" } }); // re-enables
+			expect(container.querySelector("[class*='dropdownList']")).toBeNull();
 		});
 
 		it("defaults the trigger to the first base ref and marks it as default", () => {
