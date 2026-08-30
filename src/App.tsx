@@ -396,7 +396,6 @@ const App: Component = () => {
 	// Offer to switch to newly created worktrees (from MCP) + activity notification,
 	// and prune the sidebar row when a worktree is removed backend-side.
 	useWorktreeSwitchPrompt({
-		confirm: (opts) => dialogs.confirm(opts),
 		handleBranchSelect: gitOps.handleBranchSelect,
 		closeTerminalsForBranch: gitOps.closeTerminalsForBranch,
 	});

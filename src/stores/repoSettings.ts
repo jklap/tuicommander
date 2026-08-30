@@ -1,5 +1,6 @@
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { toCamelKeys, toSnakeKeys } from "../utils/caseKeys";
 import { appLogger } from "./appLogger";
 import type {
 	AutoDeleteOnPrClose,
@@ -54,6 +55,11 @@ export interface RepoSettings {
 	autoDeleteOnPrClose: AutoDeleteOnPrClose | null;
 	/** Allowlist of upstream MCP server names for this repo (null = all servers) */
 	mcpUpstreams: string[] | null;
+	// DEFERRED (2026-08-30) — `terminalMetaHotkeys` and the three `prHide*` fields
+	// below are override slots with no writer: no UI sets them, and `config.rs`
+	// has no matching field on `RepoSettingsEntry`, so a value set here would be
+	// dropped by the backend. Either wire them up or delete them; leaving them is
+	// what let the camelCase persistence bug hide.
 	/** null = inherit from settingsStore (global) */
 	prHideDrafts: boolean | null;
 	/** null = inherit from settingsStore (global) */
@@ -165,11 +171,45 @@ interface RepoSettingsState {
 
 const LEGACY_STORAGE_KEY = "tui-commander-repo-settings";
 
-/** Persist settings to Rust backend (fire-and-forget) */
+/**
+ * Persist settings to Rust backend (fire-and-forget).
+ *
+ * The keys are renamed on the way out. `RepoSettingsEntry` in `config.rs` is
+ * snake_case and carries `#[serde(default)]` on every field, so a camelCase key
+ * is not an error — serde drops it and the field reads as "the user set
+ * nothing". Sending the store shape verbatim therefore persisted only `path` and
+ * `color`, the two names that happen to spell the same in both conventions, and
+ * every per-repo override was lost on restart while looking correct until then.
+ */
 function saveSettings(settings: Record<string, RepoSettings>): void {
-	invoke("save_repo_settings", { config: { repos: settings } }).catch((err) =>
+	const repos: Record<string, unknown> = {};
+	for (const [path, entry] of Object.entries(settings)) repos[path] = toSnakeKeys(entry);
+	invoke("save_repo_settings", { config: { repos } }).catch((err) =>
 		appLogger.error("config", "Failed to save repo settings", err),
 	);
+}
+
+/** An entry with no overrides set — every field present, every override null. */
+function blankSettings(path: string, displayName: string): RepoSettings {
+	return {
+		path,
+		displayName,
+		color: "",
+		autoConsolidateWorktrees: false,
+		branchLabels: {},
+		...OVERRIDABLE_NULL_DEFAULTS,
+	};
+}
+
+/** Wire shape -> store shape, for what `load_repo_settings` returns. Layered over
+ *  a blank entry so a key the backend omits (`branch_labels` and `mcp_upstreams`
+ *  are skipped when empty) still arrives as its default rather than undefined. */
+function fromWire(repos: Record<string, Record<string, unknown>>): Record<string, RepoSettings> {
+	const out: Record<string, RepoSettings> = {};
+	for (const [path, entry] of Object.entries(repos)) {
+		out[path] = { ...blankSettings(path, ""), ...toCamelKeys(entry) } as RepoSettings;
+	}
+	return out;
 }
 
 /**
@@ -240,17 +280,22 @@ function createRepoSettingsStore() {
 				const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
 				if (legacy) {
 					try {
-						const parsed = JSON.parse(legacy);
-						await invoke("save_repo_settings", { config: { repos: parsed } });
+						// localStorage held the store shape, so it needs the same rename as
+						// a normal save — otherwise the migration writes an entry the
+						// backend reads as empty and the settings are lost for good.
+						const parsed = JSON.parse(legacy) as Record<string, RepoSettings>;
+						const repos: Record<string, unknown> = {};
+						for (const [path, entry] of Object.entries(parsed)) repos[path] = toSnakeKeys(entry);
+						await invoke("save_repo_settings", { config: { repos } });
 					} catch {
 						/* ignore corrupt legacy data */
 					}
 					localStorage.removeItem(LEGACY_STORAGE_KEY);
 				}
 
-				const loaded = await invoke<{ repos?: Record<string, RepoSettings> }>("load_repo_settings");
+				const loaded = await invoke<{ repos?: Record<string, Record<string, unknown>> }>("load_repo_settings");
 				if (loaded?.repos) {
-					setState("settings", loaded.repos);
+					setState("settings", fromWire(loaded.repos));
 				}
 			} catch (err) {
 				appLogger.debug("config", "Failed to hydrate repo settings", err);
@@ -268,14 +313,7 @@ function createRepoSettingsStore() {
 				return state.settings[path];
 			}
 
-			const newSettings: RepoSettings = {
-				path,
-				displayName,
-				color: "",
-				autoConsolidateWorktrees: false,
-				branchLabels: {},
-				...OVERRIDABLE_NULL_DEFAULTS,
-			};
+			const newSettings = blankSettings(path, displayName);
 
 			setState("settings", path, newSettings);
 			saveSettings(state.settings);

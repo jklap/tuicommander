@@ -17,6 +17,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   other repo when that tab was active. It now only follows a cwd *inside* the
   owning repo, so a worktree switch still moves the tab and a cross-repo `cd`
   does not.
+- **An agent that describes a menu no longer reports itself as waiting** — the
+  footer row an interactive menu draws was treated as proof that a menu is open,
+  wherever it appeared. An agent that read another session's screen and pasted it
+  into its own answer therefore raised the attention mark on its own tab, marked
+  confident, which nothing retracts: the tab claimed the agent was blocked on the
+  user for the rest of the turn while it was working. The row is now recognised
+  only where a menu actually draws it — at the left edge of the screen — because
+  everything an agent streams is indented inside its own frame. Real menus are
+  unaffected.
+- **A toast now says which repo it came from, and clicking it takes the whole
+  window there** — an agent's toast arrives while you are looking at another
+  repo, and the name of the speaker was nowhere on it. It now carries the repo
+  as a badge next to the title, read from the caller's own working directory and
+  falling back to the repo owning the terminal that spoke. Clicking it used to
+  change only the active terminal: the pane drew a tab from a repo the sidebar
+  was not showing, and the tab strip had no entry for it. The click now moves
+  the sidebar repo, the branch, the pane group and the focus together.
+- **Per-repository settings survive a restart** — every per-repo override was
+  dropped the moment it was saved. The store sent its own camelCase field names
+  to a Rust struct spelled in snake_case whose every field carries a serde
+  default, so an unrecognised key was not an error: it was discarded, and the
+  field read back as "the user set nothing". Only `path` and `color` — the two
+  names that spell the same in both conventions — ever reached disk. A base
+  branch, a setup script or a worktree toggle set for one repository therefore
+  worked for the rest of the session and was gone at the next launch. Names are
+  translated at the boundary now, in both directions, so what you set is what
+  loads. Existing files are read unchanged.
+- **A worktree an agent creates no longer stops you to ask about it** — the
+  "Switch to new worktree?" confirmation was a blocking modal with a ten-second
+  auto-cancel, and it is raised by exactly the case that cannot answer it: the
+  dialog only ever comes from a backend-initiated creation (the MCP
+  `repo worktree_create` tool or the HTTP route), never from the in-app "+"
+  button. An orchestrator creating a worktree every few minutes therefore took
+  the screen every few minutes to ask a question nobody was there to answer. The
+  offer is a toast now, with a **Switch** button, and it stays in the bell after
+  the toast fades, so an unattended run leaves the offers waiting for you instead
+  of throwing them away. Whether your current tab follows is decided when you
+  click, not when the worktree appeared — a running agent still stays on its own
+  branch and CWD while the worktree opens in its own terminal. Raised by
+  [@mmullane001](https://github.com/mmullane001) in
+  [#120](https://github.com/sstraus/tuicommander/pull/120), which proposed a
+  setting to turn the dialog off.
+- **A fresh clone no longer fails its own test suite on git 2.34** — `shootout_commit_log`
+  compares the gix commit log against the git CLI byte for byte, and `%aI` spells a
+  zero UTC offset as `+00:00` on git 2.34 (what Ubuntu 22.04 ships) and as `Z` on
+  newer git. The reference side of the comparison therefore changed shape with the
+  git binary on the machine, and the test failed on a clean checkout even though
+  both backends agreed on every hash, parent, ref and subject. The comparison now
+  reads the two spellings of UTC as the one instant they both mean. Nothing about
+  the app changes: the commit log is served by gix, which already emits `Z` on
+  every git version. Reported and diagnosed by
+  [@smuchow1962](https://github.com/smuchow1962) in
+  [#117](https://github.com/sstraus/tuicommander/pull/117).
 
 ## [1.7.5] - 2026-08-27
 
