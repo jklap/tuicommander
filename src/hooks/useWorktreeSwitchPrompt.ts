@@ -4,10 +4,10 @@ import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
-import type { ConfirmOptions } from "./useConfirmDialog";
+import { toastsStore } from "../stores/toasts";
+import { pathBasename, pathDirname } from "../utils/pathUtils";
 
 interface WorktreeSwitchDeps {
-	confirm: (options: ConfirmOptions) => Promise<boolean>;
 	handleBranchSelect: (repoPath: string, branchName: string) => Promise<void>;
 	closeTerminalsForBranch: (repoPath: string, branchName: string) => Promise<void>;
 }
@@ -24,11 +24,16 @@ interface WorktreeRemovedPayload {
 }
 
 /**
- * Offer the newly created worktree without pretending a running agent can move
- * with its terminal. Branch selection opens or focuses a terminal rooted in the
- * worktree; the agent terminal remains attached to its original branch and CWD.
+ * Move to a worktree the backend just created, without pretending a running
+ * agent can move with its terminal. Branch selection opens or focuses a terminal
+ * rooted in the worktree; the agent terminal remains attached to its original
+ * branch and CWD.
+ *
+ * Called from the toast's "Switch" action, so whether the active terminal can
+ * follow is decided HERE, at click time — by then the user may have moved to a
+ * different tab than the one that was active when the worktree appeared.
  */
-export async function promptForCreatedWorktree(
+export async function switchToCreatedWorktree(
 	deps: WorktreeSwitchDeps,
 	repoPath: string,
 	branch: string,
@@ -36,20 +41,6 @@ export async function promptForCreatedWorktree(
 ): Promise<void> {
 	const activeTerm = terminalsStore.getActive();
 	const isAgentRunning = activeTerm?.agentType != null;
-
-	const message = isAgentRunning
-		? `Worktree "${branch}" was created.\nThe running agent cannot switch directories mid-session.\nOpen the worktree in its own terminal and keep the agent in its current branch?`
-		: `Worktree "${branch}" was created.\nSwitch to it now?`;
-
-	const confirmed = await deps.confirm({
-		title: "Switch to new worktree?",
-		message,
-		okLabel: isAgentRunning ? "Open Worktree" : "Switch",
-		cancelLabel: "Stay",
-		kind: "info",
-		autoCancelMs: 10_000,
-	});
-	if (!confirmed) return;
 
 	// This selects an existing worktree terminal (for example one spawned by
 	// MCP) or creates the first terminal for the branch when none exists.
@@ -109,9 +100,26 @@ export async function pruneRemovedWorktree(
 	appLogger.info("git", `Worktree removed — pruned sidebar row "${branchName}"`, { repoPath });
 }
 
+/** `repo__wt/feature` — the last two segments, enough to tell two worktrees of
+ *  different repos apart without spending a toast line on the whole path. */
+function worktreeLabel(worktreePath: string): string {
+	const parent = pathBasename(pathDirname(worktreePath));
+	const leaf = pathBasename(worktreePath);
+	return parent ? `${parent}/${leaf}` : leaf;
+}
+
 /**
  * Listens for backend worktree lifecycle events: offers to switch the active tab
  * + terminal to a newly created worktree, and prunes the row of a removed one.
+ *
+ * Only backend-initiated creations reach here — `worktree-created` is emitted by
+ * the MCP `repo worktree_create` tool and the HTTP worktree route, never by the
+ * in-app "+" button, which switches directly. The offer used to be a blocking
+ * modal with a ten-second auto-cancel, which is exactly backwards for the only
+ * case it fires in: an orchestrator creating a worktree every few minutes asked a
+ * question nobody was at the keyboard to answer, and stole the screen until each
+ * one timed out. It is a toast now, so the offer waits for the user instead of
+ * the user waiting for the offer.
  */
 export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 	let unlisten: (() => void) | null = null;
@@ -119,6 +127,11 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 
 	listen<WorktreeCreatedPayload>("worktree-created", (event) => {
 		const { repo_path, branch, worktree_path } = event.payload;
+		const switchToWorktree = () => {
+			switchToCreatedWorktree(deps, repo_path, branch, worktree_path).catch((err) =>
+				appLogger.warn("git", `Failed to switch to worktree "${branch}"`, err),
+			);
+		};
 		// Register the branch in the store immediately so the sidebar shows the new
 		// worktree right away — independent of whether the user accepts the switch
 		// prompt below. Mirrors the in-app create path (setupNewWorktree → setBranch).
@@ -127,18 +140,28 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		if (repositoriesStore.get(repo_path)) {
 			repositoriesStore.setBranch(repo_path, branch, { worktreePath: worktree_path });
 		}
+		const label = worktreeLabel(worktree_path);
 		activityStore.addItem({
 			id: `wt-${branch}-${Date.now()}`,
 			pluginId: "core",
 			sectionId: "worktrees",
 			title: `Worktree: ${branch}`,
-			subtitle: worktree_path.split("/").slice(-2).join("/"),
+			subtitle: label,
 			icon: '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0zm0 2.122a2.25 2.25 0 1 0-1.5 0v.878A2.25 2.25 0 0 0 5.75 8.5h1.5v2.128a2.251 2.251 0 1 0 1.5 0V8.5h1.5a2.25 2.25 0 0 0 2.25-2.25v-.878a2.25 2.25 0 1 0-1.5 0v.878a.75.75 0 0 1-.75.75h-5a.75.75 0 0 1-.75-.75v-.878zM8 12.25a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5zm3.25-9a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5z"/></svg>',
 			repoPath: repo_path,
 			dismissible: true,
+			// The bell outlives the toast, so the offer is still reachable after an
+			// unattended run finishes and the user comes back to the machine.
+			onClick: switchToWorktree,
 		});
-		promptForCreatedWorktree(deps, repo_path, branch, worktree_path).catch((err) =>
-			appLogger.warn("git", "Worktree switch prompt failed", err),
+		toastsStore.add(
+			`Worktree "${branch}" created`,
+			label,
+			"info",
+			false,
+			{ label: "Switch", onClick: switchToWorktree },
+			undefined,
+			repo_path,
 		);
 	})
 		.then((fn) => {

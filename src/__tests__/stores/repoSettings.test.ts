@@ -25,6 +25,15 @@ vi.mock("../../stores/repoDefaults", () => ({
 	repoDefaultsStore: { state: mockDefaults },
 }));
 
+/** The entry for `path` in the most recent `save_repo_settings` call. */
+function lastSavedEntry(path: string): Record<string, unknown> {
+	const calls = mockInvoke.mock.calls.filter(([name]) => name === "save_repo_settings");
+	const call = calls[calls.length - 1];
+	if (!call) throw new Error("save_repo_settings was never called");
+	const repos = (call[1] as { config: { repos: Record<string, Record<string, unknown>> } }).config.repos;
+	return repos[path];
+}
+
 describe("repoSettingsStore", () => {
 	let store: typeof import("../../stores/repoSettings").repoSettingsStore;
 
@@ -368,26 +377,81 @@ describe("repoSettingsStore", () => {
 		});
 	});
 
-	describe("hydrate()", () => {
+	// `RepoSettingsEntry` in config.rs is snake_case with `#[serde(default)]` on
+	// every field, so a camelCase key is not rejected — it is dropped, and the
+	// override reads as unset. These tests pin the wire shape on both directions;
+	// getting it wrong loses every per-repo override on restart, silently.
+	describe("wire format (snake_case)", () => {
 		it("loads settings from Rust backend", async () => {
 			mockInvoke.mockResolvedValueOnce({
 				repos: {
 					"/repo": {
 						path: "/repo",
-						displayName: "my-repo",
-						baseBranch: "main",
-						copyIgnoredFiles: null,
-						copyUntrackedFiles: null,
-						setupScript: null,
-						runScript: null,
+						display_name: "my-repo",
+						base_branch: "main",
+						prompt_on_create: false,
+						auto_fetch_interval_minutes: 15,
+						copy_ignored_files: null,
+						branch_labels: { my_feature: "My Feature" },
 					},
 				},
 			});
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
+				expect(store.get("/repo")?.displayName).toBe("my-repo");
 				expect(store.get("/repo")?.baseBranch).toBe("main");
+				expect(store.get("/repo")?.promptOnCreate).toBe(false);
+				expect(store.get("/repo")?.autoFetchIntervalMinutes).toBe(15);
+				expect(store.get("/repo")?.copyIgnoredFiles).toBeNull();
+				// The map is keyed by branch name — those keys are user data.
+				expect(store.get("/repo")?.branchLabels).toEqual({ my_feature: "My Feature" });
 				expect(mockInvoke).toHaveBeenCalledWith("load_repo_settings");
+			});
+		});
+
+		it("fills a key the backend omitted", async () => {
+			// `branch_labels` and `mcp_upstreams` are skipped when empty.
+			mockInvoke.mockResolvedValueOnce({ repos: { "/repo": { path: "/repo", color: "" } } });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.get("/repo")?.branchLabels).toEqual({});
+				expect(store.get("/repo")?.mcpUpstreams).toBeNull();
+			});
+		});
+
+		it("saves every override under the name the backend reads", () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				mockInvoke.mockClear();
+				store.update("/repo", { promptOnCreate: false, deleteBranchOnRemove: true, autoFetchIntervalMinutes: 5 });
+
+				const entry = lastSavedEntry("/repo");
+				expect(entry).toMatchObject({
+					path: "/repo",
+					display_name: "my-repo",
+					prompt_on_create: false,
+					delete_branch_on_remove: true,
+					auto_fetch_interval_minutes: 5,
+				});
+				// No camelCase key may survive: serde would drop it without a word.
+				expect(Object.keys(entry).filter((k) => /[A-Z]/.test(k))).toEqual([]);
+			});
+		});
+
+		it("round-trips an override through the wire shape", async () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				mockInvoke.mockClear();
+				store.update("/repo", { promptOnCreate: false });
+			});
+			const saved = lastSavedEntry("/repo");
+
+			mockInvoke.mockResolvedValueOnce({ repos: { "/repo": saved } });
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.get("/repo")?.promptOnCreate).toBe(false);
 			});
 		});
 
@@ -404,6 +468,11 @@ describe("repoSettingsStore", () => {
 			await testInScopeAsync(async () => {
 				await store.hydrate();
 				expect(localStorage.getItem("tui-commander-repo-settings")).toBeNull();
+				// The migration writes the wire shape too, or it hands the backend an
+				// entry it reads as empty and the old settings are gone for good.
+				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", {
+					config: { repos: { "/repo": { path: "/repo", display_name: "my-repo", base_branch: "main" } } },
+				});
 			});
 		});
 	});

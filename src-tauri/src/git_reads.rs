@@ -1506,7 +1506,28 @@ mod tests {
         let cli = CliGitReads;
         let gix = GixGitReads::new();
 
-        let json = |v: &Vec<CommitLogEntry>| serde_json::to_value(v).unwrap();
+        // Compare the instant, not its spelling. `%aI` renders a zero UTC offset
+        // as `+00:00` on git <= 2.34 (what Ubuntu 22.04 ships) and as `Z` on newer
+        // git, so the CLI *reference* side of this shootout changes shape with the
+        // git binary on the machine. Production is unaffected: commit_log is served
+        // by gix, whose adapter already normalizes a zero offset to `Z` (see
+        // `GixGitReads::commit_log`), so the app emits `Z` on every git version.
+        // Only this comparison is git-version-dependent — so normalize both sides.
+        // A non-zero offset, or a genuinely different instant, still fails.
+        let json = |v: &Vec<CommitLogEntry>| {
+            let mut val = serde_json::to_value(v).unwrap();
+            let items = val
+                .as_array_mut()
+                .expect("commit log serializes as an array");
+            for item in items {
+                if let Some(serde_json::Value::String(d)) = item.get_mut("author_date")
+                    && let Some(stripped) = d.strip_suffix("+00:00")
+                {
+                    *d = format!("{stripped}Z");
+                }
+            }
+            val
+        };
         let a = cli.commit_log(&repo, None, None).unwrap();
         let b = gix.commit_log(&repo, None, None).unwrap();
         assert_eq!(json(&a), json(&b), "commit_log gix != cli");

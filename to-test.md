@@ -32,6 +32,63 @@ no items left goes too. What stays open must carry its own stated reason.
 > WebView gets the same change over Vite HMR. If a browser check of a frontend fix
 > shows nothing, check `dist/index.html`'s mtime before blaming the code.
 
+## A backend-created worktree offers itself as a toast, not a modal (2026-08-30, frontend only — HMR)
+
+The "Switch to new worktree?" confirm was a blocking modal with a ten-second
+auto-cancel, raised only by MCP/HTTP worktree creation — the one case with nobody
+at the keyboard. It is a toast with a **Switch** button now, mirrored into the
+bell so an unattended run leaves the offers waiting instead of discarding them.
+Behaviour is covered by `worktreeSwitchPrompt.test.ts`; what tests cannot see is
+how it renders and whether it interrupts anything.
+
+- [ ] Have an MCP client call `repo worktree_create`. A toast appears with the
+  repo badge, `Worktree "<branch>" created`, the `repo__wt/branch` subtitle and a
+  **Switch** button. Nothing blocks, no dialog, no countdown, and typing in the
+  focused terminal is uninterrupted.
+- [ ] Ignore the toast until it fades, then open the bell: the
+  `Worktree: <branch>` row under WORKTREES is clickable and switches to it.
+- [ ] Create a worktree while a plain shell is the active tab, then click
+  **Switch**: the tab moves to the new branch and `cd`s into the worktree.
+- [ ] Repeat with a *running agent* as the active tab: the worktree opens in its
+  own terminal and the agent's tab stays on its branch and CWD.
+
+## Per-repo settings survive a restart (2026-08-30, frontend only — HMR, but needs an app restart to prove)
+
+Every per-repo override was being dropped on save: the store sent camelCase keys
+to a snake_case Rust struct that has `#[serde(default)]` on every field, so serde
+discarded them without a word. Only `path` and `color` — the two names that spell
+the same in both conventions — ever reached disk. Overrides looked correct until
+the next launch.
+
+- [ ] Settings → a repository → set a per-repo override (base branch, or the
+  worktree "Prompt for branch name during creation" toggle). Confirm the new
+  value in `repo-settings.json` under the app config dir is written with the
+  snake_case key and the value you chose.
+- [ ] Restart the app. The override is still set in the UI and still applies.
+- [ ] A repo you never customised still shows "(Global Default)" — the fix must
+  not turn absent overrides into explicit values.
+
+## An agent quoting a menu footer stops flagging itself as awaiting (2026-08-30, **Rust change — needs `make dev` restart**)
+
+Observed live on Boss's own `tuicommander/main` tab, twice in one turn: the agent
+read another session's screen, pasted it into its answer, and the menu footer
+came back out inside its own indented output. `parse_question` matched it,
+emitted `Question { confident: true }`, and no clear path retracts a confident
+question — the tab read "awaiting" while the agent worked, until Boss typed. The
+anchor is now matched at column 0 of the rendered row instead of the trimmed
+text. Covered by `pty::tests::quoted_ink_footer_in_agent_output_raises_no_question`
+(fixture `claude-quoted-ink-footer.tcap`, verified RED without the fix), but a
+live agent-frame check cannot be replayed.
+
+- [ ] After restarting `make dev`, ask an agent in a throwaway session to print a
+  captured menu screen — footer row included — inside a fenced code block. Its tab
+  must stay "working": no `?` in the sidebar, `awaiting_input` false in
+  `GET /sessions`.
+- [ ] In the same session, open a real interactive menu (any agent prompt that
+  draws the selection footer) and confirm the `?` still appears. The regression to
+  fear is the opposite one: an over-tight anchor that silences real menus for
+  agents whose frame indents them.
+
 ## Atomic MCP managed-agent submission (2026-08-27, **Rust change — needs `make dev` restart**)
 
 The running backend cannot expose the new `session action=submit` schema or
