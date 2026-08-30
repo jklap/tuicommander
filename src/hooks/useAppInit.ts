@@ -20,7 +20,7 @@ import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
-import { isAbsolutePath, pathBasename, pathStripPrefix } from "../utils/pathUtils";
+import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -407,10 +407,13 @@ export async function initApp(deps: AppInitDeps) {
 	replaceMcpToastListener((event) => {
 		const { title, message, level, sound, origin_repo_path, origin_session_id } = event.payload;
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
+		// The repo is not glued into the message any more — the toast renders it as
+		// its own badge, so an unregistered origin still names its repo and a
+		// registered one does not say it twice.
+		// Still only a REGISTERED repo: this field scopes the toast (and the bell
+		// item mirrored from it), so an unregistered cwd must not become a repo key.
 		const repoPath = resolveRepoForCwd(origin_repo_path) ?? undefined;
-		const repoName = origin_repo_path ? pathBasename(repoPath ?? origin_repo_path) : null;
-		const contextualMessage = [repoName, message].filter(Boolean).join(" · ");
-		const visibleMessage = origin_repo_path ? contextualMessage : (message ?? "");
+		const visibleMessage = message ?? "";
 		const duplicate = toastsStore.hasVisible(title, visibleMessage, safeLevel, repoPath);
 		// repoPath is already undefined without an origin, and the session id is
 		// independent of it — an agent can be bound to a PTY whose cwd resolves to
