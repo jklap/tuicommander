@@ -104,6 +104,20 @@ Question events have two sources:
 3. When the timer fires, a visible input box restricts detection to the latest chat content above that prompt; only an unanchored screen may use the bounded changed-row fallback
 4. If verified, emits `ParsedEvent::Question { confident: false }`
 
+- **The Ink dialog footer** (`Enter to select · …`) is the one surviving instant
+  pattern, and it emits `confident: true`. It is matched at **column 0 of the
+  rendered row**, not of the trimmed text, by `is_ink_dialog_footer_row()`. A
+  dialog is drawn full-bleed by the TUI, while everything an agent *streams* —
+  prose, code blocks, a screen it read and quoted back — is indented inside the
+  agent's own frame. That indentation is the only difference between the footer
+  and a copy of it: the text is otherwise identical byte for byte. Anchoring on
+  the trimmed row let an agent that pasted another session's screen latch
+  `question_confident` on its own tab, which nothing retracts, so the tab claimed
+  the agent was blocked on the user for the rest of the turn while it worked
+  (observed 2026-08-30). `ink_dialog_footer()`, which reads the same row off the
+  full screen as a *level* for `rearm_awaiting_for_open_dialog`, shares the same
+  predicate on purpose — the two must never disagree about what a footer is.
+
 Guards against false positives:
 - **Spinner suppression**: If a status-line event was seen within the last 10s, detection is suppressed
 - **Staleness counter**: If >10 non-`?` output chunks arrived after the candidate, it's considered stale

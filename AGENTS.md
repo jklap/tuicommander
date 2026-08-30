@@ -227,6 +227,13 @@ parsers were never the gap; the pipeline around them was.
 | OSC 777 `notify` | agent's own desktop notification | any agent that emits it, any blocking prompt — but the body decides the confidence: `needs your permission` / `approval required` latch, `is waiting for your input` is low-confidence because Claude also sends it on its 60s idle timer |
 | `Enter to select` footer regex | screen scrape | non-hook agents (dropped for hook-instrumented ones by `suppress_heuristic_question`) |
 
+The footer regex anchors at **column 0 of the rendered row**, never the trimmed
+text (`is_ink_dialog_footer_row`). A dialog is drawn full-bleed; everything an
+agent streams is indented inside its own frame, so the indentation is the whole
+difference between the footer and an agent quoting it. Trim first and an agent
+that pastes a screen it just read marks *itself* awaiting, confidently, with
+nothing to retract it.
+
 A hook-instrumented agent showing a picker that is *not* AskUserQuestion (plan
 pickers, skill menus, anything with `Type something` / `Chat about this`) reports
 through OSC 777 and nothing else. Prefer protocol signals over screen scraping,

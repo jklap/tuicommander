@@ -21201,6 +21201,31 @@ mod tests {
         (events, stats)
     }
 
+    /// An agent quoting an Ink dialog footer inside its own output, captured off a
+    /// live PTY on 2026-08-30. The line is byte-identical to the one a real
+    /// `AskUserQuestion` draws; only the indentation of the agent's frame differs.
+    ///
+    /// This ran through the pipeline and set `question_confident`, which no clear
+    /// path retracts — the tab reported the agent as blocked on the user while it
+    /// was working, for the rest of the turn. `hook_instrumented` is false on
+    /// purpose: that is the state of a Claude session that has not yet raised an
+    /// `AskUserQuestion`, so `suppress_heuristic_question` was not covering it.
+    #[test]
+    fn quoted_ink_footer_in_agent_output_raises_no_question() {
+        let events = replay_capture(
+            &agent_prompt_fixture("claude-quoted-ink-footer.tcap"),
+            false,
+        );
+        let questions: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, ParsedEvent::Question { .. }))
+            .collect();
+        assert!(
+            questions.is_empty(),
+            "an echoed footer is not a dialog, got: {questions:?}"
+        );
+    }
+
     /// grok in `screen_mode = "minimal"` — the mode it is actually run in —
     /// replayed byte-for-byte off a live 1.0.5 session (40x120, one full turn:
     /// prompt → thinking → answer → ready).
