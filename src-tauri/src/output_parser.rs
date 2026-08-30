@@ -1214,6 +1214,30 @@ fn parse_agent_session_conflict(clean: &str) -> Option<ParsedEvent> {
         .or_else(|| try_match(&SESSION_NOT_FOUND_RE, "not-found"))
 }
 
+/// Whether a rendered row is the Ink dialog footer itself, rather than a copy of
+/// it somewhere in an agent's own output.
+///
+/// The anchor is matched against the row **unindented**. A dialog is drawn
+/// full-bleed by the TUI and its footer starts at column 0; everything an agent
+/// streams — prose, code blocks, quoted screens — is indented inside the agent's
+/// own frame. That indentation is the only thing telling the two apart, because
+/// the text is otherwise identical byte for byte.
+///
+/// Observed 2026-08-30: an agent pasted a screen it had just read, footer
+/// included, into a fenced code block. The two leading spaces were the entire
+/// difference; without this check the row matched, the tab latched
+/// `question_confident`, and no clear path retracts a confident question — the
+/// agent had marked *itself* as blocked on the user while it was working.
+fn is_ink_dialog_footer_row(row: &str) -> bool {
+    lazy_static::lazy_static! {
+        // Anchored at column 0 of the rendered row, NOT of its trimmed text. See
+        // the doc comment: the indentation is the signal.
+        static ref INK_FOOTER_RE: regex::Regex =
+            regex::Regex::new(r"^Enter to select").unwrap();
+    }
+    INK_FOOTER_RE.is_match(row) && !line_is_diff_or_code_context(row)
+}
+
 /// The Ink dialog footer, if one is visible anywhere on the screen.
 ///
 /// This is the same anchor `parse_question` matches, read as a **level** instead
@@ -1225,14 +1249,9 @@ fn parse_agent_session_conflict(clean: &str) -> Option<ParsedEvent> {
 /// from the first sub-question to the last, so it is useless as a *change* signal
 /// and perfect as a *presence* signal.
 pub(crate) fn ink_dialog_footer(screen_rows: &[String]) -> Option<&str> {
-    lazy_static::lazy_static! {
-        static ref INK_FOOTER_RE: regex::Regex =
-            regex::Regex::new(r"^Enter to select").unwrap();
-    }
-    screen_rows.iter().find_map(|row| {
-        let trimmed = row.trim();
-        (INK_FOOTER_RE.is_match(trimmed) && !line_is_diff_or_code_context(row)).then_some(trimmed)
-    })
+    screen_rows
+        .iter()
+        .find_map(|row| is_ink_dialog_footer_row(row).then(|| row.trim()))
 }
 
 /// Question detection: most detection is handled by the silence-based detector
@@ -1244,16 +1263,6 @@ pub(crate) fn ink_dialog_footer(screen_rows: &[String]) -> Option<&str> {
 /// killed all the other regex patterns.
 fn parse_question(clean: &str) -> Option<ParsedEvent> {
     lazy_static::lazy_static! {
-        // ANCHORED at the start of the trimmed line. An Ink footer is always its
-        // own line and always opens with these words; anything that merely
-        // *contains* them is quoting them. Unanchored, this matched a grep hit
-        // (`src/output_parser.rs:1150:  regex::Regex::new(r"Enter to select")`)
-        // and parked a busy agent's tab on the awaiting badge — the agent was
-        // working, the badge said it was blocked. `line_is_diff_or_code_context`
-        // could not catch it: that guard keys off diff markers and padded line
-        // numbers, and a `path.rs:1150:` grep prefix is neither.
-        static ref INK_FOOTER_RE: regex::Regex =
-            regex::Regex::new(r"^Enter to select").unwrap();
         // cliclack interactive prompt: "◆  Do you allow this tool call?"
         // ◆ (U+25C6) is Goose's cliclack active-prompt marker. It is NOT unique to
         // interactive prompts, though: grok reuses ◆ as a decorative timeline bullet
@@ -1268,7 +1277,10 @@ fn parse_question(clean: &str) -> Option<ParsedEvent> {
     }
     for line in clean.lines() {
         let trimmed = line.trim();
-        if INK_FOOTER_RE.is_match(trimmed) && !line_is_diff_or_code_context(line) {
+        // Column-0 anchored — see `is_ink_dialog_footer_row`. An agent quoting a
+        // dialog it read reproduces the footer's text exactly; only the frame's
+        // indentation separates the copy from the original.
+        if is_ink_dialog_footer_row(line) {
             return Some(ParsedEvent::Question {
                 prompt_text: trimmed.to_string(),
                 confident: true,
@@ -5667,6 +5679,37 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                 "quoted footer must not park the badge: {input:?}"
             );
         }
+    }
+
+    /// Regression, observed 2026-08-30 on this repo's own tab: the agent read the
+    /// screen of another session, pasted it into a fenced code block to explain it,
+    /// and the footer came back out inside its own output. Claude Code indents
+    /// streamed text by two columns; the dialog that produced the line drew it at
+    /// column 0. The tab latched `question_confident`, which nothing retracts, so
+    /// it read "awaiting" for the rest of the turn while the agent worked.
+    ///
+    /// The exact row, copied from the live grid.
+    #[test]
+    fn ink_footer_indented_inside_agent_output_is_not_a_prompt() {
+        let quoted =
+            "  Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel";
+        assert!(
+            parse_question(quoted).is_none(),
+            "an agent quoting the footer must not park its own badge"
+        );
+        assert!(
+            ink_dialog_footer(&[quoted.to_string()]).is_none(),
+            "the re-arm reads the same row off the full screen — it must agree"
+        );
+
+        // Same text, drawn by the dialog itself: full-bleed at column 0.
+        let real =
+            "Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel";
+        assert!(
+            parse_question(real).is_some(),
+            "the real footer must still be detected"
+        );
+        assert!(ink_dialog_footer(&[real.to_string()]).is_some());
     }
 
     #[test]
