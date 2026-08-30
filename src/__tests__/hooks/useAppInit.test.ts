@@ -1464,7 +1464,7 @@ describe("initApp", () => {
 			play.mockRestore();
 		});
 
-		it("shows and scopes the repository resolved from the caller cwd", async () => {
+		it("scopes the toast to the repository resolved from the caller cwd", async () => {
 			repositoriesStore.add({ path: "/Gits/personal/tuicommander", displayName: "TUICommander" });
 			const { getCallback } = captureMcpToast();
 			const deps = createMockDeps();
@@ -1483,10 +1483,12 @@ describe("initApp", () => {
 			});
 
 			// The session id rides along with the repo path: the repo scopes the
-			// toast, the session is what a click on it navigates to.
+			// toast, the session is what a click on it navigates to. The repo name
+			// is NOT glued onto the message — ToastContainer renders it as its own
+			// badge, so prefixing here would print it twice.
 			expect(addToast).toHaveBeenCalledWith(
 				"Release published",
-				"tuicommander · v1.7.4",
+				"v1.7.4",
 				"info",
 				false,
 				undefined,
