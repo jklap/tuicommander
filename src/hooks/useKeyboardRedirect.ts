@@ -1,4 +1,5 @@
 import { createEffect, onCleanup } from "solid-js";
+import { anyModalOpen } from "../stores/modalStack";
 import { terminalsStore } from "../stores/terminals";
 
 /** Keys that should NOT be redirected */
@@ -72,6 +73,14 @@ function shouldRedirect(e: KeyboardEvent): boolean {
 export function useKeyboardRedirect(autoFocus: boolean = true) {
 	createEffect(() => {
 		const handleKeydown = (e: KeyboardEvent) => {
+			// A modal dialog is open — every dialog interaction (clicking a button,
+			// tabbing to a non-input control like the New Worktree "Start from"
+			// trigger) must never leak keystrokes into the terminal underneath.
+			// Checked first, before any focus-based guard below.
+			if (anyModalOpen()) {
+				return;
+			}
+
 			// Get active element
 			const activeElement = document.activeElement;
 

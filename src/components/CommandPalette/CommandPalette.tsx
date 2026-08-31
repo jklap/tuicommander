@@ -1,7 +1,7 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import type { ActionEntry } from "../../actions/actionRegistry";
+import { type ActionEntry, SMART_PROMPTS_CATEGORY } from "../../actions/actionRegistry";
 import { appLogger } from "../../stores/appLogger";
-import { commandPaletteStore } from "../../stores/commandPalette";
+import { commandPaletteStore, type PaletteScope } from "../../stores/commandPalette";
 import { registerModal } from "../../stores/modalStack";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
@@ -105,6 +105,16 @@ export function isBrowserCommandPaletteAction(action: ActionEntry): boolean {
 	return BROWSER_ACTION_IDS.has(action.id) || BROWSER_ACTION_PREFIXES.some((prefix) => action.id.startsWith(prefix));
 }
 
+/** Scope chips, in the order Tab cycles through them. */
+const SCOPE_TABS: Array<{ value: PaletteScope; label: string }> = [
+	{ value: "all", label: "All" },
+	{ value: "actions", label: "Actions" },
+	{ value: "prompts", label: "Prompts" },
+	{ value: "files", label: "Files" },
+	{ value: "content", label: "Content" },
+	{ value: "terminals", label: "Terminals" },
+];
+
 /**
  * `ActionEntry.label` is typed `string`, but the list is assembled from data this
  * process does not fully control — a repo record read from disk, or a plugin
@@ -136,10 +146,22 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 
 	const isOpen = () => commandPaletteStore.state.isOpen;
 	const mode = () => commandPaletteStore.mode();
+	const scope = () => commandPaletteStore.scope();
 	const searchQuery = () => commandPaletteStore.searchQuery();
+	/** Action-category filter, applied on top of the browser-mode allowlist —
+	 *  "Prompts" shows only Smart Prompts entries, "Actions" hides them, "All"
+	 *  is unfiltered. Meaningless (and skipped) outside command mode, where a
+	 *  search scope's own result list is what's shown instead. */
 	const availableActions = createMemo(() => {
 		const base = props.browserMode ? props.actions.filter(isBrowserCommandPaletteAction) : props.actions;
-		return base.map((action) => {
+		const filter = commandPaletteStore.state.actionFilter;
+		const scoped =
+			filter === "prompts"
+				? base.filter((a) => a.category === SMART_PROMPTS_CATEGORY)
+				: filter === "actions"
+					? base.filter((a) => a.category !== SMART_PROMPTS_CATEGORY)
+					: base;
+		return scoped.map((action) => {
 			const label = sanitizedActionLabel(action);
 			return label === action.label ? action : { ...action, label };
 		});
@@ -201,9 +223,10 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 		}
 	};
 
-	// Reset selection when query or result lists change
+	// Reset selection when query, scope, or result lists change
 	createEffect(() => {
 		void commandPaletteStore.state.query;
+		void commandPaletteStore.state.actionFilter;
 		void commandPaletteStore.state.contentResults.length;
 		void commandPaletteStore.state.terminalResults.length;
 		setSelectedIndex(0);
@@ -287,6 +310,16 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 					e.preventDefault();
 					e.stopPropagation();
 					setSelectedIndex((i) => Math.max(i - 1, 0));
+					break;
+				case "Tab":
+					// Content mode has one other real control — the "Search all repos"
+					// checkbox — so leave native Tab traversal alone there. Everywhere
+					// else, cycle the scope chips instead: there's nothing else in the
+					// dialog worth Tabbing to.
+					if (mode() === "content") break;
+					e.preventDefault();
+					e.stopPropagation();
+					commandPaletteStore.cycleScope(e.shiftKey ? -1 : 1);
 					break;
 				case "Enter":
 					e.preventDefault();
@@ -374,6 +407,25 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 							value={commandPaletteStore.state.query}
 							onInput={(e) => commandPaletteStore.setQuery(e.currentTarget.value)}
 						/>
+					</div>
+
+					<div class={s.scopeBar} role="tablist" aria-label="Filter by type">
+						<For each={SCOPE_TABS}>
+							{(tab) => (
+								<button
+									type="button"
+									role="tab"
+									aria-selected={scope() === tab.value}
+									class={`${s.scopeChip} ${scope() === tab.value ? s.scopeChipActive : ""}`}
+									onClick={() => {
+										commandPaletteStore.setScope(tab.value);
+										inputRef?.focus();
+									}}
+								>
+									{tab.label}
+								</button>
+							)}
+						</For>
 					</div>
 
 					<div class={s.list} ref={listRef}>
@@ -567,32 +619,8 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 						<span class={s.footerHint}>
 							<kbd>esc</kbd> close
 						</span>
-						<span
-							class={`${s.footerHint} ${s.footerHintClickable}`}
-							onClick={() => {
-								commandPaletteStore.setQuery("! ");
-								inputRef?.focus();
-							}}
-						>
-							<kbd>!</kbd> files
-						</span>
-						<span
-							class={`${s.footerHint} ${s.footerHintClickable}`}
-							onClick={() => {
-								commandPaletteStore.setQuery("? ");
-								inputRef?.focus();
-							}}
-						>
-							<kbd>?</kbd> content
-						</span>
-						<span
-							class={`${s.footerHint} ${s.footerHintClickable}`}
-							onClick={() => {
-								commandPaletteStore.setQuery("~ ");
-								inputRef?.focus();
-							}}
-						>
-							<kbd>~</kbd> terminals
+						<span class={s.footerHint}>
+							<kbd>⇥</kbd> scope
 						</span>
 					</div>
 				</div>

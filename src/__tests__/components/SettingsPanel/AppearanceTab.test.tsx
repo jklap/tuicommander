@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
-import { fireEvent, render } from "@solidjs/testing-library";
+import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 
 const {
 	mockSetTheme,
@@ -201,5 +201,20 @@ describe("AppearanceTab", () => {
 		const { getByText } = render(() => <AppearanceTab />);
 		fireEvent.click(getByText("Reset Panel Sizes"));
 		expect(mockResetLayout).toHaveBeenCalledOnce();
+	});
+
+	it("focuses the rename input on double-click (autofocus is inert on this long-lived, Show-gated item)", async () => {
+		const { getByText, container } = render(() => <AppearanceTab />);
+		const findRenameInput = () => Array.from(container.querySelectorAll("input")).find((el) => el.value === "Backend");
+		expect(findRenameInput()).toBeUndefined();
+
+		fireEvent.dblClick(getByText("Backend"));
+
+		const renameInput = await waitFor(() => {
+			const input = findRenameInput();
+			expect(input).not.toBeUndefined();
+			return input!;
+		});
+		await waitFor(() => expect(document.activeElement).toBe(renameInput));
 	});
 });
