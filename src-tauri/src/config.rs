@@ -2418,6 +2418,56 @@ fn validate_keyed_value(
     Ok(())
 }
 
+/// Branch fields a window caches rather than intends: every client recomputes
+/// them from the repository itself, on its own refresh cadence.
+///
+/// They must not take part in the compare-and-swap. A repo under active work
+/// changes its diffstat every few seconds, so two windows legitimately hold two
+/// different values at the same instant, and asserting equality on them turns
+/// every save into a conflict. Measured 2026-08-31: `ego` went 331 -> 357
+/// additions in 70 seconds while 29 consecutive saves were rejected, wedging
+/// unrelated intent — registering a repository — behind a number nobody edited.
+const DERIVED_BRANCH_FIELDS: [&str; 5] = [
+    "additions",
+    "deletions",
+    "isMerged",
+    "lastActiveTerminal",
+    "lastCommitTs",
+];
+
+/// A repository record with `DERIVED_BRANCH_FIELDS` removed, for the conflict
+/// comparison only. Records without branches come back unchanged, so this is
+/// safe to apply to any repo record shape.
+fn repository_intent_view(value: &Option<serde_json::Value>) -> Option<serde_json::Value> {
+    let mut record = value.clone()?;
+    if let Some(branches) = record.get_mut("branches").and_then(|b| b.as_object_mut()) {
+        for branch in branches.values_mut() {
+            if let Some(fields) = branch.as_object_mut() {
+                for name in DERIVED_BRANCH_FIELDS {
+                    fields.remove(name);
+                }
+            }
+        }
+    }
+    Some(record)
+}
+
+/// Does `current` still hold what this client expected to overwrite?
+///
+/// Deliberately weaker than equality for repos: a derived field that drifted
+/// under us is not a competing edit. Renames, ordering, grouping and every other
+/// field a human sets stay fully guarded.
+fn matches_expected_record(
+    collection: &str,
+    current: Option<&serde_json::Value>,
+    expected: &Option<serde_json::Value>,
+) -> bool {
+    if collection != "repos" {
+        return json_option_eq(current, expected);
+    }
+    repository_intent_view(&current.cloned()) == repository_intent_view(expected)
+}
+
 fn apply_keyed_repository_mutations(
     document: &mut serde_json::Map<String, serde_json::Value>,
     collection: &str,
@@ -2451,10 +2501,13 @@ fn apply_keyed_repository_mutations(
         validate_keyed_value(collection, &mutation.id, &mutation.after)?;
 
         let current = records.get(&mutation.id);
+        // Exact on purpose: a change confined to derived fields is still a change
+        // worth writing, so the cache keeps moving. It just may no longer manufacture
+        // a conflict below.
         if json_option_eq(current, &mutation.after) {
             continue;
         }
-        if !json_option_eq(current, &mutation.before) {
+        if !matches_expected_record(collection, current, &mutation.before) {
             let kind = if collection == "repos" {
                 "repository"
             } else {
@@ -5203,6 +5256,112 @@ mod tests {
         }))
         .expect_err("incompatible reorder must conflict");
         assert!(order_error.contains("repoOrder"), "{order_error}");
+    }
+
+    /// Seed one repository whose single branch carries a diffstat, and hand back
+    /// a builder for "the same record with these fields overridden" — the shape
+    /// every derived-field test needs on both sides of a mutation.
+    fn seed_repo_with_diffstat(additions: i64, display_name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "path": "/ego",
+            "displayName": display_name,
+            "activeBranch": "master",
+            "branches": {
+                "master": {
+                    "name": "master",
+                    "additions": additions,
+                    "deletions": 2787,
+                    "isMerged": false,
+                    "lastActiveTerminal": "term-261",
+                    "lastCommitTs": 1788155882000i64,
+                    "terminals": []
+                }
+            }
+        })
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_derived_field_that_drifted_under_us_does_not_block_an_intent_change() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        // Disk already moved on: another window recomputed the diffstat.
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/ego": seed_repo_with_diffstat(357, "ego")},
+            "repoOrder": ["/ego"], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        // This window still believes 331, and wants to rename the repo.
+        save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{
+                "id": "/ego",
+                "before": seed_repo_with_diffstat(331, "ego"),
+                "after": seed_repo_with_diffstat(331, "Ego renamed")
+            }],
+            "groups": []
+        }))
+        .expect("a stale diffstat must not reject a rename");
+
+        let saved = load_repositories();
+        assert_eq!(saved["repos"]["/ego"]["displayName"], "Ego renamed");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_competing_edit_to_an_intent_field_still_conflicts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        // Another window renamed it — a real competing edit, not a recomputed number.
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/ego": seed_repo_with_diffstat(331, "Renamed elsewhere")},
+            "repoOrder": ["/ego"], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        let error = save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{
+                "id": "/ego",
+                "before": seed_repo_with_diffstat(331, "ego"),
+                "after": seed_repo_with_diffstat(331, "Renamed here")
+            }],
+            "groups": []
+        }))
+        .expect_err("a competing rename must still conflict");
+        assert!(error.contains("repository '/ego'"), "{error}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_change_confined_to_derived_fields_still_persists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/ego": seed_repo_with_diffstat(331, "ego")},
+            "repoOrder": ["/ego"], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        // Ignoring derived fields in the conflict check must not make them
+        // unwritable: the sidebar cache still has to move.
+        save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{
+                "id": "/ego",
+                "before": seed_repo_with_diffstat(331, "ego"),
+                "after": seed_repo_with_diffstat(357, "ego")
+            }],
+            "groups": []
+        }))
+        .expect("a derived-only update must persist");
+
+        let saved = load_repositories();
+        assert_eq!(
+            saved["repos"]["/ego"]["branches"]["master"]["additions"],
+            357
+        );
     }
 
     /// Two-process harness entry point for

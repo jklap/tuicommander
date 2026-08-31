@@ -425,6 +425,19 @@ conflict. Active-repository changes use the same `before`/`after` check.
 
 A stale mutation of the same repository, group, active selection, or order is
 rejected with a deterministic conflict instead of overwriting the newer value.
+
+**Derived branch fields are exempt from that check.** `additions`, `deletions`,
+`isMerged`, `lastActiveTerminal` and `lastCommitTs` (`DERIVED_BRANCH_FIELDS` in
+`config.rs`) are a cache each client recomputes from the repository itself, on
+its own refresh cadence — two windows legitimately hold two different values at
+the same instant, so comparing them turns every save into a conflict. Measured
+2026-08-31: `ego` moved 331 → 357 additions in 70 seconds while 29 consecutive
+saves were rejected, and unrelated intent — registering a repository — was
+wedged behind a number nobody edited. The conflict check compares records with
+those fields stripped; the "already applied" check stays exact, so a
+derived-only update still persists and the cache keeps moving. Everything a
+human sets (name, order, grouping, active branch) is still fully guarded, and
+concurrent edits to the derived fields themselves resolve last-writer-wins.
 IPC reports that error to the frontend, where it creates a user-visible Errors
 badge; HTTP returns `409 Conflict`. Malformed deltas return HTTP `400`. A
 versioned delta is required; unversioned whole-document bodies are rejected.
