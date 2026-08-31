@@ -748,16 +748,6 @@ mod tests {
         path
     }
 
-    #[cfg(unix)]
-    fn symlink_dir(target: &std::path::Path, link: &std::path::Path) {
-        std::os::unix::fs::symlink(target, link).unwrap();
-    }
-
-    #[cfg(windows)]
-    fn symlink_dir(target: &std::path::Path, link: &std::path::Path) {
-        std::os::windows::fs::symlink_dir(target, link).unwrap();
-    }
-
     // ── is_uuid ──
 
     #[test]

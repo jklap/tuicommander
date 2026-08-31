@@ -2473,8 +2473,10 @@ mod tests {
         // is exactly CHUNK_SIZE bytes = one u64 BE index.
         let extract_indices = |bytes: &[u8]| -> Vec<u64> {
             bytes
-                .chunks_exact(CHUNK_SIZE)
-                .map(|c| u64::from_be_bytes(c.try_into().unwrap()))
+                .as_chunks::<CHUNK_SIZE>()
+                .0
+                .iter()
+                .map(|c| u64::from_be_bytes(*c))
                 .collect()
         };
 
