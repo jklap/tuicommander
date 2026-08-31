@@ -204,13 +204,14 @@ suppressed for that session.
 
 - **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary, always on. A distinct green tick marks each line where the user submitted a prompt, independent of the block boundary marks. Both are individually toggleable in settings
 - **Red ticks (turn failure)** — A block is flagged failed, primary tier: the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type; the `tuic-hook` binary extracts the exit code from the hook's own stdin JSON natively, with no external dependency) — this tier flags the block on any tool failure during the turn, even one a later retry in the same turn resolves, since Claude Code's hooks expose no per-call retry-succeeded signal to clear it against; fallback tier for sessions without hook instrumentation enabled: text-pattern matching on `⎿ Error: Exit code N` (Bash tool call failures only) or a detected API error, which *is* recovery-aware — a failure the agent retries and resolves before the turn ends does not flag the block there
-- **Timestamp overlay** — Hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
-- **Gutter click** — Click the gutter area to select the entire block output for easy copying
-- **Block folding** — Collapse/expand block output with `Cmd+Shift+.` toggle. Folded blocks show a summary line. Fold state is in-memory per session (not persisted across restarts)
-- **Block-scoped search** — Toggle with `Cmd+Shift+B` to restrict terminal search to the current block only
+- **Timestamp overlay** — Configurable display mode: off, always visible, or hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
+- **Gutter marks** — Red/green bar next to a shell command's prompt line marking its exit status
+- **Gutter click** — Click anywhere in a block's gutter except its fold chevron to select the entire block output for easy copying; the gutter is a wide, pointer-cursored click target
+- **Block folding** — Collapse/expand block output with `Cmd+Shift+.`, or by clicking the fold chevron on a block's header row in the gutter. Folded output is fully hidden behind a summary line, not dimmed. Fold state is in-memory per session (not persisted across restarts)
+- **Block-scoped search** — Toggle with `Cmd+Shift+B` to restrict terminal search to the current block only, shown with an accent bar along the block's left edge
 - **Block navigation** — `Cmd+Shift+Up/Down` jumps between block boundaries
 - **Block cap** — Sessions are capped at 500 command blocks; oldest blocks are evicted when the cap is reached
-- **Settings** — Configure block features at Settings > Terminal > Blocks: show/hide timestamps, show/hide block marks, show/hide prompt marks, enable/disable folding
+- **Settings** — Configure block features at Settings > Terminal > Blocks: timestamp display mode (off/hold Ctrl+Cmd/always), show/hide block marks, show/hide prompt marks, enable/disable folding
 
 ### 1.20 Compose Panel (`Cmd+I`)
 
@@ -1243,7 +1244,8 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Shell: custom shell override (platform default if blank)
 - Rendering: terminal font, default font size, font weight, cursor style — with a live preview
 - Behavior: copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, agent context bar, link activation mode (click/modifier/never)
-- Blocks: block timestamps, block boundary marks, prompt marks, block folding
+- Blocks: block timestamp mode (off/hold Ctrl+Cmd/always), block boundary marks, prompt marks, block folding
+- Shell Integration: copyable bash/fish startup-file snippets for OSC 133 command-block markers (zsh is automatic, no setup)
 - Session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback
 
 ### 11.3 Appearance

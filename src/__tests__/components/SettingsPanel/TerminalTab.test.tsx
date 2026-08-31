@@ -4,7 +4,7 @@ import { fireEvent, render } from "@solidjs/testing-library";
 import { resetPlatformCache } from "../../../platform";
 
 const {
-	mockSetShowBlockTimestamps,
+	mockSetBlockTimestampMode,
 	mockSetShowBlockMarks,
 	mockSetShowPromptMarks,
 	mockSetBlockFoldingEnabled,
@@ -20,8 +20,9 @@ const {
 	mockSetRestoreScrollback,
 	mockSetRestoreScrollbackLines,
 	mockSetShell,
+	mockWriteClipboard,
 } = vi.hoisted(() => ({
-	mockSetShowBlockTimestamps: vi.fn(),
+	mockSetBlockTimestampMode: vi.fn(),
 	mockSetShowBlockMarks: vi.fn(),
 	mockSetShowPromptMarks: vi.fn(),
 	mockSetBlockFoldingEnabled: vi.fn(),
@@ -37,7 +38,10 @@ const {
 	mockSetRestoreScrollback: vi.fn(),
 	mockSetRestoreScrollbackLines: vi.fn(),
 	mockSetShell: vi.fn(),
+	mockWriteClipboard: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("../../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
@@ -51,7 +55,7 @@ vi.mock("../../../stores/settings", () => ({
 			osc52Clipboard: true,
 			showLastPrompt: false,
 			linkActivation: "click",
-			showBlockTimestamps: true,
+			blockTimestampMode: "modifier",
 			showBlockMarks: true,
 			showPromptMarks: false,
 			blockFoldingEnabled: true,
@@ -69,7 +73,7 @@ vi.mock("../../../stores/settings", () => ({
 		setOsc52Clipboard: mockSetOsc52Clipboard,
 		setShowLastPrompt: mockSetShowLastPrompt,
 		setLinkActivation: mockSetLinkActivation,
-		setShowBlockTimestamps: mockSetShowBlockTimestamps,
+		setBlockTimestampMode: mockSetBlockTimestampMode,
 		setShowBlockMarks: mockSetShowBlockMarks,
 		setShowPromptMarks: mockSetShowPromptMarks,
 		setBlockFoldingEnabled: mockSetBlockFoldingEnabled,
@@ -87,10 +91,10 @@ describe("TerminalTab", () => {
 		vi.clearAllMocks();
 	});
 
-	it("renders the Shell, Rendering, Behavior, Blocks, and Session Restore headings in order", () => {
+	it("renders the Shell, Rendering, Behavior, Blocks, Shell Integration, and Session Restore headings in order", () => {
 		const { container } = render(() => <TerminalTab />);
 		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.textContent);
-		expect(headings).toEqual(["Shell", "Rendering", "Behavior", "Blocks", "Session Restore"]);
+		expect(headings).toEqual(["Shell", "Rendering", "Behavior", "Blocks", "Shell Integration", "Session Restore"]);
 	});
 
 	it("calls setShell when the Shell field changes", () => {
@@ -100,11 +104,13 @@ describe("TerminalTab", () => {
 		expect(mockSetShell).toHaveBeenCalledWith("/bin/zsh");
 	});
 
-	it("shows all nine toggles with the correct checked state", () => {
+	it("shows all eight toggles with the correct checked state", () => {
+		// showBlockTimestamps was a checkbox; it's now the blockTimestampMode
+		// <select> (see the dedicated tests below), so the count drops from 9.
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = Array.from(container.querySelectorAll("input[type=checkbox]")) as HTMLInputElement[];
-		expect(checkboxes).toHaveLength(9);
-		expect(checkboxes.map((cb) => cb.checked)).toEqual([true, true, false, true, true, false, true, true, false]);
+		expect(checkboxes).toHaveLength(8);
+		expect(checkboxes.map((cb) => cb.checked)).toEqual([true, true, false, true, false, true, true, false]);
 	});
 
 	it("calls setCopyOnSelect when its toggle changes", () => {
@@ -138,45 +144,54 @@ describe("TerminalTab", () => {
 		expect(container.textContent).toContain("Show agent context bar");
 	});
 
-	it("calls setShowBlockTimestamps when its toggle changes", () => {
+	it("shows the block timestamp mode select with the current value and its three options", () => {
 		const { container } = render(() => <TerminalTab />);
-		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[3], { target: { checked: false } });
-		expect(mockSetShowBlockTimestamps).toHaveBeenCalledWith(false);
+		const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+		const modeSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "always"))!;
+		expect(modeSelect.value).toBe("modifier");
+		expect(Array.from(modeSelect.options).map((o) => o.value)).toEqual(["off", "modifier", "always"]);
+	});
+
+	it("calls setBlockTimestampMode when the block timestamp mode select changes", () => {
+		const { container } = render(() => <TerminalTab />);
+		const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+		const modeSelect = selects.find((s) => Array.from(s.options).some((o) => o.value === "always"))!;
+		fireEvent.change(modeSelect, { target: { value: "always" } });
+		expect(mockSetBlockTimestampMode).toHaveBeenCalledWith("always");
 	});
 
 	it("calls setShowBlockMarks when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[4], { target: { checked: false } });
+		fireEvent.change(checkboxes[3], { target: { checked: false } });
 		expect(mockSetShowBlockMarks).toHaveBeenCalledWith(false);
 	});
 
 	it("calls setShowPromptMarks when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[5], { target: { checked: true } });
+		fireEvent.change(checkboxes[4], { target: { checked: true } });
 		expect(mockSetShowPromptMarks).toHaveBeenCalledWith(true);
 	});
 
 	it("calls setBlockFoldingEnabled when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[6], { target: { checked: false } });
+		fireEvent.change(checkboxes[5], { target: { checked: false } });
 		expect(mockSetBlockFoldingEnabled).toHaveBeenCalledWith(false);
 	});
 
 	it("calls setRestoreShellTerminals when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[7], { target: { checked: false } });
+		fireEvent.change(checkboxes[6], { target: { checked: false } });
 		expect(mockSetRestoreShellTerminals).toHaveBeenCalledWith(false);
 	});
 
 	it("calls setRestoreScrollback when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[8], { target: { checked: true } });
+		fireEvent.change(checkboxes[7], { target: { checked: true } });
 		expect(mockSetRestoreScrollback).toHaveBeenCalledWith(true);
 	});
 
@@ -191,6 +206,37 @@ describe("TerminalTab", () => {
 	it('shows a "Clear saved scrollback" button', () => {
 		const { container } = render(() => <TerminalTab />);
 		expect(container.textContent).toContain("Clear saved scrollback");
+	});
+
+	describe("shell integration snippets", () => {
+		it("shows the bash and fish snippets", () => {
+			const { container } = render(() => <TerminalTab />);
+			expect(container.textContent).toContain('[ -n "$TUIC_SHELL_INTEGRATION" ] && source "$TUIC_SHELL_INTEGRATION"');
+			expect(container.textContent).toContain("if set -q TUIC_SHELL_INTEGRATION; source $TUIC_SHELL_INTEGRATION; end");
+		});
+
+		it("copies the bash snippet and shows 'Copied!' feedback", async () => {
+			const { getAllByText, findByText, unmount } = render(() => <TerminalTab />);
+			fireEvent.click(getAllByText("Copy")[0]);
+			expect(mockWriteClipboard).toHaveBeenCalledWith(
+				'[ -n "$TUIC_SHELL_INTEGRATION" ] && source "$TUIC_SHELL_INTEGRATION"',
+			);
+			await findByText("Copied!");
+			// The "Copied!" reset is a real setTimeout(2000) — unmount (which runs the
+			// component's onCleanup) rather than let it dangle past the test.
+			unmount();
+		});
+
+		it("copies the fish snippet independently of the bash one", async () => {
+			const { getAllByText, findAllByText, unmount } = render(() => <TerminalTab />);
+			fireEvent.click(getAllByText("Copy")[1]);
+			expect(mockWriteClipboard).toHaveBeenCalledWith(
+				"if set -q TUIC_SHELL_INTEGRATION; source $TUIC_SHELL_INTEGRATION; end",
+			);
+			const copiedLabels = await findAllByText("Copied!");
+			expect(copiedLabels).toHaveLength(1);
+			unmount();
+		});
 	});
 
 	it("shows the font family select with the current value", () => {

@@ -435,7 +435,8 @@ export const TIPS: Tip[] = [
 	},
 	{
 		feature: "Block Timestamps",
-		description: "Hold Ctrl+Cmd to reveal when each command block started, shown as relative time in the gutter.",
+		description:
+			"Settings > Terminal > Blocks controls when relative-time labels show for each command block: never, only while holding Ctrl+Cmd, or always.",
 		shortcut: null,
 	},
 	{
