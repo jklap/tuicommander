@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { filterMatchesToBlock } from "../utils/blockSearchFilter";
+import { findBlockAtViewport } from "../utils/blockFold";
+import { filterMatchesToBlock, resolveScopedBlock } from "../utils/blockSearchFilter";
 
 interface Match {
 	row: number;
@@ -73,5 +74,40 @@ describe("filterMatchesToBlock", () => {
 			{ row: 12, col_start: 0, col_end: 4 },
 			{ row: 20, col_start: 1, col_end: 6 },
 		]);
+	});
+
+	// `filterMatchesToBlock`'s block-resolution predicate (`viewportCenter >= promptLine &&
+	// viewportCenter < endLine`, exclusive end) and `findBlockAtViewport`'s (used by the
+	// gutter click and Cmd+Shift+. fold, `>= viewTop` after the issue #3 fix) both resolve
+	// "which block does this row belong to" and must agree at a shared boundary row, or
+	// block-scoped search and gutter click/fold could silently target different blocks for
+	// the same click. `findBlockAtViewport` is called with halfViewportRows=0 here to match
+	// its exact single-row resolution shape.
+	it("agrees with findBlockAtViewport on which block owns each boundary row", () => {
+		for (const boundaryRow of [0, 10, 25]) {
+			const viaFilter = blocks.find((b) => boundaryRow >= b.promptLine && boundaryRow < b.endLine);
+			const viaViewport = findBlockAtViewport(blocks, boundaryRow, 0);
+			expect(viaViewport?.promptLine).toBe(viaFilter?.promptLine);
+		}
+	});
+});
+
+describe("resolveScopedBlock", () => {
+	const blocks = [
+		{ promptLine: 0, endLine: 10 },
+		{ promptLine: 10, endLine: 25 },
+		{ promptLine: 25, endLine: null },
+	];
+
+	it("resolves the block containing the viewport center — the same block filterMatchesToBlock filters against", () => {
+		expect(resolveScopedBlock(blocks, 15)).toBe(blocks[1]);
+	});
+
+	it("resolves the still-open block for any center at or past its promptLine", () => {
+		expect(resolveScopedBlock(blocks, 100)).toBe(blocks[2]);
+	});
+
+	it("returns undefined when the center isn't inside any block", () => {
+		expect(resolveScopedBlock([{ promptLine: 50, endLine: 60 }], 10)).toBeUndefined();
 	});
 });

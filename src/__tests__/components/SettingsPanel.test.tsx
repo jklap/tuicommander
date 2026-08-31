@@ -22,7 +22,7 @@ vi.mock("../../stores/settings", () => ({
 			wordSeparators: " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\",
 			wordSelectionRegex: "",
 			smartSelectionRules: [],
-			showBlockTimestamps: true,
+			blockTimestampMode: "modifier",
 			showBlockMarks: true,
 			showPromptMarks: true,
 			blockFoldingEnabled: true,
@@ -45,7 +45,7 @@ vi.mock("../../stores/settings", () => ({
 		setWordSeparators: vi.fn(),
 		setWordSelectionRegex: vi.fn(),
 		setSmartSelectionRules: vi.fn(),
-		setShowBlockTimestamps: vi.fn(),
+		setBlockTimestampMode: vi.fn(),
 		setShowBlockMarks: vi.fn(),
 		setShowPromptMarks: vi.fn(),
 		setBlockFoldingEnabled: vi.fn(),
@@ -166,12 +166,14 @@ describe("SettingsPanel", () => {
 		fireEvent.click(terminalItem);
 
 		const headings = Array.from(container.querySelectorAll(".section h3")).map((h) => h.textContent);
-		expect(headings).toEqual(["Shell", "Rendering", "Behavior", "Blocks", "Session Restore"]);
+		expect(headings).toEqual(["Shell", "Rendering", "Behavior", "Blocks", "Shell Integration", "Session Restore"]);
 
 		const toggleLabels = Array.from(container.querySelectorAll(".toggle span")).map((n) => n.textContent);
 		expect(toggleLabels).toContain("Copy on select");
 		expect(toggleLabels).toContain("Allow OSC 52 clipboard writes");
-		expect(toggleLabels).toContain("Show block timestamps");
+		// blockTimestampMode is a 3-way SettingSelect (off/modifier/always), not a
+		// SettingToggle, so it isn't among the `.toggle span` labels above.
+		expect(container.textContent).toContain("Show block timestamps");
 		expect(toggleLabels).toContain("Show block marks");
 		expect(toggleLabels).toContain("Show prompt marks");
 		expect(toggleLabels).toContain("Enable block folding");

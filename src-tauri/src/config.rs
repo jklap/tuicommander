@@ -908,13 +908,20 @@ pub(crate) struct AppConfig {
     /// owns that default list so it lives in exactly one place.
     #[serde(default)]
     pub(crate) smart_selection_rules: Vec<SmartSelectionRule>,
-    /// Label each command block with its elapsed time while Ctrl+Cmd is held.
-    /// Frontend-gated (the label is painted in the renderer); stored here so the
-    /// choice persists — a field absent from this struct is dropped by serde on
+    /// Deprecated (issue #5): superseded by `block_timestamp_mode` below. Kept only
+    /// so a config saved by an older build still deserializes; the frontend migrates
+    /// it once at load time (`true` -> "modifier", `false` -> "off") and no longer
+    /// writes this field on save.
     /// every `save_config`, which is exactly what happened to these three
     /// before they had a Settings toggle.
     #[serde(default = "default_true")]
     pub(crate) show_block_timestamps: bool,
+    /// Command-block timestamp overlay display mode: "off", "always", or "modifier"
+    /// (hold Ctrl+Cmd to reveal — the only behavior before this field existed, hence
+    /// the default). The frontend owns migrating a pre-existing `show_block_timestamps`
+    /// bool into this field; Rust just persists whatever it's given.
+    #[serde(default = "default_block_timestamp_mode")]
+    pub(crate) block_timestamp_mode: String,
     /// Draw command-block marks on the terminal scrollbar. Frontend-gated.
     #[serde(default = "default_true")]
     pub(crate) show_scrollbar_marks: bool,
@@ -926,8 +933,9 @@ pub(crate) struct AppConfig {
     /// submitted a prompt. Frontend-gated.
     #[serde(default = "default_true")]
     pub(crate) show_prompt_marks: bool,
-    /// Let the block-fold shortcut collapse a command block's output.
-    /// Frontend-gated.
+    /// Allow collapsing a command block's output (Cmd+Shift+.). A gutter click also
+    /// folds/unfolds when it lands on the block's header row (the chevron); anywhere
+    /// else in the block's gutter run still selects its output for copying.
     #[serde(default = "default_true")]
     pub(crate) block_folding_enabled: bool,
     /// Expose `ai_terminal_*` tools to external MCP. Default off: they need a
@@ -1096,6 +1104,10 @@ fn default_word_selection_mode() -> String {
     "characters".to_string()
 }
 
+fn default_block_timestamp_mode() -> String {
+    "modifier".to_string()
+}
+
 /// Punctuation separators matching the frontend's hardcoded `WORD_SEPARATOR_RE`
 /// (`canvasTerminalSelection.ts`) exactly, so the default preserves today's
 /// double-click behavior losslessly. Whitespace and control characters are
@@ -1204,6 +1216,7 @@ impl Default for AppConfig {
             smart_selection_rules: Vec::new(),
             show_block_timestamps: true,
             show_scrollbar_marks: true,
+            block_timestamp_mode: default_block_timestamp_mode(),
             show_block_marks: true,
             show_prompt_marks: true,
             block_folding_enabled: true,
@@ -4450,6 +4463,7 @@ mod tests {
             // tell a real round trip from serde handing back the default.
             show_block_timestamps: false,
             show_scrollbar_marks: false,
+            block_timestamp_mode: "always".to_string(),
             show_block_marks: false,
             show_prompt_marks: false,
             block_folding_enabled: false,
@@ -4525,6 +4539,7 @@ mod tests {
         // back to the default on the next load.
         assert!(!loaded.show_block_timestamps);
         assert!(!loaded.show_scrollbar_marks);
+        assert_eq!(loaded.block_timestamp_mode, "always");
         assert!(!loaded.show_block_marks);
         assert!(!loaded.show_prompt_marks);
         assert!(!loaded.block_folding_enabled);
@@ -4612,6 +4627,7 @@ mod tests {
         // agree or the Settings toggles read one value and the terminal another.
         assert!(loaded.show_block_timestamps);
         assert!(loaded.show_scrollbar_marks);
+        assert_eq!(loaded.block_timestamp_mode, "modifier"); // defaults to "modifier"
         assert!(loaded.show_block_marks); // defaults to true
         assert!(loaded.show_prompt_marks); // defaults to true
         assert!(loaded.block_folding_enabled);

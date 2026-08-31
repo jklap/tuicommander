@@ -321,7 +321,14 @@ export interface CanvasSelectionController {
 export interface CanvasSearchController {
 	readonly matches: SearchMatch[];
 	readonly activeIndex: number;
-	replace: (matches: SearchMatch[], viewport?: SearchViewport) => SearchMatch | null;
+	/** `preserveActiveByValue` (default `true`) controls whether a previously-active match
+	 *  surviving in `matches` (by row/col_start/col_end) keeps the cursor, instead of always
+	 *  recomputing from viewport proximity. Callers must pass `false` for a genuinely NEW
+	 *  query — otherwise a coincidental value match between an old and new, unrelated search
+	 *  can inherit "active" purely by chance (issue #9 follow-up). `true` is for the same
+	 *  logical search re-run for a different reason: a block-scope toggle or a content-driven
+	 *  refresh, where staying on the same hit is the whole point (issue #8). */
+	replace: (matches: SearchMatch[], viewport?: SearchViewport, preserveActiveByValue?: boolean) => SearchMatch | null;
 	clear: () => void;
 	dropRows: (rows: Set<number>) => boolean;
 	next: () => SearchMatch | null;
@@ -437,9 +444,29 @@ export function createCanvasSearchController(): CanvasSearchController {
 		get activeIndex() {
 			return activeIndex;
 		},
-		replace(nextMatches, viewport) {
+		replace(nextMatches, viewport, preserveActiveByValue = true) {
+			// Preserve the active match ACROSS a re-search (e.g. toggling "Search in
+			// Block") when it's still present in the new list, so unchecking a search
+			// scope doesn't silently jump the user's selection to a different hit.
+			// Unlike `dropRows` below, `nextMatches` is a brand-new array from a fresh
+			// `terminal_search` IPC round-trip — never the same array filtered in
+			// place — so identity can't be used; match by value instead. Gated by
+			// `preserveActiveByValue` so a genuinely new/different query doesn't
+			// coincidentally inherit "active" from an unrelated old match that
+			// happens to land at the same row/col.
+			const previouslyActive = active();
 			matches = nextMatches;
-			activeIndex = matches.length > 0 ? nearestVisibleMatch(matches, viewport) : -1;
+			const survivingIndex =
+				preserveActiveByValue && previouslyActive
+					? matches.findIndex(
+							(m) =>
+								m.row === previouslyActive.row &&
+								m.col_start === previouslyActive.col_start &&
+								m.col_end === previouslyActive.col_end,
+						)
+					: -1;
+			activeIndex =
+				survivingIndex >= 0 ? survivingIndex : matches.length > 0 ? nearestVisibleMatch(matches, viewport) : -1;
 			return active();
 		},
 		clear() {
