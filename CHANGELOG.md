@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Repository settings could stop saving entirely, and only a log line said so.**
+  A repo under active work changes its diff counts every few seconds, and every
+  window recomputes them for itself, so two windows legitimately held two
+  different — equally correct — numbers at the same instant. The save protocol
+  treated any such difference as a competing edit and rejected the whole batch:
+  29 consecutive saves failed on one repo's line count, and unrelated changes,
+  including registering a new repository, were wedged behind it. Counts, merge
+  state and last-used-tab no longer take part in that check. Renames, ordering
+  and grouping stay fully protected.
+- **A tab parked in the wrong repo now says which repo is missing.** An agent
+  started through MCP runs in its parent's directory, so its tab can belong to a
+  repository TUICommander does not know about. The tab was filed under whichever
+  repo happened to be on screen, with nothing to explain it. It now names the
+  directory to register, in the log and in a toast — register it and the tab
+  moves home on its own.
+
 - A `cd` no longer moves a terminal tab to another repo. The tab stays in the repo
   it was opened in; only a tab still parked with no owner is settled by a `cd`.
   Re-homing an owned tab left the sidebar on one repo while the pane drew a

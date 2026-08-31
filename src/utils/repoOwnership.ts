@@ -96,3 +96,35 @@ export function resolveRepoOwnerIn(
 	const { repoPath, branchName } = candidates[0];
 	return { repoPath, branchName };
 }
+
+/**
+ * The repository a path belongs to when NO registered repo claims it.
+ *
+ * `resolveRepoOwnerIn` returning null is not the same as "this path belongs to
+ * nothing". A worktree TUIC created itself lives at `<repo>__wt/<branch>`, so the
+ * repo root is right there in the path — and an agent spawned by MCP inherits its
+ * parent's cwd, which lands sessions in worktrees of repos the user never
+ * registered. The caller then parked the tab in whatever repo had focus and said
+ * only that "no registered repo" owned it, which names the symptom and not the
+ * one thing that would fix it.
+ *
+ * Deliberately a guess with a narrow basis: the `__wt` convention, or the path
+ * itself. It answers "which directory should the user register?", never "who owns
+ * this tab" — that question has exactly one answer and `resolveRepoOwnerIn` owns
+ * it. Do not wire this into placement.
+ */
+export function unregisteredRepoRootFor(path: string | null | undefined): string | null {
+	if (!path) return null;
+
+	const parts = path.split(/[\\/]+/).filter(Boolean);
+	const worktreeIndex = parts.findIndex((segment) => segment.endsWith("__wt"));
+	if (worktreeIndex === -1) return path;
+
+	// `…/LS/gate-os__wt/poc-0001` -> `…/LS/gate-os`. A bare `__wt` segment names no
+	// repo, so there is nothing to point the user at.
+	const repoName = parts[worktreeIndex].slice(0, -"__wt".length);
+	if (!repoName) return null;
+
+	const leadingSlash = /^[\\/]/.test(path) ? "/" : "";
+	return `${leadingSlash}${[...parts.slice(0, worktreeIndex), repoName].join("/")}`;
+}

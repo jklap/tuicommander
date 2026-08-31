@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BranchState, RepositoryState } from "../../stores/repositories";
-import { resolveRepoOwnerIn } from "../../utils/repoOwnership";
+import { resolveRepoOwnerIn, unregisteredRepoRootFor } from "../../utils/repoOwnership";
 
 /**
  * The resolver answers "which registered repo owns this path". It is the single
@@ -123,5 +123,43 @@ describe("resolveRepoOwnerIn", () => {
 	// no parameter through which "the repo that currently has focus" could reach it.
 	it("cannot consult focus, because no focus is passed in", () => {
 		expect(resolveRepoOwnerIn.length).toBe(2);
+	});
+});
+
+/**
+ * The consolation answer, for when the resolver above says "nobody". It exists so
+ * the caller can name the repo the user has to register, instead of parking the
+ * tab in whatever had focus and reporting only that nothing claimed it.
+ */
+describe("unregisteredRepoRootFor", () => {
+	it("derives the repo root from a TUIC worktree path", () => {
+		expect(unregisteredRepoRootFor("/Users/s/Gits/LS/gate-os__wt/poc-0001-blade-activation-intent")).toBe(
+			"/Users/s/Gits/LS/gate-os",
+		);
+	});
+
+	it("derives it from a directory nested inside that worktree", () => {
+		expect(unregisteredRepoRootFor("/Users/s/Gits/LS/gate-os__wt/poc-0001/internal/api")).toBe(
+			"/Users/s/Gits/LS/gate-os",
+		);
+	});
+
+	it("falls back to the path itself when no worktree segment is present", () => {
+		expect(unregisteredRepoRootFor("/Users/s/Gits/LS/veritas")).toBe("/Users/s/Gits/LS/veritas");
+	});
+
+	// A repo genuinely named `__wt` cannot be pointed at, and inventing `/Users/s`
+	// would send the user to register their home directory.
+	it("returns null when the worktree segment names no repo", () => {
+		expect(unregisteredRepoRootFor("/Users/s/__wt/branch")).toBeNull();
+	});
+
+	it("returns null for an empty or missing path", () => {
+		expect(unregisteredRepoRootFor(null)).toBeNull();
+		expect(unregisteredRepoRootFor("")).toBeNull();
+	});
+
+	it("handles Windows separators", () => {
+		expect(unregisteredRepoRootFor("C:\\Gits\\LS\\gate-os__wt\\poc-0001")).toBe("C:/Gits/LS/gate-os");
 	});
 });

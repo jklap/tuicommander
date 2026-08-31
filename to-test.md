@@ -1297,3 +1297,31 @@ Requires a `make dev` restart — the change is in `src-tauri/src/pty.rs`.
 - [ ] An agent tab (Claude, Codex) is unaffected: its badge still follows the
   ready-screen adapter, not this probe.
 
+
+## Repository saves survive a concurrent diffstat change
+
+Requires a `make dev` restart — the change is in `src-tauri/src/config.rs`.
+
+- [ ] With two windows open on the same config, work in a repo so its diff counts
+  keep moving (an agent committing is enough). Rename another repo, reorder the
+  sidebar, add a repo. Each must persist. Before, `GET /logs` showed a stream of
+  `Repository changes were not saved` / `repository configuration conflict`, and
+  nothing was written.
+- [ ] `GET http://localhost:9876/logs?level=error` shows no
+  `Repository changes were not saved` entry over a working session.
+- [ ] Rename the same repo in two windows without reloading either: this must
+  STILL conflict. The exemption covers counts, not intent.
+- [ ] The sidebar diff counts keep updating — the exemption must not make them
+  unwritable.
+
+## A parked tab names the repo to register
+
+Frontend only; Vite HMR picks it up.
+
+- [ ] Have an agent spawn a child via MCP in a worktree of a repo that is NOT
+  registered (`<repo>__wt/<branch>`). A toast appears: *Tab parked in the wrong
+  repo — nothing claims "<repo root>"*. The log warning names the same path.
+- [ ] Reconnecting many sessions from that one repo raises ONE toast, not one
+  per session.
+- [ ] Register that repo: the parked tab moves to it by itself, and the active
+  repo does NOT change under you while the tab moves.
