@@ -5691,8 +5691,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     /// The exact row, copied from the live grid.
     #[test]
     fn ink_footer_indented_inside_agent_output_is_not_a_prompt() {
-        let quoted =
-            "  Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel";
+        let quoted = "  Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel";
         assert!(
             parse_question(quoted).is_none(),
             "an agent quoting the footer must not park its own badge"
@@ -5703,8 +5702,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         );
 
         // Same text, drawn by the dialog itself: full-bleed at column 0.
-        let real =
-            "Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel";
+        let real = "Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel";
         assert!(
             parse_question(real).is_some(),
             "the real footer must still be detected"
