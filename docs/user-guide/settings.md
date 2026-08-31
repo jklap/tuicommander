@@ -122,7 +122,7 @@ See [Command Blocks](terminals.md#command-blocks) for what each of these control
 
 See [Session Restore](terminals.md#session-restore) for how restore behaves across a relaunch.
 
-## Selection Tab
+## Smart Selection Tab
 
 Controls double/quad-click word and smart selection in the terminal — see [Smart Selection](terminal-features.md#smart-selection) for the underlying model (precision scoring, the built-in rule set, action dispatch).
 

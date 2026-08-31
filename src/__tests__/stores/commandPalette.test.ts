@@ -200,4 +200,125 @@ describe("commandPaletteStore", () => {
 			expect(commandPaletteStore.mode()).toBe("content");
 		});
 	});
+
+	describe("scope()", () => {
+		it("defaults to 'all' when opened", () => {
+			commandPaletteStore.open();
+			expect(commandPaletteStore.scope()).toBe("all");
+		});
+
+		it("reports the search scope derived from a typed prefix, without touching a chip", () => {
+			commandPaletteStore.open();
+			commandPaletteStore.setQuery("! foo");
+			expect(commandPaletteStore.scope()).toBe("files");
+			commandPaletteStore.setQuery("? foo");
+			expect(commandPaletteStore.scope()).toBe("content");
+			commandPaletteStore.setQuery("~ foo");
+			expect(commandPaletteStore.scope()).toBe("terminals");
+		});
+
+		it("close() resets the action filter back to 'all'", () => {
+			commandPaletteStore.open();
+			commandPaletteStore.setScope("prompts");
+			commandPaletteStore.close();
+			commandPaletteStore.open();
+			expect(commandPaletteStore.scope()).toBe("all");
+		});
+	});
+
+	describe("setScope()", () => {
+		it("switches between action-category scopes without touching the query prefix", () => {
+			commandPaletteStore.open();
+			commandPaletteStore.setQuery("zoom");
+			commandPaletteStore.setScope("actions");
+			expect(commandPaletteStore.scope()).toBe("actions");
+			expect(commandPaletteStore.state.query).toBe("zoom");
+			expect(commandPaletteStore.mode()).toBe("command");
+
+			commandPaletteStore.setScope("prompts");
+			expect(commandPaletteStore.scope()).toBe("prompts");
+			expect(commandPaletteStore.state.query).toBe("zoom");
+		});
+
+		it("rewrites the query prefix when switching to a search scope, carrying the typed text over", () => {
+			commandPaletteStore.open();
+			commandPaletteStore.setQuery("readme");
+			commandPaletteStore.setScope("files");
+			expect(commandPaletteStore.mode()).toBe("filename");
+			expect(commandPaletteStore.state.query).toBe("! readme");
+			expect(commandPaletteStore.scope()).toBe("files");
+		});
+
+		it("carries typed text across a switch between two search scopes", () => {
+			commandPaletteStore.open();
+			commandPaletteStore.setQuery("! readme");
+			commandPaletteStore.setScope("content");
+			expect(commandPaletteStore.mode()).toBe("content");
+			expect(commandPaletteStore.state.query).toBe("? readme");
+		});
+
+		it("switching from a search scope back to an action scope strips the prefix and carries the text", () => {
+			commandPaletteStore.open();
+			commandPaletteStore.setQuery("~ output");
+			commandPaletteStore.setScope("all");
+			expect(commandPaletteStore.mode()).toBe("command");
+			expect(commandPaletteStore.state.query).toBe("output");
+			expect(commandPaletteStore.scope()).toBe("all");
+		});
+
+		it("switching to an empty search scope still primes the prefix for typing", () => {
+			commandPaletteStore.open();
+			commandPaletteStore.setScope("terminals");
+			expect(commandPaletteStore.state.query).toBe("~ ");
+			expect(commandPaletteStore.mode()).toBe("terminal");
+		});
+	});
+
+	describe("cycleScope()", () => {
+		it("cycles forward through all six scopes in order and wraps", () => {
+			commandPaletteStore.open();
+			const order: ReturnType<typeof commandPaletteStore.scope>[] = [
+				"all",
+				"actions",
+				"prompts",
+				"files",
+				"content",
+				"terminals",
+			];
+			for (let i = 0; i < order.length; i++) {
+				expect(commandPaletteStore.scope()).toBe(order[i]);
+				commandPaletteStore.cycleScope(1);
+			}
+			// Wrapped back to the start.
+			expect(commandPaletteStore.scope()).toBe("all");
+		});
+
+		it("cycles backward and wraps at the start", () => {
+			commandPaletteStore.open();
+			expect(commandPaletteStore.scope()).toBe("all");
+			commandPaletteStore.cycleScope(-1);
+			expect(commandPaletteStore.scope()).toBe("terminals");
+			commandPaletteStore.cycleScope(-1);
+			expect(commandPaletteStore.scope()).toBe("content");
+		});
+
+		it("preserves typed text while cycling through several scopes", () => {
+			commandPaletteStore.open();
+			commandPaletteStore.setQuery("draft");
+			commandPaletteStore.cycleScope(1); // all -> actions
+			expect(commandPaletteStore.state.query).toBe("draft");
+			commandPaletteStore.cycleScope(1); // actions -> prompts
+			expect(commandPaletteStore.state.query).toBe("draft");
+			commandPaletteStore.cycleScope(1); // prompts -> files
+			expect(commandPaletteStore.state.query).toBe("! draft");
+
+			// Landing on "files" with real text schedules a debounced filename
+			// search (SEARCH_DEBOUNCE_MS); close() clears it via cleanupSearch()
+			// so it doesn't outlive this test as an async-leak false positive —
+			// the same cleanup every other test in this file relies on its own
+			// `beforeEach`'s close() call for, but this is the last test in the
+			// file, so nothing downstream would do it.
+			commandPaletteStore.close();
+		});
+	});
 });

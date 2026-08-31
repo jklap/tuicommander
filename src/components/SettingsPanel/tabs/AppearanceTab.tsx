@@ -1,4 +1,4 @@
-import { type Component, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../../../i18n";
 import type { RepoGroup } from "../../../stores/repositories";
 import { repositoriesStore } from "../../../stores/repositories";
@@ -18,9 +18,22 @@ export { DEFAULT_COLOR_PRESETS as PRESET_COLORS } from "../../shared/colorPreset
 const GroupSettingsItem: Component<{
 	group: RepoGroup;
 }> = (props) => {
+	let renameInputRef: HTMLInputElement | undefined;
 	const [editing, setEditing] = createSignal(false);
 	const [editName, setEditName] = createSignal(props.group.name);
 	const [nameError, setNameError] = createSignal("");
+
+	// This item stays mounted for the group's lifetime — only the rename
+	// input's presence is gated by `editing()` — so `autofocus` never applies
+	// at all (Solid passes it through as a plain HTML attribute; the node is
+	// never freshly inserted on double-click). An explicit focus call on the
+	// editing() false→true edge is required instead, same pattern as
+	// CreateWorktreeDialog and PromptDrawer's search input.
+	createEffect(() => {
+		if (!editing()) return;
+		const focusTimer = setTimeout(() => renameInputRef?.focus(), 0);
+		onCleanup(() => clearTimeout(focusTimer));
+	});
 
 	const commitRename = () => {
 		const name = editName().trim();
@@ -55,6 +68,7 @@ const GroupSettingsItem: Component<{
 					}
 				>
 					<input
+						ref={renameInputRef}
 						class={s.groupNameInput}
 						value={editName()}
 						onInput={(e) => {
@@ -65,7 +79,6 @@ const GroupSettingsItem: Component<{
 							if (e.key === "Enter") commitRename();
 							if (e.key === "Escape") cancelEdit();
 						}}
-						autofocus
 					/>
 				</Show>
 				<button

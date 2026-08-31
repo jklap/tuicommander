@@ -2014,3 +2014,51 @@ checkout. Two things weren't covered by that synthetic testing:
   `*, *::before, *::after { animation-duration: 0.01ms !important }`, which
   should cover it, but this wasn't visually confirmed with the OS setting
   actually toggled on (only reasoned about from the CSS cascade).
+
+## UI fixes batch (2026-08-31, frontend only — no `make dev` restart needed)
+
+Nine UI/UX fixes plus three follow-on fixes for issues the same session's own
+code review and audit surfaced (a Space-key double-toggle, a Tab accessibility
+regression, an uncancelled animation frame, plus three more `autofocus`-on-
+dynamic-insertion sites, a keystroke-drop race window, and the New Worktree
+dropdown's fixed-direction clipping). Most of the original nine were live-
+verified against a real built app via `agent-browser` with real keystrokes
+(scope chips + Tab-cycling, the Menu-label focus/scroll fix, the Compose-vs-
+Edit-Prompt focus trap, dialog width/autofocus, both renames — see
+`.screenshots/ui-fixes-batch/` in the main checkout for the captured evidence)
+and are not repeated here. What's left needs a human pass:
+
+- [ ] **New Worktree dialog — Tab into "Start from", then type** — open the
+  dialog, Tab from the name field until the "Start from" trigger is focused
+  (verify with a visible focus ring), type a letter. It should open the
+  dropdown and filter by that letter in the search box — nothing should be
+  typed into the terminal behind the dialog. Also type a second letter
+  immediately (as fast as you can) right after the first — both should land in
+  the search box, not just the first.
+- [ ] **New Worktree dialog — "Start from" popup direction** — the popup now
+  picks upward or downward based on the trigger's actual on-screen position
+  (recomputed every open), rather than always opening upward. Needs a repo
+  with 2+ branches (the one repo checked live during this session's own
+  verification pass had only one, so the dropdown never appeared). Resize the
+  window short and confirm the popup opens toward whichever side has more room
+  and is never clipped, in both a tall and a short window.
+- [ ] **Compose append vs. overwrite** — with a terminal's Compose panel open
+  and some draft text typed in, trigger a Smart Prompt with "compose" as its
+  inject target (e.g. from the Prompt Library, with auto-execute off). The
+  prompt's content should be appended below the existing draft (blank line
+  separator), not silently dropped and not overwriting the draft. (Live
+  verification this session covered the adjacent focus-trap fix by typing
+  directly into the Content field, not this exact "trigger a real Smart
+  Prompt" path.)
+- [ ] **Settings → Smart Selection — first-edit-on-a-fresh-config case** — on
+  a config with no prior Smart Selection customization (so the rule list is
+  showing built-in defaults, unmaterialized), expand a rule, type into "Menu
+  label", and confirm focus and scroll position both survive that first edit.
+  (Live verification this session used a config that already had
+  materialized rules, so it didn't exercise the identity-flip-on-first-edit
+  path specifically, only the steady-state per-keystroke case.)
+- [ ] **Three more `autofocus`-on-dynamic-insertion fixes** — confirm each
+  actually focuses when shown: Prompt Library drawer's search box on open
+  (`Cmd/Ctrl+Shift+K`), the Knowledge history overlay's search box on open,
+  and a repository group's rename field (Settings → Appearance → Repository
+  Groups → double-click a group name).

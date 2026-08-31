@@ -93,17 +93,32 @@
 }
 
 .dropdownList {
+  /* The "Start from" row now sits below the fixed-height .branchList (150px)
+   * rather than directly under the name field, so a downward popup risks
+   * clipping against .previewFooter and .body's own overflow-y: auto —
+   * opening upward instead usually has more room. Which side actually has
+   * more room is recomputed on every open from the trigger's real position
+   * (see CreateWorktreeDialog.tsx's computeDropdownPlacement), since a short
+   * window can flip which direction that is; .dropdownListUp/Down below only
+   * supply the position side, and `max-height` is set inline per that
+   * calculation rather than fixed here. */
   position: absolute;
-  top: calc(100% + 4px);
   left: 0;
   right: 0;
-  max-height: 200px;
   overflow-y: auto;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-popup);
   z-index: 10;
+}
+
+.dropdownListUp {
+  bottom: calc(100% + 4px);
+}
+
+.dropdownListDown {
+  top: calc(100% + 4px);
 }
 
 .dropdownSearch {

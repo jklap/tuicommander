@@ -165,6 +165,38 @@ Targets macOS, Windows, Linux. Use Cmd/Ctrl abstractions, Tauri cross-platform p
 
 **Terminal keydown vs. global shortcuts:** `keyToSequence()` (`src/components/Terminal/terminalInput.ts`) excludes `metaKey` but not `ctrlKey` from its printable-character PTY-forwarding fallback — so a global shortcut whose Windows/Linux form uses Ctrl+&lt;printable&gt; (macOS form: Cmd+&lt;printable&gt;) will be silently swallowed and typed into the terminal instead of bubbling to the document-level shortcut listener, unless the terminal's keydown handler explicitly bails out first (see `isGlobalShortcutPassthrough`, `terminalInput.ts`). When adding or rebinding a global shortcut that uses Ctrl/Cmd + a printable key, verify the Windows/Linux (Ctrl) form is special-cased the same way.
 
+## Global Focus/Keyboard Handlers Must Check `anyModalOpen()`
+
+`useKeyboardRedirect.ts` (forwards printable keys to the active terminal
+whenever focus isn't in an `INPUT`/`TEXTAREA`/`SELECT`) had no
+`anyModalOpen()` check at all — a dialog control that isn't a plain input
+(e.g. `CreateWorktreeDialog`'s "Start from" `<button>` trigger, Tab-focused)
+was fair game, so typing while it had focus both leaked the keystroke into
+the terminal underneath **and** yanked focus there via `activeTerminal.ref
+.focus()`. Fixed by adding an early `if (anyModalOpen()) return;` (from
+`stores/modalStack`) — every overlay in this codebase already calls
+`registerModal()` (confirmed: both current `role="dialog"` components do), so
+this single check covers all of them; it deliberately does NOT also add an
+ARIA-role fallback, since that would be unexercised code standing in for an
+invariant ("every dialog calls registerModal") that's enforced by convention,
+not by this hook. Any new document-level keydown/focus-stealing handler that
+only special-cases `INPUT`/`TEXTAREA`/`SELECT` has the same gap for every
+non-input dialog control — check `anyModalOpen()` before assuming a
+plain-input allowlist is enough, and make sure any new overlay actually calls
+`registerModal()` rather than relying on a hook to guess it's a dialog.
+
+The inverse failure also exists: a panel that reclaims focus/keyboard input
+for *itself* whenever it loses it (e.g. `ComposePanel`'s `focusout` handler,
+which used to unconditionally refocus its own CodeMirror instance one frame
+after ANY blur) traps focus away from a dialog opened over it, even though
+the dialog is strictly higher z-index and otherwise fully interactive. The
+fix there was symmetric: only reclaim when focus demonstrably fell through to
+`<body>`/nowhere (the actual "keystrokes would vanish" case) or a modal is
+registered — never when focus visibly moved to a specific other element.
+Any panel with this "reclaim focus on blur" pattern needs the same
+`document.activeElement !== document.body` / `anyModalOpen()` guard, not a
+z-index fix — the two panels were never actually z-index-conflicting.
+
 ## Panel Refresh
 
 Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath)` in `createEffect` — not file watchers or polling. `repo_watcher` emits `"repo-changed"` → `bumpRevision()`.
@@ -178,6 +210,37 @@ Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath
 `<For>`'s mapping callback is invoked once per distinct item **reference**, not once per render — it does not re-run just because filtering/sorting shifted that same item to a new position. `<For>` hands the callback an `index` **accessor** (a function) specifically so consumers can read the item's current position later; calling it immediately (`i()`) and stashing the plain number in a closure throws that liveness away. Any handler built from that captured number (a click/hover callback that indexes back into the filtered array) goes stale the instant the array's composition changes without that item's own identity changing — the callback still runs, but against a now-wrong (sometimes out-of-bounds) slot, so it silently no-ops instead of throwing.
 
 This bit `BaseRefDropdown` in `CreateWorktreeDialog.tsx`: typing a query that filtered out an earlier match shifted a later option to a new index, and clicking or hovering it used the stale pre-filter index, so the click silently did nothing. Fixed by computing the index at use-time (`filteredRefs().indexOf(option)`) instead of caching it, and by having the click handler act on the option directly rather than through an index at all. The sibling branch list in the same file already did this correctly (it calls the accessor `index()` inline inside each handler rather than capturing `index()` up front) — use that as the reference pattern. When a `<For>`-rendered row's event handler needs its position, read the index accessor (or `array.indexOf(item)`) at the moment the handler runs, never before.
+
+## `<For>` Remounting a Row on Every Keystroke (whole-array-replace hazard)
+
+A **reference-keyed** `<For>` over a list where an edit handler rebuilds the
+**entire backing array** via `.map()` with a spread-copied element
+(`arr.map(x => x.id === id ? { ...x, ...patch } : x)`, then a single
+`setState("listField", newArray)`) disposes and recreates that one row's DOM
+on every keystroke — Solid can't reconcile a plain-object replacement of the
+whole array in place, so the edited index gets a fresh reference every call.
+This destroys whatever was focused inside that row (an `<input>` mid-type)
+and, if the row's own expand/collapse state is a **local** `createSignal`
+(not hoisted to the parent), collapses the row back too. If the array was
+previously *empty* (falling back to a shared default/built-in list) and the
+edit is the *first* one, every element flips reference simultaneously,
+remounting the whole list and resetting scroll position along with it — this
+hit `SelectionTab.tsx`'s Smart Selection rule editor, fixed by converting
+both the rule list and each rule's action list to `<Index>`, which keys by
+position and updates via a per-slot signal instead of remounting.
+
+**This is NOT a blanket "any store update near a `<For>`" problem** — check
+how the specific setter is implemented before assuming a bug. A store setter
+that targets a specific key with `setState("mapField", id, patch)` (a
+**path-based** update into an object/record, e.g. `promptLibraryStore
+.updatePrompt`'s `setState("prompts", id, {...existing, ...data})`) merges
+onto the existing proxy *in place*, preserving that entry's reference
+identity — `<For>` never sees a change and never remounts. The hazard is
+specifically "whole-array replacement built from spread-copied plain
+objects," not "any field of any list item changing." Verify empirically
+(mount the real component against the real store, edit the field, assert the
+same DOM node stays focused) before either claiming or ruling out this bug in
+a sibling list.
 
 ## solid-js Signals Inside `vi.mock` Factories
 

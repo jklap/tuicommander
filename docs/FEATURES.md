@@ -236,7 +236,7 @@ Idle, unfocused terminals are suspended to stop them consuming CPU and battery. 
 
 ### 1.22 Smart Selection
 
-Configurable, rule-driven double/quad-click word selection, mirroring iTerm2's Smart Selection. Settings > Selection.
+Configurable, rule-driven double/quad-click word selection, mirroring iTerm2's Smart Selection. Settings > Smart Selection.
 
 - **Word boundaries** — "Character list" (a literal separator set, customizable; defaults to today's punctuation class) or "Regular expression" (`|`-joined alternates; the longest match at each position joins onto the adjacent word — e.g. adding `https://` lets a double-click on a URL's host include the scheme)
 - **Smart selection rules** — a precision-scored (`very_low`…`very_high`) regex rule list; the highest `precision × matchLength` score spanning the click wins. Ships with iTerm2's built-in ten plus dev-terminal extras (git commit SHA, `file:line:col`, semver, IPv4/IPv6, UUID, issue key, `#NNN` issue ref)
@@ -491,6 +491,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **Search modes**: type `!` to search files by name, `?` to search file contents, `~` to search across all open terminal buffers. File/content results open in editor tab (content matches jump to the matched line). Terminal results navigate to the terminal tab/pane and scroll to the matched line. Leading spaces after prefix are ignored
 - Browser filename and content searches use the existing HTTP routes. Content results are correlated with a per-search random ID and republished only inside the requesting page, preventing results from leaking across windows or panels
 - **Discoverable search commands**: "Search Terminals", "Search Files", "Search in File Contents" appear as regular palette commands and pre-fill the corresponding prefix
+- **Scope chips**: a row of six chips (All / Actions / Prompts / Files / Content / Terminals) below the search box filters the result list by type. All/Actions/Prompts filter command-mode actions by category (Actions hides Smart Prompts entries, Prompts shows only them); Files/Content/Terminals select the same `!`/`?`/`~` search modes above by rewriting the query's prefix. `Tab`/`Shift+Tab` cycle forward/backward through the six chips (wrapping at either end) without leaving the search input; clicking a chip does the same. Typed text carries over across a scope switch. Typing a `!`/`?`/`~` prefix directly still lights up the matching chip even without using Tab or clicking
 - **QR for Remote Mobile Connection**: opens a large black-on-white QR (in a dialog) that a phone can scan to launch the mobile companion PWA. Reuses the Settings → Services & MCP connect flow (`get_connect_url` — token stays server-side); shows a hint when Remote Access is disabled and a network picker for multi-IP machines
 - Powered by `actionRegistry.ts` (`ACTION_META` map)
 
@@ -1217,7 +1218,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Variable insertion dropdown below content textarea: grouped by Git/GitHub/Terminal, click to insert `{variable}` at cursor
 - Create custom smart prompts with `+ New Prompt` button
 - Built-in prompts show a "Reset to Default" button when content is overridden
-- Import/export: export scope picker (All prompts / Modified only / Custom only — "All prompts" covers the entire prompt library, not just what's shown in the drawer) opens the native Save dialog to write a portable `.json`; Import reads a file and shows a per-prompt review dialog (NEW/CONFLICT badges, select which to apply) before anything is overwritten. Imported `shell`/`api` prompts land disabled pending review. Smart Selection rules (Settings > Selection) have the identical toolbar and review dialog.
+- Import/export: export scope picker (All prompts / Modified only / Custom only — "All prompts" covers the entire prompt library, not just what's shown in the drawer) opens the native Save dialog to write a portable `.json`; Import reads a file and shows a per-prompt review dialog (NEW/CONFLICT badges, select which to apply) before anything is overwritten. Imported `shell`/`api` prompts land disabled pending review. Smart Selection rules (Settings > Smart Selection) have the identical toolbar and review dialog.
 
 ### 10.11 Headless Template Configuration
 
