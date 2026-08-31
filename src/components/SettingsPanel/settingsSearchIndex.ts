@@ -186,6 +186,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/TerminalTab.tsx
 	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },
 	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
+	{ tab: "terminal", section: "Shell Integration", sectionKey: "terminal.heading.shellIntegration" },
 	{ tab: "terminal", section: "Session Restore", sectionKey: "terminal.heading.sessionRestore" },
 	{ tab: "terminal", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
 	{
@@ -221,7 +222,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		tab: "terminal",
 		section: "Terminal",
 		label: "Show block timestamps",
-		labelKey: "general.toggle.showBlockTimestamps",
+		labelKey: "terminal.label.blockTimestampMode",
 	},
 	{
 		tab: "terminal",

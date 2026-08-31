@@ -94,7 +94,10 @@ interface RustAppConfig {
 	word_separators?: string;
 	word_selection_regex?: string;
 	smart_selection_rules?: RustSmartSelectionRule[];
+	/** @deprecated superseded by `block_timestamp_mode` (issue #5) — kept only so a config
+	 *  saved by an older build still deserializes; no longer written by `save()`. */
 	show_block_timestamps?: boolean;
+	block_timestamp_mode?: string;
 	show_scrollbar_marks?: boolean;
 	show_block_marks?: boolean;
 	show_prompt_marks?: boolean;
@@ -327,6 +330,27 @@ function validateWordSelectionMode(value: string | null): WordSelectionMode {
 		: "characters";
 }
 
+/** Command-block timestamp overlay display mode (issue #5). "modifier" (hold
+ *  Ctrl+Cmd to reveal) was the only behavior before this field existed, so it's
+ *  the fallback whenever migration can't determine otherwise. */
+export type BlockTimestampMode = "off" | "always" | "modifier";
+const VALID_BLOCK_TIMESTAMP_MODES: readonly BlockTimestampMode[] = ["off", "always", "modifier"];
+
+/**
+ * Resolves `block_timestamp_mode`, migrating a pre-existing config that only
+ * ever had the legacy `show_block_timestamps` boolean: `true` becomes
+ * "modifier" (today's only behavior, preserved), `false` becomes "off". A
+ * config that already carries a valid `block_timestamp_mode` always wins —
+ * migration only fires for a config saved before this field existed.
+ */
+function resolveBlockTimestampMode(
+	mode: string | null | undefined,
+	legacyBool: boolean | undefined,
+): BlockTimestampMode {
+	if (mode && (VALID_BLOCK_TIMESTAMP_MODES as readonly string[]).includes(mode)) return mode as BlockTimestampMode;
+	return legacyBool === false ? "off" : "modifier";
+}
+
 /** Split tab mode */
 export type SplitTabMode = "separate" | "unified";
 
@@ -387,7 +411,7 @@ interface SettingsStoreState {
 	wordSeparators: string;
 	wordSelectionRegex: string;
 	smartSelectionRules: SmartSelectionRule[];
-	showBlockTimestamps: boolean;
+	blockTimestampMode: BlockTimestampMode;
 	/** Master toggle for the scrollbar history ticks; the two below pick the categories. */
 	showScrollbarMarks: boolean;
 	showBlockMarks: boolean;
@@ -464,7 +488,7 @@ function createSettingsStore() {
 		wordSeparators: DEFAULT_WORD_SEPARATORS,
 		wordSelectionRegex: "",
 		smartSelectionRules: [],
-		showBlockTimestamps: true,
+		blockTimestampMode: "modifier",
 		showScrollbarMarks: true,
 		showBlockMarks: true,
 		showPromptMarks: true,
@@ -550,7 +574,7 @@ function createSettingsStore() {
 		config.word_separators = state.wordSeparators;
 		config.word_selection_regex = state.wordSelectionRegex;
 		config.smart_selection_rules = state.smartSelectionRules.map(ruleToWire);
-		config.show_block_timestamps = state.showBlockTimestamps;
+		config.block_timestamp_mode = state.blockTimestampMode;
 		config.show_scrollbar_marks = state.showScrollbarMarks;
 		config.show_block_marks = state.showBlockMarks;
 		config.show_prompt_marks = state.showPromptMarks;
@@ -685,7 +709,10 @@ function createSettingsStore() {
 				setState("wordSeparators", config.word_separators ?? DEFAULT_WORD_SEPARATORS);
 				setState("wordSelectionRegex", config.word_selection_regex ?? "");
 				setState("smartSelectionRules", (config.smart_selection_rules ?? []).map(ruleFromWire));
-				setState("showBlockTimestamps", config.show_block_timestamps ?? true);
+				setState(
+					"blockTimestampMode",
+					resolveBlockTimestampMode(config.block_timestamp_mode ?? null, config.show_block_timestamps),
+				);
 				setState("showScrollbarMarks", config.show_scrollbar_marks ?? true);
 				setState("showBlockMarks", config.show_block_marks ?? true);
 				setState("showPromptMarks", config.show_prompt_marks ?? true);
@@ -957,9 +984,9 @@ function createSettingsStore() {
 			save();
 		},
 
-		/** Show each command block's elapsed time while Ctrl+Cmd is held */
-		setShowBlockTimestamps(enabled: boolean): void {
-			setState("showBlockTimestamps", enabled);
+		/** When each command block's relative start time is painted: never, while Ctrl+Cmd is held, or always */
+		setBlockTimestampMode(mode: BlockTimestampMode): void {
+			setState("blockTimestampMode", mode);
 			save();
 		},
 
