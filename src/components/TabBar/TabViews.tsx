@@ -262,10 +262,15 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 						}}
 					/>
 				</Show>
-				{progress() !== null && progress() !== undefined && (
+				{progress() != null && (
 					<div
 						class={s.progress}
-						style={{ transform: `scaleX(${progress() === "indeterminate" ? 1 : (progress() as number) / 100})` }}
+						data-kind={progress()!.kind}
+						style={
+							progress()!.kind === "indeterminate"
+								? undefined
+								: { transform: `scaleX(${(progress()!.value ?? 100) / 100})` }
+						}
 					/>
 				)}
 				<PanePositionIcon tabId={props.id} rects={props.paneRects} />
