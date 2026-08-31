@@ -160,6 +160,143 @@ describe("Terminal.tsx event bridge (real mount)", () => {
 		unmount();
 	});
 
+	it('routes a "progress" normal-state event into terminalsStore.progress', async () => {
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 1, value: 42 });
+
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.progress).toEqual({ kind: "normal", value: 42 });
+		});
+
+		unmount();
+	});
+
+	it('routes a "progress" error-state event with its value', async () => {
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 2, value: 30 });
+
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.progress).toEqual({ kind: "error", value: 30 });
+		});
+
+		unmount();
+	});
+
+	it('routes a "progress" error-state event with a null value through unchanged', async () => {
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 2, value: null });
+
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.progress).toEqual({ kind: "error", value: null });
+		});
+
+		unmount();
+	});
+
+	it('routes a "progress" error-state event with the value key entirely omitted (the real wire shape)', async () => {
+		// Rust's `#[serde(skip_serializing_if = "Option::is_none")]` omits the
+		// `value` key altogether for `\x1b]9;4;2;\x07` — it never sends an
+		// explicit `null`. A handler that only checks `=== null` lets this fall
+		// through to `Math.max(0, undefined)` (NaN), which CSSOM then silently
+		// drops, leaving the bar frozen at its previous width. Regression pin.
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 2 });
+
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.progress).toEqual({ kind: "error", value: null });
+		});
+
+		unmount();
+	});
+
+	it('routes a "progress" indeterminate-state event and drops the value', async () => {
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		// Even though a value is sent, indeterminate must ignore it.
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 3, value: 77 });
+
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.progress).toEqual({ kind: "indeterminate", value: null });
+		});
+
+		unmount();
+	});
+
+	it('routes a "progress" warning-state event with its value', async () => {
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 4, value: 65 });
+
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.progress).toEqual({ kind: "warning", value: 65 });
+		});
+
+		unmount();
+	});
+
+	it('routes a "progress" clear event (state=0) back to null', async () => {
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 1, value: 50 });
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.progress).toEqual({ kind: "normal", value: 50 });
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 0, value: 0 });
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.progress).toBeNull();
+		});
+
+		unmount();
+	});
+
+	it('an unknown "progress" state digit is a no-op, not a clear', async () => {
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 1, value: 60 });
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.progress).toEqual({ kind: "normal", value: 60 });
+		});
+
+		// state=9 is not a defined OSC 9;4 state (mirrors state.rs's own
+		// "unknown state leaves existing progress unchanged" test).
+		fire(`pty-parsed-${SESSION_ID}`, { type: "progress", state: 9, value: 1 });
+
+		// There is no event to await here — assert the store still holds the
+		// prior value rather than racing a state change that shouldn't happen.
+		expect(terminalsStore.get(TERMINAL_ID)?.progress).toEqual({ kind: "normal", value: 60 });
+
+		unmount();
+	});
+
 	it('an "agent-block" end event with no exit_code carries exitCode null, not 0', async () => {
 		// Regression pin for the `?? undefined` -> `?? null` distinction: a clean
 		// turn must not paint a false-successful (0) or false-failed gutter tick.

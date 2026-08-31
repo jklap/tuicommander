@@ -131,7 +131,10 @@ Drag tabs to reorder them. Visual drop indicators show where the tab will land.
 | Orange pulsing dot | Question — agent needs user input |
 | Red pulsing dot | Error — API error or agent stuck |
 | Question icon | Agent is asking a question |
-| Progress bar | Operation in progress (OSC 9;4) |
+| Progress bar (normal, accent color) | Operation in progress at a known percentage (OSC 9;4) |
+| Progress bar (error color) | Operation reported an error, optionally at a percentage |
+| Progress bar (warning color) | Operation reported a warning (iTerm2-style), optionally at a percentage |
+| Progress bar (sweeping animation) | Operation in progress with no known percentage (indeterminate) |
 | Amber gradient | Session created via HTTP/MCP (remote session) |
 
 Final API failures keep the red Error dot even when the agent prints a completion summary or returns to idle. Optional auto-retry sends up to three `continue` commands (after 5, 15 and 30 seconds); an idle agent that does not resume stays red. Native provider retry countdowns do not count as final failures. Actual resumed work clears the error, and the next successful idle turn returns to Done.
