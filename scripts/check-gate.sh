@@ -21,8 +21,8 @@
 #      successful build reports "Finished"/nothing-to-rebuild. Rebuilding it
 #      defensively before the real run avoids a false failure report.
 #
-# Two more known, pre-existing conditions this script warns about instead of
-# letting fail silently confuse an otherwise-clean change (neither is
+# Three known, pre-existing conditions this script warns about instead of
+# letting fail silently confuse an otherwise-clean change (none of these are
 # something to "fix" as part of an unrelated change — see AGENTS.md > Fresh
 # Worktree Setup):
 #   - The `plugins/` git submodule is frequently uninitialized in worktrees,
@@ -34,6 +34,23 @@
 #     the `vitest` step, and therefore all of `make check`, fail regardless
 #     of what else changed. Confirmed pre-existing (untouched by recent
 #     commits) — track/fix it separately, don't chase it as a regression.
+#   - There is no `rust-toolchain.toml` and CI installs `dtolnay/rust-toolchain
+#     @stable` (a floating, unpinned "whatever is current" version) — and CI
+#     has never actually executed on this repo (see AGENTS.md > Tests), so
+#     nothing enforces that a contributor's local stable toolchain is new
+#     enough for lints a recent commit assumed exist. A commit can land clippy
+#     fixes for a lint name that only exists in a newer stable than your local
+#     `rustc`/`cargo clippy`; with `-D warnings` promoting `unknown-lints` to a
+#     hard error, that reads as "1 errors" naming an innocuous-looking
+#     `#[allow(clippy::...)]` in a file you never touched. `rustup update` is
+#     the fix, not editing the offending file. Confirmed via `git log`/`git
+#     blame`: the 2026-08-29 session that found this traced the failing
+#     `#[allow(clippy::unused_async_trait_impl)]` in
+#     `src-tauri/src/mcp_proxy/registry.rs` to commit `7db734f9` ("fix(build):
+#     clear the clippy errors Rust 1.98 turned into build failures"), already
+#     an ancestor of the branch it was investigating — and `rustup check`
+#     confirmed the installed toolchain (1.97.1) was exactly one stable
+#     release behind (1.98.0) at the time.
 
 set -euo pipefail
 
@@ -42,6 +59,22 @@ cd "$REPO_ROOT"
 
 echo "==> Defensive rebuild: tuic-hook (works around a transient 0-byte binary issue)"
 (cd src-tauri && cargo build --package tuic-hook)
+
+if command -v rustup >/dev/null 2>&1; then
+	rustup_status="$(rustup check 2>/dev/null || true)"
+	if echo "$rustup_status" | grep -qi "update available"; then
+		echo
+		echo "NOTE: a newer stable Rust toolchain is available:"
+		echo "$rustup_status" | grep -i "update available" | sed 's/^/      /'
+		echo "      This repo has no rust-toolchain.toml pin and CI floats on"
+		echo "      'stable', so a commit can start assuming a lint/feature only"
+		echo "      a newer stable knows about (clippy then fails with 'unknown"
+		echo "      lint' on an unrelated file, not a real regression in your"
+		echo "      change). If the clippy step below fails with 'unknown lint',"
+		echo "      run 'rustup update' and re-run this script before assuming"
+		echo "      your change broke something."
+	fi
+fi
 
 if git submodule status plugins 2>/dev/null | grep -q '^-'; then
 	echo
@@ -76,6 +109,15 @@ fi
 echo
 echo "make check exited $status. Steps that reported a result:"
 grep -E "✓|✗|error:|FAILED|Found [0-9]+ error" "$LOG" || true
+
+if grep -q "unknown lint" "$LOG"; then
+	echo
+	echo "NOTE: 'unknown lint' means your local clippy is older than a lint"
+	echo "      name a commit's #[allow(clippy::...)] assumes exists — a"
+	echo "      stale-toolchain problem (see the header of this script), not"
+	echo "      a real regression in your change. Run 'rustup update' and"
+	echo "      re-run this script before investigating the named file further."
+fi
 
 if grep -q "rust tests ✓" "$LOG" && ! grep -q "vitest ✓" "$LOG"; then
 	echo
