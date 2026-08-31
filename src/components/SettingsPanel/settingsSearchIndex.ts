@@ -351,6 +351,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
 	{ tab: "terminal", section: "Preview" },
 	{ tab: "terminal", section: "Behavior" },
+	{ tab: "terminal", section: "Shell Integration", sectionKey: "terminal.heading.shellIntegration" },
 	{ tab: "terminal", section: "Session Restore", sectionKey: "terminal.heading.sessionRestore" },
 	{ tab: "terminal", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
 	{
@@ -386,7 +387,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		tab: "terminal",
 		section: "Behavior",
 		label: "Show block timestamps",
-		labelKey: "general.toggle.showBlockTimestamps",
+		labelKey: "terminal.label.blockTimestampMode",
 	},
 	{
 		tab: "terminal",

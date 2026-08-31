@@ -8,6 +8,7 @@ import {
 	ATTR_ITALIC,
 	type CellMetrics,
 	type DecodedRow,
+	GUTTER_PX,
 } from "../canvasTerminalUtils";
 import { createGridRenderer } from "../gridRenderer";
 
@@ -195,7 +196,7 @@ describe("gridRenderer hiddenRows (#1761-7249)", () => {
 		rows.set(3, textRow(3, "Z"));
 		renderer.paintGrid(rows, metrics, { fullRepaint: false, dirtyIndices: new Set([3]), hiddenRows });
 		expect(fillText.mock.calls).toEqual([["Z", 0, 44]]);
-		expect(fillRect.mock.calls).toEqual([[-6, 32, 100, 16]]);
+		expect(fillRect.mock.calls).toEqual([[-GUTTER_PX, 32, 100, 16]]);
 	});
 
 	function projectedPainter() {
@@ -236,9 +237,9 @@ describe("gridRenderer hiddenRows (#1761-7249)", () => {
 			["E", 0, 44],
 		]);
 		expect(fillRect.mock.calls).toEqual([
-			[-6, 16, 100, 16],
-			[-6, 32, 100, 16],
-			[-6, 48, 100, 16],
+			[-GUTTER_PX, 16, 100, 16],
+			[-GUTTER_PX, 32, 100, 16],
+			[-GUTTER_PX, 48, 100, 16],
 		]);
 		paint(new Set());
 		expect(fillText.mock.calls).toEqual([
@@ -269,7 +270,7 @@ describe("gridRenderer hiddenRows (#1761-7249)", () => {
 			hiddenAnswerMarkers: new Set([0]),
 		});
 		expect(fillText.mock.calls).toEqual([["X", 0, 12]]);
-		expect(fillRect.mock.calls).toEqual([[-6, 0, 100, 16]]);
+		expect(fillRect.mock.calls).toEqual([[-GUTTER_PX, 0, 100, 16]]);
 	});
 
 	// catches: a hidden marker row is still painted, so its text shows on the canvas

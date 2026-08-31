@@ -7,6 +7,7 @@
   "app.indicator_overrides.{id}.id": "Read-only registry identity of the overridden indicator; the UI Legend editor adds and removes overrides by id (src/indicators/registry.ts).",
   "app.services.auth.session_token": "Generated credential; the Remote Access page rotates it through regenerate_session_token, never an arbitrary editable token field.",
   "app.services.push.vapid_private_key": "Generated P-256 credential paired with vapid_public_key by push::generate_vapid_keys; no independent private-key editor.",
+  "app.show_block_timestamps": "Legacy migrated field: superseded by app.block_timestamp_mode (config.rs migrate_block_timestamp_mode maps false to \"off\" at load); no longer written.",
   "app.smart_selection_rules.{id}.id": "Read-only stable identity assigned by the smart-selection rule editor; changing it would replace record identity.",
   "connections.connections.{id}.id": "Read-only connection identity; the connection editor creates it and owner removal retires it.",
   "ego.auth.{provider}.credential_command": "Read-only credential presence projection; use the AI Chat provider credential-command workflow, never an editable redaction object.",

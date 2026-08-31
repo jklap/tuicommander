@@ -6,7 +6,7 @@ import {
 	selectionRowToViewport,
 	viewportRowToSelectionRow,
 } from "../canvasTerminalSelection";
-import { type CellMetrics, type DecodedRow, decodeBinaryFrame, rowText } from "../canvasTerminalUtils";
+import { type CellMetrics, type DecodedRow, decodeBinaryFrame, GUTTER_PX, rowText } from "../canvasTerminalUtils";
 import { createGridRenderer } from "../gridRenderer";
 import { hiddenMarkerRows, planSuggestOverlay } from "../suggestOverlay";
 import { ViewportProjection } from "../viewportProjection";
@@ -126,7 +126,7 @@ describe("viewport projection", () => {
 			metrics,
 			projection,
 		);
-		expect(input.style.left).toBe("26px");
+		expect(input.style.left).toBe(`${20 + GUTTER_PX}px`);
 		expect(input.style.top).toBe(`${answer * 20}px`);
 		fillRect.mockClear();
 		const hidden = [...projection.hidden][0];

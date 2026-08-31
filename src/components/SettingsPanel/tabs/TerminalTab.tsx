@@ -2,9 +2,10 @@ import { type Component, createEffect, createMemo, createSignal, onCleanup, Show
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { getModifierSymbol } from "../../../platform";
-import type { FontType } from "../../../stores/settings";
+import type { BlockTimestampMode, FontType } from "../../../stores/settings";
 import { FONT_FAMILIES, settingsStore } from "../../../stores/settings";
 import { getTerminalTheme, getThemeNames } from "../../../themes";
+import { writeClipboard } from "../../../utils/clipboard";
 import type { LinkActivation } from "../../Terminal/canvasTerminalLinks";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
@@ -288,8 +289,30 @@ const TerminalPreview: Component = () => {
 const themeOptions = () => Object.entries(getThemeNames()).map(([value, label]) => ({ value, label }));
 const fontOptions = Object.keys(FONT_FAMILIES).map((value) => ({ value, label: value }));
 
+/** zsh gets automatic shell integration via a ZDOTDIR wrapper (shell_integration.rs) — no
+ *  setup needed. bash/fish need this snippet added to their own startup file once, since
+ *  neither has an equivalent zero-config trick; see docs/user-guide/terminals.md. */
+const SHELL_INTEGRATION_SNIPPETS = {
+	bash: '[ -n "$TUIC_SHELL_INTEGRATION" ] && source "$TUIC_SHELL_INTEGRATION"',
+	fish: "if set -q TUIC_SHELL_INTEGRATION; source $TUIC_SHELL_INTEGRATION; end",
+} as const;
+
 export const TerminalTab: Component = () => {
 	const [scrollbackCleared, setScrollbackCleared] = createSignal(false);
+	const [copiedSnippet, setCopiedSnippet] = createSignal<keyof typeof SHELL_INTEGRATION_SNIPPETS | null>(null);
+	let copiedSnippetTimer: ReturnType<typeof setTimeout> | undefined;
+	onCleanup(() => clearTimeout(copiedSnippetTimer));
+	const copySnippet = (shell: keyof typeof SHELL_INTEGRATION_SNIPPETS) => {
+		writeClipboard(SHELL_INTEGRATION_SNIPPETS[shell])
+			.then(() => {
+				setCopiedSnippet(shell);
+				clearTimeout(copiedSnippetTimer);
+				copiedSnippetTimer = setTimeout(() => setCopiedSnippet(null), 2000);
+			})
+			.catch(() => {
+				/* best-effort */
+			});
+	};
 	const handleClearScrollback = async () => {
 		try {
 			await invoke("clear_saved_scrollback", {});
@@ -433,15 +456,20 @@ export const TerminalTab: Component = () => {
 					)}
 				/>
 
-				<SettingToggle
-					settingId="app.show_block_timestamps"
+				<SettingSelect
+					settingId="app.block_timestamp_mode"
 					row
-					checked={settingsStore.state.showBlockTimestamps}
-					onChange={(v) => settingsStore.setShowBlockTimestamps(v)}
-					label={t("general.toggle.showBlockTimestamps", "Show block timestamps")}
+					label={t("terminal.label.blockTimestampMode", "Show block timestamps")}
+					value={settingsStore.state.blockTimestampMode}
+					onChange={(v) => settingsStore.setBlockTimestampMode(v as BlockTimestampMode)}
+					options={[
+						{ value: "off", label: t("terminal.blockTimestampMode.off", "Never") },
+						{ value: "modifier", label: t("terminal.blockTimestampMode.modifier", "Hold Ctrl+Cmd") },
+						{ value: "always", label: t("terminal.blockTimestampMode.always", "Always") },
+					]}
 					hint={t(
-						"general.hint.showBlockTimestamps",
-						"While Ctrl+Cmd is held, label each command block with how long ago it started",
+						"terminal.hint.blockTimestampMode",
+						'When each command block started, as relative time. "Hold Ctrl+Cmd" shows it only while both are held; "Always" keeps it visible.',
 					)}
 				/>
 
@@ -514,6 +542,40 @@ export const TerminalTab: Component = () => {
 						)}
 					/>
 				</ExpertSetting>
+			</SectionCard>
+			<SectionCard title={t("terminal.heading.shellIntegration", "Shell Integration")}>
+				<p class={s.hint}>
+					{t(
+						"terminal.hint.shellIntegration",
+						"Command blocks need OSC 133 markers from your shell. zsh gets these automatically — bash and fish need one line added to their startup file.",
+					)}
+				</p>
+
+				<div class={s.hintInline}>{t("terminal.label.shellIntegrationBash", "Bash — add to ~/.bashrc:")}</div>
+				<div class={s.snippetRow}>
+					<code class={s.snippetCode}>{SHELL_INTEGRATION_SNIPPETS.bash}</code>
+					<button
+						data-non-setting="Copies the bash shell-integration snippet to the clipboard"
+						class={s.transferBtn}
+						onClick={() => copySnippet("bash")}
+					>
+						{copiedSnippet() === "bash" ? t("terminal.action.copied", "Copied!") : t("terminal.action.copy", "Copy")}
+					</button>
+				</div>
+
+				<div class={s.hintInline}>
+					{t("terminal.label.shellIntegrationFish", "Fish — add to ~/.config/fish/config.fish:")}
+				</div>
+				<div class={s.snippetRow}>
+					<code class={s.snippetCode}>{SHELL_INTEGRATION_SNIPPETS.fish}</code>
+					<button
+						data-non-setting="Copies the fish shell-integration snippet to the clipboard"
+						class={s.transferBtn}
+						onClick={() => copySnippet("fish")}
+					>
+						{copiedSnippet() === "fish" ? t("terminal.action.copied", "Copied!") : t("terminal.action.copy", "Copy")}
+					</button>
+				</div>
 			</SectionCard>
 			<SectionCard title={t("terminal.heading.sessionRestore", "Session Restore")}>
 				<SettingToggle

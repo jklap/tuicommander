@@ -1229,14 +1229,21 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates smart selection rules for the current owner; rule actions can send text or run commands when chosen.","operations":["get","set"],"confirmationClass":"execution_authority"}, "x-collection-key" = "id"))]
     pub(crate) smart_selection_rules: Vec<SmartSelectionRule>,
-    /// Label each command block with its elapsed time while Ctrl+Cmd is held.
-    /// Frontend-gated (the label is painted in the renderer); stored here so the
-    /// choice persists — a field absent from this struct is dropped by serde on
-    /// every `save_config`, which is exactly what happened to these three
-    /// before they had a Settings toggle.
+    /// Deprecated (issue #5): superseded by `block_timestamp_mode` below. Kept only
+    /// so a config saved by an older build still deserializes;
+    /// `migrate_block_timestamp_mode` maps it once at load time (`false` -> "off",
+    /// otherwise the "modifier" default) and the frontend no longer writes it.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show block timestamps for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) show_block_timestamps: bool,
+    /// Command-block timestamp overlay display mode: "off", "always", or "modifier"
+    /// (hold Ctrl+Cmd to reveal — the only behavior before this field existed, hence
+    /// the default). The frontend owns migrating a pre-existing `show_block_timestamps`
+    /// bool into this field; Rust just persists whatever it's given.
+    #[serde(default = "default_block_timestamp_mode")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates block timestamp mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["off","modifier","always"]))]
+    pub(crate) block_timestamp_mode: String,
     /// Draw command-block marks on the terminal scrollbar. Frontend-gated.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show scrollbar marks for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1251,8 +1258,9 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show prompt marks for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) show_prompt_marks: bool,
-    /// Let the block-fold shortcut collapse a command block's output.
-    /// Frontend-gated.
+    /// Allow collapsing a command block's output (Cmd+Shift+.). A gutter click also
+    /// folds/unfolds when it lands on the block's header row (the chevron); anywhere
+    /// else in the block's gutter run still selects its output for copying.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates block folding enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) block_folding_enabled: bool,
@@ -1456,6 +1464,10 @@ fn default_word_selection_mode() -> String {
     "characters".to_string()
 }
 
+fn default_block_timestamp_mode() -> String {
+    "modifier".to_string()
+}
+
 /// Punctuation separators matching the frontend's hardcoded `WORD_SEPARATOR_RE`
 /// (`canvasTerminalSelection.ts`) exactly, so the default preserves today's
 /// double-click behavior losslessly. Whitespace and control characters are
@@ -1586,6 +1598,7 @@ impl Default for AppConfig {
             smart_selection_rules: Vec::new(),
             show_block_timestamps: true,
             show_scrollbar_marks: true,
+            block_timestamp_mode: default_block_timestamp_mode(),
             show_block_marks: true,
             show_prompt_marks: true,
             block_folding_enabled: true,
@@ -2529,6 +2542,26 @@ pub(crate) const AGENTS_CONFIG_FILE: &str = "agents.json";
 const ACTIVITY_FILE: &str = "activity.json";
 
 // App config
+
+/// Derive `block_timestamp_mode` from the legacy `show_block_timestamps` bool
+/// for a config saved before the mode existed. Runs on the raw JSON because
+/// serde's default ("modifier") would otherwise hide whether the field was
+/// absent, so an explicit `false` could never become "off". `true` or no
+/// legacy value keeps the serde default.
+fn migrate_block_timestamp_mode(val: &mut serde_json::Value) {
+    let Some(obj) = val.as_object_mut() else {
+        return;
+    };
+    if obj.contains_key("block_timestamp_mode") {
+        return;
+    }
+    if obj.get("show_block_timestamps") == Some(&serde_json::Value::Bool(false)) {
+        obj.insert(
+            "block_timestamp_mode".into(),
+            serde_json::Value::String("off".into()),
+        );
+    }
+}
 
 /// Migrate flat service fields from pre-ServicesConfig format into nested `services` object.
 fn migrate_flat_services(val: &mut serde_json::Value) {
@@ -3499,6 +3532,7 @@ fn read_app_config_unlocked_for_version(
         }
     };
     migrate_flat_services(&mut val);
+    migrate_block_timestamp_mode(&mut val);
     let migrated_capabilities = val.get("disabled_native_tools").is_some();
     match serde_json::from_value(val) {
         Ok(mut config) => {
@@ -5865,6 +5899,7 @@ mod tests {
             // tell a real round trip from serde handing back the default.
             show_block_timestamps: false,
             show_scrollbar_marks: false,
+            block_timestamp_mode: "always".to_string(),
             show_block_marks: false,
             show_prompt_marks: false,
             block_folding_enabled: false,
@@ -5957,6 +5992,7 @@ mod tests {
         // back to the default on the next load.
         assert!(!loaded.show_block_timestamps);
         assert!(!loaded.show_scrollbar_marks);
+        assert_eq!(loaded.block_timestamp_mode, "always");
         assert!(!loaded.show_block_marks);
         assert!(!loaded.show_prompt_marks);
         assert!(!loaded.block_folding_enabled);
@@ -6202,6 +6238,7 @@ mod tests {
         // agree or the Settings toggles read one value and the terminal another.
         assert!(loaded.show_block_timestamps);
         assert!(loaded.show_scrollbar_marks);
+        assert_eq!(loaded.block_timestamp_mode, "modifier"); // defaults to "modifier"
         assert!(loaded.show_block_marks); // defaults to true
         assert!(loaded.show_prompt_marks); // defaults to true
         assert!(loaded.block_folding_enabled);
@@ -6237,6 +6274,43 @@ mod tests {
             undocumented.is_empty(),
             "fields missing a doc row in docs/backend/config.md: {undocumented:?}"
         );
+    }
+
+    // Catches: serde's "modifier" default hiding a legacy `show_block_timestamps: false`,
+    // so a user who had timestamps off gets them back after the upgrade.
+    #[test]
+    fn block_timestamp_mode_migrates_from_legacy_bool() {
+        let migrate = |json: serde_json::Value| {
+            let mut val = json;
+            migrate_block_timestamp_mode(&mut val);
+            val.get("block_timestamp_mode").cloned()
+        };
+        assert_eq!(
+            migrate(serde_json::json!({"show_block_timestamps": false})),
+            Some(serde_json::json!("off"))
+        );
+        // `true` or no legacy value: left to serde's "modifier" default.
+        assert_eq!(
+            migrate(serde_json::json!({"show_block_timestamps": true})),
+            None
+        );
+        assert_eq!(migrate(serde_json::json!({})), None);
+        assert_eq!(
+            migrate(
+                serde_json::json!({"show_block_timestamps": false, "block_timestamp_mode": "always"})
+            ),
+            Some(serde_json::json!("always")),
+            "an explicit mode always wins over the legacy bool"
+        );
+        let mut legacy = serde_json::to_value(AppConfig::default()).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("block_timestamp_mode");
+        legacy["show_block_timestamps"] = serde_json::json!(false);
+        migrate_block_timestamp_mode(&mut legacy);
+        let loaded: AppConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(loaded.block_timestamp_mode, "off");
     }
 
     #[test]
