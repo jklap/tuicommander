@@ -549,6 +549,55 @@ fn is_zero(v: &u32) -> bool {
     *v == 0
 }
 
+/// OSC 9;4 progress state, widened past plain "active/inactive" so the
+/// frontend can render error/indeterminate/warning distinctly instead of
+/// just a percentage. Mirrors `output_parser::ParsedEvent::Progress`'s raw
+/// `state: u8` (1/2/3/4), but as a named type on the durable session
+/// snapshot rather than a bare number.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ProgressKind {
+    Normal,
+    Error,
+    Indeterminate,
+    Warning,
+}
+
+/// `SessionState.progress`'s value: which kind of progress indicator is
+/// active, and (except for Indeterminate, which ignores it) at what value.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct ProgressInfo {
+    pub kind: ProgressKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<u8>,
+}
+
+/// `SessionState` is also read back from a remote daemon's `GET /sessions`
+/// row (#791-055e), and a daemon built before progress kinds existed sends
+/// `progress` as a bare percentage. Accept that form as `Normal` instead of
+/// failing the whole row.
+impl<'de> Deserialize<'de> for ProgressInfo {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Info {
+                kind: ProgressKind,
+                #[serde(default)]
+                value: Option<u8>,
+            },
+            Legacy(u8),
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Info { kind, value } => ProgressInfo { kind, value },
+            Wire::Legacy(value) => ProgressInfo {
+                kind: ProgressKind::Normal,
+                value: Some(value),
+            },
+        })
+    }
+}
+
 /// Per-session state accumulated from broadcast events.
 /// Updated by a background task that subscribes to the event bus.
 /// Read by `GET /sessions` to enrich the response for REST-polling clients.
@@ -656,9 +705,9 @@ pub(crate) struct SessionState {
     /// Last user prompt with >= 10 words
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_prompt: Option<String>,
-    /// Current progress value (0-100); None when no active progress bar
+    /// Current progress indicator; None when no active progress bar
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub progress: Option<u8>,
+    pub progress: Option<ProgressInfo>,
     /// Number of active sub-tasks (local agents, bash, background tasks) from ›› mode line
     #[serde(skip_serializing_if = "is_zero")]
     pub active_sub_tasks: u32,
@@ -5019,15 +5068,33 @@ impl AppState {
                     }
                     "progress" => {
                         let state_val = parsed.get("state").and_then(|v| v.as_u64()).unwrap_or(0);
-                        if state_val == 0 {
-                            // state=0 means remove the progress bar
-                            s.progress = None;
-                        } else {
-                            s.progress = parsed
-                                .get("value")
-                                .and_then(|v| v.as_u64())
-                                .map(|v| v as u8);
-                        }
+                        let value = parsed
+                            .get("value")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v.min(100) as u8);
+                        s.progress = match state_val {
+                            0 => None, // state=0 means remove the progress bar
+                            1 => Some(ProgressInfo {
+                                kind: ProgressKind::Normal,
+                                value,
+                            }),
+                            2 => Some(ProgressInfo {
+                                kind: ProgressKind::Error,
+                                value,
+                            }),
+                            // Indeterminate ignores whatever value was sent —
+                            // there is no meaningful percentage to show.
+                            3 => Some(ProgressInfo {
+                                kind: ProgressKind::Indeterminate,
+                                value: None,
+                            }),
+                            4 => Some(ProgressInfo {
+                                kind: ProgressKind::Warning,
+                                value,
+                            }),
+                            // Unknown state: leave any existing progress bar alone.
+                            _ => s.progress,
+                        };
                     }
                     _ => {}
                 }
@@ -5491,6 +5558,25 @@ mod worktree_event_payloads {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_info_round_trips_and_accepts_a_legacy_bare_percentage() {
+        let info = ProgressInfo {
+            kind: ProgressKind::Error,
+            value: None,
+        };
+        let json = serde_json::to_value(info).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "error" }));
+        assert_eq!(serde_json::from_value::<ProgressInfo>(json).unwrap(), info);
+        // A remote daemon from before progress kinds sends a bare number.
+        assert_eq!(
+            serde_json::from_value::<ProgressInfo>(serde_json::json!(42)).unwrap(),
+            ProgressInfo {
+                kind: ProgressKind::Normal,
+                value: Some(42)
+            }
+        );
+    }
 
     fn make_msg(id: &str) -> AgentMessage {
         AgentMessage {
@@ -9434,7 +9520,13 @@ mod tests {
         let state = fresh_state();
         let event = make_parsed("progress", serde_json::json!({ "state": 1, "value": 42 }));
         let s = apply(&state, &event);
-        assert_eq!(s.progress, Some(42));
+        assert_eq!(
+            s.progress,
+            Some(ProgressInfo {
+                kind: ProgressKind::Normal,
+                value: Some(42),
+            })
+        );
     }
 
     #[test]
@@ -9444,6 +9536,91 @@ mod tests {
         let set_event = make_parsed("progress", serde_json::json!({ "state": 1, "value": 75 }));
         apply(&state, &set_event);
         // Then remove it
+        let remove_event = make_parsed("progress", serde_json::json!({ "state": 0, "value": 0 }));
+        let s = apply(&state, &remove_event);
+        assert!(s.progress.is_none());
+    }
+
+    #[test]
+    fn test_session_state_progress_error_with_value() {
+        let state = fresh_state();
+        let event = make_parsed("progress", serde_json::json!({ "state": 2, "value": 50 }));
+        let s = apply(&state, &event);
+        assert_eq!(
+            s.progress,
+            Some(ProgressInfo {
+                kind: ProgressKind::Error,
+                value: Some(50),
+            })
+        );
+    }
+
+    #[test]
+    fn test_session_state_progress_error_without_value() {
+        let state = fresh_state();
+        // No "value" key at all — error state may not know a percentage.
+        let event = make_parsed("progress", serde_json::json!({ "state": 2 }));
+        let s = apply(&state, &event);
+        assert_eq!(
+            s.progress,
+            Some(ProgressInfo {
+                kind: ProgressKind::Error,
+                value: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_session_state_progress_indeterminate_ignores_value() {
+        let state = fresh_state();
+        // Even though a value is sent, indeterminate must not store it.
+        let event = make_parsed("progress", serde_json::json!({ "state": 3, "value": 77 }));
+        let s = apply(&state, &event);
+        assert_eq!(
+            s.progress,
+            Some(ProgressInfo {
+                kind: ProgressKind::Indeterminate,
+                value: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_session_state_progress_warning_sets_value() {
+        let state = fresh_state();
+        let event = make_parsed("progress", serde_json::json!({ "state": 4, "value": 30 }));
+        let s = apply(&state, &event);
+        assert_eq!(
+            s.progress,
+            Some(ProgressInfo {
+                kind: ProgressKind::Warning,
+                value: Some(30),
+            })
+        );
+    }
+
+    #[test]
+    fn test_session_state_progress_unknown_state_leaves_existing_progress_unchanged() {
+        let state = fresh_state();
+        let set_event = make_parsed("progress", serde_json::json!({ "state": 1, "value": 60 }));
+        apply(&state, &set_event);
+        // state=9 is not a defined OSC 9;4 state; must be a no-op, not a clear.
+        let unknown_event = make_parsed("progress", serde_json::json!({ "state": 9, "value": 1 }));
+        let s = apply(&state, &unknown_event);
+        assert_eq!(
+            s.progress,
+            Some(ProgressInfo {
+                kind: ProgressKind::Normal,
+                value: Some(60),
+            })
+        );
+    }
+
+    #[test]
+    fn test_session_state_progress_error_clears_on_remove() {
+        let state = fresh_state();
+        let set_event = make_parsed("progress", serde_json::json!({ "state": 2, "value": 50 }));
+        apply(&state, &set_event);
         let remove_event = make_parsed("progress", serde_json::json!({ "state": 0, "value": 0 }));
         let s = apply(&state, &remove_event);
         assert!(s.progress.is_none());
