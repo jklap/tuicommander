@@ -131,7 +131,13 @@ export function SessionCard(props: SessionCardProps) {
 						<div class={styles.progressBar} data-testid="progress-bar">
 							<div
 								class={styles.progressFill}
-								style={{ transform: `scaleX(${props.session.state!.progress! / 100})` }}
+								data-kind={props.session.state!.progress!.kind}
+								data-testid="progress-fill"
+								style={
+									props.session.state!.progress!.kind === "indeterminate"
+										? undefined
+										: { transform: `scaleX(${(props.session.state!.progress!.value ?? 100) / 100})` }
+								}
 							/>
 						</div>
 					</div>

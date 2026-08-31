@@ -60,7 +60,10 @@ Drag tabs to reorder them. Visual drop indicators show where the tab will land.
 | Orange pulsing dot | Question — agent needs user input |
 | Red pulsing dot | Error — API error or agent stuck |
 | Question icon | Agent is asking a question |
-| Progress bar | Operation in progress (OSC 9;4) |
+| Progress bar (normal, accent color) | Operation in progress at a known percentage (OSC 9;4) |
+| Progress bar (error color) | Operation reported an error, optionally at a percentage |
+| Progress bar (warning color) | Operation reported a warning (iTerm2-style), optionally at a percentage |
+| Progress bar (sweeping animation) | Operation in progress with no known percentage (indeterminate) |
 | Amber gradient | Session created via HTTP/MCP (remote session) |
 
 Sidebar branch icons also show purple when they contain unseen terminals.

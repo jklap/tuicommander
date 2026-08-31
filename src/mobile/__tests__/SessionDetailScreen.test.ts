@@ -134,11 +134,22 @@ describe("rate-limit countdown formatting", () => {
 });
 
 describe("rich header field visibility", () => {
+	type ProgressKind = "normal" | "error" | "indeterminate" | "warning";
+	interface ProgressInfo {
+		kind: ProgressKind;
+		value?: number;
+	}
 	interface HeaderState {
 		agent_intent?: string;
 		current_task?: string;
-		progress?: number;
+		progress?: ProgressInfo;
 		usage_limit_pct?: number;
+	}
+
+	/** Mirrors SessionDetailScreen.tsx's headerProgressFill style logic. */
+	function progressTransform(progress: ProgressInfo): string | undefined {
+		if (progress.kind === "indeterminate") return undefined;
+		return `scaleX(${(progress.value ?? 100) / 100})`;
 	}
 
 	function getHeaderFields(state: HeaderState) {
@@ -146,6 +157,8 @@ describe("rich header field visibility", () => {
 			intentLine: !!state.agent_intent,
 			taskLine: !!state.current_task,
 			progressBar: state.progress != null,
+			progressKind: state.progress?.kind,
+			progressTransform: state.progress ? progressTransform(state.progress) : undefined,
 			usageLabel: state.usage_limit_pct != null,
 			usageDanger: (state.usage_limit_pct ?? 0) > 80,
 		};
@@ -162,8 +175,33 @@ describe("rich header field visibility", () => {
 	});
 
 	it("shows progress bar when progress is set", () => {
-		const fields = getHeaderFields({ current_task: "Build", progress: 50 });
+		const fields = getHeaderFields({ current_task: "Build", progress: { kind: "normal", value: 50 } });
 		expect(fields.progressBar).toBe(true);
+		expect(fields.progressTransform).toBe("scaleX(0.5)");
+	});
+
+	it("shows an error progress bar at its value", () => {
+		const fields = getHeaderFields({ progress: { kind: "error", value: 25 } });
+		expect(fields.progressKind).toBe("error");
+		expect(fields.progressTransform).toBe("scaleX(0.25)");
+	});
+
+	it("shows a full-width error progress bar when no value is given", () => {
+		const fields = getHeaderFields({ progress: { kind: "error" } });
+		expect(fields.progressKind).toBe("error");
+		expect(fields.progressTransform).toBe("scaleX(1)");
+	});
+
+	it("shows a warning progress bar at its value", () => {
+		const fields = getHeaderFields({ progress: { kind: "warning", value: 75 } });
+		expect(fields.progressKind).toBe("warning");
+		expect(fields.progressTransform).toBe("scaleX(0.75)");
+	});
+
+	it("shows an indeterminate progress bar with no transform, ignoring value", () => {
+		const fields = getHeaderFields({ progress: { kind: "indeterminate", value: 90 } });
+		expect(fields.progressKind).toBe("indeterminate");
+		expect(fields.progressTransform).toBeUndefined();
 	});
 
 	it("shows usage label when usage_limit_pct is set", () => {
