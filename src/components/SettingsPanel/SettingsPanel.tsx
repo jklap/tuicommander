@@ -68,7 +68,7 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 		label: t("settings.group.workspace", "Workspace"),
 		tabs: [
 			{ key: "terminal", label: t("settings.terminal", "Terminal") },
-			{ key: "selection", label: t("settings.selection", "Selection") },
+			{ key: "selection", label: t("settings.selection", "Smart Selection") },
 			{ key: "keyboard-shortcuts", label: t("settings.keyboardShortcuts", "Keyboard Shortcuts") },
 			{ key: "github", label: "Git & GitHub" },
 		],

@@ -1,7 +1,10 @@
 import { fireEvent, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CreateWorktreeDialog } from "../../components/CreateWorktreeDialog/CreateWorktreeDialog";
+import {
+	CreateWorktreeDialog,
+	computeDropdownPlacement,
+} from "../../components/CreateWorktreeDialog/CreateWorktreeDialog";
 import { __resetModalStackForTest } from "../../stores/modalStack";
 
 const defaultProps = {
@@ -593,6 +596,108 @@ describe("CreateWorktreeDialog", () => {
 			expect(trigger.textContent).toContain("main");
 		});
 
+		it("Enter on the Tab-focused trigger opens the list", () => {
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+			expect(container.querySelector("[class*='dropdownList']")).toBeNull();
+
+			fireEvent.keyDown(trigger, { key: "Enter" });
+
+			expect(container.querySelector("[class*='dropdownList']")).not.toBeNull();
+		});
+
+		it("Space on the Tab-focused trigger opens the list", () => {
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+
+			fireEvent.keyDown(trigger, { key: " " });
+
+			expect(container.querySelector("[class*='dropdownList']")).not.toBeNull();
+		});
+
+		it("ArrowDown on the Tab-focused trigger opens the list", () => {
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+
+			fireEvent.keyDown(trigger, { key: "ArrowDown" });
+
+			expect(container.querySelector("[class*='dropdownList']")).not.toBeNull();
+		});
+
+		it("typing a printable character on the Tab-focused trigger opens the list and seeds the search query", () => {
+			// Regression: previously the trigger had no onKeyDown at all, so a
+			// printable key while it was focused did nothing locally — and before
+			// the useKeyboardRedirect fix, leaked to the terminal underneath instead.
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']") as HTMLButtonElement;
+			// A real browser guarantees the trigger is `document.activeElement`
+			// whenever its own keydown handler fires; jsdom's fireEvent doesn't
+			// move focus as a side effect of dispatching the event, so this has
+			// to be explicit to match reality (the handler now checks
+			// `activeElement` — see the race-window fix below).
+			trigger.focus();
+
+			fireEvent.keyDown(trigger, { key: "d" });
+
+			const search = container.querySelector("[data-testid='base-ref-search']") as HTMLInputElement;
+			expect(search).not.toBeNull();
+			expect(search.value).toBe("d");
+
+			const items = container.querySelectorAll("[data-testid='base-ref-item']");
+			expect(items.length).toBe(1);
+			expect(items[0].textContent).toContain("develop");
+		});
+
+		it("does not open on a modifier-held key or on a key while already open", () => {
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+
+			fireEvent.keyDown(trigger, { key: "d", ctrlKey: true });
+			expect(container.querySelector("[class*='dropdownList']")).toBeNull();
+
+			fireEvent.keyDown(trigger, { key: "d", metaKey: true });
+			expect(container.querySelector("[class*='dropdownList']")).toBeNull();
+		});
+
+		it("keeps accumulating characters typed on the trigger before the search input's deferred focus lands", () => {
+			// Regression: the search input only actually receives focus once the
+			// "reset search on open" effect's setTimeout(0) fires — a fast second
+			// keystroke landing on the trigger before that timer resolves used to
+			// hit the (then-unconditional) `open()` guard and get silently
+			// dropped instead of appended. Deliberately never advances timers, so
+			// the trigger is still `document.activeElement` for both keystrokes,
+			// reproducing the exact window the bug lived in.
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']") as HTMLButtonElement;
+			trigger.focus();
+
+			fireEvent.keyDown(trigger, { key: "d" });
+			fireEvent.keyDown(trigger, { key: "e" });
+
+			const search = container.querySelector("[data-testid='base-ref-search']") as HTMLInputElement;
+			expect(search.value).toBe("de");
+		});
+
+		it("suppresses Space's native keyup-triggered click, which would otherwise immediately re-close the list", () => {
+			// Regression: a native <button> fires its Space activation click on
+			// keyup (not keydown, unlike Enter), so without an onKeyUp handler
+			// suppressing that click, the sequence is: keydown opens the list,
+			// then the browser's own click on keyup fires the existing
+			// onClick={() => setOpen(!open())} handler and immediately closes it
+			// again. jsdom/fireEvent never synthesizes that click automatically,
+			// so this can only be asserted via the keyup event's defaultPrevented
+			// state, not by observing a full open/close cycle.
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+
+			fireEvent.keyDown(trigger, { key: " " });
+			expect(container.querySelector("[class*='dropdownList']")).not.toBeNull();
+
+			// fireEvent returns false when preventDefault() was called during dispatch.
+			const notPrevented = fireEvent.keyUp(trigger, { key: " " });
+			expect(notPrevented).toBe(false);
+		});
+
 		it("Tab closes the list", () => {
 			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
 			fireEvent.click(container.querySelector("[class*='dropdownTrigger']")!);
@@ -676,6 +781,108 @@ describe("CreateWorktreeDialog", () => {
 			fireEvent.mouseEnter(developItem);
 
 			expect(developItem.classList.toString()).toContain("dropdownItemSelected");
+		});
+	});
+
+	describe("layout: branch suggestions sit directly under the name field", () => {
+		it("renders the matching-branches list immediately after the name row, before the base-ref row", () => {
+			// The branch list should read as directly related to the name field it
+			// filters — not to the unrelated "Start from" row, which it used to
+			// visually sit under.
+			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+
+			const inputRow = container.querySelector("[class*='inputRow']")!;
+			const branchList = container.querySelector("[class*='branchList']")!;
+			const baseRefRow = container.querySelector("[class*='baseRefRow']")!;
+
+			expect(inputRow).not.toBeNull();
+			expect(branchList).not.toBeNull();
+			expect(baseRefRow).not.toBeNull();
+
+			// inputRow comes before branchList...
+			expect(inputRow.compareDocumentPosition(branchList) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+			// ...and branchList comes before baseRefRow (i.e. baseRefRow follows it).
+			expect(branchList.compareDocumentPosition(baseRefRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		});
+	});
+
+	describe("computeDropdownPlacement() — pure placement decision", () => {
+		it("opens downward when there is more room below than above", () => {
+			const result = computeDropdownPlacement({ top: 50, bottom: 80 }, 600);
+			expect(result.upward).toBe(false);
+		});
+
+		it("opens upward when there is more room above than below", () => {
+			const result = computeDropdownPlacement({ top: 500, bottom: 530 }, 600);
+			expect(result.upward).toBe(true);
+		});
+
+		it("caps maxHeight at 200px even when a huge amount of space is available", () => {
+			const result = computeDropdownPlacement({ top: 900, bottom: 930 }, 2000);
+			expect(result.maxHeight).toBe(200);
+		});
+
+		it("never returns a maxHeight below the 100px floor, even in a very short viewport", () => {
+			const downward = computeDropdownPlacement({ top: 40, bottom: 50 }, 60);
+			expect(downward.maxHeight).toBeGreaterThanOrEqual(100 - 8); // floor minus the edge margin
+		});
+
+		it("leaves an 8px margin below the available space rather than using all of it", () => {
+			// spaceAbove = 130 (under the 200px cap, above the 100px floor), so the
+			// result should track it directly minus the edge margin, not clamp to
+			// either boundary — a case the cap/floor tests above don't exercise.
+			const result = computeDropdownPlacement({ top: 130, bottom: 160 }, 200);
+			expect(result.upward).toBe(true);
+			expect(result.maxHeight).toBe(130 - 8);
+		});
+	});
+
+	describe("dropdown direction responds to real viewport position", () => {
+		function withTriggerRect(rect: { top: number; bottom: number }, run: () => void) {
+			const original = HTMLElement.prototype.getBoundingClientRect;
+			HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+				if (this.matches("[data-testid='base-ref-trigger']")) {
+					return { ...original.call(this), ...rect } as DOMRect;
+				}
+				return original.call(this);
+			};
+			try {
+				run();
+			} finally {
+				HTMLElement.prototype.getBoundingClientRect = original;
+			}
+		}
+
+		it("opens downward when the trigger sits near the top of a short window", () => {
+			const originalHeight = window.innerHeight;
+			Object.defineProperty(window, "innerHeight", { value: 300, configurable: true });
+			try {
+				withTriggerRect({ top: 20, bottom: 50 }, () => {
+					const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+					fireEvent.click(container.querySelector("[class*='dropdownTrigger']")!);
+					const list = container.querySelector("[class*='dropdownList']")!;
+					expect(list.className).toContain("dropdownListDown");
+					expect(list.className).not.toContain("dropdownListUp");
+				});
+			} finally {
+				Object.defineProperty(window, "innerHeight", { value: originalHeight, configurable: true });
+			}
+		});
+
+		it("opens upward when the trigger sits near the bottom of a short window", () => {
+			const originalHeight = window.innerHeight;
+			Object.defineProperty(window, "innerHeight", { value: 300, configurable: true });
+			try {
+				withTriggerRect({ top: 250, bottom: 280 }, () => {
+					const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+					fireEvent.click(container.querySelector("[class*='dropdownTrigger']")!);
+					const list = container.querySelector("[class*='dropdownList']")!;
+					expect(list.className).toContain("dropdownListUp");
+					expect(list.className).not.toContain("dropdownListDown");
+				});
+			} finally {
+				Object.defineProperty(window, "innerHeight", { value: originalHeight, configurable: true });
+			}
 		});
 	});
 
