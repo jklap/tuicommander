@@ -1,5 +1,5 @@
 import { type Accessor, createMemo, onCleanup } from "solid-js";
-import { type ActionEntry, getActionEntries } from "../actions/actionRegistry";
+import { type ActionEntry, getActionEntries, SMART_PROMPTS_CATEGORY } from "../actions/actionRegistry";
 import { t } from "../i18n";
 import { appLogger } from "../stores/appLogger";
 import { commandPaletteStore } from "../stores/commandPalette";
@@ -168,7 +168,7 @@ export function useCommandPaletteActions(options: CommandPaletteActionOptions): 
 			entries.push({
 				id: `smart:${prompt.id}`,
 				label: `Smart: ${prompt.name}`,
-				category: "Smart Prompts",
+				category: SMART_PROMPTS_CATEGORY,
 				keybinding: prompt.shortcut ?? "",
 				execute: () => {
 					options

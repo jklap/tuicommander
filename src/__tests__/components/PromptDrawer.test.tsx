@@ -196,4 +196,16 @@ describe("PromptDrawer auto-execute", () => {
 		expect(terminalMocks.openComposeWithText).toHaveBeenCalledWith("Handle tests");
 		expect(ptyMocks.sendCommand).not.toHaveBeenCalled();
 	});
+
+	it("focuses the search input on open (autofocus is inert — the drawer mounts once at app startup)", async () => {
+		const { container } = render(() => <PromptDrawer />);
+		const searchInput = container.querySelector(
+			'input[placeholder="Search prompts... (type to filter)"]',
+		) as HTMLInputElement;
+		expect(searchInput).toBeTruthy();
+
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(document.activeElement).toBe(searchInput);
+	});
 });

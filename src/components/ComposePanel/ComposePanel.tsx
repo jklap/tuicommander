@@ -5,6 +5,7 @@ import { type Accessor, type Component, createEffect, createSignal, For, on, onC
 import type { QueuedCommand } from "../../hooks/usePty";
 import { appLogger } from "../../stores/appLogger";
 import { generateId } from "../../stores/ideas";
+import { anyModalOpen } from "../../stores/modalStack";
 import { cx } from "../../utils";
 import { savePastedImage } from "../../utils/pastedImage";
 import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
@@ -268,17 +269,39 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	// panel sits beside a terminal the user must be able to click into.
 	createEffect(() => {
 		if (!props.isOpen() || props.pinned()) return;
-		const handleFocusOut = (e: FocusEvent) => {
-			const related = e.relatedTarget as Node | null;
-			const panel = editorView()?.dom?.closest(`.${s.panel}`);
-			if (related && panel?.contains(related)) return;
-			requestAnimationFrame(() => {
-				if (props.isOpen()) editorView()?.focus();
+		// Tracks whichever frame is currently pending so cleanup can cancel it —
+		// mirrors the initialText effect above, which cancels its own rAFs for
+		// the same reason: a frame firing after the panel closes/unmounts would
+		// call into a torn-down view.
+		let pendingFrame: number | null = null;
+		const handleFocusOut = () => {
+			// Deciding purely from `relatedTarget` (as this used to) fires too early:
+			// WebKit doesn't populate it for a mousedown-focused button, and even
+			// where it's populated the *next* focus target hasn't necessarily
+			// settled into `document.activeElement` yet. Deferring the whole
+			// decision to the next frame — after focus has actually settled — is
+			// what lets a click into an unrelated dialog (e.g. Edit Prompt, opened
+			// while Compose stays open) keep its focus instead of losing it back to
+			// CodeMirror one frame later.
+			pendingFrame = requestAnimationFrame(() => {
+				pendingFrame = null;
+				if (!props.isOpen()) return;
+				if (anyModalOpen()) return;
+				const active = document.activeElement;
+				// Only reclaim when focus fell through to <body> (or nowhere) — that's
+				// the "keystrokes would otherwise vanish" case this exists for. Focus
+				// that landed anywhere else (a dialog field, another panel) is left
+				// alone; nothing here needs that target's cooperation.
+				if (active && active !== document.body) return;
+				editorView()?.focus();
 			});
 		};
 		const cmDom = editorView()?.dom;
 		cmDom?.addEventListener("focusout", handleFocusOut);
-		onCleanup(() => cmDom?.removeEventListener("focusout", handleFocusOut));
+		onCleanup(() => {
+			cmDom?.removeEventListener("focusout", handleFocusOut);
+			if (pendingFrame !== null) cancelAnimationFrame(pendingFrame);
+		});
 	});
 
 	// The badge count comes from the cheap lifecycle poll; the texts cost an IPC
