@@ -118,7 +118,7 @@ How a detected link (URL, file path, `file://`, or OSC 8 hyperlink) opens is con
 - **Never** — click never opens a link; right-click's Open/Copy-link menu is the only way to activate one.
 
 ### Smart Selection
-Double-click word selection is configurable and rule-driven, mirroring iTerm2's Smart Selection. Configurable via the **Selection** settings tab (see [Settings — Selection Tab](../user-guide/settings.md#selection-tab)).
+Double-click word selection is configurable and rule-driven, mirroring iTerm2's Smart Selection. Configurable via the **Smart Selection** settings tab (see [Settings — Smart Selection Tab](../user-guide/settings.md#smart-selection-tab)).
 
 **Word boundaries** — what a double-click expands to when no smart rule matches (`word_selection_mode`, default `characters`):
 - **Character list** (`word_separators`) — a literal set of characters that break a word. Whitespace/control characters are always separators regardless of this list.
@@ -130,7 +130,7 @@ An empty `smart_selection_rules` means "use the built-in default set" (`DEFAULT_
 
 **Rule actions** — a rule may offer actions (Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI), each with a parameter template supporting `\0`-`\9` (match/capture groups), `\d`/`\u`/`\h` (cwd/user/host) substitution (`substituteActionParameter`). Actions surface in the right-click context menu when the click lands on a match (link-detection's own Open/Copy-link pair takes priority when both apply to the same span, to avoid duplicate menu items). When a rule's actions are shown, the matched rule's name appears above them as a non-interactive header (`ContextMenuItem.header`) so it's clear which rule fired — omitted for a rule left with a blank name. At most one action per rule may be marked default — Option/Alt+double-click runs it directly, in addition to selecting the match. `run_command`'s auto-submit is gated by `shouldAutoSubmitSuggestion` (same metacharacter-safety heuristic as OSC 7770 suggestion chips); `send_text` never auto-submits.
 
-**Export/Import** (`smartSelectionExport.ts`) — the Selection tab's toolbar exports the
+**Export/Import** (`smartSelectionExport.ts`) — the Smart Selection tab's toolbar exports the
 effective rule set (`all`/`modified`/`custom`, same scope semantics as Smart Prompts) to a
 `tuicommander-smart-selection-rules`-kinded JSON file via the native Save dialog, and imports one
 through a NEW/CONFLICT review dialog (`RuleImportDialog`, built on the shared

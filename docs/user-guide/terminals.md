@@ -300,7 +300,7 @@ Double-clicking a word tries to select something *useful*, not just characters b
 - **Option/Alt+double-click** — runs the matched item's default action directly (e.g. opening a URL) instead of just selecting it
 - **Right-click** a matched item for more actions (Copy, Open, Run Command, Ask AI, and others depending on what matched)
 
-Customize the rule list, or the plain word-boundary characters double-click falls back to, in Settings > Selection. See [Settings — Selection Tab](settings.md#selection-tab) for every control.
+Customize the rule list, or the plain word-boundary characters double-click falls back to, in Settings > Smart Selection. See [Settings — Smart Selection Tab](settings.md#smart-selection-tab) for every control.
 
 ## Clear Terminal
 
