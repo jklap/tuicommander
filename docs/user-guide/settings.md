@@ -101,10 +101,13 @@ A live preview reflects these as you change them.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| **Show block timestamps** | `boolean` | `true` | Enable the hold-`Ctrl+Cmd` relative-time overlay on command blocks |
+| **Show block timestamps** | `off/modifier/always` | `modifier` | When to show the relative-time overlay on command blocks: never, only while holding `Ctrl+Cmd`, or always |
 | **Show block marks** | `boolean` | `true` | Draw command-block boundary tick marks (blue/red) on the terminal scrollbar |
 | **Show prompt marks** | `boolean` | `true` | Draw a green tick mark on the scrollbar for each line where you submitted a prompt |
-| **Enable block folding** | `boolean` | `true` | Allow collapsing a command block's output with `Cmd+Shift+.` — gutter click selects the block's output instead, it does not fold |
+| **Enable block folding** | `boolean` | `true` | Allow collapsing a command block's output with `Cmd+Shift+.`, or by clicking the fold chevron on a block's header row in the gutter. Clicking anywhere else in the block's gutter run selects its output for copying |
+
+This section also has a **Shell Integration** subsection with copyable bash/fish startup-file
+snippets (zsh needs no setup) — see [Shell Integration](terminals.md#shell-integration).
 
 See [Command Blocks](terminals.md#command-blocks) for what each of these controls.
 

@@ -231,15 +231,89 @@ describe("settingsStore", () => {
 	});
 
 	describe("block display settings", () => {
-		it("setShowBlockTimestamps persists show_block_timestamps", async () => {
+		it("setBlockTimestampMode persists block_timestamp_mode", async () => {
 			await testInScopeAsync(async () => {
 				await hydrateStore();
-				store.setShowBlockTimestamps(false);
-				expect(store.state.showBlockTimestamps).toBe(false);
+				store.setBlockTimestampMode("always");
+				expect(store.state.blockTimestampMode).toBe("always");
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
-					config: expect.objectContaining({ show_block_timestamps: false }),
+					config: expect.objectContaining({ block_timestamp_mode: "always" }),
+				});
+			});
+		});
+
+		describe("blockTimestampMode migration from the legacy show_block_timestamps bool", () => {
+			it("migrates legacy true to 'modifier' when block_timestamp_mode is absent", async () => {
+				await testInScopeAsync(async () => {
+					mockInvoke.mockResolvedValueOnce({
+						shell: null,
+						font_family: "JetBrains Mono",
+						font_size: 14,
+						theme: "vscode-dark",
+						mcp_server_enabled: false,
+						ide: "vscode",
+						default_font_size: 13,
+						show_block_timestamps: true,
+					});
+					await store.hydrate();
+					expect(store.state.blockTimestampMode).toBe("modifier");
+				});
+			});
+
+			it("migrates legacy false to 'off' when block_timestamp_mode is absent", async () => {
+				await testInScopeAsync(async () => {
+					mockInvoke.mockResolvedValueOnce({
+						shell: null,
+						font_family: "JetBrains Mono",
+						font_size: 14,
+						theme: "vscode-dark",
+						mcp_server_enabled: false,
+						ide: "vscode",
+						default_font_size: 13,
+						show_block_timestamps: false,
+					});
+					await store.hydrate();
+					expect(store.state.blockTimestampMode).toBe("off");
+				});
+			});
+
+			it("a present block_timestamp_mode always wins over the legacy bool", async () => {
+				await testInScopeAsync(async () => {
+					mockInvoke.mockResolvedValueOnce({
+						shell: null,
+						font_family: "JetBrains Mono",
+						font_size: 14,
+						theme: "vscode-dark",
+						mcp_server_enabled: false,
+						ide: "vscode",
+						default_font_size: 13,
+						show_block_timestamps: false,
+						block_timestamp_mode: "always",
+					});
+					await store.hydrate();
+					expect(store.state.blockTimestampMode).toBe("always");
+				});
+			});
+
+			it("falls back to the legacy bool when block_timestamp_mode holds a corrupt/unrecognized value", async () => {
+				await testInScopeAsync(async () => {
+					mockInvoke.mockResolvedValueOnce({
+						shell: null,
+						font_family: "JetBrains Mono",
+						font_size: 14,
+						theme: "vscode-dark",
+						mcp_server_enabled: false,
+						ide: "vscode",
+						default_font_size: 13,
+						show_block_timestamps: false,
+						// Neither a valid mode nor absent — e.g. hand-edited config.json,
+						// or a value written by some future/unreleased build we don't know yet.
+						block_timestamp_mode: "bogus-value",
+					});
+					await store.hydrate();
+					expect(store.state.blockTimestampMode).toBe("off");
 				});
 			});
 		});
@@ -283,10 +357,10 @@ describe("settingsStore", () => {
 			});
 		});
 
-		it("defaults all four to true when absent from the hydrated config", async () => {
+		it("defaults to 'modifier' timestamp mode and true for the other three when absent from the hydrated config", async () => {
 			await testInScopeAsync(async () => {
 				await hydrateStore();
-				expect(store.state.showBlockTimestamps).toBe(true);
+				expect(store.state.blockTimestampMode).toBe("modifier");
 				expect(store.state.showBlockMarks).toBe(true);
 				expect(store.state.showPromptMarks).toBe(true);
 				expect(store.state.blockFoldingEnabled).toBe(true);

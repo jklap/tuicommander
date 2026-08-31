@@ -4,17 +4,17 @@ import { GUTTER_PX, gridDimsForBox, SCROLLBAR_PX } from "../canvasTerminalUtils"
 
 describe("gridDimsForBox", () => {
 	it("subtracts gutter + scrollbar from the width before dividing into columns", () => {
-		// 820px box, 8px cells: usable width = 820 - 6 - 14 = 800 → 100 cols.
+		// 820px box, 8px cells: usable width = 820 - 14 - 14 = 792 → 99 cols.
 		const d = gridDimsForBox(820, 480, 8, 16);
 		expect(d.cols).toBe((820 - GUTTER_PX - SCROLLBAR_PX) / 8);
-		expect(d.cols).toBe(100);
+		expect(d.cols).toBe(99);
 		expect(d.rows).toBe(30);
 	});
 
 	it("floors fractional cells (never overcounts)", () => {
-		// usable width 795 / 8 = 99.375 → 99; height 479 / 16 = 29.9 → 29.
+		// usable width 787 / 8 = 98.375 → 98; height 479 / 16 = 29.9 → 29.
 		const d = gridDimsForBox(815, 479, 8, 16);
-		expect(d.cols).toBe(99);
+		expect(d.cols).toBe(98);
 		expect(d.rows).toBe(29);
 	});
 

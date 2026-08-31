@@ -26,6 +26,51 @@ no items left goes too. What stays open must carry its own stated reason.
 > prior "gate satisfied" note still holds; check the running binary's build
 > time against the commit you're verifying before trusting a `[x]`.
 
+## Command Blocks fixes (2026-08-31)
+
+Nine reported issues fixed with new/updated unit coverage for the underlying logic
+(`blockFold.test.ts`, `blockSearchFilter.test.ts`, `canvasTerminalSelection.test.ts`,
+`canvasTerminalGutter.test.ts`, `TerminalSearch.test.tsx`, `settings.test.ts`, `config.rs`).
+Canvas rendering itself (opacity, chevron glyph, mark colors, cursor, accent bar) is not
+observable over HTTP or by unit test — needs a visual pass.
+
+- [ ] **Fold hides text (issue #1)** — run a multi-line command (e.g. `ls -la /usr`), fold it
+  (`Cmd+Shift+.` or the gutter chevron), confirm the output is fully hidden behind
+  "N lines folded", not just dimmed/translucent.
+- [ ] **Gutter click target + cursor (issue #2)** — hover the gutter next to a command block;
+  cursor should change to a pointer, and the click target should feel comfortably wider than
+  before (14px vs the old 6px).
+- [ ] **Gutter click resolves the correct block at a boundary (issue #3)** — with two adjacent
+  closed blocks, click the gutter exactly on the row where one ends and the next begins;
+  confirm the copied selection is the NEWER block's output, not the older one's.
+- [ ] **Block-scoped search indicator (issue #4)** — open search (`Cmd+F`), toggle "Search in
+  Block" (`Cmd+Shift+B`), confirm a thin amber accent bar appears along the left edge marking
+  which block is in scope, and that it moves when the viewport scrolls to a different block.
+- [ ] **Timestamp mode select (issue #5)** — Settings > Terminal > Blocks > "Show block
+  timestamps": try all three modes (Never / hold Ctrl+Cmd / Always) against a live session and
+  confirm each behaves as labeled.
+- [ ] **Gutter click folds via chevron (issue #6)** — click the small chevron on a closed
+  block's header row (in the gutter); confirm it folds/unfolds that specific block, and that
+  clicking elsewhere in the same block's gutter still copies its output instead.
+- [ ] **Green success mark (issue #7)** — run a command that exits 0 and one that exits
+  non-zero in a zsh session; confirm the gutter shows a green bar for the former and red for
+  the latter, and that this is distinct from the blue fold-state indicator (now the chevron).
+- [ ] **Search-in-Block toggle preserves selection (issue #8)** — search for a term that
+  matches in multiple blocks, note the active match, toggle "Search in Block" off, confirm the
+  active match stays the same (not viewport-nearest) when it's still present in the wider result
+  set.
+- [ ] **Shell integration snippet (issue #9)** — Settings > Terminal > Shell Integration: copy
+  the bash snippet, paste into a fresh `~/.bashrc`, open a new bash session, confirm command
+  blocks now appear (gutter marks, fold, timestamps) the same way they do for zsh. Repeat for
+  fish with `~/.config/fish/config.fish`.
+
+### Rust change — needs `make dev` restart
+
+- [ ] **`block_timestamp_mode` config migration** — an existing `config.json` with the old
+  `show_block_timestamps: true`/`false` (no `block_timestamp_mode` key) should, after a rebuilt
+  `make dev` restart, come up with the timestamp select showing "hold Ctrl+Cmd" (if it was
+  `true`) or "Never" (if it was `false`) — not silently reset to the new default.
+
 ## Atomic MCP managed-agent submission (2026-08-27, **Rust change — needs `make dev` restart**)
 
 The running backend cannot expose the new `session action=submit` schema or

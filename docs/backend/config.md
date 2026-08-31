@@ -176,10 +176,11 @@ cleartext copy does not survive on disk.
 | `word_separators` | `String` | `` " \"'`(){}[]<>\|;:,.!?@#$%^&*~=+/\\" `` | `"characters"` mode: characters that BREAK a word (the inverse of iTerm2's "additional word characters" — preserves today's default double-click behavior losslessly) |
 | `word_selection_regex` | `String` | `""` (empty) | `"regex"` mode: `\|`-joined alternates. At each character, the longest anchored match becomes one word-class run (e.g. adding `https://` lets a double-click expand across a URL's scheme) |
 | `smart_selection_rules` | `Vec<SmartSelectionRule>` | `[]` | User-defined smart-selection rules (regex, precision, actions). Empty means "use the built-in default set" (iTerm2's ten plus dev-terminal extras) — the frontend owns that default list. Importing a rule export (`smartSelectionExport.ts`) writes the merged *effective* set, so importing even a single custom rule permanently materializes every built-in rule here — "Restore built-in defaults" resets this field back to `[]` |
-| `show_block_timestamps` | `bool` | `true` | Show the hold-`Ctrl+Cmd` relative-time overlay on command blocks |
+| `show_block_timestamps` | `bool` | `true` | **Deprecated** — superseded by `block_timestamp_mode`. Kept only so a config saved by an older build still deserializes; the frontend migrates it once at load time (`true` → `"modifier"`, `false` → `"off"`) and no longer writes this field on save |
+| `block_timestamp_mode` | `String` | `"modifier"` | Command-block timestamp overlay display mode: `"off"` (never), `"always"` (always visible), or `"modifier"` (hold `Ctrl+Cmd` to reveal — the only behavior before this field existed) |
 | `show_block_marks` | `bool` | `true` | Draw command-block boundary tick marks (blue/red) on the terminal scrollbar |
 | `show_prompt_marks` | `bool` | `true` | Draw a tick mark on the terminal scrollbar for each line where the user submitted a prompt |
-| `block_folding_enabled` | `bool` | `true` | Allow collapsing a command block's output (`Cmd+Shift+.`) — gutter click selects the block's output instead, it does not fold |
+| `block_folding_enabled` | `bool` | `true` | Allow collapsing a command block's output. Toggled by `Cmd+Shift+.`, or by clicking the fold chevron on a block's header row in the gutter — clicking anywhere else in the block's gutter run still selects its output for copying |
 
 **Commands:** `load_app_config()`, `save_app_config(config)`
 

@@ -95,6 +95,13 @@ previously-built worktree but fail in a fresh one:
    second `ls -la` or re-running the build (which is a no-op) shows the correct size with the same
    mtime. If `golden_wire_output` tests fail with empty-output assertions right after a build
    that already succeeded once, re-check the file size before assuming a real regression.
+   **This is not fresh-worktree-only** — confirmed 2026-08-31: `check-gate.sh`'s own
+   clippy-unknown-lint NOTE tells you to run `rustup update` when the local toolchain is stale,
+   but a toolchain bump invalidates the already-built `tuic-hook` binary. `cargo nextest run`
+   then rebuilds it implicitly as part of the test binary graph, and the exact same
+   `golden_wire_output` empty-output failure mode reappears afterward, in a worktree that had
+   already passed this gate once before the `rustup update`. Same fix: `cargo build --package
+   tuic-hook` (from `src-tauri/`), then re-run.
 4. **If you later run `make dev`/`pnpm build:sidecar` in the same fresh worktree, the step-2
    placeholders can leave `tuic-bridge` and `tuic-hook` permanently broken instead of getting
    replaced by a real build** — this also snapped the `tuicommander` MCP connection for a

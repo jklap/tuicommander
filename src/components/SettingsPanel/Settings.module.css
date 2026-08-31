@@ -336,6 +336,29 @@
   color: var(--fg-muted);
 }
 
+/* Shell integration setup snippet — TerminalTab */
+
+.snippetRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  margin-bottom: 12px;
+}
+
+.snippetCode {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  overflow-x: auto;
+  white-space: pre;
+}
+
 .info {
   color: var(--fg-muted);
   font-size: var(--font-sm);
