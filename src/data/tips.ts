@@ -324,7 +324,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Smart Selection Rules Import/Export",
 		description:
-			"Move your Smart Selection rules (Settings > Selection) to another machine or share them with a teammate — export to a file, or import and review each rule before it's applied.",
+			"Move your Smart Selection rules (Settings > Smart Selection) to another machine or share them with a teammate — export to a file, or import and review each rule before it's applied.",
 		shortcut: null,
 	},
 	{
@@ -369,9 +369,9 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
-		feature: "Clickable Palette Hints",
+		feature: "Palette Scope Chips",
 		description:
-			"The footer mode hints in the command palette (! for files, ? for content) are now clickable — tap one to switch mode instantly.",
+			"The command palette's All/Actions/Prompts/Files/Content/Terminals chips filter results by type — click one, or press Tab to cycle through them without leaving the search box.",
 		shortcut: null,
 	},
 	{

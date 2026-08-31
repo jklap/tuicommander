@@ -18,9 +18,36 @@ const MAX_TERMINAL_RESULTS = 200;
 
 export type PaletteMode = "command" | "filename" | "content" | "terminal";
 
+/** The six scope chips shown in the palette. "all"/"actions"/"prompts" filter
+ *  the action category within command mode; "files"/"content"/"terminals"
+ *  mirror the existing `!`/`?`/`~` prefix-derived search modes — selecting one
+ *  of those three rewrites the query's prefix rather than adding a second,
+ *  independent axis of filtering. */
+export type PaletteScope = "all" | "actions" | "prompts" | "files" | "content" | "terminals";
+
+const SCOPE_ORDER: PaletteScope[] = ["all", "actions", "prompts", "files", "content", "terminals"];
+
+/** Query prefix for each search scope — the single existing source of truth
+ *  (`mode()` below) for filename/content/terminal search already keys off
+ *  these same characters. */
+const SEARCH_SCOPE_PREFIX: Record<"files" | "content" | "terminals", string> = {
+	files: "!",
+	content: "?",
+	terminals: "~",
+};
+
+function isSearchScope(scope: PaletteScope): scope is "files" | "content" | "terminals" {
+	return scope === "files" || scope === "content" || scope === "terminals";
+}
+
 interface CommandPaletteState {
 	isOpen: boolean;
 	query: string;
+	/** Action-category scope within command mode ("all"/"actions"/"prompts").
+	 *  Meaningless while a search prefix is active — `scope()` below reports
+	 *  "files"/"content"/"terminals" instead in that case, derived from the
+	 *  query prefix the same way `mode()` already is. */
+	actionFilter: "all" | "actions" | "prompts";
 	recentActions: string[];
 	/** Content search results (? prefix) */
 	contentResults: ContentMatch[];
@@ -56,6 +83,7 @@ function createCommandPaletteStore() {
 	const [state, setState] = createStore<CommandPaletteState>({
 		isOpen: false,
 		query: "",
+		actionFilter: "all",
 		recentActions: loadRecentActions(),
 		contentResults: [],
 		contentSearching: false,
@@ -241,16 +269,53 @@ function createCommandPaletteStore() {
 		return "";
 	}
 
+	/** The active scope chip. In command mode this is the action-category filter;
+	 *  in a search mode it mirrors the query's prefix, so typing `!`/`?`/`~`
+	 *  directly (without touching a chip) still lights up the matching chip. */
+	function scope(): PaletteScope {
+		const currentMode = mode();
+		if (currentMode === "filename") return "files";
+		if (currentMode === "content") return "content";
+		if (currentMode === "terminal") return "terminals";
+		return state.actionFilter;
+	}
+
+	/** The text the user has typed, independent of scope: the plain query in
+	 *  command mode, or the prefix-stripped query in a search mode. Used to
+	 *  carry typed text across a scope switch instead of discarding it. */
+	function typedText(): string {
+		return mode() === "command" ? state.query : searchQuery();
+	}
+
+	/** Switch scope chips. Moving to a search scope rewrites the query's prefix
+	 *  (reusing the existing `!`/`?`/`~` mode machinery via `setQuery`); moving
+	 *  to an action-category scope strips any prefix and updates the category
+	 *  filter instead. Either way, whatever text was already typed carries over. */
+	function setScope(next: PaletteScope): void {
+		const text = typedText();
+		if (isSearchScope(next)) {
+			setQuery(text ? `${SEARCH_SCOPE_PREFIX[next]} ${text}` : `${SEARCH_SCOPE_PREFIX[next]} `);
+			return;
+		}
+		setState("actionFilter", next);
+		if (mode() !== "command") setQuery(text);
+	}
+
+	/** Move to the next/previous scope chip, wrapping at either end. */
+	function cycleScope(direction: 1 | -1): void {
+		const currentIndex = SCOPE_ORDER.indexOf(scope());
+		const nextIndex = (currentIndex + direction + SCOPE_ORDER.length) % SCOPE_ORDER.length;
+		setScope(SCOPE_ORDER[nextIndex]);
+	}
+
 	function open(): void {
 		cleanupSearch();
-		setState("isOpen", true);
-		setState("query", "");
+		setState({ isOpen: true, query: "", actionFilter: "all" });
 	}
 
 	function close(): void {
 		cleanupSearch();
-		setState("isOpen", false);
-		setState("query", "");
+		setState({ isOpen: false, query: "", actionFilter: "all" });
 	}
 
 	function toggle(): void {
@@ -337,7 +402,7 @@ function createCommandPaletteStore() {
 	/** Open palette with a pre-filled query (e.g. "~ " for terminal search mode) */
 	function openWithQuery(query: string): void {
 		cleanupSearch();
-		setState({ isOpen: true, query });
+		setState({ isOpen: true, query, actionFilter: "all" });
 		// Re-run setQuery to trigger mode-specific search logic
 		setQuery(query);
 	}
@@ -359,6 +424,9 @@ function createCommandPaletteStore() {
 		state,
 		mode,
 		searchQuery,
+		scope,
+		setScope,
+		cycleScope,
 		open,
 		close,
 		toggle,

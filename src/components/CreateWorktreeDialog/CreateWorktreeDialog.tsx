@@ -38,6 +38,36 @@ function sanitizeForPath(name: string): string {
 	return name.replace(/\//g, "-");
 }
 
+const DROPDOWN_MAX_HEIGHT = 200;
+// Never shrink the popup below this even when space is tight — better to
+// slightly overlap the viewport edge than to render an unusably short list.
+const DROPDOWN_MIN_HEIGHT = 100;
+// Small gap kept between the popup and whichever viewport edge it opens
+// toward, so it doesn't render flush against it.
+const DROPDOWN_EDGE_MARGIN = 8;
+
+/** Decide whether the base-ref dropdown should open upward or downward, and how
+ * tall it may grow, from the trigger's actual position — recomputed every time
+ * it opens rather than assumed. The trigger's position varies run to run (the
+ * branch-list reorder above it can be taller or shorter depending on how many
+ * matches are showing), so a fixed direction clips at *some* window height no
+ * matter which one is hardcoded; picking whichever side currently has more
+ * room avoids that.
+ *
+ * Takes plain numbers (not a real `DOMRect`) so it's directly unit-testable —
+ * jsdom/happy-dom's `getBoundingClientRect()` always returns zeros, which
+ * would make any test exercising the real DOM API meaningless here. */
+export function computeDropdownPlacement(
+	triggerRect: { top: number; bottom: number },
+	viewportHeight: number,
+): { upward: boolean; maxHeight: number } {
+	const spaceAbove = triggerRect.top;
+	const spaceBelow = viewportHeight - triggerRect.bottom;
+	const upward = spaceAbove > spaceBelow;
+	const available = Math.max(upward ? spaceAbove : spaceBelow, DROPDOWN_MIN_HEIGHT);
+	return { upward, maxHeight: Math.min(DROPDOWN_MAX_HEIGHT, available - DROPDOWN_EDGE_MARGIN) };
+}
+
 /** Wraps the first case-insensitive match of `query` inside `text` in a `<mark>`.
  * The filter is a single substring match, so a single highlighted range is enough —
  * mirrors CommandPalette's `renderMatchLine`. */
@@ -83,9 +113,19 @@ const BaseRefDropdown: Component<{
 	// -1 means "no keyboard cursor yet" — mirrors the branch list below: opening the
 	// list or typing a query shouldn't visually pre-select a row until the user moves.
 	const [selectedIndex, setSelectedIndex] = createSignal(-1);
+	// Recomputed for real every time the list opens (see the effect below) —
+	// this default is only ever visible for the one reactive flush between
+	// `setOpen(true)` and that effect running, never actually painted.
+	const [placement, setPlacement] = createSignal({ upward: true, maxHeight: DROPDOWN_MAX_HEIGHT });
 	let triggerRef: HTMLButtonElement | undefined;
 	let listRef: HTMLDivElement | undefined;
 	let searchRef: HTMLInputElement | undefined;
+	// Not a signal: consumed by the "reset search on open" effect below, which
+	// otherwise unconditionally clears the query to "" on every open — a plain
+	// setQuery() call from the trigger's onKeyDown would just get overwritten by
+	// that reset. Read-then-clear inside the same effect keeps a single place
+	// responsible for the query's value at open time.
+	let pendingQuerySeed = "";
 
 	// Flat, filtered list in the same local-then-remote order the backend already
 	// returns — this is what keyboard navigation walks, so arrows cross the section
@@ -126,13 +166,25 @@ const BaseRefDropdown: Component<{
 	// to close the dialog itself.
 	createEffect(() => {
 		if (!open()) return;
-		setQuery("");
+		const seed = pendingQuerySeed;
+		pendingQuerySeed = "";
+		setQuery(seed);
 		setSelectedIndex(-1);
+		if (triggerRef) {
+			setPlacement(computeDropdownPlacement(triggerRef.getBoundingClientRect(), window.innerHeight));
+		}
 		// setTimeout (not requestAnimationFrame) so this reliably fires after the
 		// dialog's own mount-time name-input focus, which is queued the same way —
 		// two rAFs and a 0ms timer don't have a guaranteed relative order, but two
 		// same-delay timers run in scheduling order.
-		const focusTimer = setTimeout(() => searchRef?.focus(), 0);
+		const focusTimer = setTimeout(() => {
+			searchRef?.focus();
+			// Put the caret after the seeded character rather than at position 0, so
+			// keyboard-opening the dropdown by typing continues the search instead of
+			// inserting ahead of what the user already typed.
+			const len = searchRef?.value.length ?? 0;
+			searchRef?.setSelectionRange(len, len);
+		}, 0);
 		onCleanup(() => clearTimeout(focusTimer));
 		registerModal(() => setOpen(false));
 	});
@@ -227,6 +279,55 @@ const BaseRefDropdown: Component<{
 					data-testid="base-ref-trigger"
 					disabled={props.disabled}
 					onClick={() => setOpen(!open())}
+					onKeyDown={(e) => {
+						if (props.disabled) return;
+						if (!open()) {
+							if (e.key === "Enter" || e.key === "ArrowDown") {
+								// A native <button>'s Enter activation fires its click as part of
+								// THIS keydown's own default action, so preventDefault() here also
+								// suppresses that — safe to also call setOpen ourselves as the
+								// single source of truth. ArrowDown has no native activation at
+								// all, so it needs this branch regardless.
+								e.preventDefault();
+								setOpen(true);
+								return;
+							}
+							if (e.key === " ") {
+								// Space's native <button> activation fires its click on the
+								// SEPARATE keyup event, not this one — preventDefault() here does
+								// NOT suppress it. Without the onKeyUp handler below, the list
+								// would open here and then immediately re-close from that click's
+								// onClick={() => setOpen(!open())} toggle.
+								e.preventDefault();
+								setOpen(true);
+								return;
+							}
+						}
+						if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && document.activeElement === triggerRef) {
+							// Typing a printable character while the Tab-focused trigger has
+							// focus opens the list and starts filtering immediately, instead of
+							// the keystroke being silently swallowed (or, previously, leaking to
+							// the terminal underneath — see useKeyboardRedirect). Gated on
+							// `activeElement` (not `!open()`) so a fast SECOND character — one
+							// landing before the search input's deferred setTimeout(0) focus
+							// handoff below has actually run, while this trigger still holds
+							// focus — keeps accumulating into the query instead of being
+							// dropped, matching what the user would see if focus had already
+							// moved to the search box.
+							e.preventDefault();
+							if (open()) {
+								setQuery((q) => q + e.key);
+							} else {
+								pendingQuerySeed = e.key;
+								setOpen(true);
+							}
+						}
+					}}
+					onKeyUp={(e) => {
+						// Suppresses the native click Space fires on keyup — see the keydown
+						// comment above for why this can't be done in keydown alone.
+						if (e.key === " ") e.preventDefault();
+					}}
 				>
 					<span class={s.dropdownValue}>{props.value}</span>
 					<svg class={s.dropdownChevron} width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
@@ -234,7 +335,11 @@ const BaseRefDropdown: Component<{
 					</svg>
 				</button>
 				<Show when={open() && !props.disabled}>
-					<div ref={listRef} class={s.dropdownList}>
+					<div
+						ref={listRef}
+						class={`${s.dropdownList} ${placement().upward ? s.dropdownListUp : s.dropdownListDown}`}
+						style={{ "max-height": `${placement().maxHeight}px` }}
+					>
 						<input
 							ref={searchRef}
 							type="text"
@@ -508,15 +613,8 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 							</Show>
 						</div>
 
-						<Show when={availableBaseRefs().length > 1}>
-							<BaseRefDropdown
-								value={baseRef()}
-								options={availableBaseRefs()}
-								onChange={setBaseRef}
-								disabled={isExistingBranch()}
-							/>
-						</Show>
-
+						{/* Directly under the name field it filters, so it reads as related to
+						    that field rather than to the unrelated "Start from" row below. */}
 						<div class={s.branchList} ref={branchListRef}>
 							<Show
 								when={filteredBranches().length > 0}
@@ -549,6 +647,15 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 								</For>
 							</Show>
 						</div>
+
+						<Show when={availableBaseRefs().length > 1}>
+							<BaseRefDropdown
+								value={baseRef()}
+								options={availableBaseRefs()}
+								onChange={setBaseRef}
+								disabled={isExistingBranch()}
+							/>
+						</Show>
 
 						{/* Wrapped in a fixed-min-height footer (rather than making each row
 						    always-mounted) so the dialog's overall height stays constant as

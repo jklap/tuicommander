@@ -309,8 +309,13 @@
 }
 
 .editor {
-  width: 500px;
-  max-width: 90vw;
+  /* Wider than the 600px drawer behind it, so it reads as a layer above rather
+   * than a narrower inset — this form is long (name, description, content, 7
+   * placement checkboxes, exec mode, output target, system prompt, shortcut,
+   * actions), so it also needs its own scroll rather than growing the page. */
+  width: min(760px, 92vw);
+  max-height: 85vh;
+  overflow-y: auto;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
@@ -352,6 +357,12 @@
 .editorField textarea {
   resize: vertical;
   font-family: var(--font-mono);
+}
+
+/* The prompt body itself — wider dialog (see .editor) plus a taller default
+ * than the other textarea on this form (system prompt), which stays compact. */
+.editorContentTextarea {
+  min-height: 180px;
 }
 
 .editorActions {

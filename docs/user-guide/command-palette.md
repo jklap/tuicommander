@@ -10,7 +10,8 @@ In the desktop app, open the palette with `Cmd+P` (macOS) / `Ctrl+P` (Windows/Li
 2. Type to filter actions by name or category (substring match, case-insensitive)
 3. Navigate with `↑` / `↓` arrow keys
 4. Press `Enter` to execute the selected action
-5. Press `Escape` or click outside the palette to close
+5. Press `Tab` / `Shift+Tab`, or click a chip, to switch scope — see [Scope Chips](#scope-chips)
+6. Press `Escape` or click outside the palette to close
 
 ### What You See
 
@@ -36,6 +37,17 @@ Hovering over a row highlights it (same as keyboard selection). Clicking a row e
 
 The palette is auto-populated from `actionRegistry.ts`. The desktop app exposes the complete registered action set. Browser mode uses an explicit allowlist and omits actions that require native dialogs, detached OS windows, the native updater, desktop-only MCP configuration, or user-plugin management. This fail-closed policy prevents a newly added desktop action from appearing in the browser before it has a working web or HTTP implementation. Browser-capable plugin actions appear alongside built-in ones.
 
+### Scope Chips
+
+A row of six chips sits below the search box: **All**, **Actions**, **Prompts**, **Files**, **Content**, **Terminals**.
+
+- **All** — every action, including Smart Prompts (the default)
+- **Actions** — every action except Smart Prompts entries
+- **Prompts** — only Smart Prompts entries (the ones labeled `Smart: <name>`)
+- **Files** / **Content** / **Terminals** — the same three search modes described below, selected by chip instead of by typing a prefix
+
+Click a chip, or press `Tab` (forward) / `Shift+Tab` (backward) to cycle through all six — the cycle wraps at either end. Whatever you've already typed carries over when you switch scope: switching from All to Files rewrites your text with a `!` prefix instead of discarding it, and switching between Files/Content/Terminals keeps the same text under a different prefix. Typing a `!`, `?`, or `~` prefix directly (without touching a chip) still selects the matching chip, so the two ways of choosing a search mode always agree.
+
 ### Search Modes
 
 The command palette supports three search prefixes:
@@ -54,7 +66,7 @@ The command palette supports three search prefixes:
 - Terminal match navigation switches to the correct tab/pane and scrolls to the matched line
 - Delete the prefix to return to command mode
 - Search runs with a 300ms debounce
-- Footer shows `!`, `?`, and `~` hints when in command mode
+- Footer shows a `⇥ scope` hint reminding you Tab cycles the chips above
 - In browser mode, filename and content searches use the same backend over HTTP. Each content search carries a random correlation ID local to the requesting page, so another window or panel cannot inject results into the palette
 
 If no repository is selected, file/content modes show "No repository selected".

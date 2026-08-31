@@ -1,4 +1,4 @@
-import { type Component, createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
@@ -69,6 +69,7 @@ export async function copyToClipboard(text: string): Promise<void> {
 }
 
 export const KnowledgeHistoryOverlay: Component = () => {
+	let searchInputRef: HTMLInputElement | undefined;
 	const visible = () => uiStore.state.knowledgeHistoryOverlayVisible;
 	const [searchRaw, setSearchRaw] = createSignal("");
 	const [search, setSearch] = createSignal("");
@@ -96,6 +97,18 @@ export const KnowledgeHistoryOverlay: Component = () => {
 	createEffect(() => {
 		if (!visible()) return;
 		registerModal(close);
+	});
+
+	// This overlay mounts once at app startup — only its content is gated by
+	// `visible()` — so `autofocus` on the search input never applies at all
+	// (Solid passes it through as a plain HTML attribute; the node is never
+	// freshly inserted). An explicit focus call on the visible() false→true
+	// edge is required instead, same pattern as CreateWorktreeDialog and
+	// PromptDrawer's own search input.
+	createEffect(() => {
+		if (!visible()) return;
+		const focusTimer = setTimeout(() => searchInputRef?.focus(), 0);
+		onCleanup(() => clearTimeout(focusTimer));
 	});
 
 	const filterKey = createMemo(() => ({
@@ -164,6 +177,7 @@ export const KnowledgeHistoryOverlay: Component = () => {
 						<div class={s.title}>Knowledge</div>
 						<div class={s.searchRow}>
 							<input
+								ref={searchInputRef}
 								class={s.searchInput}
 								type="search"
 								placeholder="Search commands, output, errors…"
@@ -172,7 +186,6 @@ export const KnowledgeHistoryOverlay: Component = () => {
 								autocomplete="off"
 								autocorrect="off"
 								spellcheck={false}
-								autofocus
 							/>
 							<label class={s.filterCheck}>
 								<input

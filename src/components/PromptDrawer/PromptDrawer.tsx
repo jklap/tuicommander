@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { SMART_PROMPTS_BUILTIN, VARIABLE_DESCRIPTIONS } from "../../data/smartPromptsBuiltIn";
 import { useConfirmDialog } from "../../hooks/useConfirmDialog";
 import { usePty } from "../../hooks/usePty";
@@ -43,6 +43,7 @@ const ALL_PLACEMENTS: SmartPlacement[] = [
 const BUILTIN_BY_ID = new Map(SMART_PROMPTS_BUILTIN.map((p) => [p.id, p]));
 
 export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
+	let searchInputRef: HTMLInputElement | undefined;
 	const [selectedIndex, setSelectedIndex] = createSignal(0);
 	const [showEditor, setShowEditor] = createSignal(false);
 	const [editingPrompt, setEditingPrompt] = createSignal<SavedPrompt | null>(null);
@@ -72,6 +73,18 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 
 	createEffect(() => {
 		if (!isOpen()) clearPendingPromptClick();
+	});
+
+	// `PromptDrawer` itself mounts once at app startup — only its content is
+	// gated by `isOpen()` — so `autofocus` on the search input (a plain HTML
+	// attribute Solid doesn't simulate, unlike React) never applies at all;
+	// the node was never freshly inserted. An explicit focus call on the
+	// isOpen() false→true edge is required, same reasoning as PromptEditor's
+	// Name field and the same pattern CreateWorktreeDialog already uses.
+	createEffect(() => {
+		if (!isOpen()) return;
+		const focusTimer = setTimeout(() => searchInputRef?.focus(), 0);
+		onCleanup(() => clearTimeout(focusTimer));
 	});
 
 	// Keyboard navigation
@@ -251,7 +264,7 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 					<div class={s.drawer} onClick={(e) => e.stopPropagation()}>
 						{/* Header */}
 						<div class={s.header}>
-							<h3>{t("promptDrawer.title", "Smart Prompts Library")}</h3>
+							<h3>{t("promptDrawer.title", "Prompts Library")}</h3>
 							<button class={s.close} onClick={() => promptLibraryStore.closeDrawer()}>
 								&times;
 							</button>
@@ -260,6 +273,7 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 						{/* Search */}
 						<div class={s.search}>
 							<input
+								ref={searchInputRef}
 								type="text"
 								placeholder={t("promptDrawer.searchPlaceholder", "Search prompts... (type to filter)")}
 								value={promptLibraryStore.state.searchQuery}
@@ -267,7 +281,6 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 								autocomplete="off"
 								autocorrect="off"
 								spellcheck={false}
-								autofocus
 							/>
 						</div>
 
@@ -607,6 +620,21 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 	const isBuiltIn = () => !!props.prompt?.builtIn;
 	const builtInDefault = () => (props.prompt ? BUILTIN_BY_ID.get(props.prompt.id) : undefined);
 	let textareaRef: HTMLTextAreaElement | undefined;
+	let nameInputRef: HTMLInputElement | undefined;
+
+	// Solid passes `autofocus` through as a plain HTML attribute rather than
+	// simulating it in JS (unlike React), so whether it fires on a node
+	// inserted after initial page load depends on the host WebView's own
+	// autofocus-on-dynamic-insertion support — unreliable enough that
+	// CreateWorktreeDialog, RenameBranchDialog, and BranchSwitcher all already
+	// avoid it in favor of an explicit ref + focus() call. This dialog mounts
+	// fresh every time it's opened, so it gets the same treatment. setTimeout
+	// (not a bare synchronous call) so this runs after the dialog's own layout
+	// settles, matching CreateWorktreeDialog's own name-input focus-on-open.
+	onMount(() => {
+		const focusTimer = setTimeout(() => nameInputRef?.focus(), 0);
+		onCleanup(() => clearTimeout(focusTimer));
+	});
 
 	const [name, setName] = createSignal(props.prompt?.name || "");
 	const [description, setDescription] = createSignal(props.prompt?.description || "");
@@ -700,6 +728,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				<div class={s.editorField}>
 					<label>Name *</label>
 					<input
+						ref={nameInputRef}
 						type="text"
 						value={name()}
 						disabled={isBuiltIn()}
@@ -708,7 +737,6 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 							setValidationError(null);
 						}}
 						placeholder="My Prompt"
-						autofocus
 					/>
 				</div>
 
@@ -728,10 +756,11 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 					<label>Content *</label>
 					<textarea
 						ref={textareaRef}
+						class={s.editorContentTextarea}
 						value={content()}
 						onInput={(e) => setContent(e.currentTarget.value)}
 						placeholder="Enter your prompt text here..."
-						rows={6}
+						rows={10}
 					/>
 					<VariableDropdown onInsert={handleInsertVariable} />
 				</div>

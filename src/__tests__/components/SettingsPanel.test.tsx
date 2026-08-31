@@ -181,10 +181,10 @@ describe("SettingsPanel", () => {
 		expect(toggleLabels).toContain("Save terminal scrollback");
 	});
 
-	it("shows the Selection nav item and its content when active", () => {
+	it("shows the Smart Selection nav item and its content when active", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		const navItems = container.querySelectorAll(".navItem");
-		const selectionItem = Array.from(navItems).find((n) => n.textContent === "Selection")!;
+		const selectionItem = Array.from(navItems).find((n) => n.textContent === "Smart Selection")!;
 		expect(selectionItem).toBeTruthy();
 		fireEvent.click(selectionItem);
 
