@@ -73,17 +73,57 @@ describe("SessionCard sub-rows", () => {
 	it("still shows progress when the task text was suppressed", () => {
 		// Progress is a separate signal (OSC 9;4) and used to be nested inside the
 		// task row, so dropping the verb must not take the bar with it.
-		const session = makeSession({ current_task: "Working", agent_type: "codex", progress: 45 });
+		const session = makeSession({
+			current_task: "Working",
+			agent_type: "codex",
+			progress: { kind: "normal", value: 45 },
+		});
 		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
 		expect(container.querySelector("[data-testid='task-row']")).toBeNull();
 		expect(container.querySelector("[data-testid='progress-bar']")).not.toBeNull();
 	});
 
 	it("shows progress indicator when progress is set", () => {
-		const session = makeSession({ current_task: "Building", progress: 45 });
+		const session = makeSession({ current_task: "Building", progress: { kind: "normal", value: 45 } });
 		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
 		const progress = container.querySelector("[data-testid='progress-bar']");
 		expect(progress).not.toBeNull();
+	});
+
+	it("shows an error progress fill with its value", () => {
+		const session = makeSession({ current_task: "Building", progress: { kind: "error", value: 20 } });
+		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
+		const fill = container.querySelector("[data-testid='progress-fill']") as HTMLElement;
+		expect(fill).not.toBeNull();
+		expect(fill.getAttribute("data-kind")).toBe("error");
+		expect(fill.style.transform).toBe("scaleX(0.2)");
+	});
+
+	it("shows a full-width error progress fill when no value is given", () => {
+		const session = makeSession({ current_task: "Building", progress: { kind: "error" } });
+		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
+		const fill = container.querySelector("[data-testid='progress-fill']") as HTMLElement;
+		expect(fill).not.toBeNull();
+		expect(fill.getAttribute("data-kind")).toBe("error");
+		expect(fill.style.transform).toBe("scaleX(1)");
+	});
+
+	it("shows a warning progress fill with its value", () => {
+		const session = makeSession({ current_task: "Building", progress: { kind: "warning", value: 80 } });
+		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
+		const fill = container.querySelector("[data-testid='progress-fill']") as HTMLElement;
+		expect(fill).not.toBeNull();
+		expect(fill.getAttribute("data-kind")).toBe("warning");
+		expect(fill.style.transform).toBe("scaleX(0.8)");
+	});
+
+	it("shows an indeterminate progress fill with no transform", () => {
+		const session = makeSession({ current_task: "Building", progress: { kind: "indeterminate", value: 90 } });
+		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);
+		const fill = container.querySelector("[data-testid='progress-fill']") as HTMLElement;
+		expect(fill).not.toBeNull();
+		expect(fill.getAttribute("data-kind")).toBe("indeterminate");
+		expect(fill.style.transform).toBe("");
 	});
 
 	it("shows usage limit when usage_limit_pct is set", () => {

@@ -3,6 +3,15 @@ import { appLogger } from "../stores/appLogger";
 import { rpc, subscribeEvents } from "../transport";
 import { createVisibilityInterval } from "./utils/visibilityInterval";
 
+/** OSC 9;4 progress state. Matches Rust state::ProgressKind. */
+export type ProgressKind = "normal" | "error" | "indeterminate" | "warning";
+
+/** Matches Rust state::ProgressInfo. `value` is absent for "indeterminate". */
+export interface ProgressInfo {
+	kind: ProgressKind;
+	value?: number;
+}
+
 /** Server-side accumulated state for a session (matches Rust SessionState) */
 export interface SessionState {
 	awaiting_input: boolean;
@@ -19,7 +28,7 @@ export interface SessionState {
 	current_task?: string;
 	active_sub_tasks?: number;
 	last_prompt?: string;
-	progress?: number;
+	progress?: ProgressInfo;
 	suggested_actions?: string[];
 	slash_menu_items?: SlashMenuItem[];
 	choice_prompt?: ChoicePrompt;

@@ -185,7 +185,16 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 
 			<Show when={sessionState()?.progress != null}>
 				<div class={styles.headerProgressBar}>
-					<div class={styles.headerProgressFill} style={{ transform: `scaleX(${sessionState()!.progress! / 100})` }} />
+					<div
+						class={styles.headerProgressFill}
+						data-kind={sessionState()!.progress!.kind}
+						data-testid="header-progress-fill"
+						style={
+							sessionState()!.progress!.kind === "indeterminate"
+								? undefined
+								: { transform: `scaleX(${(sessionState()!.progress!.value ?? 100) / 100})` }
+						}
+					/>
 				</div>
 			</Show>
 

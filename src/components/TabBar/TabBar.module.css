@@ -654,6 +654,45 @@
   100% { background-position: -100% 0; }
 }
 
+/* Error/warning: a static, solid-colored bar. No shimmer — that reads as
+   "still working," which isn't true when either state is active. */
+.progress[data-kind="error"] {
+  background: var(--error);
+  background-size: auto;
+  animation: none;
+}
+
+.progress[data-kind="warning"] {
+  background: var(--warning);
+  background-size: auto;
+  animation: none;
+}
+
+/* Indeterminate: no known percentage, so no scaleX transform is applied
+   (see TabViews.tsx) and the bar stays full width. A sweeping band is the
+   only signal of activity.
+   `.tab.active::before` paints its own full-width `var(--accent)` underline
+   at this same position (z-index 1, one below `.progress`'s z-index 2) —
+   an opaque, non-accent base color is required here so the moving accent
+   band has something to contrast against on the active tab. A transparent
+   base (letting that underline show through) makes the band blend into an
+   identically-colored backdrop and renders motionless. */
+.progress[data-kind="indeterminate"] {
+  background-color: var(--bg-tertiary);
+  background-image: linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: progressIndeterminateSweep 1.2s linear infinite;
+}
+
+/* Same band width/speed as SessionCard.module.css and
+   SessionDetailScreen.module.css's indeterminate sweeps — keep all three in
+   sync if this ever changes. */
+@keyframes progressIndeterminateSweep {
+  0% { background-position: -50% 0; }
+  100% { background-position: 150% 0; }
+}
+
 .progressLabel {
   font-size: var(--font-2xs);
   color: var(--accent);

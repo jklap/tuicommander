@@ -58,7 +58,7 @@
 - Tab status dot (left of name): grey=idle, blue-pulse=busy, green=done, purple=unseen (completed while not viewed), orange-pulse=question (needs input), red-pulse=error
 - Tab type colors: red gradient=diff, blue gradient=editor, green gradient=markdown, purple gradient=panel, amber gradient=HTML preview, cyan gradient=remote PTY session. Toggle the tint (background gradient + border) on/off with **Show tab type highlighting** in Settings → Appearance — off keeps each type's icon color but removes the background/border. Every color/icon/animation above is customizable via the UI Legend (see **11.3**)
 - Remote PTY sessions (created via HTTP/MCP) show "PTY:" prefix and cyan styling
-- Progress bar (OSC 9;4)
+- Progress bar (OSC 9;4) — states: normal and warning show a solid fill at the reported percentage (full-width if no percentage was sent), error shows the same but in the error color, and indeterminate ignores any percentage and instead plays a continuous sweep animation across the full bar
 - Context menu (right-click): Close Tab, Close Other Tabs, Close Tabs to the Right, Detach to Window, Copy Path
   - Copy Path appears on every file-backed tab — diff, editor, markdown, HTML preview, and a plugin panel opened from a `file://` url — and copies the ABSOLUTE path with `$HOME` shortened to `~`. The tab stores keep `filePath` relative to the tab's filesystem root, so the root is joined back on before copying
   - "Open in Browser" on a `file://` plugin panel hands the file to the OS default application, not to the URL allowlist (which permits only http/https/mailto, because the URLs it was built for come off a PTY)
