@@ -452,6 +452,19 @@ Agents `cd` across repos constantly, which is why it read as the app switching r
 on its own. Only a parked tab is settled by a `cd`, because for it the question was
 still open.
 
+**Parking says which repo is missing.** An MCP-spawned agent inherits its parent's
+cwd, so sessions land in worktrees of repos the user never registered; the tab was
+then filed under whichever repo had focus, and the only trace was a warning naming
+the cwd. `unregisteredRepoRootFor(cwd)` (`utils/repoOwnership.ts`) turns that cwd
+into the directory to register — `…/gate-os__wt/poc-0001` → `…/gate-os` via the
+`__wt` convention, otherwise the path itself — and `assignSessionToRepoBranch`
+puts it in the warning and in one deduped toast. It is a guess for the user to act
+on, never a placement: `resolveRepoOwnerIn` remains the single answer to "who owns
+this tab", and registering the repo lets `reconcileTerminalOwnership` move the tab
+home by itself. Auto-registering instead was rejected — `addRepository` calls
+`setActive()`, which would yank the user's focused repo from a background event,
+the exact failure the paragraph above describes.
+
 ### contextMenuActionsStore (`contextMenuActionsStore.ts`)
 Dynamic context menu action registration.
 

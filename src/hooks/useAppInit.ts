@@ -21,6 +21,7 @@ import { isTauri } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
+import { unregisteredRepoRootFor } from "../utils/repoOwnership";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -189,10 +190,30 @@ function assignSessionToRepoBranch(sessionId: string, terminalId: string, cwd: s
 	const fallbackState = fallbackRepo ? repositoriesStore.get(fallbackRepo) : undefined;
 	const fallbackBranch = fallbackState?.activeBranch;
 	if (fallbackRepo && fallbackBranch) {
+		// Which repo the user would have to register to fix this. Without it the
+		// warning named only the symptom, and a tab from an unregistered repo landed
+		// silently in whichever repo happened to have focus — indistinguishable, to
+		// the user, from the app filing it in the wrong place.
+		const unregisteredRoot = unregisteredRepoRootFor(cwd);
 		appLogger.warn(
 			"app",
-			`Session ${sessionId}: cwd "${cwd ?? "(null)"}" is owned by no registered repo — parking the tab in the active repo until one claims it`,
+			`Session ${sessionId}: cwd "${cwd ?? "(null)"}" is owned by no registered repo${
+				unregisteredRoot ? ` — register "${unregisteredRoot}" to give it a home` : ""
+			} — parking the tab in the active repo until one claims it`,
 		);
+		if (unregisteredRoot) {
+			// Repeats collapse: `hasVisible` dedups on title+message, so reconnecting
+			// twenty sessions from one unregistered repo raises one toast, not twenty.
+			toastsStore.add(
+				"Tab parked in the wrong repo",
+				`Nothing claims "${unregisteredRoot}". Register it and the tab moves home by itself.`,
+				"warn",
+				false,
+				undefined,
+				undefined,
+				fallbackRepo,
+			);
+		}
 		repositoriesStore.addTerminalToBranch(fallbackRepo, fallbackBranch, terminalId);
 	} else {
 		appLogger.error("app", `Session ${sessionId}: no repo/branch to assign tab to — tab will be invisible`);
