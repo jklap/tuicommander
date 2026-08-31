@@ -300,7 +300,16 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 							setHeaderPanel("progress");
 						}}
 					>
-						Progress <span>{sessionState()?.progress == null ? "—" : `${sessionState()!.progress}%`}</span>
+						Progress{" "}
+						<span>
+							{(() => {
+								// OSC 9;4 progress: a percentage when one was sent, else its
+								// kind (indeterminate, or an error/warning with no value).
+								const p = sessionState()?.progress;
+								if (p == null) return "—";
+								return p.value != null ? `${p.value}%` : p.kind;
+							})()}
+						</span>
 					</button>
 					<button
 						type="button"

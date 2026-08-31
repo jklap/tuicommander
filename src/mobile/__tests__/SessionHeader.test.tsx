@@ -32,7 +32,7 @@ function session(id: string, agentType: string, name: string): SessionInfo {
 			agent_intent: "Inspect the repository",
 			current_task: "Running focused tests",
 			active_sub_tasks: 3,
-			progress: 42,
+			progress: { kind: "normal", value: 42 },
 		},
 	};
 }
@@ -63,6 +63,8 @@ describe("mobile session header", () => {
 		expect(view.queryByText("Running focused tests")).toBeNull();
 		expect(view.queryByRole("button", { name: "Session progress" })).toBeNull();
 		await fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+		// OSC 9;4 progress is a {kind, value} object; the overflow entry shows its percentage.
+		expect(view.getByRole("button", { name: /Progress\s*42%/ })).toBeTruthy();
 		await fireEvent.click(view.getByRole("button", { name: /Progress/ }));
 		await waitFor(() =>
 			expect(rpc).toHaveBeenCalledWith("progress_list", {
