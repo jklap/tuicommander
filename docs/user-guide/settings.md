@@ -225,7 +225,7 @@ Settings. Set `bell_style` in `config.json` (see [Terminal Bell](terminals.md#te
 
 See [Session Restore](terminals.md#session-restore) for how restore behaves across a relaunch.
 
-### Selection
+### Smart Selection
 
 Controls double/quad-click word and smart selection in the terminal — see [Smart Selection](../frontend/terminal-features.md#smart-selection) for the underlying model (precision scoring, the built-in rule set, action dispatch).
 

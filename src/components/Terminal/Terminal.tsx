@@ -55,6 +55,7 @@ import {
 const ComposePanel = lazy(() =>
 	import("../ComposePanel/ComposePanel").then((module) => ({ default: module.ComposePanel })),
 );
+type ComposeAppendRequest = import("../ComposePanel/ComposePanel").ComposeAppendRequest;
 
 /** Trim trailing whitespace from each line of a terminal selection. */
 export function trimSelection(text: string): string {
@@ -218,6 +219,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		setComposeOpen(false);
 		canvasTerminalRef()?.focus();
 	};
+	const [composeAppendRequest, setComposeAppendRequest] = createSignal<ComposeAppendRequest | null>(null);
+	let composeAppendSeq = 0;
 	const [reconnecting, setReconnecting] = createSignal<{ attempt: number; max: number } | null>(null);
 	let sessionInitialized = false;
 	let disposed = false;
@@ -1141,6 +1144,17 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			}
 		},
 		openComposeWithText: (text: string) => {
+			if (composeOpen()) {
+				// Compose is already open — `pendingComposeText`/`setComposeOpen(true)`
+				// below only take effect on the isOpen false→true edge (see
+				// ComposePanel's initialText effect), so setting them here would
+				// silently do nothing until the panel is later closed and reopened,
+				// at which point it would overwrite whatever the user had typed.
+				// Route through the separate append signal instead.
+				composeAppendSeq += 1;
+				setComposeAppendRequest({ text, seq: composeAppendSeq });
+				return;
+			}
 			setPendingComposeText(text);
 			setComposeOpen(true);
 		},
@@ -1484,6 +1498,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							canvasTerminalRef()?.focus();
 						}}
 						focusRequest={composeFocusRequest}
+						appendRequest={composeAppendRequest}
 						canEnqueue={() => !!terminalsStore.get(props.id)?.agentType}
 						queuedCount={() => terminalsStore.get(props.id)?.queuedCommands ?? 0}
 						onClearQueue={async () => {

@@ -72,7 +72,7 @@ Exported files never include per-machine usage data (last-used timestamps). Prom
 shell commands or call an external API directly are imported **disabled** — review their
 content in the list before turning them on.
 
-Smart Selection rules (Settings > Selection) have the same Export/Import toolbar and review
+Smart Selection rules (Settings > Smart Selection) have the same Export/Import toolbar and review
 dialog — see [Smart Selection Rules](settings.md#smart-selection-rules) for the rule-specific
 scope definitions and import safety notes.
 

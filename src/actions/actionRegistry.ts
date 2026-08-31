@@ -17,6 +17,11 @@ import { isTauri } from "../transport";
 import { comboToDisplay } from "../utils/hotkey";
 import { isHandsFreeArmed, toggleHandsFreeConversation } from "./handsFreeConversation";
 
+/** The one dynamic category (from `useCommandPaletteActions.ts`) the Command
+ *  Palette's scope chips need to name explicitly — shared so the two files
+ *  can't drift apart on the literal string. */
+export const SMART_PROMPTS_CATEGORY = "Smart Prompts";
+
 export interface ActionEntry {
 	id: string; // ActionName for static entries, or dynamic IDs like "switch-repo:/path"
 	label: string;

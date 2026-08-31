@@ -2,9 +2,10 @@ import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ComposePanel } from "../../components/ComposePanel/ComposePanel";
+import { type ComposeAppendRequest, ComposePanel } from "../../components/ComposePanel/ComposePanel";
 import type { QueuedCommand } from "../../hooks/usePty";
 import { invoke } from "../../invoke";
+import { __resetModalStackForTest, pushModal } from "../../stores/modalStack";
 
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn().mockResolvedValue(undefined),
@@ -34,6 +35,19 @@ function typeIntoEditor(container: HTMLElement, text: string): void {
 function editorText(container: HTMLElement): string {
 	const editor = container.querySelector(".cm-editor") as HTMLElement;
 	return EditorView.findFromDOM(editor)?.state.doc.toString() ?? "";
+}
+
+/** Read the current CodeMirror document text. */
+function docText(container: HTMLElement): string {
+	const editor = container.querySelector(".cm-editor") as HTMLElement | null;
+	if (!editor) return "";
+	const view = EditorView.findFromDOM(editor);
+	return view?.state.doc.toString() ?? "";
+}
+
+/** happy-dom implements requestAnimationFrame with setImmediate — flush one. */
+function flushFrame(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
 }
 
 function renderPanel(overrides: Partial<Parameters<typeof ComposePanel>[0]> = {}) {
@@ -386,5 +400,127 @@ describe("ComposePanel", () => {
 
 		expect(event.defaultPrevented).toBe(true);
 		await waitFor(() => expect(editorText(container)).toBe("[image: /data/note-images/n1/shot.png]"));
+	});
+
+	describe("initialText seeding", () => {
+		it("seeds the editor with initialText when the panel opens", async () => {
+			const [isOpen, setIsOpen] = createSignal(false);
+			const { container } = renderPanel({ isOpen, initialText: () => "draft from cursor line" });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			expect(docText(container)).toBe("");
+
+			setIsOpen(true);
+			await waitFor(() => expect(docText(container)).toBe("draft from cursor line"));
+		});
+	});
+
+	describe("appendRequest — filling an already-open panel", () => {
+		it("appends with a blank-line separator when the doc already has content", async () => {
+			const [appendRequest, setAppendRequest] = createSignal<ComposeAppendRequest | null>(null);
+			const { container } = renderPanel({ appendRequest });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			typeIntoEditor(container, "existing draft");
+
+			setAppendRequest({ text: "appended prompt", seq: 1 });
+			await waitFor(() => expect(docText(container)).toBe("existing draft\n\nappended prompt"));
+		});
+
+		it("appends without a separator when the doc is empty", async () => {
+			const [appendRequest, setAppendRequest] = createSignal<ComposeAppendRequest | null>(null);
+			const { container } = renderPanel({ appendRequest });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+
+			setAppendRequest({ text: "first prompt", seq: 1 });
+			await waitFor(() => expect(docText(container)).toBe("first prompt"));
+		});
+
+		it("ignores an appendRequest that is already set at mount time (defer skips the initial value)", async () => {
+			const [appendRequest] = createSignal<ComposeAppendRequest | null>({ text: "stale", seq: 1 });
+			const { container } = renderPanel({ appendRequest });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			await flushFrame();
+			await flushFrame();
+
+			expect(docText(container)).toBe("");
+		});
+
+		it("applies a second append after the first", async () => {
+			const [appendRequest, setAppendRequest] = createSignal<ComposeAppendRequest | null>(null);
+			const { container } = renderPanel({ appendRequest });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+
+			setAppendRequest({ text: "first", seq: 1 });
+			await waitFor(() => expect(docText(container)).toBe("first"));
+
+			setAppendRequest({ text: "second", seq: 2 });
+			await waitFor(() => expect(docText(container)).toBe("first\n\nsecond"));
+		});
+	});
+
+	describe("focus reclaim (focusout handler)", () => {
+		afterEach(async () => {
+			__resetModalStackForTest();
+			// CodeMirror's own blur observer queues an internal 10ms setTimeout
+			// (updateForFocusChange) independent of anything under test here; drain
+			// it so it doesn't outlive the test as an async-leak false positive.
+			await new Promise((resolve) => setTimeout(resolve, 15));
+		});
+
+		// The panel's own initial-open effect (separate from the focusout handler
+		// under test) unconditionally focuses the editor two animation frames
+		// after mount — and `.cm-content` exists in the DOM well before that
+		// chain resolves, so a test that starts driving focus right after the
+		// element appears races it. Settle those two frames first so the only
+		// focus change left in flight is the one each test itself makes.
+		async function settleInitialMountFocus(): Promise<void> {
+			await flushFrame();
+			await flushFrame();
+		}
+
+		it("reclaims focus when it drops to <body>, which would otherwise silently drop keystrokes", async () => {
+			const { container } = renderPanel();
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			await settleInitialMountFocus();
+			const content = container.querySelector(".cm-content") as HTMLElement;
+			content.focus();
+			expect(document.activeElement).toBe(content);
+
+			content.blur();
+			await waitFor(() => expect(document.activeElement).toBe(content));
+		});
+
+		it("does not reclaim focus once it has moved to another element (e.g. a dialog field opened over Compose)", async () => {
+			const { container } = renderPanel();
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			await settleInitialMountFocus();
+			const content = container.querySelector(".cm-content") as HTMLElement;
+			content.focus();
+
+			const dialogInput = document.createElement("input");
+			document.body.appendChild(dialogInput);
+			content.blur();
+			dialogInput.focus();
+
+			await flushFrame();
+			await flushFrame();
+			expect(document.activeElement).toBe(dialogInput);
+
+			document.body.removeChild(dialogInput);
+		});
+
+		it("does not reclaim focus while a modal is registered", async () => {
+			const { container } = renderPanel();
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			await settleInitialMountFocus();
+			const content = container.querySelector(".cm-content") as HTMLElement;
+			content.focus();
+
+			pushModal(() => {});
+			content.blur();
+
+			await flushFrame();
+			await flushFrame();
+			expect(document.activeElement).not.toBe(content);
+		});
 	});
 });

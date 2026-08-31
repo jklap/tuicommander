@@ -184,10 +184,10 @@ describe("SettingsPanel", () => {
 		expect(container.querySelectorAll("kbd").length).toBeGreaterThan(0);
 	});
 
-	it("shows the Selection nav item and its content when active", () => {
+	it("shows the Smart Selection nav item and its content when active", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		const navItems = container.querySelectorAll(".navItem");
-		const selectionItem = Array.from(navItems).find((n) => n.textContent === "Selection")!;
+		const selectionItem = Array.from(navItems).find((n) => n.textContent === "Smart Selection")!;
 		expect(selectionItem).toBeTruthy();
 		fireEvent.click(selectionItem);
 
@@ -248,7 +248,7 @@ describe("SettingsPanel", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		expect(navGroups(container)).toEqual({
 			Application: ["General", "Appearance", "Notifications"],
-			Workspace: ["Terminal", "Selection", "Keyboard Shortcuts", "Git & GitHub"],
+			Workspace: ["Terminal", "Smart Selection", "Keyboard Shortcuts", "Git & GitHub"],
 			AI: ["Agents", "Voice", "Smart Prompts"],
 			Integrations: ["MCP", "Remote Access", "Remote Machines", "Telegram", "Plugins"],
 			REPOSITORIES: ["Alpha", "Beta"],
