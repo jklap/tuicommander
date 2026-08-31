@@ -255,7 +255,7 @@ snippets (zsh needs no setup) — see [Shell Integration](terminals.md#shell-int
 The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control on
 the dedicated Terminal page: it is **Bell Style** on the Appearance page (**Bell** section) (see [Terminal Bell](terminals.md#terminal-bell)).
 
-### Selection
+### Smart Selection
 
 Controls double/quad-click word and smart selection in the terminal — see [Smart Selection](../frontend/terminal-features.md#smart-selection) for the underlying model (precision scoring, the built-in rule set, action dispatch).
 
