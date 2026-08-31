@@ -57,7 +57,7 @@
 - Tab status dot (left of name): grey=idle, blue-pulse=busy, green=done, purple=unseen (completed while not viewed), orange-pulse=question (needs input), red-pulse=error
 - Tab type colors: red gradient=diff, blue gradient=editor, green gradient=markdown, purple gradient=panel, amber gradient=HTML preview, cyan gradient=remote PTY session. Toggle the tint (background gradient + border) on/off with **Show tab type highlighting** in Settings → Appearance — off keeps each type's icon color but removes the background/border. Every color/icon/animation above is customizable via the UI Legend (see **11.3**)
 - Remote PTY sessions (created via HTTP/MCP) show "PTY:" prefix and cyan styling
-- Progress bar (OSC 9;4)
+- Progress bar (OSC 9;4) — states: normal and warning show a solid fill at the reported percentage (full-width if no percentage was sent), error shows the same but in the error color, and indeterminate ignores any percentage and instead plays a continuous sweep animation across the full bar
 - Context menu (right-click): Close Tab, Close Other Tabs, Close Tabs to the Right, Detach to Window, Copy Path (on diff/editor/markdown file tabs)
 - **Context menu shortcut chords** — while a context menu is open, pressing a menu item's keyboard shortcut chord (modifier + key, or Enter) fires that action directly without needing to click. Modifier-only keystrokes (Cmd, Shift, etc.) do not close the menu so multi-key chords can form; any other non-matching key closes the menu normally
 - Detach to Window: right-click a tab to open it in a floating OS window

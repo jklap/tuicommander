@@ -64,7 +64,8 @@ event map.)
 | `src-tauri/patches/alacritty_terminal/src/term/{mod,cell}.rs` | `Handler` impls (OSC 133, clipboard, keyboard modes), `Cell::erase_blank` |
 | `src-tauri/src/terminal_grid.rs` | `TermEvent` mapping, `extract_semantic_zones`, emulator `Config` flags (e.g. `kitty_keyboard`) |
 | `src-tauri/src/output_parser.rs` | Raw-stream regexes that bypass vte (`parse_osc94`, `parse_osc777_notifies`) |
-| `src-tauri/src/state.rs` | `strip_kitty_sequences`, `KittyKeyboardState` |
+| `src-tauri/src/state.rs` | `strip_kitty_sequences`, `KittyKeyboardState`; OSC 9;4 progress dispatch (`ProgressKind`/`ProgressInfo`, the `"progress"` event arm) |
+| `src/stores/terminals.ts`, `src/components/Terminal/Terminal.tsx`, `src/components/TabBar/{TabViews.tsx,TabBar.module.css}`, `src/mobile/{useSessions.ts,components/SessionCard.tsx,screens/SessionDetailScreen.tsx}` (+ their `.module.css`) | OSC 9;4 progress bar rendering — kind (normal/error/indeterminate/warning) to color/animation mapping must stay identical on desktop and mobile |
 | `src-tauri/src/input_line_buffer.rs` | Input-side key decoding and private-marker report filtering |
 | `src/components/Terminal/canvasTerminalUtils.ts` | Mouse report encoding (`sgrMotionButton`, `motionReportButton`) |
 | `src/components/Terminal/canvasTerminalWheel.ts` | Wheel notch quantization |

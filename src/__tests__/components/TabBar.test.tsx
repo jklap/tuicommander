@@ -388,7 +388,7 @@ describe("TabBar", () => {
 
 	it("tab with progress shows bar at correct width (no label)", () => {
 		const id = addTerminal({ name: "Progress" });
-		terminalsStore.update(id, { progress: 50 });
+		terminalsStore.update(id, { progress: { kind: "normal", value: 50 } });
 
 		const { container } = render(() => (
 			<TabBar
@@ -403,12 +403,13 @@ describe("TabBar", () => {
 		expect(tab.querySelector(".progressLabel")).toBeNull();
 		const bar = tab.querySelector(".progress");
 		expect(bar).not.toBeNull();
+		expect((bar as HTMLElement).getAttribute("data-kind")).toBe("normal");
 		expect((bar as HTMLElement).style.transform).toBe("scaleX(0.5)");
 	});
 
 	it("tab with progress=0 shows bar, no label", () => {
 		const id = addTerminal({ name: "Zero" });
-		terminalsStore.update(id, { progress: 0 });
+		terminalsStore.update(id, { progress: { kind: "normal", value: 0 } });
 
 		const { container } = render(() => (
 			<TabBar
@@ -424,6 +425,82 @@ describe("TabBar", () => {
 		const bar = tab.querySelector(".progress");
 		expect(bar).not.toBeNull();
 		expect((bar as HTMLElement).style.transform).toBe("scaleX(0)");
+	});
+
+	it("tab with error progress shows bar with error data-kind and its value", () => {
+		const id = addTerminal({ name: "Error" });
+		terminalsStore.update(id, { progress: { kind: "error", value: 30 } });
+
+		const { container } = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		const bar = container.querySelector(".tab .progress") as HTMLElement;
+		expect(bar).not.toBeNull();
+		expect(bar.getAttribute("data-kind")).toBe("error");
+		expect(bar.style.transform).toBe("scaleX(0.3)");
+	});
+
+	it("tab with error progress and no value shows a full-width bar", () => {
+		const id = addTerminal({ name: "ErrorNoValue" });
+		terminalsStore.update(id, { progress: { kind: "error", value: null } });
+
+		const { container } = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		const bar = container.querySelector(".tab .progress") as HTMLElement;
+		expect(bar).not.toBeNull();
+		expect(bar.getAttribute("data-kind")).toBe("error");
+		expect(bar.style.transform).toBe("scaleX(1)");
+	});
+
+	it("tab with warning progress shows bar with warning data-kind and its value", () => {
+		const id = addTerminal({ name: "Warning" });
+		terminalsStore.update(id, { progress: { kind: "warning", value: 65 } });
+
+		const { container } = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		const bar = container.querySelector(".tab .progress") as HTMLElement;
+		expect(bar).not.toBeNull();
+		expect(bar.getAttribute("data-kind")).toBe("warning");
+		expect(bar.style.transform).toBe("scaleX(0.65)");
+	});
+
+	it("tab with indeterminate progress shows bar with no transform (ignores value)", () => {
+		const id = addTerminal({ name: "Indeterminate" });
+		terminalsStore.update(id, { progress: { kind: "indeterminate", value: 90 } });
+
+		const { container } = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		const bar = container.querySelector(".tab .progress") as HTMLElement;
+		expect(bar).not.toBeNull();
+		expect(bar.getAttribute("data-kind")).toBe("indeterminate");
+		expect(bar.style.transform).toBe("");
 	});
 
 	it("tab with progress=null does not show progress elements", () => {

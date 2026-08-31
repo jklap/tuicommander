@@ -897,3 +897,19 @@ describe("terminalsStore", () => {
 		});
 	});
 });
+
+describe("progressKindFromState", () => {
+	it("maps OSC 9;4 state digits to their kind", async () => {
+		const { progressKindFromState } = await import("../../stores/terminals");
+		expect(progressKindFromState(1)).toBe("normal");
+		expect(progressKindFromState(2)).toBe("error");
+		expect(progressKindFromState(3)).toBe("indeterminate");
+		expect(progressKindFromState(4)).toBe("warning");
+	});
+
+	it("returns null for state 0 (remove) and any undefined state", async () => {
+		const { progressKindFromState } = await import("../../stores/terminals");
+		expect(progressKindFromState(0)).toBeNull();
+		expect(progressKindFromState(9)).toBeNull();
+	});
+});

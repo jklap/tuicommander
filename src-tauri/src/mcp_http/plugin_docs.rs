@@ -403,8 +403,9 @@ Detected from OSC 9;4 terminal progress sequences.
 ```typescript
 {
   type: "progress",
-  state: number,  // 0=remove, 1=normal, 2=error, 3=indeterminate
-  value: number,  // 0-100
+  state: number,          // 0=remove, 1=normal, 2=error, 3=indeterminate, 4=warning
+  value: number | null,   // 0-100, or null when the emitter sent no percentage
+                          // (states 2/3/4 may omit it); ignored entirely for state 3
 }
 ```
 
