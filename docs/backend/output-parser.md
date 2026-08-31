@@ -56,10 +56,18 @@ OSC 9;4 progress indicator:
 
 ```rust
 ParsedEvent::Progress {
-    state: u8,  // 0=remove, 1=set, 2=error, 3=indeterminate, 4=warning
-    value: u8,  // 0-100 progress percentage
+    state: u8,           // 0=remove, 1=normal, 2=error, 3=indeterminate, 4=warning
+    value: Option<u8>,   // 0-100 progress percentage; None when the emitter sent no
+                          // digits (states 2/3/4 may omit it)
 }
 ```
+
+The parser stays raw: it passes `value` through unchanged for every state,
+including indeterminate. The durable per-session snapshot (`state::SessionState.progress`,
+a `ProgressInfo { kind, value }`) is where indeterminate's value is forced to `None`
+— it has no meaningful percentage — and the frontend renders each `kind` distinctly
+(normal/error/warning as a solid fill at `value`%, or full-width if `value` is absent;
+indeterminate as a continuous sweep animation, ignoring `value` entirely).
 
 ### Question
 

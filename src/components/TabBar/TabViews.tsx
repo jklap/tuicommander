@@ -236,8 +236,16 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 						}}
 					/>
 				</Show>
-				{progress() !== null && progress() !== undefined && (
-					<div class={s.progress} style={{ transform: `scaleX(${progress()! / 100})` }} />
+				{progress() != null && (
+					<div
+						class={s.progress}
+						data-kind={progress()!.kind}
+						style={
+							progress()!.kind === "indeterminate"
+								? undefined
+								: { transform: `scaleX(${(progress()!.value ?? 100) / 100})` }
+						}
+					/>
 				)}
 				<PanePositionIcon tabId={props.id} rects={props.paneRects} />
 				<Show when={props.showWorkspaceMetadata && isPromoted() && !globalWorkspaceStore.isActive()}>

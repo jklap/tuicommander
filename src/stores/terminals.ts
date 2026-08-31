@@ -51,6 +51,31 @@ export function isShellState(value: unknown): value is ShellState {
 }
 
 /** Terminal pane data (without DOM references for serialization) */
+/** OSC 9;4 progress state. Mirrors Rust's `state::ProgressKind`. */
+export type ProgressKind = "normal" | "error" | "indeterminate" | "warning";
+
+/** Current progress indicator; `value` is ignored (always null) for "indeterminate". */
+export interface ProgressInfo {
+	kind: ProgressKind;
+	value: number | null;
+}
+
+/** Maps a raw OSC 9;4 state digit (1=normal, 2=error, 3=indeterminate, 4=warning) to its kind, or null for an unknown/undefined state. */
+export function progressKindFromState(state: number): ProgressKind | null {
+	switch (state) {
+		case 1:
+			return "normal";
+		case 2:
+			return "error";
+		case 3:
+			return "indeterminate";
+		case 4:
+			return "warning";
+		default:
+			return null;
+	}
+}
+
 export interface TerminalData {
 	id: string;
 	sessionId: string | null;
@@ -76,7 +101,7 @@ export interface TerminalData {
 	awaitingInputConfident: boolean; // High-confidence detection — don't clear on idle→busy
 	activity: boolean;
 	unseen: boolean; // Terminal completed work while user wasn't viewing it
-	progress: number | null; // OSC 9;4 progress (0-100), null when inactive
+	progress: ProgressInfo | null; // OSC 9;4 progress, null when inactive
 	shellState: ShellState;
 	/** Monotonic local event revision; prevents a stale session snapshot from overwriting PTY state. */
 	shellStateRevision: number;

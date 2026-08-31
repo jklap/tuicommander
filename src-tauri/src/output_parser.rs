@@ -25,8 +25,11 @@ pub enum ParsedEvent {
     },
     #[serde(rename = "progress")]
     Progress {
-        state: u8, // 0=remove, 1=normal, 2=error, 3=indeterminate
-        value: u8, // 0-100
+        state: u8, // 0=remove, 1=normal, 2=error, 3=indeterminate, 4=warning
+        // None when the emitter sent no digits (e.g. `\x1b]9;4;2;\x07`), which
+        // states 2/3/4 may legitimately do. Clamped to 100 when present.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        value: Option<u8>,
     },
     /// Agent is waiting for user input (question, confirmation, menu)
     #[serde(rename = "question")]
@@ -832,6 +835,11 @@ fn ae(name: &'static str, pattern: &str, error_kind: &'static str) -> ApiErrorPa
 }
 
 /// Parse OSC 9;4 progress sequences: \x1b]9;4;STATE;VALUE\x07
+///
+/// VALUE is optional — states 2 (error), 3 (indeterminate) and 4 (warning)
+/// may be sent with no digits at all (e.g. `\x1b]9;4;2;\x07`). Parsed as
+/// `u16` before clamping so an out-of-range value (e.g. "999") still clamps
+/// to 100 instead of failing to parse, matching prior u8-overflow behavior.
 pub(crate) fn parse_osc94(text: &str) -> Option<ParsedEvent> {
     // Fast path: check for ESC ] before running regex
     if !text.contains("\x1b]9;4;") {
@@ -839,11 +847,16 @@ pub(crate) fn parse_osc94(text: &str) -> Option<ParsedEvent> {
     }
     lazy_static::lazy_static! {
         static ref OSC94_RE: regex::Regex =
-            regex::Regex::new(r"\x1b\]9;4;(\d);(\d{1,3})(?:\x07|\x1b\\)").unwrap();
+            regex::Regex::new(r"\x1b\]9;4;(\d);(\d{0,3})(?:\x07|\x1b\\)").unwrap();
     }
     OSC94_RE.captures_iter(text).last().map(|caps| {
         let state: u8 = caps[1].parse().unwrap_or(0);
-        let value: u8 = caps[2].parse().unwrap_or(0).min(100);
+        let value_str = &caps[2];
+        let value: Option<u8> = if value_str.is_empty() {
+            None
+        } else {
+            value_str.parse::<u16>().ok().map(|v| v.min(100) as u8)
+        };
         ParsedEvent::Progress { state, value }
     })
 }
@@ -2232,7 +2245,7 @@ mod tests {
         match &events[0] {
             ParsedEvent::Progress { state, value } => {
                 assert_eq!(*state, 1);
-                assert_eq!(*value, 75);
+                assert_eq!(*value, Some(75));
             }
             _ => panic!("Expected Progress event"),
         }
@@ -2246,7 +2259,7 @@ mod tests {
         match &events[0] {
             ParsedEvent::Progress { state, value } => {
                 assert_eq!(*state, 0);
-                assert_eq!(*value, 0);
+                assert_eq!(*value, Some(0));
             }
             _ => panic!("Expected Progress event"),
         }
@@ -2259,7 +2272,100 @@ mod tests {
         match event {
             Some(ParsedEvent::Progress { state, value }) => {
                 assert_eq!(state, 1);
-                assert_eq!(value, 100, "should return the LAST progress value in chunk");
+                assert_eq!(
+                    value,
+                    Some(100),
+                    "should return the LAST progress value in chunk"
+                );
+            }
+            _ => panic!("Expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn test_osc94_progress_error_with_value() {
+        let event = parse_osc94("\x1b]9;4;2;50\x07");
+        match event {
+            Some(ParsedEvent::Progress { state, value }) => {
+                assert_eq!(state, 2);
+                assert_eq!(value, Some(50));
+            }
+            _ => panic!("Expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn test_osc94_progress_error_without_value() {
+        // Error state may be sent with no digits at all — not every emitter
+        // knows a percentage at the point it flags an error.
+        let event = parse_osc94("\x1b]9;4;2;\x07");
+        match event {
+            Some(ParsedEvent::Progress { state, value }) => {
+                assert_eq!(state, 2);
+                assert_eq!(value, None);
+            }
+            _ => panic!("Expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn test_osc94_progress_indeterminate_state() {
+        // The parser stays raw/dumb: it does not strip a value sent alongside
+        // state=3, even though indeterminate rendering ignores it downstream.
+        let event = parse_osc94("\x1b]9;4;3;50\x07");
+        match event {
+            Some(ParsedEvent::Progress { state, value }) => {
+                assert_eq!(state, 3);
+                assert_eq!(value, Some(50));
+            }
+            _ => panic!("Expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn test_osc94_progress_indeterminate_without_value() {
+        let event = parse_osc94("\x1b]9;4;3;\x07");
+        match event {
+            Some(ParsedEvent::Progress { state, value }) => {
+                assert_eq!(state, 3);
+                assert_eq!(value, None);
+            }
+            _ => panic!("Expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn test_osc94_progress_warning_state() {
+        // iTerm2-style warning state (4), analogous to error but non-fatal.
+        let event = parse_osc94("\x1b]9;4;4;30\x07");
+        match event {
+            Some(ParsedEvent::Progress { state, value }) => {
+                assert_eq!(state, 4);
+                assert_eq!(value, Some(30));
+            }
+            _ => panic!("Expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn test_osc94_progress_warning_without_value() {
+        let event = parse_osc94("\x1b]9;4;4;\x07");
+        match event {
+            Some(ParsedEvent::Progress { state, value }) => {
+                assert_eq!(state, 4);
+                assert_eq!(value, None);
+            }
+            _ => panic!("Expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn test_osc94_progress_value_out_of_range_clamps_to_100() {
+        let event = parse_osc94("\x1b]9;4;1;250\x07");
+        match event {
+            Some(ParsedEvent::Progress { state, value }) => {
+                assert_eq!(state, 1);
+                assert_eq!(value, Some(100));
             }
             _ => panic!("Expected Progress event"),
         }

@@ -10,7 +10,7 @@ import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { settingsStore } from "../../stores/settings";
-import { type AwaitingInputType, isShellState, terminalsStore } from "../../stores/terminals";
+import { type AwaitingInputType, isShellState, progressKindFromState, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { isTauri, subscribePty, type Unsubscribe } from "../../transport";
 import { onClickKeyDown } from "../../utils/a11y";
@@ -47,7 +47,7 @@ export function trimSelection(text: string): string {
 type ParsedEvent =
 	| { type: "rate-limit"; pattern_name: string; matched_text: string; retry_after_ms: number | null }
 	| { type: "status-line"; task_name: string; full_line: string; time_info: string | null; token_info: string | null }
-	| { type: "progress"; state: number; value: number }
+	| { type: "progress"; state: number; value?: number | null }
 	| { type: "question"; prompt_text: string; confident: boolean }
 	| { type: "question-cleared" }
 	| { type: "choice-cleared" }
@@ -293,10 +293,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			if (disposed) return;
 			switch (parsed.type) {
 				case "progress": {
+					const kind = progressKindFromState(parsed.state);
 					if (parsed.state === 0) {
 						terminalsStore.update(props.id, { progress: null });
-					} else if (parsed.state === 1 || parsed.state === 2 || parsed.state === 3) {
-						terminalsStore.update(props.id, { progress: Math.min(100, Math.max(0, parsed.value)) });
+					} else if (kind !== null) {
+						// Indeterminate ignores whatever value was sent — there is no
+						// meaningful percentage to show. `value` can arrive as `undefined`
+						// (Rust's `skip_serializing_if` omits the key entirely, e.g. for
+						// `\x1b]9;4;2;\x07`), not just `null` — checking only `=== null`
+						// let it fall through to `Math.max(0, undefined)` (NaN), which
+						// CSSOM then silently rejects, freezing the bar's width at
+						// whatever it last was instead of going full-width.
+						const value =
+							kind === "indeterminate" || parsed.value === null || parsed.value === undefined
+								? null
+								: Math.min(100, Math.max(0, parsed.value));
+						terminalsStore.update(props.id, { progress: { kind, value } });
 					}
 					break;
 				}

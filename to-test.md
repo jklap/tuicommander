@@ -1948,3 +1948,24 @@ the frame ticker's stalled-sync-update flush path (`terminal_grid.rs`'s new
   readline-based REPLs, `tput`-driven scripts) still gets a correct reply and
   behaves normally — this fix changes reply *timing*, not content, so nothing
   should look different, only faster/more reliable.
+
+## OSC 9;4 progress bar — error/warning/indeterminate states
+
+All four states (normal/error/indeterminate/warning), with and without a
+percentage, were verified via synthetic `printf` injection on both desktop
+(tab bar) and mobile (SessionCard + SessionDetailScreen header) — screenshots
+in `.screenshots/progress-bar-error-warning-indeterminate/` in the main
+checkout. Two things weren't covered by that synthetic testing:
+
+- [ ] Watch for a real long-running tool (a build, a package manager, an AI
+  agent) that emits OSC 9;4 state 2 (error), 3 (indeterminate), or 4 (warning)
+  during normal daily use, and confirm it renders as expected end-to-end (not
+  just via injected test sequences). Most real emitters observed so far
+  (cargo, nextest) only use state 1 (normal).
+- [ ] Enable "Reduce motion" (macOS System Settings → Accessibility, or the
+  OS-level `prefers-reduced-motion` toggle) and confirm the indeterminate
+  sweep animation actually stops rather than continuing to animate — the
+  `@media (prefers-reduced-motion: reduce)` rule in `global.css` is a blanket
+  `*, *::before, *::after { animation-duration: 0.01ms !important }`, which
+  should cover it, but this wasn't visually confirmed with the OS setting
+  actually toggled on (only reasoned about from the CSS cascade).

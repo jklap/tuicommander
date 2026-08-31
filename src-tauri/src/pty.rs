@@ -16257,6 +16257,28 @@ mod tests {
         );
     }
 
+    /// Same raw-stream invisibility applies to every non-normal state, not
+    /// just the original state=1 case above — error/indeterminate/warning
+    /// are just as absent from the vt100-rendered clean rows.
+    #[test]
+    fn test_osc94_error_indeterminate_warning_from_raw_stream() {
+        use crate::output_parser::{ParsedEvent, parse_osc94};
+
+        for raw in [
+            "\x1b]9;4;2;50\x07", // error
+            "\x1b]9;4;3;\x07",   // indeterminate, no value
+            "\x1b]9;4;4;30\x07", // warning
+        ] {
+            let event = parse_osc94(raw);
+            assert!(
+                matches!(event, Some(ParsedEvent::Progress { .. })),
+                "expected Progress from raw OSC 9;4 sequence {:?}, got: {:?}",
+                raw,
+                event
+            );
+        }
+    }
+
     /// extract_question_line finds `?`-ending rows from VtLogBuffer output.
     #[test]
     fn test_extract_question_line_basic() {
