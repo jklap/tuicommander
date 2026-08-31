@@ -13,7 +13,7 @@ import { uiStore } from "../../stores/ui";
 import { getSessionConnection } from "../../transportRuntime";
 import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
 import { pickBlock } from "../../utils/blockNav";
-import { filterMatchesToBlock } from "../../utils/blockSearchFilter";
+import { filterMatchesToBlock, resolveScopedBlock } from "../../utils/blockSearchFilter";
 import { writeClipboard } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
 import { ensureKeyboardViewportTracking, keyboardOcclusion } from "../../utils/keyboardViewport";
@@ -29,6 +29,7 @@ import { AnswersPanel } from "./AnswersPanel";
 import { type AnswersTurn, newTurnCache, readAnswersHistory, sameAnswersHistory } from "./answersTurn";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
 import { type ClickCounterState, classifyClick, decideMousedownSelection } from "./canvasTerminalGestures";
+import { canToggleFold, gutterMarkKind, gutterZoneAt } from "./canvasTerminalGutter";
 import {
 	createCanvasLinkController,
 	createLinkPressTracker,
@@ -64,6 +65,7 @@ import {
 	type CursorShape,
 	cellText,
 	cellToTextOffset,
+	clampRowRangeToViewport,
 	computeCursorRect,
 	createHiddenAckThrottle,
 	createLeadingThrottle,
@@ -228,6 +230,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// the ones that still hit.
 	let searchQuery = "";
 	let searchBlockScope = false;
+	/** The block "Search in Block" is actually scoped to, for `paintSearchScopeIndicator`
+	 *  (issue #4) — resolved silently before this, with nothing telling the user which
+	 *  block a block-scoped search landed on. */
+	let scopedSearchBlock: import("../../utils/blockSearchFilter").BlockRange | null = null;
 	/** Leading-edge, so a continuously redrawing TUI still refreshes the search.
 	 *  A trailing debounce reset its timer on every frame and so never fired. */
 	const searchRefresh = createLeadingThrottle(() => {
@@ -780,8 +786,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		octx.clearRect(-GUTTER_PX, 0, overlayCanvasRef.width / m.dpr, overlayCanvasRef.height / m.dpr);
 		paintSelection(m);
 		paintSearchHighlights(m);
+		paintSearchScopeIndicator(m);
 		paintLinkUnderline(frame, m);
 		paintGutterMarkers(m);
+		paintFoldChevrons(m);
 		paintBlockTimestamps(m);
 		paintFoldedBlocks(m);
 		paintCursor(frame, m);
@@ -849,7 +857,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	 *  Shared by the `searchFind` ref method and by the frame-driven refresh, so a
 	 *  live TUI redraw re-derives matches through exactly the same path as a fresh
 	 *  find — no second copy of the block-scope / viewport-anchoring rules. */
-	async function runSearchQuery(scrollToActive: boolean): Promise<{ index: number; count: number }> {
+	async function runSearchQuery(
+		scrollToActive: boolean,
+		preserveActiveByValue = true,
+	): Promise<{ index: number; count: number }> {
 		if (!searchQuery || !invokeRef) {
 			search.clear();
 			return { index: -1, count: 0 };
@@ -866,12 +877,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// resurrects highlights the user just cleared, or overwrites the newer
 		// query's matches with the older query's.
 		if (generation !== screenGeneration || query !== searchQuery) return { index: -1, count: 0 };
+		scopedSearchBlock = null;
 		if (searchBlockScope && currentFrame) {
 			const term = terminalsStore.get(props.terminalId);
 			if (term) {
 				const allBlocks = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
 				const viewTop = currentFrame.historySize - currentFrame.displayOffset;
 				const viewCenter = viewTop + Math.floor(currentFrame.screenRows / 2);
+				scopedSearchBlock = resolveScopedBlock(allBlocks, viewCenter, currentFrame.historyBase) ?? null;
 				matches = filterMatchesToBlock(matches, allBlocks, viewCenter, currentFrame.historyBase);
 			}
 		}
@@ -884,6 +897,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						screenRows: currentFrame.screenRows || lastResizeRows,
 					}
 				: undefined,
+			preserveActiveByValue,
 		);
 		// Only a user-driven find/next/prev may move the viewport. A refresh triggered
 		// by the agent repainting must never yank the screen out from under the user.
@@ -903,6 +917,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function clearSearchState(): void {
 		searchQuery = "";
 		searchRefresh.cancel();
+		scopedSearchBlock = null;
 		search.clear();
 	}
 
@@ -936,6 +951,35 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 	}
 
+	/**
+	 * Clamps an absolute-row range `[startRow, endRow)` to the rows currently in
+	 * the viewport, returning viewport-relative start/end (inclusive), or `null`
+	 * if the range doesn't overlap the viewport at all. A multi-row range needs
+	 * this rather than calling `absRowToViewport` on each edge separately: when
+	 * BOTH edges have scrolled past the viewport (one above, one below — a fold
+	 * or search-scoped block taller than the screen), each edge individually
+	 * maps to `null`, which is indistinguishable from "this range doesn't
+	 * overlap the viewport at all" unless the caller checks the overlap itself
+	 * first. Two real bugs shipped from exactly that ambiguity: `paintFoldedBlocks`
+	 * skipped drawing its opaque hide-rect entirely whenever the fold's start
+	 * row scrolled off the top (even with part of the fold still visible below —
+	 * making the "hide the text" fix from issue #1 leave it fully visible in that
+	 * scroll position), and `paintSearchScopeIndicator` used to fall back to
+	 * `?? 0`/`?? lastResizeRows - 1` unconditionally, drawing a full-viewport-height
+	 * bar once the scoped block scrolled fully off-screen in either direction.
+	 */
+	/** Same offset math as `absRowToViewport` (including the smooth-scroll
+	 *  `overlayScrollOffset` override) — the shared bounds callers of
+	 *  `clampRowRangeToViewport` need. Expressed in eviction-stable absolute rows
+	 *  (`historyBase + grid-relative`), the same space command-block lines use. */
+	function currentViewportBounds(): { viewTop: number; viewBottom: number } | null {
+		if (!currentFrame) return null;
+		const offset = overlayScrollOffset ?? currentFrame.displayOffset;
+		const viewTop = currentFrame.historyBase + currentFrame.historySize - offset;
+		const viewBottom = viewTop + (currentFrame.screenRows || lastResizeRows);
+		return { viewTop, viewBottom };
+	}
+
 	function paintSearchHighlights(m: CellMetrics) {
 		if (search.matches.length === 0) return;
 		for (let i = 0; i < search.matches.length; i++) {
@@ -955,17 +999,72 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 	}
 
+	/**
+	 * Issue #4: "Search in Block" used to resolve its target block silently —
+	 * nothing told the user which one they were searching. Draws a thin accent
+	 * bar (the same `#e8984c` used for the active search match below) along the
+	 * left edge of the scoped block's row range, clamped to whatever's currently
+	 * in the viewport.
+	 */
+	function paintSearchScopeIndicator(m: CellMetrics) {
+		if (!searchBlockScope || !scopedSearchBlock) return;
+		const bounds = currentViewportBounds();
+		if (!bounds) return;
+		// endLine ?? Infinity: an open block's indicator should extend to the bottom
+		// of the viewport, same as a closed block would if it ran past it.
+		const clamped = clampRowRangeToViewport(
+			scopedSearchBlock.promptLine,
+			scopedSearchBlock.endLine ?? Number.POSITIVE_INFINITY,
+			bounds.viewTop,
+			bounds.viewBottom,
+		);
+		if (!clamped) return; // scrolled fully off-screen — draw nothing, not a full-height bar
+		const { startVp, endVp } = clamped;
+		octx.fillStyle = "#e8984c";
+		octx.fillRect(0, startVp * m.cellHeight, 2, (endVp - startVp + 1) * m.cellHeight);
+	}
+
+	/** Exit-status colors for the gutter mark — GitHub-style red/green. `canvasTerminalMarks.ts`'s
+	 *  scrollbar ticks use blue for "not a failure" (a different surface with a different
+	 *  question: prompt-submission ticks there are their own dedicated green), so this mark's
+	 *  green is deliberately its own choice, not a value borrowed from that module. */
+	const GUTTER_MARK_COLOR = { success: "#3fb950", failure: "#f85149" } as const;
+
 	function paintGutterMarkers(m: CellMetrics) {
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
 		const blocks = term.commandBlocks;
 		if (blocks.length === 0) return;
 		for (const block of blocks) {
-			if (block.exitCode === null || block.exitCode === 0) continue;
+			const kind = gutterMarkKind(block);
+			if (!kind) continue;
 			const vpRow = absRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
 			if (vpRow === null) continue;
-			octx.fillStyle = "#f85149";
+			octx.fillStyle = GUTTER_MARK_COLOR[kind];
 			octx.fillRect(-GUTTER_PX, vpRow * m.cellHeight, 3, m.cellHeight);
+		}
+	}
+
+	/** Fold/unfold chevron on each foldable block's header row (`executionLine ?? promptLine`,
+	 *  same row `gutterZoneAt` treats as the fold zone for a gutter click). Drawn for every
+	 *  closed block regardless of fold state — issue #6's split-zone gutter click needs a
+	 *  visible target, and it doubles as the "is this block folded" indicator that used to be
+	 *  a blue bar in `paintFoldedBlocks` easily mistaken for a status mark (issue #7). */
+	function paintFoldChevrons(m: CellMetrics) {
+		if (!settingsStore.state.blockFoldingEnabled) return;
+		const term = terminalsStore.get(props.terminalId);
+		if (!term || term.commandBlocks.length === 0) return;
+		const fontFamily = settingsStore.getFontFamily();
+		octx.font = `${Math.round(m.cellHeight * 0.7)}px ${fontFamily}`;
+		octx.fillStyle = "rgba(150,150,150,0.8)";
+		for (const block of term.commandBlocks) {
+			const folded = term.foldedBlocks.has(block.promptLine);
+			if (!folded && !foldRange(block)) continue; // nothing to fold, don't imply otherwise
+			const headerRow = block.executionLine ?? block.promptLine;
+			const vpRow = absRowToViewport(headerRow - (currentFrame?.historyBase ?? 0));
+			if (vpRow === null) continue;
+			const y = vpRow * m.cellHeight;
+			octx.fillText(folded ? "▸" : "▾", -GUTTER_PX + 4, y + m.cellHeight * 0.8);
 		}
 	}
 
@@ -983,33 +1082,36 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (!range) continue;
 			const { foldStart, foldedCount } = range;
 			const foldEnd = foldStart + foldedCount;
-			const startVp = absRowToViewport(foldStart - (currentFrame?.historyBase ?? 0));
-			if (startVp === null) continue;
-			const endVp = absRowToViewport(foldEnd - 1 - (currentFrame?.historyBase ?? 0));
-			const lastVp = endVp ?? lastResizeRows - 1;
+			const bounds = currentViewportBounds();
+			const clamped = bounds ? clampRowRangeToViewport(foldStart, foldEnd, bounds.viewTop, bounds.viewBottom) : null;
+			if (!clamped) continue;
+			const { startVp, endVp } = clamped;
 			const y = startVp * m.cellHeight;
-			const h = (lastVp - startVp + 1) * m.cellHeight;
+			const h = (endVp - startVp + 1) * m.cellHeight;
+			// Fully opaque, and reserves the folded rows' original height rather than
+			// removing it (true row-remapping collapse is a larger follow-up — see
+			// docs/user-guide/terminals.md). Issue #1: this used to be globalAlpha=0.85,
+			// which left 15% of the folded text visibly bleeding through — "N lines
+			// folded" while still being able to read those N lines. The overlay canvas
+			// paints on top of the base canvas (see the JSX: overlay is later in the
+			// DOM, same stacking context, no explicit z-index), so opaque here is
+			// sufficient to fully hide the text underneath without touching the grid
+			// renderer's own paint path.
 			octx.fillStyle = cachedBgDefault;
-			octx.globalAlpha = 0.85;
 			octx.fillRect(-GUTTER_PX, y, overlayCanvasRef.width / m.dpr, h);
-			octx.globalAlpha = 1.0;
 			const label = `  ··· ${foldedCount} lines folded ···`;
 			octx.font = `${Math.round(m.cellHeight * 0.7)}px ${fontFamily}`;
 			octx.fillStyle = "rgba(150,150,150,0.6)";
 			octx.fillText(label, 4, y + m.cellHeight * 0.75);
-			// Fold gutter indicator
-			octx.fillStyle = "rgba(88,166,255,0.5)";
-			const gutterVp = absRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
-			if (gutterVp !== null) {
-				octx.fillRect(-GUTTER_PX, gutterVp * m.cellHeight, 3, m.cellHeight);
-			}
 		}
 	}
 
 	let blockTimestampsVisible = false;
 
 	function paintBlockTimestamps(m: CellMetrics) {
-		if (!blockTimestampsVisible || !settingsStore.state.showBlockTimestamps) return;
+		const mode = settingsStore.state.blockTimestampMode;
+		if (mode === "off") return;
+		if (mode === "modifier" && !blockTimestampsVisible) return;
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
 		const all = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
@@ -2850,7 +2952,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 			resetBlink();
 
-			if (e.ctrlKey && e.metaKey && !blockTimestampsVisible) {
+			if (settingsStore.state.blockTimestampMode === "modifier" && e.ctrlKey && e.metaKey && !blockTimestampsVisible) {
 				blockTimestampsVisible = true;
 				fullRepaintNeeded = true;
 				if (currentFrame && metrics()) paintFrame(currentFrame, metrics()!);
@@ -3204,7 +3306,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// must not compare its evolving range against that previous snapshot.
 			selection.invalidateSnapshot();
 
-			// Gutter click: select entire block output
+			// Gutter click: fold chevron zone toggles fold, the rest of the block's
+			// gutter run selects its output for copying (issue #6 — there used to be
+			// no fold gesture here at all; this is the split that adds one without
+			// taking away the existing copy behavior).
 			{
 				const rect = canvasRef.getBoundingClientRect();
 				const rawX = e.clientX - rect.left;
@@ -3218,6 +3323,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						) as import("../../stores/terminals").CommandBlock[];
 						const block = findBlockAtViewport(allBlocks, absRow, 0);
 						if (block) {
+							// Only treat the header row as a fold target when folding is
+							// enabled — otherwise it falls through to the copy behavior
+							// below, same as it did before this row had a fold zone at all.
+							if (settingsStore.state.blockFoldingEnabled && gutterZoneAt(absRow, block) === "fold") {
+								toggleFoldForBlock(block);
+								e.preventDefault();
+								return;
+							}
 							const startRow = Math.max(historyBase, (block.executionLine ?? block.promptLine) + 1);
 							const endRow = (block.endLine ?? absRow) - 1;
 							if (endRow >= startRow) {
@@ -3397,6 +3510,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					writePtyNoScroll(sgrMouseSequence(32 + motionButton, pos.col, pos.row, true, e));
 				}
 				return;
+			}
+
+			// Gutter hover (issue #2): pointer cursor over the click-to-copy/fold
+			// strip, with an early return so the "no link hovered" branch below can't
+			// immediately clobber it back to "text".
+			if (!selection.selecting) {
+				const rect = canvasRef.getBoundingClientRect();
+				const rawX = e.clientX - rect.left;
+				if (rawX < GUTTER_PX && isPointerInsideRect(e, rect)) {
+					if (hoveredLink) {
+						hoveredLink = null;
+						const m = metrics();
+						if (currentFrame && m) repaintOverlay(currentFrame, m);
+					}
+					canvasRef.style.cursor = "pointer";
+					return;
+				}
 			}
 
 			// Selection drag: coalesce into one rAF/frame with the latest position.
@@ -3766,6 +3896,24 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}).catch(ipcErr("terminal_scroll_to"));
 		}
 
+		/** Shared by the gutter click's fold zone and the `Cmd+Shift+.` shortcut below —
+		 *  toggle fold state for a specific, already-resolved block. */
+		function toggleFoldForBlock(block: import("../../stores/terminals").CommandBlock) {
+			if (!settingsStore.state.blockFoldingEnabled) return;
+			const term = terminalsStore.get(props.terminalId);
+			const alreadyFolded = term?.foldedBlocks.has(block.promptLine) ?? false;
+			// Never fold ON a block with nothing to fold yet (still running, or a
+			// degenerate empty block) — unfolding is always safe, but folding a
+			// still-open block would silently pre-fold it before it ever appears in
+			// commandBlocks, so it renders pre-folded the instant it closes with no
+			// action from the user at that point.
+			if (!canToggleFold(alreadyFolded, foldRange(block) !== null)) return;
+			terminalsStore.toggleBlockFold(props.terminalId, block.promptLine);
+			fullRepaintNeeded = true;
+			const m = metrics();
+			if (currentFrame && m) paintFrame(currentFrame, m);
+		}
+
 		function toggleBlockFoldAtViewport() {
 			if (!settingsStore.state.blockFoldingEnabled) return;
 			const term = terminalsStore.get(props.terminalId);
@@ -3776,10 +3924,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			) as import("../../stores/terminals").CommandBlock[];
 			const current = findBlockAtViewport(blocks, viewTop, lastResizeRows >> 1);
 			if (!current) return;
-			terminalsStore.toggleBlockFold(props.terminalId, current.promptLine);
-			fullRepaintNeeded = true;
-			const m = metrics();
-			if (currentFrame && m) paintFrame(currentFrame, m);
+			toggleFoldForBlock(current);
 		}
 
 		props.onRef?.({
@@ -3814,9 +3959,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					if (currentFrame && m) paintFrame(currentFrame, m);
 					return { index: -1, count: 0 };
 				}
+				// A genuinely new/different query must not inherit "active" from an old
+				// match that coincidentally lands at the same row/col — only a re-run of
+				// the SAME query (e.g. toggling block scope) should preserve it by value.
+				const preserveActiveByValue = query === searchQuery;
 				searchQuery = query;
 				searchBlockScope = blockScope ?? false;
-				return runSearchQuery(true);
+				return runSearchQuery(true, preserveActiveByValue);
 			},
 			searchNext: () => {
 				const match = search.next();
@@ -3914,6 +4063,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		settingsStore.state.showPromptMarks;
 		if (!alive || !currentFrame) return;
 		updateScrollbar(currentFrame);
+	});
+
+	// Same reasoning as the scrollbar-marks effect above, for the gutter-overlay
+	// settings: paintBlockTimestamps/paintFoldChevrons are only invoked from the
+	// frame-decode/scroll path, so toggling the timestamp mode or block folding
+	// on an otherwise-idle terminal wouldn't take visible effect until the next
+	// unrelated repaint.
+	createEffect(() => {
+		settingsStore.state.blockTimestampMode;
+		settingsStore.state.blockFoldingEnabled;
+		if (!alive || !currentFrame) return;
+		const m = metrics();
+		if (m) repaintOverlay(currentFrame, m);
 	});
 
 	// React to link-activation mode changes and (in "modifier" mode) to the

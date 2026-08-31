@@ -199,14 +199,17 @@ playback also uses the selected output device.
 | **Copy on select** | On | Auto-copy terminal selection to clipboard. When text is selected in the terminal, it is immediately copied. A "Copied to clipboard" confirmation appears in the status bar. |
 | **Allow OSC 52 clipboard writes** | On | Let terminal programs set the system clipboard via the OSC 52 escape sequence (used by tmux, vim, ssh yank-over-SSH, etc.). Because OSC 52 is honored from anywhere in the byte stream, a displayed file or log can also overwrite the clipboard — so a non-blocking "Clipboard updated" notice appears on every successful write (a failed write logs quietly instead). Disable to ignore OSC 52 entirely. |
 | **Open links on** | Click | How links (URLs, file paths) in terminal output activate. **Click** opens on a plain click. **⌘Click**/**Ctrl+Click** hides the underline until Cmd (macOS) or Ctrl (Windows/Linux) is held, then opens on modifier+click. **Never** disables click-to-open entirely — right-click still offers Open/Copy link. |
-| **Show block timestamps** | On | While Ctrl+Cmd is held, each command block is labelled at the right edge with how long ago it started. |
-| **Block folding** | On | Let the Toggle Block Fold shortcut (Cmd/Ctrl+Shift+.) and its command-palette entry collapse a command block's output. Blocks already folded stay collapsed when this is off. |
+| **Show block timestamps** | Hold Ctrl+Cmd | When each command block is labelled at the right edge with how long ago it started: **Never**, only while **Ctrl+Cmd** is held, or **Always**. |
+| **Block folding** | On | Let the Toggle Block Fold shortcut (Cmd/Ctrl+Shift+.), its command-palette entry and the fold chevron on a block's header row in the gutter collapse a command block's output (clicking elsewhere in the block's gutter selects its output for copying). Blocks already folded stay collapsed when this is off. |
 | **Show scrollbar marks** | On | Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began. Covers the **history** markers only — the blue/red block ticks and the green user-prompt ticks. Orange search-match ticks are not affected: they are the result of a search you just ran, not a display preference. |
 | **Show block marks** | On | Blue/red scrollbar tick for each command block (red when the command failed). Expert setting; needs **Show scrollbar marks**. |
 | **Show prompt marks** | On | Green scrollbar tick for each prompt you sent. Expert setting; needs **Show scrollbar marks**. |
 | **Reflow scrollback on resize** | On | Re-wrap scrollback history when the terminal changes width, so output written at the old width stays readable after a side panel opens or closes. Turn it off to leave history lines as they were written and truncate them to the new width instead. The visible screen is never reflowed either way — cursor-addressed TUIs redraw themselves. A change applies to sessions already open. |
 
 See [Command Blocks](terminals.md#command-blocks) for what the block settings control.
+
+The Terminal page also has a **Shell Integration** section with copyable bash/fish startup-file
+snippets (zsh needs no setup) — see [Shell Integration](terminals.md#shell-integration).
 
 The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control in
 Settings. Set `bell_style` in `config.json` (see [Terminal Bell](terminals.md#terminal-bell)).

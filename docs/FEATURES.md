@@ -234,13 +234,14 @@ suppressed for that session.
 - **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary. Provides a visual map of command history at a glance, shown without holding any modifier. **Show scrollbar marks** in Settings > Terminal (`show_scrollbar_marks`, on by default) is the master switch for the history markers — these ticks and the user-prompt ticks below — and the expert toggles **Show block marks** (`show_block_marks`) and **Show prompt marks** (`show_prompt_marks`) turn each category off on its own. None of them hides the search-match ticks, which stay visible so a search never silently draws nothing
 - **User-prompt scrollbar markers** — A distinct green tick on the scrollbar marks each line where the user submitted a prompt to the agent (recorded from the OSC 7770 `state=prompt` the submit-prompt hook emits; tool-call `state=busy` carries no row via `userPromptLines`). These are separate from command-block boundary marks and help you quickly locate your own prompts in long sessions
 - **Red ticks (turn failure)** — A block is flagged failed, primary tier: the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type; the `tuic-hook` binary extracts the exit code from the hook's own stdin JSON natively, with no external dependency) — this tier flags the block on any tool failure during the turn, even one a later retry in the same turn resolves, since Claude Code's hooks expose no per-call retry-succeeded signal to clear it against; fallback tier for sessions without hook instrumentation enabled: text-pattern matching on `⎿ Error: Exit code N` (Bash tool call failures only) or a detected API error, which *is* recovery-aware — a failure the agent retries and resolves before the turn ends does not flag the block there
-- **Timestamp overlay** — Hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
-- **Gutter click** — Click the gutter area to select the entire block output for easy copying
-- **Block folding** — Collapse/expand block output with `Cmd+Shift+.` toggle. Folded blocks show a summary line. Fold state is in-memory per session (not persisted across restarts)
-- **Block-scoped search** — Toggle with `Cmd+Shift+B` to restrict terminal search to the current block only
+- **Timestamp overlay** — Configurable display mode: off, always visible, or hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
+- **Gutter marks** — Red/green bar next to a shell command's prompt line marking its exit status
+- **Gutter click** — Click anywhere in a block's gutter except its fold chevron to select the entire block output for easy copying; the gutter is a wide, pointer-cursored click target
+- **Block folding** — Collapse/expand block output with `Cmd+Shift+.`, or by clicking the fold chevron on a block's header row in the gutter. Folded output is fully hidden behind a summary line, not dimmed. Fold state is in-memory per session (not persisted across restarts)
+- **Block-scoped search** — Toggle with `Cmd+Shift+B` to restrict terminal search to the current block only, shown with an accent bar along the block's left edge
 - **Block navigation** — `Cmd+Shift+Up/Down` jumps between block boundaries
 - **Block cap** — Sessions are capped at 500 command blocks; oldest blocks are evicted when the cap is reached
-- **Settings** — Configure block features at Settings > Terminal > Terminal: show/hide timestamps, show/hide scrollbar marks (with separate block-mark and prompt-mark toggles), enable/disable folding
+- **Settings** — Configure block features at Settings > Terminal > Terminal: timestamp display mode (off/hold Ctrl+Cmd/always), show/hide scrollbar marks (with separate block-mark and prompt-mark toggles), enable/disable folding
 
 ### 1.20 Compose Panel (`Cmd+I`)
 
@@ -1560,7 +1561,8 @@ ego's own configuration; the `ego_executable` path and the `ai_chat_workspace` f
 - Theme: terminal and app color theme, color swatches. Bundled themes include **Commander** (default and fallback for an unknown key), **Paper** (key `vscode-light`, the light theme), **Minimal Kiwi** (dark green-tinted background with muted warm accents) and **Ink** (key `clean`; Orca-style neutral dark: `#0a0a0a` canvas, `#171717` surfaces, white accent, Ghostty ANSI palette, neutral tab-type tints keyed on `html[data-theme]`). The UI uses `antialiased` font smoothing with 0.01em tracking on every theme
 - Shell
 - Terminal font: bundled monospace fonts (JetBrains Mono default), default font size (8-32px slider), font weight, cursor style (bar / block / underline)
-- Copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, block timestamps (elapsed-time label per command block while Ctrl+Cmd is held), block folding (gates the Toggle Block Fold shortcut and its palette entry), scrollbar marks, scrollback reflow on resize
+- Copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, block timestamp mode (elapsed-time label per command block: off / while Ctrl+Cmd is held / always), block folding (gates the Toggle Block Fold shortcut, its palette entry and the gutter fold chevron), scrollbar marks, scrollback reflow on resize
+- Shell Integration: copyable bash/fish startup-file snippets for OSC 133 command-block markers (zsh is automatic, no setup)
 - Terminal session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback
 
 ### 11.10 Git & GitHub

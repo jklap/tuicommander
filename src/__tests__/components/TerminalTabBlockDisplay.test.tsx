@@ -28,7 +28,6 @@ function toggleFor(container: HTMLElement, label: string): HTMLInputElement {
 	return input as HTMLInputElement;
 }
 
-const TIMESTAMPS = "Show block timestamps";
 const FOLDING = "Block folding";
 const MARKS = "Show scrollbar marks";
 const REFLOW = "Reflow scrollback on resize";
@@ -41,7 +40,6 @@ const PROMPT_MARKS = "Show prompt marks";
  * the three checks — which is how `show_scrollbar_marks` reached the config, the
  * store and a reader while having no control at all. */
 const DEFAULT_ON = [
-	{ label: TIMESTAMPS, key: "show_block_timestamps", field: "showBlockTimestamps" },
 	{ label: FOLDING, key: "block_folding_enabled", field: "blockFoldingEnabled" },
 	{ label: MARKS, key: "show_scrollbar_marks", field: "showScrollbarMarks" },
 	{ label: REFLOW, key: "scrollback_reflow", field: "scrollbackReflow" },
@@ -94,11 +92,11 @@ describe("TerminalTab block display toggles", () => {
 	});
 
 	it("shows the values the config was loaded with", async () => {
-		mockInvoke.mockImplementation(invokeImpl({ show_block_timestamps: false, block_folding_enabled: false }));
+		mockInvoke.mockImplementation(invokeImpl({ show_scrollbar_marks: false, block_folding_enabled: false }));
 		await settingsStore.hydrate();
 		const { container } = render(() => <TerminalTab />);
 
-		expect(toggleFor(container, TIMESTAMPS).checked).toBe(false);
+		expect(toggleFor(container, MARKS).checked).toBe(false);
 		expect(toggleFor(container, FOLDING).checked).toBe(false);
 	});
 
@@ -134,11 +132,11 @@ describe("TerminalTab block display toggles", () => {
 		// save writes the field, a fresh load_config returns it, the checkbox
 		// comes back off rather than snapping to the `?? true` default.
 		vi.useFakeTimers();
-		mockInvoke.mockImplementation(invokeImpl({ show_block_timestamps: true }));
+		mockInvoke.mockImplementation(invokeImpl({ block_folding_enabled: true }));
 		await settingsStore.hydrate();
 
 		const first = render(() => <TerminalTab />);
-		fireEvent.change(toggleFor(first.container, TIMESTAMPS), { target: { checked: false } });
+		fireEvent.change(toggleFor(first.container, FOLDING), { target: { checked: false } });
 		await vi.advanceTimersByTimeAsync(600);
 		const written = savedConfigs()[0];
 		cleanup();
@@ -146,6 +144,6 @@ describe("TerminalTab block display toggles", () => {
 		mockInvoke.mockImplementation(invokeImpl(written));
 		await settingsStore.hydrate();
 		const { container } = render(() => <TerminalTab />);
-		expect(toggleFor(container, TIMESTAMPS).checked).toBe(false);
+		expect(toggleFor(container, FOLDING).checked).toBe(false);
 	});
 });
