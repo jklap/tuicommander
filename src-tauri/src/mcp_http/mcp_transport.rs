@@ -194,6 +194,55 @@ pub(crate) fn marker_flags_for_agent(state: &AppState, agent_type: Option<&str>)
     (show_intent, show_suggest)
 }
 
+/// Resolve both `prefer_tuic_spawning` and `prefer_tuic_messaging` for an
+/// agent type from a single `load_agents_config()` read (mirrors
+/// `marker_flags_for_agent`'s shape). Both default ON. Turning either off
+/// does not disable the underlying spawn/messaging tool or API — it only
+/// removes that half's guidance from the MCP `initialize` instructions, so
+/// an agent type that has its own native subagent/Task tool and/or its own
+/// cross-agent messaging (e.g. Claude Code's SendMessage) isn't steered
+/// toward TUIC's in preference to it. The two are independent: an agent type
+/// can prefer TUIC for one and its own native tooling for the other, in
+/// either direction.
+///
+/// A single shared read matters, not just to avoid the duplicate disk I/O:
+/// `build_mcp_instructions` uses both values to render ONE instructions
+/// response, and `resolve_prefer_tuic_spawning`/`resolve_prefer_tuic_messaging`
+/// previously each ran their own independent `load_agents_config()` call —
+/// two reads a Settings save could land between, producing one response
+/// whose spawn- and messaging-gated sections reflect two different disk
+/// snapshots of `agents.json`.
+fn prefer_tuic_flags_for_agent(agent_type: Option<&str>) -> (bool, bool) {
+    let agents_cfg = crate::config::load_agents_config();
+    let agent_settings = agent_type.and_then(|t| agents_cfg.agents.get(t));
+
+    let prefer_spawning = agent_settings
+        .and_then(|s| s.prefer_tuic_spawning)
+        .unwrap_or(true);
+    let prefer_messaging = agent_settings
+        .and_then(|s| s.prefer_tuic_messaging)
+        .unwrap_or(true);
+
+    (prefer_spawning, prefer_messaging)
+}
+
+/// Same rule as [`prefer_tuic_flags_for_agent`], keyed by client name.
+/// Test-only: production code that needs both flags calls
+/// `prefer_tuic_flags_for_agent` directly so they come from a single
+/// `load_agents_config()` snapshot; these thin per-flag wrappers exist only
+/// so tests that care about one flag at a time don't need the tuple.
+#[cfg(test)]
+fn resolve_prefer_tuic_messaging(client_name: Option<&str>) -> bool {
+    prefer_tuic_flags_for_agent(resolve_agent_type(client_name)).1
+}
+
+/// Same rule as [`prefer_tuic_flags_for_agent`], keyed by client name. See
+/// [`resolve_prefer_tuic_messaging`]'s doc comment.
+#[cfg(test)]
+fn resolve_prefer_tuic_spawning(client_name: Option<&str>) -> bool {
+    prefer_tuic_flags_for_agent(resolve_agent_type(client_name)).0
+}
+
 /// SIMP-1: Drain registered HTML tabs for a closing/killed/exited session and
 /// emit `close-html-tabs` to the frontend. SIL-3: log a warning if the emit
 /// fails (don't drop silently — orphan tabs in UI hint at a missing app handle
@@ -947,11 +996,25 @@ fn build_mcp_instructions_for_mode(
     client_name: Option<&str>,
     collapse_tools: bool,
 ) -> String {
+    let (prefer_spawning, prefer_messaging) =
+        prefer_tuic_flags_for_agent(resolve_agent_type(client_name));
+    let gates = ToolGates {
+        disabled_native: state
+            .config
+            .read()
+            .disabled_native_tools
+            .iter()
+            .cloned()
+            .collect(),
+        prefer_spawning,
+        prefer_messaging,
+    };
     render_mcp_instructions(
         client_name,
         collapse_tools,
         resolve_marker_flags(state, client_name),
         &instruction_context(state),
+        &gates,
     )
 }
 
@@ -964,11 +1027,22 @@ fn build_mcp_instructions_for_mode(
 /// and `instructions_do_not_repeat_what_tool_descriptions_already_say`. What is
 /// left is what belongs to no single tool: the wire protocol markers, the rules
 /// that forbid a *non-TUIC* tool, and the live state below.
+/// Per-tool gates for the rendered instructions: which native tools are
+/// disabled (`disabled_native_tools`) and the connecting agent's Prefer
+/// TUICommander spawning/messaging flags. Gathered by the caller so this
+/// renderer stays pure (see `InstructionContext`'s doc comment).
+struct ToolGates {
+    disabled_native: std::collections::HashSet<String>,
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+}
+
 fn render_mcp_instructions(
     client_name: Option<&str>,
     collapse_tools: bool,
     markers: (bool, bool),
     ctx: &InstructionContext,
+    gates: &ToolGates,
 ) -> String {
     let ver = env!("CARGO_PKG_VERSION");
     let mut out = String::with_capacity(2048);
@@ -1012,6 +1086,28 @@ fn render_mcp_instructions(
     }
     out.push('\n');
 
+    // ── Per-tool enablement ────────────────────────────────────────────
+    // A tool disabled via `disabled_native_tools` must not be prescribed
+    // anywhere below — telling an agent to call a tool it can't reach just
+    // produces a confusing tool-not-found error instead of a clean gate.
+    let session_enabled = !gates.disabled_native.contains("session");
+    let agent_enabled = !gates.disabled_native.contains("agent");
+    let repo_enabled = !gates.disabled_native.contains("repo");
+    let ui_enabled = !gates.disabled_native.contains("ui");
+    let plugin_dev_guide_enabled = !gates.disabled_native.contains("plugin_dev_guide");
+    // Two independent preferences layered on top of `agent_enabled` — the
+    // `agent` tool does both spawning and messaging, and an agent type can
+    // prefer TUIC for either, both, or neither, in any combination, while
+    // still relying on its own native tooling for the other. Neither implies
+    // the other. Both collapse to false when the tool itself is disabled —
+    // there's nothing to prefer when the tool can't be reached at all.
+    // Read from a single `prefer_tuic_flags_for_agent` call (one
+    // `load_agents_config()` snapshot) rather than the two individual
+    // resolvers, so this one instructions response can't straddle two
+    // different reads of `agents.json` if a Settings save races it.
+    let spawn_preferred = agent_enabled && gates.prefer_spawning;
+    let messaging_preferred = agent_enabled && gates.prefer_messaging;
+
     // ── Cross-tool rules ─────────────────────────────────────────────
     // NOT a tool catalogue: `tools/list` already carries every name, action and
     // schema in the same turn, and restating it here bought a second copy for
@@ -1021,7 +1117,9 @@ fn render_mcp_instructions(
     out.push_str("## Tools\n\n");
     if collapse_tools {
         out.push_str("Tool discovery and invocation via `search_tools` / `get_tool_schema` / `call_tool` — see their descriptions for usage.\n\n");
-        out.push_str("**Worktrees:** never `git worktree add/remove` — always use `repo action=worktree_create` / `worktree_remove` so TUIC tracks the worktree and can spawn a PTY inside.\n\n");
+        if repo_enabled {
+            out.push_str("**Worktrees:** never `git worktree add/remove` — always use `repo action=worktree_create` / `worktree_remove` so TUIC tracks the worktree and can spawn a PTY inside.\n\n");
+        }
         // Kept verbatim in both modes. It is not a restatement of the `session`
         // description: agents split the text and the Enter into two calls, or
         // polled after submitting, until this line existed.
@@ -1040,16 +1138,20 @@ fn render_mcp_instructions(
     // is conditioned on the connecting client and so cannot sit in a static
     // description at all.
     let is_claude_code = detect_claude_code_client(client_name);
-    out.push_str("## Multi-Agent Work\n\n");
-    if ctx.peer_count > 0 {
+    if agent_enabled || repo_enabled {
+        out.push_str("## Multi-Agent Work\n\n");
+    }
+    if agent_enabled && ctx.peer_count > 0 {
         out.push_str(&format!(
             "**{}** peer agent(s) connected. Orchestrate them with the `agent` tool; read its description first.\n",
             ctx.peer_count
         ));
     }
-    out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
-    if is_claude_code {
-        out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
+    if repo_enabled {
+        out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
+        if is_claude_code {
+            out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
+        }
     }
     out.push('\n');
 
@@ -6949,6 +7051,14 @@ fn sanitize_branch_for_suggested_prompt(branch_name: &str) -> String {
     branch_name.replace('`', "'").replace('\n', " ")
 }
 
+fn default_tool_gates() -> ToolGates {
+    ToolGates {
+        disabled_native: std::collections::HashSet::new(),
+        prefer_spawning: true,
+        prefer_messaging: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6957,6 +7067,7 @@ mod tests {
     use crate::OutputRingBuffer;
     use crate::state::tests_support::create_temp_git_repo as create_temp_git_repo_for_mcp_test;
     use base64::Engine;
+    use tempfile::TempDir;
 
     fn upstream_passthrough_result() -> serde_json::Value {
         serde_json::json!({
@@ -13307,6 +13418,367 @@ mod tests {
         assert!(!collapsed.contains("status after"));
     }
 
+    // ---- build_mcp_instructions per-tool gating (disabled_native_tools) ------
+
+    #[test]
+    fn instructions_omit_disabled_session_tool() {
+        let state = test_state();
+        state.config.write().disabled_native_tools = vec!["session".to_string()];
+        let out = build_mcp_instructions(&state, None);
+
+        assert!(
+            !out.contains("- `session` ("),
+            "session bullet must be omitted from Tools"
+        );
+        assert!(
+            !out.contains("`session action=create` (shell)"),
+            "session clause must be omitted from Workflow Spawn bullet"
+        );
+        assert!(
+            !out.contains("`session action=status|output`"),
+            "session clause must be omitted from Workflow Observe bullet"
+        );
+        // Other tools stay advertised.
+        assert!(out.contains("- `agent` (AI peers"));
+        assert!(out.contains("## Multi-Agent Work"));
+    }
+
+    #[test]
+    fn instructions_omit_disabled_agent_tool_and_multi_agent_section() {
+        let state = test_state();
+        state.config.write().disabled_native_tools = vec!["agent".to_string()];
+        let out = build_mcp_instructions(&state, None);
+
+        assert!(
+            !out.contains("- `agent` ("),
+            "agent bullet must be omitted from Tools"
+        );
+        assert!(
+            !out.contains("## Multi-Agent Work"),
+            "Multi-Agent Work must be omitted entirely when agent tool is disabled"
+        );
+        assert!(
+            !out.contains("- **Coordinate:**"),
+            "agent-only Coordinate bullet must be omitted from Workflow"
+        );
+        // session/repo spawn guidance stays.
+        assert!(out.contains("`session action=create` (shell)"));
+        assert!(out.contains("`repo action=worktree_create` (isolated)"));
+    }
+
+    #[test]
+    fn instructions_omit_disabled_repo_tool() {
+        let state = test_state();
+        state.config.write().disabled_native_tools = vec!["repo".to_string()];
+        let out = build_mcp_instructions(&state, None);
+
+        assert!(
+            !out.contains("- `repo` ("),
+            "repo bullet must be omitted from Tools"
+        );
+        assert!(
+            !out.contains("**Worktrees:**"),
+            "Worktrees tip must be omitted when repo tool is disabled"
+        );
+        assert!(
+            !out.contains("- **Isolated branches:**"),
+            "repo-only Isolated branches bullet must be omitted"
+        );
+        assert!(
+            !out.contains("Single isolated task (CC only)"),
+            "repo-only CC worktree bullet must be omitted"
+        );
+    }
+
+    #[test]
+    fn instructions_omit_disabled_ui_tool() {
+        let state = test_state();
+        state.config.write().disabled_native_tools = vec!["ui".to_string()];
+        let out = build_mcp_instructions(&state, None);
+
+        assert!(!out.contains("- `ui` ("), "ui bullet must be omitted");
+        assert!(
+            !out.contains("**UI feedback:**"),
+            "UI feedback tip must be omitted when ui tool is disabled"
+        );
+    }
+
+    #[test]
+    fn instructions_omit_disabled_plugin_dev_guide_tool() {
+        let state = test_state();
+        state.config.write().disabled_native_tools = vec!["plugin_dev_guide".to_string()];
+        let out = build_mcp_instructions(&state, None);
+
+        assert!(
+            !out.contains("plugin_dev_guide`: plugin authoring reference"),
+            "plugin_dev_guide bullet must be omitted"
+        );
+    }
+
+    #[test]
+    fn instructions_workflow_header_omitted_when_session_agent_repo_all_disabled() {
+        let state = test_state();
+        state.config.write().disabled_native_tools = vec![
+            "session".to_string(),
+            "agent".to_string(),
+            "repo".to_string(),
+        ];
+        let out = build_mcp_instructions(&state, None);
+
+        assert!(
+            !out.contains("## Workflow"),
+            "Workflow header must not render with zero possible bullets"
+        );
+        // ui/plugin_dev_guide are unaffected and still listed.
+        assert!(out.contains("- `ui` ("));
+        assert!(out.contains("plugin_dev_guide`: plugin authoring reference"));
+    }
+
+    #[test]
+    fn instructions_peer_count_included_when_peers_registered() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "worker-1", "mcp-1");
+        let out = build_mcp_instructions(&state, None);
+
+        assert!(
+            out.contains("**1** peer agent(s) connected"),
+            "expected peer count sentence, got: {out}"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn instructions_single_isolated_task_bullet_only_for_claude_code_client() {
+        let state = test_state();
+
+        let generic = build_mcp_instructions(&state, Some("some-other-agent"));
+        assert!(
+            !generic.contains("Single isolated task (CC only)"),
+            "CC-only bullet must not appear for non-Claude-Code clients"
+        );
+
+        let claude = build_mcp_instructions(&state, Some("claude-code"));
+        assert!(
+            claude.contains("Single isolated task (CC only)"),
+            "CC-only bullet must appear for Claude Code clients"
+        );
+    }
+
+    // ---- build_mcp_instructions prefer_tuic_messaging gating ------------------
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_prefer_tuic_messaging_defaults_true_with_no_override() {
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        assert!(resolve_prefer_tuic_messaging(Some("claude-code")));
+        assert!(resolve_prefer_tuic_messaging(None));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_prefer_tuic_messaging_respects_per_agent_override() {
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let mut agents_cfg = crate::config::AgentsConfig::default();
+        agents_cfg.agents.insert(
+            "claude".to_string(),
+            crate::config::AgentSettings {
+                prefer_tuic_messaging: Some(false),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents_cfg).unwrap();
+
+        assert!(!resolve_prefer_tuic_messaging(Some("claude-code")));
+        // A different, unconfigured agent type is unaffected.
+        assert!(resolve_prefer_tuic_messaging(Some("codex")));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn instructions_messaging_disabled_keeps_spawn_but_omits_messaging_guidance() {
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let mut agents_cfg = crate::config::AgentsConfig::default();
+        agents_cfg.agents.insert(
+            "claude".to_string(),
+            crate::config::AgentSettings {
+                prefer_tuic_messaging: Some(false),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents_cfg).unwrap();
+
+        let state = test_state();
+        let out = build_mcp_instructions(&state, Some("claude-code"));
+
+        // Spawn guidance stays.
+        assert!(out.contains("`agent action=spawn` (AI)"));
+        assert!(
+            out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo.")
+        );
+        assert!(out.contains("- **Isolated branches:**"));
+
+        // Messaging guidance is gone.
+        assert!(
+            out.contains("- `agent` (AI peers): spawn, detect, stats, metrics"),
+            "expected trimmed agent bullet without messaging verbs, got: {out}"
+        );
+        assert!(!out.contains("agent action=register"));
+        assert!(!out.contains("- **Coordinate:**"));
+        assert!(!out.contains("`agent action=inbox`"));
+        assert!(!out.contains("- **Identity:**"));
+    }
+
+    // ---- build_mcp_instructions prefer_tuic_spawning gating (independent of
+    // prefer_tuic_messaging — an agent type can prefer either, both, or
+    // neither, in any combination) ---------------------------------------
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_prefer_tuic_spawning_defaults_true_with_no_override() {
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        assert!(resolve_prefer_tuic_spawning(Some("claude-code")));
+        assert!(resolve_prefer_tuic_spawning(None));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_prefer_tuic_spawning_respects_per_agent_override_independent_of_messaging() {
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let mut agents_cfg = crate::config::AgentsConfig::default();
+        agents_cfg.agents.insert(
+            "claude".to_string(),
+            crate::config::AgentSettings {
+                prefer_tuic_spawning: Some(false),
+                prefer_tuic_messaging: Some(true),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents_cfg).unwrap();
+
+        assert!(!resolve_prefer_tuic_spawning(Some("claude-code")));
+        assert!(resolve_prefer_tuic_messaging(Some("claude-code")));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn instructions_spawning_disabled_keeps_messaging_but_omits_spawn_guidance() {
+        // The mirror image of the messaging-disabled test above: spawn off,
+        // messaging on. Neither preference should ever imply the other.
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let mut agents_cfg = crate::config::AgentsConfig::default();
+        agents_cfg.agents.insert(
+            "claude".to_string(),
+            crate::config::AgentSettings {
+                prefer_tuic_spawning: Some(false),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents_cfg).unwrap();
+
+        let state = test_state();
+        let out = build_mcp_instructions(&state, Some("claude-code"));
+
+        // Messaging guidance stays.
+        assert!(out.contains("- `agent` (AI peers + messaging): wait, detect, stats, metrics, register, list_peers, send, inbox"));
+        assert!(out.contains("- **Identity:**"));
+        assert!(out.contains("`agent action=inbox`"));
+        assert!(out.contains("- **Coordinate:**"));
+        assert!(out.contains(
+            "- **Same repo:** wait with `agent action=wait`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`.\n"
+        ));
+
+        // Spawn guidance is gone.
+        assert!(!out.contains("`agent action=spawn` (AI)"));
+        assert!(!out.contains("- **Isolated branches:**"));
+        assert!(!out.contains("Prefer TUICommander for peers/teams"));
+        assert!(!out.contains("Single isolated task (CC only)"));
+        // The anomaly-fallback clause is spawn-specific ("a child failed to
+        // send its result" presumes TUIC did the spawning) — must not leak
+        // into the messaging-only Same-repo bullet.
+        assert!(!out.contains("anomaly fallback"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn instructions_omit_multi_agent_work_when_neither_spawning_nor_messaging_preferred() {
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let mut agents_cfg = crate::config::AgentsConfig::default();
+        agents_cfg.agents.insert(
+            "claude".to_string(),
+            crate::config::AgentSettings {
+                prefer_tuic_spawning: Some(false),
+                prefer_tuic_messaging: Some(false),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents_cfg).unwrap();
+
+        let state = test_state();
+        let out = build_mcp_instructions(&state, Some("claude-code"));
+
+        assert!(
+            !out.contains("## Multi-Agent Work"),
+            "section must be omitted entirely when there's nothing TUIC-preferred left to say"
+        );
+        // The agent tool is still enabled and still listed, just with neither
+        // spawn nor messaging verbs — pure peer-admin only.
+        assert!(out.contains("- `agent` (AI peers): detect, stats, metrics"));
+        // Workflow still renders (session/repo/agent-detect content survives).
+        assert!(!out.contains("- **Coordinate:**"));
+        assert!(!out.contains("`agent action=spawn` (AI)"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn instructions_disabled_agent_tool_wins_over_an_explicit_prefer_true_override() {
+        // `spawn_preferred`/`messaging_preferred` are `agent_enabled && resolve_prefer_tuic_*(...)`
+        // — a hard AND, not an OR. An explicit `Some(true)` override must NOT resurrect
+        // Multi-Agent Work guidance once the `agent` tool itself is disabled; there's
+        // nothing to prefer when the tool can't be reached at all.
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let mut agents_cfg = crate::config::AgentsConfig::default();
+        agents_cfg.agents.insert(
+            "claude".to_string(),
+            crate::config::AgentSettings {
+                prefer_tuic_spawning: Some(true),
+                prefer_tuic_messaging: Some(true),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents_cfg).unwrap();
+
+        let state = test_state();
+        state.config.write().disabled_native_tools = vec!["agent".to_string()];
+        let out = build_mcp_instructions(&state, Some("claude-code"));
+
+        assert!(
+            !out.contains("## Multi-Agent Work"),
+            "an explicit prefer_tuic_*=true override must not override agent_enabled=false"
+        );
+        assert!(
+            !out.contains("- `agent` ("),
+            "agent bullet must still be omitted from Tools"
+        );
+        assert!(!out.contains("- **Coordinate:**"));
+        // session/repo spawn guidance is unaffected by the agent-only override.
+        assert!(out.contains("`session action=create` (shell)"));
+        assert!(out.contains("`repo action=worktree_create` (isolated)"));
+    }
+
     // ---- Instruction de-duplication (#754-affa) ------------------------------
 
     fn tool_description<'a>(defs: &'a serde_json::Value, name: &str) -> &'a str {
@@ -13507,19 +13979,19 @@ mod tests {
         let markers = (true, true);
         let instructions_classic_empty = record(
             "instructions.classic.empty",
-            render_mcp_instructions(None, false, markers, &empty),
+            render_mcp_instructions(None, false, markers, &empty, &default_tool_gates()),
         );
         let instructions_classic_loaded = record(
             "instructions.classic.loaded",
-            render_mcp_instructions(None, false, markers, &loaded),
+            render_mcp_instructions(None, false, markers, &loaded, &default_tool_gates()),
         );
         let instructions_collapsed_empty = record(
             "instructions.collapsed.empty",
-            render_mcp_instructions(None, true, markers, &empty),
+            render_mcp_instructions(None, true, markers, &empty, &default_tool_gates()),
         );
         record(
             "instructions.collapsed.loaded",
-            render_mcp_instructions(None, true, markers, &loaded),
+            render_mcp_instructions(None, true, markers, &loaded, &default_tool_gates()),
         );
 
         // Discovered schemas: what `get_tool_schema` hands back, per tool.

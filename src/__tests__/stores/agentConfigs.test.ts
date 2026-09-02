@@ -383,4 +383,191 @@ describe("agentConfigsStore", () => {
 			});
 		});
 	});
+
+	describe("intent_tab_title override", () => {
+		it("is undefined when no override is set", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				expect(store.getIntentTabTitle("claude")).toBeUndefined();
+			});
+		});
+
+		it("persists a per-agent override and saves to disk", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				mockInvoke.mockClear();
+				await store.setIntentTabTitle("claude", false);
+				expect(store.getIntentTabTitle("claude")).toBe(false);
+				expect(mockInvoke).toHaveBeenCalledWith(
+					"save_agents_config",
+					expect.objectContaining({
+						config: expect.objectContaining({
+							agents: expect.objectContaining({
+								claude: expect.objectContaining({ intent_tab_title: false }),
+							}),
+						}),
+					}),
+				);
+			});
+		});
+
+		it("resets to default when set to undefined", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				await store.setIntentTabTitle("claude", false);
+				await store.setIntentTabTitle("claude", undefined);
+				expect(store.getIntentTabTitle("claude")).toBeUndefined();
+			});
+		});
+
+		it("creates an agent entry when none exists yet", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				await store.setIntentTabTitle("gemini", true);
+				expect(store.getIntentTabTitle("gemini")).toBe(true);
+			});
+		});
+	});
+
+	describe("suggest_followups override", () => {
+		it("is undefined when no override is set", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				expect(store.getSuggestFollowups("claude")).toBeUndefined();
+			});
+		});
+
+		it("persists a per-agent override and saves to disk", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				mockInvoke.mockClear();
+				await store.setSuggestFollowups("claude", false);
+				expect(store.getSuggestFollowups("claude")).toBe(false);
+				expect(mockInvoke).toHaveBeenCalledWith(
+					"save_agents_config",
+					expect.objectContaining({
+						config: expect.objectContaining({
+							agents: expect.objectContaining({
+								claude: expect.objectContaining({ suggest_followups: false }),
+							}),
+						}),
+					}),
+				);
+			});
+		});
+
+		it("resets to default when set to undefined", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				await store.setSuggestFollowups("claude", false);
+				await store.setSuggestFollowups("claude", undefined);
+				expect(store.getSuggestFollowups("claude")).toBeUndefined();
+			});
+		});
+	});
+
+	describe("prefer_tuic_messaging override", () => {
+		it("is undefined when no override is set", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				expect(store.getPreferTuicMessaging("claude")).toBeUndefined();
+			});
+		});
+
+		it("persists a per-agent override and saves to disk", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				mockInvoke.mockClear();
+				await store.setPreferTuicMessaging("claude", false);
+				expect(store.getPreferTuicMessaging("claude")).toBe(false);
+				expect(mockInvoke).toHaveBeenCalledWith(
+					"save_agents_config",
+					expect.objectContaining({
+						config: expect.objectContaining({
+							agents: expect.objectContaining({
+								claude: expect.objectContaining({ prefer_tuic_messaging: false }),
+							}),
+						}),
+					}),
+				);
+			});
+		});
+
+		it("resets to default when set to undefined", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				await store.setPreferTuicMessaging("claude", false);
+				await store.setPreferTuicMessaging("claude", undefined);
+				expect(store.getPreferTuicMessaging("claude")).toBeUndefined();
+			});
+		});
+
+		it("creates an agent entry when none exists yet", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				await store.setPreferTuicMessaging("codex", false);
+				expect(store.getPreferTuicMessaging("codex")).toBe(false);
+			});
+		});
+	});
+
+	describe("prefer_tuic_spawning override", () => {
+		it("is undefined when no override is set", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				expect(store.getPreferTuicSpawning("claude")).toBeUndefined();
+			});
+		});
+
+		it("persists a per-agent override and saves to disk", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				mockInvoke.mockClear();
+				await store.setPreferTuicSpawning("claude", false);
+				expect(store.getPreferTuicSpawning("claude")).toBe(false);
+				expect(mockInvoke).toHaveBeenCalledWith(
+					"save_agents_config",
+					expect.objectContaining({
+						config: expect.objectContaining({
+							agents: expect.objectContaining({
+								claude: expect.objectContaining({ prefer_tuic_spawning: false }),
+							}),
+						}),
+					}),
+				);
+			});
+		});
+
+		it("resets to default when set to undefined", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				await store.setPreferTuicSpawning("claude", false);
+				await store.setPreferTuicSpawning("claude", undefined);
+				expect(store.getPreferTuicSpawning("claude")).toBeUndefined();
+			});
+		});
+
+		it("creates an agent entry when none exists yet", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith({ agents: {} });
+				await store.setPreferTuicSpawning("codex", false);
+				expect(store.getPreferTuicSpawning("codex")).toBe(false);
+			});
+		});
+
+		it("is independent of prefer_tuic_messaging in both directions", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				await store.setPreferTuicSpawning("claude", false);
+				await store.setPreferTuicMessaging("claude", true);
+				expect(store.getPreferTuicSpawning("claude")).toBe(false);
+				expect(store.getPreferTuicMessaging("claude")).toBe(true);
+
+				await store.setPreferTuicSpawning("claude", true);
+				await store.setPreferTuicMessaging("claude", false);
+				expect(store.getPreferTuicSpawning("claude")).toBe(true);
+				expect(store.getPreferTuicMessaging("claude")).toBe(false);
+			});
+		});
+	});
 });
