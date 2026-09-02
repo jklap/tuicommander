@@ -49,6 +49,8 @@ interface AgentConfigsState {
 			progress_tracking?: boolean;
 			suggest_followups?: boolean;
 			hook_instrumentation?: boolean;
+			prefer_tuic_messaging?: boolean;
+			prefer_tuic_spawning?: boolean;
 			native_status_signals?: boolean;
 			prevent_alt_screen?: boolean;
 			skip_trust_dialog?: boolean;
@@ -368,6 +370,50 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 						s.agents[type] = { run_configs: [] };
 					}
 					s.agents[type].suggest_followups = value;
+				}),
+			);
+			try {
+				await saveToDisk();
+			} catch (_err) {
+				// saveToDisk already logged the error
+			}
+		},
+
+		/** Get per-agent prefer_tuic_messaging override (undefined = use default/on) */
+		getPreferTuicMessaging(type: AgentType): boolean | undefined {
+			return state.agents[type]?.prefer_tuic_messaging;
+		},
+
+		/** Set per-agent prefer_tuic_messaging override. Pass undefined to reset to default. */
+		async setPreferTuicMessaging(type: AgentType, value: boolean | undefined): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) {
+						s.agents[type] = { run_configs: [] };
+					}
+					s.agents[type].prefer_tuic_messaging = value;
+				}),
+			);
+			try {
+				await saveToDisk();
+			} catch (_err) {
+				// saveToDisk already logged the error
+			}
+		},
+
+		/** Get per-agent prefer_tuic_spawning override (undefined = use default/on) */
+		getPreferTuicSpawning(type: AgentType): boolean | undefined {
+			return state.agents[type]?.prefer_tuic_spawning;
+		},
+
+		/** Set per-agent prefer_tuic_spawning override. Pass undefined to reset to default. */
+		async setPreferTuicSpawning(type: AgentType, value: boolean | undefined): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) {
+						s.agents[type] = { run_configs: [] };
+					}
+					s.agents[type].prefer_tuic_spawning = value;
 				}),
 			);
 			try {
