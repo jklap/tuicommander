@@ -114,6 +114,8 @@ PTY sessions receive the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` environment va
 
 Spawned sessions automatically emit lifecycle events (`session-created`, `session-closed`) so they appear as tabs and clean up on exit.
 
+By default, TUICommander's MCP instructions also steer spawned Claude Code agents toward TUIC's own `agent` tool for both spawning (`agent action=spawn`, instead of Claude Code's native subagent/Task tool) and messaging (register/send/inbox/wait, instead of Claude Code's native cross-agent messaging). These are two **independent** settings — **Settings** > **Agents** > **Claude Code** > **Prefer TUICommander agent spawning** and **Prefer TUICommander messaging** — so you can turn either off without affecting the other, in any combination: TUIC for both, TUIC spawning with native messaging, native spawning with TUIC messaging, or native for both while leaving the `agent` MCP tool itself enabled. Turning a preference off only changes what the MCP instructions tell the agent to use; it doesn't disable the underlying tool. Both preferences stop mattering (and the UI greys them out) if the `agent` MCP tool itself is disabled.
+
 ## TUIC Protocol — Output Markers
 
 TUICommander asks the top-level agent in each session to emit three wire markers so the UI can

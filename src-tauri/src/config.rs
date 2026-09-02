@@ -1499,6 +1499,24 @@ pub(crate) struct AgentSettings {
     /// Per-agent override for suggested follow-ups. None = use global default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) suggest_followups: Option<bool>,
+    /// Whether TUICommander's own `agent` messaging (register/send/inbox/wait,
+    /// and the messaging-related guidance in the MCP `initialize` instructions)
+    /// should be advertised to this agent type. None = on (default). Off does
+    /// NOT disable the underlying messaging tool/API — it only stops the MCP
+    /// instructions text from telling this agent to use it, so it falls back
+    /// to its own native cross-agent messaging instead. Independent of
+    /// `prefer_tuic_spawning` — neither requires the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) prefer_tuic_messaging: Option<bool>,
+    /// Whether TUICommander's own `agent action=spawn` (and the spawn-preference
+    /// guidance in the MCP `initialize` instructions, e.g. "use TUIC's agent
+    /// action=spawn instead of your host's native subagent/Task tool") should be
+    /// advertised to this agent type. None = on (default). Off does NOT disable
+    /// the underlying spawn tool/API — it only stops the MCP instructions text
+    /// from telling this agent to prefer it over its own native spawning.
+    /// Independent of `prefer_tuic_messaging` — neither requires the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) prefer_tuic_spawning: Option<bool>,
     /// Opt-in: drive busy/idle/awaiting from the agent's native hooks instead of
     /// output heuristics. Enabling installs hooks into the agent's settings file;
     /// disabling removes only TUIC's entries. None/false = heuristics (default).
@@ -4494,6 +4512,8 @@ mod tests {
                 env_flags: HashMap::new(),
                 intent_tab_title: Some(false),
                 suggest_followups: None,
+                prefer_tuic_messaging: Some(false),
+                prefer_tuic_spawning: Some(true),
                 hook_instrumentation: None,
             },
         );
@@ -4515,6 +4535,21 @@ mod tests {
         assert!(!claude.run_configs[1].is_default);
         assert_eq!(claude.intent_tab_title, Some(false));
         assert_eq!(claude.suggest_followups, None);
+        assert_eq!(claude.prefer_tuic_messaging, Some(false));
+        assert_eq!(claude.prefer_tuic_spawning, Some(true));
+    }
+
+    #[test]
+    fn agents_config_prefer_tuic_messaging_and_spawning_default_to_none_for_old_json() {
+        // Forward-compat: an agents.json written before `prefer_tuic_messaging`/
+        // `prefer_tuic_spawning` existed must still deserialize, with both
+        // fields defaulting to None (i.e. build_mcp_instructions treats each as "on").
+        let old_json = r#"{"agents":{"claude":{"run_configs":[],"intent_tab_title":true}}}"#;
+        let loaded: AgentsConfig = serde_json::from_str(old_json).unwrap();
+        let claude = loaded.agents.get("claude").unwrap();
+        assert_eq!(claude.intent_tab_title, Some(true));
+        assert_eq!(claude.prefer_tuic_messaging, None);
+        assert_eq!(claude.prefer_tuic_spawning, None);
     }
 
     #[test]

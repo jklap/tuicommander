@@ -757,13 +757,14 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Edit agent config:** Opens agent's own configuration file in the user's preferred IDE
 - **Context menu integration:** Right-click terminal > Agents submenu with per-agent run configurations
 - **Busy detection:** Agents submenu disabled when a process is already running in the active terminal
-- **Environment Flags** — Per-agent environment variables injected into every new terminal session. Configure in Settings > Agents > expand an agent > Environment Flags. Useful for setting feature flags like `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` without manual export.
+- **Environment Flags** — Per-agent environment variables injected into every new terminal session. Configure in Settings > Agents > expand an agent > Environment Flags. Useful for setting feature flags without manual export. (Note: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is not one of these — it's injected unconditionally by TUICommander itself and isn't user-togglable here.)
 
 ### 6.10 Agent Teams
 - **Purpose:** Enables Claude Code's Agent Teams feature to use TUIC tabs instead of tmux panes
-- **Approach:** Environment variable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` injected into PTY sessions, which unlocks Claude Code's TeamCreate/TaskCreate/SendMessage tools. Agent spawning uses direct MCP tool calls (`agent spawn`) instead of the deprecated it2 shim
+- **Approach:** Environment variable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` injected unconditionally into every PTY session, which unlocks Claude Code's `SendMessage` tool (as of current Claude Code versions, `TeamCreate`/`TaskCreate` no longer exist as separate tools — team membership is implicit). Agent spawning uses direct MCP tool calls (`agent spawn`) instead of the deprecated it2 shim
 - **Session lifecycle events:** MCP-spawned sessions emit `session-created` and `session-closed` events so they automatically appear as tabs and clean up on exit
 - **No settings toggle:** enabled unconditionally for every Claude Code PTY session — there is no Settings > Agents > Agent Teams switch
+- **Prefer TUICommander messaging / spawning:** two independent per-agent-type settings (Settings > Agents > *agent* > Prefer TUICommander messaging / Prefer TUICommander agent spawning, both default on) controlling whether TUIC's own `agent` guidance is advertised to that agent type in the MCP `initialize` instructions — messaging (register/send/inbox/wait) and spawning (`agent action=spawn`, plus the "prefer TUIC over your native subagent/Task tool" framing) independently, in any of the four combinations. Turning either off only removes that half's guidance from the instructions text; it does not disable the underlying tool/API, and has no effect on the other setting. Both preferences collapse to off automatically when the `agent` MCP tool itself is disabled (nothing left to prefer)
 - **Suggest follow-ups:** Agents can propose follow-up actions via `suggest: [ A | B | C ]` tokens, displayed as floating chip bar
 - **Deprecated:** The it2 shim approach (iTerm2 CLI emulation) is commented out — superseded by direct MCP tool spawning
 
@@ -786,7 +787,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Identity**: Each agent uses its `$TUIC_SESSION` env var (stable tab UUID) as its messaging identity. A headerless external caller may `register` without `tuic_session` to be issued an MCP-scoped UUID, or supply a stable UUID to reclaim an existing identity
 - **Actions**: `register` (announce presence, or rename/re-project an auto-bound peer), `list_peers` (discover other agents, optional `project` filter), `send` (message a peer by `to` = tuic_session), `inbox` (poll for messages), `wait` (block until new mail)
 - **Dual delivery**: Real-time push via MCP `notifications/claude/channel` over SSE into already working Claude Code turns; idle/completed managed agents and managed non-Claude agents use submitted PTY delivery even when their MCP bridge has an SSE stream; polling fallback via `inbox` is always available
-- **Channel support**: TUICommander declares `experimental.claude/channel` capability; spawned Claude Code agents automatically get `--dangerously-load-development-channels server:tuicommander`
+- **Channel support**: TUICommander declares `experimental.claude/channel` capability. Spawned Claude Code agents are *documented* to automatically get `--dangerously-load-development-channels server:tuicommander`, but the code that adds this flag was accidentally dropped in a later refactor and hasn't been restored — SSE push is currently unreachable for MCP-spawned agents (see `docs/backend/mcp-http.md`); the inbox-poll and terminal-typing delivery paths are unaffected
 - **Lifecycle**: Peer registrations cleaned up on MCP session delete and TTL reap; `PeerRegistered`/`PeerUnregistered` events broadcast via event bus for frontend visibility
 - **Limits**: 64 KB max message size, 100 messages per inbox (FIFO eviction), optional project filtering for `list_peers`
 - TUICommander acts as the messaging hub — no external daemon needed
