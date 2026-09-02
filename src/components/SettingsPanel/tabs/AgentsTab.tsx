@@ -890,6 +890,7 @@ export const AgentRow: Component<{
 	const [mcpLoading, setMcpLoading] = createSignal(false);
 	const [hookState, setHookState] = createSignal<AgentHookState | null>(null);
 	const [hookLoading, setHookLoading] = createSignal(false);
+	const [agentMcpToolDisabled, setAgentMcpToolDisabled] = createSignal(false);
 
 	const agent = () => AGENTS[props.agentType];
 	const display = () => AGENT_DISPLAY[props.agentType];
@@ -929,6 +930,23 @@ export const AgentRow: Component<{
 		}
 	};
 
+	/**
+	 * "Prefer TUICommander messaging/spawning" only mean anything when the
+	 * `agent` MCP tool itself is enabled (`mcp_capabilities.denied`, Settings > MCP) —
+	 * disabled means both preferences are moot (build_mcp_instructions collapses
+	 * them to false either way), so grey the checkboxes out to avoid implying
+	 * a toggle that has no effect right now.
+	 */
+	const loadAgentMcpToolStatus = async () => {
+		if (!isTauri()) return;
+		try {
+			const config = await invoke<{ mcp_capabilities?: { denied?: string[] } }>("load_config");
+			setAgentMcpToolDisabled((config.mcp_capabilities?.denied ?? []).includes("agent"));
+		} catch (err) {
+			appLogger.error("config", `Failed to load mcp_capabilities for ${props.agentType}`, err);
+		}
+	};
+
 	const handleHookToggle = async () => {
 		if (hookLoading()) return;
 		setHookLoading(true);
@@ -965,6 +983,7 @@ export const AgentRow: Component<{
 		if (newVal) {
 			loadMcpStatus();
 			loadHookState();
+			loadAgentMcpToolStatus();
 			props.onExpand?.(props.agentType);
 		}
 	};
@@ -1332,6 +1351,56 @@ export const AgentRow: Component<{
 								</p>
 							</div>
 						</ExpertSetting>
+
+						<div class={a.expandedSection}>
+							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+								<input
+									type="checkbox"
+									data-setting-id="agents.agents.{key}.prefer_tuic_spawning"
+									disabled={agentMcpToolDisabled()}
+									checked={
+										agentMcpToolDisabled() ? false : (configStore.getPreferTuicSpawning(props.agentType) ?? true)
+									}
+									onChange={(e) => configStore.setPreferTuicSpawning(props.agentType, e.currentTarget.checked)}
+								/>
+								<span>Prefer TUICommander agent spawning</span>
+							</label>
+							<p class={s.hint}>
+								Advertise TUICommander's <code>agent action=spawn</code> (and the guidance to prefer it over this
+								agent's native subagent/Task tool) in its MCP instructions. Turn off if you'd rather this agent use its
+								own native spawning instead — independent of the messaging toggle below, and independent in either
+								direction: you can prefer TUIC for one and native for the other.
+								<Show when={agentMcpToolDisabled()}>
+									{" "}
+									Disabled because the <code>agent</code> MCP tool itself is off (Settings &gt; MCP &gt; TUIC Tools) —
+									neither preference has anything to do while that's the case.
+								</Show>
+							</p>
+						</div>
+
+						<div class={a.expandedSection}>
+							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+								<input
+									type="checkbox"
+									data-setting-id="agents.agents.{key}.prefer_tuic_messaging"
+									disabled={agentMcpToolDisabled()}
+									checked={
+										agentMcpToolDisabled() ? false : (configStore.getPreferTuicMessaging(props.agentType) ?? true)
+									}
+									onChange={(e) => configStore.setPreferTuicMessaging(props.agentType, e.currentTarget.checked)}
+								/>
+								<span>Prefer TUICommander messaging</span>
+							</label>
+							<p class={s.hint}>
+								Advertise TUICommander's own agent messaging (register/send/inbox/wait) in its MCP instructions. Turn
+								off if this agent has its own native cross-agent messaging you'd rather it use instead — independent of
+								the spawning toggle above, in either direction.
+								<Show when={agentMcpToolDisabled()}>
+									{" "}
+									Disabled because the <code>agent</code> MCP tool itself is off (Settings &gt; MCP &gt; TUIC Tools).
+								</Show>
+							</p>
+						</div>
 					</Show>
 
 					<Show when={LAUNCH_INSTRUCTION_AGENTS.includes(props.agentType) && settingsExpertStore.launchInstructions()}>

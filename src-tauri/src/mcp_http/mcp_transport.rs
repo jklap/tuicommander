@@ -85,6 +85,8 @@ use super::mcp_transport_catalogue::build_mcp_instructions;
 use super::mcp_transport_catalogue::build_mcp_instructions_for_mode;
 use super::mcp_transport_catalogue::build_mcp_instructions_for_session;
 #[cfg(test)]
+use super::mcp_transport_catalogue::default_tool_gates;
+#[cfg(test)]
 use super::mcp_transport_catalogue::filtered_native_tools;
 use super::mcp_transport_catalogue::handle_call_tool;
 use super::mcp_transport_catalogue::handle_get_tool_schema_for_session;
@@ -386,6 +388,55 @@ pub(super) fn resolve_marker_flags(
 pub(crate) fn marker_flags_for_agent(state: &AppState, agent_type: Option<&str>) -> (bool, bool) {
     let agents_cfg = crate::config::load_agents_config();
     crate::launch_instructions::marker_flags(&state.config.read(), &agents_cfg, agent_type)
+}
+
+/// Resolve both `prefer_tuic_spawning` and `prefer_tuic_messaging` for an
+/// agent type from a single `load_agents_config()` read (mirrors
+/// `marker_flags_for_agent`'s shape). Both default ON. Turning either off
+/// does not disable the underlying spawn/messaging tool or API — it only
+/// removes that half's guidance from the MCP `initialize` instructions, so
+/// an agent type that has its own native subagent/Task tool and/or its own
+/// cross-agent messaging (e.g. Claude Code's SendMessage) isn't steered
+/// toward TUIC's in preference to it. The two are independent: an agent type
+/// can prefer TUIC for one and its own native tooling for the other, in
+/// either direction.
+///
+/// A single shared read matters, not just to avoid the duplicate disk I/O:
+/// `build_mcp_instructions` uses both values to render ONE instructions
+/// response, and `resolve_prefer_tuic_spawning`/`resolve_prefer_tuic_messaging`
+/// previously each ran their own independent `load_agents_config()` call —
+/// two reads a Settings save could land between, producing one response
+/// whose spawn- and messaging-gated sections reflect two different disk
+/// snapshots of `agents.json`.
+pub(super) fn prefer_tuic_flags_for_agent(agent_type: Option<&str>) -> (bool, bool) {
+    let agents_cfg = crate::config::load_agents_config();
+    let agent_settings = agent_type.and_then(|t| agents_cfg.agents.get(t));
+
+    let prefer_spawning = agent_settings
+        .and_then(|s| s.prefer_tuic_spawning)
+        .unwrap_or(true);
+    let prefer_messaging = agent_settings
+        .and_then(|s| s.prefer_tuic_messaging)
+        .unwrap_or(true);
+
+    (prefer_spawning, prefer_messaging)
+}
+
+/// Same rule as [`prefer_tuic_flags_for_agent`], keyed by client name.
+/// Test-only: production code that needs both flags calls
+/// `prefer_tuic_flags_for_agent` directly so they come from a single
+/// `load_agents_config()` snapshot; these thin per-flag wrappers exist only
+/// so tests that care about one flag at a time don't need the tuple.
+#[cfg(test)]
+fn resolve_prefer_tuic_messaging(client_name: Option<&str>) -> bool {
+    prefer_tuic_flags_for_agent(resolve_agent_type(client_name)).1
+}
+
+/// Same rule as [`prefer_tuic_flags_for_agent`], keyed by client name. See
+/// [`resolve_prefer_tuic_messaging`]'s doc comment.
+#[cfg(test)]
+fn resolve_prefer_tuic_spawning(client_name: Option<&str>) -> bool {
+    prefer_tuic_flags_for_agent(resolve_agent_type(client_name)).0
 }
 
 /// SIMP-1: Drain registered HTML tabs for a closing/killed/exited session and

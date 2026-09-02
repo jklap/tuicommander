@@ -6,6 +6,7 @@ use super::mcp_transport::client_requires_meta_tools;
 use super::mcp_transport::detect_claude_code_client;
 use super::mcp_transport::handle_mcp_tool_call_with_context;
 use super::mcp_transport::mark_upstream_tool_result;
+use super::mcp_transport::prefer_tuic_flags_for_agent;
 use super::mcp_transport::resolve_agent_type;
 use super::mcp_transport::resolve_marker_flags;
 
@@ -143,6 +144,18 @@ fn instruction_context(state: &Arc<AppState>, mcp_session_id: Option<&str>) -> I
     }
 }
 
+/// Every native tool the capability gate filtered out of `ctx.native_tools`.
+fn disabled_native_tool_names(ctx: &InstructionContext) -> std::collections::HashSet<String> {
+    native_tool_definitions()
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["name"].as_str())
+        .filter(|name| !ctx.native_tools.iter().any(|enabled| enabled == name))
+        .map(str::to_string)
+        .collect()
+}
+
 /// An MCP session bound to a peer that has a parent session: it was spawned
 /// by another agent rather than started by the user.
 fn is_spawned_child(state: &AppState, mcp_session_id: &str) -> bool {
@@ -169,12 +182,21 @@ pub(super) fn build_mcp_instructions_for_session(
     collapse_tools: bool,
     mcp_session_id: Option<&str>,
 ) -> String {
+    let (prefer_spawning, prefer_messaging) =
+        prefer_tuic_flags_for_agent(resolve_agent_type(client_name));
+    let ctx = instruction_context(state, mcp_session_id);
+    let gates = ToolGates {
+        disabled_native: disabled_native_tool_names(&ctx),
+        prefer_spawning,
+        prefer_messaging,
+    };
     render_mcp_instructions(
         client_name,
         collapse_tools,
         resolve_marker_flags(state, client_name),
         crate::progress::progress_tracking_enabled(state, resolve_agent_type(client_name)),
-        &instruction_context(state, mcp_session_id),
+        &ctx,
+        &gates,
     )
 }
 
@@ -187,12 +209,24 @@ pub(super) fn build_mcp_instructions_for_session(
 /// and `instructions_do_not_repeat_what_tool_descriptions_already_say`. What is
 /// left is what belongs to no single tool: the wire protocol markers, the rules
 /// that forbid a *non-TUIC* tool, and the live state below.
+/// Per-tool gates for the rendered instructions: which native tools are
+/// unavailable on this install (the `mcp_capabilities` gate, read through
+/// `filtered_native_tools` like dispatch) and the connecting agent's Prefer
+/// TUICommander spawning/messaging flags. Gathered by the caller so this
+/// renderer stays pure (see `InstructionContext`'s doc comment).
+pub(super) struct ToolGates {
+    pub(super) disabled_native: std::collections::HashSet<String>,
+    pub(super) prefer_spawning: bool,
+    pub(super) prefer_messaging: bool,
+}
+
 pub(super) fn render_mcp_instructions(
     client_name: Option<&str>,
     collapse_tools: bool,
     markers: (bool, bool),
     progress_tracking: bool,
     ctx: &InstructionContext,
+    gates: &ToolGates,
 ) -> String {
     let ver = env!("CARGO_PKG_VERSION");
     let mut out = String::with_capacity(2048);
@@ -247,6 +281,28 @@ pub(super) fn render_mcp_instructions(
         detect_claude_code_client(client_name),
     ));
 
+    // ── Per-tool enablement ────────────────────────────────────────────
+    // A tool disabled by `mcp_capabilities` must not be prescribed
+    // anywhere below — telling an agent to call a tool it can't reach just
+    // produces a confusing tool-not-found error instead of a clean gate.
+    let session_enabled = !gates.disabled_native.contains("session");
+    let agent_enabled = !gates.disabled_native.contains("agent");
+    let repo_enabled = !gates.disabled_native.contains("repo");
+    let ui_enabled = !gates.disabled_native.contains("ui");
+    let plugin_dev_guide_enabled = !gates.disabled_native.contains("plugin_dev_guide");
+    // Two independent preferences layered on top of `agent_enabled` — the
+    // `agent` tool does both spawning and messaging, and an agent type can
+    // prefer TUIC for either, both, or neither, in any combination, while
+    // still relying on its own native tooling for the other. Neither implies
+    // the other. Both collapse to false when the tool itself is disabled —
+    // there's nothing to prefer when the tool can't be reached at all.
+    // Read from a single `prefer_tuic_flags_for_agent` call (one
+    // `load_agents_config()` snapshot) rather than the two individual
+    // resolvers, so this one instructions response can't straddle two
+    // different reads of `agents.json` if a Settings save races it.
+    let spawn_preferred = agent_enabled && gates.prefer_spawning;
+    let messaging_preferred = agent_enabled && gates.prefer_messaging;
+
     // ── Cross-tool rules ─────────────────────────────────────────────
     // NOT a tool catalogue: `tools/list` already carries every name, action and
     // schema in the same turn, and restating it here bought a second copy for
@@ -260,15 +316,21 @@ pub(super) fn render_mcp_instructions(
     if !launch_channel {
         if collapse_tools {
             out.push_str("Discover/invoke via `search_tools` / `get_tool_schema` / `call_tool`; read their descriptions.\n\n");
-            out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
-            // Kept verbatim in both modes. It is not a restatement of the `session`
-            // description: agents split the text and the Enter into two calls, or
-            // polled after submitting, until this line existed.
-            out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
         } else {
             out.push_str("Read each tool's description for actions and rules.\n\n");
+        }
+        if repo_enabled {
             out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
-            out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+        }
+        // Kept verbatim in both modes. It is not a restatement of the `session`
+        // description: agents split the text and the Enter into two calls, or
+        // polled after submitting, until this line existed.
+        if session_enabled {
+            out.push_str(if collapse_tools {
+                "**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n"
+            } else {
+                "**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n"
+            });
         }
 
         // ── Progress — an obligation, not a capability ───────────────────
@@ -296,16 +358,24 @@ pub(super) fn render_mcp_instructions(
     // is conditioned on the connecting client and so cannot sit in a static
     // description at all.
     let is_claude_code = detect_claude_code_client(client_name);
-    out.push_str("## Multi-Agent Work\n\n");
-    if ctx.peer_count > 0 {
+    if agent_enabled || repo_enabled {
+        out.push_str("## Multi-Agent Work\n\n");
+    }
+    if agent_enabled && ctx.peer_count > 0 {
         out.push_str(&format!(
             "**{}** peer agent(s) connected. Orchestrate them with the `agent` tool; read its description first.\n",
             ctx.peer_count
         ));
     }
-    out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
-    out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
-    if is_claude_code {
+    if repo_enabled {
+        out.push_str(
+            "- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n",
+        );
+    }
+    if agent_enabled {
+        out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
+    }
+    if repo_enabled && is_claude_code {
         out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
     }
     out.push('\n');
@@ -1270,5 +1340,14 @@ pub(super) async fn handle_call_tool(
             managed_parent_cwd,
         ))
         .await
+    }
+}
+
+#[cfg(test)]
+pub(super) fn default_tool_gates() -> ToolGates {
+    ToolGates {
+        disabled_native: std::collections::HashSet::new(),
+        prefer_spawning: true,
+        prefer_messaging: true,
     }
 }

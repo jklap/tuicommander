@@ -79,7 +79,7 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
 	// The per-agent "Launch instructions for <agent>" editor names its agent at
 	// runtime, inside a collapsed card; the global editor is indexed.
-	agents: { dynamic: 2, orphans: 18 },
+	agents: { dynamic: 2, orphans: 20 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
@@ -191,6 +191,8 @@ describe("settings search index — drift guard", () => {
 			"Track agent intent",
 			"Collect progress",
 			"Show suggested follow-ups",
+			"Prefer TUICommander agent spawning",
+			"Prefer TUICommander messaging",
 		]);
 		expect(SETTINGS_SEARCH_INDEX).toContainEqual({
 			tab: "agents",

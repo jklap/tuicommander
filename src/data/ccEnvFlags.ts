@@ -276,12 +276,6 @@ export const CC_ENV_FLAGS: EnvFlagDef[] = [
 		category: "tasks",
 	},
 	{
-		key: "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
-		description: "Enable Agent Teams (TeamCreate/TaskCreate/SendMessage)",
-		type: "boolean",
-		category: "tasks",
-	},
-	{
 		key: "CLAUDE_CODE_DISABLE_CRON",
 		description: "Disable cron jobs mid-session",
 		type: "boolean",
