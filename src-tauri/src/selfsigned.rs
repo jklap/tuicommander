@@ -12,10 +12,16 @@ const CERT_FILE: &str = "self-signed-cert.pem";
 const KEY_FILE: &str = "self-signed-key.pem";
 const META_FILE: &str = "self-signed-meta.json";
 
-/// 10 years: this is a private, locally-trusted-by-exception cert accepted via
-/// a one-time browser warning per device — short rotation only adds
-/// re-click-through friction with no real security benefit here.
-const VALIDITY_DAYS: i64 = 365 * 10;
+/// 397 days: Apple caps *any* TLS server certificate — including one chained
+/// to a user-trusted root, self-signed ones included — at 825 days
+/// (`support.apple.com/en-us/103769`); WebKit/Safari can refuse to honor a
+/// longer-lived leaf even after the user clicks through the trust warning.
+/// This mirrors the public-CA 398-day convention with a day of margin for
+/// clock skew, well clear of the 825-day hard cap, and self-renews well
+/// before expiry via `RENEWAL_THRESHOLD_DAYS` (checked both at boot/restart
+/// and on `self_signed_recheck_loop`'s short interval) — so the shorter
+/// lifetime costs nothing in practice.
+const VALIDITY_DAYS: i64 = 397;
 
 /// Matches `tailscale::cert_renewal_loop`'s convention of renewing ahead of
 /// expiry rather than exactly at it.
