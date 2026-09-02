@@ -955,7 +955,9 @@ A channel notification is transport delivery into an existing turn, not proof th
 }
 ```
 
-This requires the client to be launched with `--dangerously-load-development-channels server:tuicommander`. The server declares `experimental.claude/channel` in its capabilities. Spawned Claude Code agents get this flag automatically.
+This requires the client to be launched with `--dangerously-load-development-channels server:tuicommander`. The server declares `experimental.claude/channel` in its capabilities.
+
+> **Known regression:** spawned Claude Code agents are documented as getting this flag automatically, but the code that appended it to the spawn command was accidentally deleted in an unrelated refactor and has not been restored. SSE channel push is currently unreachable for MCP-spawned agents — delivery falls through to the inbox-poll path and the terminal-typing injection (`deliver_message_to_pty`) instead, both of which are unaffected by this and work normally.
 
 ### Limits
 

@@ -275,6 +275,8 @@ Any per-repo or per-agent boolean setting that can inherit a global default (Rep
 
 **Resolution is always `override ?? globalDefault`** (see `src/stores/repoSettings.ts`'s `resolvers` map, e.g. `copyIgnoredFiles: (s, local) => s.copyIgnoredFiles ?? local()?.copy_ignored_files ?? repoDefaultsStore.state.copyIgnoredFiles`). Never invert this order — resolving `globalDefault ?? override` silently makes every explicit "Off" override unreachable whenever the global default is `true`. Any new inheritable field must go through `RepoSettingsEntry`/`AgentConfig`'s `Option<bool>` (Rust) / `boolean | null` (TS) shape and a `resolvers` entry, not a bare `bool`/`boolean` — a bare boolean silently drops the "use global" state.
 
+**The trigger for TriStateToggle is a real global counterpart to inherit from, not merely `Option<bool>`.** `AgentsTab.tsx`'s `intent_tab_title`/`suggest_followups` qualify because a global `Settings > Agents` toggle exists for each (`global AND (per_agent ?? true)` — see `marker_flags_for_agent`, `config.rs`). `hook_instrumentation`, `auto_retry_on_error`, and `prefer_tuic_spawning`/`prefer_tuic_messaging` are also per-agent `Option<bool>` with `None` defaulting to a fixed literal (`false`, `false`, `true`, `true` respectively) — but there is no global-level flag any of them fall back to, so a plain `<input type="checkbox">` is correct for them, not a rule violation. Before converting a plain checkbox to `TriStateToggle` (or flagging one as non-compliant), check whether a matching global setting actually exists — `TriStateToggle` also has no `disabled` prop today, so a setting that needs a greyed-out state (like the two `prefer_tuic_*` checkboxes when the `agent` MCP tool is off) can't adopt it as a drop-in swap anyway.
+
 ## Export/Import Settings Collections & Native File Save
 
 Smart Prompts and Smart Selection rules both have a Settings toolbar for moving a user-editable
@@ -316,6 +318,30 @@ collection between machines: a scope dropdown (`all`/`modified`/`custom`), **Exp
 ## TUIC Protocol Markers (ack / intent: / suggest:)
 
 Top-level sessions only. Subagents (Task tool) and in-process teammates must NEVER emit `ack`, `intent:`, or `suggest:` — `suggest:` is the end-of-task signal, so a subagent emitting it flips the *parent* session to `completed` mid-work. See `docs/user-guide/ai-agents.md#tuic-protocol--output-markers` for the full protocol and `src-tauri/src/mcp_http/mcp_transport.rs`'s `build_mcp_instructions_for_mode` / `cc_agent_hint.suggested_prompt` for where this is enforced today.
+
+## MCP `initialize` Instructions: Per-Agent Config Tests Must Be `#[serial_test::serial]`
+
+`build_mcp_instructions`/`build_mcp_instructions_for_mode` (`mcp_transport.rs`) resolve
+several things per-agent-type off disk via `crate::config::load_agents_config()` —
+`marker_flags_for_agent` (intent/suggest), `resolve_prefer_tuic_spawning`,
+`resolve_prefer_tuic_messaging` — keyed by `resolve_agent_type(client_name)`, which maps
+`"claude"`, `"claude-code"`, AND `"tuic-bridge"` all to the single agent type `"claude"`.
+Any test that calls `build_mcp_instructions` with a Claude-ish `client_name` (including
+`Some("claude-code")`, the value the CC-only-bullet test uses) reads whatever
+`CONFIG_DIR_OVERRIDE` happens to be active *right now* — a single un-scoped global `static`
+(`config.rs`) — even if that test never calls `set_config_dir_override` itself. If another
+test elsewhere in the suite is mid-flight with an override that sets `prefer_tuic_spawning:
+Some(false)` for `"claude"`, a concurrently-running non-serial test observes it and produces
+a spuriously wrong result. `set_config_dir_override`'s own doc comment says it serializes
+"callers" of itself, which undersells the actual hazard — the tests that need protecting are
+every test that reads a per-agent config value for a Claude-family client, not just the ones
+that write one. Confirmed empirically: `instructions_single_isolated_task_bullet_only_for_claude_code_client`
+(pre-existing, calls `build_mcp_instructions(&state, Some("claude-code"))`, no override of
+its own) started failing intermittently the moment sibling tests started overriding
+`prefer_tuic_spawning` for `"claude"`, and was fixed by adding `#[serial_test::serial]` to
+it too. When adding a new per-agent disk-config field read inside `build_mcp_instructions`,
+audit every existing test that passes a Claude-family `client_name` and add the annotation
+where it's missing — don't assume "I didn't touch that test" means it's safe.
 
 ## Worktree Removal Safety
 

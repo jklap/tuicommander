@@ -373,6 +373,24 @@ export interface AgentSettingsConfig {
 	 * disabling removes only TUIC's entries. Undefined/false = heuristics (default).
 	 */
 	hook_instrumentation?: boolean;
+	/**
+	 * Whether TUICommander's own agent messaging (register/send/inbox/wait) is
+	 * advertised to this agent type in the MCP `initialize` instructions.
+	 * Undefined = on (default). Off does NOT disable the messaging tool/API —
+	 * it only stops the instructions text from steering this agent toward it,
+	 * so it falls back to its own native cross-agent messaging. Independent
+	 * of `prefer_tuic_spawning` — neither implies the other.
+	 */
+	prefer_tuic_messaging?: boolean;
+	/**
+	 * Whether TUICommander's own `agent action=spawn` (and the spawn-preference
+	 * guidance) is advertised to this agent type in the MCP `initialize`
+	 * instructions. Undefined = on (default). Off does NOT disable the spawn
+	 * tool/API — it only stops the instructions text from steering this agent
+	 * toward it, so it falls back to its own native spawning. Independent of
+	 * `prefer_tuic_messaging` — neither implies the other.
+	 */
+	prefer_tuic_spawning?: boolean;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */
