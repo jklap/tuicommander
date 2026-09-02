@@ -4,7 +4,7 @@ Agent Teams let Claude Code spawn teammate agents that work in parallel, each in
 
 ## How It Works
 
-TUICommander automatically injects `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` into every PTY session. This unlocks Claude Code's `TeamCreate`, `TaskCreate`, and `SendMessage` tools. When Claude Code spawns a teammate, TUICommander creates a new terminal tab via its MCP `agent spawn` tool — no external dependencies required.
+TUICommander automatically injects `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` into every PTY session. This unlocks Claude Code's native `SendMessage` tool (as of current Claude Code versions, `TeamCreate` and `TaskCreate` no longer exist as separate tools — teammate spawning is handled implicitly, and there is a single implicit team per session, not explicitly-created named teams). When Claude Code spawns a teammate, TUICommander creates a new terminal tab via its MCP `agent spawn` tool — no external dependencies required.
 
 ## Setup
 
@@ -218,6 +218,8 @@ the notice.
 
 Messages are always buffered in the inbox regardless of whether another delivery path succeeds. The inbox holds up to 100 messages per agent: it evicts safe lifecycle notices before peer mail, and rejects a peer send when only protected peer mail remains. Individual messages are capped at 64 KB.
 
+> **Known regression:** the code that automatically adds `--dangerously-load-development-channels server:tuicommander` to spawned Claude Code agents was accidentally dropped in a later refactor and hasn't been restored, so channel push is currently unreachable for MCP-spawned agents regardless of what's documented elsewhere. The inbox buffer and the terminal-typing delivery (incoming messages typed directly into an idle recipient's terminal) both work normally and are unaffected — in practice, that's the delivery path spawned agents actually use today.
+
 ### Using Messaging from a Standalone Claude Code Session
 
 If you run Claude Code outside TUICommander but still want to use TUIC messaging:
@@ -261,7 +263,7 @@ If you run Claude Code outside TUICommander but still want to use TUIC messaging
 | **Discovery** | `list_peers` with path filter | Team config file |
 | **Persistence** | In-memory ring buffer (lost on TUIC restart) | Files on disk (survives restart) |
 
-Both systems work simultaneously. Claude Code agents spawned by TUICommander can use either or both.
+Both systems can coexist — a Claude Code agent spawned by TUICommander technically has both available. By default, though, TUICommander's MCP `initialize` instructions actively steer it toward TUIC's own tool for both spawning and messaging (that's what the "Prefer TUICommander for peers/teams" guidance in the instructions text is for). These are two **independent** per-agent-type settings — **Settings** > **Agents** > *agent* > **Prefer TUICommander agent spawning** and **Prefer TUICommander messaging** — so a given agent type can prefer TUIC for one and its own native tooling for the other, in either direction, or opt fully out of both while leaving the `agent` MCP tool itself enabled. Turning a preference off only changes what the instructions tell the agent to use; it does not disable the underlying tool/API or the env-var injection. Both preferences stop mattering automatically if the `agent` MCP tool itself is disabled — there's nothing left to prefer.
 
 ## Deprecated: it2 Shim
 
