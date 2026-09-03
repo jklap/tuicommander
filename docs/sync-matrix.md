@@ -130,6 +130,21 @@ When adding routes or changing server behavior:
 | `docs/user-guide/remote-access.md` | User setup guide |
 | `src-tauri/src/mcp_http/plugin_docs.rs` | PLUGIN_DOCS (if plugin-facing) |
 
+### CLI Companion (`tuic` / `tuic`-as-`tmux`)
+When changing `src-tauri/crates/tuic-cli/**` (subcommands, tmux-compat arms, IPC client) or the
+app-side tmux topology it talks to (`src-tauri/src/mcp_http/tmux_routes.rs`):
+
+| File | What to update |
+|------|----------------|
+| `docs/user-guide/cli.md` | Command reference — session management, tmux compatibility table, `TUIC_TMUX_LOG` |
+| `docs/api/http-api.md` | The `/tmux/*` endpoints, if the topology HTTP surface changes |
+| `docs/backend/mcp-http.md` | REST table, if routes change |
+| `tmux-swarm-shim.md` (repo root) | Investigation notes — keep verified-against-binary claims current if Claude Code's own tmux usage is re-audited |
+
+Previously this repo had no row for the CLI at all — `docs/user-guide/cli.md` is reachable only
+through `docs/SUMMARY.md`, which is exactly how its tmux-compatibility table drifted from the
+actual `tmux_compat()` implementation unnoticed for a full feature cycle.
+
 ### Self-Signed HTTPS & Network Reachability (mDNS/Bonjour, custom hostname)
 When modifying `selfsigned.rs`'s SAN/cache-coverage logic, `get_local_ips`'s entry list, or
 `get_connect_url`/`resolve_connect_target`'s scheme/host resolution:

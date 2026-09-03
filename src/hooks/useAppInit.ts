@@ -485,6 +485,18 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.update(termId, { alias });
 	}).catch((err) => appLogger.error("app", "Failed to register term-alias-assigned listener", err));
 
+	// `PUT /sessions/:id/name` (and its Tauri-command twin) previously mutated
+	// display_name with no emit at all, so a rename was invisible until the next
+	// full app restart — the tab title was only ever set from session-created's
+	// payload or the init-time GET /sessions read, neither of which re-fires
+	// later. This listener is the fix: the tmux shim's `select-pane -T` (and any
+	// other future caller of the rename route) now actually updates the tab.
+	listen<{ session_id: string; display_name?: string | null; is_custom: boolean }>("session-renamed", (event) => {
+		const { session_id, display_name, is_custom } = event.payload;
+		const termId = terminalsStore.getTerminalForSession(session_id);
+		if (termId) terminalsStore.update(termId, { name: display_name ?? "", nameIsCustom: is_custom });
+	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
+
 	listen<{ session_id: string; standby: boolean }>("session-standby", (event) => {
 		const { session_id, standby } = event.payload;
 		const termId = terminalsStore.getTerminalForSession(session_id);

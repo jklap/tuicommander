@@ -10530,9 +10530,31 @@ pub(crate) fn set_session_name(
         .sessions
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    let mut session = entry.lock();
-    session.display_name = name;
-    session.display_name_is_custom = is_custom.unwrap_or(true);
+    let (display_name, is_custom) = {
+        let mut session = entry.lock();
+        session.display_name = name;
+        session.display_name_is_custom = is_custom.unwrap_or(true);
+        (session.display_name.clone(), session.display_name_is_custom)
+    };
+    drop(entry);
+    // Same gap and same fix as the HTTP twin (mcp_http/session.rs's
+    // set_session_name): without this emit, a rename was invisible until the
+    // client's next full GET /sessions, which never happens again after init.
+    state.emit_pty_event(crate::state::AppEvent::SessionRenamed {
+        session_id: session_id.clone(),
+        display_name: display_name.clone(),
+        is_custom,
+    });
+    if let Some(app) = state.app_handle.read().as_ref() {
+        let _ = app.emit(
+            "session-renamed",
+            serde_json::json!({
+                "session_id": session_id,
+                "display_name": display_name,
+                "is_custom": is_custom,
+            }),
+        );
+    }
     Ok(())
 }
 

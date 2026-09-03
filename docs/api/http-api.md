@@ -231,11 +231,78 @@ Sets a display name and its origin. `isCustom: true` protects an explicit user
 rename from subsequent OSC/intent titles; spawn-assigned and dynamic titles use
 `false`. Omitting the field preserves the legacy custom-rename behavior.
 
+Emits a `session-renamed` event (`{session_id, display_name, is_custom}`) over both the SSE/WS
+event bus and the desktop Tauri `session-renamed` event — previously this route mutated the name
+with no emit at all, so a rename was invisible to a browser/PWA client (or a desktop tab that
+wasn't the one that issued the rename) until the next full app restart.
+
 ### Close Session
 
 ```
 DELETE /sessions/:id?cleanup_worktree=false
 ```
+
+## tmux Compatibility Shim Endpoints
+
+Back the `tuic`-as-`tmux` compatibility layer (`docs/user-guide/cli.md`'s "tmux Compatibility"
+section) — a pane/window/session graph, in-memory only, partitioned by a caller-supplied `label`
+(the tmux `-L`/`-S` value, or `"default"`). Every route reconciles stale entries against live
+`GET /sessions` state first: a pane whose backing TUIC session has disappeared (the user closed
+the tab, or the app restarted) reverts to *virtual* rather than 404ing forever.
+
+```
+GET /tmux/topology?label=<label>
+```
+Full graph for one label: `{"sessions":[{"id":"$0","name":"...","active_window":"@0","windows":[{"id":"@0","name":"...","index":0,"active_pane":"%0","panes":[{"id":"%0","index":0,"title":null,"cwd":null,"tuic_session_id":null}]}]}]}`. `tuic_session_id: null` means the pane's id has been allocated but no PTY has been spawned for it yet.
+
+```
+POST /tmux/sessions
+{ "label": "...", "name": "claude-swarm", "window_name": "swarm-view" }
+→ 201 { "session_id": "$0", "window_id": "@0", "pane_id": "%0" }
+```
+Creates a session with one window and one virtual initial pane.
+
+```
+DELETE /tmux/sessions/:id?label=<label>
+```
+Removes the session and closes every one of its materialised panes' PTYs.
+
+```
+POST /tmux/windows
+{ "label": "...", "session_id": "$0", "name": "..." }
+→ 201 { "window_id": "@1", "pane_id": "%1" }
+```
+Adds a window (with one virtual initial pane) to an existing session.
+
+```
+POST /tmux/panes
+{ "label": "...", "window_id": "@0", "cwd": "/optional/path" }
+→ 201 { "pane_id": "%2", "tuic_session_id": "<uuid>" }
+```
+Adds a pane to an existing window — unlike the initial panes above, this one **materialises
+immediately** (spawns a real PTY): a split is always about to be used.
+
+```
+POST /tmux/panes/:id/materialize?label=<label>
+{ "cwd": "/optional/path" }
+→ 200 { "tuic_session_id": "<uuid>" }
+```
+Idempotent lazy spawn for a still-virtual pane; returns the existing id if already materialised.
+
+```
+PUT /tmux/panes/:id?label=<label>
+{ "title": "teammate-1" }
+```
+Records the pane's title and, if materialised, renames its TUIC tab (`PUT /sessions/:id/name`).
+
+```
+DELETE /tmux/panes/:id?label=<label>
+```
+Removes the pane and closes its PTY if materialised.
+
+`kill-server` has no dedicated endpoint of its own — it is `DELETE /tmux/sessions/:id?label=<label>`
+called once per session currently tracked under that label, matching real tmux's `-L a
+kill-server` never touching a session under a different label (or the user's own untracked tabs).
 
 ## Streaming Endpoints
 

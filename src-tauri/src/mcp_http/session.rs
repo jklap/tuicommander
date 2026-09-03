@@ -317,9 +317,34 @@ pub(super) async fn set_session_name(
         Some(e) => e,
         None => return session_not_found(),
     };
-    let mut session = entry.lock();
-    session.display_name = body.name;
-    session.display_name_is_custom = body.is_custom.unwrap_or(true);
+    let (display_name, is_custom) = {
+        let mut session = entry.lock();
+        session.display_name = body.name;
+        session.display_name_is_custom = body.is_custom.unwrap_or(true);
+        (session.display_name.clone(), session.display_name_is_custom)
+    };
+    drop(entry);
+    // Previously this mutated display_name with no emit at all, so a rename
+    // was invisible until the client's next full `GET /sessions` — which
+    // never happens again after init. Dual-emitted like
+    // `set_pty_description`: event_bus/SSE for browser clients, Tauri emit
+    // for desktop.
+    state.emit_pty_event(crate::state::AppEvent::SessionRenamed {
+        session_id: session_id.clone(),
+        display_name: display_name.clone(),
+        is_custom,
+    });
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        let _ = app.emit(
+            "session-renamed",
+            serde_json::json!({
+                "session_id": session_id,
+                "display_name": display_name,
+                "is_custom": is_custom,
+            }),
+        );
+    }
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
@@ -1173,6 +1198,9 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
                                     serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
                                 }
+                                crate::state::AppEvent::SessionRenamed { session_id: sid, display_name, is_custom } => {
+                                    serde_json::json!({"type": "renamed", "session_id": sid, "display_name": display_name, "is_custom": is_custom})
+                                }
                                 _ => continue,
                             };
                             if futures_util::SinkExt::send(
@@ -1459,6 +1487,13 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
             description,
         } => {
             serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
+        }
+        crate::state::AppEvent::SessionRenamed {
+            session_id: sid,
+            display_name,
+            is_custom,
+        } => {
+            serde_json::json!({"type": "renamed", "session_id": sid, "display_name": display_name, "is_custom": is_custom})
         }
         // Mirrors the desktop `Osc133Event` field for field — see the shape
         // contract above. Without this a browser/PWA client had no command

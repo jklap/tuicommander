@@ -58,6 +58,26 @@ The socket at `<config_dir>/mcp.sock` is managed with two safety layers to survi
 | `POST` | `/sessions/:id/resume` | Resume session output |
 | `DELETE` | `/sessions/:id` | Close session |
 
+### tmux Compatibility Shim (`tmux_routes.rs`)
+
+Backs the `tuic`-as-`tmux` layer's pane/window/session graph (`docs/api/http-api.md`'s "tmux
+Compatibility Shim Endpoints" has full request/response shapes). In-memory only, partitioned by a
+caller-supplied `label`, reconciled against live `GET /sessions` state on every read.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/tmux/topology` | Full pane/window/session graph for one label |
+| `POST` | `/tmux/sessions` | Create a session (+ initial window/virtual pane) |
+| `DELETE` | `/tmux/sessions/:id` | Kill a session and every materialised pane's PTY |
+| `POST` | `/tmux/windows` | Add a window (+ virtual initial pane) to a session |
+| `POST` | `/tmux/panes` | Split: add a pane to a window, materialising immediately |
+| `POST` | `/tmux/panes/:id/materialize` | Idempotent lazy PTY spawn for a virtual pane |
+| `PUT` | `/tmux/panes/:id` | Set a pane's title; renames its TUIC tab if materialised |
+| `DELETE` | `/tmux/panes/:id` | Remove a pane and close its PTY if materialised |
+
+`kill-server` has no dedicated route — the CLI calls `DELETE /tmux/sessions/:id` once per session
+tracked under the invoking `-L`/`-S` label, so it never touches a different label's sessions.
+
 ### Monitoring
 
 | Method | Path | Description |

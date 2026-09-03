@@ -138,6 +138,17 @@ pub enum AppEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// A session's tab title changed after creation (`PUT /sessions/{id}/name`,
+    /// or its Tauri-command twin). Previously this route mutated `display_name`
+    /// with no emit at all, so a rename was invisible until the client's next
+    /// full `GET /sessions` — i.e. never, since nothing re-polls after init.
+    #[serde(rename = "session-renamed")]
+    SessionRenamed {
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+        is_custom: bool,
+    },
     #[serde(rename = "plugin-changed")]
     #[allow(dead_code)] // reserved for future plugin hot-reload notifications
     PluginChanged { plugin_ids: Vec<String> },
@@ -312,6 +323,7 @@ impl AppEvent {
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
+            | AppEvent::SessionRenamed { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
         }
@@ -1730,6 +1742,13 @@ pub struct AppState {
     /// frontend on tab focus changes. Read by the watcher engine to evaluate
     /// the Unseen trigger (fires only when the terminal tab is not visible).
     pub(crate) session_visibility: DashMap<String, bool>,
+    /// tmux-shim pane topology, keyed by tmux server label (the `-L`/`-S`
+    /// value a `tuic`-as-`tmux` invocation passes as a global option, or
+    /// `"default"` for one that passes neither). See
+    /// `crate::mcp_http::tmux_routes` for the full model — this is in-memory
+    /// only, by design: a swarm cannot outlive its lead process, so losing it
+    /// on app restart is correct, not a bug.
+    pub(crate) tmux_servers: DashMap<String, crate::mcp_http::tmux_routes::TmuxTopology>,
     /// Terminal watcher engine handle — initialized once at startup.
     /// Commands access the shared config via `engine.config()`.
     pub(crate) watcher_engine: std::sync::OnceLock<Arc<crate::ai_agent::watcher::WatcherEngine>>,
@@ -2711,6 +2730,7 @@ impl AppState {
             term_aliases: DashMap::new(),
             term_alias_counters: DashMap::new(),
             session_visibility: DashMap::new(),
+            tmux_servers: DashMap::new(),
             watcher_engine: std::sync::OnceLock::new(),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: DashMap::new(),
@@ -3721,6 +3741,7 @@ impl AppState {
             }
             // Global events don't affect per-session state
             AppEvent::HeadChanged { .. }
+            | AppEvent::SessionRenamed { .. }
             | AppEvent::RepoChanged { .. }
             | AppEvent::PluginChanged { .. }
             | AppEvent::UpstreamStatusChanged { .. }
@@ -6369,6 +6390,7 @@ mod tests {
             term_aliases: DashMap::new(),
             term_alias_counters: DashMap::new(),
             session_visibility: DashMap::new(),
+            tmux_servers: DashMap::new(),
             watcher_engine: std::sync::OnceLock::new(),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: DashMap::new(),
