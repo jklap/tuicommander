@@ -2022,8 +2022,20 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 21.5 tmux Compatibility Mode
 - `tuic alias` creates `tmux → tuic` symlink; `argv[0]` detection switches to compat mode
-- Supports: `new-session`, `list-sessions`, `kill-session`, `kill-server`, `send-keys`, `capture-pane`, `resize-pane`, `attach-session`, `has-session`
-- Tools expecting tmux (e.g. Claude Code `--tmux`) transparently use TUICommander
+- Global options (`-L <name>`, `-S <path>`) partition state, exactly as with real tmux — two
+  concurrent tmux-driving processes never see each other's panes
+- Supports: `-V`, `new-session`, `new-window`, `split-window`, `respawn-pane`, `list-sessions`,
+  `list-windows`, `list-panes`, `display-message`, `select-pane`, `kill-pane`, `kill-session`,
+  `kill-server`, `send-keys`, `capture-pane`, `resize-pane`, `attach-session`, `has-session`;
+  `select-layout`/`set-option`/`set-window-option`/`switch-client`/`rename-window` are accepted
+  as explicit no-ops
+- A real pane/window/session graph lives app-side (`GET/POST/DELETE /tmux/*`), reconciled
+  against live sessions so a manually-closed tab doesn't leave a dangling pane reference
+- Every invocation is logged (`<config dir>/logs/tmux-shim.log` + `POST /logs`, source
+  `tmux-shim`) — including unrecognized subcommands, `TUIC_TMUX_LOG=0`/`stderr` to control it
+- Tools expecting tmux (e.g. Claude Code's teammate-pane backend) transparently use
+  TUICommander — see `docs/user-guide/cli.md`'s "tmux Compatibility" section for the full
+  table and `tmux-swarm-shim.md` (repo root) for the investigation this was built from
 
 ### 21.6 Installation
 - First-run prompt on app launch (one-time, dismissible)

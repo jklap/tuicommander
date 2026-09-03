@@ -16,6 +16,7 @@ mod plugin_routes;
 mod session;
 pub(crate) mod sse_routes;
 mod static_files;
+pub(crate) mod tmux_routes;
 mod types;
 mod watcher_routes;
 mod worktree_routes;
@@ -585,6 +586,24 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/visible", post(session::set_session_visible))
         .route("/sessions/{id}", delete(session::close_session))
+        // tmux compat shim topology (see tmux_routes.rs; backs `tuic`-as-`tmux`'s
+        // split-window/new-window/list-panes/etc.)
+        .route("/tmux/topology", get(tmux_routes::get_topology))
+        .route("/tmux/sessions", post(tmux_routes::create_tmux_session))
+        .route(
+            "/tmux/sessions/{id}",
+            delete(tmux_routes::delete_tmux_session),
+        )
+        .route("/tmux/windows", post(tmux_routes::create_tmux_window))
+        .route("/tmux/panes", post(tmux_routes::create_tmux_pane))
+        .route(
+            "/tmux/panes/{id}/materialize",
+            post(tmux_routes::materialize_pane),
+        )
+        .route(
+            "/tmux/panes/{id}",
+            put(tmux_routes::rename_pane).delete(tmux_routes::kill_pane),
+        )
         // WebSocket streaming
         .route("/sessions/{id}/stream", get(session::ws_stream))
         // Terminal grid commands
@@ -2256,6 +2275,7 @@ mod tests {
             term_aliases: dashmap::DashMap::new(),
             term_alias_counters: dashmap::DashMap::new(),
             session_visibility: dashmap::DashMap::new(),
+            tmux_servers: dashmap::DashMap::new(),
             watcher_engine: std::sync::OnceLock::new(),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: dashmap::DashMap::new(),
@@ -2327,6 +2347,13 @@ mod tests {
             "/sessions/x/terminal/lines",
             "/sessions/agent",
             "/sessions/worktree",
+            "/tmux/topology",
+            "/tmux/sessions",
+            "/tmux/sessions/x",
+            "/tmux/windows",
+            "/tmux/panes",
+            "/tmux/panes/x/materialize",
+            "/tmux/panes/x",
             "/stats",
             "/metrics",
             "/process/stats",

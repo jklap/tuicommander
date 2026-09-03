@@ -9,6 +9,7 @@
 
 mod ipc;
 mod mcp;
+mod tmux;
 
 use clap::{Parser, Subcommand};
 
@@ -28,7 +29,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
-enum Command {
+pub(crate) enum Command {
     /// Open a file or directory in TUICommander
     Open {
         /// Path to open (file or directory)
@@ -177,6 +178,14 @@ enum AgentAction {
     },
 }
 
+/// Whether `argv[0]`'s file name identifies this invocation as the tmux
+/// shim. Also matches `tmux.exe` — the copy `cmd_alias` itself creates on
+/// Windows never entered this branch before, since the original `== "tmux"`
+/// compare only ever saw `tmux.exe` there.
+fn is_tmux_invocation(argv0: &str) -> bool {
+    argv0 == "tmux" || argv0 == "tmux.exe"
+}
+
 fn main() {
     let argv0 = std::env::args()
         .next()
@@ -187,8 +196,8 @@ fn main() {
         })
         .unwrap_or_default();
 
-    if argv0 == "tmux" {
-        return tmux_compat();
+    if is_tmux_invocation(&argv0) {
+        tmux::tmux_compat();
     }
 
     let cli = Cli::parse();
@@ -216,7 +225,7 @@ fn main() {
     }
 }
 
-fn dispatch(cmd: Command) -> Result<(), String> {
+pub(crate) fn dispatch(cmd: Command) -> Result<(), String> {
     match cmd {
         Command::Open { path, wait, goto } => cmd_open(path, wait, goto),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
@@ -774,9 +783,6 @@ fn cmd_install_cli(target: Option<&str>) -> Result<(), String> {
 }
 
 fn cmd_alias(remove: bool) -> Result<(), String> {
-    let self_exe =
-        std::env::current_exe().map_err(|e| format!("Cannot find own executable: {e}"))?;
-
     let tmux_path = if cfg!(target_os = "windows") {
         // Same user-writable, in-PATH location as the tuic install (see cmd_install_cli).
         let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
@@ -784,19 +790,27 @@ fn cmd_alias(remove: bool) -> Result<(), String> {
     } else {
         "/usr/local/bin/tmux".to_string()
     };
+    alias_at(&tmux_path, remove)
+}
+
+/// The testable core of `cmd_alias`, against an injectable path so tests can
+/// point it at a scratch directory instead of `/usr/local/bin`.
+fn alias_at(tmux_path: &str, remove: bool) -> Result<(), String> {
+    let self_exe =
+        std::env::current_exe().map_err(|e| format!("Cannot find own executable: {e}"))?;
 
     if remove {
         // Only remove if it's our symlink
         #[cfg(unix)]
         {
-            if let Ok(target) = std::fs::read_link(&tmux_path) {
+            if let Ok(target) = std::fs::read_link(tmux_path) {
                 if target == self_exe
                     || target
                         .file_name()
                         .map(|f| f.to_string_lossy().contains("tuic"))
                         .unwrap_or(false)
                 {
-                    remove_with_elevation(&tmux_path)?;
+                    remove_with_elevation(tmux_path)?;
                     println!("Removed tmux alias at {tmux_path}");
                 } else {
                     return Err(format!(
@@ -826,7 +840,7 @@ fn cmd_alias(remove: bool) -> Result<(), String> {
     if has_real_tmux {
         // Check if it's already our symlink
         #[cfg(unix)]
-        if let Ok(target) = std::fs::read_link(&tmux_path)
+        if let Ok(target) = std::fs::read_link(tmux_path)
             && target == self_exe
         {
             println!("tmux alias already installed at {tmux_path}");
@@ -839,7 +853,7 @@ fn cmd_alias(remove: bool) -> Result<(), String> {
 
     #[cfg(unix)]
     {
-        if std::os::unix::fs::symlink(&self_exe, &tmux_path).is_ok() {
+        if std::os::unix::fs::symlink(&self_exe, tmux_path).is_ok() {
             println!("Created tmux -> tuic alias at {tmux_path}");
             return Ok(());
         }
@@ -911,108 +925,6 @@ fn cmd_resume(target: &str) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// tmux compatibility mode
-// ---------------------------------------------------------------------------
-
-fn tmux_compat() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-
-    if args.is_empty() {
-        // bare `tmux` → new session in cwd
-        if let Err(e) = dispatch(Command::New {
-            name: None,
-            repo: None,
-        }) {
-            eprintln!("tmux: {e}");
-            std::process::exit(1);
-        }
-        return;
-    }
-
-    let subcmd = args[0].as_str();
-    let rest = &args[1..];
-
-    let result = match subcmd {
-        "new-session" | "new" => {
-            let name = find_flag(rest, "-s").or_else(|| find_flag(rest, "-n"));
-            dispatch(Command::New { name, repo: None })
-        }
-        "list-sessions" | "ls" => dispatch(Command::Ls { json: false }),
-        "kill-session" => {
-            let target = find_flag(rest, "-t").unwrap_or_default();
-            dispatch(Command::Kill { target })
-        }
-        "kill-server" => {
-            // Kill all sessions
-            if let Ok(resp) = ipc::get("/sessions")
-                && let Ok(v) = resp.json()
-                && let Some(arr) = v.as_array()
-            {
-                for s in arr {
-                    if let Some(id) = s["session_id"].as_str() {
-                        let _ = ipc::delete(&format!("/sessions/{id}"));
-                    }
-                }
-            }
-            Ok(())
-        }
-        "send-keys" => {
-            let target = find_flag(rest, "-t").unwrap_or_default();
-            dispatch(Command::Send {
-                target,
-                keys: without_flag(rest, "-t"),
-            })
-        }
-        "capture-pane" => {
-            let target = find_flag(rest, "-t").unwrap_or_default();
-            dispatch(Command::Capture {
-                target,
-                format: "text".to_string(),
-                lines: None,
-            })
-        }
-        "resize-pane" => {
-            let target = find_flag(rest, "-t").unwrap_or_default();
-            let x = find_flag(rest, "-x").unwrap_or("80".to_string());
-            let y = find_flag(rest, "-y").unwrap_or("24".to_string());
-            dispatch(Command::Resize {
-                target,
-                size: format!("{x}x{y}"),
-            })
-        }
-        "attach-session" | "attach" | "a" => {
-            // Focus TUICommander window
-            let _ = open_deep_link("tuic://focus");
-            Ok(())
-        }
-        "has-session" => {
-            let target = find_flag(rest, "-t").unwrap_or_default();
-            match resolve_session_id(&target) {
-                Ok(_) => std::process::exit(0),
-                Err(_) => std::process::exit(1),
-            }
-        }
-        "display-message" => {
-            // tmux display-message -p "#{session_name}" etc.
-            // Return session info
-            dispatch(Command::Status)
-        }
-        _ => {
-            eprintln!("tmux (tuic compat): unknown command '{subcmd}'");
-            eprintln!("Supported: new-session, list-sessions, kill-session, kill-server,");
-            eprintln!("           send-keys, capture-pane, resize-pane, attach-session,");
-            eprintln!("           has-session, display-message");
-            std::process::exit(1);
-        }
-    };
-
-    if let Err(e) = result {
-        eprintln!("tmux: {e}");
-        std::process::exit(1);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1066,23 +978,49 @@ fn parse_goto(path: &str) -> (String, Option<u32>, Option<u32>) {
     (path.to_string(), None, None)
 }
 
-fn resolve_session_id(target: &str) -> Result<String, String> {
-    // If it looks like a UUID, use directly
-    if target.len() >= 32 && target.contains('-') {
-        return Ok(target.to_string());
+/// True only for a strict UUID shape (8-4-4-4-12 hex, hyphens at exactly
+/// those four positions) — matching what the server actually mints
+/// (`Uuid::new_v4().to_string()`).
+///
+/// The old heuristic (`len() >= 32 && contains('-')`) passed ANY sufficiently
+/// long hyphenated target through unvalidated: `has-session -t <anything
+/// that shape>` exited 0 even for a target that was never created, which
+/// would make a tmux-driven caller skip `new-session` and proceed to drive a
+/// session that doesn't exist.
+pub(crate) fn looks_like_uuid(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 36 {
+        return false;
     }
+    const DASH_AT: [usize; 4] = [8, 13, 18, 23];
+    bytes.iter().enumerate().all(|(i, &b)| {
+        if DASH_AT.contains(&i) {
+            b == b'-'
+        } else {
+            b.is_ascii_hexdigit()
+        }
+    })
+}
 
-    // Otherwise search by name
-    let resp = ipc::get("/sessions").map_err(|e| e.to_string())?;
-    if !resp.is_success() {
-        return Err("Cannot list sessions".to_string());
+/// Pure matching ladder against an already-fetched `GET /sessions` payload:
+/// exact `display_name`, then case-insensitive id/name prefix. Extracted from
+/// `resolve_session_id` so it's testable without a network fetch — the tmux
+/// shim's legacy-name-fallback path (see `tmux::exec`) reuses this directly
+/// against a topology-miss target.
+pub(crate) fn match_session(
+    sessions: &[serde_json::Value],
+    target: &str,
+) -> Result<String, String> {
+    // A missing `-t` upstream used to become target == "", which prefix-matched
+    // EVERY session below (`.starts_with("")` is always true) — so
+    // `kill-session`/`has-session` with no `-t` silently acted on whatever the
+    // lone session happened to be. Refuse explicitly instead.
+    if target.is_empty() {
+        return Err("target session/window/pane not specified (missing -t)".to_string());
     }
-
-    let sessions: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let arr = sessions.as_array().ok_or("Invalid response")?;
 
     // Try exact name match
-    for s in arr {
+    for s in sessions {
         if s["display_name"].as_str() == Some(target) {
             return s["session_id"]
                 .as_str()
@@ -1094,7 +1032,7 @@ fn resolve_session_id(target: &str) -> Result<String, String> {
     // Then ID prefix (what `tuic ls` prints) or name prefix, case-insensitive —
     // typing `tuic send buil…` should not require the full name.
     let needle = target.to_lowercase();
-    let matches: Vec<_> = arr
+    let matches: Vec<_> = sessions
         .iter()
         .filter(|s| {
             let id_match = s["session_id"]
@@ -1119,6 +1057,21 @@ fn resolve_session_id(target: &str) -> Result<String, String> {
             "Ambiguous target '{target}': {n} sessions match. Use full ID."
         )),
     }
+}
+
+pub(crate) fn resolve_session_id(target: &str) -> Result<String, String> {
+    if looks_like_uuid(target) {
+        return Ok(target.to_string());
+    }
+
+    let resp = ipc::get("/sessions").map_err(|e| e.to_string())?;
+    if !resp.is_success() {
+        return Err("Cannot list sessions".to_string());
+    }
+
+    let sessions: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let arr = sessions.as_array().ok_or("Invalid response")?;
+    match_session(arr, target)
 }
 
 /// Translate one argument if it is EXACTLY a key name, else `None`.
@@ -1163,7 +1116,7 @@ fn control_key(token: &str) -> Option<String> {
 /// Join `send` arguments the way tmux does: key names become their escape
 /// sequence, everything else is literal text, and only adjacent literals are
 /// separated by a space.
-fn translate_keys(tokens: &[String]) -> String {
+pub(crate) fn translate_keys(tokens: &[String]) -> String {
     let mut out = String::new();
     let mut previous_was_literal = false;
     for token in tokens {
@@ -1184,33 +1137,7 @@ fn translate_keys(tokens: &[String]) -> String {
     out
 }
 
-fn find_flag(args: &[String], flag: &str) -> Option<String> {
-    args.iter()
-        .position(|a| a == flag)
-        .and_then(|i| args.get(i + 1).cloned())
-}
-
-/// Drop `flag` and the value right after it, keeping every other argument —
-/// including one that happens to equal the flag's value (`tmux send-keys -t
-/// build build` must still send "build").
-fn without_flag(args: &[String], flag: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut skip_next = false;
-    for arg in args {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if arg == flag {
-            skip_next = true;
-            continue;
-        }
-        out.push(arg.clone());
-    }
-    out
-}
-
-fn urlencod(s: &str) -> String {
+pub(crate) fn urlencod(s: &str) -> String {
     s.replace('%', "%25")
         .replace(' ', "%20")
         .replace('#', "%23")
@@ -1219,7 +1146,7 @@ fn urlencod(s: &str) -> String {
         .replace('=', "%3D")
 }
 
-fn open_deep_link(url: &str) -> std::io::Result<()> {
+pub(crate) fn open_deep_link(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open").arg(url).spawn()?;
@@ -1273,8 +1200,9 @@ fn remove_with_elevation(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_send_parts, capture_query, resolve_path, session_status, short_id, short_repo,
-        strip_verbatim, translate_keys, truncate, without_flag,
+        agent_send_parts, capture_query, is_tmux_invocation, looks_like_uuid, match_session,
+        resolve_path, session_status, short_id, short_repo, strip_verbatim, translate_keys,
+        truncate,
     };
     use serde_json::json;
 
@@ -1335,14 +1263,6 @@ mod tests {
     fn short_id_is_the_first_uuid_group() {
         assert_eq!(short_id("43263870-7ac5-4091-9dca-c4acd22ad78f"), "43263870");
         assert_eq!(short_id("plain"), "plain");
-    }
-
-    #[test]
-    fn without_flag_drops_the_pair_but_keeps_a_repeated_value() {
-        assert_eq!(
-            without_flag(&tokens(&["-t", "build", "build", "Enter"]), "-t"),
-            tokens(&["build", "Enter"])
-        );
     }
 
     #[test]
@@ -1436,5 +1356,163 @@ mod tests {
         let (payload, enter) = agent_send_parts("line one\nline two");
         assert_eq!(payload, "\x15\x1b[200~line one\nline two\x1b[201~");
         assert_eq!(enter, "\r");
+    }
+
+    #[test]
+    fn looks_like_uuid_accepts_the_real_shape() {
+        assert!(looks_like_uuid("43263870-7ac5-4091-9dca-c4acd22ad78f"));
+    }
+
+    #[test]
+    fn looks_like_uuid_rejects_a_merely_long_hyphenated_string() {
+        // The pre-refactor bug: `len() >= 32 && contains('-')` passed this
+        // through as a session id unvalidated, so `has-session -t <this>`
+        // exited 0 for a target that was never created.
+        assert!(!looks_like_uuid("claude-swarm-99999999999999999999999"));
+        assert!(!looks_like_uuid("teammate-a-long-descriptive-name-here"));
+    }
+
+    #[test]
+    fn looks_like_uuid_rejects_wrong_length_and_bad_hex() {
+        assert!(!looks_like_uuid("43263870-7ac5-4091-9dca-c4acd22ad78"));
+        assert!(!looks_like_uuid("zzzzzzzz-7ac5-4091-9dca-c4acd22ad78f"));
+    }
+
+    fn session(id: &str, name: Option<&str>) -> serde_json::Value {
+        json!({ "session_id": id, "display_name": name })
+    }
+
+    #[test]
+    fn match_session_exact_name_wins_over_prefix_ambiguity() {
+        let sessions = vec![
+            session("11111111-1111-1111-1111-111111111111", Some("build")),
+            session("22222222-2222-2222-2222-222222222222", Some("build-2")),
+        ];
+        assert_eq!(
+            match_session(&sessions, "build").unwrap(),
+            "11111111-1111-1111-1111-111111111111"
+        );
+    }
+
+    #[test]
+    fn match_session_id_prefix_is_case_sensitive() {
+        // Real session ids are always lowercase (`Uuid::new_v4().to_string()`),
+        // so this only matters for a hand-typed/copy-pasted target — id-prefix
+        // matching compares the raw bytes, unlike the name-prefix match below.
+        let sessions = vec![session("abcdef00-0000-0000-0000-000000000000", None)];
+        assert_eq!(
+            match_session(&sessions, "abcdef00").unwrap(),
+            "abcdef00-0000-0000-0000-000000000000"
+        );
+    }
+
+    #[test]
+    fn match_session_name_prefix_is_case_insensitive() {
+        let sessions = vec![session(
+            "11111111-1111-1111-1111-111111111111",
+            Some("Build"),
+        )];
+        assert_eq!(
+            match_session(&sessions, "buil").unwrap(),
+            "11111111-1111-1111-1111-111111111111"
+        );
+    }
+
+    #[test]
+    fn match_session_zero_matches_errors() {
+        let sessions = vec![session(
+            "11111111-1111-1111-1111-111111111111",
+            Some("build"),
+        )];
+        assert!(match_session(&sessions, "nope").is_err());
+    }
+
+    #[test]
+    fn match_session_ambiguous_prefix_errors() {
+        let sessions = vec![
+            session("11111111-1111-1111-1111-111111111111", Some("build-a")),
+            session("22222222-2222-2222-2222-222222222222", Some("build-b")),
+        ];
+        let err = match_session(&sessions, "build").unwrap_err();
+        assert!(err.contains("Ambiguous"), "got: {err}");
+    }
+
+    #[test]
+    fn argv0_dispatch_matches_tmux_and_its_windows_copy() {
+        assert!(is_tmux_invocation("tmux"));
+        assert!(is_tmux_invocation("tmux.exe"));
+        // is_tmux_invocation only ever sees the file_name component; verifying
+        // a full path arrives stripped is main()'s job, tested implicitly by
+        // this function only ever being handed a bare file name.
+        assert!(!is_tmux_invocation("/usr/local/bin/tuic"));
+        assert!(!is_tmux_invocation("tuic"));
+        assert!(!is_tmux_invocation(""));
+    }
+
+    #[cfg(unix)]
+    mod alias_tests {
+        use super::super::alias_at;
+
+        #[test]
+        fn creates_a_symlink_pointing_at_self() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tmux");
+            alias_at(path.to_str().unwrap(), false).unwrap();
+            let target = std::fs::read_link(&path).unwrap();
+            assert_eq!(target, std::env::current_exe().unwrap());
+        }
+
+        #[test]
+        fn create_is_idempotent_when_already_our_symlink() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tmux");
+            alias_at(path.to_str().unwrap(), false).unwrap();
+            // Second call must short-circuit at "already installed", not error
+            // trying to overwrite its own symlink.
+            assert!(alias_at(path.to_str().unwrap(), false).is_ok());
+            assert!(path.exists());
+        }
+
+        #[test]
+        fn remove_deletes_our_own_symlink() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tmux");
+            alias_at(path.to_str().unwrap(), false).unwrap();
+            alias_at(path.to_str().unwrap(), true).unwrap();
+            assert!(!path.exists());
+        }
+
+        #[test]
+        fn remove_refuses_a_symlink_pointing_elsewhere() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tmux");
+            // Deliberately no "tuic" substring in this name — the real bug
+            // this guards is a name like "not-tuic-build" wrongly matching
+            // the "contains tuic" fallback check and getting removed anyway.
+            let foreign = dir.path().join("real-tmux-binary");
+            std::fs::write(&foreign, b"").unwrap();
+            std::os::unix::fs::symlink(&foreign, &path).unwrap();
+
+            let err = alias_at(path.to_str().unwrap(), true).unwrap_err();
+            assert!(err.contains("refusing to remove"), "got: {err}");
+            assert!(path.exists(), "the foreign symlink must be left untouched");
+        }
+
+        #[test]
+        fn remove_when_absent_is_a_no_op_success() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tmux");
+            assert!(alias_at(path.to_str().unwrap(), true).is_ok());
+        }
+    }
+
+    #[test]
+    fn match_session_empty_target_errors_even_with_a_single_session() {
+        // The pre-refactor bug: a missing `-t` produced target == "", which
+        // prefix-matched every session — with exactly one session that meant
+        // `kill-session`/`has-session` with no `-t` silently acted on it.
+        let sessions = vec![session("11111111-1111-1111-1111-111111111111", Some("a"))];
+        let err = match_session(&sessions, "").unwrap_err();
+        assert!(err.contains("missing -t"), "got: {err}");
     }
 }

@@ -157,7 +157,10 @@ rather than stealing a live binding.
 
 ## tmux Compatibility
 
-`tuic` can act as a drop-in replacement for tmux. When invoked as `tmux` (via symlink), it translates tmux commands to TUICommander equivalents.
+`tuic` can act as a drop-in replacement for tmux. When invoked as `tmux` (via symlink), it
+translates tmux commands to TUICommander equivalents — including the pane/window/session graph
+Claude Code's teammate-pane backend drives when its `teammateMode` selects tmux (see
+`tmux-swarm-shim.md` at the repo root for the investigation this was built from).
 
 ### Setting Up the Alias
 
@@ -171,22 +174,58 @@ tuic alias --remove
 
 ### Supported tmux Commands
 
-When invoked as `tmux`, the following commands are supported:
+When invoked as `tmux`, the following commands are supported. Global options (`-L <name>`,
+`-S <path>`) may precede any subcommand, exactly as with real tmux — `-L`/`-S` partition state so
+two concurrent tmux-driving processes (e.g. two Claude Code instances) never see each other's
+panes.
 
 | tmux Command | Behavior |
 |---|---|
+| `tmux -V` | Print a plausible version string, exit 0 — a pure capability probe, answered without contacting TUICommander |
 | `tmux` | Create new session in cwd |
-| `tmux new-session -s name` | Create named session |
+| `tmux new-session -s name [-n window] [-P -F fmt]` | Create a named session (and its initial window/pane); `-P -F` prints the rendered format instead of the legacy `name: id` line |
+| `tmux new-window -t target [-n name] [-P -F fmt]` | Add a window to an existing session |
+| `tmux split-window -t target [-c cwd] [-P -F fmt]` | Add a pane to an existing window — the actual mechanism behind a new teammate |
+| `tmux respawn-pane -k -t target -- cmd` | Deliver a real command into a pane that was created running a placeholder |
 | `tmux list-sessions` | List sessions |
+| `tmux list-windows [-t target] [-F fmt]` | List a session's windows |
+| `tmux list-panes [-t target] [-F fmt]` | List a window's panes |
+| `tmux display-message -p fmt` | Render a `#{...}` format string to stdout |
+| `tmux select-pane -t target -T title` | Rename a pane's tab |
+| `tmux kill-pane -t target` | Close one pane |
 | `tmux kill-session -t target` | Kill session |
-| `tmux kill-server` | Kill all sessions |
+| `tmux kill-server` | Kill all sessions (and all tracked tmux topology) |
 | `tmux send-keys -t target "cmd" Enter` | Send input |
 | `tmux capture-pane -t target` | Capture output |
 | `tmux resize-pane -t target -x 120 -y 40` | Resize |
 | `tmux attach-session` | Focus TUICommander window |
 | `tmux has-session -t target` | Check if session exists (exit code) |
+| `tmux select-layout`, `set-option`, `set-window-option`, `switch-client`, `rename-window` | Accepted and succeed with no effect — cosmetic in real tmux, no TUIC-tab equivalent |
 
 Key names are translated: `Enter`, `Space`, `Tab`, `Escape`, `C-c`, `C-d`, `C-z`, etc.
+
+`-t` targets accept the usual tmux forms: a pane id (`%3`), window id (`@1`), session id (`$0`),
+a bare session name, or a compound `session:window.pane` path. A target that doesn't resolve
+against tracked tmux topology falls back to the same session name/uuid/prefix matching `tuic send`
+and friends already use outside tmux mode.
+
+Panes created by `new-session`/`new-window` don't spawn a terminal tab until something actually
+writes to them (`send-keys`, `respawn-pane`, a rename) — this keeps a freshly-created, unused
+session from cluttering the sidebar. `split-window` is the exception: it materialises immediately,
+since a split is always about to be used. Topology (the pane/window/session graph itself, as
+opposed to the TUIC tabs it points at) lives only in memory and does not survive an app restart —
+a swarm can't outlive its lead process anyway, so this is by design, not a limitation to work
+around.
+
+### Invocation logging
+
+Every `tmux ...` call is logged — including ones this compatibility layer doesn't recognize, which
+is the main way to discover what a caller like Claude Code's teammate-pane backend actually
+invokes. Logged to `<config dir>/logs/tmux-shim.log` (size-rotated at 1 MiB, one previous
+generation kept) and, best-effort, to the running instance's own logs via `POST /logs` (source
+`tmux-shim`, readable via `GET /logs?source=tmux-shim`) — the file sink is the one that still
+works when TUICommander isn't running. Disable with `TUIC_TMUX_LOG=0`; set `TUIC_TMUX_LOG=stderr`
+to also mirror every line to stderr.
 
 ## System Commands
 
