@@ -325,7 +325,10 @@ mod tests {
             ("claude", "Elicitation", "", &[("state", "awaiting")]),
             ("claude", "ElicitationResult", "", &[("state", "busy")]),
             ("claude", "PostToolUseFailure", "", &[("toolfail", "1")]),
-            ("claude", "Notification", "", &[("state", "awaiting")]), // added with tuic-hook
+            // added with tuic-hook; `notify`/`notifytype` scrapes precede it when the
+            // payload carries them, and pty.rs::notification_awaiting_outcome decides
+            // whether this awaiting badges (see the real-binary wire test below).
+            ("claude", "Notification", "", &[("state", "awaiting")]),
             ("claude", "Stop", "", &[("state", "idle")]),
             (
                 "claude",
@@ -1039,6 +1042,34 @@ mod tests {
             assert_eq!(written, expected);
         }
 
+        /// Real-binary wire for the `notification_type` scrape (e256f8cfe):
+        /// `notify`, then `notifytype`, then `state=awaiting`, all in one
+        /// write — the order `pty.rs`'s `pending_notify_message`/
+        /// `pending_notification_type` stash relies on to classify the
+        /// awaiting fire (`notification_awaiting_outcome`).
+        #[test]
+        fn notification_scrapes_notification_type_before_state_on_the_actual_wire() {
+            let _binary = install_binary();
+            let map = claude_hook_map();
+            let (_, _, cmd) = map
+                .iter()
+                .find(|(e, _, _)| *e == "Notification")
+                .expect("Notification entry present");
+            let stdin = br#"{"hook_event_name":"Notification","message":"Claude is waiting for your input","notification_type":"idle_prompt"}"#;
+            let (code, written) = run(cmd, true, None, Some(stdin));
+            assert_eq!(code, 0);
+            let expected = [
+                osc("notify", "Claude%20is%20waiting%20for%20your%20input"),
+                osc("notifytype", "idle_prompt"),
+                osc("state", "awaiting"),
+            ]
+            .concat();
+            assert_eq!(
+                String::from_utf8_lossy(&written),
+                String::from_utf8_lossy(&expected)
+            );
+        }
+
         #[test]
         fn help_flag_prints_something_and_exits_zero_without_tuic_session() {
             let _binary = install_binary();
@@ -1162,12 +1193,26 @@ mod tests {
         /// transition stays correct either way — but if a future Gemini payload
         /// shape turns out to include a `hook_event_name` field (its hooks
         /// "haven't been verified" not to, per this module's doc comment),
-        /// Notification would ALSO start emitting a `notify` scrape Gemini's map
-        /// never asked for, contradicting this module's doc comment that
-        /// non-Claude agents "fall back to flags exactly as before derivation
+        /// Notification would ALSO start emitting `notify`/`notifytype` scrapes
+        /// Gemini's map never asked for, contradicting this module's doc comment
+        /// that non-Claude agents "fall back to flags exactly as before derivation
         /// existed." This test pins the current, real behavior (not the intended
         /// one) so a fix — or a decision to accept the risk — is a deliberate,
         /// visible change to this test, not a silent one.
+        ///
+        /// The `notification_type` leak (added 2026-09-02 alongside `message`'s
+        /// pre-existing one, same collision) is a strictly bigger risk than
+        /// `message`'s: a leaked `message` is inert free-text metadata, but a
+        /// leaked `notification_type` directly drives
+        /// `pty.rs::notification_awaiting_outcome`'s confidence classification —
+        /// a Gemini payload whose own (unrelated) field coincidentally matching
+        /// one of Claude's 12 documented values could silently suppress a
+        /// genuine Gemini awaiting badge. Not fixed here (the real fix is
+        /// per-agent-scoped `DERIVATIONS` matching, a larger change — see this
+        /// module's doc comment and `todo.md`'s "DERIVATIONS lookup is not
+        /// scoped per agent" entry); flagged in
+        /// `agent-signal-architecture.html`'s Incident Log so it isn't
+        /// discovered fresh.
         #[test]
         fn gemini_notification_name_collision_with_claude_derivations_currently_leaks_a_scrape() {
             let _binary = install_binary();
@@ -1189,6 +1234,16 @@ mod tests {
                 "documents the current leak — Claude's Notification derivation scrapes \
                  `message` for ANY caller whose payload names itself \"Notification\", \
                  including Gemini's, since matching isn't scoped per agent"
+            );
+
+            let stdin = br#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#;
+            let (_, written) = run(notification_cmd, true, None, Some(stdin));
+            assert_eq!(
+                written,
+                [osc("notifytype", "idle_prompt"), osc("state", "awaiting"),].concat(),
+                "the same collision now also leaks notification_type — worse than the \
+                 message leak above, since this one actively feeds Gemini's own \
+                 state=awaiting through Claude's confidence classifier"
             );
 
             // SessionEnd has no scrape field in DERIVATIONS, so its collision is
