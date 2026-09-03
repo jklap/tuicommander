@@ -48,6 +48,21 @@ one-process-per-test default currently masks this, but don't rely on that).
    bare string lookup with no per-agent scope (see `todo.md`'s "DERIVATIONS
    lookup is not scoped per agent" entry).
 
+## Extending an existing event's scrape set (not just adding a new event)
+
+When one `hook_event_name` needs its *behavior* to vary by a VALUE inside the
+payload (not just by which event fired) — e.g. `Notification`'s 12 different
+`notification_type` reasons, only some of which are a genuine block — keep this
+binary "dumb": add the new field to `scrape_*` (its own `EventDerivation` bool +
+`--emit-*` override flag, same shape as `scrape_message`) and emit it as its own
+verb, unconditionally, alongside whatever the event already emits. Do NOT branch
+`state` on the payload value here. All classification of what a scraped value
+*means* belongs on the receiving end (`pty.rs`), which already owns this pattern
+for `notify`'s message text (see `notification_awaiting_outcome`,
+`agent-signal-architecture.html#osc-confusion`) — that keeps this crate a pure
+"what did Claude Code say" extractor, with no policy logic to keep in sync across
+two repos' worth of Claude Code documentation as its enums evolve.
+
 ## Startup ordering
 
 `hook_binary::ensure_current()` MUST run before
