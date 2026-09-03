@@ -192,6 +192,16 @@ Detects errors from two tiers:
 - **Agent-specific**: Claude Code, Aider, Codex CLI, Gemini CLI, Copilot CLI (note: the generic "request failed unexpectedly" pattern was removed from Copilot detection due to false positives on Claude Code output)
 - **Provider-level**: OpenAI, Anthropic, Google, OpenRouter, MiniMax JSON error structures
 
+Claude Code has two 5xx renderings and both are covered. `claude-api-error` matches
+the JSON body (`"type":"api_error"`); `claude-server-error-friendly` matches the
+prose-only form (`API Error: 500 Internal server error. This is a server-side issue…`),
+anchored on the status code because the prose wraps at the terminal width and rendered
+rows are joined with `\n`. The friendly pattern requires a letter after the code, so
+the JSON variants above it keep priority and `API Error: 529` stays a rate limit.
+
+`error_kind: "server"` is what drives auto-retry in `Terminal.tsx` (inject `continue`,
+backoff 5s/15s/30s), gated per agent by `auto_retry_on_error` — **default `false`**.
+
 Frontend plays an error notification sound and logs via `appLogger.error()`.
 
 ### Intent
