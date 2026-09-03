@@ -201,6 +201,67 @@ live agent-frame check cannot be replayed.
   fear is the opposite one: an over-tight anchor that silences real menus for
   agents whose frame indents them.
 
+## tmux compatibility shim: swarm subcommands + invocation logging (2026-09-02/03, uncommitted)
+
+**Rust change — needs `make dev` restart** (adds an `AppState` field, a `session-renamed`
+`AppEvent` variant, and a new `/tmux/*` route family — none of this exists in a running `make dev`
+instance until restarted, which tears down every live PTY session; coordinate before running it).
+
+Implements `tmux-swarm-shim.md`'s §5.1–5.6 (§5.0 — confirming the real pane-backed-teammate
+trigger — is explicitly deferred; the invocation logging below is how a future session answers it).
+
+_A `/code-review` pass (scoped to this session's uncommitted diff) found 10 issues, all fixed:_
+**(High)** `respawn-pane` sent the command text + submitting Enter as one raw PTY write, which a
+raw-mode Ink teammate agent treats as an unsubmitted prefill — now sent as two writes with a gap,
+matching `cmd_agent`'s `AgentAction::Type` framing. **(High)** `kill-server` closed every TUIC
+session app-wide and wiped every label's topology, not just the invoking `-L`/`-S`'s — now scoped
+to the current label only, matching real tmux's `-L a kill-server` never touching `-L b`.
+**(Medium)** `-c <cwd>` was parsed for `new-session`/`new-window` but silently dropped — now
+threaded through to the initial pane. **(Medium)** `kill-pane` left a stale `active_pane` pointer
+when the active pane itself was killed — now reassigned to a remaining pane. **(Medium)**
+`split-window` left a permanent phantom pane in topology if `materialize()` failed (e.g. hit the
+session cap) — now rolled back on failure. Plus five low-severity reuse/simplification fixes
+(removed a redundant capacity check that ran twice per split-window, a duplicated `"default"`
+label literal, a duplicated select-pane/kill-pane resolution block, dead code, and an unused
+`DELETE /tmux/servers` route once `kill-server` no longer needed it).
+
+Verified this session: `cargo nextest run --workspace` (5451 tests, all passing — 111 `tuic-cli`
+tests plus a new `tmux_routes.rs` regression test for the `kill-pane`/`active_pane` fix), `cargo
+clippy --release --workspace -- -D warnings` (clean), `cargo fmt --check` (clean), `cargo test
+--doc` (clean), `tsc --noEmit` (clean). Not yet verified: anything requiring a live TUICommander
+instance — the whole feature only really proves itself against a running `make dev` build talking
+to real Claude Code swarm invocations.
+
+- [ ] **End-to-end swarm flow against a live dev instance** (the `make dev` test instance on
+  `:9877`, per AGENTS.md's "Test instance vs orchestrator instance" — never Boss's orchestrator).
+  Point `TUIC_SOCKET` at the dev instance's socket (its `GET /health` reports the actual bound
+  path, which falls back to `mcp-{pid}.sock` when `mcp.sock` is already held), then replay Claude
+  Code's real external-mode
+  call order under one `-L claude-swarm-test`: `has-session -t claude-swarm` (expect exit 1) →
+  `new-session -d -s claude-swarm -n swarm-view -P -F '#{pane_id}' -- cat` → `list-windows` →
+  `list-panes -t claude-swarm:swarm-view -F '#{pane_id}'` → `split-window -d -t %<pane> -P -F
+  '#{pane_id}' -- cat` → `select-pane -t %N -T teammate-1` → `respawn-pane -k -t %N -- 'echo hi'`
+  → `kill-pane -t %N` → `kill-session -t claude-swarm`. Confirm every `-P`/`-F` call's stdout is
+  exactly the rendered id (nothing else on the line — a stray character breaks Claude Code's
+  pane-id capture), and that no orphan tabs remain after teardown.
+- [ ] **`tmux -V` unblocks real Claude Code teammate spawning at all.** This is the actual point of
+  the whole feature — with a real Claude Code instance pointed at the `tuic alias`'d shim (do this
+  in a scratch `$PATH`, not by repointing the machine's real `tmux` alias mid-development), confirm
+  a teammate spawn actually produces a visible TUIC tab, and capture whatever it calls via
+  `GET /logs?source=tmux-shim` / `<config dir>/logs/tmux-shim.log` — including any subcommand this
+  work didn't anticipate. This is also the mechanism for answering §5.0.
+- [ ] **`select-pane -T` visibly renames the tab.** Confirm the `session-renamed` event fix
+  (`mcp_http/session.rs`'s `set_session_name`, `pty.rs`'s Tauri-command twin, and the new
+  `useAppInit.ts` listener) actually updates a live tab's title with no restart needed — this was
+  previously silently broken (the route mutated `display_name` with no emit at all).
+- [ ] **A pane's TUIC tab actually docks into the visible split layout.** `split-window`'s pane
+  comes from a plain `POST /sessions` equivalent (via `spawn_pty_session`, no `agent_type`), and
+  `session-created`'s `assignTabToActiveGroup` call is gated on `agent_type` being set
+  (`useAppInit.ts`) — confirm empirically that a teammate pane is actually visible in split mode,
+  not just present in `GET /sessions`.
+- [ ] **Windows**: `argv0 == "tmux.exe"` dispatch and the `tuic alias` Windows copy-based install
+  path have no CI and were not tested on this machine (macOS only) — needs a real Windows pass.
+
 ## Per-tool MCP-instructions gating + "Prefer TUICommander messaging/spawning" settings (2026-09-02, uncommitted)
 
 _Applied from a patch generated against a slightly older tree; the conflicting sections (Multi-Agent Work wording, the `agent action=wait since=<last_ms>` param since dropped in favor of a server-side cursor, the `task` tool, and the `orchestrator=true` register bullet) were hand-merged. Verified for real this session: `cargo build --package tuic-hook`, `cargo check --lib`, `cargo test --lib` (331 mcp_transport + 174 config tests, all passing — including one pre-existing test that needed `#[serial_test::serial]` added to fix a real cross-test global-config-dir race exposed by this change), `cargo fmt`, `cargo clippy --lib --no-deps` (clean), `tsc --noEmit`, `vitest run` (6946 tests passing; the one failing file is the pre-existing `ChangelogModal.test.tsx` leak-detector flake, unrelated), `biome check`. Only the live-in-Settings-UI behavior below is unverified._
@@ -4328,3 +4389,21 @@ and are not repeated here. What's left needs a human pass:
   dominates everything else means don't read too much into one Sonnet-backed
   trial (Sonnet already picked TUIC's tool 100% of the time regardless of
   this wording).
+- [ ] **Tab-name-flapping fix (rustc requires `make dev` restart)** — fixed an
+  infinite `session-renamed` echo loop between the frontend's `update()` (in
+  `terminals.ts`) and the backend's `set_session_name` (`pty.rs`'s Tauri
+  command and `session.rs`'s HTTP twin): both now no-op an unchanged
+  name/is_custom pair instead of unconditionally re-emitting, and the
+  frontend now also skips its echo-back RPC when the value hasn't changed.
+  Covered by automated tests (`set_session_name_skips_emit_when_unchanged`,
+  `rename_pane_is_idempotent_and_only_emits_on_real_change`,
+  `terminals.renameEchoGuard.test.ts`), all verified to fail without the fix.
+  What automated coverage can't reach: the actual live symptom — a tab's
+  title visibly flickering/relabeling while an agent works, or during a tmux
+  swarm session with `select-pane -T` — and the sustained CPU spike this was
+  causing (~125-130% observed in this session's own orchestrator instance
+  logs before the fix). After restarting `make dev`, open a tab running an
+  active agent for a couple of minutes and confirm the tab name stays stable
+  (only changes when the agent's title/status genuinely changes), and check
+  `GET /diagnostics` (enable diagnostic mode first) for CPU staying idle
+  between real activity instead of pinned high.

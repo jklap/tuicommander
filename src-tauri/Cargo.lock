@@ -8996,6 +8996,8 @@ dependencies = [
  "clap",
  "dirs",
  "serde_json",
+ "serial_test",
+ "tempfile",
 ]
 
 [[package]]
