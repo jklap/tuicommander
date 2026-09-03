@@ -4554,6 +4554,14 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
         {
             arm_explicit_idle_background_probe(state, session_id, turn_epoch);
         }
+        tracing::debug!(
+            session_id = %session_id,
+            prev,
+            target,
+            label,
+            hook_state,
+            "shell_state edge attempt (research: unexpected state transitions)"
+        );
         let (transitioned, parent_dispatch) = try_shell_transition_locked(
             ShellTransitionRequest {
                 state,
@@ -4571,6 +4579,13 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
     if let Some(dispatch) = parent_dispatch {
         dispatch_parent_lifecycle(state, dispatch);
     }
+    tracing::debug!(
+        session_id = %session_id,
+        target,
+        label,
+        transitioned,
+        "shell_state edge result (research: unexpected state transitions)"
+    );
     if transitioned {
         emit_shell_state(state, session_id, label);
         // Publish IDLE before a queued delivery claims IDLE→BUSY again. Reversing
@@ -5440,14 +5455,29 @@ fn spawn_silence_timer(
 /// "not on screen right now" is not proof that it was answered. A live
 /// `choice_prompt` owns its own resolution and is left alone.
 fn emit_question_cleared_if_stale(state: &Arc<AppState>, session_id: &str) {
-    let turn_epoch = state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .and_then(|s| {
-            (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
-                .then_some(s.turn_epoch)
-        });
+    let turn_epoch = state.session_maps.session_states.get(session_id).and_then(|s| {
+        // Research note (2026-09-01): this guard is BY DESIGN never allowed to
+        // retract a confident question or one with an open choice_prompt — see the
+        // module-level docs on why (a confident source can still repaint while
+        // genuinely waiting; screen absence alone isn't proof of an answer). If a
+        // session is stuck "awaiting" and this log line below never appears for
+        // it, that's the tell: the badge is confident/choice-prompt-owned, so this
+        // backstop was never going to be the thing that clears it — look at the
+        // hook busy re-affirmation path (`tuic_state_awaiting_event`) or
+        // `resolve_choice_prompt_input`/`choice-cleared` instead.
+        if s.awaiting_input && (s.question_confident || s.choice_prompt.is_some()) {
+            tracing::debug!(
+                session_id = %session_id,
+                confident = s.question_confident,
+                has_choice_prompt = s.choice_prompt.is_some(),
+                "silence_timer: awaiting_input is stale-eligible on screen but the \
+                 confident/choice_prompt guard blocks this backstop from clearing it \
+                 (research: unexpected state transitions)"
+            );
+        }
+        (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
+            .then_some(s.turn_epoch)
+    });
     let Some(turn_epoch) = turn_epoch else {
         return;
     };
@@ -5583,12 +5613,121 @@ fn clean_action_required_title(title: &str) -> String {
     }
 }
 
+/// Whether a `Notification` hook's `notification_type` describes a fire that
+/// genuinely needs a response, per Claude Code's own closed set of values —
+/// far more reliable than sniffing the free-text `message` wording the way
+/// `output_parser.rs::parse_osc777_notifies` has to for the (unconfirmed-live)
+/// native OSC 777 path. See `agent-signal-architecture.html`'s "OSC 777 vs OSC
+/// 7770" section for the full background and the 2026-08-29/2026-09-02
+/// incident this fixes.
+enum NotificationOutcome {
+    /// A genuine block — a confident, sticky `Question`.
+    Blocking,
+    /// Purely informational — never a question at all (e.g. a background
+    /// session finishing, auth succeeding). Distinct from "not confident":
+    /// this never even flashes the badge, rather than flashing and
+    /// self-clearing.
+    Informational,
+    /// A value outside Claude Code's documented set as of this writing — a
+    /// future addition this binary predates. Deliberately NOT folded into
+    /// `Blocking` or `Informational`: guessing either one risks either
+    /// silently swallowing a real future block, or reproducing this exact
+    /// incident under a new type name. The caller falls back to the
+    /// `message` wording heuristic instead of guessing here.
+    Unknown,
+}
+
+/// Classify one `notification_type` value. `idle_prompt` is handled by the
+/// caller, not here — its correct outcome depends on whether the session is
+/// already idle (see `tuic_state_awaiting_event`'s doc comment), which this
+/// function has no access to.
+fn classify_notification_type(notification_type: &str) -> NotificationOutcome {
+    match notification_type {
+        // A tool/network permission prompt, an MCP elicitation form or URL
+        // dialog, a multi-agent teammate question, or Claude waiting on a
+        // stale quota resume — all genuinely need a response.
+        "permission_prompt"
+        | "elicitation_dialog"
+        | "elicitation_url_dialog"
+        | "agent_needs_input"
+        | "quota_auto_resume_stale" => NotificationOutcome::Blocking,
+        // Background-session/auth/elicitation lifecycle noise and quota
+        // auto-resume outcomes — none of these are the agent asking the user
+        // anything.
+        "auth_success"
+        | "elicitation_complete"
+        | "elicitation_response"
+        | "agent_completed"
+        | "quota_auto_resume_fired"
+        | "quota_auto_resume_disabled" => NotificationOutcome::Informational,
+        _ => NotificationOutcome::Unknown,
+    }
+}
+
+/// The wording rule `output_parser.rs::parse_osc777_notifies` already uses
+/// for its own ambiguous `message` text — the fallback for a `Notification`
+/// fire this binary can't classify by `notification_type` alone (an older
+/// Claude Code build that predates the field, or a value outside its
+/// documented set).
+fn message_wording_confidence(notify_message: Option<&str>) -> bool {
+    notify_message.is_some_and(crate::output_parser::is_confident_permission_wording)
+}
+
+/// Whether a `Notification`-sourced `state=awaiting` should badge at all, and
+/// if so how confidently. `None` means "no `notify=`/`notifytype=` verb
+/// preceded this fire" — i.e. it came from `PreToolUse(AskUserQuestion|
+/// ExitPlanMode)` or `Elicitation`, neither of which scrapes either (see
+/// `tuic-hook`'s `DERIVATIONS` table) — always a genuine block, so this always
+/// returns `Some(true)` in that case.
+///
+/// `shell_already_idle` resolves the one `notification_type` that can't be
+/// classified by itself: `idle_prompt` fires both for Claude's own ~60s
+/// heartbeat after a turn that already ended (`Stop` already fired, shell
+/// already idle — nothing pending, any future need for input arrives through
+/// its own signal the next time the user acts) and, per Claude Code's own
+/// docs, whenever the session has gone 60s without a keystroke — which can
+/// also mean it's genuinely still stuck mid-turn on an un-hooked plan/skill
+/// picker (shell still busy, no `Stop` yet). Only the first case is safe to
+/// drop outright; the second is the one signal that gap has at all, so it
+/// still surfaces, just not confidently.
+fn notification_awaiting_outcome(
+    notify_message: Option<&str>,
+    notification_type: Option<&str>,
+    shell_already_idle: bool,
+) -> Option<bool> {
+    if notify_message.is_none() && notification_type.is_none() {
+        return Some(true);
+    }
+    match notification_type {
+        Some("idle_prompt") => {
+            if shell_already_idle {
+                None
+            } else {
+                Some(false)
+            }
+        }
+        Some(other) => match classify_notification_type(other) {
+            NotificationOutcome::Blocking => Some(true),
+            NotificationOutcome::Informational => None,
+            NotificationOutcome::Unknown => Some(message_wording_confidence(notify_message)),
+        },
+        // notification_type absent entirely (an older Claude Code build that
+        // predates the field) but a message was scraped.
+        None => Some(message_wording_confidence(notify_message)),
+    }
+}
+
 /// Map a TUIC `state=` verb to the awaiting-input `ParsedEvent` it implies.
 ///
 /// busy/idle shell transitions are handled by `handle_tuic_state`; this covers
 /// only the separate `awaiting_input` field, which is driven by Question /
 /// UserInput events in `state.rs`:
-/// - `awaiting` → confident `Question` (sets `awaiting_input` + `question_confident`)
+/// - `awaiting` → `Question` per `notification_awaiting_outcome` above: a
+///   genuine block stays a confident, sticky question; Claude's own idle-timer
+///   heartbeat after a turn that already ended is dropped outright; the same
+///   heartbeat firing mid-turn (no `Stop` yet) surfaces non-confidently, so
+///   the silence-timer backstop (`emit_question_cleared_if_stale`) can retract
+///   it once the screen goes quiet with nothing really pending.
 /// - `busy`     → `UserInput` clear (hook busy is authoritative — clears an awaiting
 ///   set by a prior `PreToolUse(AskUserQuestion)`; empty content never overwrites
 ///   `last_prompt`). Fires on every tool call too, so it carries no prompt row
@@ -5596,12 +5735,25 @@ fn clean_action_required_title(title: &str) -> String {
 /// - `prompt`   → same clear, sent only by the user-prompt-submit hook, and the only
 ///   one that carries the prompt row for the scrollbar marker
 /// - anything else (incl. `idle`, unknown) → `None`
-fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
+fn tuic_state_awaiting_event(
+    payload: &str,
+    line: i64,
+    notify_message: Option<&str>,
+    notification_type: Option<&str>,
+    shell_already_idle: bool,
+) -> Option<ParsedEvent> {
     match payload {
-        "awaiting" => Some(ParsedEvent::Question {
-            prompt_text: String::new(),
-            confident: true,
-        }),
+        "awaiting" => {
+            let confident = notification_awaiting_outcome(
+                notify_message,
+                notification_type,
+                shell_already_idle,
+            )?;
+            Some(ParsedEvent::Question {
+                prompt_text: String::new(),
+                confident,
+            })
+        }
         "busy" => Some(ParsedEvent::UserInput {
             content: String::new(),
             line: -1,
@@ -6920,6 +7072,17 @@ impl ChunkProcessor {
         // Handle terminal events from alacritty (title, clipboard, PTY writes, OSC 133, TUIC)
         let mut tuic_events: Vec<ParsedEvent> = Vec::new();
         let mut explicit_idle_in_chunk = false;
+        // Set by "notify"/"notifytype" verbs, consumed by the very next
+        // "state" verb — a Claude Code `Notification` hook fire always emits
+        // `notify=<message>` (and, when Claude Code sends the field,
+        // `notifytype=<notification_type>`) immediately followed by
+        // `state=awaiting` in the same `write_all` (see `tuic-hook`'s
+        // `DERIVATIONS` table and `emit.rs`), so all land in this same chunk
+        // in that order. `PreToolUse(AskUserQuestion|ExitPlanMode)` and
+        // `Elicitation` never scrape either, so both stay `None` for those —
+        // see `notification_awaiting_outcome`.
+        let mut pending_notify_message: Option<String> = None;
+        let mut pending_notification_type: Option<String> = None;
         if !term_events.is_empty() {
             use crate::terminal_grid::{Osc133Event, TermEvent};
             for evt in term_events {
@@ -7066,7 +7229,63 @@ impl ChunkProcessor {
                             if let Some(evt) = block_event {
                                 tuic_events.push(evt);
                             }
-                            if let Some(evt) = tuic_state_awaiting_event(&payload, line as i64) {
+                            // Consumed here regardless of payload — a notify/
+                            // notifytype pair only ever precedes its own paired
+                            // state verb (see the declaration above), so nothing
+                            // legitimate is lost by clearing it on a "busy"/"idle"
+                            // state too.
+                            let notify_message = pending_notify_message.take();
+                            let notification_type = pending_notification_type.take();
+                            // Unaffected by the `handle_tuic_state` call above for
+                            // an "awaiting" payload (it only mutates on "idle"/
+                            // "busy") — this is the shell state as it stood BEFORE
+                            // this fire, which is exactly what distinguishes "the
+                            // turn already ended" from "still stuck mid-turn."
+                            let shell_already_idle = state
+                                .session_maps
+                                .shell_states
+                                .get(session_id)
+                                .is_some_and(|s| s.load(Ordering::Relaxed) == SHELL_IDLE);
+                            let evt = tuic_state_awaiting_event(
+                                &payload,
+                                line as i64,
+                                notify_message.as_deref(),
+                                notification_type.as_deref(),
+                                shell_already_idle,
+                            );
+                            // Notification-sourced classification is the one
+                            // decision in this arm with no other trace when it
+                            // suppresses outright (`evt` is `None`, so no event
+                            // reaches state.rs's reducer at all — unlike a real
+                            // state change, a "correctly did nothing" outcome
+                            // would otherwise be invisible to a future
+                            // investigation). Logged for every Notification-
+                            // sourced fire, not just the suppressed case, so a
+                            // stuck-badge report can see the full classification
+                            // — inputs and outcome — in one place. See
+                            // `agent-signal-architecture.html`'s Investigation
+                            // Playbook.
+                            if payload == "awaiting"
+                                && (notify_message.is_some() || notification_type.is_some())
+                            {
+                                let confident = match &evt {
+                                    Some(ParsedEvent::Question { confident, .. }) => {
+                                        Some(*confident)
+                                    }
+                                    _ => None,
+                                };
+                                tracing::debug!(
+                                    session_id = %session_id,
+                                    notification_type = notification_type.as_deref().unwrap_or("<none>"),
+                                    has_message = notify_message.is_some(),
+                                    shell_already_idle,
+                                    confident = ?confident,
+                                    suppressed = evt.is_none(),
+                                    "Notification-sourced state=awaiting classified \
+                                     (research: notification confidence)"
+                                );
+                            }
+                            if let Some(evt) = evt {
                                 tuic_events.push(evt);
                             }
                         }
@@ -7153,10 +7372,26 @@ impl ChunkProcessor {
                             field: "tool_name".to_string(),
                             value: percent_decode_osc_payload(&payload),
                         }),
-                        "notify" => tuic_events.push(ParsedEvent::AgentMetadata {
-                            field: "message".to_string(),
-                            value: percent_decode_osc_payload(&payload),
-                        }),
+                        "notify" => {
+                            let decoded = percent_decode_osc_payload(&payload);
+                            // Stashed for the "state" arm's very next iteration —
+                            // see `pending_notify_message`'s declaration above.
+                            pending_notify_message = Some(decoded.clone());
+                            tuic_events.push(ParsedEvent::AgentMetadata {
+                                field: "message".to_string(),
+                                value: decoded,
+                            });
+                        }
+                        "notifytype" => {
+                            let decoded = percent_decode_osc_payload(&payload);
+                            // Stashed for the "state" arm's very next iteration —
+                            // see `pending_notification_type`'s declaration above.
+                            pending_notification_type = Some(decoded.clone());
+                            tuic_events.push(ParsedEvent::AgentMetadata {
+                                field: "notification_type".to_string(),
+                                value: decoded,
+                            });
+                        }
                         _ => {}
                     },
                     TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {}
@@ -7633,7 +7868,25 @@ impl ChunkProcessor {
             // Dedup question: skip if same prompt_text already emitted. Retired as
             // soon as the prompt leaves the screen (see the screen-absence reset
             // above), so this guards one pending prompt, not the whole session.
-            if let ParsedEvent::Question { prompt_text, .. } = event {
+            //
+            // Only applies to a NON-EMPTY prompt_text. `tuic_state_awaiting_event`'s
+            // hook-based `state=awaiting` mapping always carries an empty prompt_text
+            // (it has no real question text to offer) — keying the dedup on that
+            // empty placeholder made every hook-based AskUserQuestion after the
+            // FIRST one in a session look like a repeat of it, and the screen-
+            // absence reset below can never retire an empty string (every row
+            // trivially "contains" ""), so the empty placeholder stuck forever and
+            // silently swallowed every later AskUserQuestion's awaiting signal.
+            // Confirmed via a real two-`AskUserQuestion` capture
+            // (`claude_double_askuserquestion_second_missed.tcap`): the raw OSC 7770
+            // stream carries `state=awaiting` for BOTH questions, but only the first
+            // survived this dedup. A discrete hook firing doesn't need repaint
+            // suppression the way a screen-scraped heuristic question does — it
+            // fires once per real `PreToolUse(AskUserQuestion)`, not once per
+            // spinner tick — so skipping the dedup for it is safe.
+            if let ParsedEvent::Question { prompt_text, .. } = event
+                && !prompt_text.is_empty()
+            {
                 if self.last_question_text.as_deref() == Some(prompt_text.as_str()) {
                     continue;
                 }

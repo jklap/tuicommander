@@ -704,11 +704,21 @@ TUIC_SKIP_FIXTURE_GATE=1 git commit ...     # or: git commit --no-verify
 ```
 
 **Three signals report awaiting, and they are not interchangeable:**
+**Three signals report awaiting, and they are not interchangeable.** OSC 7770 and
+OSC 777 differ by one digit and both happen to use the word "notify" — this has
+caused real confusion (see `agent-signal-architecture.html#osc-confusion`): OSC
+7770 is **ours** (`tuic-hook`, written from Claude Code's own hook events); OSC
+777 is a believed-but-**unconfirmed-live** native agent notification, empirically
+retested 2026-08-29 and never observed firing even in a scenario built to trigger
+it. Do not assume Claude Code natively emits OSC 777 — what actually fires for
+Claude's own "waiting for your input" idle-timer heartbeat is `tuic-hook`
+converting a real `Notification` **hook event** into OSC 7770's `notify=`/
+`state=awaiting`, not a native OSC 777 write:
 
 | Signal | Source | Applies to |
 |---|---|---|
-| OSC 7770 `state=awaiting` | TUIC hook | hook-instrumented agents, **only** on `PreToolUse(AskUserQuestion)` |
-| OSC 777 `notify` | agent's own desktop notification | unambiguous `needs your permission` / `approval required` wording only; Claude's generic `is waiting for your input` also follows an ordinary completed turn and never sets awaiting |
+| OSC 7770 `state=awaiting` | TUIC hook (`tuic-hook`, from a real Claude Code hook event) | hook-instrumented agents. `PreToolUse(AskUserQuestion\|ExitPlanMode)` and `Elicitation` are always confident. `Notification` (12 possible `notification_type` reasons — permission prompt, MCP elicitation, quota resume, a background session finishing, Claude's own ~60s idle-timer heartbeat, …) is classified deterministically by `notification_type` (`pty.rs::notification_awaiting_outcome`): some types stay confident, purely informational ones never badge at all, and the idle-timer heartbeat (`idle_prompt`) is dropped outright once the shell is already idle. A wording fallback covers an unrecognized/absent `notification_type`. |
+| OSC 777 `notify` | agent's own native desktop notification — **unconfirmed to ever actually fire** | unambiguous `needs your permission` / `approval required` wording only; Claude's generic `is waiting for your input` also follows an ordinary completed turn and never sets awaiting (the OSC 7770 `Notification` classification above handles the confirmed-live path for the same ambiguity) |
 | `Enter to select` footer | rendered screen | Ink dialogs, including hook-instrumented sessions through the full-screen presence recovery; the changed-row parser's heuristic copy is suppressed for hooked agents |
 
 Busy/idle evidence is ranked within one submitted-turn epoch. Lower-ranked
