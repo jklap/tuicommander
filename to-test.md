@@ -1325,3 +1325,73 @@ Frontend only; Vite HMR picks it up.
   per session.
 - [ ] Register that repo: the parked tab moves to it by itself, and the active
   repo does NOT change under you while the tab moves.
+
+## An exited tab says so instead of going black
+
+Frontend only; Vite HMR picks it up. Already verified live in the running dev
+build: `term-100` ("GitHub state", exited agent in a deleted worktree) renders
+one `terminal-exited-notice`, the other 15 tabs render none. What is left is the
+visual check.
+
+- [ ] Click an exited tab (grey dot). The panel shows a centred, muted *Session
+  ended* / *The process exited and its output was released. Close this tab to
+  remove it.* — not a black void.
+- [ ] Open a brand-new terminal: the notice must NOT flash before the PTY
+  spawns. A new tab also has a null sessionId; only `shellState === "exited"`
+  may show the notice.
+- [ ] Let an agent finish in a background tab: the tab keeps its grey dot and
+  its name, and the panel shows the notice when you switch to it.
+
+## Repository saves converge across windows
+
+**Rust change — a `make dev` restart (or `make build`) is required.** The
+frontend half is HMR-only, but `repositories-changed` is emitted by the backend,
+so nothing happens until the Rust process is rebuilt.
+
+- [ ] Open the desktop app and a browser at `http://localhost:9876/`. Rename a
+  repo in the browser. The desktop sidebar shows the new name without a reload,
+  and vice versa.
+- [ ] Add a repo in one client: it appears in the other, in the right sidebar
+  position.
+- [ ] Remove a repo with no terminals open in one client: it disappears from the
+  other.
+- [ ] Remove a repo that has open terminals in the other client: that client
+  KEEPS the repo and its tabs (they must not be orphaned), and the repo is still
+  visible in the sidebar — not just present in memory.
+- [ ] Remove a worktree/branch in one client while the other has a terminal open
+  on that exact branch: the branch row and its tabs stay in the other client.
+- [ ] Rename a repo in one client while the other has that same repo open and
+  actively changing (edit a file so the diffstat moves): the rename still lands.
+- [ ] Group a repo in one client, then delete the group there: the other client
+  loses the group and shows the repo ungrouped, with no empty accordion left.
+- [ ] Switch the active repo in one client: the other client's focus does NOT
+  move.
+- [ ] After any of the above, rename a *different* repo in the client that
+  received the change. `GET http://localhost:9876/logs?level=error` shows no
+  `Repository changes were not saved`, and the first client's change is still
+  there — the receiver must not have reverted it.
+- [ ] Toggle something that writes no change (re-save the same value): the other
+  client must not re-read. `GET /logs` shows no burst of `load_repositories`.
+
+## Auto-retry on Claude Code's prose 5xx message
+
+**Rust change — a `make dev` restart (or `make build`) is required.** The parser
+runs in the backend, so nothing changes until the Rust process is rebuilt.
+
+**Precondition:** Settings → Agents → Claude → enable auto-retry. It is
+`auto_retry_on_error`, default `false`, and it is currently unset in
+`config.json`, so with it off you only get the red error badge and no retry.
+
+- [ ] Reach a real `API Error: 500 Internal server error. This is a server-side
+  issue…` in a Claude tab. `GET http://localhost:9876/logs` shows
+  `[ApiError] … pattern=claude-server-error-friendly kind=server` followed by
+  `[AutoRetry] claude: attempt 1/3 in 5s`.
+- [ ] The tab does NOT play the error sound and does NOT show the red awaiting
+  badge while a retry is pending — only after the 3rd attempt is exhausted.
+- [ ] `continue` is injected after 5s and the turn resumes.
+- [ ] With auto-retry disabled for Claude, the same error sets the red badge
+  immediately and injects nothing.
+- [ ] The message wraps across terminal rows (narrow the window before it
+  fires): detection still happens — the pattern anchors on `API Error: 5xx`.
+- [ ] A 429/overload (`API Error: 529` or "temporarily limiting requests") is
+  still logged as a rate limit, not as a server error, and injects nothing.
