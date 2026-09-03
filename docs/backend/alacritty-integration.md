@@ -42,7 +42,7 @@ In-band signalling via the PTY stream. Never written to the grid (consumed by VT
 
 | Verb | Payload | Effect |
 |------|---------|--------|
-| `state` | `idle`, `busy`, or `awaiting` | `idle`/`busy`: immediate shell state transition (bypasses silence timer). `awaiting`: emits a confident `Question` (sets `awaiting_input`); `busy` also clears a prior `awaiting`. Driven by native agent hooks (see AI Agents → Native Hook Instrumentation). Unknown payloads are ignored. |
+| `state` | `idle`, `busy`, or `awaiting` | `idle`/`busy`: immediate shell state transition (bypasses silence timer); `busy` also clears a prior `awaiting`. `awaiting` from `PreToolUse(AskUserQuestion\|ExitPlanMode)`/`Elicitation` is always a confident `Question`; `awaiting` paired with a preceding `notify`/`notifytype` (i.e. from `Notification`) is classified by `notification_type` instead (`pty.rs::notification_awaiting_outcome`) — a genuine block stays confident, Claude's own idle-timer heartbeat after the shell is already idle is dropped outright, the same heartbeat mid-turn surfaces non-confidently, and purely informational types (`auth_success`, `agent_completed`, …) never badge at all. Driven by native agent hooks (see AI Agents → Native Hook Instrumentation). Unknown payloads are ignored. |
 | `suggest` | `A\|B\|C` (pipe-separated) | Emits `ParsedEvent::Suggest` — never hits the grid, no conceal needed. |
 | `intent` | `text` or `text (Title)` | Emits `ParsedEvent::Intent` with optional tab title. |
 | `block` | `start`, `end`, or `end;<exit_code>` | Emits `ParsedEvent::AgentBlock` — the turn-level command block boundary for hook-instrumented sessions (see `handle_tuic_state`, which derives `start`/`end` from the `state` busy/idle edge rather than a hook emitting `block` directly). |
@@ -52,8 +52,9 @@ In-band signalling via the PTY stream. Never written to the grid (consumed by VT
 | `transcript` | percent-encoded path | Emits `ParsedEvent::AgentMetadata { field: "transcript_path", .. }`. From Claude's `SessionStart` hook. |
 | `tool` | percent-encoded tool name | Emits `ParsedEvent::AgentMetadata { field: "tool_name", .. }`. From Claude's `PreToolUse`/`PostToolUse` hooks. |
 | `notify` | percent-encoded message | Emits `ParsedEvent::AgentMetadata { field: "message", .. }`. From Claude's `Notification` hook. |
+| `notifytype` | percent-encoded `notification_type` | Emits `ParsedEvent::AgentMetadata { field: "notification_type", .. }`. From Claude's `Notification` hook — Claude Code's own closed-set discriminant for the fire (`permission_prompt`, `idle_prompt`, `auth_success`, …; full list in `docs/backend/tuic-hook.md`). Immediately precedes this fire's `state=awaiting`, same batch as `notify`. |
 
-`ccsession`/`cwd`/`transcript`/`tool`/`notify` payloads are percent-encoded (RFC 3986 unreserved
+`ccsession`/`cwd`/`transcript`/`tool`/`notify`/`notifytype` payloads are percent-encoded (RFC 3986 unreserved
 set) by the `tuic-hook` binary before they reach the wire — free text could otherwise contain the
 `;` param delimiter or control bytes, either of which would desync this parser. Decoded on receipt
 by `pty::percent_decode_osc_payload`.

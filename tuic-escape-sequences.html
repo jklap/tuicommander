@@ -316,7 +316,7 @@ footer{
     <div class="eyebrow">Terminal Protocol Reference</div>
     <h1>TUICommander<br>Escape Sequences</h1>
     <p>What the parser actually recognizes when a program writes control bytes to the PTY — OSC, CSI, and SGR — verified against the patched <code style="font-family:var(--font-mono)">vte</code> fork and the shell-integration scripts that emit these sequences in practice.</p>
-    <div class="src">Source: <code>src-tauri/patches/vte/src/ansi.rs</code>, <code>patches/alacritty_terminal/src/term/{mod,cell}.rs</code>, <code>terminal_grid.rs</code>, <code>output_parser.rs</code>, <code>shell_integration.rs</code>, <code>pty.rs</code>, <code>state.rs</code></div>
+    <div class="src">Source: <code>src-tauri/patches/vte/src/ansi.rs</code>, <code>patches/alacritty_terminal/src/term/{mod,cell}.rs</code>, <code>terminal_grid.rs</code>, <code>output_parser.rs</code>, <code>shell_integration.rs</code>, <code>pty.rs</code>, <code>state.rs</code>. For how these sequences fit into the bigger picture — which agent triggers which, and where each one flows to — see <code>agent-signal-architecture.html</code>.</div>
   </header>
 
   <nav class="quicknav">
@@ -471,7 +471,7 @@ Query: <span class="esc">\x1b]</span>52;c;?<span class="st">\x07</span></div>
           </tbody>
         </table>
       </div>
-      <p class="detail-note">Any other letter hits the fallback arm and returns before an event is even built — no <code>TermEvent::Osc133</code> is emitted for it. And although the parser accepts <strong>B</strong>, TUIC's own bash/zsh/fish hooks never send it — only <strong>A</strong>, <strong>C</strong>, and <strong>D</strong> — it's recognized purely for compatibility with other tools (FinalTerm/iTerm2-style) that do emit it.</p>
+      <p class="detail-note">Any other letter hits the fallback arm and returns before an event is even built — no <code>TermEvent::Osc133</code> is emitted for it. <strong>Corrected 2026-08-30</strong> — an earlier version of this page claimed TUIC's own shell hooks never send <strong>B</strong>; that's now stale. All three of <code>shell_integration.rs</code>'s scripts (zsh/bash/fish) emit <code>B</code> immediately after <code>A</code>, inside the same precmd-equivalent hook, since it can't be embedded in the prompt string itself without risking the user's own prompt theme (powerlevel10k, starship, …). <code>bash_precmd_preexec_cycle_emits_the_real_byte_sequence</code> (shell_integration.rs) asserts the real byte-for-byte sequence including B. Per-shell mechanism (ZDOTDIR trick vs. PROMPT_COMMAND/DEBUG trap vs. native fish events) is in <code>agent-signal-architecture.html#blocks</code>, not here — this page stays wire-grammar only.</p>
 
       <div class="code">printf '<span class="esc">\e]</span>133;A<span class="st">\a</span>'          <span class="cmt"># prompt start (real preexec hook output)</span>
 printf '<span class="esc">\e]</span>133;C<span class="st">\a</span>'          <span class="cmt"># about to run</span>
@@ -495,7 +495,7 @@ printf '<span class="esc">\e]</span>133;D;%d<span class="st">\a</span>' "$ec"  <
 
       <div class="subtable table-wrap">
         <table>
-          <caption>Verbs actually wired up by TUIC's shell hooks</caption>
+          <caption>Verbs from TUIC's own shell integration (bash/zsh/fish hooks)</caption>
           <thead><tr><th>Verb</th><th>Payload shape</th><th>Emitted by</th></tr></thead>
           <tbody>
             <tr><td class="mode">state</td><td>free-text token, e.g. <code>idle</code>, <code>busy</code></td><td><code>tuic_state()</code></td></tr>
@@ -504,7 +504,31 @@ printf '<span class="esc">\e]</span>133;D;%d<span class="st">\a</span>' "$ec"  <
           </tbody>
         </table>
       </div>
-      <p class="detail-note">The parser itself is <strong>verb-agnostic</strong> — anything before the first <code>=</code> is accepted and forwarded as-is. Only these three are actually sent by the shell integration scripts or consumed downstream; there's no <code>error</code>, <code>done</code>, or <code>progress</code> verb.</p>
+
+      <p style="margin-top:18px;">A second, larger set of verbs comes from the <strong>AI-agent hook</strong>
+      system (Claude Code/Gemini/Grok/Codex hooks → <code>tuic-hook</code>, not the shell integration
+      above) — full event→verb mapping in <code>hook-lifecycle.html</code>, this is the wire-format side only:</p>
+      <div class="subtable table-wrap">
+        <table>
+          <caption>Verbs from <code>tuic-hook</code> (agent hook instrumentation)</caption>
+          <thead><tr><th>Verb</th><th>Payload shape</th><th>Consumer</th></tr></thead>
+          <tbody>
+            <tr><td class="mode">state</td><td><code>idle</code> / <code>busy</code> / <code>awaiting</code></td><td>Shell busy/idle CAS (<code>handle_tuic_state</code>) and, for <code>awaiting</code> only, the separate <code>tuic_state_awaiting_event</code> → <code>Question{confident:true}</code></td></tr>
+            <tr><td class="mode">tool</td><td>tool name, e.g. <code>AskUserQuestion</code></td><td><code>AgentMetadata{tool_name}</code></td></tr>
+            <tr><td class="mode">toolfail</td><td>exit code (presence-only in practice — the value is never actually parsed on the consumer side)</td><td><code>turn_error_flags</code>, read-and-cleared at the next <code>state=idle</code></td></tr>
+            <tr><td class="mode">notify</td><td>percent-encoded free text (a Claude Code <code>Notification</code> hook's <code>message</code> field)</td><td><code>AgentMetadata{message}</code> — <strong>distinct from the unrelated OSC 777 format below</strong>, despite the shared name</td></tr>
+            <tr><td class="mode">ccsession / cwd / transcript</td><td>session id / percent-encoded path / percent-encoded path</td><td><code>AgentMetadata</code> — open for a future session-binding feature, no consumer yet</td></tr>
+            <tr><td class="mode">block</td><td><code>start</code> / <code>end;&lt;exit_code&gt;</code></td><td><strong>Parsed and unit-tested, never emitted</strong> — grepped <code>tuic-hook</code> and <code>agent_hook.rs</code>, no hook event produces this verb. The real block source is synthesized from <code>state=busy/idle</code> edges instead (see <code>agent-signal-architecture.html#blocks</code>). Documented here as a wire format that parses cleanly, not as a live signal.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="detail-note">The parser itself is <strong>verb-agnostic</strong> — anything before the
+      first <code>=</code> is accepted and forwarded as-is; an unrecognized verb is simply never matched
+      by any consumer. There is no <code>error</code>, <code>done</code>, or <code>progress</code> verb
+      in the <em>shell-integration</em> table above, but <code>toolfail</code> in the hook table serves
+      the same role for agent turns. Full per-Claude-Code-event derivation (which hook fires which verb,
+      and why) is <code>hook-lifecycle.html</code>'s job, not this page's — this table exists so the wire
+      format itself is documented in one place regardless of which of the two systems above produced it.</p>
 
       <div class="code"><span class="esc">\x1b]</span>7770;state=idle<span class="st">\x07</span>
 <span class="esc">\x1b]</span>7770;suggest=Fix the bug|Run tests|Deploy<span class="st">\x07</span>
@@ -530,7 +554,18 @@ Clear:         <span class="esc">\x1b]</span>9;4;0;0<span class="st">\x07</span>
 
     <!-- ============ OSC 777 — DEEP DETAIL ============ -->
     <article class="seq deep">
-      <div class="seq-top"><span class="num">OSC 777</span><span class="name">Desktop notification → question detection</span></div>
+      <div class="seq-top"><span class="num">OSC 777</span><span class="name">Desktop notification → question detection <span class="pill absent" style="margin-left:6px;">unconfirmed in current practice</span></span></div>
+      <p><strong>Origin:</strong> believed to be the agent's own native desktop-notification write (a
+      pre-existing rxvt-unicode convention — three sevens, semicolon-delimited, no percent-encoding) —
+      <em>not</em> anything TUIC emits or controls, unlike the similarly-named OSC 7770 <code>notify=</code>
+      verb above. <strong>Status, re-verified 2026-08-29:</strong> a live capture built specifically to
+      trigger this (a hook-instrumented Claude session, idle for 90s past its documented ~60s
+      notification timer) produced <em>zero</em> occurrences of this format — the same "is waiting for
+      your input" wording arrived instead as the OSC 7770 <code>notify=</code> verb, hook-driven. Whether
+      this format still fires for a <em>non</em>-hook-instrumented Claude session (or an older CLI
+      version) is untested — full writeup in <code>agent-signal-architecture.html#osc-confusion</code>.
+      The parser and its confidence table below are documented as they exist in code; treat them as
+      unverified against current Claude Code behavior, not as confirmed-dead.</p>
       <p>Grammar: <code>\x1b]777;notify;TITLE;BODY&lt;BEL|ST&gt;</code>, matched by <code style="font-family:var(--font-mono)">parse_osc777_notifies()</code> (output_parser.rs:852–883) against the regex <code>\x1b\]777;notify;([^;\x07\x1b]*)(?:;([^\x07\x1b]*))?(?:\x07|\x1b\\)</code>. The text actually tested is the body if it's non-empty, otherwise the title falls back into its place.</p>
 
       <div class="subtable table-wrap">

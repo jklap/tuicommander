@@ -522,12 +522,21 @@ through `raw_stream_events` + `parse_clean_lines` + `suppress_heuristic_question
 assert against a pipeline that does not exist. Unit tests on the individual
 parsers were never the gap; the pipeline around them was.
 
-**Three signals report awaiting, and they are not interchangeable:**
+**Three signals report awaiting, and they are not interchangeable.** OSC 7770 and
+OSC 777 differ by one digit and both happen to use the word "notify" — this has
+caused real confusion (see `agent-signal-architecture.html#osc-confusion`): OSC
+7770 is **ours** (`tuic-hook`, written from Claude Code's own hook events); OSC
+777 is a believed-but-**unconfirmed-live** native agent notification, empirically
+retested 2026-08-29 and never observed firing even in a scenario built to trigger
+it. Do not assume Claude Code natively emits OSC 777 — what actually fires for
+Claude's own "waiting for your input" idle-timer heartbeat is `tuic-hook`
+converting a real `Notification` **hook event** into OSC 7770's `notify=`/
+`state=awaiting`, not a native OSC 777 write:
 
 | Signal | Source | Applies to |
 |---|---|---|
-| OSC 7770 `state=awaiting` | TUIC hook | hook-instrumented agents, **only** on `PreToolUse(AskUserQuestion)` |
-| OSC 777 `notify` | agent's own desktop notification | any agent that emits it, any blocking prompt — but the body decides the confidence: `needs your permission` / `approval required` latch, `is waiting for your input` is low-confidence because Claude also sends it on its 60s idle timer |
+| OSC 7770 `state=awaiting` | TUIC hook (`tuic-hook`, from a real Claude Code hook event) | hook-instrumented agents. `PreToolUse(AskUserQuestion\|ExitPlanMode)` and `Elicitation` are always confident. `Notification` (12 possible `notification_type` reasons — permission prompt, MCP elicitation, quota resume, a background session finishing, Claude's own ~60s idle-timer heartbeat, …) is classified deterministically by `notification_type` (`pty.rs::notification_awaiting_outcome`): some types stay confident, purely informational ones never badge at all, and the idle-timer heartbeat (`idle_prompt`) is dropped outright once the shell is already idle. A wording fallback covers an unrecognized/absent `notification_type`. |
+| OSC 777 `notify` | agent's own native desktop notification — **unconfirmed to ever actually fire** | if it does fire: any agent, any blocking prompt — the body decides the confidence: `needs your permission` / `approval required` latch, `is waiting for your input` is low-confidence because Claude also sends it on its 60s idle timer (mirrored by the OSC 7770 `Notification` classification above, which handles the confirmed-live path for the same ambiguity) |
 | `Enter to select` footer regex | screen scrape | non-hook agents (dropped for hook-instrumented ones by `suppress_heuristic_question`) |
 
 A hook-instrumented agent showing a picker that is *not* AskUserQuestion (plan

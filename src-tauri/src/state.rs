@@ -3456,6 +3456,22 @@ impl AppState {
                         ..Default::default()
                     });
                 s.last_activity_ms = now_ms;
+                // Snapshot of the awaiting-input-related fields before the reducer
+                // runs, diffed against the same fields after (below, before `drop(s)`)
+                // and logged only when something actually changed. One generic log
+                // point covering every arm below — question/question-cleared/
+                // user-input/choice-prompt/choice-cleared/status-line all funnel
+                // through here — rather than a debug! scattered per-arm, so a future
+                // arm added to this match can't silently skip being traced. Added
+                // 2026-09-01 to research "awaiting badge stuck/wrong" reports without
+                // needing to re-derive the reducer's logic from scratch each time;
+                // see agent-signal-architecture.html's investigation playbook.
+                let awaiting_before = (
+                    s.awaiting_input,
+                    s.question_confident,
+                    s.choice_prompt.is_some(),
+                    s.question_text.clone(),
+                );
                 match event_type {
                     "question" if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) => {
                         let new_confident = parsed
@@ -3666,6 +3682,29 @@ impl AppState {
                     }
                     _ => {}
                 }
+                let awaiting_after = (
+                    s.awaiting_input,
+                    s.question_confident,
+                    s.choice_prompt.is_some(),
+                    s.question_text.clone(),
+                );
+                if awaiting_before != awaiting_after {
+                    tracing::debug!(
+                        session_id = %session_id,
+                        event_type,
+                        event_turn_epoch,
+                        session_turn_epoch = s.turn_epoch,
+                        before_awaiting = awaiting_before.0,
+                        before_confident = awaiting_before.1,
+                        before_choice_prompt = awaiting_before.2,
+                        before_question_text = ?awaiting_before.3,
+                        after_awaiting = awaiting_after.0,
+                        after_confident = awaiting_after.1,
+                        after_choice_prompt = awaiting_after.2,
+                        after_question_text = ?awaiting_after.3,
+                        "awaiting-input state changed (research: unexpected state transitions)"
+                    );
+                }
                 drop(s);
 
                 // Unblock-triggered flush (story 091): user-input just cleared
@@ -3717,6 +3756,18 @@ impl AppState {
             }
             AppEvent::PtyExit { session_id } => {
                 if let Some(mut entry) = state.session_states.get_mut(session_id) {
+                    if entry.awaiting_input {
+                        // A session exiting while still marked awaiting_input is a
+                        // real diagnostic signal for this bug class — it's the exact
+                        // shape of "the badge was wrong right up until the process
+                        // died," worth distinguishing from a normal exit.
+                        tracing::debug!(
+                            session_id = %session_id,
+                            confident = entry.question_confident,
+                            had_choice_prompt = entry.choice_prompt.is_some(),
+                            "session exited while still awaiting_input (research: unexpected state transitions)"
+                        );
+                    }
                     entry.awaiting_input = false;
                     entry.question_text = None;
                     entry.question_confident = false;

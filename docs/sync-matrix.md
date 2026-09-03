@@ -184,6 +184,7 @@ When changing an awaiting/idle/busy signal — a parser, the hook suppression, o
 | `src-tauri/src/pty.rs` tests | A case in the `Awaiting-signal fixtures` block replaying that capture |
 | `src-tauri/src/pty.rs` tests | A case in the `Awaiting RETRACTION` block when the failure is a state that never clears — fixtures assert emitted events and cannot express a MISSING one |
 | `AGENTS.md` | "Agent state detection" section (signal table, capture workflow, retraction) |
+| `agent-signal-architecture.html` | The three-origin pipeline diagram, OSC 777-vs-7770 status, and the per-agent signal matrix — update if a signal's origin, confidence, or an agent's coverage changes |
 
 ### Native hook instrumentation (OSC 7770, `tuic-hook`)
 When changing an agent's hook event map, adding/removing an OSC 7770 verb, or touching the
@@ -205,6 +206,7 @@ When changing an agent's hook event map, adding/removing an OSC 7770 verb, or to
 | `docs/user-guide/ai-agents.md` | "Native Hook Instrumentation" user-facing section |
 | `docs/FEATURES.md` | Section 1.19 (red-tick tier description) |
 | `hook-lifecycle.html` (repo root, tracked) | Full event→verb→feature lifecycle diagram, CLI surface, and rationale |
+| `agent-signal-architecture.html` (repo root, tracked) | Per-agent signal matrix and the command-block/scrollbar-tick section — update if a hook map, block producer, or per-agent classifier changes |
 
 ### MCP Tool Surface (native tools, upstream proxy, meta-tools)
 When changing the tool list, tool handlers, `disabled_native_tools`, upstream allow/deny filters, or the Speakeasy meta-tools:
@@ -484,6 +486,7 @@ When adding, renaming or moving a docs page:
 | Path | Purpose |
 |------|---------|
 | **Root** | |
+| `agent-signal-architecture.html` | Big-picture reference — how hooks (OSC 7770), the OSC 777 notification format, and screen-scraping all converge into one `SessionState` and one scrollbar-tick system; per-agent signal matrix; start here before the two below |
 | `tuic-escape-sequences.html` | Terminal protocol reference (OSC/CSI/SGR/modes, both directions) |
 | `hook-lifecycle.html` | Native hook instrumentation reference — event→wire→feature pipeline, CLI surface, per-agent event tables, rationale |
 | `SPEC.md` | Feature specification, architecture, version |

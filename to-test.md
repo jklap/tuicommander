@@ -126,6 +126,46 @@ to real Claude Code swarm invocations.
   wait passively) — not `input`, which is itself capable of causing the exact stuck-looking
   symptom being diagnosed.
 
+## `Notification` hook classified deterministically by `notification_type`, `idle_prompt` after `Stop` dropped outright (2026-09-02, uncommitted) — **Rust change, needs `make dev` restart**
+
+Fixes the `agent-signal-architecture.html` 2026-08-29 incident, live-reproduced this session on the
+real `dbsql-test-review` session (`databricks-sql-cli`): a task finished, the recap printed, and
+~60s later the tab flipped to "awaiting input" with an empty question — Claude Code's own idle-timer
+`Notification` hook fire (`notification_type: "idle_prompt"`, confirmed via the temporary
+hook-debug.log capture), not a real block. Two-stage fix, both landed the same day:
+
+1. First pass classified the `notify=` message text the way `output_parser.rs::parse_osc777_notifies`
+   already does ("needs your permission"/"approval required" → confident; generic wording → not).
+2. Refined once Claude Code's actual documented `notification_type` enum was in hand (12 values:
+   `permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, `elicitation_url_dialog`,
+   `elicitation_complete`, `elicitation_response`, `agent_needs_input`, `agent_completed`,
+   `quota_auto_resume_fired`, `quota_auto_resume_stale`, `quota_auto_resume_disabled`) —
+   `tuic-hook` now scrapes it as a new `notifytype` verb, and `pty.rs::notification_awaiting_outcome`
+   classifies deterministically: 5 blocking types stay confident, 6 purely-informational types never
+   badge awaiting at all, and `idle_prompt` is dropped outright when the shell is already idle (a real
+   `Stop` already fired — exactly the dbsql-test-review shape) but still surfaces non-confidently
+   mid-turn (the one signal available for an un-hooked plan/skill picker). An unrecognized future type,
+   or no `notification_type` at all (older Claude Code), falls back to the wording classifier from step
+   1. `PreToolUse(AskUserQuestion|ExitPlanMode)` and `Elicitation` never scrape either field, so they're
+   unaffected — still unconditionally confident.
+
+Verified via `cargo build --package tuic-hook`, `cargo nextest run --package tuicommander pty::`
+(572 tests passing), `cargo nextest run --package tuicommander agent_hook::` (33 tests),
+`cargo nextest run -p tuic-hook` (60 tests), `cargo clippy --lib --no-deps` + `cargo clippy -p
+tuic-hook --no-deps` (clean), `cargo fmt`. New coverage: pure-function unit tests for every
+`notification_type` outcome (blocking/informational/idle-prompt-suppressed/idle-prompt-mid-turn/
+unrecognized-type-fallback/no-type-fallback), plus wire-level tests driving the real three-sequence
+`notify`→`notifytype`→`state=awaiting` bytes through the production `process_chunk` hot path
+(`notification_hook_idle_prompt_after_stop_is_suppressed_through_process_chunk` and 3 siblings). Not
+verifiable by unit test alone: the real Claude Code idle-timer heartbeat itself (its ~60s cadence and
+whether it still sends `notification_type` the same way across versions) and every other
+`notification_type` besides `idle_prompt`/the one real permission-prompt shape captured so far — none
+of the other 10 have been observed in a live capture yet, only documented — that needs live sessions.
+
+- [ ] Rebuild (`make dev` restart — this is `src-tauri/**`, never hot-reloads), start a hook-instrumented Claude Code session, give it a trivial one-shot task, let it finish, then leave it alone for 90+ seconds. Confirm the tab badge does NOT flip to "awaiting input" at all once the shell has gone idle (the fixed shape suppresses it outright, not just non-confidently). Check `GET /logs?source=terminal` — there should be no `question — awaitingInput transition` line following the `completion` line for this idle stretch.
+- [ ] Separately confirm a REAL `AskUserQuestion` prompt still latches the badge confidently and stays latched until answered (regression check — this fix must not make genuine blocking prompts flaky/self-clearing).
+- [ ] Trigger a real MCP elicitation dialog and a real permission-required tool call (if feasible) and confirm both still badge confidently — the only two `notification_type` shapes besides `idle_prompt` this session has real end-to-end coverage for are `permission_prompt` (via a synthetic wire-level test only, not yet observed live) and `idle_prompt` (both cases, observed live). The other 9 documented types are untested against real Claude Code output.
+
 ## Per-tool MCP-instructions gating + "Prefer TUICommander messaging/spawning" settings (2026-09-02, uncommitted)
 
 _Applied from a patch generated against a slightly older tree; the conflicting sections (Multi-Agent Work wording, the `agent action=wait since=<last_ms>` param since dropped in favor of a server-side cursor, the `task` tool, and the `orchestrator=true` register bullet) were hand-merged. Verified for real this session: `cargo build --package tuic-hook`, `cargo check --lib`, `cargo test --lib` (331 mcp_transport + 174 config tests, all passing — including one pre-existing test that needed `#[serial_test::serial]` added to fix a real cross-test global-config-dir race exposed by this change), `cargo fmt`, `cargo clippy --lib --no-deps` (clean), `tsc --noEmit`, `vitest run` (6946 tests passing; the one failing file is the pre-existing `ChangelogModal.test.tsx` leak-detector flake, unrelated), `biome check`. Only the live-in-Settings-UI behavior below is unverified._
@@ -2402,3 +2442,74 @@ and are not repeated here. What's left needs a human pass:
   dominates everything else means don't read too much into one Sonnet-backed
   trial (Sonnet already picked TUIC's tool 100% of the time regardless of
   this wording).
+
+## Second `AskUserQuestion` in one session never showed "awaiting" (2026-08-30, **Rust change — needs `make dev` restart**)
+
+Reported bug: a hook-instrumented Claude tab correctly showed "awaiting" for its FIRST
+`AskUserQuestion` in a session, but a second, later `AskUserQuestion` in the same session showed
+"working" — genuinely blocked on the user with no badge to show it. Confirmed via a live capture
+with Claude Code's own hooks fully instrumented (`.claude/hook-debug.log`): Claude Code's
+`PreToolUse(AskUserQuestion)` hook fired correctly both times, and the raw OSC 7770 stream carried
+`state=awaiting` for both questions — the break was entirely inside `pty.rs`'s own dedup logic.
+Root cause: `tuic_state_awaiting_event()`'s hook-based mapping always builds
+`ParsedEvent::Question{prompt_text: String::new(), ..}` (there's no real question text on the
+bare protocol marker), and the question-dedup guard a few chunks later keyed off that same
+(always-identical, always-empty) `prompt_text` with no regard for source. The screen-absence reset
+meant to retire the dedup key can never fire for an empty string (`anything.contains("")` is
+always true), so the first `AskUserQuestion` permanently poisoned the dedup for the rest of the
+session. Fixed by only applying that dedup when `prompt_text` is non-empty. Regression test
+`claude_double_askuserquestion_both_survive_dedup` (`pty.rs`) replays a real captured two-question
+session through the actual production `process_chunk` hot path and asserts all four raw
+`state=awaiting` markers survive — confirmed it fails (count stuck at 1) against the pre-fix code
+and passes (count 4) with the fix.
+
+- [ ] After restart, in a hook-instrumented Claude session, trigger `AskUserQuestion` twice in a
+  row (answer the first, let it lead into a second, separate `AskUserQuestion` call) — the tab
+  should show "awaiting" both times, not just the first.
+- [ ] Same, but with a real amount of work between the two questions (not back-to-back) — confirms
+  the fix holds once other busy/idle churn has happened in between.
+- [ ] A single multi-sub-question `AskUserQuestion` (the "Pick 3 options, Submit" wizard shape)
+  still re-arms correctly between sub-questions — this fix is unrelated to that mechanism
+  (`rearm_awaiting_for_open_dialog`) but should be spot-checked for a regression anyway since both
+  paths touch `awaiting_input`.
+
+## Mid-turn `AskUserQuestion` busy re-affirmation silently dropped the awaiting clear (2026-09-01, **Rust change — needs `make dev` restart**)
+
+Live-reproduced on two real, unattended/auto-approve Claude sessions (`commerce-journal`'s
+`publish` tab, `agent-tooling-analysis`'s `tool-scan` tab): the awaiting badge stuck `true` through
+full task completion. Root cause: `PreToolUse(AskUserQuestion)`'s `awaiting` override never touches
+the shell busy/idle bit, so shell state was already `SHELL_BUSY` before and after a mid-turn
+`AskUserQuestion` — the ordinary case. `PostToolUse(AskUserQuestion|ExitPlanMode)`'s busy
+re-affirmation, kept specifically to clear the badge, landed on that already-busy state
+(`busy_transitioned == false`) and its clear was silently dropped — nothing else is allowed to
+retract a confident question besides real user input, which never arrives when the agent answers
+its own question unattended. Fixed: `tuic_state_awaiting_event` now clears on
+`busy_transitioned || currently_awaiting`. Separately, the `ChoicePrompt` screen-scrape detector
+had no hook-instrumented suppression at all (only the generic `Question` heuristic did, via
+`suppress_heuristic_question`) — fixed to skip detection outright for a hook-instrumented session.
+Both covered by regression tests in `pty.rs`
+(`claude_askuserquestion_midturn_busy_reaffirmation_clears_stuck_awaiting`,
+`test_chunk_processor_choice_prompt_suppressed_when_hook_instrumented`), each individually
+confirmed to fail against the pre-fix code. Full incident write-up, a related-but-still-OPEN
+`Notification`-hook confidence gap, and an investigation playbook for the next report in this
+class: `agent-signal-architecture.html#incidents`.
+
+Debug logging (all at `tracing::debug!` — the app's default level is `info`; needs
+`RUST_LOG=info,tuicommander_lib::pty=debug,tuicommander_lib::state=debug` to actually see them) was
+added throughout the awaiting-input state-transition path specifically so a future report doesn't
+need this same archaeology — see the playbook link above for exactly what's logged where. A
+temporary global Claude Code hook (tagged `# tuic-debug-hook-2026-09-01 (temporary, research)` in
+`~/.claude/settings.json`) logs every raw hook payload to `.claude/hook-debug.log` per-repo while
+`TUIC_SESSION` is set — intentionally left in place "for the time being"; remove it (grep the
+sentinel) once this research window closes.
+
+- [ ] After restart, reproduce the original report if possible: an unattended/auto-approve Claude
+  session that calls `AskUserQuestion` (or hits a Bash permission prompt while hooks are
+  installed) mid-turn — confirm the tab correctly shows "awaiting" and then correctly clears back
+  to busy/idle once the turn continues, instead of sticking.
+- [ ] Confirm a hook-instrumented Claude session's numbered permission/edit-confirm dialog no
+  longer produces a `[ChoicePrompt]` frontend log line (check `GET /logs?source=terminal`) — only
+  the hook-driven signal should appear.
+- [ ] With `RUST_LOG` elevated per above, confirm the new debug log lines actually appear in
+  `GET /logs` during a real session — spot-check at least the `state.rs` generic awaiting-diff
+  line and the `pty.rs` shell-state-edge lines.

@@ -881,6 +881,19 @@ pub(crate) fn parse_osc94(text: &str) -> Option<ParsedEvent> {
 /// notification body, is what tells the two apart. Permission and approval
 /// wording is unambiguous and stays confident.
 ///
+/// Whether ambiguous agent-notification wording describes a genuine blocking
+/// prompt — shared by `parse_osc777_notifies` below (the native OSC 777 path)
+/// and `pty.rs::message_wording_confidence` (the OSC 7770 `Notification` hook
+/// path's fallback for a `notification_type` this binary doesn't recognize, or
+/// an older Claude Code build that never sends the field at all). One rule,
+/// one place to update if Claude Code's wording ever changes — see
+/// `agent-signal-architecture.html#osc-confusion` for why these two paths
+/// classify the same ambiguity.
+pub(crate) fn is_confident_permission_wording(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    normalized.contains("needs your permission") || normalized.contains("approval required")
+}
+
 /// The `prompt_text` is the body when present, else the title.
 pub(crate) fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
     // Fast path: skip the regex unless the introducer is present.
@@ -903,9 +916,8 @@ pub(crate) fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
             if prompt_text.is_empty() {
                 return None;
             }
+            let confident = is_confident_permission_wording(prompt_text);
             let normalized = prompt_text.to_ascii_lowercase();
-            let confident = normalized.contains("needs your permission")
-                || normalized.contains("approval required");
             let requires_response = confident || normalized.contains("is waiting for your input");
             requires_response.then(|| ParsedEvent::Question {
                 prompt_text: prompt_text.to_string(),
