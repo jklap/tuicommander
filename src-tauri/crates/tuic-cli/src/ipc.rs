@@ -5,8 +5,16 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 
-#[cfg(unix)]
-fn config_dir() -> std::path::PathBuf {
+/// TUICommander's config directory. Not `#[cfg(unix)]` — the Windows
+/// transport is a named pipe with no directory of its own, but the shim's
+/// invocation log (`<config_dir>/logs/tmux-shim.log`) needs a real path on
+/// every platform, so this is shared rather than reimplemented per caller.
+///
+/// This is a separate, simpler copy of the app's own `config_dir()`
+/// (`src-tauri/src/config.rs`) — no legacy-dir migration, no test override
+/// seam. Kept that way deliberately: this crate is a small sidecar binary,
+/// not the desktop app.
+pub(crate) fn config_dir() -> std::path::PathBuf {
     dirs::config_dir()
         .map(|d| d.join("com.tuic.commander"))
         .unwrap_or_else(|| {
@@ -51,6 +59,7 @@ fn connect() -> io::Result<std::fs::File> {
 }
 
 /// HTTP response parsed from the IPC stream.
+#[derive(Debug)]
 pub struct Response {
     pub status: u16,
     pub body: String,
@@ -277,4 +286,127 @@ pub fn ensure_running() -> io::Result<()> {
         io::ErrorKind::TimedOut,
         "TUICommander did not start within 10 seconds",
     ))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    /// Points `$TUIC_SOCKET` at a fresh Unix socket in a temp dir, spawns a
+    /// client thread that issues `GET /health` (and joins it before
+    /// returning — so exactly one connect() pairs with exactly one accept(),
+    /// with no detached background thread whose scheduling could race a
+    /// *different* test's mock server for the same process-global env var),
+    /// and answers it with `response` verbatim.
+    ///
+    /// `#[serial]` on every caller still matters: `$TUIC_SOCKET` is
+    /// process-global, so two of these running concurrently would still
+    /// stomp on each other even though each one's own round trip is now
+    /// internally race-free.
+    fn round_trip(response: &'static str) -> (Response, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("mcp.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        unsafe {
+            std::env::set_var("TUIC_SOCKET", &sock_path);
+        }
+        let client = std::thread::spawn(|| get("/health"));
+
+        let (mut stream, _) = listener.accept().unwrap();
+        // Drain the request so the client's write doesn't block on a full
+        // pipe; content doesn't matter for these tests.
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+        drop(stream);
+
+        let resp = client.join().unwrap().unwrap();
+        (resp, dir)
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn parses_status_line_and_content_length_body() {
+        let (resp, _dir) = round_trip(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"ok\":true}\r\n",
+        );
+        assert_eq!(resp.status, 200);
+        assert!(resp.is_success());
+        assert_eq!(resp.body, "{\"ok\":true}\r\n");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn malformed_status_line_defaults_to_500() {
+        let (resp, _dir) = round_trip("NOT A STATUS LINE\r\n\r\n");
+        assert_eq!(resp.status, 500);
+        assert!(!resp.is_success());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn headers_are_looked_up_case_insensitively() {
+        let (resp, _dir) =
+            round_trip("HTTP/1.1 200 OK\r\nMcp-Session-Id: abc-123\r\nContent-Length: 0\r\n\r\n");
+        assert_eq!(resp.header("mcp-session-id"), Some("abc-123"));
+        assert_eq!(resp.header("MCP-SESSION-ID"), Some("abc-123"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn chunked_body_is_reassembled() {
+        let (resp, _dir) = round_trip(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n",
+        );
+        assert_eq!(resp.body, "hello world");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn no_content_length_reads_to_eof() {
+        let (resp, _dir) = round_trip("HTTP/1.1 200 OK\r\n\r\nplain body, no length");
+        assert_eq!(resp.body, "plain body, no length");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn is_running_reflects_transport_success_not_status_code() {
+        // Documents the existing behavior: is_running() only checks that the
+        // connection succeeded and a response came back, not that /health
+        // returned 2xx.
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("mcp.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        unsafe {
+            std::env::set_var("TUIC_SOCKET", &sock_path);
+        }
+        let client = std::thread::spawn(is_running);
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        stream
+            .write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+        drop(stream);
+        assert!(client.join().unwrap());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn connect_failure_names_the_socket_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("does-not-exist.sock");
+        unsafe {
+            std::env::set_var("TUIC_SOCKET", &sock_path);
+        }
+        let err = get("/health").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&sock_path.to_string_lossy().to_string()),
+            "got: {err}"
+        );
+    }
 }

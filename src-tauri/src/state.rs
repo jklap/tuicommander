@@ -231,6 +231,17 @@ pub enum AppEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// A session's tab title changed after creation (`PUT /sessions/{id}/name`,
+    /// or its Tauri-command twin). Previously this route mutated `display_name`
+    /// with no emit at all, so a rename was invisible until the client's next
+    /// full `GET /sessions` — i.e. never, since nothing re-polls after init.
+    #[serde(rename = "session-renamed")]
+    SessionRenamed {
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+        is_custom: bool,
+    },
     #[serde(rename = "plugin-changed")]
     #[allow(dead_code)] // reserved for future plugin hot-reload notifications
     PluginChanged { plugin_ids: Vec<String> },
@@ -456,6 +467,7 @@ impl AppEvent {
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
+            | AppEvent::SessionRenamed { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
         }
@@ -2087,6 +2099,13 @@ pub struct AppState {
     pub(crate) window_geometry: crate::window_geometry::WindowGeometryTracker,
     /// Server start time for uptime calculation in health endpoint.
     pub(crate) server_start_time: std::time::Instant,
+    /// tmux-shim pane topology, keyed by tmux server label (the `-L`/`-S`
+    /// value a `tuic`-as-`tmux` invocation passes as a global option, or
+    /// `"default"` for one that passes neither). See
+    /// `crate::mcp_http::tmux_routes` for the full model — this is in-memory
+    /// only, by design: a swarm cannot outlive its lead process, so losing it
+    /// on app restart is correct, not a bug.
+    pub(crate) tmux_servers: DashMap<String, crate::mcp_http::tmux_routes::TmuxTopology>,
     /// TUIC's own AI agent: per-session knowledge, sandboxes, the watcher
     /// engine, the cron scheduler and the suggestion triggers.
     pub(crate) ai: AiAgentState,
@@ -3046,6 +3065,7 @@ impl AppState {
                 crate::window_geometry::WindowGeometry::default(),
             ),
             server_start_time: std::time::Instant::now(),
+            tmux_servers: DashMap::new(),
             tunnel_manager,
             tunnel_audit,
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
@@ -4394,6 +4414,7 @@ impl AppState {
             }
             // Global events don't affect per-session state
             AppEvent::HeadChanged { .. }
+            | AppEvent::SessionRenamed { .. }
             | AppEvent::RepoChanged { .. }
             | AppEvent::PluginChanged { .. }
             | AppEvent::UpstreamStatusChanged { .. }
