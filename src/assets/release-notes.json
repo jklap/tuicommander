@@ -204,5 +204,18 @@
       "Terminal links with trailing punctuation open correctly, and copying Claude output no longer pastes its quote gutter."
     ],
     "date": "2026-08-27"
+  },
+  "1.7.6": {
+    "highlights": [
+      "A tab parked in an unregistered repo now names the missing directory and offers a one-click Register to move it home.",
+      "Repository lists stay in sync across desktop, browser and phone, so one window's save no longer undoes another's.",
+      "Repository settings no longer stop saving because two windows computed different diff counts at the same moment.",
+      "Per-repository settings like base branch, setup script and worktree toggle now survive a restart.",
+      "A cd inside a terminal no longer moves an owned tab to another repo; only unowned parked tabs follow it.",
+      "Agent toasts show which repo they came from, and clicking one moves the sidebar, branch, pane and focus there.",
+      "An agent that quotes a menu on screen no longer marks its own tab as waiting for you.",
+      "Worktrees created by an agent now offer a Switch toast that waits in the bell instead of a blocking modal."
+    ],
+    "date": "2026-09-02"
   }
 }

@@ -6,7 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.6] - 2026-09-02
+
+### Added
+
+- **The toast about a tab parked in the wrong repo can now register that repo
+  for you.** It already named the directory nothing claimed; finding it in the
+  sidebar and adding it by hand was still your job. The toast now carries a
+  *Register* button that does it, and the parked tab moves home on its own.
+  Registration still only ever happens from your click — nothing registers a
+  repository behind your back, because doing so would move the repo you are
+  looking at.
+
 ### Fixed
+
+- **Two windows on the same repository list now agree.** The desktop app, a
+  browser tab and the phone app all talk to one backend, but a save told the
+  others nothing: each kept working from the list it last read, so a rename in
+  one window could be silently undone by the next save from another. A save that
+  changes something is now announced, and the other clients take in what changed
+  without losing whatever you were in the middle of doing. The repo *you* are
+  looking at never moves, and nothing with an open tab is taken from under you —
+  neither a whole repository nor a single branch someone deleted elsewhere, and
+  what is kept stays visible in the sidebar rather than surviving in name only.
 
 - **Repository settings could stop saving entirely, and only a log line said so.**
   A repo under active work changes its diff counts every few seconds, and every
