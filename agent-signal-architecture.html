@@ -833,6 +833,14 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
         to be the fix — look at the busy-reaffirmation path or <code>choice-cleared</code> instead.</li>
         <li><code>pty.rs</code>'s <code>ChoicePrompt</code> detection — logs every fresh (non-dedup)
         detection, only for non-hook-instrumented sessions post-fix.</li>
+        <li><code>pty.rs</code>'s <code>process_chunk</code> "state" arm (2026-09-02) — logs every
+        <code>Notification</code>-sourced <code>state=awaiting</code> fire's full classification:
+        <code>notification_type</code>, whether a message was present, <code>shell_already_idle</code>,
+        the resulting confidence, and whether it was <strong>suppressed entirely</strong>
+        (<code>suppressed=true</code>, no event at all — the only place this case leaves any trace,
+        since a suppressed fire never reaches <code>state.rs</code>'s reducer to log a state change).
+        If a report claims a false "awaiting" flash for a completed turn, this line is the fastest way
+        to confirm whether <code>notification_awaiting_outcome</code> ran at all and what it decided.</li>
       </ul>
     </div>
 
