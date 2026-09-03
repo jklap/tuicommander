@@ -228,13 +228,19 @@ pub(super) async fn get_repositories() -> impl IntoResponse {
 pub(super) async fn put_repositories(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(config): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_repositories_request(config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(changed) => {
+            if changed {
+                state.notify_repositories_changed();
+            }
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => {
             let status = match &e {
                 crate::config::RepositorySaveError::Conflict(_) => StatusCode::CONFLICT,
@@ -918,7 +924,7 @@ mod tests {
             "repoOrder": ["/repo"]
         }))
         .expect("seed repositories");
-        crate::config::save_repositories(serde_json::json!({
+        crate::config::save_repositories_request(serde_json::json!({
             "mutationVersion": 1,
             "repos": [{
                 "id":"/repo",
@@ -932,6 +938,7 @@ mod tests {
         let response = put_repositories(
             ConnectInfo(loopback()),
             None,
+            State(super::super::tests::test_state()),
             Json(serde_json::json!({
                 "mutationVersion": 1,
                 "repos": [{
@@ -948,6 +955,81 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
+    /// The whole point of the write is the announcement: a second client only learns
+    /// the document moved because this fires. Both tests subscribe before the request,
+    /// so a broadcast dropped or made unconditional fails here rather than in a
+    /// two-window session nobody can reproduce on demand.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn an_accepted_delta_announces_the_change() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = super::super::tests::test_state();
+        let mut events = state.event_bus.subscribe();
+
+        let response = put_repositories(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Json(serde_json::json!({
+                "mutationVersion": 1,
+                "repos": [{
+                    "id":"/repo",
+                    "before":null,
+                    "after":{"path":"/repo","displayName":"Added","branches":{}}
+                }],
+                "groups": []
+            })),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            matches!(
+                events.try_recv(),
+                Ok(crate::state::AppEvent::RepositoriesChanged)
+            ),
+            "an accepted delta must announce itself on the event bus"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_delta_that_changes_nothing_stays_quiet() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let record = serde_json::json!({"path":"/repo","displayName":"Added","branches":{}});
+        crate::config::replace_repositories_for_test(serde_json::json!({
+            "repos": {"/repo": record.clone()},
+            "repoOrder": ["/repo"]
+        }))
+        .expect("seed repositories");
+        let state = super::super::tests::test_state();
+        let mut events = state.event_bus.subscribe();
+
+        // Same record, already on disk: accepted, but nothing moved. Announcing it
+        // would make every client re-read for nothing.
+        let response = put_repositories(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Json(serde_json::json!({
+                "mutationVersion": 1,
+                "repos": [{"id":"/repo","before":record.clone(),"after":record}],
+                "groups": []
+            })),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            events.try_recv().is_err(),
+            "a no-op delta must not announce a change"
+        );
+    }
+
     #[tokio::test]
     #[serial_test::serial]
     async fn malformed_repository_delta_returns_http_bad_request() {
@@ -956,6 +1038,7 @@ mod tests {
         let response = put_repositories(
             ConnectInfo(loopback()),
             None,
+            State(super::super::tests::test_state()),
             Json(serde_json::json!({
                 "mutationVersion": 1,
                 "repos": [{"id":"/repo","before":null,"after":"not-an-object"}],
@@ -976,6 +1059,7 @@ mod tests {
         let response = put_repositories(
             ConnectInfo(loopback()),
             None,
+            State(super::super::tests::test_state()),
             Json(serde_json::json!({"repos": {}, "repoOrder": []})),
         )
         .await

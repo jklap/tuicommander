@@ -2727,9 +2727,15 @@ pub(crate) fn load_repositories() -> serde_json::Value {
     load_json_config_from_path(&repository_file())
 }
 
+/// Apply a repository mutation delta.
+///
+/// `Ok(true)` means the document actually moved and was written; `Ok(false)` means
+/// the delta was already applied, so disk is untouched. Callers use that to decide
+/// whether to announce `repositories-changed` — a no-op save must not wake every
+/// other client.
 pub(crate) fn save_repositories_request(
     config: serde_json::Value,
-) -> Result<(), RepositorySaveError> {
+) -> Result<bool, RepositorySaveError> {
     let batch: RepositoryMutationBatch = serde_json::from_value(config).map_err(|error| {
         RepositorySaveError::Invalid(format!("could not decode delta: {error}"))
     })?;
@@ -2738,7 +2744,7 @@ pub(crate) fn save_repositories_request(
     let result =
         file.update_with_strict(
             |value| match apply_repository_mutation_batch(value, &batch) {
-                Ok(changed) => Ok(((), changed)),
+                Ok(changed) => Ok((changed, changed)),
                 Err(error) => {
                     mutation_error = Some(error);
                     Err("repository mutation rejected".to_string())
@@ -2746,15 +2752,29 @@ pub(crate) fn save_repositories_request(
             },
         );
     match (result, mutation_error) {
-        (Ok(()), _) => Ok(()),
+        (Ok(changed), _) => Ok(changed),
         (Err(_), Some(error)) => Err(error),
         (Err(error), None) => Err(RepositorySaveError::Io(error)),
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_repositories(config: serde_json::Value) -> Result<(), String> {
-    save_repositories_request(config).map_err(|error| error.to_string())
+/// Desktop IPC twin of `PUT /config/repositories`.
+///
+/// Takes `AppState` only to announce the write: one backend serves the desktop
+/// WebView, the browser and the PWA at once, and until this event existed a
+/// successful save told the other clients nothing, so their compare-and-swap
+/// baseline stayed stale until a conflict taught them otherwise.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn save_repositories(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    config: serde_json::Value,
+) -> Result<(), String> {
+    let changed = save_repositories_request(config).map_err(|error| error.to_string())?;
+    if changed {
+        state.notify_repositories_changed();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2974,6 +2994,17 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// The save path minus the broadcast. The desktop command wraps
+    /// `save_repositories_request` only to announce `repositories-changed`, which
+    /// needs an `AppState` these tests have no reason to build; every assertion
+    /// here is about the document on disk. Shadows the command deliberately —
+    /// a local item wins over the `use super::*` glob.
+    fn save_repositories(config: serde_json::Value) -> Result<(), String> {
+        save_repositories_request(config)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
 
     /// Helper: run load/save with a temp directory to avoid touching real config.
     /// We override config_dir by writing directly to a temp path and reading back.
@@ -4185,6 +4216,54 @@ mod tests {
 
     // -- Note image tests --
     // These tests use the global config_dir override and must run serially.
+
+    /// The broadcast is driven by this flag, so a wrong `false` silently leaves
+    /// every other client on a stale baseline — the exact failure the event exists
+    /// to end.
+    #[test]
+    #[serial_test::serial]
+    fn a_delta_that_moves_the_document_reports_changed() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let changed = save_repositories_request(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{
+                "id": "/repo",
+                "before": null,
+                "after": {"path": "/repo", "displayName": "Repo", "branches": {}}
+            }],
+            "groups": []
+        }))
+        .expect("first write");
+
+        assert!(changed, "creating a repo moves the document");
+    }
+
+    /// Re-applying a delta is a no-op on disk. Announcing it anyway would make
+    /// every save wake every client, whether or not anything moved.
+    #[test]
+    #[serial_test::serial]
+    fn a_delta_already_applied_reports_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let after = serde_json::json!({"path": "/repo", "displayName": "Repo", "branches": {}});
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/repo": after.clone()},
+            "repoOrder": ["/repo"]
+        }))
+        .expect("seed repositories");
+
+        let changed = save_repositories_request(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{"id": "/repo", "before": after.clone(), "after": after}],
+            "groups": []
+        }))
+        .expect("idempotent write");
+
+        assert!(!changed, "an already-applied delta must not be announced");
+    }
 
     #[test]
     #[serial_test::serial]

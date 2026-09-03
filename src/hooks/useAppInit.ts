@@ -120,6 +120,12 @@ export interface AppInitDeps {
 	};
 	applyPlatformClass: () => string;
 	onCloseRequested: (handler: (event: { preventDefault: () => void }) => void) => void;
+	/** Register a repository by path. Same entry point as the `tuic://open-repo`
+	 *  deep link (`gitOps.addRepoByPath`), so registration has one implementation.
+	 *  Init NEVER calls this on its own — only the parked-tab toast's button does,
+	 *  from a click. addRepoByPath calls setActive(), and stealing the focused repo
+	 *  from a background event is exactly what b7e6c360 exists to stop. */
+	registerRepo: (path: string) => Promise<void>;
 }
 
 /** Collect terminal metadata from all repos/branches for persistence */
@@ -165,7 +171,12 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
  * Remote sessions may use a cwd below a repo or outside every configured repo,
  * so reconnect must use the same ancestor matching and active-branch fallback
  * as the live session-created path. */
-function assignSessionToRepoBranch(sessionId: string, terminalId: string, cwd: string | null): void {
+function assignSessionToRepoBranch(
+	sessionId: string,
+	terminalId: string,
+	cwd: string | null,
+	registerRepo: AppInitDeps["registerRepo"],
+): void {
 	const owner = resolveRepoOwner(cwd);
 
 	// Record the resolved owner on the terminal itself, BEFORE any placement. The
@@ -204,12 +215,26 @@ function assignSessionToRepoBranch(sessionId: string, terminalId: string, cwd: s
 		if (unregisteredRoot) {
 			// Repeats collapse: `hasVisible` dedups on title+message, so reconnecting
 			// twenty sessions from one unregistered repo raises one toast, not twenty.
+			//
+			// The button closes the loop the message opens: naming the directory still left
+			// the user to find it in the sidebar and add it by hand. Registration runs ONLY
+			// from this click — the user picked the moment, so the setActive() inside
+			// addRepoByPath is a repo switch they asked for, not one a background reconnect
+			// imposed (b7e6c360). addRepoByPath ends in reconcileTerminalOwnership(), which
+			// is what walks the parked tab home once the repo exists.
 			toastsStore.add(
 				"Tab parked in the wrong repo",
 				`Nothing claims "${unregisteredRoot}". Register it and the tab moves home by itself.`,
 				"warn",
 				false,
-				undefined,
+				{
+					label: "Register",
+					onClick: () => {
+						void registerRepo(unregisteredRoot).catch((err) =>
+							appLogger.error("app", `Failed to register "${unregisteredRoot}" from the parked-tab toast`, err),
+						);
+					},
+				},
 				undefined,
 				fallbackRepo,
 			);
@@ -474,7 +499,7 @@ export async function initApp(deps: AppInitDeps) {
 			});
 			remoteSessionTabs.set(session_id, id);
 
-			assignSessionToRepoBranch(session_id, id, cwd);
+			assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo);
 
 			// Dock agent-spawned tabs so swarm workers show up in the tab strip.
 			// Only for agent_type (MCP agent spawn), not for manually created
@@ -744,7 +769,7 @@ export async function initApp(deps: AppInitDeps) {
 			});
 			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
 
-			assignSessionToRepoBranch(session.session_id, id, session.cwd);
+			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo);
 		}
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
 	}

@@ -266,6 +266,7 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::McpToast { .. } => "mcp-toast",
         AppEvent::McpConfirm { .. } => "mcp-confirm",
         AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
+        AppEvent::RepositoriesChanged => "repositories-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
         AppEvent::WorktreeRemoved { .. } => "worktree-removed",
@@ -404,6 +405,8 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({ "request_id": request_id, "confirmed": confirmed })
         }
+        // Payload-free: the receiver re-reads `repositories.json` itself.
+        AppEvent::RepositoriesChanged => serde_json::json!({}),
         AppEvent::DirChanged { dir_path } => {
             serde_json::json!({ "dir_path": dir_path })
         }

@@ -27,7 +27,10 @@ import { isTauri } from "../transport";
 import { type AppInitDeps, initApp } from "./useAppInit";
 import { startAutoFetch } from "./useAutoFetch";
 
-type InitOptions = Omit<AppInitDeps, "stores" | "applyPlatformClass" | "onCloseRequested">;
+// `registerRepo` is omitted too: it is supplied below from `openRepoPath`, so the
+// caller passes one repo-registration function and both consumers (the deep link
+// and the parked-tab toast) share it.
+type InitOptions = Omit<AppInitDeps, "stores" | "applyPlatformClass" | "onCloseRequested" | "registerRepo">;
 
 export type AppBootstrapOptions = InitOptions & {
 	detectAgents: () => Promise<unknown>;
@@ -130,6 +133,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 
 	await initApp({
 		...initOptions,
+		registerRepo: openRepoPath,
 		stores: {
 			hydrate: hydrateStores,
 			startPolling: githubStore.startPolling,
