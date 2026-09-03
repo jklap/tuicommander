@@ -2,6 +2,7 @@ import { type Component, createEffect, createSignal, lazy, on, onCleanup, onMoun
 import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
+import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { agentConfigsStore } from "../../stores/agentConfigs";
@@ -583,6 +584,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						// Agent finished: keep the tab with a grey "exited" dot so the user
 						// can read the final output and re-launch. Without this a dead session
 						// keeps its last shellState forever — a ghost tab that looks idle.
+						//
+						// DEFERRED (2026-09-02) — this does not actually deliver either half of
+						// that promise. `sessionId: null` collapses the <Show> around
+						// CanvasTerminal, so the final output is erased at the moment of exit;
+						// `agentType: null` then discards what would have to be re-launched. The
+						// content area now says so (see the exited fallback below) instead of
+						// going black, which was the visible bug. Keeping the output needs
+						// CanvasTerminal mounted against a dead sid — its ~35 async IPC handlers
+						// would keep polling a session the backend reaps after TOMBSTONE_TTL_MS
+						// (5 min), so it is a real design change, not a tweak. Needs Boss.
 						terminalsStore.update(props.id, {
 							shellState: "exited",
 							sessionId: null,
@@ -1120,6 +1131,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		canvasTerminalRef()?.focus();
 	};
 
+	/** True once this tab's backend session is gone for good: an agent finished
+	 *  (pty-exit handler above) or a remote session closed. Deliberately keyed on
+	 *  shellState, not on a null sessionId — that is also the pre-init state of a
+	 *  freshly opened tab, which must not flash the notice before its PTY exists. */
+	const sessionEnded = () => terminalsStore.get(props.id)?.shellState === "exited";
+
 	const handleFileDragOver = (e: DragEvent) => {
 		if (e.dataTransfer?.types?.includes("application/x-tuic-path")) {
 			e.preventDefault();
@@ -1200,7 +1217,26 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				    SolidJS root (whole UI frozen, hover-only, backend alive). keyed makes sid a
 				    plain string captured at mount, immune to stale reads. Transitions are always
 				    null↔id so CanvasTerminal already remounts on session change — no behavior change. */}
-				<Show keyed when={_currentSessionId()}>
+				{/* fallback: an exited tab is kept on purpose (grey dot, readable name), but
+				    unmounting CanvasTerminal leaves .content an empty flex column — a black
+				    void indistinguishable from a broken terminal. Say what happened instead. */}
+				<Show
+					keyed
+					when={_currentSessionId()}
+					fallback={
+						<Show when={sessionEnded()}>
+							<div class={s.exitedNotice} data-testid="terminal-exited-notice">
+								<span class={s.exitedTitle}>{t("terminal.exited.title", "Session ended")}</span>
+								<span class={s.exitedHint}>
+									{t(
+										"terminal.exited.hint",
+										"The process exited and its output was released. Close this tab to remove it.",
+									)}
+								</span>
+							</div>
+						</Show>
+					}
+				>
 					{(sid) => (
 						<CanvasTerminal
 							sessionId={sid}
