@@ -3530,6 +3530,280 @@ fn queue_idempotency_validates_keys_and_bounds_recent_acceptance() {
     assert_eq!(list_queued_commands(&state, sid).len(), 1);
 }
 
+#[test]
+fn tuic_state_awaiting_with_no_notify_yields_confident_question() {
+    // "awaiting" is unrelated to the busy/idle transition edge (see
+    // handle_tuic_state's doc comment — there is no SHELL_AWAITING), so
+    // it must fire regardless of the busy_transitioned flag. No preceding
+    // notify/notifytype means this came from PreToolUse(AskUserQuestion|
+    // ExitPlanMode) or Elicitation, both always genuine blocks.
+    match tuic_state_awaiting_event("awaiting", 0, None, None, false) {
+        Some(ParsedEvent::Question {
+            confident,
+            prompt_text,
+        }) => {
+            assert!(confident, "hook awaiting with no notify must be confident");
+            assert_eq!(prompt_text, "", "hook awaiting carries no prompt text");
+        }
+        other => panic!("expected confident Question, got {other:?}"),
+    }
+}
+
+#[test]
+fn tuic_state_awaiting_idle_prompt_after_stop_is_suppressed_entirely() {
+    // The exact 2026-09-02 dbsql-test-review shape, straight from the real
+    // hook-debug.log capture: Stop fires, the shell goes idle, then ~60s
+    // later Notification fires with notification_type=idle_prompt. The
+    // turn already ended — nothing pending — so this must not even flash
+    // a non-confident badge, let alone a confident one.
+    assert!(
+        tuic_state_awaiting_event(
+            "awaiting",
+            0,
+            Some("Claude is waiting for your input"),
+            Some("idle_prompt"),
+            true, // shell already idle — Stop already fired
+        )
+        .is_none(),
+        "idle_prompt after the shell is already idle must be dropped outright, \
+         not just made non-confident"
+    );
+}
+
+#[test]
+fn tuic_state_awaiting_idle_prompt_mid_turn_is_non_confident_not_suppressed() {
+    // Same notification_type, but the shell is still busy (no Stop yet) —
+    // e.g. stuck on an un-hooked plan/skill picker. This is the only
+    // awaiting signal available for that gap, so it must still surface,
+    // just not confidently (the silence-timer backstop can retract it).
+    match tuic_state_awaiting_event(
+        "awaiting",
+        0,
+        Some("Claude is waiting for your input"),
+        Some("idle_prompt"),
+        false, // still mid-turn
+    ) {
+        Some(ParsedEvent::Question { confident, .. }) => {
+            assert!(
+                !confident,
+                "idle_prompt mid-turn must surface but not confidently"
+            );
+        }
+        other => panic!("expected a (non-confident) Question, got {other:?}"),
+    }
+}
+
+#[test]
+fn tuic_state_awaiting_blocking_notification_types_stay_confident() {
+    for notification_type in [
+        "permission_prompt",
+        "elicitation_dialog",
+        "elicitation_url_dialog",
+        "agent_needs_input",
+        "quota_auto_resume_stale",
+    ] {
+        match tuic_state_awaiting_event(
+            "awaiting",
+            0,
+            Some("irrelevant wording"),
+            Some(notification_type),
+            false,
+        ) {
+            Some(ParsedEvent::Question { confident, .. }) => {
+                assert!(confident, "{notification_type} must stay confident");
+            }
+            other => {
+                panic!("{notification_type}: expected a confident Question, got {other:?}")
+            }
+        }
+    }
+}
+
+#[test]
+fn tuic_state_awaiting_informational_notification_types_are_suppressed() {
+    for notification_type in [
+        "auth_success",
+        "elicitation_complete",
+        "elicitation_response",
+        "agent_completed",
+        "quota_auto_resume_fired",
+        "quota_auto_resume_disabled",
+    ] {
+        assert!(
+            tuic_state_awaiting_event(
+                "awaiting",
+                0,
+                Some("irrelevant wording"),
+                Some(notification_type),
+                false,
+            )
+            .is_none(),
+            "{notification_type} is purely informational and must never badge awaiting"
+        );
+    }
+}
+
+#[test]
+fn tuic_state_awaiting_unrecognized_notification_type_falls_back_to_wording() {
+    // A future Claude Code notification_type this binary predates — must
+    // not guess confident (could silently re-latch this exact incident
+    // under a new name) or guess informational (could silently swallow a
+    // real future block). Falls back to the same wording rule used when
+    // notification_type is absent entirely.
+    match tuic_state_awaiting_event(
+        "awaiting",
+        0,
+        Some("Claude needs your permission to run this command"),
+        Some("some_future_type_2027"),
+        false,
+    ) {
+        Some(ParsedEvent::Question { confident, .. }) => {
+            assert!(confident, "permission wording must still win the fallback");
+        }
+        other => panic!("expected a confident Question, got {other:?}"),
+    }
+    match tuic_state_awaiting_event(
+        "awaiting",
+        0,
+        Some("just some other text"),
+        Some("some_future_type_2027"),
+        false,
+    ) {
+        Some(ParsedEvent::Question { confident, .. }) => {
+            assert!(!confident, "generic wording must not win the fallback");
+        }
+        other => panic!("expected a (non-confident) Question, got {other:?}"),
+    }
+}
+
+#[test]
+fn tuic_state_awaiting_with_generic_notify_message_and_no_type_is_not_confident() {
+    // An older Claude Code build that predates notification_type entirely
+    // — falls back to `parse_osc777_notifies`'s own wording rule.
+    match tuic_state_awaiting_event(
+        "awaiting",
+        0,
+        Some("Claude is waiting for your input"),
+        None,
+        false,
+    ) {
+        Some(ParsedEvent::Question { confident, .. }) => {
+            assert!(
+                !confident,
+                "generic idle-timer wording must not latch a confident question"
+            );
+        }
+        other => panic!("expected a (non-confident) Question, got {other:?}"),
+    }
+}
+
+#[test]
+fn tuic_state_awaiting_with_permission_notify_message_and_no_type_stays_confident() {
+    // Unambiguous wording — a real permission prompt — must stay sticky
+    // until real user input, same as the OSC 777 classification this
+    // mirrors (output_parser.rs::parse_osc777_notifies).
+    match tuic_state_awaiting_event(
+        "awaiting",
+        0,
+        Some("Claude needs your permission to run this command"),
+        None,
+        false,
+    ) {
+        Some(ParsedEvent::Question { confident, .. }) => {
+            assert!(confident, "a real permission prompt must stay confident");
+        }
+        other => panic!("expected a confident Question, got {other:?}"),
+    }
+}
+
+#[test]
+fn tuic_state_awaiting_with_approval_notify_message_and_no_type_stays_confident() {
+    match tuic_state_awaiting_event(
+        "awaiting",
+        0,
+        Some("approval required before continuing"),
+        None,
+        false,
+    ) {
+        Some(ParsedEvent::Question { confident, .. }) => {
+            assert!(confident, "approval-required wording must stay confident");
+        }
+        other => panic!("expected a confident Question, got {other:?}"),
+    }
+}
+
+#[test]
+fn tuic_state_busy_without_transition_but_awaiting_yields_userinput_clear() {
+    // Regression for the 2026-09-01 stuck-badge bug: `AskUserQuestion` fires
+    // mid-turn (shell already SHELL_BUSY before and after — awaiting never
+    // touches the shell bit), so the PostToolUse(AskUserQuestion|ExitPlanMode)
+    // busy re-affirmation that exists specifically to clear it lands with no
+    // idle→busy edge. On main every `busy` clears awaiting unconditionally
+    // (no edge gate at all; the prompt row moved to the separate `prompt`
+    // verb, #1388), so this pins that the clear survives a non-edge busy.
+    match tuic_state_awaiting_event("busy", 42, None, None, false) {
+        Some(ParsedEvent::UserInput { content, line }) => {
+            assert_eq!(content, "", "busy clear must not overwrite last_prompt");
+            assert_eq!(line, -1, "busy carries no prompt row (#1388)");
+        }
+        other => panic!(
+            "a currently-awaiting session must still get its clear on a redundant \
+             busy re-affirmation, got {other:?}"
+        ),
+    }
+}
+
+/// Regression, live-reproduced 2026-09-01 on two real unattended/auto-approve
+/// Claude sessions (`commerce-journal`'s `publish` tab, `agent-tooling-
+/// analysis`'s `tool-scan` tab): a confident question — correctly confident,
+/// a genuine `AskUserQuestion` — stuck `true` through full task completion.
+///
+/// `confident_awaiting_is_never_retracted` above proves the silence-timer
+/// backstop correctly refuses to touch a confident question. This test proves
+/// the OTHER side stays reachable: `claude_hook_map()`'s `PostToolUse
+/// (AskUserQuestion|ExitPlanMode)` busy re-affirmation — kept specifically to
+/// clear a confident question afterward — must still clear it even when it
+/// fires mid-turn with no real shell idle↔busy edge (the ordinary case,
+/// since `PreToolUse(AskUserQuestion)`'s `awaiting` override never touches
+/// the shell busy/idle bit at all). Drives the real `tuic_state_awaiting_event`
+/// output through the real accumulator, end to end.
+#[tokio::test(flavor = "current_thread")]
+async fn confident_awaiting_still_clears_on_a_non_edge_busy_reaffirmation() {
+    let state = accumulating_state("s1");
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: "s1".to_string(),
+        parsed: serde_json::json!({
+            "type": "question",
+            "prompt_text": "",
+            "confident": true,
+        })
+        .into(),
+    });
+    assert!(
+        await_session(&state, "s1", |s| s.awaiting_input && s.question_confident).await,
+        "PreToolUse(AskUserQuestion)'s state=awaiting must badge the tab confidently"
+    );
+
+    // PostToolUse(AskUserQuestion|ExitPlanMode)'s busy re-affirmation, with no
+    // real shell edge — exactly the mid-turn case. `tuic_state_awaiting_event`
+    // has no edge gate on `busy`, so the clear is always emitted.
+    let clear_event = tuic_state_awaiting_event("busy", 0, None, None, false)
+        .expect("a currently-awaiting session must still get its clear");
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: "s1".to_string(),
+        parsed: serde_json::to_value(&clear_event)
+            .expect("serialisable")
+            .into(),
+    });
+    assert!(
+        await_session(&state, "s1", |s| !s.awaiting_input && !s.question_confident).await,
+        "a confident question must clear on the PostToolUse busy re-affirmation \
+         even with no real idle↔busy edge — before the fix, this event was never \
+         even emitted (tuic_state_awaiting_event returned None), which is exactly \
+         how the badge stuck through full task completion on both live sessions"
+    );
+}
+
 #[cfg(unix)]
 mod submit_confirmation {
     //! Submit-confirmation gaps found by the 1423 path audit. Each test names the

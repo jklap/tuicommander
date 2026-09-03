@@ -8053,29 +8053,13 @@ fn percent_decode_osc_payload_tolerates_invalid_hex() {
     assert_eq!(percent_decode_osc_payload("abc%ZZdef"), "abc%ZZdef");
 }
 
-#[test]
-fn tuic_state_awaiting_yields_confident_question() {
-    // "awaiting" is unrelated to the busy/idle transition edge (see
-    // handle_tuic_state's doc comment — there is no SHELL_AWAITING), so
-    // it must fire regardless of the busy_transitioned flag.
-    match tuic_state_awaiting_event("awaiting", 0) {
-        Some(ParsedEvent::Question {
-            confident,
-            prompt_text,
-        }) => {
-            assert!(confident, "hook awaiting must be a confident question");
-            assert_eq!(prompt_text, "", "hook awaiting carries no prompt text");
-        }
-        other => panic!("expected confident Question, got {other:?}"),
-    }
-}
 
 #[test]
 fn tuic_state_prompt_yields_userinput_clear_with_prompt_line() {
     // The submit hook's absolute prompt row (history_size + cursor row, here 42)
     // must reach the UserInput event so the frontend can mark the user-prompt
     // line on the scrollbar.
-    match tuic_state_awaiting_event("prompt", 42) {
+    match tuic_state_awaiting_event("prompt", 42, None, None, false) {
         Some(ParsedEvent::UserInput { content, line }) => {
             assert_eq!(content, "", "prompt clear must not overwrite last_prompt");
             assert_eq!(line, 42, "prompt UserInput must carry the prompt row");
@@ -8089,7 +8073,7 @@ fn tuic_state_busy_carries_no_prompt_row() {
     // Catches #1388: PreToolUse fires state=busy on every tool call, and each one
     // used to mark a user-prompt tick at the cursor row, painting a solid green
     // band on the scrollbar. Busy still clears awaiting but has no prompt row.
-    match tuic_state_awaiting_event("busy", 42) {
+    match tuic_state_awaiting_event("busy", 42, None, None, false) {
         Some(ParsedEvent::UserInput { content, line }) => {
             assert_eq!(content, "");
             assert_eq!(line, -1, "busy must not claim a prompt row");
@@ -8126,7 +8110,7 @@ fn tuic_state_prompt_drives_shell_busy() {
 #[test]
 fn tuic_state_idle_yields_no_awaiting_event() {
     assert!(
-        tuic_state_awaiting_event("idle", 0).is_none(),
+        tuic_state_awaiting_event("idle", 0, None, None, false).is_none(),
         "idle only transitions shell_state; it pushes no awaiting event"
     );
 }
@@ -8134,7 +8118,7 @@ fn tuic_state_idle_yields_no_awaiting_event() {
 #[test]
 fn tuic_state_unknown_yields_no_awaiting_event() {
     assert!(
-        tuic_state_awaiting_event("thinking", 0).is_none(),
+        tuic_state_awaiting_event("thinking", 0, None, None, false).is_none(),
         "unknown verb must push no awaiting event"
     );
 }
@@ -10921,6 +10905,498 @@ fn claude_hook_osc7770_turn_reaches_busy_then_idle() {
     );
 }
 
+/// Regression for a real hook-instrumented `claude` session that called
+/// `AskUserQuestion` twice, answering each in turn. Live, the session's
+/// `awaiting_input` badge lit for the first question and never lit for the
+/// second — the tab read "working" while genuinely blocked on the user.
+///
+/// Root cause: `tuic_state_awaiting_event`'s hook-based `state=awaiting`
+/// mapping always emits `ParsedEvent::Question { prompt_text: String::new(), .. }`
+/// — there is no real question text to offer for a bare protocol marker.
+/// The question-dedup guard a few chunks down keyed off that same
+/// `prompt_text` with no regard for where the event came from, so the
+/// first `state=awaiting` (empty prompt_text) recorded `last_question_text
+/// = Some("")`, and the screen-absence reset that is supposed to retire it
+/// (`!screen.iter().any(|row| row.contains(last))`) can never fire for an
+/// empty needle — `"".contains("")` and `anything.contains("")` are both
+/// trivially true, so `last_question_text` stayed `Some("")` for the rest
+/// of the session. Every later hook-based awaiting signal (this fixture's
+/// second `AskUserQuestion`, and any subsequent one) matched that stale
+/// empty placeholder and was silently swallowed, one chunk before ever
+/// reaching `SessionState`.
+///
+/// This replays only the OUTPUT half of the capture through the real
+/// `ChunkProcessor::process_chunk` (the exact production hot path,
+/// `last_question_text` and all) and counts "question" events published on
+/// the event bus — a direct measurement of what the dedup let through,
+/// independent of whether applying it to `SessionState` was itself a
+/// no-op. The raw byte stream carries `state=awaiting` FOUR times (two
+/// redundant hook-matcher registrations firing per `AskUserQuestion`, an
+/// orthogonal quirk this test does not need to fix): before the dedup fix,
+/// only the first ever survived (count == 1); after it, all four do.
+#[test]
+fn claude_double_askuserquestion_both_survive_dedup() {
+    use crate::pty_capture::CaptureDirection;
+    use crate::state::VtLogBuffer;
+    use std::sync::atomic::AtomicU64;
+
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "test-double-askuserquestion";
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.to_string(), silence.clone());
+    state.session_maps.shell_states.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_NULL),
+    );
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(40, 120, 2000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(65536)));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.to_string(), AtomicU64::new(0));
+    state.session_maps.session_states.insert(
+        sid.to_string(),
+        crate::state::SessionState {
+            hook_instrumented: true,
+            agent_type: Some("claude".to_string()),
+            ..Default::default()
+        },
+    );
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut rx = state.event_bus.subscribe();
+    let mut question_count = 0;
+    let mut footer_question_count = 0;
+
+    let bytes = agent_prompt_fixture("claude_double_askuserquestion_second_missed.tcap");
+    for record in crate::pty_capture::decode(&bytes).expect("valid capture") {
+        if record.direction != CaptureDirection::Output {
+            continue;
+        }
+        let data = String::from_utf8_lossy(&record.data).into_owned();
+        let _ = cp.process_chunk(&data, &silence, sid, &state);
+        while let Ok(evt) = rx.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
+                && parsed.get("type").and_then(|t| t.as_str()) == Some("question")
+            {
+                // Main also re-arms awaiting from the rendered `Enter to select`
+                // footer for hook-instrumented sessions (full-screen presence
+                // recovery), which emits its own non-empty-prompt `question`
+                // per dialog. Count only the hook-sourced (empty prompt_text)
+                // markers this test is about, and the footer ones separately.
+                if parsed.get("prompt_text").and_then(|t| t.as_str()) == Some("") {
+                    question_count += 1;
+                } else {
+                    footer_question_count += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        footer_question_count, 2,
+        "main's footer recovery should see each of the two AskUserQuestion dialogs once"
+    );
+
+    assert_eq!(
+        question_count, 4,
+        "all four raw `state=awaiting` markers (two per AskUserQuestion, from \
+         two hook-matcher registrations) must survive the question dedup — \
+         a count stuck at 1 is exactly how the second AskUserQuestion's \
+         awaiting signal got silently swallowed"
+    );
+}
+
+/// Regression for the 2026-09-01 stuck-badge bug, live-reproduced on two real
+/// unattended/auto-approve Claude sessions (`commerce-journal`'s `publish` tab,
+/// `agent-tooling-analysis`'s `tool-scan` tab): a mid-turn `AskUserQuestion`
+/// left `awaiting_input` stuck `true` through full task completion.
+///
+/// Root cause: `PreToolUse(AskUserQuestion)`'s `--state awaiting` override never
+/// touches the shell busy/idle bit (`handle_tuic_state`'s doc comment — there is
+/// no SHELL_AWAITING), so the shell was already `SHELL_BUSY` — the ordinary case,
+/// mid-turn — both before and after. `claude_hook_map()`'s `PostToolUse
+/// (AskUserQuestion|ExitPlanMode)` busy re-affirmation exists specifically to
+/// clear the badge afterward, but landed on that same already-busy state:
+/// `transition_explicit_shell_state` saw no edge, `busy_transitioned` was
+/// `false`, and `tuic_state_awaiting_event`'s old signature dropped the clear
+/// silently. Nothing else was allowed to touch a confident question besides
+/// real user input, which never arrived (the agent answered its own question in
+/// auto-mode) — the badge was permanently stuck.
+///
+/// This constructs the session already `awaiting_input: true, question_confident:
+/// true` (the state a real `PreToolUse(AskUserQuestion)` `state=awaiting` fire
+/// leaves it in, proven independently by the sibling
+/// `claude_double_askuserquestion_both_survive_dedup` test above) and shell
+/// already `SHELL_BUSY` (the ordinary mid-turn case), then feeds exactly the
+/// `PostToolUse` busy re-affirmation through the real `process_chunk` hot path.
+#[test]
+fn claude_askuserquestion_midturn_busy_reaffirmation_clears_stuck_awaiting() {
+    use crate::state::VtLogBuffer;
+    use std::sync::atomic::AtomicU64;
+
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "test-midturn-askuserquestion-busy-reaffirmation";
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.to_string(), silence.clone());
+    // Already busy, mid-turn — the ordinary case. `awaiting` never flips this.
+    state.session_maps.shell_states.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+    );
+    state
+        .session_maps
+        .shell_state_since_ms
+        .insert(sid.to_string(), std::sync::atomic::AtomicU64::new(0));
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(40, 120, 2000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(65536)));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.to_string(), AtomicU64::new(0));
+    state.session_maps.session_states.insert(
+        sid.to_string(),
+        crate::state::SessionState {
+            hook_instrumented: true,
+            agent_type: Some("claude".to_string()),
+            awaiting_input: true,
+            question_confident: true,
+            ..Default::default()
+        },
+    );
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut rx = state.event_bus.subscribe();
+
+    // The PostToolUse(AskUserQuestion|ExitPlanMode) busy re-affirmation: a
+    // same-state (SHELL_BUSY → SHELL_BUSY) re-affirmation, busy_transitioned
+    // == false.
+    let _ = cp.process_chunk("\x1b]7770;state=busy\x07", &silence, sid, &state);
+
+    let mut saw_clear = false;
+    while let Ok(evt) = rx.try_recv() {
+        if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
+            && parsed.get("type").and_then(|t| t.as_str()) == Some("user-input")
+        {
+            saw_clear = true;
+        }
+    }
+    assert!(
+        saw_clear,
+        "a redundant busy re-affirmation while awaiting_input is set must still \
+         emit the UserInput clear — before the 2026-09-01 fix, busy_transitioned \
+         being false silently dropped it and the badge stuck forever, surviving \
+         even full task completion"
+    );
+}
+
+/// Shared scaffolding for the `notification_hook_*_through_process_chunk`
+/// wire-level tests below: a fresh session past startup grace, ready for
+/// `process_chunk` to run real OSC 7770 bytes through.
+fn notification_hook_test_session(
+    sid: &str,
+    shell_state: u8,
+) -> (Arc<crate::state::AppState>, Arc<Mutex<SilenceState>>) {
+    use crate::state::VtLogBuffer;
+    use std::sync::atomic::AtomicU64;
+
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    // Past startup grace — these tests are about steady-state Notification
+    // behavior, not "historical output replayed by --continue," which is
+    // what the grace period guards against by suppressing non-confident
+    // questions outright.
+    silence.lock().startup_settled = true;
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.to_string(), silence.clone());
+    state.session_maps.shell_states.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU8::new(shell_state),
+    );
+    state
+        .session_maps
+        .shell_state_since_ms
+        .insert(sid.to_string(), AtomicU64::new(0));
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(40, 120, 2000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(65536)));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.to_string(), AtomicU64::new(0));
+    state.session_maps.session_states.insert(
+        sid.to_string(),
+        crate::state::SessionState {
+            hook_instrumented: true,
+            agent_type: Some("claude".to_string()),
+            ..Default::default()
+        },
+    );
+    (state, silence)
+}
+
+/// The last "question" event seen on the bus, if any, plus whether one
+/// was seen at all — distinguishing "no question event fired" from "one
+/// fired with some confident value," which a bare `Option<bool>` can't.
+fn drain_question_confidence(
+    rx: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
+) -> Option<bool> {
+    let mut confident = None;
+    let mut saw_question = false;
+    while let Ok(evt) = rx.try_recv() {
+        if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
+            && parsed.get("type").and_then(|t| t.as_str()) == Some("question")
+        {
+            saw_question = true;
+            confident = parsed.get("confident").and_then(|c| c.as_bool());
+        }
+    }
+    saw_question.then_some(confident).flatten()
+}
+
+/// Wire-level regression for the 2026-09-02 `dbsql-test-review` incident
+/// (`agent-signal-architecture.html`'s "OSC 777 vs OSC 7770" section): the
+/// exact real shape from that session's `hook-debug.log` capture — a
+/// `Stop` already put the shell idle, then ~60s later `Notification`
+/// fires with `notification_type=idle_prompt`. `tuic-hook` derives
+/// `notify=<message>`, `notifytype=<type>`, then `state=awaiting` in one
+/// `write_all` for every `Notification` fire; this drives those exact
+/// three wire sequences through the real `process_chunk` hot path (not
+/// the bare `tuic_state_awaiting_event` unit above) to prove the
+/// `notify`/`notifytype` → `state` pairing built into `ChunkProcessor`
+/// actually threads both fields through, and that the shell-already-idle
+/// case is dropped outright — no badge flash at all, confident or not.
+#[test]
+fn notification_hook_idle_prompt_after_stop_is_suppressed_through_process_chunk() {
+    let sid = "test-notification-idle-prompt-after-stop";
+    let (state, silence) = notification_hook_test_session(sid, SHELL_IDLE);
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut rx = state.event_bus.subscribe();
+
+    let _ = cp.process_chunk(
+        "\x1b]7770;notify=Claude%20is%20waiting%20for%20your%20input\x1b\\\
+         \x1b]7770;notifytype=idle_prompt\x1b\\\
+         \x1b]7770;state=awaiting\x1b\\",
+        &silence,
+        sid,
+        &state,
+    );
+
+    assert_eq!(
+        drain_question_confidence(&mut rx),
+        None,
+        "idle_prompt after the shell is already idle (a real Stop already fired) \
+         must not badge awaiting at all — a genuinely idle session must not flash \
+         'awaiting' through full task completion, not even briefly"
+    );
+}
+
+/// Sibling of the test above: the same `notification_type=idle_prompt`
+/// firing while the shell is still busy (no `Stop` yet — e.g. stuck on an
+/// un-hooked plan/skill picker) must still surface, just non-confidently,
+/// since it's the only awaiting signal available for that gap.
+#[test]
+fn notification_hook_idle_prompt_mid_turn_is_non_confident_through_process_chunk() {
+    let sid = "test-notification-idle-prompt-mid-turn";
+    let (state, silence) = notification_hook_test_session(sid, SHELL_BUSY);
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut rx = state.event_bus.subscribe();
+
+    let _ = cp.process_chunk(
+        "\x1b]7770;notify=Claude%20is%20waiting%20for%20your%20input\x1b\\\
+         \x1b]7770;notifytype=idle_prompt\x1b\\\
+         \x1b]7770;state=awaiting\x1b\\",
+        &silence,
+        sid,
+        &state,
+    );
+
+    assert_eq!(
+        drain_question_confidence(&mut rx),
+        Some(false),
+        "idle_prompt mid-turn (no Stop yet) must still surface, non-confidently"
+    );
+}
+
+/// A genuine blocking `notification_type` (`permission_prompt`) must stay
+/// a confident question, classified deterministically off the type field
+/// rather than by sniffing `message` wording.
+#[test]
+fn notification_hook_permission_prompt_stays_confident_through_process_chunk() {
+    let sid = "test-notification-permission-prompt";
+    let (state, silence) = notification_hook_test_session(sid, SHELL_BUSY);
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut rx = state.event_bus.subscribe();
+
+    let _ = cp.process_chunk(
+        "\x1b]7770;notify=Claude%20needs%20your%20permission%20to%20run%20this%20command\x1b\\\
+         \x1b]7770;notifytype=permission_prompt\x1b\\\
+         \x1b]7770;state=awaiting\x1b\\",
+        &silence,
+        sid,
+        &state,
+    );
+
+    assert_eq!(
+        drain_question_confidence(&mut rx),
+        Some(true),
+        "a real permission prompt must stay a confident question"
+    );
+}
+
+/// A purely informational `notification_type` (`agent_completed` — a
+/// background session finishing, not the agent asking anything) must
+/// never badge awaiting at all, regardless of shell state.
+#[test]
+fn notification_hook_informational_type_never_badges_through_process_chunk() {
+    let sid = "test-notification-informational-type";
+    let (state, silence) = notification_hook_test_session(sid, SHELL_IDLE);
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut rx = state.event_bus.subscribe();
+
+    let _ = cp.process_chunk(
+        "\x1b]7770;notify=Background%20task%20finished\x1b\\\
+         \x1b]7770;notifytype=agent_completed\x1b\\\
+         \x1b]7770;state=awaiting\x1b\\",
+        &silence,
+        sid,
+        &state,
+    );
+
+    assert_eq!(
+        drain_question_confidence(&mut rx),
+        None,
+        "a purely informational notification_type must never badge awaiting"
+    );
+}
+
+/// Stronger than the test above: an informational `notification_type`
+/// must push NO `PtyParsed` event at all besides its own metadata scrape
+/// — not a `Question`, not a `UserInput` clear, nothing that could
+/// disturb an already-confident awaiting session sitting mid-block (e.g.
+/// a real `AskUserQuestion` block, with a background session finishing
+/// concurrently).
+#[test]
+fn notification_hook_informational_type_emits_no_awaiting_related_event_at_all() {
+    let sid = "test-notification-informational-no-side-effect";
+    let (state, silence) = notification_hook_test_session(sid, SHELL_BUSY);
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut rx = state.event_bus.subscribe();
+
+    let _ = cp.process_chunk(
+        "\x1b]7770;notify=Background%20task%20finished\x1b\\\
+         \x1b]7770;notifytype=agent_completed\x1b\\\
+         \x1b]7770;state=awaiting\x1b\\",
+        &silence,
+        sid,
+        &state,
+    );
+
+    let mut other_types = Vec::new();
+    while let Ok(evt) = rx.try_recv() {
+        if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt {
+            let ty = parsed
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            if ty != "agent-metadata" {
+                other_types.push(ty);
+            }
+        }
+    }
+    assert!(
+        other_types.is_empty(),
+        "an informational notification_type must emit nothing besides its own \
+         metadata scrape — got: {other_types:?}"
+    );
+}
+
+/// All confidences seen, in order — unlike `drain_question_confidence`
+/// (which only keeps the last), this proves a batch of several
+/// `Notification` fires in one chunk each got its OWN correctly paired
+/// `notify`/`notifytype`, not a stale value left over from an earlier
+/// fire in the same chunk.
+fn drain_all_question_confidences(
+    rx: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
+) -> Vec<Option<bool>> {
+    let mut out = Vec::new();
+    while let Ok(evt) = rx.try_recv() {
+        if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
+            && parsed.get("type").and_then(|t| t.as_str()) == Some("question")
+        {
+            out.push(parsed.get("confident").and_then(|c| c.as_bool()));
+        }
+    }
+    out
+}
+
+/// Two `Notification` fires batched into a single chunk (plausible if
+/// Claude Code's own hook invocations land close enough together to
+/// coalesce into one PTY read) must each classify off their OWN
+/// `notify`/`notifytype` pair, not leak state across fires. Regression
+/// guard for `pending_notify_message`/`pending_notification_type` being
+/// simple `Option<String>` locals reused across the whole chunk's loop —
+/// a `.take()` that ran at the wrong point, or an ordering assumption
+/// that broke, would show up here as the second fire inheriting the
+/// first's classification.
+#[test]
+fn two_notification_fires_in_one_chunk_classify_independently() {
+    let sid = "test-notification-two-fires-one-chunk";
+    let (state, silence) = notification_hook_test_session(sid, SHELL_BUSY);
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut rx = state.event_bus.subscribe();
+
+    let _ = cp.process_chunk(
+        "\x1b]7770;notify=Claude%20needs%20your%20permission%20to%20run%20this%20command\x1b\\\
+         \x1b]7770;notifytype=permission_prompt\x1b\\\
+         \x1b]7770;state=awaiting\x1b\\\
+         \x1b]7770;notify=Claude%20is%20waiting%20for%20your%20input\x1b\\\
+         \x1b]7770;notifytype=idle_prompt\x1b\\\
+         \x1b]7770;state=awaiting\x1b\\",
+        &silence,
+        sid,
+        &state,
+    );
+
+    assert_eq!(
+        drain_all_question_confidences(&mut rx),
+        vec![Some(true), Some(false)],
+        "each Notification fire in the batch must classify off its own paired \
+         notify/notifytype, not a stale value from the previous fire in the same chunk"
+    );
+}
+
 /// Replay a whole directory of real `.tcap` captures through the production
 /// composition and report what the detection pipeline made of them.
 ///
@@ -11775,10 +12251,7 @@ fn retraction_skips_a_session_with_a_live_choice_prompt() {
         dismiss_key: None,
         amend_key: None,
     });
-    state
-        .session_maps
-        .session_states
-        .insert("s1".to_string(), session);
+    state.session_maps.session_states.insert("s1".to_string(), session);
 
     let mut rx = state.event_bus.subscribe();
     emit_question_cleared_if_stale(&state, "s1");
