@@ -1,0 +1,882 @@
+<title>TUICommander Agent Signal Architecture</title>
+<meta name="description" content="The big-picture map of every way TUICommander learns an agent's state — Claude Code's native hooks (OSC 7770), the OSC 777 desktop-notification format, and screen-scraping — and how they converge into one SessionState and one set of scrollbar ticks.">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@500;600;700&family=Literata:ital,opsz,wght@0,14..72,400;0,14..72,500;0,14..72,600;1,14..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --bg:#e8e5dc;
+  --surface:#dcd8cb;
+  --surface-2:#f1eee5;
+  --ink:#20241f;
+  --ink-muted:#5b594c;
+  --rule:#b9b3a0;
+  --accent-event:#a35a0a;
+  --accent-verb:#286966;
+  --accent-feature:#6b4a8a;
+  --accent-warn:#8a3b2e;
+  --shadow: 0 1px 0 rgba(32,36,31,0.06);
+  --font-display:'Big Shoulders', 'Arial Narrow', sans-serif;
+  --font-body:'Literata', Georgia, 'Times New Roman', serif;
+  --font-mono:'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15181a; --surface:#1d2023; --surface-2:#101214;
+    --ink:#e8e4d6; --ink-muted:#9c9887; --rule:#33362f;
+    --accent-event:#e2953f; --accent-verb:#59a6a0; --accent-feature:#b28fd1; --accent-warn:#c15b47;
+    --shadow: 0 1px 0 rgba(0,0,0,0.4);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15181a; --surface:#1d2023; --surface-2:#101214;
+  --ink:#e8e4d6; --ink-muted:#9c9887; --rule:#33362f;
+  --accent-event:#e2953f; --accent-verb:#59a6a0; --accent-feature:#b28fd1; --accent-warn:#c15b47;
+  --shadow: 0 1px 0 rgba(0,0,0,0.4);
+}
+
+*{ box-sizing:border-box; }
+html{ -webkit-text-size-adjust:100%; }
+body{ margin:0; background:var(--bg); color:var(--ink); font-family:var(--font-body); font-size:16px; line-height:1.65; -webkit-font-smoothing:antialiased; }
+::selection{ background:var(--accent-event); color:var(--surface-2); }
+a{ color:var(--accent-verb); text-decoration-thickness:1px; }
+a:focus-visible, button:focus-visible, summary:focus-visible{ outline:2px solid var(--accent-event); outline-offset:2px; border-radius:2px; }
+code, .mono{ font-family:var(--font-mono); }
+.wrap{ max-width:980px; margin:0 auto; padding:0 24px 96px; }
+
+.nameplate{ border-bottom:1px solid var(--rule); padding:56px 0 28px; }
+.nameplate .eyebrow{ font-family:var(--font-mono); font-size:12.5px; letter-spacing:0.14em; text-transform:uppercase; color:var(--accent-event); display:flex; align-items:center; gap:10px; }
+.nameplate .eyebrow::before{ content:""; width:7px; height:7px; background:var(--accent-event); display:inline-block; }
+.nameplate h1{ font-family:var(--font-display); font-weight:700; font-size:clamp(2.2rem, 4.6vw, 3.4rem); letter-spacing:0.01em; text-transform:uppercase; line-height:0.98; margin:10px 0 14px; text-wrap:balance; }
+.nameplate p{ max-width:70ch; color:var(--ink-muted); font-size:1.05rem; margin:0; }
+.nameplate .src{ margin-top:18px; font-family:var(--font-mono); font-size:12.5px; color:var(--ink-muted); }
+.nameplate .src code{ color:var(--ink); }
+
+.quicknav{ position:sticky; top:0; z-index:5; background:var(--bg); border-bottom:1px solid var(--rule); margin:0 -24px 40px; padding:0 24px; }
+.quicknav ul{ display:flex; flex-wrap:wrap; gap:2px 18px; list-style:none; margin:0; padding:12px 0; font-family:var(--font-mono); font-size:12.5px; }
+.quicknav a{ color:var(--ink-muted); text-decoration:none; text-transform:uppercase; letter-spacing:0.06em; }
+.quicknav a:hover{ color:var(--accent-event); }
+
+.pipeline{ margin:8px 0 56px; }
+.pipeline-scroll{ overflow-x:auto; padding-bottom:6px; }
+.pipeline svg{ display:block; min-width:920px; }
+.pipeline text{ font-family:var(--font-mono); }
+.pipeline .stage-label{ font-size:10px; letter-spacing:0.05em; text-transform:uppercase; fill:var(--ink-muted); }
+.pipeline .stage-title{ font-size:12px; font-weight:600; fill:var(--ink); }
+.pipeline .arrow{ stroke:var(--rule); stroke-width:1.5; fill:none; }
+.pipeline .arrowhead{ fill:var(--rule); }
+.pipeline .box{ fill:var(--surface); stroke:var(--rule); stroke-width:1; }
+.pipeline .box.event{ stroke:var(--accent-event); }
+.pipeline .box.verb{ stroke:var(--accent-verb); }
+.pipeline .box.feature{ stroke:var(--accent-feature); }
+.pipeline .box.warn{ stroke:var(--accent-warn); }
+
+.module{ margin-bottom:56px; }
+.module-head{ display:flex; align-items:baseline; gap:14px; border-bottom:2px solid var(--ink); padding-bottom:8px; margin-bottom:6px; }
+.module-head h2{ font-family:var(--font-display); font-weight:700; font-size:1.6rem; text-transform:uppercase; letter-spacing:0.01em; margin:0; }
+.module-head .count{ font-family:var(--font-mono); color:var(--ink-muted); font-size:13px; }
+.module > .dek{ color:var(--ink-muted); max-width:72ch; margin:10px 0 28px; }
+
+.pill{ display:inline-block; font-family:var(--font-mono); font-size:10.5px; letter-spacing:0.05em; text-transform:uppercase; padding:2px 7px; border-radius:3px; border:1px solid currentColor; line-height:1.6; }
+.pill.event{ color:var(--accent-event); }
+.pill.verb{ color:var(--accent-verb); }
+.pill.feature{ color:var(--accent-feature); }
+.pill.warn{ color:var(--accent-warn); }
+
+.origin-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px; margin:8px 0 8px; }
+.origin{ border:1px solid var(--rule); background:var(--surface); padding:20px 22px; box-shadow:var(--shadow); }
+.origin h3{ font-family:var(--font-display); font-weight:700; font-size:1.15rem; text-transform:uppercase; letter-spacing:0.01em; margin:0 0 10px; }
+.origin p{ margin:0 0 10px; font-size:0.94rem; color:var(--ink); }
+.origin p:last-child{ margin-bottom:0; }
+.origin .own{ font-family:var(--font-mono); font-size:11px; color:var(--ink-muted); text-transform:uppercase; letter-spacing:0.05em; }
+
+.evt{ border:1px solid var(--rule); background:var(--surface); padding:20px 22px; margin-bottom:14px; box-shadow:var(--shadow); }
+.evt-top{ display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:10px; flex-wrap:wrap; }
+.evt-top .name{ font-family:var(--font-mono); font-weight:600; font-size:1.05rem; }
+.evt p.note{ color:var(--ink-muted); font-size:0.92rem; margin:14px 0 0; max-width:74ch; }
+
+.tablewrap{ overflow-x:auto; margin:8px 0 12px; }
+table{ border-collapse:collapse; width:100%; font-size:13.5px; }
+th, td{ border:1px solid var(--rule); padding:9px 12px; text-align:left; vertical-align:top; }
+th{ background:var(--surface-2); font-family:var(--font-mono); font-size:10.5px; letter-spacing:0.05em; text-transform:uppercase; color:var(--ink-muted); font-weight:500; }
+td code{ font-size:12.5px; }
+tr:nth-child(even) td{ background:var(--surface-2); }
+
+.reason{ border-left:3px solid var(--accent-warn); background:var(--surface); padding:16px 20px; margin-bottom:14px; }
+.reason h4{ margin:0 0 8px; font-family:var(--font-display); font-weight:600; font-size:1.05rem; text-transform:uppercase; letter-spacing:0.01em; }
+.reason p{ margin:0; color:var(--ink); }
+.reason p + p{ margin-top:8px; }
+
+.code{ background:var(--surface-2); border:1px solid var(--rule); font-family:var(--font-mono); font-size:13px; padding:10px 12px; overflow-x:auto; white-space:pre; color:var(--ink); }
+.code .esc{ color:var(--accent-event); font-weight:600; }
+
+.dead{ border:1px dashed var(--accent-warn); padding:14px 18px; margin:14px 0; color:var(--ink-muted); }
+.dead strong{ color:var(--accent-warn); font-family:var(--font-mono); text-transform:uppercase; font-size:11px; letter-spacing:0.06em; }
+
+footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; color:var(--ink-muted); font-size:13px; }
+</style>
+
+<div class="wrap">
+
+  <div class="nameplate">
+    <div class="eyebrow">Reference — start here</div>
+    <h1>Agent Signal Architecture</h1>
+    <p>Every way TUICommander learns whether an agent is busy, idle, or blocked waiting on you —
+    and how three completely different origins (a hook protocol we invented, a notification format
+    we don't control, and reading the rendered screen) all converge into one <code>SessionState</code>
+    and one pair of scrollbar ticks. Read this first; <code>hook-lifecycle.html</code> and
+    <code>tuic-escape-sequences.html</code> go deep on one piece each.</p>
+    <div class="src">Companion to <code>hook-lifecycle.html</code> (the hook→OSC 7770 pipeline in
+    detail) and <code>tuic-escape-sequences.html</code> (every wire sequence TUIC parses, either
+    direction). Source: <code>src-tauri/src/pty.rs</code>, <code>state.rs</code>,
+    <code>output_parser.rs</code>, <code>agent_hook.rs</code>, <code>terminal_grid.rs</code>,
+    <code>src/components/Terminal/Terminal.tsx</code>, <code>canvasTerminalMarks.ts</code>.</div>
+  </div>
+
+  <div class="quicknav">
+    <ul>
+      <li><a href="#origins">Three Origins</a></li>
+      <li><a href="#pipeline">The Whole Pipeline</a></li>
+      <li><a href="#osc-confusion">OSC 777 vs 7770</a></li>
+      <li><a href="#agents">Per-Agent Matrix</a></li>
+      <li><a href="#blocks">Command Blocks &amp; Ticks</a></li>
+      <li><a href="#why">Why It's Shaped This Way</a></li>
+      <li><a href="#incidents">Incident Log</a></li>
+      <li><a href="#playbook">Investigation Playbook</a></li>
+    </ul>
+  </div>
+
+  <section class="module" id="origins">
+    <div class="module-head"><h2>Three Origins, Same Destination</h2><span class="count">hooks · notify · screen</span></div>
+    <p class="dek">Nothing downstream cares which of these three fired — a <code>ParsedEvent</code> looks
+    the same regardless of origin. But the three could not be more different in who controls them,
+    which is exactly what makes the boundary between them easy to misdescribe (this doc's own first
+    draft got it wrong once — see <a href="#osc-confusion">OSC 777 vs 7770</a>).</p>
+
+    <div class="origin-grid">
+      <div class="origin">
+        <h3>Hook protocol <span class="pill verb">OSC 7770</span></h3>
+        <div class="own">TUIC-invented · TUIC-controlled</div>
+        <p>We install a hook command into the agent's own settings file. When Claude Code (or Gemini/
+        Grok/Codex) fires a hook event, that command runs <code>tuic-hook</code>, which writes
+        <code>ESC]7770;verb=payload</code> straight to its own controlling tty. Every verb, every
+        payload shape, and every event→verb mapping is ours to define — see
+        <code>hook-lifecycle.html</code> in full.</p>
+        <p>Off entirely if the user hasn't enabled "Native Hook Instrumentation," or if the hook
+        binary/settings entry has drifted — TUIC can tell the difference (<code>hook_state_seen</code>,
+        <code>InstallState</code>) and falls back accordingly.</p>
+      </div>
+      <div class="origin">
+        <h3>Native notification <span class="pill event">OSC 777</span></h3>
+        <div class="own">Agent-owned (believed) · not TUIC-controlled</div>
+        <p><code>ESC]777;notify;TITLE;BODY</code> — a pre-existing terminal convention (rxvt-unicode's
+        desktop-notification extension) that <code>output_parser.rs::parse_osc777_notifies()</code> was
+        written to catch as a fallback signal for whatever hooks can't reach (plan/skill pickers).</p>
+        <p><strong>Empirically retested 2026-08-29</strong> and found to <em>not</em> appear even in a
+        scenario built specifically to trigger it. See <a href="#osc-confusion">OSC 777 vs 7770</a> —
+        this box may be documenting a mechanism that no longer fires for hook-instrumented Claude.</p>
+      </div>
+      <div class="origin">
+        <h3>Screen-scrape <span class="pill feature">rendered rows</span></h3>
+        <div class="own">Universal fallback · fragile by nature</div>
+        <p>Read the terminal grid TUIC already renders and look for agent-specific patterns: an Ink
+        footer, a cliclack <code>◆</code> prompt, a spinner row, a composer glyph, a title string. The
+        only mechanism available to an agent with no hook support at all (Aider, Amp, Cursor, Droid,
+        pi) or as the fallback half of a hook-instrumented one (plan/skill pickers, which fire no hook
+        state at all — see <code>hook-lifecycle.html</code>).</p>
+        <p>Explicitly suppressed for hook-instrumented sessions where the hook already covers the same
+        ground (<code>suppress_heuristic_question</code>), so the two don't double-fire.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="pipeline module" id="pipeline">
+    <div class="module-head"><h2>The Whole Pipeline</h2><span class="count">origin → event → state → consumer</span></div>
+    <p class="dek">Four consumers read off the same <code>SessionState</code>, and two more read a
+    parallel <code>CommandBlock</code> stream that's fed by a structurally different subset of the same
+    three origins (see <a href="#blocks">Command Blocks</a>).</p>
+    <div class="pipeline-scroll">
+      <svg viewBox="0 0 1180 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Three signal origins — hook OSC 7770, native OSC 777, screen scrape — feed ParsedEvent, which the state.rs reducer applies to SessionState fields awaiting_input, shell_state and question_confident, which four consumers read: the tab badge, the orchestrator parked_wait, a push notification, and AI watchers.">
+        <g>
+          <rect class="box event" x="10" y="20" width="190" height="52" rx="2"/>
+          <text class="stage-title" x="24" y="42">Hook: OSC 7770 verb=payload</text>
+          <text class="stage-label" x="24" y="60">tuic-hook, our protocol</text>
+        </g>
+        <g>
+          <rect class="box event" x="10" y="86" width="190" height="52" rx="2"/>
+          <text class="stage-title" x="24" y="108">Notify: OSC 777 (unconfirmed)</text>
+          <text class="stage-label" x="24" y="126">agent's own tty write</text>
+        </g>
+        <g>
+          <rect class="box event" x="10" y="152" width="190" height="52" rx="2"/>
+          <text class="stage-title" x="24" y="174">Screen scrape</text>
+          <text class="stage-label" x="24" y="192">Ink footer, cliclack, title, spinner</text>
+        </g>
+        <path class="arrow" d="M200 46 H 240 V 96 H 270" marker-end="url(#arrow)"/>
+        <path class="arrow" d="M200 112 H 270" marker-end="url(#arrow)"/>
+        <path class="arrow" d="M200 178 H 240 V 128 H 270" marker-end="url(#arrow)"/>
+
+        <g>
+          <rect class="box verb" x="274" y="70" width="170" height="72" rx="2"/>
+          <text class="stage-label" x="288" y="90">pty.rs</text>
+          <text class="stage-title" x="288" y="110">ParsedEvent</text>
+          <text class="stage-title" x="288" y="128" fill="var(--ink-muted)" font-size="11">Question · UserInput · …</text>
+        </g>
+        <path class="arrow" d="M444 106 H 482" marker-end="url(#arrow)"/>
+
+        <g>
+          <rect class="box verb" x="486" y="60" width="190" height="92" rx="2"/>
+          <text class="stage-label" x="500" y="80">state.rs reducer</text>
+          <text class="stage-title" x="500" y="100">SessionState</text>
+          <text class="stage-title" x="500" y="118" fill="var(--ink-muted)" font-size="11">awaiting_input</text>
+          <text class="stage-title" x="500" y="134" fill="var(--ink-muted)" font-size="11">question_confident / text</text>
+        </g>
+        <path class="arrow" d="M676 106 H 714" marker-end="url(#arrow)"/>
+
+        <g>
+          <rect class="box feature" x="718" y="16" width="160" height="46" rx="2"/>
+          <text class="stage-title" x="730" y="38" font-size="11">Tab badge</text>
+          <text class="stage-label" x="730" y="52">awaiting/working/idle</text>
+        </g>
+        <g>
+          <rect class="box feature" x="718" y="70" width="160" height="46" rx="2"/>
+          <text class="stage-title" x="730" y="92" font-size="11">Orchestrator wake</text>
+          <text class="stage-label" x="730" y="106">parked_wait → inbox</text>
+        </g>
+        <g>
+          <rect class="box feature" x="718" y="124" width="160" height="46" rx="2"/>
+          <text class="stage-title" x="730" y="146" font-size="11">Push notification</text>
+          <text class="stage-label" x="730" y="160">relay_client.rs</text>
+        </g>
+        <g>
+          <rect class="box feature" x="718" y="178" width="160" height="46" rx="2"/>
+          <text class="stage-title" x="730" y="200" font-size="11">AI Watchers</text>
+          <text class="stage-label" x="730" y="214">Question trigger</text>
+        </g>
+        <path class="arrow" d="M878 39 H 900" marker-end="url(#arrow)"/>
+        <path class="arrow" d="M878 93 H 900" marker-end="url(#arrow)"/>
+        <path class="arrow" d="M878 147 H 900" marker-end="url(#arrow)"/>
+        <path class="arrow" d="M878 201 H 900" marker-end="url(#arrow)"/>
+
+        <path class="arrow" d="M200 46 H 240 V 260 H 486" marker-end="url(#arrow)" stroke-dasharray="3,3"/>
+        <g>
+          <rect class="box warn" x="486" y="238" width="240" height="60" rx="2"/>
+          <text class="stage-label" x="500" y="258">separate stream</text>
+          <text class="stage-title" x="500" y="278">CommandBlock</text>
+          <text class="stage-title" x="500" y="292" fill="var(--ink-muted)" font-size="11">turn-level or per-tool-call</text>
+        </g>
+        <path class="arrow" d="M726 268 H 900" marker-end="url(#arrow)"/>
+        <g>
+          <rect class="box feature" x="904" y="240" width="120" height="56" rx="2"/>
+          <text class="stage-title" x="916" y="262" font-size="11">Scrollbar</text>
+          <text class="stage-label" x="916" y="276">blue/red ticks</text>
+          <text class="stage-label" x="916" y="288">CommandOverview</text>
+        </g>
+
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path class="arrowhead" d="M0 0 L10 5 L0 10 z"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <p class="note" style="color:var(--ink-muted); max-width:74ch;">The dashed line is deliberate: only
+    the hook's <code>state=busy/idle</code> transitions feed <code>CommandBlock</code> directly (via
+    <code>handle_tuic_state</code>). The OSC 777 and screen-scrape boxes above only ever reach
+    <code>SessionState</code>, never blocks — screen-scraped blocks come from a completely separate
+    detector (<code>synthesize_cc_block_events</code>) that isn't shown twice on this diagram only to
+    keep it legible. Full detail in <a href="#blocks">Command Blocks &amp; Ticks</a>.</p>
+  </section>
+
+  <section class="module" id="osc-confusion">
+    <div class="module-head"><h2>OSC 777 vs OSC 7770</h2><span class="count">one digit, two unrelated systems</span></div>
+    <p class="dek">The names collide on purpose — both happen to use the word "notify" — and that's
+    the entire source of the confusion this section exists to kill.</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th></th><th>OSC 7770</th><th>OSC 777</th></tr></thead>
+        <tbody>
+          <tr><td>Digits</td><td><code>7770</code> — four</td><td><code>777</code> — three</td></tr>
+          <tr><td>Grammar</td><td><code>verb=payload</code>, percent-encoded free text</td><td><code>notify;TITLE;BODY</code>, semicolon-delimited, not encoded</td></tr>
+          <tr><td>Who writes it</td><td><code>tuic-hook</code>, invoked by a hook <strong>we installed</strong></td><td>Believed: the agent itself, natively</td></tr>
+          <tr><td>Can TUIC disable it</td><td>Yes — it's our hook</td><td>No — if real, it's the agent's own feature</td></tr>
+          <tr><td>Confirmed present in a live capture</td><td>Yes, extensively (every capture this session)</td><td><strong>No</strong> — zero occurrences across every capture examined, including one built specifically to trigger it</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">The empirical test (2026-08-29)</span></div>
+      <p>Spawned a fresh hook-instrumented Claude session, gave it a one-word trivial task, let it go
+      idle, then waited 90 seconds — past the documented ~60s idle-timer threshold that's supposed to
+      make Claude emit <code>"Claude is waiting for your input"</code> as a notification. Captured the
+      raw PTY bytes (<code>/diagnostics/capture</code>) and classified every OSC 777x sequence by exact
+      digit count:</p>
+      <div class="code"><span class="esc">\x1b]</span>7770;notify=Claude%20is%20waiting%20for%20your%20input
+<span class="esc">\x1b]</span>7770;state=awaiting</div>
+      <p><strong>Zero</strong> occurrences of <code>\x1b]777;notify;…</code> (three sevens). What
+      actually happened: Claude Code's <code>Notification</code> hook event fired (a real Claude Code
+      hook, not an escape sequence), and <em>our own</em> <code>tuic-hook</code> converted it into the
+      OSC 7770 <code>notify=</code> verb plus a separate <code>state=awaiting</code> verb — exactly as
+      <code>hook-lifecycle.html</code>'s Notification card already describes. No native OSC 777 was
+      involved at any point.</p>
+      <p class="note">This does not prove OSC 777 never fires — only that it didn't fire here, for a
+      hook-instrumented session, for exactly the scenario its own doc comments describe. Whether it's a
+      real fallback for non-hook-instrumented Claude, a signal from an older CLI version, or fully dead
+      code is <strong>unconfirmed</strong> — testing it would mean disabling hook instrumentation
+      globally, which affects every other live Claude tab, so it wasn't done casually mid-session.
+      Treat <code>parse_osc777_notifies()</code> as unverified-in-current-practice, not as
+      confirmed-dead — the honest state is "we don't know," not "it's gone."</p>
+    </div>
+
+    <div class="reason">
+      <h4>The confidence gap this reveals <span class="pill warn">fixed 2026-09-02</span></h4>
+      <p><code>tuic_state_awaiting_event()</code> used to map <em>every</em> hook-sourced
+      <code>state=awaiting</code> to <code>ParsedEvent::Question{confident: true}</code>, unconditionally
+      — it had no way to know whether the underlying Claude Code hook event was
+      <code>PreToolUse(AskUserQuestion)</code> (always a genuine block) or <code>Notification</code>
+      (which fires for a genuine block <em>and</em> for Claude's own ~60s idle-timer heartbeat, using
+      the same ambiguous wording, and TUIC cannot tell them apart from the hook payload alone).</p>
+      <p>The <em>never-actually-firing</em> OSC 777 parser, ironically, already solved this exact
+      problem for the path it covers: it deliberately marks <code>"is waiting for your input"</code> as
+      <code>confident: false</code> specifically because of this ambiguity, which lets the silence-timer
+      retraction backstop (<code>emit_question_cleared_if_stale</code>) clear a false alarm once the
+      screen goes quiet with nothing really pending. The hook path used to have no equivalent — a
+      confident question is designed to stay sticky until real user input, which is correct for a
+      genuine <code>AskUserQuestion</code> block and was wrong for an idle-timer false alarm wearing the
+      same <code>state=awaiting</code> costume. This was the actual, precise mechanism behind a class of
+      "badge stuck on awaiting, but the agent is genuinely idle and has been for 20+ minutes" reports —
+      not a broken retraction path, a hook signal that was more confident than its own source event
+      justified.</p>
+      <p><strong>Fix:</strong> rather than only sniffing <code>message</code> wording the way the OSC
+      777 parser has to, <code>tuic-hook</code> now also scrapes Claude Code's own
+      <code>notification_type</code> field (a closed set of 12 values as of this writing) as a new
+      <code>notifytype</code> verb, paired with <code>notify</code> immediately before every
+      <code>Notification</code>-sourced <code>state=awaiting</code>. <code>pty.rs</code>'s
+      <code>notification_awaiting_outcome</code> classifies deterministically off it — permission/
+      elicitation/quota-stale types stay confident, purely informational types (auth success, a
+      background session finishing, …) never badge awaiting at all, and <code>idle_prompt</code> is
+      dropped outright when the shell is already idle (a real <code>Stop</code> already fired) but
+      still surfaces non-confidently mid-turn. The wording classifier survives as the fallback for a
+      <code>notification_type</code> this binary predates or an older Claude Code build that never
+      sends the field. <code>PreToolUse</code>/<code>Elicitation</code> still never scrape either
+      field, so they're unaffected — always confident. See the matching
+      <a href="#incidents">Incident Log</a> entry for the full mechanism and the tests covering it.</p>
+    </div>
+  </section>
+
+  <section class="module" id="agents">
+    <div class="module-head"><h2>Per-Agent Signal Matrix</h2><span class="count">9 agents, 3 mechanisms each (or fewer)</span></div>
+    <p class="dek">"No hook map" and "no screen classifier" are two independent gaps — an agent can have
+    either, both, or neither. Rows are ordered roughly by how complete their coverage is.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Agent</th><th>Hook map</th><th>Screen busy/idle classifier</th><th>Awaiting source</th><th>Block source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Claude (hook-instrumented)</td>
+            <td>9 events, full detail in <code>hook-lifecycle.html</code></td>
+            <td><code>detect_claude_screen_activity</code> — Ready/Unknown only, never Working (busy is movement-driven, not classifier-driven — see below)</td>
+            <td><code>PreToolUse(AskUserQuestion|ExitPlanMode)</code>, <code>Notification</code>, <code>Elicitation</code> — all hook-driven, all <code>confident: true</code></td>
+            <td>Hook-driven: one block per busy→idle turn cycle (<code>handle_tuic_state</code>)</td>
+          </tr>
+          <tr>
+            <td>Claude (no hooks)</td>
+            <td>—</td>
+            <td>Same classifier as above</td>
+            <td>Ink footer / cliclack screen-scrape, generic silence-timer "ends in <code>?</code>" heuristic</td>
+            <td>Screen-scrape: one block per <code>⏺ ToolName(…)</code> header seen (<code>synthesize_cc_block_events</code>) — finer-grained than the hook path, per tool call not per turn</td>
+          </tr>
+          <tr>
+            <td>Gemini</td>
+            <td>5 events (<code>agent_hook.rs</code>), all fixed <code>--state</code> flags — no stdin JSON extraction at all</td>
+            <td>Prompt-presence only; can return Ready or Unknown, never Working</td>
+            <td><code>Notification</code> hook event → awaiting, always <code>confident: true</code> — <strong>the same idle-timer-latch class of bug the 2026-09-02 Claude fix closes, still open here</strong>. Gemini's map bypasses stdin derivation entirely (bare <code>--state awaiting</code>), so it can't scrape <code>notification_type</code>/<code>message</code> at all; fixing this needs Gemini's hook confirmed to send `hook_event_name`-shaped stdin first (see the module doc comment in `agent_hook.rs`), not just wiring the same classifier.</td>
+            <td>Hook-driven only (no scrape fallback confirmed)</td>
+          </tr>
+          <tr>
+            <td>Codex</td>
+            <td>3 events, turn-level only — no PreToolUse/PostToolUse usefully exposed</td>
+            <td>Most elaborate of any agent: finds the live prompt row, inspects the 6 rows above it for a working-status pattern or a literal "■ Conversation interrupted" — can independently assert Working</td>
+            <td>None from hooks — screen only</td>
+            <td>No dedicated Codex block detector found — likely falls to the generic scrape path</td>
+          </tr>
+          <tr>
+            <td>Grok</td>
+            <td>4 events, own settings file — no narrow awaiting override, bare <code>PreToolUse</code> → busy</td>
+            <td>Can assert Working (spinner row) and Ready (boxed composer, UI-version-sensitive — has regressed once already)</td>
+            <td>None from hooks — OSC-0 title "Action Required" heuristic only, <strong>not</strong> suppressed under hook instrumentation</td>
+            <td>No dedicated Grok block detector found</td>
+          </tr>
+          <tr>
+            <td>Goose</td>
+            <td>None</td>
+            <td><strong>None</strong> — absent from <code>has_ready_screen_adapter</code>; a long command can leave it stuck BUSY permanently (tracked gap, not a design choice)</td>
+            <td>Cliclack <code>◆ …?</code> prompt line only</td>
+            <td>None</td>
+          </tr>
+          <tr>
+            <td>Aider</td>
+            <td>None (doesn't support hooks)</td>
+            <td>Real classifier: bare <code>&gt;</code> in the last 3 rows → Ready, else Unknown. Composer fully disappears mid-generation, so busy is spinner/silence-driven like Claude</td>
+            <td>Generic screen-scrape only</td>
+            <td>None</td>
+          </tr>
+          <tr>
+            <td>pi</td>
+            <td>None</td>
+            <td>Has a classifier and is in <code>has_ready_screen_adapter</code> — not traced in full for this doc</td>
+            <td>Generic screen-scrape</td>
+            <td>None</td>
+          </tr>
+          <tr>
+            <td>OpenCode</td>
+            <td>Separate Bun/TS plugin, own emitter — <strong>wire format unconfirmed</strong> (its <code>plugins/</code> submodule isn't initialized in this checkout)</td>
+            <td>Dedicated structural classifier — full-screen TUI with no prompt glyph, reads its status bar ("esc interrupt" vs "ctrl+p commands") instead</td>
+            <td>Plugin-side, mechanism unconfirmed from this codebase alone</td>
+            <td>Unconfirmed</td>
+          </tr>
+          <tr>
+            <td>Amp, Cursor, Droid</td>
+            <td>None</td>
+            <td><strong>None</strong> — audited and explicitly deferred (no binary available to capture real screens against). A long-lived foreground command stays BUSY for the whole process.</td>
+            <td>Generic screen-scrape only</td>
+            <td>None</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">"No session tracking" in <code>AGENTS.md</code> (Aider, Amp, Cursor, Droid, OpenCode,
+    pi) is about <strong>resume-by-session-ID</strong> — a completely different axis from busy/idle
+    detection. Aider and pi both have real screen classifiers despite being in that group; don't infer
+    signal quality from it.</p>
+  </section>
+
+  <section class="module" id="blocks">
+    <div class="module-head"><h2>Command Blocks &amp; Scrollbar Ticks</h2><span class="count">2 producers, 1 dead verb, 2 tick colors</span></div>
+    <p class="dek">The scrollbar's colored ticks are driven by the exact same three-origin split as
+    <code>awaiting_input</code> — but through a structurally different event (<code>AgentBlock</code>,
+    not <code>Question</code>) with its own one-way switch between producers.</p>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">ParsedEvent::AgentBlock</span></div>
+      <p><code>{ action: "start"|"end", line, exit_code: Option&lt;i32&gt;, prompt_text: Option&lt;String&gt; }</code>.
+      Two producers, mutually exclusive per session for its whole lifetime:</p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th></th><th>Hook-driven</th><th>Screen-scraped fallback</th></tr></thead>
+          <tbody>
+            <tr><td>Function</td><td><code>handle_tuic_state</code></td><td><code>synthesize_cc_block_events</code></td></tr>
+            <tr><td>Trigger</td><td>A real <code>state=busy</code>/<code>state=idle</code> CAS edge (not a re-affirmation)</td><td>A Claude Code <code>⏺ ToolName(…)</code> tool-call header appearing on screen</td></tr>
+            <tr><td>Granularity</td><td>One block per whole busy→idle turn</td><td>One block per tool call — finer-grained</td></tr>
+            <tr><td><code>exit_code</code></td><td>From <code>turn_error_flags</code>, read-and-cleared at the idle edge</td><td>Always <code>None</code> — no text source available</td></tr>
+            <tr><td><code>prompt_text</code></td><td>The submitted prompt, on block start</td><td>Always <code>None</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">The switch: <code>state.has_tuic_state_integration</code> flips permanently the
+      FIRST time any OSC 7770 <code>state=</code> event is seen for a session, then the hook path is
+      authoritative for the rest of that session's life — with a one-shot cleanup that closes any block
+      the screen-scrape heuristic had left open at the moment of the switch, so a mid-turn hook
+      detection can't orphan an open block forever.</p>
+    </div>
+
+    <div class="dead">
+      <strong>Dead on the emit side</strong> — the OSC 7770 <code>block=start</code> /
+      <code>block=end;&lt;exit_code&gt;</code> verb is fully parsed and unit-tested in <code>pty.rs</code>,
+      but nothing in <code>tuic-hook</code> or <code>agent_hook.rs</code> ever emits it — grepped both,
+      zero hits beyond the unrelated English word "block". The only real hook-driven block source is
+      <code>handle_tuic_state</code>'s synthesis off the ordinary <code>state=busy</code>/<code>idle</code>
+      verbs, described above. This is the same shape of trap as the OSC 777 case in this doc — a
+      reachable-looking parser that isn't actually reachable in production. Don't assume a wire verb is
+      live just because it parses cleanly and has a passing test; check the emit side too.
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">OSC 133 semantic zones — a different system, do not conflate</span></div>
+      <p>Shell-integration prompt marks (<code>A</code>/<code>B</code>/<code>C</code>/<code>D</code>,
+      full grammar in <code>tuic-escape-sequences.html</code>) tag terminal grid <em>cells</em> directly
+      as alacritty's handler sees them arrive. <code>extract_semantic_zones()</code> then walks the
+      <strong>current screen</strong> on demand and coalesces contiguous same-tagged cells into
+      <code>(prompt|input|output, start_line, end_line, text)</code> tuples — a query over rendered
+      state, not an event stream. This is shell-command-level (one real shell command = one triple),
+      used by anything wanting "just the command" or "just the output" text.</p>
+      <p><code>AgentBlock</code> is agent-turn-level (or per-tool-call, for the scrape fallback), pushed
+      continuously as a discrete event stream. The two mechanisms are structurally unrelated in the
+      backend — but they <strong>do</strong> converge, deliberately, one layer up.</p>
+
+      <p style="margin-top:14px;"><strong>Nobody writes these marks by default — TUIC injects a shell
+      hook that does, and the injection mechanism is a completely different trick per shell</strong>
+      (<code>src-tauri/src/shell_integration.rs</code>, ~4ms per prompt/command):</p>
+
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Shell</th><th>Injection mechanism</th><th>Hook equivalent</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>zsh</td>
+              <td>The <code>ZDOTDIR</code> trick: TUIC points <code>ZDOTDIR</code> at its own wrapper
+              directory, whose <code>.zshenv</code> sources the integration script <em>first</em>, then
+              restores the real <code>ZDOTDIR</code> and re-sources the user's actual <code>.zshenv</code>.
+              Passthrough wrappers for <code>.zprofile</code>/<code>.zshrc</code>/<code>.zlogin</code>/
+              <code>.zlogout</code> just delegate to the user's real files (plus a <code>compinit -C</code>
+              safety net, since the trick can skip system completion setup).</td>
+              <td>zsh's own <code>precmd_functions</code>/<code>preexec_functions</code> hook arrays — the
+              integration script appends to them, it doesn't replace anything the user already has there.</td>
+              <td><strong>Fully automatic</strong> — works transparently, no user action, doesn't touch the
+              user's own dotfiles on disk.</td>
+            </tr>
+            <tr>
+              <td>bash</td>
+              <td>Script is written to disk and an env var (<code>TUIC_SHELL_INTEGRATION</code>) is set
+              pointing at it — <strong>nothing currently sources it for an interactive shell.</strong></td>
+              <td>Would-be mechanism, present in the script itself: <code>PROMPT_COMMAND</code> (bash's
+              closest analogue to precmd) prepended non-destructively, plus a <code>DEBUG</code> trap
+              (fires before each simple command — bash's closest analogue to preexec), gated by a
+              <code>__tuic_preexec_ready</code> flag so the trap doesn't double-fire against
+              <code>PROMPT_COMMAND</code>'s own internal command execution.</td>
+              <td><strong>Not auto-wired.</strong> Confirmed by grep: <code>TUIC_SHELL_INTEGRATION</code>
+              is set in <code>shell_integration.rs</code> and read nowhere else in the codebase. An
+              interactive bash session today gets no automatic OSC 133 marks — the code's own comment
+              says "for interactive login shells we rely on the user sourcing it or a future --init-file
+              approach." Verified with real bash in a unit test (spawn, feed the script, drive one
+              precmd→preexec→precmd cycle, assert the exact byte sequence including the real exit code) —
+              that just proves the SCRIPT works when sourced, not that anything sources it automatically.</td>
+            </tr>
+            <tr>
+              <td>fish</td>
+              <td>Same as bash: script written to disk, env var set, nothing consumes it automatically
+              yet (module doc comment marks this "(future) XDG_CONFIG_HOME/fish/conf.d/ auto-source").</td>
+              <td>fish's native event system directly — <code>function … --on-event fish_prompt</code> and
+              <code>--on-event fish_preexec</code>. Cleanest of the three: no polyfill needed, fish already
+              has the exact hooks zsh has.</td>
+              <td><strong>Not auto-wired</strong>, same gap as bash.</td>
+            </tr>
+            <tr>
+              <td>WSL (bash)</td>
+              <td>Same bash script, path-translated (<code>/mnt/c/…</code>) so the Windows-side script
+              path resolves inside the WSL Linux environment.</td>
+              <td>Same as bash above.</td>
+              <td>Same gap as bash.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">Net effect: real shell-command blue/red scrollbar ticks and
+      <code>CommandOverview</code> entries — the OSC-133 half of the convergence below — currently only
+      happen for <strong>zsh</strong> sessions in practice. Bash and fish users get the exact same
+      <code>AgentBlock</code>-driven ticks for AI agent turns (that path doesn't depend on shell
+      integration at all), just not for their own plain shell commands.</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">Frontend convergence</span></div>
+      <p>An <code>agent-block</code> wire event is handled in <code>Terminal.tsx</code> by directly
+      reusing the OSC-133 handler: <code>action:"start"</code> calls the same code path as a real OSC
+      133 <code>A</code> mark, <code>action:"end"</code> the same as a real <code>D</code> mark. Both
+      land in the identical <code>CommandBlock</code> record shape in <code>terminals.ts</code>
+      (<code>promptLine</code>/<code>commandLine</code>/<code>executionLine</code>/<code>endLine</code>/
+      <code>exitCode</code>/<code>promptText</code>) — <code>promptText</code> is the one field that
+      distinguishes an agent-turn block (populated) from a real shell command or a scrape-fallback block
+      (always null). One record shape, one renderer, three possible producers.</p>
+      <p class="note"><strong>Correction for anyone assuming "green tick = success":</strong> block
+      ticks are actually <strong>blue</strong> (translucent, exit 0 or unknown) or <strong>red</strong>
+      (non-zero exit) — <code>canvasTerminalMarks.ts</code>. Green is a completely separate,
+      independent tick marking the line where the <em>user</em> submitted a prompt (driven by
+      <code>ParsedEvent::UserInput</code>), drawn on top of the block ticks so it's never hidden. Two
+      tick systems on one scrollbar, not one. <code>CommandOverview.tsx</code> is the panel that lists
+      blocks with duration and command text, preferring <code>promptText</code> and falling back to
+      slicing the grid between <code>commandLine</code>/<code>executionLine</code> when it's null.</p>
+    </div>
+  </section>
+
+  <section class="module" id="why">
+    <div class="module-head"><h2>Why It's Shaped This Way</h2><span class="count">4 things that look like bugs and aren't (quite)</span></div>
+
+    <div class="reason">
+      <h4>A confident hook signal can still be a false alarm</h4>
+      <p>Covered in full in <a href="#osc-confusion">OSC 777 vs 7770</a> — <code>Notification</code>'s
+      hook-driven <code>state=awaiting</code> couldn't distinguish a genuine block from Claude's own
+      idle heartbeat, and unlike the OSC 777 path it mirrors, had no low-confidence escape hatch.
+      <strong>Fixed 2026-09-02</strong> — see the matching <a href="#incidents">Incident Log</a> entry
+      for the mechanism; kept here so the next person can see why the hook path used to need one.</p>
+    </div>
+
+    <div class="reason">
+      <h4>Block-source switching is one-way and permanent</h4>
+      <p>Once a session has emitted a single OSC 7770 <code>state=</code> event, the screen-scrape block
+      detector never runs again for that session's life — even if the hook later goes quiet (a crashed
+      hook binary, a settings rollback mid-session). The alternative — falling back to scraping whenever
+      the hook stream looks stale — would mean two block granularities (per-turn vs per-tool-call)
+      interleaving unpredictably in the same scrollbar. A permanent switch, flipped once real hook
+      evidence exists, keeps one session's ticks internally consistent even at the cost of never
+      recovering if the hook stream dies mid-session.</p>
+    </div>
+
+    <div class="reason">
+      <h4>OSC 133 zones and AgentBlock stay separate systems despite converging on screen</h4>
+      <p>They could have been unified in the backend too. They aren't, because they answer different
+      questions at different layers: OSC 133 answers "what did the shell run and what did it print,"
+      queried on demand from live cell tags; <code>AgentBlock</code> answers "when did the agent's turn
+      start and end," pushed as a discrete lifecycle event. Merging them would mean deciding what a
+      "prompt" means for an agent turn that has no real shell prompt line at all — the frontend
+      convergence (one <code>CommandBlock</code> shape, reused handler) gets the visual benefit without
+      forcing that decision on the backend.</p>
+    </div>
+
+    <div class="reason">
+      <h4>Amp/Cursor/Droid's stuck-busy behavior is a tracked gap, not a design choice</h4>
+      <p>These three (and Goose, for busy/idle specifically) have no screen classifier at all — a
+      long-lived foreground command leaves them BUSY for the rest of the process. This was a deliberate
+      <em>deferral</em>, not a decision that they don't need one: none of the four binaries was
+      installed on the auditing machine to capture real screens against, and a classifier written
+      against guessed screen shapes is worse than no classifier (it can confidently assert the wrong
+      thing). Tracked in <code>to-test.md</code>; give each one an adapter only after capturing its
+      actual output.</p>
+    </div>
+  </section>
+
+  <section class="module" id="incidents">
+    <div class="module-head"><h2>Incident Log</h2><span class="count">real, live-reproduced cases</span></div>
+    <p class="dek">Each entry below is a real production report, not a hypothetical. Kept
+    chronological and never deleted — a fixed root cause is marked fixed, not removed, because the
+    <em>symptom</em> ("badge stuck on awaiting") has more than one independent cause and a future
+    report matching the same symptom needs to see everything already ruled in or out.</p>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">2026-09-01 — two live sessions stuck "awaiting" through full task completion</span><span class="pill warn">fixed</span></div>
+      <p><strong>Reported:</strong> <code>commerce-journal</code>'s <code>publish</code> tab and
+      <code>agent-tooling-analysis</code>'s <code>tool-scan</code> tab both read "awaiting" despite
+      being genuinely idle — both had finished their entire task (one published 37 Teams cards and
+      printed a recap, the other completed a background scan) with the badge never clearing.</p>
+      <p><strong>Root cause:</strong> both sessions are hook-instrumented Claude, running unattended
+      with auto-approve/bypass-permissions on (<code>⏵⏵ auto mode on</code>). A real
+      <code>AskUserQuestion</code> tool call fired mid-turn — the ordinary case, shell already
+      <code>SHELL_BUSY</code> before and after, since <code>PreToolUse(AskUserQuestion)</code>'s
+      <code>awaiting</code> override never touches the shell busy/idle bit at all (no
+      <code>SHELL_AWAITING</code> exists). Claude answered its own question (auto-mode, no human at
+      the keyboard). <code>claude_hook_map()</code>'s <code>PostToolUse(AskUserQuestion|
+      ExitPlanMode)</code> busy re-affirmation — kept specifically to clear the badge afterward —
+      fired into <code>tuic_state_awaiting_event</code>, but <code>busy_transitioned</code> was
+      <code>false</code> (no real shell edge, already busy), so the clear it exists to provide was
+      silently dropped. Nothing else is allowed to touch a confident question besides real user
+      input, which never arrived. <strong>Silent</strong> because
+      <code>tuic_state_awaiting_event</code>'s old signature had no log on the dropped path — "the
+      hook fired but got swallowed" and "the hook never fired" were indistinguishable from the logs
+      alone; diagnosing this needed reconstructing the timeline from <code>[Notify]</code>/
+      <code>[ChoicePrompt]</code> frontend log lines and reading the source, not a log line pointing
+      straight at it.</p>
+      <p><strong>Separately found in the same investigation:</strong> the numbered-dialog
+      <code>ChoicePrompt</code> screen-scrape detector had no hook-instrumented suppression at
+      all — <code>suppress_heuristic_question</code> only ever covered the generic
+      <code>Question</code> type. Live logs showed a hook-instrumented session logging both
+      <code>[ChoicePrompt] ... title="Do you want to proceed?"</code> (screen-scrape) AND a
+      hook-driven confident <code>question — awaitingInput transition</code> for the exact same
+      dialog, seconds apart — a confusing duplicate signal, not two real events. (This one turned
+      out not to be load-bearing for the stuck badge itself — the <code>choice_prompt</code> field
+      it sets gets cleared by the same <code>user-input</code> event arm that the busy-clear fix
+      above now correctly fires — but it was real noise worth removing on its own, and is the same
+      "screen-scrape not suppressed under hooks" shape as Grok's OSC-0 heuristic below.)</p>
+      <p><strong>Fix (this branch):</strong> <code>tuic_state_awaiting_event</code> gained a
+      <code>currently_awaiting</code> parameter — the busy clear now fires on
+      <code>busy_transitioned || currently_awaiting</code>, so a session that IS awaiting always
+      gets its clear on the next busy re-affirmation, edge or no edge. <code>ChoicePrompt</code>
+      detection is now skipped outright when the session is hook-instrumented. Both covered by
+      regression tests replaying the real failure shape through the production
+      <code>process_chunk</code> hot path (<code>claude_askuserquestion_midturn_busy_reaffirmation_clears_stuck_awaiting</code>,
+      <code>test_chunk_processor_choice_prompt_suppressed_when_hook_instrumented</code> in
+      <code>pty.rs</code>), each independently confirmed to fail against the pre-fix code.</p>
+      <p class="note">Debug logging added throughout the state-transition path specifically so the
+      NEXT report in this class doesn't need this same archaeology — see
+      <a href="#playbook">Investigation Playbook</a> below for what to check and how to read it.</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">2026-08-29 — <code>Notification</code> hook's blanket confident latch</span><span class="pill warn">fixed</span></div>
+      <p><strong>Reported (2026-09-02):</strong> a live session (<code>dbsql-test-review</code>,
+      <code>databricks-sql-cli</code>) finished its task, printed its recap, then ~44s later flipped
+      to "awaiting" with an empty question text — the tab badge read "waiting for input" even though
+      nothing was actually pending. Reconstructed from <code>debug action=logs</code>: a
+      <code>[Notify] … completion</code> line, then 44s of silence, then a fresh
+      <code>question — awaitingInput transition</code> with <code>confident: true, question_text: ""</code>.
+      That shape — confident, empty text, tens of seconds after a real completion — is exactly this
+      card's mechanism, not the 2026-09-01 one below (no <code>AskUserQuestion</code> ever fired here).</p>
+      <p>See <a href="#osc-confusion">OSC 777 vs 7770</a>'s "confidence gap" reason card for the full
+      root cause. Short version: <code>Notification</code>'s hook-driven <code>state=awaiting</code>
+      used to be always <code>confident: true</code>, with no way to distinguish a genuine block from
+      Claude's own ~60s idle-timer heartbeat firing the same hook with the same ambiguous wording.
+      <strong>This is a DIFFERENT mechanism from the 2026-09-01 incident above</strong> — that one is a
+      real, correctly-confident <code>AskUserQuestion</code> block whose CLEAR got dropped; this one
+      was a signal that was never entitled to be confident in the first place. Both produce the
+      identical externally-visible symptom ("stuck on awaiting, agent genuinely idle"), so ruling one
+      out is not evidence against the other — check both.</p>
+      <p><strong>First pass:</strong> <code>tuic_state_awaiting_event</code> (<code>pty.rs</code>)
+      classified the <code>notify=</code> verb's scraped message text exactly like
+      <code>parse_osc777_notifies</code> already does for its own wording — "needs your permission" /
+      "approval required" → confident, everything else → <code>confident: false</code>.</p>
+      <p><strong>Refined the same day</strong> once Claude Code's actual, documented
+      <code>notification_type</code> enum was in hand — far more reliable than sniffing free-text
+      wording. Real production evidence for the exact root cause: the temporary hook-debug log
+      (<a href="#playbook">Investigation Playbook</a> step 4) for this very session shows
+      <code>Stop</code> at 20:42:39Z, then <code>Notification{message: "Claude is waiting for your
+      input", notification_type: "idle_prompt"}</code> at 20:43:39Z — exactly 60s later, nothing fired
+      in between. <code>tuic-hook</code> now also scrapes <code>notification_type</code> as a new
+      <code>notifytype</code> verb (paired with <code>notify</code>, both immediately before
+      <code>state=awaiting</code>, same <code>write_all</code>). <code>pty.rs</code>'s
+      <code>notification_awaiting_outcome</code> classifies deterministically off the 12 documented
+      values: <code>permission_prompt</code>/<code>elicitation_dialog</code>/
+      <code>elicitation_url_dialog</code>/<code>agent_needs_input</code>/
+      <code>quota_auto_resume_stale</code> stay confident; <code>auth_success</code>/
+      <code>elicitation_complete</code>/<code>elicitation_response</code>/<code>agent_completed</code>/
+      <code>quota_auto_resume_fired</code>/<code>quota_auto_resume_disabled</code> are pure lifecycle
+      noise and never badge awaiting at all; <code>idle_prompt</code> gets the sharpest fix — dropped
+      outright (not merely non-confident) whenever the shell is already idle, since that means a real
+      <code>Stop</code> already ended the turn and any future need for input arrives through its own
+      signal the next time the user acts, exactly as suggested when this incident was reported. The
+      same <code>idle_prompt</code> firing mid-turn (shell still busy, no <code>Stop</code> yet — the
+      one gap this signal covers, an un-hooked plan/skill picker) still surfaces non-confidently. A
+      <code>notification_type</code> this binary predates, or its total absence (an older Claude Code
+      build), falls back to the original wording classifier — never a fixed guess, since guessing
+      either direction risks silently swallowing a real future block or reproducing this exact
+      incident under a new type name. No preceding <code>notify=</code>/<code>notifytype=</code> at
+      all (the <code>PreToolUse(AskUserQuestion|ExitPlanMode)</code> and <code>Elicitation</code> case
+      — neither ever scrapes either field) stays unconditionally confident, unchanged from before.
+      Covered by pure-function unit tests per outcome (blocking/informational/idle-prompt-suppressed/
+      idle-prompt-mid-turn/unrecognized-type-fallback/no-type-fallback) and wire-level tests driving
+      the real three-sequence <code>notify</code>→<code>notifytype</code>→<code>state=awaiting</code>
+      bytes through the production <code>process_chunk</code> hot path
+      (<code>notification_hook_idle_prompt_after_stop_is_suppressed_through_process_chunk</code> and
+      siblings).</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">Grok's OSC-0 "Action Required" heuristic — unsuppressed under hook instrumentation</span><span class="pill warn">open</span></div>
+      <p>Noted in the <a href="#agents">Per-Agent Matrix</a>: Grok's hook map has no narrow awaiting
+      override at all (bare <code>PreToolUse</code> → busy only), so awaiting comes exclusively from
+      the OSC-0 title heuristic — and unlike Claude's <code>ChoicePrompt</code> case above, this one
+      hasn't been checked against <code>suppress_heuristic_question</code> or fixed. Flagging here
+      so it isn't independently "discovered" a third time; same shape, different agent.</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">Gemini's <code>Notification</code> → awaiting is still unconditionally confident</span><span class="pill warn">open</span></div>
+      <p>The exact same idle-timer-latch class of bug the 2026-09-02 Claude fix above closes —
+      unfixed for Gemini. Noted in the <a href="#agents">Per-Agent Matrix</a>: Gemini's hook map
+      never goes through <code>tuic-hook</code>'s stdin-JSON derivation at all (it passes a bare
+      <code>--state awaiting</code> flag for its own <code>Notification</code> event), so there is
+      no <code>message</code>/<code>notification_type</code> to scrape or classify even in
+      principle. Fixing this needs Gemini's own hook confirmed to send `hook_event_name`-shaped
+      stdin first — a real verification gap noted in `agent_hook.rs`'s own module doc comment,
+      predating this session — not just reusing `notification_awaiting_outcome`. Flagging here so
+      it isn't mistaken for already covered by today's fix, and isn't independently
+      "discovered" again later.</p>
+    </div>
+  </section>
+
+  <section class="module" id="playbook">
+    <div class="module-head"><h2>Investigation Playbook</h2><span class="count">for the next "stuck/wrong state" report</span></div>
+    <p class="dek">Written for an agent picking up a fresh report with no other context — Boss will
+    launch a new session, point it at this doc and at the specific TUIC session/tab that needs
+    research. Read <a href="#origins">Three Origins</a> and <a href="#osc-confusion">OSC 777 vs
+    7770</a> first if you haven't; this is the "what to actually go do" checklist.</p>
+
+    <div class="reason">
+      <h4>1. Get the facts before theorizing</h4>
+      <p>Use the <code>tuicommander</code> MCP tools against the live TUICommander instance (never
+      guess from memory): <code>session action=list</code> to find the stuck session, <code>session
+      action=output</code> to read its actual on-screen transcript (is a dialog really still there,
+      or is the terminal idle and the badge just wrong?), <code>debug action=logs</code> (no
+      <code>level</code> filter — default is <code>info</code>) to pull the frontend's
+      <code>[Notify]</code>/<code>[ChoicePrompt]</code> lines and build a timeline of when
+      <code>awaitingInput</code> actually flipped, and how long ago.</p>
+    </div>
+
+    <div class="reason">
+      <h4>2. Check whether hook instrumentation is actually installed and live</h4>
+      <p>Hooks install into the AGENT's OWN global settings file
+      (<code>~/.claude/settings.json</code> for Claude — NOT anywhere per-repo), tagged
+      <code># tuic-managed-hook</code>. Grep that file for the sentinel to confirm hooks are
+      installed at all before assuming a hook-driven signal is in play — a repo with no hooks
+      installed can only be getting awaiting from screen-scrape or (for Claude) a native OSC 777
+      notify, if that ever actually fires (see below).</p>
+    </div>
+
+    <div class="reason">
+      <h4>3. Read the new debug logs (2026-09-01) — but you need <code>RUST_LOG=debug</code></h4>
+      <p>The app's default tracing level is <code>info</code>
+      (<code>app_logger.rs</code>) — <code>tracing::debug!</code> calls are silently dropped unless
+      the process was launched with an elevated filter. To see them for a research window, launch
+      TUICommander (or <code>make dev</code>) with, e.g.:</p>
+      <div class="code">RUST_LOG=info,tuicommander_lib::pty=debug,tuicommander_lib::state=debug</div>
+      <p>What's logged, all at <code>debug</code>, all searchable via <code>GET /logs</code> once
+      elevated:</p>
+      <ul>
+        <li><code>state.rs</code>'s <code>AppEvent::PtyParsed</code> reducer — ONE generic log line
+        whenever <code>awaiting_input</code>/<code>question_confident</code>/<code>choice_prompt</code>/
+        <code>question_text</code> actually changes, with before/after values and the triggering
+        <code>event_type</code>. Covers every arm (question, question-cleared, user-input,
+        choice-prompt, choice-cleared, status-line) — a new arm added later inherits this for free.</li>
+        <li><code>state.rs</code>'s <code>PtyExit</code> handler — logs specifically when a session
+        exits while STILL <code>awaiting_input</code> (a strong signal something upstream never
+        cleared it).</li>
+        <li><code>pty.rs</code>'s <code>transition_explicit_shell_state_with_hook</code> — every
+        real shell busy/idle edge attempt and result (<code>prev</code>/<code>target</code>/
+        <code>transitioned</code>), regardless of trigger (OSC 7770 <code>state=</code> or OSC 133
+        shell integration).</li>
+        <li><code>pty.rs</code>'s <code>tuic_state_awaiting_event</code> — logs specifically when
+        the 2026-09-01 fix's edge-repair path fires (a busy re-affirmation with no real edge,
+        kept alive only because the session was already awaiting).</li>
+        <li><code>pty.rs</code>'s <code>emit_question_cleared_if_stale</code> — logs when the
+        silence-timer backstop is BLOCKED from clearing (session is stale-eligible but confident or
+        choice-prompt-owned). If a stuck session never logs this line, the backstop was never going
+        to be the fix — look at the busy-reaffirmation path or <code>choice-cleared</code> instead.</li>
+        <li><code>pty.rs</code>'s <code>ChoicePrompt</code> detection — logs every fresh (non-dedup)
+        detection, only for non-hook-instrumented sessions post-fix.</li>
+      </ul>
+    </div>
+
+    <div class="reason">
+      <h4>4. Read the raw hook payloads, temporarily, if the above isn't enough</h4>
+      <p>A temporary debug hook is installed globally (2026-09-01, tagged
+      <code># tuic-debug-hook-2026-09-01 (temporary, research)</code> in
+      <code>~/.claude/settings.json</code>) on every Claude Code hook event TUIC cares about
+      (<code>SessionStart</code>, <code>UserPromptSubmit</code>, <code>PreToolUse</code> (both the
+      broad and <code>AskUserQuestion|ExitPlanMode</code> matchers), <code>PostToolUse</code> (same
+      two), <code>PostToolUseFailure</code>, <code>Notification</code>, <code>PermissionRequest</code>,
+      <code>Elicitation</code>, <code>ElicitationResult</code>, <code>Stop</code>,
+      <code>StopFailure</code>, <code>SessionEnd</code>, <code>SubagentStop</code>). It appends one
+      line per hook fire — UTC timestamp + the full stdin JSON (capped at 20KB, newlines squashed) —
+      to <code>.claude/hook-debug.log</code> <strong>relative to whatever repo the session is
+      running in</strong> (only when <code>TUIC_SESSION</code> is set, so it's silent outside TUIC).
+      This is how the 2026-09-01 incident's root cause was originally traced for the WIP fixture
+      that produced <code>claude_double_askuserquestion_second_missed.tcap</code> — reuse it rather
+      than re-inventing it. <strong>Left in place intentionally, "for the time being"</strong> —
+      remove it (grep the sentinel across all four hook-event blocks it touches) once this research
+      window closes; it is NOT meant to ship in a release config.</p>
+    </div>
+
+    <div class="reason">
+      <h4>5. Before proposing a fix, check this doc's own Incident Log and matrix first</h4>
+      <p>Two independent mechanisms already produce the exact same "stuck on awaiting" symptom (see
+      <a href="#incidents">Incident Log</a>) — ruling one out is not evidence the other isn't also,
+      or instead, at play. Check the <a href="#agents">Per-Agent Matrix</a> for the specific agent
+      involved: "no hook map" and "no screen classifier" are independent gaps, and an unsuppressed
+      screen-scrape heuristic under hook instrumentation has now happened twice (Claude's
+      <code>ChoicePrompt</code>, Grok's OSC-0 title) — check whether the agent in the new report has
+      the same shape before assuming it's novel.</p>
+    </div>
+  </section>
+
+  <footer>
+    Reflects <code>src-tauri/src/pty.rs</code> (silence timer, <code>ChunkProcessor</code>, the
+    <code>TermEvent::Tuic</code> verb switch), <code>state.rs</code> (the awaiting_input reducer),
+    <code>output_parser.rs</code> (OSC 777, screen-scrape regexes), <code>agent_hook.rs</code> (every
+    per-agent hook map), <code>terminal_grid.rs</code> (OSC 133 zones), <code>Terminal.tsx</code> and
+    <code>canvasTerminalMarks.ts</code> (frontend convergence). Cross-reference
+    <code>hook-lifecycle.html</code> for the hook pipeline in full and <code>tuic-escape-sequences.html</code>
+    for wire grammar. Tracked by git — keep in sync per <code>docs/sync-matrix.md</code>'s "Agent state
+    detection" and "Native hook instrumentation" rows.
+  </footer>
+
+</div>
