@@ -515,6 +515,7 @@ impl OutputParser {
     fn parse_api_error(&mut self, text: &str) -> Option<ParsedEvent> {
         // Fast path: every api-error pattern requires at least one of these keywords.
         if !text.contains("api_error")
+            && !text.contains("API Error: 5")
             && !text.contains("authentication_error")
             && !text.contains("server_error")
             && !text.contains("UNAVAILABLE")
@@ -729,6 +730,20 @@ fn build_api_error_patterns() -> Vec<ApiErrorPattern> {
             "claude-auth-error",
             r#""type":"authentication_error""#,
             "auth",
+        ),
+        // Claude Code: user-facing friendly 5xx message, no JSON body. Full UI string:
+        // "API Error: 500 Internal server error. This is a server-side issue, usually
+        // temporary — try again in a moment. If it persists, check https://status.claude.com."
+        //
+        // Anchored on the status code because it opens the message: the prose wraps at
+        // the terminal width and rendered rows are joined with '\n', so any phrase
+        // further in can be split mid-match. Requiring a letter after the code excludes
+        // the JSON-body variants (`API Error: 5xx {"type":…`), which the patterns above
+        // classify more precisely — 529 overloaded stays a rate limit, not a server error.
+        ae(
+            "claude-server-error-friendly",
+            r"API Error: 5\d\d [A-Za-z]",
+            "server",
         ),
         // Gemini CLI: API Error: got status: UNAVAILABLE/INTERNAL
         ae(
@@ -3535,6 +3550,59 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         // overloaded_error is a rate limit pattern, not api-error
         assert!(!has_api_error(&parser.parse(input)));
         assert!(has_rate_limit(&parser.parse(input)));
+    }
+
+    #[test]
+    fn test_api_error_claude_500_friendly() {
+        // Claude Code renders 5xx as prose with no JSON body. Nothing in this string
+        // hits the JSON patterns, so before the friendly pattern existed the message
+        // never reached auto-retry — it fell out at the keyword fast path.
+        let mut parser = OutputParser::new();
+        let input = "API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.";
+        let events = parser.parse(input);
+        let (name, _, kind) = get_api_error(&events).expect("should detect friendly Claude 5xx");
+        assert_eq!(name, "claude-server-error-friendly");
+        assert_eq!(kind, "server");
+    }
+
+    #[test]
+    fn test_api_error_claude_500_friendly_survives_wrapping() {
+        // The prose wraps at the terminal width and rows are joined with '\n', so the
+        // pattern must anchor on the status code that opens the message — a phrase
+        // further in gets split mid-match.
+        let mut parser = OutputParser::new();
+        let rows = vec![
+            row(0, "API Error: 500 Internal server error. This is a server-"),
+            row(1, "side issue, usually temporary — try again in a moment."),
+        ];
+        let events = parser.parse_clean_lines(&rows, true);
+        let (name, _, kind) = get_api_error(&events).expect("should detect across a row wrap");
+        assert_eq!(name, "claude-server-error-friendly");
+        assert_eq!(kind, "server");
+    }
+
+    #[test]
+    fn test_api_error_friendly_pattern_yields_to_json_variants() {
+        // The friendly pattern is deliberately last among the Claude patterns: a JSON
+        // body classifies more precisely, and 529 must stay a rate limit.
+        let mut parser = OutputParser::new();
+        let json_500 = r#"API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}"#;
+        let events = parser.parse(json_500);
+        let (name, _, _) = get_api_error(&events).expect("json 500 detected");
+        assert_eq!(name, "claude-api-error");
+
+        let mut parser = OutputParser::new();
+        let json_529 = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+        assert!(!has_api_error(&parser.parse(json_529)));
+    }
+
+    #[test]
+    fn test_no_api_error_friendly_401() {
+        // Only 5xx is retryable; an auth failure must not match the friendly pattern.
+        let mut parser = OutputParser::new();
+        assert!(!has_api_error(&parser.parse(
+            "API Error: 401 Unauthorized. Run /login to reauthenticate."
+        )));
     }
 
     #[test]
