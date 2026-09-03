@@ -2858,6 +2858,14 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
         {
             arm_explicit_idle_background_probe(state, session_id, turn_epoch);
         }
+        tracing::debug!(
+            session_id = %session_id,
+            prev,
+            target,
+            label,
+            hook_state,
+            "shell_state edge attempt (research: unexpected state transitions)"
+        );
         let (transitioned, parent_dispatch) = try_shell_transition_locked(
             ShellTransitionRequest {
                 state,
@@ -2875,6 +2883,13 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
     if let Some(dispatch) = parent_dispatch {
         dispatch_parent_lifecycle(state, dispatch);
     }
+    tracing::debug!(
+        session_id = %session_id,
+        target,
+        label,
+        transitioned,
+        "shell_state edge result (research: unexpected state transitions)"
+    );
     if transitioned {
         emit_shell_state(state, session_id, label);
         // Publish IDLE before a queued delivery claims IDLE→BUSY again. Reversing
@@ -3154,14 +3169,29 @@ pub(super) fn record_inferred_outcome_if_no_osc133(state: &AppState, session_id:
 /// "not on screen right now" is not proof that it was answered. A live
 /// `choice_prompt` owns its own resolution and is left alone.
 pub(super) fn emit_question_cleared_if_stale(state: &Arc<AppState>, session_id: &str) {
-    let turn_epoch = state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .and_then(|s| {
-            (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
-                .then_some(s.turn_epoch)
-        });
+    let turn_epoch = state.session_maps.session_states.get(session_id).and_then(|s| {
+        // Research note (2026-09-01): this guard is BY DESIGN never allowed to
+        // retract a confident question or one with an open choice_prompt — see the
+        // module-level docs on why (a confident source can still repaint while
+        // genuinely waiting; screen absence alone isn't proof of an answer). If a
+        // session is stuck "awaiting" and this log line below never appears for
+        // it, that's the tell: the badge is confident/choice-prompt-owned, so this
+        // backstop was never going to be the thing that clears it — look at the
+        // hook busy re-affirmation path (`tuic_state_awaiting_event`) or
+        // `resolve_choice_prompt_input`/`choice-cleared` instead.
+        if s.awaiting_input && (s.question_confident || s.choice_prompt.is_some()) {
+            tracing::debug!(
+                session_id = %session_id,
+                confident = s.question_confident,
+                has_choice_prompt = s.choice_prompt.is_some(),
+                "silence_timer: awaiting_input is stale-eligible on screen but the \
+                 confident/choice_prompt guard blocks this backstop from clearing it \
+                 (research: unexpected state transitions)"
+            );
+        }
+        (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
+            .then_some(s.turn_epoch)
+    });
     let Some(turn_epoch) = turn_epoch else {
         return;
     };
