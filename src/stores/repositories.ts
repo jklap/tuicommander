@@ -1,7 +1,7 @@
 import { batch } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { AGENT_TYPES } from "../agents";
-import { invoke } from "../invoke";
+import { invoke, listen } from "../invoke";
 import type { SavedTerminal } from "../types";
 import { pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 import { markPerf } from "../utils/perfTrace";
@@ -163,6 +163,63 @@ function snapshotFromLoaded(value: Partial<RepositorySnapshot> | null | undefine
 	});
 }
 
+/** One repository as it goes to disk: the fields that live only in this window's
+ *  memory are stripped, so two clients holding the same document agree on it. */
+function serializableRepo(repo: RepositoryState): RepositoryState {
+	const branches: Record<string, BranchState> = {};
+	for (const [name, branch] of Object.entries(repo.branches)) {
+		const persisted: BranchState = { ...branch, terminals: [] };
+		// `healing` is a transient runtime flag; never persist it (a crash mid-heal
+		// would otherwise leave the toggle showing "Healing" forever after reload).
+		if (persisted.ciAutoHeal?.healing) {
+			persisted.ciAutoHeal = { ...persisted.ciAutoHeal, healing: false };
+		}
+		branches[name] = persisted;
+	}
+	return { ...repo, branches };
+}
+
+/**
+ * Bring a record read from `repositories.json` up to the shape the UI indexes.
+ *
+ * Applied on hydrate *and* on every record adopted from another client: a second
+ * client can be an older build, or can echo back a document a legacy migration
+ * wrote, and the fields defaulted here are read as always-present. The `agentType`
+ * scrub is the sharp one — an unknown name throws inside a render no ErrorBoundary
+ * covers.
+ */
+function normalizeLoadedRepo(repo: RepositoryState): void {
+	if (repo.collapsed === undefined) repo.collapsed = false;
+	if (repo.expanded === undefined) repo.expanded = true;
+	if (repo.parked === undefined) repo.parked = false;
+	// Migration: remove legacy showAllBranches field
+	delete (repo as unknown as Record<string, unknown>).showAllBranches;
+	for (const branch of Object.values(repo.branches)) {
+		branch.terminals = [];
+		// Reset hadTerminals on startup: the flag only suppresses auto-spawn
+		// within a session (after user closes all terminals). Across restarts,
+		// auto-spawn should work unless savedTerminals will restore them.
+		branch.hadTerminals = !!branch.savedTerminals?.length;
+		if (branch.savedTerminals === undefined) {
+			branch.savedTerminals = [];
+		}
+		// A build that drops an agent leaves its name behind on disk — `fx`
+		// was first-class for five days before being reverted. `AGENT_DISPLAY`
+		// and `AGENTS` are exhaustive `Record<AgentType, …>` indexed without an
+		// existence check, so a stale name throws inside a render that no
+		// ErrorBoundary covers. Drop it once here rather than making every
+		// index site defend itself.
+		for (const saved of branch.savedTerminals) {
+			if (saved.agentType !== null && !AGENT_TYPES.includes(saved.agentType)) {
+				saved.agentType = null;
+			}
+		}
+		if (branch.isMerged === undefined) {
+			branch.isMerged = false;
+		}
+	}
+}
+
 function serializableSnapshot(
 	repositories: Record<string, RepositoryState>,
 	repoOrder: string[],
@@ -172,17 +229,7 @@ function serializableSnapshot(
 ): RepositorySnapshot {
 	const serializable: Record<string, RepositoryState> = {};
 	for (const [path, repo] of Object.entries(repositories)) {
-		const branches: Record<string, BranchState> = {};
-		for (const [name, branch] of Object.entries(repo.branches)) {
-			const persisted: BranchState = { ...branch, terminals: [] };
-			// `healing` is a transient runtime flag; never persist it (a crash mid-heal
-			// would otherwise leave the toggle showing "Healing" forever after reload).
-			if (persisted.ciAutoHeal?.healing) {
-				persisted.ciAutoHeal = { ...persisted.ciAutoHeal, healing: false };
-			}
-			branches[name] = persisted;
-		}
-		serializable[path] = { ...repo, branches };
+		serializable[path] = serializableRepo(repo);
 	}
 	return cloneJson({
 		repos: serializable,
@@ -197,6 +244,98 @@ function serializableSnapshot(
 
 function jsonEqual(left: unknown, right: unknown): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** The branches of `repo` this window still has an open terminal in. */
+function liveBranchNames(repo: RepositoryState | undefined): string[] {
+	if (!repo) return [];
+	return Object.entries(repo.branches)
+		.filter(([, branch]) => branch.terminals.length > 0)
+		.map(([name]) => name);
+}
+
+/** True while any branch of the repo still holds an open terminal. */
+function hasLiveTerminals(repo: RepositoryState | undefined): boolean {
+	return liveBranchNames(repo).length > 0;
+}
+
+/**
+ * Branch fields a window caches rather than intends: every client recomputes them
+ * from the repository itself, on its own refresh cadence. Mirrors
+ * `DERIVED_BRANCH_FIELDS` in `config.rs` — the backend already excludes them from
+ * its compare-and-swap, for the same reason this file excludes them from the
+ * "does this window have unsaved intent" test.
+ */
+const DERIVED_BRANCH_FIELDS = [
+	"additions",
+	"deletions",
+	"isMerged",
+	"lastActiveTerminal",
+	"lastCommitTs",
+	// Persisted, but session state all the same: it suppresses auto-spawn after the
+	// user closes every pane, and `hydrate` recomputes it from `savedTerminals` on
+	// the next start. Another window's copy is not an edit to defend.
+	"hadTerminals",
+];
+
+/**
+ * What this window *meant* a record to say, for comparison only.
+ *
+ * Two differences must not read as an edit. `updateBranchStats` moves a diffstat
+ * without saving, so a repo under active work drifts from its own baseline every few
+ * seconds — comparing whole records would refuse every remote change for exactly the
+ * repos the user is working in. And the baseline is the document as it came off disk,
+ * *before* `normalizeLoadedRepo` added the migration defaults the store holds, so a
+ * record written by an older build differs on fields nobody touched.
+ */
+function repositoryIntentView(record: RepositoryState | null): unknown {
+	if (!record) return null;
+	const view = cloneJson(record);
+	normalizeLoadedRepo(view);
+	const branches = (view as unknown as { branches: Record<string, Record<string, unknown>> }).branches;
+	for (const branch of Object.values(branches)) {
+		for (const field of DERIVED_BRANCH_FIELDS) delete branch[field];
+	}
+	return view;
+}
+
+/** Re-apply the fields this window owns onto a record read from disk.
+ *  Tab placement, an in-flight CI heal and the derived stats exist only in this
+ *  window's memory or its own refresh cycle, so a record another client wrote would
+ *  otherwise blank them or set them back. */
+function withLiveBranchFields(fresh: RepositoryState, live: RepositoryState | undefined): RepositoryState {
+	const incoming = cloneJson(fresh);
+	if (!live) return incoming;
+	const branches: Record<string, BranchState> = {};
+	for (const [name, branch] of Object.entries(incoming.branches)) {
+		const liveBranch = live.branches[name];
+		if (!liveBranch) {
+			branches[name] = branch;
+			continue;
+		}
+		branches[name] = {
+			...branch,
+			terminals: [...liveBranch.terminals],
+			hadTerminals: liveBranch.hadTerminals,
+			additions: liveBranch.additions,
+			deletions: liveBranch.deletions,
+			isMerged: liveBranch.isMerged,
+			lastActiveTerminal: liveBranch.lastActiveTerminal,
+			lastCommitTs: liveBranch.lastCommitTs,
+			ciAutoHeal:
+				branch.ciAutoHeal && liveBranch.ciAutoHeal?.healing
+					? { ...branch.ciAutoHeal, healing: true }
+					: branch.ciAutoHeal,
+		};
+	}
+	// The repo-level live-terminal rule, at branch granularity: a branch another
+	// client deleted while this window still has a pane open in it stays. Dropping it
+	// leaves the pane running with nothing in `branches` owning it — invisible to the
+	// tab strip, and unreachable through `findOwnerForTerminal`.
+	for (const name of liveBranchNames(live)) {
+		if (!branches[name]) branches[name] = cloneJson(live.branches[name]);
+	}
+	return { ...incoming, branches };
 }
 
 function keyedMutations<T extends RepositoryState | RepoGroup>(
@@ -327,6 +466,11 @@ let persistedSnapshot: RepositorySnapshot | null = null;
 let queuedSnapshot: RepositorySnapshot | null = null;
 let saveInFlight = false;
 
+/** Set by the store so an adoption that arrived mid-save can run once the baseline
+ *  is settled. A save writes `persistedSnapshot` when its request resolves, which
+ *  would otherwise overwrite a baseline an adoption moved while it was in flight. */
+let onSaveSettled: (() => void) | null = null;
+
 function drainRepositorySaveQueue(): void {
 	if (saveInFlight || !queuedSnapshot) return;
 	const next = queuedSnapshot;
@@ -351,6 +495,7 @@ function drainRepositorySaveQueue(): void {
 		})
 		.finally(() => {
 			saveInFlight = false;
+			onSaveSettled?.();
 			if (queuedSnapshot) drainRepositorySaveQueue();
 		});
 }
@@ -381,12 +526,9 @@ async function persistRepositoryMutation(mutation: RepositoryMutationBatch, next
 	// `next`, not the document just read. The baseline must stay in step with this
 	// client's own in-memory state: a record another writer changed is equally stale
 	// in both, so it yields no mutation and their write survives. Adopting disk here
-	// would instead make the next diff revert it.
-	//
-	// DEFERRED (2026-08-25) — a record edited concurrently by two clients resolves
-	// last-writer-wins. Proper merging needs the backend to broadcast a
-	// `repositories-changed` event so clients converge before they collide; that is a
-	// bigger change than un-wedging the save path and is tracked separately.
+	// would instead make the next diff revert it. Convergence between clients is the
+	// job of the `repositories-changed` broadcast, which moves the baseline and the
+	// store together — see `adoptRemoteRepositories`.
 	persistedSnapshot = next;
 }
 
@@ -459,6 +601,205 @@ function createRepositoriesStore() {
 	const saveNow = () =>
 		saveReposImmediate(state.repositories, state.repoOrder, state.activeRepoPath, state.groups, state.groupOrder);
 
+	/** Forget a repository without persisting — the shared half of `remove()` and
+	 *  of adopting a removal another client already wrote to disk. */
+	const dropRepositoryFromState = (path: string): void => {
+		// Clear inverse index entries for all terminals in this repo
+		const repo = state.repositories[path];
+		if (repo) {
+			for (const branch of Object.values(repo.branches)) {
+				for (const termId of branch.terminals) {
+					terminalToRepo.delete(termId);
+				}
+			}
+		}
+		setState(
+			produce((s) => {
+				delete s.repositories[path];
+				delete s.revisions[path];
+				delete s.gitRevisions[path];
+				s.repoOrder = s.repoOrder.filter((p) => p !== path);
+				// Clean up group membership
+				for (const group of Object.values(s.groups)) {
+					group.repoOrder = group.repoOrder.filter((p) => p !== path);
+				}
+				if (s.activeRepoPath === path) {
+					s.activeRepoPath = null;
+				}
+			}),
+		);
+	};
+
+	/**
+	 * Merge a `repositories.json` another client wrote into this one.
+	 *
+	 * A key is adopted only when this client has no unsaved intent for it — when
+	 * the live value still equals the persisted baseline. Adopted keys move in the
+	 * store *and* in the baseline together: those two are diffed against each other
+	 * on every save, so refreshing one alone would make the next diff revert what
+	 * the other client just wrote. Keys this client did change are left untouched;
+	 * they go out on the next save and the compare-and-swap rebase resolves the
+	 * collision, exactly as before.
+	 *
+	 * `activeRepoPath` is never adopted: it is which repo *this* window is looking
+	 * at, and a background event must not move the user's focus.
+	 */
+	const adoptRemoteRepositories = (fresh: RepositorySnapshot): void => {
+		const baseline = persistedSnapshot;
+		if (!hydrated || !baseline) return;
+		// The common event by far is this client's own echo, and the whole body below
+		// is `JSON.stringify` on every repository. Leave before paying for it.
+		if (jsonEqual(baseline, fresh)) return;
+		const current = serializableSnapshot(
+			state.repositories,
+			state.repoOrder,
+			state.activeRepoPath,
+			state.groups,
+			state.groupOrder,
+		);
+		const next = cloneJson(baseline);
+		let adopted = false;
+
+		for (const id of new Set([...Object.keys(baseline.repos), ...Object.keys(fresh.repos)])) {
+			const mine = baseline.repos[id] ?? null;
+			const incoming = fresh.repos[id] ?? null;
+			if (jsonEqual(mine, incoming)) continue;
+			// Unsaved local intent for this repo — leave it to the save path. Derived
+			// fields are excluded: a diffstat that moved under us is not an edit.
+			if (!jsonEqual(repositoryIntentView(mine), repositoryIntentView(current.repos[id] ?? null))) continue;
+			if (incoming) {
+				const normalized = cloneJson(incoming);
+				normalizeLoadedRepo(normalized);
+				const merged = withLiveBranchFields(normalized, state.repositories[id]);
+				// Replaced, not merged: `setState(…, id, record)` walks the incoming keys
+				// only, so a field the other client cleared (`connectionId`) would survive
+				// on the live record forever. Adoption is rare enough to pay for the
+				// coarser update.
+				setState(
+					produce((s) => {
+						s.repositories[id] = merged;
+					}),
+				);
+				// The baseline takes the record as this window now holds it, not as disk
+				// holds it. Storing disk's copy would leave the live-only fields differing
+				// from the baseline on the very next diff, and emit a mutation for them.
+				next.repos[id] = serializableRepo(merged);
+			} else {
+				// A repo holding live terminals is local intent of its own: dropping it
+				// would orphan panes the user is looking at. It stays in the store and in
+				// the baseline, so no mutation is emitted for it — the other client's
+				// removal stands on disk, and this window keeps working until its panes
+				// close.
+				if (hasLiveTerminals(state.repositories[id])) continue;
+				delete next.repos[id];
+				dropRepositoryFromState(id);
+			}
+			adopted = true;
+		}
+
+		for (const id of new Set([...Object.keys(baseline.groups), ...Object.keys(fresh.groups)])) {
+			const mine = baseline.groups[id] ?? null;
+			const incoming = fresh.groups[id] ?? null;
+			if (jsonEqual(mine, incoming)) continue;
+			if (!jsonEqual(mine, current.groups[id] ?? null)) continue;
+			if (incoming) {
+				next.groups[id] = cloneJson(incoming);
+				setState("groups", id, cloneJson(incoming));
+			} else {
+				delete next.groups[id];
+				next.groupOrder = next.groupOrder.filter((gid) => gid !== id);
+				setState(
+					produce((s) => {
+						delete s.groups[id];
+						s.groupOrder = s.groupOrder.filter((gid) => gid !== id);
+					}),
+				);
+			}
+			adopted = true;
+		}
+
+		if (!jsonEqual(baseline.repoOrder, fresh.repoOrder) && jsonEqual(baseline.repoOrder, current.repoOrder)) {
+			next.repoOrder = [...fresh.repoOrder];
+			setState("repoOrder", [...fresh.repoOrder]);
+			adopted = true;
+		}
+		if (!jsonEqual(baseline.groupOrder, fresh.groupOrder) && jsonEqual(baseline.groupOrder, current.groupOrder)) {
+			next.groupOrder = [...fresh.groupOrder];
+			setState("groupOrder", [...fresh.groupOrder]);
+			adopted = true;
+		}
+
+		// Every repo the store holds has to be reachable from `repoOrder` or from a
+		// group, or the sidebar has no row to render it on. Adoption can break that
+		// invariant two ways: the loop above refuses to drop a repo holding live
+		// terminals while the order arrives from the client that did drop it, and a
+		// group deleted elsewhere takes its members' only placement with it. Both end
+		// with a repo that is running and invisible; `deleteGroup` resolves the second
+		// case the same way, by putting the members back at the end.
+		const placed = new Set([...next.repoOrder, ...Object.values(next.groups).flatMap((group) => group.repoOrder)]);
+		const unplaced = Object.keys(next.repos).filter((id) => !placed.has(id));
+		if (unplaced.length > 0) {
+			next.repoOrder = [...next.repoOrder, ...unplaced];
+			setState("repoOrder", [...next.repoOrder]);
+			adopted = true;
+		}
+
+		if (!adopted) return;
+		persistedSnapshot = next;
+		syncHotRepos(state.repositories);
+		invoke("github_update_paths", { paths: actions.getActivePaths() }).catch(() => {});
+	};
+
+	let remoteSyncStarted = false;
+	let remoteSyncPending = false;
+
+	/**
+	 * Re-read disk and merge whatever another client wrote.
+	 *
+	 * Deferred while a save is in flight. That save ends by assigning
+	 * `persistedSnapshot`, computed before it was sent, so an adoption landing inside
+	 * that window has its baseline overwritten while its store changes stay — leaving
+	 * the two out of step, which is the one thing this whole path exists to prevent.
+	 * There is no ordering guarantee between the broadcast and the save's own reply,
+	 * so waiting is the only sound answer; `onSaveSettled` runs us again.
+	 */
+	const syncFromDisk = (): void => {
+		if (saveInFlight) {
+			remoteSyncPending = true;
+			return;
+		}
+		remoteSyncPending = false;
+		loadPersistedSnapshot()
+			.then((fresh) => {
+				if (!fresh) return;
+				// A save can have started while the read was in flight — same window,
+				// checked again on the near side of it.
+				if (saveInFlight) {
+					remoteSyncPending = true;
+					return;
+				}
+				adoptRemoteRepositories(fresh);
+			})
+			.catch((err) => appLogger.error("store", "Failed to re-read repositories after a remote change", err));
+	};
+
+	/** Subscribe once to the backend's `repositories-changed` broadcast. Started
+	 *  from `hydrate`, so the first adoption always has a baseline to diff against.
+	 *  This client's own saves echo back here too; they adopt nothing, because every
+	 *  key they moved still differs from the baseline they were diffed from. */
+	const startRemoteSync = (): void => {
+		if (remoteSyncStarted) return;
+		remoteSyncStarted = true;
+		onSaveSettled = () => {
+			if (remoteSyncPending) syncFromDisk();
+		};
+		listen("repositories-changed", syncFromDisk).catch((err) => {
+			remoteSyncStarted = false;
+			onSaveSettled = null;
+			appLogger.error("store", "Failed to register the repositories-changed listener", err);
+		});
+	};
+
 	const actions = {
 		/** Load repos from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
@@ -516,43 +857,7 @@ function createRepositoriesStore() {
 				const repos = loaded?.repos;
 				if (repos) {
 					// Migration: add collapsed/expanded fields, clear stale terminal IDs
-					Object.values(repos).forEach((repo) => {
-						if (repo.collapsed === undefined) {
-							repo.collapsed = false;
-						}
-						if (repo.expanded === undefined) {
-							repo.expanded = true;
-						}
-						if (repo.parked === undefined) {
-							repo.parked = false;
-						}
-						// Migration: remove legacy showAllBranches field
-						delete (repo as unknown as Record<string, unknown>).showAllBranches;
-						for (const branch of Object.values(repo.branches)) {
-							branch.terminals = [];
-							// Reset hadTerminals on startup: the flag only suppresses auto-spawn
-							// within a session (after user closes all terminals). Across restarts,
-							// auto-spawn should work unless savedTerminals will restore them.
-							branch.hadTerminals = !!branch.savedTerminals?.length;
-							if (branch.savedTerminals === undefined) {
-								branch.savedTerminals = [];
-							}
-							// A build that drops an agent leaves its name behind on disk — `fx`
-							// was first-class for five days before being reverted. `AGENT_DISPLAY`
-							// and `AGENTS` are exhaustive `Record<AgentType, …>` indexed without an
-							// existence check, so a stale name throws inside a render that no
-							// ErrorBoundary covers. Drop it once here rather than making every
-							// index site defend itself.
-							for (const saved of branch.savedTerminals) {
-								if (saved.agentType !== null && !AGENT_TYPES.includes(saved.agentType)) {
-									saved.agentType = null;
-								}
-							}
-							if (branch.isMerged === undefined) {
-								branch.isMerged = false;
-							}
-						}
-					});
+					Object.values(repos).forEach(normalizeLoadedRepo);
 					setState("repositories", repos);
 
 					// Hydrate repoOrder: use saved order, falling back to Object.keys for repos not yet in the order
@@ -573,6 +878,7 @@ function createRepositoriesStore() {
 				}
 				hydrated = true;
 				syncHotRepos(state.repositories);
+				startRemoteSync();
 			} catch (err) {
 				appLogger.error("store", "Failed to hydrate repositories", err);
 				// hydrated stays false — saves are blocked to prevent data loss
@@ -608,30 +914,7 @@ function createRepositoriesStore() {
 
 		/** Remove a repository */
 		remove(path: string): void {
-			// Clear inverse index entries for all terminals in this repo
-			const repo = state.repositories[path];
-			if (repo) {
-				for (const branch of Object.values(repo.branches)) {
-					for (const termId of branch.terminals) {
-						terminalToRepo.delete(termId);
-					}
-				}
-			}
-			setState(
-				produce((s) => {
-					delete s.repositories[path];
-					delete s.revisions[path];
-					delete s.gitRevisions[path];
-					s.repoOrder = s.repoOrder.filter((p) => p !== path);
-					// Clean up group membership
-					for (const group of Object.values(s.groups)) {
-						group.repoOrder = group.repoOrder.filter((p) => p !== path);
-					}
-					if (s.activeRepoPath === path) {
-						s.activeRepoPath = null;
-					}
-				}),
-			);
+			dropRepositoryFromState(path);
 			save();
 			invoke("github_update_paths", { paths: this.getActivePaths() }).catch(() => {});
 		},

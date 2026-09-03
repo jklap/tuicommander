@@ -1077,6 +1077,13 @@ Different repository/group IDs and independent order membership changes
 compose; incompatible changes to the same record return `409 Conflict` and a
 malformed or unversioned delta returns `400 Bad Request`.
 
+A `PUT` that actually moves the document broadcasts a payload-free
+`repositories-changed` SSE event (subscribe with `GET /events?types=repositories-changed`)
+so the other clients re-read the document instead of saving over it from a stale
+baseline. A delta that was already applied changes nothing on disk and is not
+announced. See `docs/backend/config.md` for what a receiving client is allowed to
+adopt.
+
 ### Prompt Library
 
 ```

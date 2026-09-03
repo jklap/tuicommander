@@ -30,6 +30,11 @@ function resetStores() {
 	for (const id of mdTabsStore.getIds()) {
 		mdTabsStore.remove(id);
 	}
+	// Toasts dedup on title+message+level+repoPath, so one left behind by an
+	// earlier test silently suppresses the next test's identical toast.
+	for (const toast of [...toastsStore.toasts]) {
+		toastsStore.remove(toast.id);
+	}
 }
 
 function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
@@ -58,6 +63,7 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 		},
 		applyPlatformClass: vi.fn().mockReturnValue("macos"),
 		onCloseRequested: vi.fn().mockResolvedValue(undefined),
+		registerRepo: vi.fn().mockResolvedValue(undefined),
 		...overrides,
 	};
 }
@@ -651,6 +657,75 @@ describe("initApp", () => {
 		expect(terminalsStore.get(branch!.terminals[0])?.sessionId).toBe("sess-1");
 		expect(terminalsStore.getCount()).toBe(1);
 		expect(deps.handleBranchSelect).not.toHaveBeenCalled();
+	});
+
+	describe("parked-tab toast registration", () => {
+		// A worktree of an unregistered repo: unregisteredRepoRootFor strips the
+		// `__wt/<branch>` suffix, so the root the user must register is /gits/ls/gate-os.
+		const PARKED_CWD = "/gits/ls/gate-os__wt/poc-0001-blade";
+		const DEDUCED_ROOT = "/gits/ls/gate-os";
+
+		function parkedSessionDeps(): AppInitDeps {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActive("/repo");
+			return createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-parked", cwd: PARKED_CWD }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+		}
+
+		function parkedToast() {
+			return toastsStore.toasts.find((toast) => toast.title === "Tab parked in the wrong repo");
+		}
+
+		it("offers a register action naming the deduced repo root", async () => {
+			const deps = parkedSessionDeps();
+			await initApp(deps);
+
+			const toast = parkedToast();
+			expect(toast).toBeDefined();
+			expect(toast!.message).toContain(DEDUCED_ROOT);
+			expect(toast!.action?.label).toBe("Register");
+		});
+
+		// The whole reason auto-registration was rejected: addRepoByPath calls
+		// setActive(), so registering from a background reconnect would yank the
+		// focused repo out from under the user. Adoption must stay inert.
+		it("registers nothing while the action is not clicked", async () => {
+			const deps = parkedSessionDeps();
+			await initApp(deps);
+
+			expect(parkedToast()).toBeDefined();
+			expect(deps.registerRepo).not.toHaveBeenCalled();
+			expect(repositoriesStore.getPaths()).not.toContain(DEDUCED_ROOT);
+			// The tab is still parked in the focused repo, and the focus is untouched.
+			expect(repositoriesStore.get("/repo")?.branches["main"].terminals).toHaveLength(1);
+			expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
+		});
+
+		it("registers the deduced root when the action is clicked", async () => {
+			const deps = parkedSessionDeps();
+			await initApp(deps);
+
+			parkedToast()!.action!.onClick();
+
+			expect(deps.registerRepo).toHaveBeenCalledTimes(1);
+			expect(deps.registerRepo).toHaveBeenCalledWith(DEDUCED_ROOT);
+		});
+
+		it("survives a failing registration without an unhandled rejection", async () => {
+			const deps = parkedSessionDeps();
+			deps.registerRepo = vi.fn().mockRejectedValue(new Error("not a directory"));
+			await initApp(deps);
+
+			expect(() => parkedToast()!.action!.onClick()).not.toThrow();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(deps.registerRepo).toHaveBeenCalledWith(DEDUCED_ROOT);
+		});
 	});
 
 	it("snapshots agentSessionId into savedTerminals on beforeunload", async () => {

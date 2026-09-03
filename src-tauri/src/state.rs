@@ -191,6 +191,15 @@ pub enum AppEvent {
     /// request must dismiss it; `confirmed` is the answer that won.
     #[serde(rename = "mcp-confirm-resolved")]
     McpConfirmResolved { request_id: String, confirmed: bool },
+    /// `repositories.json` was written by some client.
+    ///
+    /// Payload-free on purpose. One backend serves the desktop WebView, the
+    /// browser and the PWA, and each keeps its own compare-and-swap baseline; the
+    /// only thing a receiver needs to know is "disk moved, re-read it". Shipping
+    /// the document instead would copy the whole repository set to every client on
+    /// every save — including the client that just wrote it.
+    #[serde(rename = "repositories-changed")]
+    RepositoriesChanged,
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
@@ -3110,6 +3119,21 @@ impl AppState {
         }
     }
 
+    /// Announce that `repositories.json` was written, so every other client
+    /// re-reads disk instead of overwriting it from a stale baseline.
+    ///
+    /// Call this only when the save actually changed the document — see
+    /// `config::save_repositories_request`. Dual-emitted because there is no
+    /// bus-to-window forwarder: the desktop WebView listens on the Tauri event,
+    /// browser and PWA clients on the `/events` SSE bus.
+    pub(crate) fn notify_repositories_changed(&self) {
+        let _ = self.event_bus.send(AppEvent::RepositoriesChanged);
+        #[cfg(feature = "desktop")]
+        if let Some(ref app) = *self.app_handle.read() {
+            let _ = app.emit("repositories-changed", serde_json::json!({}));
+        }
+    }
+
     /// Default rate limit expiry when no retry_after_ms is provided (120s).
     const RATE_LIMIT_DEFAULT_EXPIRY_MS: u64 = 120_000;
 
@@ -3582,6 +3606,7 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
+            | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::WorktreeCreated { .. }
             | AppEvent::WorktreeRemoved { .. }

@@ -442,6 +442,60 @@ IPC reports that error to the frontend, where it creates a user-visible Errors
 badge; HTTP returns `409 Conflict`. Malformed deltas return HTTP `400`. A
 versioned delta is required; unversioned whole-document bodies are rejected.
 
+**A successful write is announced, so the other clients converge instead of
+colliding.** One backend serves the desktop WebView, the browser and the PWA at
+once, and each keeps its own `before` baseline. Until this event existed, a save
+told the other clients nothing: their baseline stayed stale until a conflict
+taught them otherwise, which is late — by then the two documents have already
+diverged. Both save paths (`save_repositories` over IPC, `PUT
+/config/repositories` over HTTP) now call `AppState::notify_repositories_changed()`,
+which dual-emits the payload-free `repositories-changed` event to the desktop
+window and onto the `/events` SSE bus.
+
+It fires **only when the document actually moved**:
+`save_repositories_request` returns `Ok(true)` for a write and `Ok(false)` for a
+delta already applied, so a no-op save does not wake every client. The payload is
+empty by design — a receiver only needs "disk moved, re-read it", and shipping
+the document would copy the whole repository set to everyone on every save.
+
+On the receiving side `repositoriesStore` re-reads `repositories.json` and adopts
+a key **only when it has no unsaved intent for it** — when its live value still
+equals its baseline. Adopted keys move in the store *and* in the baseline
+together: those two are diffed against each other on every save, so refreshing
+one alone would make the next diff revert what the other client just wrote. Two
+keys are deliberately never adopted: `activeRepoPath`, because which repo a
+window is looking at is per-window and a background event must not move the
+user's focus, and a repository whose disk record disappeared while it still holds
+open terminals, because dropping it would orphan panes the user is looking at.
+Keys this client did change are left untouched and still resolve through the
+compare-and-swap rebase.
+
+Four details make that gate hold up in practice:
+
+- **The "unsaved intent" test runs on an intent view, not the whole record.**
+  `repositoriesStore` mirrors the backend's `DERIVED_BRANCH_FIELDS` (plus
+  `hadTerminals`, which is session state that happens to be persisted) and
+  normalizes both sides through the same migration pass `hydrate` applies. Without
+  the first, a repo under active work drifts from its own baseline every few
+  seconds via `updateBranchStats`, which saves nothing — and adoption would be
+  refused for exactly the repos the user is working in. Without the second, a
+  baseline read off disk *before* the migration defaults were added never matches
+  the migrated store, and a record written by an older build is never adopted.
+- **The live-terminal rule applies per branch, not only per repository.** A repo
+  record that survives on disk with one branch removed goes through the merge path,
+  where the repo-level guard never runs; a branch this window still has a pane in is
+  kept there instead.
+- **Every repo the store holds stays in `repoOrder`.** The order arrives from the
+  client that *did* drop the repo, so a record kept for its live terminals would
+  otherwise leave the sidebar while its panes keep running. Grouping is an overlay:
+  `getGroupedLayout` filters grouped paths out of `repoOrder` at render time, so
+  putting a repo back there is always safe.
+- **Adoption waits for an in-flight save.** A save ends by assigning the baseline
+  it computed before it was sent, and nothing orders the broadcast against that
+  save's own reply — so an adoption landing inside the window would have its
+  baseline overwritten while its store changes stay, which is the one state this
+  whole path exists to prevent.
+
 **Version skew is the dangerous case, and it is one-sided.** A backend from
 before the delta protocol does not decode `config` at all — it stores it as the
 whole document, so `repositories.json` becomes the delta envelope and every
