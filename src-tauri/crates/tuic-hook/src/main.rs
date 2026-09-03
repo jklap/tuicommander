@@ -108,7 +108,7 @@ DERIVATION (Claude Code events):
     PostToolUse           state=busy      scrapes tool_name
     PostToolUseFailure    (no state)      scrapes tool_name; toolfail=<exit_code, default 1>,
                                            suppressed entirely if is_interrupt is true
-    Notification          state=awaiting  scrapes message
+    Notification          state=awaiting  scrapes message, notification_type
     Elicitation           state=awaiting  MCP server asking the user for input mid tool call
     ElicitationResult     state=busy      paired retraction for Elicitation
     Stop                  state=idle
@@ -125,6 +125,7 @@ FLAGS (override the derived value; freely combinable):
     --emit-session                 Force scraping session_id/cwd/transcript_path.
     --emit-tool                    Force scraping tool_name.
     --emit-notify                  Force scraping message.
+    --emit-notification-type       Force scraping notification_type.
     --version                      Print the version and exit (no TUIC_SESSION needed).
     --help, -h                     Print this message and exit (no TUIC_SESSION needed).
 
@@ -134,7 +135,8 @@ understand, never fail the hook.
 
 STDIN:
     A JSON object, read in full (bounded to 1 MiB). Fields read: hook_event_name,
-    session_id, cwd, transcript_path, tool_name, message, exit_code, is_interrupt.
+    session_id, cwd, transcript_path, tool_name, message, notification_type,
+    exit_code, is_interrupt.
     Missing, empty, or malformed fields are treated as absent — never an error. A
     payload truncated past the bound loses the whole fire's derivation, not just
     the oversized field.
@@ -148,8 +150,9 @@ ENVIRONMENT:
 
 WIRE FORMAT:
     ESC ] 7770 ; verb=payload ESC \    (one sequence per verb, one write per fire)
-    Free-text payloads (ccsession, cwd, transcript, tool, notify) are percent-encoded;
-    state and toolfail are fixed enum/numeric values, emitted verbatim.
+    Free-text payloads (ccsession, cwd, transcript, tool, notify, notifytype) are
+    percent-encoded; state and toolfail are fixed enum/numeric values, emitted
+    verbatim.
 "#,
         version = env!("CARGO_PKG_VERSION")
     )
@@ -177,6 +180,7 @@ struct ParsedArgs {
     emit_session: bool,
     emit_tool: bool,
     emit_notify: bool,
+    emit_notification_type: bool,
 }
 
 /// Hand-rolled, not clap: this is most of the per-fire cost a compiled
@@ -205,6 +209,7 @@ fn parse_args(args: &[String]) -> ParsedArgs {
             "--emit-session" => out.emit_session = true,
             "--emit-tool" => out.emit_tool = true,
             "--emit-notify" => out.emit_notify = true,
+            "--emit-notification-type" => out.emit_notification_type = true,
             _ => {} // unrecognized — ignore, don't error
         }
         i += 1;
@@ -281,6 +286,7 @@ struct EventDerivation {
     state: Option<&'static str>,
     scrape_tool_name: bool,
     scrape_message: bool,
+    scrape_notification_type: bool,
     scrape_session_metadata: bool,
     toolfail: DerivedToolfail,
 }
@@ -306,6 +312,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("busy"),
         scrape_tool_name: false,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: true,
         toolfail: DerivedToolfail::None,
     },
@@ -314,6 +321,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("busy"),
         scrape_tool_name: false,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::None,
     },
@@ -322,6 +330,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("busy"),
         scrape_tool_name: true,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::None,
     },
@@ -330,6 +339,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("busy"),
         scrape_tool_name: true,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::None,
     },
@@ -338,6 +348,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: None,
         scrape_tool_name: true,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::FromStdinExitCode,
     },
@@ -346,6 +357,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("awaiting"),
         scrape_tool_name: false,
         scrape_message: true,
+        scrape_notification_type: true,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::None,
     },
@@ -359,6 +371,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("awaiting"),
         scrape_tool_name: false,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::None,
     },
@@ -369,6 +382,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("busy"),
         scrape_tool_name: false,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::None,
     },
@@ -377,6 +391,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("idle"),
         scrape_tool_name: false,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::None,
     },
@@ -385,6 +400,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("idle"),
         scrape_tool_name: false,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::Fixed("1"),
     },
@@ -393,6 +409,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         state: Some("idle"),
         scrape_tool_name: false,
         scrape_message: false,
+        scrape_notification_type: false,
         scrape_session_metadata: false,
         toolfail: DerivedToolfail::None,
     },
@@ -411,6 +428,8 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
         parsed.emit_session || derivation.is_some_and(|d| d.scrape_session_metadata);
     let scrape_tool_name = parsed.emit_tool || derivation.is_some_and(|d| d.scrape_tool_name);
     let scrape_message = parsed.emit_notify || derivation.is_some_and(|d| d.scrape_message);
+    let scrape_notification_type =
+        parsed.emit_notification_type || derivation.is_some_and(|d| d.scrape_notification_type);
 
     if scrape_session_metadata {
         if let Some(v) = str_field(stdin_json, "session_id") {
@@ -428,6 +447,19 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
     }
     if scrape_message && let Some(v) = str_field(stdin_json, "message") {
         pairs.push(Emission::encoded("notify", v));
+    }
+    // `notification_type` is Claude Code's own closed-set discriminant for a
+    // `Notification` fire (`permission_prompt`, `idle_prompt`, `auth_success`,
+    // `elicitation_dialog`, `elicitation_url_dialog`, `elicitation_complete`,
+    // `elicitation_response`, `agent_needs_input`, `agent_completed`,
+    // `quota_auto_resume_fired`, `quota_auto_resume_stale`,
+    // `quota_auto_resume_disabled` as of this writing) — far more reliable
+    // than sniffing the free-text `message` wording the way
+    // `output_parser.rs::parse_osc777_notifies` has to. Scraped as its own
+    // verb, alongside `notify`, so the receiving end (`pty.rs`) can classify
+    // deterministically instead of guessing from prose.
+    if scrape_notification_type && let Some(v) = str_field(stdin_json, "notification_type") {
+        pairs.push(Emission::encoded("notifytype", v));
     }
 
     // toolfail: an explicit fixed value or `--toolfail-from-stdin` always
@@ -526,11 +558,13 @@ mod tests {
             "--emit-session".into(),
             "--emit-tool".into(),
             "--emit-notify".into(),
+            "--emit-notification-type".into(),
         ]);
         assert!(a.toolfail_from_stdin);
         assert!(a.emit_session);
         assert!(a.emit_tool);
         assert!(a.emit_notify);
+        assert!(a.emit_notification_type);
     }
 
     #[test]
@@ -679,6 +713,57 @@ mod tests {
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].verb, "notify");
         assert!(!pairs[0].payload.contains(';'), "must be percent-encoded");
+    }
+
+    #[test]
+    fn emit_notification_type_extracts_and_encodes_it() {
+        let parsed = ParsedArgs {
+            emit_notification_type: true,
+            ..Default::default()
+        };
+        let json = serde_json::json!({"notification_type": "idle_prompt"});
+        let pairs = build_emissions(&parsed, &json);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].verb, "notifytype");
+        assert_eq!(pairs[0].payload, "idle_prompt");
+    }
+
+    #[test]
+    fn emit_notification_type_omits_missing_field() {
+        let parsed = ParsedArgs {
+            emit_notification_type: true,
+            ..Default::default()
+        };
+        let pairs = build_emissions(&parsed, &Value::Null);
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn emit_notification_type_omits_empty_string_field() {
+        let parsed = ParsedArgs {
+            emit_notification_type: true,
+            ..Default::default()
+        };
+        let json = serde_json::json!({"notification_type": ""});
+        let pairs = build_emissions(&parsed, &json);
+        assert!(
+            pairs.is_empty(),
+            "an empty notification_type must be treated as absent, same as every other free-text field"
+        );
+    }
+
+    #[test]
+    fn emit_notification_type_ignores_non_string_value_without_panicking() {
+        // Claude Code's schema documents notification_type as a string, but a
+        // future/buggy build sending a non-string value must degrade the same
+        // way every other str_field() consumer does — omit it, never panic.
+        let parsed = ParsedArgs {
+            emit_notification_type: true,
+            ..Default::default()
+        };
+        let json = serde_json::json!({"notification_type": 42});
+        let pairs = build_emissions(&parsed, &json);
+        assert!(pairs.is_empty());
     }
 
     #[test]
@@ -845,6 +930,39 @@ mod tests {
     }
 
     #[test]
+    fn derives_notification_type_alongside_message_for_notification() {
+        // Real production payload shape (2026-09-02 capture, dbsql-test-review):
+        // Claude Code's Notification event carries a closed-set
+        // `notification_type` discriminant alongside `message` — scraped as
+        // its own verb so the receiving end can classify deterministically
+        // instead of sniffing `message`'s free-text wording.
+        let json = serde_json::json!({
+            "hook_event_name": "Notification",
+            "message": "Claude is waiting for your input",
+            "notification_type": "idle_prompt",
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
+        assert_eq!(verbs, ["notify", "notifytype", "state"]);
+        assert_eq!(pairs[1].payload, "idle_prompt");
+        assert_eq!(pairs[2].payload, "awaiting");
+    }
+
+    #[test]
+    fn notification_with_no_notification_type_field_still_derives_normally() {
+        // An older Claude Code build that doesn't send notification_type yet
+        // — must degrade to exactly the pre-existing shape, not drop message
+        // or state too.
+        let json = serde_json::json!({
+            "hook_event_name": "Notification",
+            "message": "needs input",
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
+        assert_eq!(verbs, ["notify", "state"]);
+    }
+
+    #[test]
     fn derives_idle_for_stop_and_session_end() {
         for event in ["Stop", "SessionEnd"] {
             let json = serde_json::json!({"hook_event_name": event});
@@ -959,6 +1077,7 @@ mod tests {
             "--emit-session",
             "--emit-tool",
             "--emit-notify",
+            "--emit-notification-type",
             "--version",
             "--help",
             "TUIC_SESSION",

@@ -196,8 +196,11 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
     inside TUICommander consumes it on the other end.</p>
     <div class="src">Tracked alongside <code>src-tauri/src/agent_hook.rs</code> and
     <code>src-tauri/crates/tuic-hook/</code>, following the same convention as
-    <code>tuic-escape-sequences.html</code>. See also <code>docs/backend/tuic-hook.md</code> for the
-    developer-doc version of the CLI reference below.</div>
+    <code>tuic-escape-sequences.html</code> (wire-format reference for every verb below — its OSC 7770
+    section is the canonical grammar; "Verbs emitted" here just names which ones a given event fires).
+    For the bigger picture — how this hook path relates to OSC 777 and screen-scraping, and the
+    per-agent signal matrix — see <code>agent-signal-architecture.html</code>. See also
+    <code>docs/backend/tuic-hook.md</code> for the developer-doc version of the CLI reference below.</div>
   </div>
 
   <div class="quicknav">
@@ -388,6 +391,15 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
         <div class="evt-field"><h4>Verbs emitted</h4><div class="val arrow-chain"><span class="pill verb">tool</span><span class="pill verb">state=busy</span></div></div>
         <div class="evt-field"><h4>Drives</h4><div class="val">Clears the awaiting overlay; back to busy.</div></div>
       </div>
+      <p class="note"><strong>Fixed 2026-09-01:</strong> this re-affirmation's clear used to be
+      silently dropped whenever it fired mid-turn — the ordinary case, since
+      <code>PreToolUse(AskUserQuestion)</code>'s <code>awaiting</code> override (above) never touches
+      the shell busy/idle bit, so shell state was already <code>SHELL_BUSY</code> and stayed that way
+      through both the block and this re-affirmation. <code>tuic_state_awaiting_event</code> gated the
+      clear on a real idle→busy edge (<code>busy_transitioned</code>), which this same-state
+      re-affirmation never has, so "back to busy" above was aspirational, not actual, for exactly the
+      turn this entry exists to cover. Live-reproduced on two unattended/auto-approve sessions — full
+      incident write-up: <code>agent-signal-architecture.html#incidents</code>.</p>
     </div>
 
     <div class="evt">
@@ -412,10 +424,48 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
       <div class="evt-top"><span class="name">Notification</span><span class="pill event">awaiting</span></div>
       <div class="evt-grid">
         <div class="evt-field"><h4>Matcher</h4><div class="val">— (all)</div></div>
-        <div class="evt-field"><h4>Extracts</h4><div class="val">message</div></div>
-        <div class="evt-field"><h4>Verbs emitted</h4><div class="val arrow-chain"><span class="pill verb">notify</span><span class="pill verb">state=awaiting</span></div></div>
-        <div class="evt-field"><h4>Drives</h4><div class="val">Question overlay + <code>AgentMetadata{message}</code> — precise awaiting reason, open for a future prompt-text upgrade.</div></div>
+        <div class="evt-field"><h4>Extracts</h4><div class="val">message, notification_type</div></div>
+        <div class="evt-field"><h4>Verbs emitted</h4><div class="val arrow-chain"><span class="pill verb">notify</span><span class="pill verb">notifytype</span><span class="pill verb">state=awaiting</span></div></div>
+        <div class="evt-field"><h4>Drives</h4><div class="val">Question overlay (classified — see below) + <code>AgentMetadata{message}</code>/<code>AgentMetadata{notification_type}</code>.</div></div>
       </div>
+      <p class="note"><strong>Fixed (2026-09-02):</strong> Claude Code fires this same hook event for
+      12 different reasons (<code>notification_type</code>: <code>permission_prompt</code>,
+      <code>idle_prompt</code>, <code>auth_success</code>, <code>elicitation_dialog</code>,
+      <code>elicitation_url_dialog</code>, <code>elicitation_complete</code>,
+      <code>elicitation_response</code>, <code>agent_needs_input</code>, <code>agent_completed</code>,
+      <code>quota_auto_resume_fired</code>, <code>quota_auto_resume_stale</code>,
+      <code>quota_auto_resume_disabled</code>) — only some of them a genuine block, others pure
+      lifecycle noise, and <code>idle_prompt</code> specifically fires both for a stuck plan/skill
+      picker <em>and</em> for Claude's own ~60s idle-timer heartbeat after a finished turn. This
+      event's <code>state=awaiting</code> used to always map to <code>Question{confident: true}</code>
+      (<code>tuic_state_awaiting_event</code>) regardless of which of the 12 it was, so an idle-timer
+      false alarm latched the awaiting badge exactly as hard as a genuine block, with nothing to
+      retract it. Fix: <code>tuic-hook</code> now also scrapes <code>notification_type</code> (the
+      <code>notifytype</code> verb, paired with <code>notify</code> immediately before
+      <code>state=awaiting</code> in the same fire), and
+      <code>pty.rs::notification_awaiting_outcome</code> classifies deterministically off it —
+      <code>permission_prompt</code>/<code>elicitation_dialog</code>/<code>elicitation_url_dialog</code>/
+      <code>agent_needs_input</code>/<code>quota_auto_resume_stale</code> stay confident;
+      <code>auth_success</code>/<code>elicitation_complete</code>/<code>elicitation_response</code>/
+      <code>agent_completed</code>/<code>quota_auto_resume_fired</code>/
+      <code>quota_auto_resume_disabled</code> never badge awaiting at all (they're not the agent
+      asking anything); <code>idle_prompt</code> is dropped outright when the shell is already idle (a
+      real <code>Stop</code> already fired — the dbsql-test-review shape) but still surfaces
+      non-confidently when the shell is still busy (the one signal available for a stuck plan/skill
+      picker). <code>PreToolUse(AskUserQuestion|ExitPlanMode)</code> and <code>Elicitation</code> never
+      scrape either field, so their absence leaves them unconditionally confident, unchanged. A
+      <code>notification_type</code> this binary predates, or its total absence (an older Claude Code
+      build), falls back to the wording rule <code>output_parser.rs::parse_osc777_notifies</code>
+      already uses for its own ambiguous text — never a fixed guess, since guessing either direction
+      risks either silently swallowing a real future block or reproducing this exact incident under a
+      new type name. Full mechanism and the (apparently unrelated, unconfirmed) OSC 777 path this
+      mirrors: <code>agent-signal-architecture.html#osc-confusion</code>.</p>
+      <p class="note"><strong>Related but distinct fix (2026-09-01):</strong> the
+      <code>PostToolUse(AskUserQuestion|ExitPlanMode)</code> busy re-affirmation below had a
+      SEPARATE bug — a genuinely, correctly confident question's clear was getting silently dropped
+      mid-turn (shell already busy, no edge for <code>busy_transitioned</code> to see). Fixed; do not
+      confuse the two mechanisms. Full incident write-up and the general "how to investigate a stuck
+      badge" playbook: <code>agent-signal-architecture.html#incidents</code>.</p>
     </div>
 
     <div class="evt">
