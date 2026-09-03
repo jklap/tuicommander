@@ -2316,6 +2316,13 @@ pub struct AppState {
     pub(crate) window_geometry: crate::window_geometry::WindowGeometryTracker,
     /// Server start time for uptime calculation in health endpoint.
     pub(crate) server_start_time: std::time::Instant,
+    /// tmux-shim pane topology, keyed by tmux server label (the `-L`/`-S`
+    /// value a `tuic`-as-`tmux` invocation passes as a global option, or
+    /// `"default"` for one that passes neither). See
+    /// `crate::mcp_http::tmux_routes` for the full model — this is in-memory
+    /// only, by design: a swarm cannot outlive its lead process, so losing it
+    /// on app restart is correct, not a bug.
+    pub(crate) tmux_servers: DashMap<String, crate::mcp_http::tmux_routes::TmuxTopology>,
     /// TUIC's own AI agent: per-session knowledge, sandboxes, the watcher
     /// engine, the cron scheduler and the suggestion triggers.
     pub(crate) ai: AiAgentState,
@@ -3568,6 +3575,7 @@ impl AppState {
                 crate::window_geometry::WindowGeometry::default(),
             ),
             server_start_time: std::time::Instant::now(),
+            tmux_servers: DashMap::new(),
             tunnel_manager,
             remote: Default::default(),
             remote_sessions: Default::default(),

@@ -1470,6 +1470,9 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
                                     serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
                                 }
+                                crate::state::AppEvent::SessionRenamed { session_id: sid, name, is_custom } => {
+                                    serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom})
+                                }
                                 _ => continue,
                             };
                             if ws_sender.text(&payload.to_string()).await.is_err() {
@@ -1735,6 +1738,13 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
             description,
         } => {
             serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
+        }
+        crate::state::AppEvent::SessionRenamed {
+            session_id: sid,
+            name,
+            is_custom,
+        } => {
+            serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom})
         }
         // Mirrors the desktop `Osc133Event` field for field — see the shape
         // contract above. Without this a browser/PWA client had no command
@@ -2973,6 +2983,41 @@ mod tests {
             !concatenated_slash_mode,
             "the concatenated Escape/slash request must remain distinguishable from two parts"
         );
+    }
+
+    /// `PUT /sessions/{id}/name` is a frontend-originated rename (the store's
+    /// `update()` echoes every `name` change here), so it must never emit
+    /// `session-renamed`: the frontend's listener feeds that event straight back
+    /// into `update()`, which would echo again — an unbounded ping-pong on every
+    /// OSC title repaint. Backend-originated renames (MCP `session action=rename`,
+    /// tmux `select-pane -T`) go through `AppState::rename_session_from_backend`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_never_emits_session_renamed() {
+        let state = super::super::tests::test_state();
+        let session_id = "rename-no-echo";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        let mut rx = state.event_bus.subscribe();
+        for name in ["hello", "hello", "world"] {
+            set_session_name(
+                State(state.clone()),
+                Path(session_id.to_string()),
+                Json(SetNameRequest {
+                    name: Some(name.to_string()),
+                    is_custom: Some(false),
+                }),
+            )
+            .await;
+        }
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event, crate::state::AppEvent::SessionRenamed { .. }),
+                "a frontend-originated rename must not emit session-renamed: {event:?}"
+            );
+        }
+        let entry = state.session_maps.sessions.get(session_id).unwrap();
+        assert_eq!(entry.lock().display_name.as_deref(), Some("world"));
     }
 
     #[cfg(unix)]
