@@ -12,8 +12,19 @@ concurrency:
 
 # Keep the sccache server alive across a compile longer than its 600s idle timer —
 # see the note in release.yml.
+#
+# RUST_VERSION pins the compiler. `dtolnay/rust-toolchain@stable` floats: a new
+# stable turns fresh clippy lints and rustfmt reflows into a red main for whoever
+# pushes next, which has now happened three times (7db734f9, 20e58629, and the
+# 1.98 lints cleared on 2026-08-31 while CI was still green on an older stable).
+# To bump: raise the version HERE and in release.yml, nightly.yml and audit.yml in
+# one commit, after `cargo clippy --all-targets -- -D warnings` and
+# `cargo fmt --check` pass locally on that toolchain. CI then runs on the new
+# compiler as part of that commit, so a breakage lands on its author.
+# See docs/guides/ci.md.
 env:
   SCCACHE_IDLE_TIMEOUT: "0"
+  RUST_VERSION: "1.98.0"
 
 jobs:
   socket:
@@ -50,6 +61,8 @@ jobs:
         run: sfw pnpm install --frozen-lockfile
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Scan cargo fetch through Socket Firewall
         run: cd src-tauri && sfw cargo fetch
@@ -96,9 +109,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev mold
 
-      - name: Install Rust stable
+      - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: clippy
 
       - name: Setup sccache
@@ -174,8 +188,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev mold
 
-      - name: Install Rust stable
+      - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -230,9 +246,10 @@ jobs:
         shell: bash
         run: echo "CARGO_TARGET_DIR=C:/t" >> $GITHUB_ENV
 
-      - name: Install Rust stable
+      - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: clippy
 
       - name: Setup sccache

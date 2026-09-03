@@ -112,6 +112,7 @@
 # Developer Guide
 
 - [Development Setup](./guides/development-setup.md)
+- [Continuous Integration](./guides/ci.md)
 - [Performance Profiling](./guides/profiling.md)
 - [Documentation Sync Matrix](./sync-matrix.md)
 - [Release & Tag Checklist](./release-checklist.md)
