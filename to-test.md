@@ -2137,3 +2137,21 @@ and are not repeated here. What's left needs a human pass:
   (`Cmd/Ctrl+Shift+K`), the Knowledge history overlay's search box on open,
   and a repository group's rename field (Settings → Appearance → Repository
   Groups → double-click a group name).
+- [ ] **Tab-name-flapping fix (rustc requires `make dev` restart)** — fixed an
+  infinite `session-renamed` echo loop between the frontend's `update()` (in
+  `terminals.ts`) and the backend's `set_session_name` (`pty.rs`'s Tauri
+  command and `session.rs`'s HTTP twin): both now no-op an unchanged
+  name/is_custom pair instead of unconditionally re-emitting, and the
+  frontend now also skips its echo-back RPC when the value hasn't changed.
+  Covered by automated tests (`set_session_name_skips_emit_when_unchanged`,
+  `rename_pane_is_idempotent_and_only_emits_on_real_change`,
+  `terminals.renameEchoGuard.test.ts`), all verified to fail without the fix.
+  What automated coverage can't reach: the actual live symptom — a tab's
+  title visibly flickering/relabeling while an agent works, or during a tmux
+  swarm session with `select-pane -T` — and the sustained CPU spike this was
+  causing (~125-130% observed in this session's own orchestrator instance
+  logs before the fix). After restarting `make dev`, open a tab running an
+  active agent for a couple of minutes and confirm the tab name stays stable
+  (only changes when the agent's title/status genuinely changes), and check
+  `GET /diagnostics` (enable diagnostic mode first) for CPU staying idle
+  between real activity instead of pinned high.

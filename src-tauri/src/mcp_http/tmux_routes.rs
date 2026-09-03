@@ -683,4 +683,108 @@ mod tests {
             "active_pane must be reassigned to a pane that still exists, not left dangling"
         );
     }
+
+    /// Regression for the tab-name-flapping bug: `select-pane -T` (this route)
+    /// is called every time an agent's OSC/tmux status ticker repaints, often
+    /// with an unchanged title. `rename_pane` call-through to
+    /// `session::set_session_name` must not re-emit `session-renamed` when the
+    /// title hasn't actually changed — see that function's own regression
+    /// test (`set_session_name_skips_emit_when_unchanged`) for the full loop
+    /// this was creating between the frontend's OSC-title sync and this route.
+    #[tokio::test]
+    async fn rename_pane_is_idempotent_and_only_emits_on_real_change() {
+        let state = super::super::tests::test_state();
+        let label = "test-rename-pane-idempotent";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        // Materialize the pane to a real live session — rename_pane only
+        // calls through to set_session_name when the pane already has a
+        // tuic_session_id (real tmux behavior: a virtual pane can be renamed
+        // before it's ever attached, but there's no tab to sync until then).
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+
+        let mut rx = state.event_bus.subscribe();
+
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(RenamePaneRequest {
+                title: Some("build".to_string()),
+            }),
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::SessionRenamed {
+                display_name,
+                is_custom,
+                ..
+            }) => {
+                assert_eq!(display_name, Some("build".to_string()));
+                assert!(
+                    is_custom,
+                    "a tmux select-pane -T rename must mark the tab custom"
+                );
+            }
+            other => panic!("expected SessionRenamed on the first real tmux rename, got {other:?}"),
+        }
+
+        // The exact scenario that caused the bug: the same title repeated
+        // (a status ticker repainting, or the frontend echoing its own
+        // OSC-title sync back through this route) must not re-emit.
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(RenamePaneRequest {
+                title: Some("build".to_string()),
+            }),
+        )
+        .await;
+        assert!(
+            rx.try_recv().is_err(),
+            "repeated select-pane -T with an unchanged title must not re-emit session-renamed"
+        );
+
+        // A genuinely different title still renames and emits.
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(RenamePaneRequest {
+                title: Some("test".to_string()),
+            }),
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::SessionRenamed { display_name, .. }) => {
+                assert_eq!(display_name, Some("test".to_string()));
+            }
+            other => panic!("expected SessionRenamed on a genuine tmux rename, got {other:?}"),
+        }
+    }
 }

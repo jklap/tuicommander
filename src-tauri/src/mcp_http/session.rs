@@ -317,13 +317,26 @@ pub(super) async fn set_session_name(
         Some(e) => e,
         None => return session_not_found(),
     };
-    let (display_name, is_custom) = {
+    let (display_name, is_custom, changed) = {
         let mut session = entry.lock();
+        let next_is_custom = body.is_custom.unwrap_or(true);
+        let changed =
+            session.display_name != body.name || session.display_name_is_custom != next_is_custom;
         session.display_name = body.name;
-        session.display_name_is_custom = body.is_custom.unwrap_or(true);
-        (session.display_name.clone(), session.display_name_is_custom)
+        session.display_name_is_custom = next_is_custom;
+        (
+            session.display_name.clone(),
+            session.display_name_is_custom,
+            changed,
+        )
     };
     drop(entry);
+    if !changed {
+        // Same no-op guard as the IPC twin (pty.rs's set_session_name) — without
+        // it, the frontend's echo-back of its own `session-renamed` update re-emits
+        // the same event forever. See that function's comment for the full loop.
+        return (StatusCode::OK, Json(serde_json::json!({"ok": true})));
+    }
     // Previously this mutated display_name with no emit at all, so a rename
     // was invisible until the client's next full `GET /sessions` — which
     // never happens again after init. Dual-emitted like
@@ -2129,6 +2142,77 @@ mod tests {
             !concatenated_slash_mode,
             "the concatenated Escape/slash request must remain distinguishable from two parts"
         );
+    }
+
+    /// Regression for the tab-name-flapping bug: the frontend's `update()`
+    /// echoes any `name`/`nameIsCustom` change back to `set_session_name`
+    /// (so a reconnect can distinguish a user-protected rename from a
+    /// transient OSC one), and the backend's `session-renamed` listener feeds
+    /// that echo straight back into `update()`. If `set_session_name` always
+    /// re-emits, that round trip never terminates — an unbounded ping-pong on
+    /// every OSC title repaint or tmux `select-pane -T` call. A repeat call
+    /// with the same name/is_custom must be a silent no-op.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_skips_emit_when_unchanged() {
+        let state = super::super::tests::test_state();
+        let session_id = "rename-noop-guard";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        let mut rx = state.event_bus.subscribe();
+
+        set_session_name(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetNameRequest {
+                name: Some("hello".to_string()),
+                is_custom: Some(false),
+            }),
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::SessionRenamed {
+                display_name,
+                is_custom,
+                ..
+            }) => {
+                assert_eq!(display_name, Some("hello".to_string()));
+                assert!(!is_custom);
+            }
+            other => panic!("expected SessionRenamed on the first real rename, got {other:?}"),
+        }
+
+        // Same name, same is_custom — the echo-back case. Must not re-emit.
+        set_session_name(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetNameRequest {
+                name: Some("hello".to_string()),
+                is_custom: Some(false),
+            }),
+        )
+        .await;
+        assert!(
+            rx.try_recv().is_err(),
+            "an unchanged rename must not re-emit session-renamed — this is what caused tab names to loop"
+        );
+
+        // A genuinely different name still emits.
+        set_session_name(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetNameRequest {
+                name: Some("world".to_string()),
+                is_custom: Some(false),
+            }),
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::SessionRenamed { display_name, .. }) => {
+                assert_eq!(display_name, Some("world".to_string()));
+            }
+            other => panic!("expected SessionRenamed on a genuine rename, got {other:?}"),
+        }
     }
 
     #[cfg(unix)]
