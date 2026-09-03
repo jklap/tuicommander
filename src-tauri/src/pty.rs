@@ -10530,13 +10530,31 @@ pub(crate) fn set_session_name(
         .sessions
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    let (display_name, is_custom) = {
+    let (display_name, is_custom, changed) = {
         let mut session = entry.lock();
+        let next_is_custom = is_custom.unwrap_or(true);
+        let changed =
+            session.display_name != name || session.display_name_is_custom != next_is_custom;
         session.display_name = name;
-        session.display_name_is_custom = is_custom.unwrap_or(true);
-        (session.display_name.clone(), session.display_name_is_custom)
+        session.display_name_is_custom = next_is_custom;
+        (
+            session.display_name.clone(),
+            session.display_name_is_custom,
+            changed,
+        )
     };
     drop(entry);
+    if !changed {
+        // The frontend's `TerminalsStore.update()` echoes any `name`/`nameIsCustom`
+        // change back here (so a reconnect can tell a user-protected rename from a
+        // transient OSC one) — including changes that originated from this very
+        // command's own emit below. Without this no-op guard, that echo is
+        // indistinguishable from a real rename and re-emits `session-renamed`,
+        // which the frontend's `session-renamed` listener feeds straight back into
+        // `update()`, which echoes again — an unbounded ping-pong for every OSC
+        // title change and every tmux `select-pane -T` call, not just a one-off.
+        return Ok(());
+    }
     // Same gap and same fix as the HTTP twin (mcp_http/session.rs's
     // set_session_name): without this emit, a rename was invisible until the
     // client's next full GET /sessions, which never happens again after init.

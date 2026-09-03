@@ -596,6 +596,11 @@ function createTerminalsStore() {
 				appLogger.warn("terminal", `update(${id}) — terminal not in store, ignoring`);
 				return;
 			}
+			// Captured before setState below applies `data`, so the post-update
+			// echo-back guard can tell a real rename from the backend's own
+			// `session-renamed` echo of a change this store already applied.
+			const prevName = state.terminals[id]?.name;
+			const prevIsCustom = state.terminals[id]?.nameIsCustom ?? false;
 			batch(() => {
 				if ("shellState" in data) {
 					const prev = state.terminals[id]?.shellState ?? null;
@@ -641,13 +646,23 @@ function createTerminalsStore() {
 			});
 			// Sync display name and its origin so reconnect can distinguish a
 			// user-protected rename from a transient OSC/intent title.
-			if ("name" in data) {
+			//
+			// Guarded to only fire when the value actually changed: the backend's
+			// `session-renamed` event (tmux `select-pane -T`, OSC titles) flows
+			// through this same `update()`, and echoing it straight back
+			// unconditionally used to re-trigger the backend's own emit of that
+			// same event — an unbounded ping-pong on every OSC title repaint and
+			// every tmux rename, not just once. The backend now also no-ops an
+			// unchanged rename, but this guard avoids the round trip in the first
+			// place rather than relying solely on that backstop.
+			const nextIsCustom = state.terminals[id]?.nameIsCustom ?? false;
+			if ("name" in data && (data.name !== prevName || nextIsCustom !== prevIsCustom)) {
 				const sessionId = state.terminals[id]?.sessionId;
 				if (sessionId) {
 					rpc("set_session_name", {
 						sessionId,
 						name: data.name ?? null,
-						isCustom: state.terminals[id]?.nameIsCustom ?? false,
+						isCustom: nextIsCustom,
 					}).catch(() => {});
 				}
 			}
