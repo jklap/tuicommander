@@ -1,4 +1,11 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
 
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
 use parking_lot::Mutex;
@@ -7,20 +14,22 @@ use tokio::{sync::oneshot, task::JoinHandle};
 use super::{
     AcpCapabilitySnapshot, AcpClientError, AcpConnectRequest, AcpConnectionId,
     AcpConnectionSettlement, AcpConnectionSettlementReason, AcpConnectionSnapshot,
-    AcpConnectionState, EgoAcpConfig, build_initialize_request, capability_snapshot, launch_spec,
+    AcpConnectionState, AcpReconnectRequest, EgoAcpConfig, build_initialize_request,
+    capability_snapshot, launch_spec,
 };
 
 const INITIAL_GENERATION: u64 = 1;
 
 pub struct AcpClientManager {
     config: EgoAcpConfig,
-    connections: Mutex<HashMap<AcpConnectionId, ConnectionHandle>>,
+    connections: Arc<Mutex<HashMap<AcpConnectionId, ConnectionHandle>>>,
+    next_generation: AtomicU64,
 }
 
 struct ConnectionHandle {
     snapshot: AcpConnectionSnapshot,
-    shutdown: oneshot::Sender<()>,
-    supervisor: JoinHandle<()>,
+    shutdown: Option<oneshot::Sender<()>>,
+    supervisor: Option<JoinHandle<()>>,
 }
 
 struct InitializedConnection {
@@ -28,12 +37,20 @@ struct InitializedConnection {
     capabilities: AcpCapabilitySnapshot,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SupervisorExit {
+    NotReady,
+    Disconnected,
+    Eof,
+}
+
 impl AcpClientManager {
     #[must_use]
     pub fn new(config: EgoAcpConfig) -> Self {
         Self {
             config,
-            connections: Mutex::new(HashMap::new()),
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            next_generation: AtomicU64::new(INITIAL_GENERATION),
         }
     }
 
@@ -46,14 +63,19 @@ impl AcpClientManager {
         let spec = launch_spec(&EgoAcpConfig { executable }, &root)?;
         let agent = AcpAgent::new(AcpAgentConfig::new(spec.program).args(spec.args));
         let connection_id = AcpConnectionId::new();
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         let (initialized_tx, initialized_rx) = oneshot::channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (registered_tx, registered_rx) = oneshot::channel();
 
         let supervisor = tokio::spawn(supervise_connection(
             connection_id,
+            generation,
             agent,
             initialized_tx,
+            registered_rx,
             shutdown_rx,
+            Arc::clone(&self.connections),
         ));
 
         let initialized = match initialized_rx.await {
@@ -73,21 +95,35 @@ impl AcpClientManager {
 
         let snapshot = AcpConnectionSnapshot {
             connection_id,
-            generation: INITIAL_GENERATION,
+            generation,
             state: AcpConnectionState::Ready,
             agent_info: initialized.agent_info,
             capabilities: Some(initialized.capabilities),
+            attachments: Vec::new(),
+            earliest_sequence: 0,
+            latest_sequence: 0,
+            settlement: None,
         };
         self.connections.lock().insert(
             connection_id,
             ConnectionHandle {
                 snapshot: snapshot.clone(),
-                shutdown: shutdown_tx,
-                supervisor,
+                shutdown: Some(shutdown_tx),
+                supervisor: Some(supervisor),
             },
         );
+        let _ = registered_tx.send(());
 
         Ok(snapshot)
+    }
+
+    pub async fn reconnect(
+        &self,
+        request: AcpReconnectRequest,
+    ) -> Result<AcpConnectionSnapshot, AcpClientError> {
+        self.snapshot(request.connection_id)?;
+        self.disconnect(request.connection_id).await?;
+        self.connect(AcpConnectRequest { root: request.root }).await
     }
 
     pub fn snapshot(
@@ -110,29 +146,54 @@ impl AcpClientManager {
         &self,
         connection_id: AcpConnectionId,
     ) -> Result<AcpConnectionSettlement, AcpClientError> {
-        let connection = self
-            .connections
-            .lock()
-            .remove(&connection_id)
-            .ok_or_else(|| AcpClientError::not_found(connection_id))?;
-        let _ = connection.shutdown.send(());
-        let _ = connection.supervisor.await;
+        let (shutdown, supervisor, settled) = {
+            let mut connections = self.connections.lock();
+            let connection = connections
+                .get_mut(&connection_id)
+                .ok_or_else(|| AcpClientError::not_found(connection_id))?;
+            if let Some(settlement) = connection.snapshot.settlement {
+                (None, None, Some(settlement))
+            } else {
+                connection.snapshot.state = AcpConnectionState::Closing;
+                (
+                    connection.shutdown.take(),
+                    connection.supervisor.take(),
+                    None,
+                )
+            }
+        };
+        if let Some(settlement) = settled {
+            return Ok(settlement);
+        }
 
-        Ok(AcpConnectionSettlement {
-            connection_id,
-            generation: connection.snapshot.generation,
-            reason: AcpConnectionSettlementReason::Disconnected,
+        if let Some(shutdown) = shutdown {
+            let _ = shutdown.send(());
+        }
+        if let Some(supervisor) = supervisor {
+            let _ = supervisor.await;
+        }
+
+        self.snapshot(connection_id)?.settlement.ok_or_else(|| {
+            AcpClientError::initialization_failed(
+                connection_id,
+                "ACP supervisor ended without settling the connection",
+            )
         })
     }
 }
 
 async fn supervise_connection(
     connection_id: AcpConnectionId,
+    generation: u64,
     agent: AcpAgent,
     initialized: oneshot::Sender<Result<InitializedConnection, AcpClientError>>,
+    registered: oneshot::Receiver<()>,
     shutdown: oneshot::Receiver<()>,
+    connections: Arc<Mutex<HashMap<AcpConnectionId, ConnectionHandle>>>,
 ) {
-    let _ = Client
+    let ready = Arc::new(AtomicBool::new(false));
+    let closure_ready = Arc::clone(&ready);
+    let outcome = Client
         .builder()
         .connect_with(agent, move |connection: ConnectionTo<Agent>| async move {
             let response = match connection
@@ -155,7 +216,7 @@ async fn supervise_connection(
                 Ok(capabilities) => capabilities,
                 Err(error) => {
                     let _ = initialized.send(Err(error.with_connection_id(connection_id)));
-                    return Ok(());
+                    return Ok(SupervisorExit::NotReady);
                 }
             };
             let ready = InitializedConnection {
@@ -163,13 +224,59 @@ async fn supervise_connection(
                 capabilities,
             };
             if initialized.send(Ok(ready)).is_err() {
-                return Ok(());
+                return Ok(SupervisorExit::NotReady);
+            }
+            closure_ready.store(true, Ordering::Release);
+            if registered.await.is_err() {
+                return Ok(SupervisorExit::NotReady);
             }
 
-            let _ = shutdown.await;
-            Ok(())
+            tokio::select! {
+                biased;
+                _ = shutdown => Ok(SupervisorExit::Disconnected),
+                () = connection.incoming_closed() => Ok(SupervisorExit::Eof),
+            }
         })
         .await;
+
+    let reason = match outcome {
+        Ok(SupervisorExit::Disconnected) => AcpConnectionSettlementReason::Disconnected,
+        Ok(SupervisorExit::Eof) => AcpConnectionSettlementReason::Eof,
+        Ok(SupervisorExit::NotReady) => return,
+        Err(_) if ready.load(Ordering::Acquire) => AcpConnectionSettlementReason::TransportError,
+        _ => return,
+    };
+    settle_connection(&connections, connection_id, generation, reason);
+}
+
+fn settle_connection(
+    connections: &Mutex<HashMap<AcpConnectionId, ConnectionHandle>>,
+    connection_id: AcpConnectionId,
+    generation: u64,
+    reason: AcpConnectionSettlementReason,
+) {
+    let mut connections = connections.lock();
+    let Some(connection) = connections.get_mut(&connection_id) else {
+        return;
+    };
+    if connection.snapshot.settlement.is_some() {
+        return;
+    }
+
+    connection.snapshot.state = match reason {
+        AcpConnectionSettlementReason::Disconnected => AcpConnectionState::Closed,
+        AcpConnectionSettlementReason::Killed => AcpConnectionState::Killed,
+        AcpConnectionSettlementReason::Eof
+        | AcpConnectionSettlementReason::TransportError
+        | AcpConnectionSettlementReason::WriteError
+        | AcpConnectionSettlementReason::InitializationFailed
+        | AcpConnectionSettlementReason::ProtocolViolation => AcpConnectionState::Failed,
+    };
+    connection.snapshot.settlement = Some(AcpConnectionSettlement {
+        connection_id,
+        generation,
+        reason,
+    });
 }
 
 async fn canonical_executable(path: &Path) -> Result<std::path::PathBuf, AcpClientError> {

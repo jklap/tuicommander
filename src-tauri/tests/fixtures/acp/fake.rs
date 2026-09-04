@@ -26,6 +26,9 @@ fn main() {
         r#"{"protocol":"ready"}"# => {
             serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":1,"agentInfo":{"name":"ego","version":"test"},"agentCapabilities":{}}}).to_string()
         }
+        r#"{"protocol":"ready-eof"}"# => {
+            serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":1,"agentInfo":{"name":"ego","version":"test"},"agentCapabilities":{}}}).to_string()
+        }
         r#"{"protocol":"non-v1"}"# => {
             serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":2,"agentInfo":{"name":"ego","version":"test"},"agentCapabilities":{}}}).to_string()
         }
