@@ -129,6 +129,11 @@ crate-type = ["rlib"]
 name = "tuic-remote"
 path = "src/bin/tuic_remote.rs"
 
+[[bin]]
+name = "story092_acp_fake"
+path = "tests/fixtures/acp/fake.rs"
+test = false
+
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
 
