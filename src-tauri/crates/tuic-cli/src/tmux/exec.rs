@@ -21,6 +21,78 @@ use super::target::{parse_target, resolve_pane, resolve_session, resolve_window}
 use crate::Command;
 use serde_json::Value;
 
+/// Real tmux's `new-session`/`split-window`/`new-window` default `cwd` to the
+/// *calling* client's own current directory when `-c` is absent — never to
+/// some fixed global default. Claude Code's swarm path never passes `-c` at
+/// all (confirmed empirically: every captured `new-session`/`split-window`
+/// call omits it), so without this fallback every swarm-created pane spawns
+/// with `cwd: None`, which `spawn_pty_session` (session.rs) leaves as
+/// whatever directory the TUICommander *app process* happens to be running
+/// in — unrelated to the repo the lead session actually lives in. That
+/// wrong cwd then fails `resolveRepoOwner` on the frontend, and the tab
+/// silently lands under whichever repo happens to be active in the sidebar
+/// at that moment (confirmed live 2026-09-04: a 4-teammate swarm spawned
+/// from a `commerce-journal` session landed all 4 panes under
+/// `databricks-sql-cli`, the repo the user happened to be focused on).
+///
+/// `inherited` — an existing pane's already-resolved cwd in the SAME
+/// session/window, when one exists — takes priority over a fresh
+/// `std::env::current_dir()` read. This matters for `split-window`/
+/// `new-window`: each `tmux` subcommand is its own OS subprocess, so a
+/// second `current_dir()` call is a genuinely independent read that could
+/// in principle disagree with the first pane's cwd (a code-review finding,
+/// 2026-09-04 — not observed live, but cheap to close off entirely rather
+/// than rely on the calling process's cwd staying constant across several
+/// separate subprocess invocations). Inheriting from topology instead
+/// guarantees every pane in one swarm shares the exact cwd the *first* pane
+/// resolved, which also matches real tmux's own actual semantics more
+/// closely — real `split-window`/`new-window` without `-c` default to the
+/// pane/session being split from, not to the invoking client. `new-session`
+/// has nothing to inherit from (it's the first pane), so its call site
+/// passes `inherited = None` and this is just `cwd.or_else(current_dir)`,
+/// unchanged from before.
+fn resolve_cwd(cwd: Option<String>, inherited: Option<&str>) -> Option<String> {
+    cwd.or_else(|| inherited.map(String::from)).or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    })
+}
+
+/// The first pane's `cwd` found anywhere under the given session, or `None`
+/// if the session has no panes with a recorded cwd yet. Used by `new-window`
+/// to inherit the swarm's already-established cwd instead of independently
+/// re-reading `std::env::current_dir()`.
+fn topology_cwd_for_session<'a>(topology: &'a Value, session_id: &str) -> Option<&'a str> {
+    topology["sessions"].as_array()?.iter().find_map(|s| {
+        if s["id"].as_str() != Some(session_id) {
+            return None;
+        }
+        s["windows"]
+            .as_array()?
+            .iter()
+            .flat_map(|w| w["panes"].as_array().into_iter().flatten())
+            .find_map(|p| p["cwd"].as_str())
+    })
+}
+
+/// The first pane's `cwd` found under the given window, or `None`. Used by
+/// `split-window` to inherit the pane it's splitting from, rather than
+/// independently re-reading `std::env::current_dir()`.
+fn topology_cwd_for_window<'a>(topology: &'a Value, window_id: &str) -> Option<&'a str> {
+    topology["sessions"].as_array()?.iter().find_map(|s| {
+        s["windows"].as_array()?.iter().find_map(|w| {
+            if w["id"].as_str() != Some(window_id) {
+                return None;
+            }
+            w["panes"]
+                .as_array()?
+                .iter()
+                .find_map(|p| p["cwd"].as_str())
+        })
+    })
+}
+
 pub(crate) struct Outcome {
     pub stdout: Vec<String>,
     pub stderr: Vec<String>,
@@ -560,12 +632,16 @@ pub(crate) fn execute(
                 // Legacy path: byte-identical to today's behavior for
                 // `tuic alias` users who never pass -P (which Claude Code's
                 // swarm backend always does). `repo` is this path's cwd.
+                // Deliberately NOT resolve_cwd()'d — this path's existing
+                // `None`-means-app-default behavior predates the swarm
+                // path and must stay byte-identical for it.
                 return Outcome::from_dispatch(backend.dispatch_legacy(Command::New {
                     name: session_name,
                     repo: cwd,
                 }));
             }
             let name = session_name.unwrap_or_else(|| "0".to_string());
+            let cwd = resolve_cwd(cwd, None);
             let created = match backend.create_tmux_session(
                 &label,
                 &name,
@@ -610,6 +686,8 @@ pub(crate) fn execute(
                     target.as_deref().unwrap_or("")
                 ));
             };
+            let inherited = topology_cwd_for_session(&topology, session_id);
+            let cwd = resolve_cwd(cwd, inherited);
             let created = match backend.create_tmux_window(
                 &label,
                 session_id,
@@ -659,6 +737,8 @@ pub(crate) fn execute(
             // The trailing command on the swarm path is always the
             // placeholder `cat` — the real command arrives later via
             // respawn-pane, so it is intentionally never written here.
+            let inherited = topology_cwd_for_window(&topology, window_id);
+            let cwd = resolve_cwd(cwd, inherited);
             let created = match backend.create_tmux_pane(&label, window_id, cwd.as_deref()) {
                 Ok(v) => v,
                 Err(e) => return Outcome::err(e),
@@ -694,13 +774,11 @@ pub(crate) fn execute(
             };
             let pane_id = pane["id"].as_str().unwrap_or_default().to_string();
             let cwd = pane["cwd"].as_str().map(String::from);
-            let tuic_id = match pane["tuic_session_id"].as_str() {
-                Some(id) => id.to_string(),
-                None => match backend.materialize_pane(&label, &pane_id, cwd.as_deref()) {
-                    Ok(id) => id,
-                    Err(e) => return Outcome::err(e),
-                },
-            };
+            // Whether *this* pane already had a live PTY before this call —
+            // e.g. one `split-window` eagerly materialised. Only in that case
+            // is there an actual foreground process for `-k` to interrupt.
+            let was_already_materialized = pane["tuic_session_id"].as_str().is_some();
+
             // `-k` interrupts whatever is running (real tmux's respawn-pane
             // always kills the pane's process first) before delivering the
             // command — never through `translate_keys`, since the command
@@ -715,14 +793,45 @@ pub(crate) fn execute(
             // `text\r` in one write as an unsubmitted prefill, not a
             // submitted command. Sending it as one write here would leave
             // every teammate's launch command typed but never launched.
-            let mut payload = String::new();
-            if kill {
-                payload.push('\x03');
+            //
+            // Up to two attempts. Confirmed live (2026-09-03, see
+            // tmux-shim.html): a pane materialised for the first time by
+            // THIS call can have its freshly-spawned PTY die (app log:
+            // "Session closed: process exited") within single-digit
+            // milliseconds of creation — before this call ever writes to
+            // it — so the very first write can fail against a session id
+            // that is already gone. `materialize_pane` re-runs the app's
+            // `reconcile()` against live sessions before its idempotent
+            // early-return, so a dead id from attempt 1 is detected and
+            // cleared before attempt 2 — the retry spawns a genuinely fresh
+            // PTY rather than handing back the same dead id twice. Never
+            // send `-k`'s kill byte on a pane THIS call just (re)materialised
+            // — attempt 1 has nothing to interrupt if it was virtual before
+            // this call, and attempt 2 is by construction a brand-new PTY
+            // either way.
+            let mut last_err = String::new();
+            let mut delivered: Option<String> = None;
+            for attempt in 0..2 {
+                let tuic_id = match backend.materialize_pane(&label, &pane_id, cwd.as_deref()) {
+                    Ok(id) => id,
+                    Err(e) => return Outcome::err(e),
+                };
+                let mut payload = String::new();
+                if kill && was_already_materialized && attempt == 0 {
+                    payload.push('\x03');
+                }
+                payload.push_str(&command.join(" "));
+                match backend.write(&tuic_id, &payload) {
+                    Ok(()) => {
+                        delivered = Some(tuic_id);
+                        break;
+                    }
+                    Err(e) => last_err = e,
+                }
             }
-            payload.push_str(&command.join(" "));
-            if let Err(e) = backend.write(&tuic_id, &payload) {
-                return Outcome::err(e);
-            }
+            let Some(tuic_id) = delivered else {
+                return Outcome::err(last_err);
+            };
             std::thread::sleep(std::time::Duration::from_millis(100));
             match backend.write(&tuic_id, "\r") {
                 Ok(()) => Outcome::ok(),
@@ -738,5 +847,83 @@ pub(crate) fn execute(
             let _ = args;
             Outcome::err(format!("unknown command '{name}'"))
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_cwd_tests {
+    use super::{resolve_cwd, topology_cwd_for_session, topology_cwd_for_window};
+    use serde_json::json;
+
+    #[test]
+    fn explicit_cwd_wins_over_the_fallback() {
+        assert_eq!(
+            resolve_cwd(Some("/explicit/path".to_string()), Some("/inherited/path")),
+            Some("/explicit/path".to_string())
+        );
+    }
+
+    #[test]
+    fn inherited_cwd_wins_over_current_dir_when_no_explicit_value() {
+        // Each `tmux` subcommand is its own OS subprocess, so a second
+        // std::env::current_dir() read for split-window/new-window is a
+        // genuinely independent read from the one new-session made earlier
+        // — inheriting from topology instead guarantees every pane in one
+        // swarm shares the exact cwd the first pane resolved, regardless.
+        assert_eq!(
+            resolve_cwd(None, Some("/inherited/path")),
+            Some("/inherited/path".to_string())
+        );
+    }
+
+    #[test]
+    fn absent_cwd_falls_back_to_the_calling_processs_own_current_dir() {
+        // Real tmux defaults new-session/split-window/new-window's cwd to
+        // the calling client's own directory when -c is absent — never a
+        // fixed global default. Claude Code's swarm path never passes -c
+        // (confirmed empirically), so without this fallback every
+        // swarm-created pane's cwd silently defaults to whatever directory
+        // the TUICommander app process happens to be running in instead —
+        // which is how a live 2026-09-04 swarm spawned from a
+        // `commerce-journal` session landed all 4 teammate panes under an
+        // unrelated repo (`databricks-sql-cli`, whichever was active in the
+        // sidebar at that moment).
+        let expected = std::env::current_dir()
+            .expect("current_dir must resolve in a test process")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(resolve_cwd(None, None), Some(expected));
+    }
+
+    #[test]
+    fn topology_cwd_for_session_finds_the_first_panes_cwd_across_windows() {
+        let topology = json!({
+            "sessions": [{
+                "id": "$0",
+                "windows": [
+                    { "id": "@0", "panes": [{ "id": "%0", "cwd": null }] },
+                    { "id": "@1", "panes": [{ "id": "%1", "cwd": "/repo/path" }] }
+                ]
+            }]
+        });
+        assert_eq!(
+            topology_cwd_for_session(&topology, "$0"),
+            Some("/repo/path")
+        );
+        assert_eq!(topology_cwd_for_session(&topology, "$nonexistent"), None);
+    }
+
+    #[test]
+    fn topology_cwd_for_window_finds_the_first_panes_cwd() {
+        let topology = json!({
+            "sessions": [{
+                "id": "$0",
+                "windows": [
+                    { "id": "@0", "panes": [{ "id": "%0", "cwd": "/repo/path" }, { "id": "%1", "cwd": "/other" }] }
+                ]
+            }]
+        });
+        assert_eq!(topology_cwd_for_window(&topology, "@0"), Some("/repo/path"));
+        assert_eq!(topology_cwd_for_window(&topology, "@nonexistent"), None);
     }
 }
