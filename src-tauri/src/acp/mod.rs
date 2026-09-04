@@ -1,7 +1,4 @@
-use std::{
-    ffi::OsString,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::{ProtocolVersion, v1};
 use serde::{Deserialize, Serialize};
@@ -9,6 +6,10 @@ use serde::{Deserialize, Serialize};
 const EGO_PAUSE_METHOD: &str = "_ego/pause";
 const EGO_RESUME_METHOD: &str = "_ego/resume";
 const EGO_COMPACT_METHOD: &str = "_ego/compact";
+
+mod manager;
+
+pub use manager::AcpClientManager;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgoAcpConfig {
@@ -18,7 +19,7 @@ pub struct EgoAcpConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchSpec {
     pub program: PathBuf,
-    pub args: Vec<OsString>,
+    pub args: Vec<String>,
 }
 
 pub fn launch_spec(config: &EgoAcpConfig, root: &Path) -> Result<LaunchSpec, AcpClientError> {
@@ -32,14 +33,13 @@ pub fn launch_spec(config: &EgoAcpConfig, root: &Path) -> Result<LaunchSpec, Acp
             "ACP root must be an absolute path",
         ));
     }
+    let root = root
+        .to_str()
+        .ok_or_else(|| AcpClientError::invalid_input("ACP root must be valid UTF-8"))?;
 
     Ok(LaunchSpec {
         program: config.executable.clone(),
-        args: vec![
-            OsString::from("acp"),
-            OsString::from("-C"),
-            root.as_os_str().to_owned(),
-        ],
+        args: vec!["acp".to_string(), "-C".to_string(), root.to_string()],
     })
 }
 
@@ -96,11 +96,73 @@ pub struct AcpAvailability {
     pub reason: Option<AcpUnavailableReason>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub struct AcpConnectionId(uuid::Uuid);
+
+impl AcpConnectionId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(uuid::Uuid::now_v7())
+    }
+}
+
+impl Default for AcpConnectionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpConnectRequest {
+    pub root: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcpConnectionState {
+    Starting,
+    Initializing,
+    Ready,
+    Closing,
+    Closed,
+    Failed,
+    Killed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpConnectionSnapshot {
+    pub connection_id: AcpConnectionId,
+    pub generation: u64,
+    pub state: AcpConnectionState,
+    pub agent_info: Option<v1::Implementation>,
+    pub capabilities: Option<AcpCapabilitySnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcpConnectionSettlementReason {
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpConnectionSettlement {
+    pub connection_id: AcpConnectionId,
+    pub generation: u64,
+    pub reason: AcpConnectionSettlementReason,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AcpClientErrorCode {
     InvalidInput,
+    InitializationFailed,
+    NotFound,
     UnsupportedProtocol,
 }
 
@@ -109,18 +171,34 @@ pub enum AcpClientErrorCode {
 pub struct AcpClientError {
     pub code: AcpClientErrorCode,
     pub message: String,
-    pub connection_id: Option<uuid::Uuid>,
+    pub connection_id: Option<AcpConnectionId>,
     pub session_id: Option<v1::SessionId>,
     pub operation: Option<AcpOperation>,
     pub retryable: bool,
 }
 
 impl AcpClientError {
-    fn invalid_input(message: impl Into<String>) -> Self {
+    pub(super) fn invalid_input(message: impl Into<String>) -> Self {
         Self::new(AcpClientErrorCode::InvalidInput, message)
     }
 
-    fn unsupported_protocol(message: impl Into<String>) -> Self {
+    pub(super) fn initialization_failed(
+        connection_id: AcpConnectionId,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(AcpClientErrorCode::InitializationFailed, message)
+            .with_connection_id(connection_id)
+    }
+
+    pub(super) fn not_found(connection_id: AcpConnectionId) -> Self {
+        Self::new(
+            AcpClientErrorCode::NotFound,
+            format!("ACP connection {connection_id} was not found"),
+        )
+        .with_connection_id(connection_id)
+    }
+
+    pub(super) fn unsupported_protocol(message: impl Into<String>) -> Self {
         Self::new(AcpClientErrorCode::UnsupportedProtocol, message)
     }
 
@@ -133,6 +211,17 @@ impl AcpClientError {
             operation: None,
             retryable: false,
         }
+    }
+
+    pub(super) fn with_connection_id(mut self, connection_id: AcpConnectionId) -> Self {
+        self.connection_id = Some(connection_id);
+        self
+    }
+}
+
+impl std::fmt::Display for AcpConnectionId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
     }
 }
 
