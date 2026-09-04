@@ -180,6 +180,42 @@ impl AcpClientManager {
             )
         })
     }
+
+    pub async fn kill(
+        &self,
+        connection_id: AcpConnectionId,
+    ) -> Result<AcpConnectionSettlement, AcpClientError> {
+        let (shutdown, supervisor, generation, settled) = {
+            let mut connections = self.connections.lock();
+            let connection = connections
+                .get_mut(&connection_id)
+                .ok_or_else(|| AcpClientError::not_found(connection_id))?;
+            (
+                connection.shutdown.take(),
+                connection.supervisor.take(),
+                connection.snapshot.generation,
+                connection.snapshot.settlement,
+            )
+        };
+        if let Some(settlement) = settled {
+            return Ok(settlement);
+        }
+
+        if let Some(supervisor) = supervisor {
+            supervisor.abort();
+            let _ = supervisor.await;
+        }
+        drop(shutdown);
+        settle_connection(
+            &self.connections,
+            connection_id,
+            generation,
+            AcpConnectionSettlementReason::Killed,
+        );
+        self.snapshot(connection_id)?.settlement.ok_or_else(|| {
+            AcpClientError::initialization_failed(connection_id, "ACP kill did not settle")
+        })
+    }
 }
 
 async fn supervise_connection(
