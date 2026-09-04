@@ -44,16 +44,9 @@ pub fn launch_spec(config: &EgoAcpConfig, root: &Path) -> Result<LaunchSpec, Acp
 }
 
 pub fn build_initialize_request() -> v1::InitializeRequest {
-    let config_options = v1::SessionConfigOptionsCapabilities::new()
-        .boolean(v1::BooleanConfigOptionCapabilities::new());
-    let session = v1::ClientSessionCapabilities::new().config_options(config_options);
-    let elicitation =
-        v1::ElicitationCapabilities::new().form(v1::ElicitationFormCapabilities::new());
     let client_capabilities = v1::ClientCapabilities::new()
         .fs(v1::FileSystemCapabilities::new())
-        .terminal(false)
-        .session(session)
-        .elicitation(elicitation);
+        .terminal(false);
 
     v1::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_capabilities)
 }
@@ -394,7 +387,7 @@ impl AcpCapabilitySnapshot {
             AcpOperation::PromptImage => advertised(self.prompt_image),
             AcpOperation::PromptAudio => advertised(self.prompt_audio),
             AcpOperation::PromptEmbeddedContext => advertised(self.prompt_embedded_context),
-            AcpOperation::McpStdio => None,
+            AcpOperation::McpStdio => included(self.mcp_stdio),
             AcpOperation::McpHttp => advertised(self.mcp_http),
             AcpOperation::McpSse => advertised(self.mcp_sse),
             AcpOperation::ClientFormElicitation => included(self.client_form_elicitation),
@@ -442,11 +435,11 @@ pub fn capability_snapshot(
         prompt_image: prompt.image,
         prompt_audio: prompt.audio,
         prompt_embedded_context: prompt.embedded_context,
-        mcp_stdio: true,
+        mcp_stdio: false,
         mcp_http: mcp.http,
         mcp_sse: mcp.sse,
-        client_form_elicitation: true,
-        client_boolean_config: true,
+        client_form_elicitation: false,
+        client_boolean_config: false,
         ego_pause_version: exact_extension_version(pause),
         ego_resume_version: exact_extension_version(resume),
         ego_compact_version: exact_extension_version(compact),
