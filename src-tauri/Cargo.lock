@@ -8897,7 +8897,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-hook"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "libc",
  "serde_json",
