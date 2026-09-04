@@ -113,9 +113,67 @@ impl Default for AcpConnectionId {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub struct AcpTurnId(uuid::Uuid);
+
+impl AcpTurnId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(uuid::Uuid::now_v7())
+    }
+}
+
+impl Default for AcpTurnId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub struct AcpHostRequestId(uuid::Uuid);
+
+impl AcpHostRequestId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(uuid::Uuid::now_v7())
+    }
+}
+
+impl Default for AcpHostRequestId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub struct AcpOperationId(uuid::Uuid);
+
+impl AcpOperationId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(uuid::Uuid::now_v7())
+    }
+}
+
+impl Default for AcpOperationId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpConnectRequest {
+    pub root: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpReconnectRequest {
+    pub connection_id: AcpConnectionId,
     pub root: PathBuf,
 }
 
@@ -132,13 +190,71 @@ pub enum AcpConnectionState {
     Killed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcpAttachmentState {
+    Attaching,
+    Idle,
+    Prompting,
+    Cancelling,
+    PausePending,
+    Paused,
+    Closing,
+    Closed,
+    Detached,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcpTurnState {
+    Running,
+    Cancelling,
+    Settled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpUsageSnapshot {
+    pub context: v1::UsageUpdate,
+    pub end_turn: Option<v1::Usage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpTurnSnapshot {
+    pub turn_id: AcpTurnId,
+    pub state: AcpTurnState,
+    pub stop_reason: Option<v1::StopReason>,
+    pub usage: Option<v1::Usage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAttachmentSnapshot {
+    pub session_id: v1::SessionId,
+    pub state: AcpAttachmentState,
+    pub cwd: PathBuf,
+    pub additional_directories: Vec<PathBuf>,
+    pub config_options: Vec<v1::SessionConfigOption>,
+    pub usage: Option<AcpUsageSnapshot>,
+    pub active_turn: Option<AcpTurnSnapshot>,
+    pub pending_permission_ids: Vec<AcpHostRequestId>,
+    pub pending_elicitation_ids: Vec<AcpHostRequestId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AcpConnectionSnapshot {
     pub connection_id: AcpConnectionId,
     pub generation: u64,
     pub state: AcpConnectionState,
     pub agent_info: Option<v1::Implementation>,
     pub capabilities: Option<AcpCapabilitySnapshot>,
+    pub attachments: Vec<AcpAttachmentSnapshot>,
+    pub earliest_sequence: u64,
+    pub latest_sequence: u64,
+    pub settlement: Option<AcpConnectionSettlement>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,6 +262,12 @@ pub struct AcpConnectionSnapshot {
 #[non_exhaustive]
 pub enum AcpConnectionSettlementReason {
     Disconnected,
+    Eof,
+    TransportError,
+    WriteError,
+    InitializationFailed,
+    ProtocolViolation,
+    Killed,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
