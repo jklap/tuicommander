@@ -199,11 +199,22 @@ mod tests {
         topology: RefCell<HashMap<String, Value>>,
         writes: RefCell<Vec<(String, String)>>,
         next_uuid: RefCell<u32>,
+        /// Simulates a freshly-materialized PTY that dies before it can be
+        /// written to (confirmed live, see `RespawnPane`'s doc comment in
+        /// `exec.rs`): the next N `write()` calls fail with "Session not
+        /// found" regardless of session id, then writes succeed normally.
+        fail_next_n_writes: RefCell<u32>,
         /// Tags recorded by `dispatch_legacy` so tests can confirm the
         /// byte-identical arms (`list-sessions`, `capture-pane`,
         /// `attach-session`, bare `tmux`) actually reach it, without needing
         /// `Command` to implement `Debug`/`PartialEq`.
         legacy_calls: RefCell<Vec<&'static str>>,
+        /// `repo` from every legacy `Command::New` seen, in order — kept
+        /// separate from `legacy_calls` (which only tags *which* legacy
+        /// command ran) so a test can assert `resolve_cwd()`'s fallback
+        /// never leaks into the legacy `tuic alias` path, which must stay
+        /// byte-identical for pre-existing non-swarm users.
+        legacy_new_repo: RefCell<Vec<Option<String>>>,
     }
 
     impl FakeBackend {
@@ -227,6 +238,11 @@ mod tests {
             true
         }
         fn write(&self, session_id: &str, data: &str) -> Result<(), String> {
+            let mut remaining = self.fail_next_n_writes.borrow_mut();
+            if *remaining > 0 {
+                *remaining -= 1;
+                return Err("Session not found".to_string());
+            }
             self.writes
                 .borrow_mut()
                 .push((session_id.to_string(), data.to_string()));
@@ -409,7 +425,7 @@ mod tests {
             Ok(())
         }
         fn dispatch_legacy(&self, cmd: crate::Command) -> Result<(), String> {
-            let tag = match cmd {
+            let tag = match &cmd {
                 crate::Command::New { .. } => "New",
                 crate::Command::Ls { .. } => "Ls",
                 crate::Command::Capture { .. } => "Capture",
@@ -418,6 +434,9 @@ mod tests {
                 crate::Command::Send { .. } => "Send",
                 _ => "Other",
             };
+            if let crate::Command::New { repo, .. } = &cmd {
+                self.legacy_new_repo.borrow_mut().push(repo.clone());
+            }
             self.legacy_calls.borrow_mut().push(tag);
             Ok(())
         }
@@ -625,6 +644,22 @@ mod tests {
                 "argv={argv:?}"
             );
         }
+    }
+
+    #[test]
+    fn legacy_new_session_without_dash_c_never_gets_resolve_cwds_fallback() {
+        // Bare `tuic alias` usage (no -P) goes through dispatch_legacy and
+        // must stay byte-identical to pre-swarm-shim behavior: `repo` is
+        // `None` when no `-c` was given, never resolve_cwd()'s
+        // std::env::current_dir() fallback (which is swarm-path-only,
+        // gated on `-P`). A code-review finding, 2026-09-04: nothing
+        // protected this invariant before, since FakeBackend::dispatch_legacy
+        // discarded Command::New's fields entirely.
+        let backend = FakeBackend::default();
+        let o = run(&s(&["new-session", "-d", "-s", "legacy-session"]), &backend);
+        assert_eq!(o.exit, 0);
+        assert_eq!(backend.legacy_calls.borrow().last().copied(), Some("New"));
+        assert_eq!(backend.legacy_new_repo.borrow().last().cloned(), Some(None));
     }
 
     #[test]
@@ -969,5 +1004,344 @@ mod tests {
         );
         assert_eq!(o.exit, 1);
         assert!(backend.writes.borrow().is_empty());
+    }
+
+    // ---- respawn-pane: freshly-materialized-pane race (found live, 2026-09-03) --
+
+    #[test]
+    fn respawn_pane_never_sends_the_kill_byte_against_a_still_virtual_pane() {
+        // A pane `new-session -d`'s initial slot creates stays virtual until
+        // something writes to it — respawn-pane is that something, so THIS
+        // call is what materializes it. There is no prior foreground process
+        // to interrupt, unlike a split-window pane a teammate reuses later.
+        let backend = FakeBackend::default();
+        run(
+            &s(&[
+                "new-session",
+                "-d",
+                "-s",
+                "claude-swarm",
+                "-n",
+                "swarm-view",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "--",
+                "cat",
+            ]),
+            &backend,
+        );
+        let o = run(
+            &s(&["respawn-pane", "-k", "-t", "%0", "--", "echo", "hi"]),
+            &backend,
+        );
+        assert_eq!(o.exit, 0);
+        let writes = backend.writes.borrow();
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0].1, "echo hi", "no leading kill byte");
+        assert_eq!(writes[1].1, "\r");
+    }
+
+    #[test]
+    fn respawn_pane_retries_once_when_a_freshly_materialized_ptys_first_write_fails() {
+        // Confirmed live: a pane materialized for the first time by THIS
+        // call can have its PTY die (app log: "Session closed: process
+        // exited") within milliseconds — before this call's own write ever
+        // reaches it. The retry must re-materialize (not reuse the dead id)
+        // and succeed against the fresh one.
+        let backend = FakeBackend::default();
+        run(
+            &s(&[
+                "new-session",
+                "-d",
+                "-s",
+                "claude-swarm",
+                "-n",
+                "swarm-view",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "--",
+                "cat",
+            ]),
+            &backend,
+        );
+        *backend.fail_next_n_writes.borrow_mut() = 1;
+        let o = run(
+            &s(&["respawn-pane", "-k", "-t", "%0", "--", "echo", "hi"]),
+            &backend,
+        );
+        assert_eq!(o.exit, 0, "must recover via the retry: {:?}", o.stderr);
+        let writes = backend.writes.borrow();
+        // Only the surviving attempt's two writes are recorded — the failed
+        // first write to the dead id was never pushed onto `writes`.
+        assert_eq!(writes.len(), 2);
+        assert_eq!(
+            writes[0].1, "echo hi",
+            "still no kill byte — attempt 2 is also a fresh PTY"
+        );
+        assert_eq!(writes[1].1, "\r");
+    }
+
+    #[test]
+    fn respawn_pane_gives_up_after_the_retry_also_fails() {
+        let backend = FakeBackend::default();
+        run(
+            &s(&[
+                "new-session",
+                "-d",
+                "-s",
+                "claude-swarm",
+                "-n",
+                "swarm-view",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "--",
+                "cat",
+            ]),
+            &backend,
+        );
+        *backend.fail_next_n_writes.borrow_mut() = 2;
+        let o = run(
+            &s(&["respawn-pane", "-k", "-t", "%0", "--", "echo", "hi"]),
+            &backend,
+        );
+        assert_eq!(o.exit, 1);
+        assert!(o.stderr[0].contains("Session not found"));
+        assert!(backend.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn respawn_pane_still_sends_the_kill_byte_against_an_already_live_pane() {
+        // A split-window pane materializes eagerly, so by the time a later
+        // respawn-pane targets it, there IS a real foreground process (the
+        // placeholder shell) to interrupt — unlike the still-virtual
+        // new-session initial pane covered above. Must not regress this:
+        // `full_swarm_flow_end_to_end` already covers the happy path: this
+        // test isolates the kill-byte behavior on its own.
+        let backend = FakeBackend::default();
+        run(
+            &s(&[
+                "new-session",
+                "-d",
+                "-s",
+                "claude-swarm",
+                "-n",
+                "swarm-view",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "--",
+                "cat",
+            ]),
+            &backend,
+        );
+        let o = run(
+            &s(&[
+                "split-window",
+                "-d",
+                "-t",
+                "%0",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "--",
+                "cat",
+            ]),
+            &backend,
+        );
+        let teammate_pane = o.stdout[0].clone();
+        let o = run(
+            &s(&[
+                "respawn-pane",
+                "-k",
+                "-t",
+                &teammate_pane,
+                "--",
+                "echo",
+                "hi",
+            ]),
+            &backend,
+        );
+        assert_eq!(o.exit, 0);
+        let writes = backend.writes.borrow();
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0].1, "\x03echo hi");
+        assert_eq!(writes[1].1, "\r");
+    }
+
+    #[test]
+    fn new_session_without_dash_c_falls_back_to_the_real_cwd_not_none() {
+        // Claude Code's swarm path never passes -c on new-session (confirmed
+        // empirically — see resolve_cwd's doc comment in exec.rs). Without
+        // the fallback this landed on the wrong repo entirely: a live
+        // 2026-09-04 swarm spawned from `commerce-journal` had all 4
+        // teammate panes land under `databricks-sql-cli` instead, because
+        // `cwd: None` let spawn_pty_session inherit the app process's own
+        // cwd, which matched no registered repo, so the frontend fell back
+        // to whichever repo was active in the sidebar at that moment.
+        const LABEL: &str = "claude-swarm-cwd-1";
+        let backend = FakeBackend::default();
+        run(
+            &under_label(
+                LABEL,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "claude-swarm",
+                    "-n",
+                    "swarm-view",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "--",
+                    "cat",
+                ],
+            ),
+            &backend,
+        );
+        let topology = backend.get_topology(LABEL).expect("topology must exist");
+        let cwd = topology["sessions"][0]["windows"][0]["panes"][0]["cwd"]
+            .as_str()
+            .expect("cwd must be populated, not null");
+        let expected = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(cwd, expected);
+    }
+
+    #[test]
+    fn split_window_without_dash_c_falls_back_to_the_real_cwd_not_none() {
+        const LABEL: &str = "claude-swarm-cwd-2";
+        let backend = FakeBackend::default();
+        run(
+            &under_label(
+                LABEL,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "claude-swarm",
+                    "-n",
+                    "swarm-view",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "--",
+                    "cat",
+                ],
+            ),
+            &backend,
+        );
+        run(
+            &under_label(
+                LABEL,
+                &[
+                    "split-window",
+                    "-d",
+                    "-t",
+                    "%0",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "--",
+                    "cat",
+                ],
+            ),
+            &backend,
+        );
+        let topology = backend.get_topology(LABEL).expect("topology must exist");
+        let cwd = topology["sessions"][0]["windows"][0]["panes"][1]["cwd"]
+            .as_str()
+            .expect("cwd must be populated, not null");
+        let expected = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(cwd, expected);
+    }
+
+    #[test]
+    fn new_session_with_dash_c_still_honors_the_explicit_value() {
+        const LABEL: &str = "claude-swarm-cwd-3";
+        let backend = FakeBackend::default();
+        run(
+            &under_label(
+                LABEL,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "claude-swarm",
+                    "-c",
+                    "/explicit/repo/path",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "--",
+                    "cat",
+                ],
+            ),
+            &backend,
+        );
+        let topology = backend.get_topology(LABEL).expect("topology must exist");
+        let cwd = topology["sessions"][0]["windows"][0]["panes"][0]["cwd"]
+            .as_str()
+            .expect("cwd must be populated");
+        assert_eq!(cwd, "/explicit/repo/path");
+    }
+
+    #[test]
+    fn new_window_without_dash_c_falls_back_to_the_real_cwd_not_none() {
+        // new-window is a rarer edge of the real swarm flow (only reached
+        // when the swarm-view window is missing — see tmux-shim.html's
+        // "conditions" section) but goes through the same resolve_cwd()
+        // fallback as new-session/split-window and must not regress
+        // independently of them.
+        const LABEL: &str = "claude-swarm-cwd-4";
+        let backend = FakeBackend::default();
+        run(
+            &under_label(
+                LABEL,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "claude-swarm",
+                    "-P",
+                    "-F",
+                    "#{session_name}",
+                ],
+            ),
+            &backend,
+        );
+        run(
+            &under_label(
+                LABEL,
+                &[
+                    "new-window",
+                    "-t",
+                    "claude-swarm",
+                    "-n",
+                    "swarm-view",
+                    "-P",
+                    "-F",
+                    "#{window_id}",
+                ],
+            ),
+            &backend,
+        );
+        let topology = backend.get_topology(LABEL).expect("topology must exist");
+        let cwd = topology["sessions"][0]["windows"][1]["panes"][0]["cwd"]
+            .as_str()
+            .expect("cwd must be populated, not null");
+        let expected = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(cwd, expected);
     }
 }

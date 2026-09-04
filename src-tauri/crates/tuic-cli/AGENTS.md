@@ -69,6 +69,53 @@ never been created, failing with empty resolved names rather than a crash.
 lookup must create it via `new-session -P -F '<something>'`**, not the bare
 form — even if the test doesn't care what gets printed.
 
+## `cwd` must fall back to `std::env::current_dir()`, never stay `None`
+
+`new-session`/`new-window`/`split-window`'s `cwd` field only ever gets a value from an
+explicit `-c` flag (`args.rs`'s `p.value('c')`). Real Claude Code swarm calls **never** pass
+`-c` — confirmed empirically, both live and via the synthetic wording harness
+(`plans/agent-teams-wording-harness/` in the main checkout). Without `exec.rs`'s
+`resolve_cwd()` fallback, that leaves `cwd: None` all the way down to `spawn_pty_session`
+(`session.rs`), which only calls `cmd.cwd(dir)` when a `cwd` is actually given — so the
+spawned pane's PTY silently inherits whatever directory the **TUICommander app process
+itself** happens to be running in, not the repo the swarm was actually spawned from. This
+produced a real, live, user-visible bug (2026-09-04): a 4-teammate swarm's panes all landed
+under an unrelated repo's tab group in the sidebar, because the frontend's
+`assignSessionToRepoBranch` correctly parks a session with an unowned cwd in "whichever repo
+is currently active" — which is exactly and only wrong because the cwd it received was wrong.
+
+`resolve_cwd()` fixes this by falling back, in priority order, to (1) an existing pane's
+already-resolved cwd elsewhere in the same session/window (`topology_cwd_for_session`/
+`topology_cwd_for_window`), then (2) `std::env::current_dir()` — the tmux CLI subprocess's
+own cwd, inherited from whatever process spawned it (normally Claude Code, itself running
+inside the lead session's real repo). `new-session` has nothing to inherit from (it's the
+first pane), so it only ever hits (2). The topology-inheritance step (a 2026-09-04 code-review
+finding, not part of the original fix) exists because each `tmux` subcommand is its own OS
+subprocess — a `split-window`/`new-window` call's own `current_dir()` read is genuinely
+independent of whatever `new-session` saw earlier, so relying on it alone would only
+guarantee a *correct* cwd, not one that's *identical* across every pane in one swarm if the
+calling process's own cwd ever changed between separate subprocess invocations. Inheriting
+from topology closes that off entirely, and also matches real tmux's own actual semantics
+more closely (real `split-window`/`new-window` without `-c` default to the pane/session being
+split from, not to the invoking client — only `new-session` falls back to the client's own
+cwd). Any new tmux subcommand that creates a pane must go through this same fallback — check
+`exec.rs`'s three existing call sites (`NewSession`, `NewWindow`, `SplitWindow`) for the
+pattern before adding a fourth.
+
+**Two related findings from that same review, accepted as-is rather than fixed:**
+- `std::env::current_dir()` resolves symlinks (`getcwd(3)` semantics); if a registered repo's
+  path was typed through a symlinked ancestor, the frontend's exact-prefix repo-owner matching
+  (`src/utils/repoOwnership.ts`) could still fail to match the canonicalized form. This is a
+  pre-existing, general path-canonicalization gap spanning anywhere TUICommander resolves a
+  session's cwd, not something this fix introduces or worsens — before this fix, split/new
+  panes had `cwd: None` and matched *no* repo 100% of the time, so this is strictly an
+  improvement, just not a complete one for symlink-affected setups.
+- This crate now has multiple independent inline `current_dir().ok().map(|p|
+  p.to_string_lossy()...)` implementations (`main.rs`'s `cmd_open` and others, plus this
+  module's `resolve_cwd`) instead of one shared helper. Real duplication, but consolidating it
+  means touching `main.rs` call sites unrelated to this fix — left as a separate, future
+  cleanup rather than scope-creeping this change.
+
 ## `DisplayMessage`/`ListPanes` session-name resolution
 
 Both need to report `#{session_name}` for the session that actually *owns*
