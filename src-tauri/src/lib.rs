@@ -3,6 +3,7 @@
     allow(dead_code, unused_imports, unused_variables)
 )]
 
+pub mod acp;
 pub(crate) mod agent;
 pub(crate) mod agent_hook;
 pub(crate) mod agent_hook_codex;
