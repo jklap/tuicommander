@@ -31,9 +31,7 @@ fn initialize_is_v1_and_advertises_exact_client_capabilities() {
         serde_json::to_value(&request.client_capabilities).unwrap(),
         json!({
             "fs": {"readTextFile": false, "writeTextFile": false},
-            "terminal": false,
-            "session": {"configOptions": {"boolean": {}}},
-            "elicitation": {"form": {}}
+            "terminal": false
         })
     );
 }
@@ -59,6 +57,25 @@ fn initialize_response_becomes_an_immutable_full_capability_snapshot() {
     assert!(snapshot.load && snapshot.list && snapshot.resume && snapshot.fork);
     assert!(snapshot.delete && snapshot.close && snapshot.prompt_image);
     assert!(snapshot.prompt_embedded_context && snapshot.mcp_http && snapshot.mcp_sse);
+    assert!(!snapshot.mcp_stdio);
+    assert!(!snapshot.client_form_elicitation);
+    assert!(!snapshot.client_boolean_config);
+    assert_eq!(
+        snapshot.availability(AcpOperation::McpStdio).reason,
+        Some(AcpUnavailableReason::ExcludedByContract)
+    );
+    assert_eq!(
+        snapshot
+            .availability(AcpOperation::ClientFormElicitation)
+            .reason,
+        Some(AcpUnavailableReason::ExcludedByContract)
+    );
+    assert_eq!(
+        snapshot
+            .availability(AcpOperation::ClientBooleanConfig)
+            .reason,
+        Some(AcpUnavailableReason::ExcludedByContract)
+    );
     assert_eq!(snapshot.ego_pause_version, Some(1));
     assert_eq!(snapshot.ego_resume_version, Some(1));
     assert_eq!(snapshot.ego_compact_version, Some(1));
