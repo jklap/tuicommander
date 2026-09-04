@@ -430,10 +430,31 @@ async fn materialize(
             Json(serde_json::json!({"error": format!("PTY spawn task panicked: {error}")})),
         ))
     })?;
-    if let Some(mut topology) = state.tmux_servers.get_mut(label)
+    // `select-pane -T` against a still-virtual pane (every swarm's first
+    // teammate — `new-session`'s initial pane, always virtual until this
+    // function's caller materializes it) can only record the title in
+    // topology at the time (`rename_pane` below has no real session to
+    // rename yet). Apply it now, retroactively, the moment a real session
+    // exists — otherwise that title is silently lost forever and the tab
+    // keeps its default name (found live, 2026-09-03).
+    let pending_title = if let Some(mut topology) = state.tmux_servers.get_mut(label)
         && let Some(pane) = topology.find_pane_mut(pane_id)
     {
         pane.tuic_session_id = Some(spawn.clone());
+        pane.title.clone()
+    } else {
+        None
+    };
+    if let Some(title) = pending_title {
+        let _ = super::session::set_session_name(
+            State(state.clone()),
+            Path(spawn.clone()),
+            Json(super::types::SetNameRequest {
+                name: Some(title),
+                is_custom: Some(true),
+            }),
+        )
+        .await;
     }
     Ok(spawn)
 }
@@ -713,10 +734,13 @@ mod tests {
         let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let pane_id = created["pane_id"].as_str().unwrap().to_string();
 
-        // Materialize the pane to a real live session — rename_pane only
-        // calls through to set_session_name when the pane already has a
-        // tuic_session_id (real tmux behavior: a virtual pane can be renamed
-        // before it's ever attached, but there's no tab to sync until then).
+        // Materialize the pane to a real live session BEFORE renaming it —
+        // this test is specifically about the already-materialized path.
+        // `rename_pane` only calls through to `set_session_name` when the
+        // pane already has a `tuic_session_id`; the opposite order (rename
+        // while still virtual, materialize after) is covered by
+        // `materialize_applies_a_title_recorded_while_the_pane_was_still_virtual`
+        // below — that path used to lose the title silently.
         let materialized = materialize_pane(
             State(state.clone()),
             Path(pane_id.clone()),
@@ -785,6 +809,152 @@ mod tests {
                 assert_eq!(display_name, Some("test".to_string()));
             }
             other => panic!("expected SessionRenamed on a genuine tmux rename, got {other:?}"),
+        }
+    }
+
+    /// Regression, found live 2026-09-03: `select-pane -T` against a pane
+    /// that is STILL VIRTUAL (`new-session`'s initial pane — every swarm's
+    /// first teammate, always) recorded the title in topology but never
+    /// applied it to a real tab, and nothing re-applied it once the pane
+    /// materialized later — the tab kept its default name forever. Confirmed
+    /// live: `tauri-lister` (a `split-window` pane, materialized before its
+    /// rename ran) got renamed correctly; `src-lister` (the `new-session`
+    /// initial pane, still virtual at rename time) showed `"general-purpose"`
+    /// instead. Fixed by having `materialize()` apply any pane title already
+    /// recorded in topology the moment it spawns a real session.
+    #[tokio::test]
+    async fn materialize_applies_a_title_recorded_while_the_pane_was_still_virtual() {
+        let state = super::super::tests::test_state();
+        let label = "test-deferred-title-on-materialize";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        // Rename it while it's still virtual — exactly `select-pane -t %0 -T
+        // src-lister` before `respawn-pane` ever materializes %0.
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(RenamePaneRequest {
+                title: Some("src-lister".to_string()),
+            }),
+        )
+        .await;
+        {
+            let topology = state.tmux_servers.get(label).unwrap();
+            let pane = topology.find_pane(&pane_id).unwrap();
+            assert_eq!(pane.title.as_deref(), Some("src-lister"));
+            assert!(
+                pane.tuic_session_id.is_none(),
+                "pane must still be virtual at this point"
+            );
+        }
+
+        let mut rx = state.event_bus.subscribe();
+
+        // Materialize it — the real command-delivery path (respawn-pane).
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"].as_str().unwrap();
+
+        // `spawn_pty_session` also broadcasts `SessionCreated` for the same
+        // materialize call — drain events until the expected `SessionRenamed`
+        // turns up (or the buffer is exhausted), rather than assuming it's
+        // the very first message on the bus.
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::SessionRenamed { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::SessionRenamed {
+                session_id,
+                display_name,
+                is_custom,
+            }) => {
+                assert_eq!(session_id, tuic_session_id);
+                assert_eq!(display_name, Some("src-lister".to_string()));
+                assert!(
+                    is_custom,
+                    "a deferred tmux select-pane -T rename must mark the tab custom"
+                );
+            }
+            other => panic!(
+                "expected SessionRenamed the moment the previously-virtual pane materialized, got {other:?}"
+            ),
+        }
+    }
+
+    /// A pane materialized with no prior `select-pane -T` call must not emit
+    /// a spurious rename — `pending_title` is `None` and `materialize` must
+    /// skip the `set_session_name` call entirely.
+    #[tokio::test]
+    async fn materialize_without_a_prior_rename_emits_nothing() {
+        let state = super::super::tests::test_state();
+        let label = "test-materialize-no-pending-title";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        let mut rx = state.event_bus.subscribe();
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        // `SessionCreated` is expected (the materialize itself); `SessionRenamed`
+        // must not appear anywhere in the buffer.
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event, crate::state::AppEvent::SessionRenamed { .. }),
+                "no SessionRenamed without a prior select-pane -T, got {event:?}"
+            );
         }
     }
 }

@@ -1,9 +1,14 @@
 # Claude Code tmux/iTerm2 teammate-pane shim — investigation + plan
 
-Status: §5.1–5.6 implemented (see the "Implementation status" note right after this paragraph).
-§5.0 (confirming the real pane-backed-teammate trigger) remains deliberately deferred — the
-invocation logging added in §5.6 is how a future session answers it, by reading
-`GET /logs?source=tmux-shim` / `<config dir>/logs/tmux-shim.log` against a live Claude Code run.
+Status: §5.1–5.6 implemented. **§5.0 answered, 2026-09-03** — see
+`tmux-shim.html` (main checkout's `plans/` directory — gitignored, not in this worktree) for the
+full write-up: the real trigger is simply that
+TUICommander's own `agent` MCP tool is unavailable (disabled, or in principle sufficiently
+un-preferred) to the connecting Claude Code session, at which point its native agent-teams backend
+falls through to real `tmux` calls via this shim, using the invocation logging §5.6 added — exactly
+as this section originally predicted. That doc also covers the full observed call sequence, every
+subcommand's disposition, every `set-option` variant seen, a materialization race found and fixed
+along the way, and the confirmation that Task-tool subagents never reach this shim at all.
 
 > **Implementation status (this session):** §1.5/§4's tmux-subcommand disposition table and §2's
 > test-coverage numbers are **stale as written below** — left in place as investigation history,

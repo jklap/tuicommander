@@ -57,35 +57,74 @@ clippy --release --workspace -- -D warnings` (clean), `cargo fmt --check` (clean
 instance — the whole feature only really proves itself against a running `make dev` build talking
 to real Claude Code swarm invocations.
 
-- [ ] **End-to-end swarm flow against a live dev instance** (the `make dev` test instance on
-  `:9877`, per AGENTS.md's "Test instance vs orchestrator instance" — never Boss's orchestrator).
-  Point `TUIC_SOCKET` at the dev instance's socket (its `GET /health` reports the actual bound
-  path, which falls back to `mcp-{pid}.sock` when `mcp.sock` is already held), then replay Claude
-  Code's real external-mode
-  call order under one `-L claude-swarm-test`: `has-session -t claude-swarm` (expect exit 1) →
-  `new-session -d -s claude-swarm -n swarm-view -P -F '#{pane_id}' -- cat` → `list-windows` →
-  `list-panes -t claude-swarm:swarm-view -F '#{pane_id}'` → `split-window -d -t %<pane> -P -F
-  '#{pane_id}' -- cat` → `select-pane -t %N -T teammate-1` → `respawn-pane -k -t %N -- 'echo hi'`
-  → `kill-pane -t %N` → `kill-session -t claude-swarm`. Confirm every `-P`/`-F` call's stdout is
-  exactly the rendered id (nothing else on the line — a stray character breaks Claude Code's
-  pane-id capture), and that no orphan tabs remain after teardown.
-- [ ] **`tmux -V` unblocks real Claude Code teammate spawning at all.** This is the actual point of
-  the whole feature — with a real Claude Code instance pointed at the `tuic alias`'d shim (do this
-  in a scratch `$PATH`, not by repointing the machine's real `tmux` alias mid-development), confirm
-  a teammate spawn actually produces a visible TUIC tab, and capture whatever it calls via
-  `GET /logs?source=tmux-shim` / `<config dir>/logs/tmux-shim.log` — including any subcommand this
-  work didn't anticipate. This is also the mechanism for answering §5.0.
-- [ ] **`select-pane -T` visibly renames the tab.** Confirm the `session-renamed` event fix
-  (`mcp_http/session.rs`'s `set_session_name`, `pty.rs`'s Tauri-command twin, and the new
-  `useAppInit.ts` listener) actually updates a live tab's title with no restart needed — this was
-  previously silently broken (the route mutated `display_name` with no emit at all).
+- [x] **End-to-end swarm flow against a live instance.** _(verified: against the orchestrator
+  instance directly, not a separate `make dev` build — the user explicitly authorized this for this
+  session, overriding AGENTS.md's normal orchestrator/test-instance separation.)_ Replayed real
+  Claude Code agent-teams spawns (two teammates, `-L claude-swarm-<pid>`) end to end twice on
+  2026-09-03: the first run surfaced the respawn-pane materialization race documented below and in
+  `tmux-shim.html#race` (main checkout's `plans/` directory); after the fix, a repeat of the identical spawn produced zero errors, and
+  both teammates launched, ran, and reported real file listings back over MCP. Every `-P`/`-F`
+  call's stdout was exactly the rendered id, and `kill-pane` on teardown left no orphan tabs.
+- [x] **`tmux -V` unblocks real Claude Code teammate spawning at all — §5.0 answered.**
+  _(verified live, 2026-09-03)_ With the `agent` MCP tool disabled, a real Claude Code session's
+  agent-teams request falls through to genuine `tmux` calls via this shim — confirmed via
+  `GET /logs?source=tmux-shim` showing the full real call sequence, now written up in
+  `tmux-shim.html` (main checkout's `plans/` directory — gitignored, not in this worktree). Model willingness to actually reach for the native mechanism from a plain
+  request is non-deterministic across runs (see that doc's "When This Runs At All" section) — not
+  a shim gap, just worth knowing before assuming a silent tmux-shim log means the shim is broken
+  rather than the model just not trying it that turn.
+- [x] **`select-pane -T` against a still-virtual pane no longer drops the rename.**
+  _(fixed 2026-09-03.)_ `materialize()` (`tmux_routes.rs`) now applies a pane's already-recorded
+  `title` — set by an earlier `select-pane -T` while the pane was still virtual — the moment it
+  spawns the real session, via the same `set_session_name` call `rename_pane` uses. Covers exactly
+  the live-found gap: `new-session`'s initial pane (every swarm's first teammate, always virtual
+  until `respawn-pane` first materializes it) previously kept its default tab name forever, while a
+  `split-window` pane (eagerly materialized, so already real by the time its own `select-pane -T`
+  ran) always renamed correctly. Two new regression tests
+  (`materialize_applies_a_title_recorded_while_the_pane_was_still_virtual`,
+  `materialize_without_a_prior_rename_emits_nothing`) plus the pre-existing
+  `rename_pane_is_idempotent_and_only_emits_on_real_change`, all green. **Live-verified 2026-09-03**
+  after a full app rebuild+restart: a real two-teammate swarm spawn showed BOTH tabs with correct
+  names in `session action=list` — including `src-lister`, the `new-session` initial-pane case that
+  previously showed `"general-purpose"`.
+- [x] **`select-pane -T` visibly renames the tab when the pane is already materialized.**
+  _(verified live, 2026-09-03.)_ Confirmed the `session-renamed` event fix (`mcp_http/session.rs`'s
+  `set_session_name`, `pty.rs`'s Tauri-command twin, and the `useAppInit.ts` listener) actually
+  updates a live tab's title with no restart needed, for a pane that was already real when the
+  rename call ran.
 - [ ] **A pane's TUIC tab actually docks into the visible split layout.** `split-window`'s pane
   comes from a plain `POST /sessions` equivalent (via `spawn_pty_session`, no `agent_type`), and
   `session-created`'s `assignTabToActiveGroup` call is gated on `agent_type` being set
-  (`useAppInit.ts`) — confirm empirically that a teammate pane is actually visible in split mode,
-  not just present in `GET /sessions`.
+  (`useAppInit.ts`) — confirmed the sessions exist and are addressable (`session action=list`), but
+  did not visually confirm split-layout docking specifically; still needs a screenshot pass.
 - [ ] **Windows**: `argv0 == "tmux.exe"` dispatch and the `tuic alias` Windows copy-based install
   path have no CI and were not tested on this machine (macOS only) — needs a real Windows pass.
+- [x] **[NOT A BUG]** `session action=output` returning an apparently-stale snapshot while
+  `status`/`list` reported `busy`/`awaiting_input` for minutes. _(root-caused 2026-09-03.)_
+  Root-caused by deliberate live reproduction, not code inspection: `session action=output` was
+  never actually stale — confirmed by typing a unique probe string via `session action=input` and
+  watching it appear correctly on the very next read. What looked stuck was a low-confidence
+  `awaiting_input` latch carrying `question_text = "Claude is waiting for your input"` — a phrase a
+  2026-08-11 `pty.rs` regression comment attributes to Claude's own ~60s idle timer. **Not
+  independently verified as an actual OSC 777 escape sequence this session** (no raw byte capture —
+  see `feedback_osc_777_vs_7770_confusion` memory, which warns against that exact claim without
+  one; it could equally be the silence timer's own screen-text heuristic match on the same
+  phrase). Either way, TUICommander already auto-retracts this low-confidence latch after
+  `SILENCE_QUESTION_THRESHOLD` (10s) of true silence —
+  `spawn_silence_timer`/`emit_question_cleared_if_stale` in `pty.rs`, shipped and regression-tested
+  since 2026-08-11 (`osc777_notify_retraction_follows_the_wording`, though that test constructs the
+  scenario via `parse_osc777_notify` specifically — if the real signal doesn't arrive that way in
+  current Claude Code, a screen-heuristic-driven sibling case may be missing coverage; not
+  investigated further). The 10s window depends on
+  `last_output_at`, which any `session action=input` call legitimately resets (it's real PTY
+  traffic) — so repeatedly polling a session with raw `input` calls to check "is it still stuck"
+  perpetually re-arms the very grace period the auto-heal needs, creating the illusion of a
+  permanently stuck session. Confirmed definitively: reproduced the same-looking stuck state, then
+  left the session completely untouched (an `until`-loop wait, zero calls to that session) for 90s
+  — it self-cleared correctly with no intervention. Takeaway for future sessions: when checking
+  whether an awaiting/busy state will resolve on its own, use read-only `status`/`output` calls (or
+  wait passively) — not `input`, which is itself capable of causing the exact stuck-looking
+  symptom being diagnosed.
 
 ## Per-tool MCP-instructions gating + "Prefer TUICommander messaging/spawning" settings (2026-09-02, uncommitted)
 
@@ -95,6 +134,130 @@ _Follow-up (same day): reviewed all ~406 commits between the patch's Jul-20 base
 
 - [ ] Two independent per-agent-type settings, both **Settings > Agents > *agent*** (default on): **Prefer TUICommander agent spawning** and **Prefer TUICommander messaging**. Now covered by `cargo test` (16 Rust unit tests on `build_mcp_instructions`/`resolve_prefer_tuic_*`) and `vitest` (5 component tests on the checkboxes themselves, DOM-level only — no visual/screenshot pass was done this session, no worktree dev build was running to check against) — this item is about seeing it live end-to-end, not first verification: (1) **visual** — expand an agent row, confirm the two new checkboxes and their hint text render cleanly (same `expandedSection`/`toggleRow`/hint styling as the adjacent "Use native agent hooks for status" row) and that both grey out with the explanatory sentence appended when the `agent` MCP tool is disabled in Settings > Services > MCP Tools; (2) **functional** — connect a real MCP client and confirm all 4 combinations actually produce different `initialize` instructions text (see `mcp-instructions-examples.md` §9 for the exact expected text per combination), and confirm both toggles persist independently in `agents.json` (`prefer_tuic_spawning`/`prefer_tuic_messaging`).
 - [ ] Confirm the dead `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` entry removed from Settings > Agents > Environment Flags doesn't leave a dangling reference anywhere in the per-agent env-flags UI, and that the env var itself is still injected into every PTY session as before (`src-tauri/src/pty.rs:112`, unchanged).
+
+## `agent` tool's own MCP schema description was not gated by "Prefer TUICommander spawning/messaging" (2026-09-03, uncommitted)
+
+_Found live: with both settings persisted `false` for `claude` in `agents.json`, a real Claude Code
+session (asked to spawn a "team" of teammates) still called `agent action=spawn` and successfully
+opened two new TUICommander panes — confirmed via `debug action=logs source=tmux-shim` staying at
+its pre-test baseline (the tmux CLI shim was never touched) and via `session action=list` showing
+the two new sessions. Root cause: `build_mcp_instructions`'s prose ("Prefer TUICommander for
+peers/teams") was already correctly gated on `prefer_tuic_spawning`/`prefer_tuic_messaging`, but the
+`agent` tool's own baked-in MCP schema description (`native_tool_definitions`, read by any client via
+`tools/list` independently of the connect-time instructions) was static and unconditionally
+persuasive — it told the model to prefer `spawn`/messaging regardless of the setting. Fixed by
+extracting `agent_tool_definition(prefer_spawning, prefer_messaging)`, resolved per MCP connection
+from a new `McpSessionMeta::agent_type` field cached at `initialize` time, threaded through
+`filtered_native_tools`/`merged_tool_definitions_for_mode`. The action list and every per-action
+bullet stay identical regardless — only the steering language (the opening line + the "Orchestration
+in N lines" walkthrough) is gated, mirroring "prefer ≠ disable" exactly as the existing settings'
+own hint text already promises. Verified via `cargo nextest run` (336/336 `mcp_transport` tests,
+including a new end-to-end regression test that reproduces the exact live bug via a fake
+`McpSessionMeta` + `merged_tool_definitions`), `cargo fmt`, `cargo clippy` — all clean. The
+`collapse_tools`/meta-tool path (`search_tools`/`get_tool_schema`/`call_tool`, used only by
+`grok-shell-*` clients) is a deliberate, documented scope limit: it still serves the fully-permissive
+description regardless of the connecting agent's preference, since that path has no per-connection
+tool-list context today._
+
+- [x] **End-to-end live re-verification.** _(verified 2026-09-03, after a full app rebuild+restart.)_
+  With **Prefer TUICommander agent spawning** and **Prefer TUICommander messaging** both off, but
+  the `agent`/`session` MCP tools themselves fully **enabled**, a real Claude Code session asked to
+  spawn a team of teammates went straight to the native tmux-backed path — the full real call
+  sequence (`list-panes` → styling `set-option`s → `select-pane -T` → `respawn-pane`, then
+  `split-window` for the second teammate), confirmed via `GET /logs?source=tmux-shim` — with
+  **zero** calls to `agent action=spawn`. This answers the previously-open question definitively:
+  the softer, schema-level preference alone (tool available, just not recommended) is sufficient to
+  change the model's choice; fully disabling the tool isn't required. Both teammates also launched
+  and reported real results with no errors, confirming the respawn-pane race fix holds under this
+  path too.
+- [x] **Both preferences flipped back ON — schema confirmed correct, but the model still chose
+  tmux twice.** _(tested 2026-09-03, same rebuild.)_ With `prefer_tuic_spawning`/
+  `prefer_tuic_messaging` both persisted `true` (confirmed directly in `agents.json`), a raw
+  `POST /mcp` `initialize` + `tools/list` as a fresh `claude-code` client (bypassing any of this
+  session's own tool-schema caching) confirmed the server correctly serves the full, unmodified,
+  maximally-persuasive `agent` tool description — the exact text that worked the very first time
+  this branch's live testing found `agent action=spawn` in use. **Two separate live Claude Code
+  runs against that exact schema both still chose the native tmux-backed path anyway** — one
+  after asking a clarifying question and being told to use its own "Agent tool with names," the
+  other going straight there. Not a regression and not a config-application bug (both were
+  independently ruled out) — model discretion: TUICommander's tool description is advisory, and
+  a model that already has its own working native mechanism for "spawn a named teammate" is not
+  guaranteed to reach for an alternate MCP tool just because that tool recommends itself, even at
+  full persuasive strength. Consistent with the non-determinism observed throughout this
+  investigation (identical prompts previously produced clarifying questions, native spawns, and
+  MCP-tool spawns across different runs with no settings changes at all). This means the "Prefer
+  TUICommander" settings should be understood as *biasing* the model's choice, not *controlling*
+  it — accurate in the Settings UI copy already ("Advertise ... in its MCP instructions"), but
+  worth remembering before treating any single live test's outcome as proof either fixture is
+  broken.
+- [x] **Description never said "teammate" — fixed.** _(found + fixed 2026-09-03.)_ After removing
+  a `teammateMode` setting from Claude Code's own config (separate from anything TUICommander
+  controls), a live retest surfaced Claude Code's own reasoning verbatim: it considered
+  `mcp__tuicommander__agent action=spawn` "a different thing entirely — those are terminal
+  sessions running an agent binary, **not Claude Code teammates**." The `agent` tool's
+  description never used the word "teammate" anywhere — only "peer"/"worker" — so nothing told
+  the model the two are the same concept with a different backend. Fixed by having
+  `agent_tool_definition` (`mcp_transport.rs`) explicitly say so, but only in the header/
+  walkthrough text that appears when `prefer_spawning` is true (never claim the equivalence in
+  the same breath as "prefer your own native teammate feature instead" — that would contradict
+  itself). New regression test:
+  `agent_tool_definition_calls_a_spawned_peer_a_teammate_wherever_spawn_is_recommended`, plus the
+  full existing suite, all green.
+  _(Live-tested after a full rebuild+restart, 2026-09-03 — inconclusive on the specific question,
+  informative on a different one.)_ The retest produced a **third** outcome distinct from every
+  prior run with this exact prompt: **zero** `tmux-shim` log entries AND **no** new TUICommander
+  sessions in `session action=list` — Claude Code used its own fully in-process "background
+  agents, named" mechanism (addressable, but never leaving the parent PTY at all), neither the
+  tmux-backed path nor `agent action=spawn`. Both named agents completed and reported real
+  results normally. This doesn't confirm or refute the wording fix's effect — it demonstrates
+  there are at least **three** distinct outcomes this identical prompt can produce (tmux, TUIC MCP
+  spawn, in-process-with-names), not two, so a handful of live runs isn't enough to characterize
+  which one a given change actually shifts the odds toward. Would need many repeated trials under
+  controlled conditions to say anything quantitative.
+- [ ] **Test prompt confound found + fixed mid-batch, 2026-09-03.** The live test prompt used
+  throughout this investigation said "...distinct from the Task/**Agent** tool..." — but
+  TUICommander's own MCP tool is ALSO literally named `agent`. The user caught that this phrasing
+  gives the model no way to distinguish "avoid Claude Code's own internal subagent primitive"
+  from "avoid anything named agent," which could have been suppressing `mcp__tuicommander__agent`
+  regardless of every other fix in this session. The first batch of repeated trials
+  (`swarm-spawn-trials`) was stopped mid-run for this reason and restarted
+  (`swarm-spawn-trials-v2`) with the exclusion clause dropped entirely: "Spawn two agent-teams
+  teammates now: one named src-lister..." with no "distinct from" language at all. Treat any
+  results from the first (stopped) batch as unreliable; only the v2 batch's tally is meaningful.
+- [x] **Explicit "use this instead of your own built-in tool" directive added to the schema
+  itself.** _(2026-09-03.)_ `build_mcp_instructions`'s one-time connect prose already said "use
+  TUIC's `agent action=spawn` MCP tool (not your host's native subagent/Task/team tool)" — but
+  that's shown once at `initialize` and never re-read. The `agent` tool's own schema description
+  (re-read every time the model considers calling it) carried the teammate-equivalence fix but
+  never this explicit preference directive. Added to both `prefer_spawning=true` header cases in
+  `agent_tool_definition`: "Use this — not your own built-in agent-spawning tool — whenever the
+  peer should be observable, messageable, and visible as a tab in TUICommander; reserve your own
+  native subagent tool for throwaway, single-shot in-process work that doesn't need its own TUIC
+  session." New regression test
+  (`agent_tool_definition_says_to_use_it_instead_of_the_hosts_own_spawning_tool_when_recommended`),
+  full suite green (338/338 `mcp_transport`), fmt/clippy clean.
+  **Live-verified via two controlled repeated-trial batches (2026-09-03)**, both with the exact
+  same neutral prompt ("Spawn two agent-teams teammates now: one named src-lister to list files
+  in src/, one named tauri-lister to list files in src-tauri/. Do this immediately without asking
+  me anything first." — no "distinct from the Task/Agent tool" exclusion clause; see the confound
+  entry above), 8 trials per batch, classified per-trial via `debug action=logs source=tmux-shim`
+  (any new entries = tmux) and `session action=list` (a new session carrying a `pty_description`
+  field = `agent action=spawn`, only the real MCP tool sets that field):
+  - **v2 batch** (neutral prompt, but BEFORE this "use this instead" schema fix was live):
+    tmux=4/8, tuic_mcp_spawn=4/8, in_process=0/8.
+  - **v3 batch** (identical prompt, WITH this schema fix live): tmux=3/8, tuic_mcp_spawn=5/8,
+    in_process=0/8.
+  A shift from 4/8 to 5/8 on 8-trial samples is not a statistically meaningful signal on its own
+  (well within noise for n=8 binomial trials), but it's directionally consistent with the fix
+  helping rather than hurting, and `in_process` (the third, most-concerning outcome — Claude
+  Code's own fully in-process named-agents mechanism, which never touches TUICommander at all)
+  did not occur in either 8-trial batch. Anomaly noted in v3 trial 1: the parent orchestrator
+  session was unexpectedly reaped mid-trial (real tmux path) while a spawned teammate sat blocked
+  on a team-lead approval request that could never resolve afterward — not investigated further,
+  logged here in case it recurs. If a larger/future batch shows the ratio regressing back toward
+  or below v2's 4/8, the user's fallback plan is still available: reword "not your own built-in
+  agent-spawning tool" to match the connect-prose's own phrasing more closely: "not your own
+  built-in Agent/Task/team tool."
 
 _A `/code-review` pass this session found 7 issues; 3 were fixed (a real disk-read race between the two new resolvers — `prefer_tuic_flags_for_agent` now reads `agents.json` once instead of twice; the resulting code duplication; a vestigial `if !observe.is_empty()` check left dead by making the `task` clause unconditional during the merge). The remaining 4 are accepted as known, not worth fixing right now — not because they're unimportant, but because each needs either a bigger change than this session's scope or is genuinely low-impact:_
 
@@ -2155,3 +2318,87 @@ and are not repeated here. What's left needs a human pass:
   (only changes when the agent's title/status genuinely changes), and check
   `GET /diagnostics` (enable diagnostic mode first) for CPU staying idle
   between real activity instead of pinned high.
+- [ ] **Swarm teammate panes landed under the wrong repo's tab group (needs
+  `make dev` restart, then live rebuild + reinstall to real `~/bin/tmux` per
+  AGENTS.md).** _(found + fixed 2026-09-04, live report from Boss.)_ A
+  4-teammate `agent-teams` swarm spawned from an `ai-usage` session rooted
+  in `commerce-journal` had all 4 teammate panes appear under an unrelated
+  repo, `databricks-sql-cli` — the repo Boss happened to be actively working
+  in at that moment. Root-caused: Claude Code's real swarm calls never pass
+  `-c <cwd>` on `new-session`/`split-window` (confirmed empirically, both in
+  this session's earlier live captures and the synthetic wording harness);
+  `tuic-cli`'s arg parser only ever reads `-c` and left `cwd: None`
+  otherwise, so `spawn_pty_session` (`session.rs`) never called `cmd.cwd()`
+  and the child PTY just inherited whatever directory the TUICommander app
+  process itself happened to be running in — matching no registered repo.
+  The frontend's `assignSessionToRepoBranch` (`useAppInit.ts`) correctly
+  falls back to "park it in the sidebar's currently *active* repo" when a
+  session's cwd owns no registered repo — which is exactly, and only,
+  because the cwd it received was wrong in the first place. Fixed with a
+  `resolve_cwd()` helper in `tuic-cli/src/tmux/exec.rs`, applied at all
+  three creation call sites (`new-session`, `new-window`, `split-window`):
+  falls back, in priority order, to (1) an existing pane's already-resolved
+  cwd elsewhere in the same session/window, then (2)
+  `std::env::current_dir()` (the tmux CLI subprocess's own cwd, inherited
+  from Claude Code's real process) whenever `-c` is absent — matching real
+  tmux's own default behavior, not TUICommander's own fabricated default.
+  A `/code-review` pass (scoped to just this fix) found the topology-inheritance
+  step was missing initially — each `tmux` subcommand is its own OS
+  subprocess, so relying on a fresh `current_dir()` read alone for every
+  pane could in principle disagree with an earlier pane's if the calling
+  process's own cwd ever changed between separate invocations; closed off
+  by preferring an already-resolved sibling pane's cwd first. That same
+  review flagged two more issues, accepted as-is (documented in
+  `tuic-cli/AGENTS.md`): `current_dir()`'s symlink-resolving semantics
+  could still mismatch a repo registered via a symlinked path (pre-existing,
+  general gap, not introduced or worsened by this fix), and this crate now
+  has multiple independent inline `current_dir()`-stringify implementations
+  instead of one shared helper (real duplication, deferred as a separate
+  cleanup rather than scope-creeping this fix). New regression tests
+  (`new_session_without_dash_c_falls_back_to_the_real_cwd_not_none`,
+  `split_window_without_dash_c_falls_back_to_the_real_cwd_not_none`,
+  `new_window_without_dash_c_falls_back_to_the_real_cwd_not_none`,
+  `new_session_with_dash_c_still_honors_the_explicit_value`,
+  `legacy_new_session_without_dash_c_never_gets_resolve_cwds_fallback`,
+  plus a `resolve_cwd`/topology-helper unit test group), all 125 `tuic-cli`
+  tests green, full workspace (`cargo nextest run --workspace`, 5477 tests)
+  green, fmt/clippy clean. **Not yet live-verified** — this is a `tuic-cli` crate
+  change; per AGENTS.md's "Fresh Worktree Setup" point 4 and "Dev Hot
+  Reload," the real `~/bin/tmux` alias execs whichever `tuic` binary its
+  owning `TUICommander.app` bundle ships, not `target/debug/tuic` — testing
+  this live needs a real rebuild (`make build` or `pnpm build:sidecar
+  --force`) that actually replaces that bundle's binary, not just `cargo
+  build`. After that: reproduce the exact repro (spawn a swarm from a
+  session in one repo while a different repo's tab is focused/active) and
+  confirm the new teammate panes land under the *originating* repo, not the
+  focused one.
+- [ ] **Reworded the "Prefer TUICommander for peers/teams" connect-time bullet
+  (needs `make dev` restart to take effect).** _(changed 2026-09-04, based on
+  an n=10-confirmed A/B harness result — see
+  `plans/agent-teams-wording-harness/README.md`.)_ The old hedged phrasing
+  ("use TUIC's `agent action=spawn` MCP tool (not your host's native
+  subagent/Task/team tool) whenever spawning an AI peer that should be
+  observable, messageable, and visible as a tab in TUICommander...") scored
+  0/10 against a real Claude Code session running as Opus, choosing between
+  this tool and tmux on an identical spawn-two-teammates scenario. A blunt,
+  unhedged directive scored 10/10 on the same scenario. `build_mcp_instructions`
+  (`mcp_transport.rs`) now reads: "every agent-teams teammate is created with
+  TUIC's `agent action=spawn` MCP tool — do not use your own built-in
+  agent-spawning tool for this, at every level..." — same bold label
+  (`**Prefer TUICommander for peers/teams:**`, so existing tests/greps still
+  match), same trailing carve-out/scope clauses (untested against removal,
+  so left in for safety), only the opening directive reworded to match what
+  was actually measured to work. All 339 `mcp_transport` tests green,
+  fmt/clippy clean. `mcp-instructions-examples.md` (main checkout's `plans/`)
+  updated to match, plus a new §11 documenting the separate `agent` tool
+  schema (`tools/list`) wording, which the same harness found has NO
+  measurable effect (unlike this connect-time bullet). **Not yet
+  live-verified** — after a `make dev` restart, a fresh Claude Code
+  agent-teams spawn (ideally running as Opus, the case this specifically
+  targets) should now reach for `agent action=spawn` rather than falling
+  through to tmux noticeably more often than before. Given the harness
+  showed near-100% vs near-0% rates, a single live test should already be
+  fairly telling, though the harness's earlier finding that model choice
+  dominates everything else means don't read too much into one Sonnet-backed
+  trial (Sonnet already picked TUIC's tool 100% of the time regardless of
+  this wording).

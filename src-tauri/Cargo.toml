@@ -11,7 +11,7 @@ exclude = ["patches/wayland-scanner"]
 resolver = "2"
 
 [workspace.package]
-version = "1.7.5"
+version = "1.7.5-nightly.20260903.t1429c"
 
 [package]
 name = "tuicommander"

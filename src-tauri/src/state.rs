@@ -1127,6 +1127,11 @@ pub struct McpSessionMeta {
     /// Repo path extracted from MCP initialize `roots[0].uri` (file:// URI → absolute path).
     /// Used by downstream per-project filtering to scope tool access.
     pub repo_path: Option<String>,
+    /// TUICommander agent-type key resolved from the client's `clientInfo.name`
+    /// at initialize time (`resolve_agent_type` in mcp_transport.rs), cached so
+    /// later requests on this connection (e.g. `tools/list`) don't need the
+    /// original client name again. `None` when the name matched no known agent.
+    pub agent_type: Option<String>,
 }
 
 /// A registered peer agent in the inter-agent messaging system.
