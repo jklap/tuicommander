@@ -137,3 +137,30 @@ async fn reconnect_settles_old_connection_and_starts_a_new_generation() {
     assert!(fresh.settlement.is_none());
     manager.disconnect(fresh.connection_id).await.unwrap();
 }
+
+#[tokio::test]
+async fn kill_settles_and_retains_a_killed_snapshot_without_session_operations() {
+    let root = tempdir().unwrap();
+    std::fs::copy(
+        "tests/fixtures/acp/ready-alive.json",
+        root.path().join("scenario.json"),
+    )
+    .unwrap();
+    let manager = AcpClientManager::new(EgoAcpConfig { executable: fake() });
+    let ready = manager
+        .connect(AcpConnectRequest {
+            root: root.path().to_path_buf(),
+        })
+        .await
+        .unwrap();
+    let settlement = manager.kill(ready.connection_id).await.unwrap();
+    assert_eq!(settlement.reason, AcpConnectionSettlementReason::Killed);
+    let killed = manager.snapshot(ready.connection_id).unwrap();
+    assert_eq!(killed.state, AcpConnectionState::Killed);
+    assert_eq!(killed.generation, ready.generation);
+    assert_eq!(
+        killed.settlement.unwrap().reason,
+        AcpConnectionSettlementReason::Killed
+    );
+    assert!(killed.attachments.is_empty());
+}

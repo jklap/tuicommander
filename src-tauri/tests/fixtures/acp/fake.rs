@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Write},
     path::PathBuf,
 };
 
@@ -29,6 +29,9 @@ fn main() {
         r#"{"protocol":"ready-eof"}"# => {
             serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":1,"agentInfo":{"name":"ego","version":"test"},"agentCapabilities":{}}}).to_string()
         }
+        r#"{"protocol":"ready-alive"}"# => {
+            serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":1,"agentInfo":{"name":"ego","version":"test"},"agentCapabilities":{}}}).to_string()
+        }
         r#"{"protocol":"non-v1"}"# => {
             serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":2,"agentInfo":{"name":"ego","version":"test"},"agentCapabilities":{}}}).to_string()
         }
@@ -36,4 +39,8 @@ fn main() {
     };
     println!("{response}");
     io::stdout().flush().unwrap();
+    if scenario.trim() == r#"{"protocol":"ready-alive"}"# {
+        let mut closed = Vec::new();
+        let _ = io::stdin().read_to_end(&mut closed);
+    }
 }
