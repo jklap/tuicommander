@@ -27,7 +27,7 @@ import { mdTabsStore, type PluginPanelTab } from "../../stores/mdTabs";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { currentBranchKey, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
-import { tabOrderingStore } from "../../stores/tabOrdering";
+import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";

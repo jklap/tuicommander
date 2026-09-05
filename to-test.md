@@ -1518,3 +1518,23 @@ needed. Canvas painting is not observable over HTTP, so these need eyes.
 - [ ] Search a Dictation setting (e.g. `whisper`) in the desktop app: it appears.
   In browser mode (`http://localhost:9876/`) the Dictation tab is absent, so the
   same query must return "No settings match your search."
+
+## Cross-kind tab drag reorder (story 682-b8d2, frontend — Vite HMR picks it up)
+
+Free-mode and terminals-first drag reorder across tab kinds never worked: the
+cross-kind order list had no writer, so the reorder call always returned early.
+The DOM order is covered by tests; a real pointer drag in the WebView is not.
+
+- [ ] Settings → Appearance → Tab Ordering → **Free**. Open a terminal, a diff and
+  a markdown tab. Drag the diff tab onto the left half of the terminal tab: it must
+  land before the terminal and stay there. Repeat dragging the terminal to the right
+  half of the markdown tab.
+- [ ] Still in Free mode, open a new terminal after a drag. It must appear at the
+  end without disturbing the order you dragged.
+- [ ] Switch to **Terminals First**. Terminals stay leftmost. Drag the markdown tab
+  onto the diff tab — the two non-terminal tabs must swap, and the terminals must
+  not move.
+- [ ] Switch to **Grouped by Type** (the default). Ordering must be unchanged from
+  before this story: kinds stay grouped, and dragging only reorders within a kind.
+- [ ] Close a tab you dragged, then reopen one. No ghost position: the reopened tab
+  appears at the end, not at the closed tab's old slot.

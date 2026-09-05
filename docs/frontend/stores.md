@@ -483,6 +483,25 @@ Default settings applied to newly added repositories.
 ### tabManager (`tabManager.ts`)
 Tab ordering, branch-key mapping, and tab persistence logic.
 
+**One ordering implementation.** `reorderIds` (splice source before/after target) and
+`orderedThenRemainder` (known order first, never-dragged ids appended) are the only
+ordering code in the app. Both display orders call them: each store's own `_order`
+via `reorderByIds` / `getVisibleIds`, and `tabOrderingStore` — the single cross-kind
+list that spans terminals, diffs, markdown and editor tabs, which the tab bar reads in
+the `terminals-first` and `free` ordering modes. A per-store `_order` cannot express
+that list, because a drag between two kinds moves an id across store boundaries.
+
+`tabOrderingStore` is only correct while the stores keep it populated: `_addTab`,
+`_addTabBackground`, `remove`, `clearAll` and `_clearWhere` mirror into it, and
+`terminals.ts` (outside the factory) does the same from its `add` and `remove`. Skip
+that wiring and the list stays empty, `reorder` finds neither id and returns, and every
+drag across tab kinds silently does nothing. Pinned by
+`src/__tests__/stores/tabOrderWiring.test.ts`.
+
+Terminal order itself is NOT here: it lives in `repositoriesStore`, per repo and per
+branch, and is persisted. `tabOrderingStore` holds terminal ids so a cross-kind drag
+can place them, but the branch list stays the source of truth for terminals alone.
+
 **Exclusive pane activation.** TerminalArea renders terminals, diffs, markdown and
 editors as four independent `For` lists, each marking its pane `active` from its
 OWN store's `activeId` — so "only one pane shows" is a cross-store invariant.

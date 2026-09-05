@@ -8,7 +8,7 @@ import { mdTabsStore } from "../stores/mdTabs";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { currentBranchKey, repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
-import { tabOrderingStore } from "../stores/tabOrdering";
+import { tabOrderingStore } from "../stores/tabManager";
 import { terminalsStore } from "../stores/terminals";
 import { readClipboard, writeClipboard } from "../utils/clipboard";
 import { getFocusedFrameSelection } from "../utils/focusedSelection";

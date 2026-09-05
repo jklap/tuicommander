@@ -32,7 +32,7 @@ import { mdTabsStore } from "../../stores/mdTabs";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore, type TabOrderingMode } from "../../stores/settings";
-import { tabOrderingStore } from "../../stores/tabOrdering";
+import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 
 describe("TabBar", () => {
@@ -762,6 +762,171 @@ describe("TabBar", () => {
 			const closeBtn = container.querySelector(".mdTab .tabClose")!;
 			fireEvent.click(closeBtn);
 			expect(handleClose).toHaveBeenCalledWith(id);
+		});
+	});
+
+	describe("cross-kind drag reorder", () => {
+		/** Set up a repo with one terminal plus one diff and one markdown tab. */
+		function setupMixedTabs() {
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setBranch("/repo", "main", { isMain: true, worktreePath: null });
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveBranch("/repo", "main");
+			const terminalId = addTerminal({ name: "Terminal" });
+			repositoriesStore.addTerminalToBranch("/repo", "main", terminalId);
+			const diffId = diffTabsStore.add("/repo", "/repo/change.ts", "M");
+			const markdownId = mdTabsStore.add("/repo", "/repo/readme.md");
+			return { terminalId, diffId, markdownId };
+		}
+
+		/** Drag `sourceEl` onto `targetEl` and release, dropping on the given half. */
+		function dragOnto(sourceEl: Element, targetEl: Element, side: "left" | "right") {
+			vi.spyOn(targetEl, "getBoundingClientRect").mockReturnValue({
+				left: 100,
+				right: 200,
+				top: 0,
+				bottom: 30,
+				width: 100,
+				height: 30,
+				x: 100,
+				y: 0,
+				toJSON: () => ({}),
+			} as DOMRect);
+			vi.spyOn(document, "elementFromPoint").mockReturnValue(targetEl);
+			const dropX = side === "left" ? 110 : 190;
+
+			fireEvent.pointerDown(sourceEl, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+			fireEvent.pointerMove(document, { pointerId: 1, clientX: dropX, clientY: 10 });
+			fireEvent.pointerUp(document, { pointerId: 1, clientX: dropX, clientY: 10 });
+		}
+
+		function renderedTabIds(container: HTMLElement): string[] {
+			return [...container.querySelectorAll("[data-tab-id]")].map((el) => (el as HTMLElement).dataset.tabId!);
+		}
+
+		it("free mode: dropping a diff on a terminal moves it before the terminal", () => {
+			const { terminalId, diffId, markdownId } = setupMixedTabs();
+			settingsStore.setTabOrderingMode("free");
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			expect(renderedTabIds(container)).toEqual([terminalId, diffId, markdownId]);
+
+			const source = container.querySelector(`[data-tab-id="${diffId}"]`)!;
+			const target = container.querySelector(`[data-tab-id="${terminalId}"]`)!;
+			dragOnto(source, target, "left");
+
+			expect(renderedTabIds(container)).toEqual([diffId, terminalId, markdownId]);
+		});
+
+		it("free mode: dropping a terminal on a markdown tab moves it after the markdown tab", () => {
+			const { terminalId, diffId, markdownId } = setupMixedTabs();
+			settingsStore.setTabOrderingMode("free");
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+
+			const source = container.querySelector(`[data-tab-id="${terminalId}"]`)!;
+			const target = container.querySelector(`[data-tab-id="${markdownId}"]`)!;
+			dragOnto(source, target, "right");
+
+			expect(renderedTabIds(container)).toEqual([diffId, markdownId, terminalId]);
+		});
+
+		it("terminals-first mode: dropping a markdown tab on a diff reorders the non-terminal tabs", () => {
+			const { terminalId, diffId, markdownId } = setupMixedTabs();
+			settingsStore.setTabOrderingMode("terminals-first");
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			expect(renderedTabIds(container)).toEqual([terminalId, diffId, markdownId]);
+
+			const source = container.querySelector(`[data-tab-id="${markdownId}"]`)!;
+			const target = container.querySelector(`[data-tab-id="${diffId}"]`)!;
+			dragOnto(source, target, "left");
+
+			expect(renderedTabIds(container)).toEqual([terminalId, markdownId, diffId]);
+		});
+
+		it("grouped mode: a same-kind drop still reorders within the kind", () => {
+			const { terminalId } = setupMixedTabs();
+			const secondDiffId = diffTabsStore.add("/repo", "/repo/other.ts", "M");
+			settingsStore.setTabOrderingMode("grouped-by-type");
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			const ids = renderedTabIds(container);
+			const firstDiffId = ids[1];
+
+			const source = container.querySelector(`[data-tab-id="${secondDiffId}"]`)!;
+			const target = container.querySelector(`[data-tab-id="${firstDiffId}"]`)!;
+			dragOnto(source, target, "left");
+
+			expect(renderedTabIds(container).slice(0, 3)).toEqual([terminalId, secondDiffId, firstDiffId]);
+		});
+
+		it("terminals-first mode: dropping a terminal on a terminal still calls onReorder", () => {
+			setupMixedTabs();
+			const secondTerminalId = addTerminal({ name: "Terminal 2" });
+			repositoriesStore.addTerminalToBranch("/repo", "main", secondTerminalId);
+			settingsStore.setTabOrderingMode("terminals-first");
+			const onReorder = vi.fn();
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+					onReorder={onReorder}
+				/>
+			));
+			const ids = renderedTabIds(container);
+
+			const source = container.querySelector(`[data-tab-id="${secondTerminalId}"]`)!;
+			const target = container.querySelector(`[data-tab-id="${ids[0]}"]`)!;
+			dragOnto(source, target, "left");
+
+			expect(onReorder).toHaveBeenCalledWith(1, 0);
+		});
+
+		it("closing a tab drops it from the cross-kind order", () => {
+			const { terminalId, diffId, markdownId } = setupMixedTabs();
+			settingsStore.setTabOrderingMode("free");
+
+			mdTabsStore.remove(markdownId);
+
+			expect(tabOrderingStore.getOrdered(new Set([terminalId, diffId]))).toEqual([terminalId, diffId]);
+			expect(tabOrderingStore.state.order).not.toContain(markdownId);
 		});
 	});
 

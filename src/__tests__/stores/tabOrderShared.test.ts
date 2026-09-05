@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { type BaseTab, createTabManager, orderedThenRemainder, reorderIds } from "../../stores/tabManager";
-import { tabOrderingStore } from "../../stores/tabOrdering";
+import {
+	type BaseTab,
+	createTabManager,
+	orderedThenRemainder,
+	reorderIds,
+	tabOrderingStore,
+} from "../../stores/tabManager";
 import { testInScope } from "../helpers/store";
 
 interface TestTab extends BaseTab {

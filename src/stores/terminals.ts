@@ -5,7 +5,7 @@ import { rpc } from "../transport";
 import type { TerminalMatch } from "../types";
 import { isPerfDebug } from "../utils/perfDebug";
 import { appLogger } from "./appLogger";
-import { activatePaneExclusively, registerPaneDeactivator } from "./tabManager";
+import { activatePaneExclusively, registerPaneDeactivator, tabOrderingStore } from "./tabManager";
 
 /** Type of input being awaited */
 export type AwaitingInputType = "question" | "error" | null;
@@ -433,6 +433,7 @@ function createTerminalsStore() {
 				...data,
 			});
 			if (data.sessionId) sessionToTerminal.set(data.sessionId, id);
+			tabOrderingStore.insert(id);
 			return id;
 		},
 
@@ -489,6 +490,7 @@ function createTerminalsStore() {
 			});
 			const sessionId = state.terminals[id]?.sessionId;
 			if (sessionId) sessionToTerminal.delete(sessionId);
+			tabOrderingStore.remove(id);
 			cleanupBusyState(id);
 			lastDataAtMap.delete(id);
 			// Cancel any pending OSC 133 flush so its rAF callback can't fire after
