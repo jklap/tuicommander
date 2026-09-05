@@ -481,6 +481,19 @@ fn is_binary(data: &[u8]) -> bool {
     data.iter().take(8000).any(|&b| b == 0)
 }
 
+/// Test-only count of gix revwalks performed for a repository, keyed by repo
+/// path so parallel tests cannot see each other's walks. Proves `branches_detail`
+/// short-circuits instead of merely returning the same numbers.
+#[cfg(test)]
+static AHEAD_BEHIND_WALKS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+/// How many revwalks `ahead_behind` ran for `repo`. See [`AHEAD_BEHIND_WALKS`].
+#[cfg(test)]
+fn ahead_behind_walks(repo: &Path) -> usize {
+    AHEAD_BEHIND_WALKS.get(repo).map(|n| *n).unwrap_or(0)
+}
+
 impl GitReads for GixGitReads {
     fn branches_detail(&self, repo: &Path) -> Result<Vec<BranchDetail>, String> {
         use gix::bstr::ByteSlice;
@@ -670,11 +683,23 @@ impl GitReads for GixGitReads {
             .map_err(|e| e.to_string())?
             .detach();
 
+        // Two refs on the same commit diverge by nothing. `branches_detail` asks
+        // this question once per branch and a branch level with its upstream is
+        // the common case, so answering it from the tips alone removes the two
+        // full revwalks below — the whole reason that fan-out was O(history).
+        if l == r {
+            return Ok((0, 0));
+        }
+
         // ahead = commits reachable from `left` but not `right`; behind = the
         // reverse. Counting is order-independent, so the lack of topo-order in
         // gix's walk is irrelevant here. Hiding the other side prunes the shared
         // history, which also yields the correct result with no common ancestor.
         let count_excl = |tip, hide| -> Result<u32, String> {
+            #[cfg(test)]
+            {
+                *AHEAD_BEHIND_WALKS.entry(repo.to_path_buf()).or_insert(0) += 1;
+            }
             Ok(grepo
                 .rev_walk([tip])
                 .with_hidden([hide])
@@ -1162,6 +1187,47 @@ mod tests {
         assert!(
             !b.unwrap().iter().any(|br| br.is_current),
             "no current branch when detached"
+        );
+    }
+
+    /// `branches_detail` asks ahead/behind once per branch; a branch level with
+    /// its upstream must cost no revwalk at all. Before the tip short-circuit
+    /// every branch paid two full `with_hidden` walks whatever its state, which
+    /// is what made the fan-out O(branches x history).
+    #[test]
+    fn branches_detail_does_no_revwalk_for_a_branch_level_with_its_upstream() {
+        let (_dir, repo) = fixture_repo();
+        // Fast-forward the tracking ref onto main's tip: main is now in sync.
+        let head = run_git(&repo, &["rev-parse", "main"]).trim().to_string();
+        run_git(&repo, &["update-ref", "refs/remotes/origin/main", &head]);
+
+        let before = ahead_behind_walks(&repo);
+        let branches = GixGitReads::new().branches_detail(&repo).expect("branches");
+        let walks = ahead_behind_walks(&repo) - before;
+
+        let main = branches.iter().find(|b| b.name == "main").expect("main");
+        assert_eq!(
+            (main.ahead, main.behind),
+            (None, None),
+            "in sync renders as no tracking token, like git's %(upstream:track)"
+        );
+        assert_eq!(walks, 0, "an in-sync branch must cost no revwalk");
+    }
+
+    /// The short-circuit must not swallow a real divergence.
+    #[test]
+    fn ahead_behind_still_counts_a_diverged_pair() {
+        let (_dir, repo) = fixture_repo();
+        let gix = GixGitReads::new();
+        assert_eq!(
+            gix.ahead_behind(&repo, "main", "feature").unwrap(),
+            CliGitReads.ahead_behind(&repo, "main", "feature").unwrap(),
+            "diverged pair must still agree with the CLI"
+        );
+        assert_eq!(
+            gix.ahead_behind(&repo, "main", "main").unwrap(),
+            (0, 0),
+            "a ref compared with itself is in sync"
         );
     }
 

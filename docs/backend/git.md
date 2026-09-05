@@ -25,7 +25,7 @@ Read operations go through a reversible `GitReads` port (`src-tauri/src/git_read
 | Op | Backend | Notes |
 |----|---------|-------|
 | `branches_detail` | **gix** | `references()` → shorten / peel / committer ISO8601 / author / summary / upstream. ahead/behind via the `ahead_behind` backend. |
-| `ahead_behind` | **gix** | `rev_parse_single` + two `with_hidden` revwalks (counts are order-independent; handles no-common-ancestor). |
+| `ahead_behind` | **gix** | `rev_parse_single`, then **identical tips short-circuit to `(0, 0)` with no walk**; otherwise two `with_hidden` revwalks (counts are order-independent; handles no-common-ancestor). `branches_detail` asks this once per branch, and a branch level with its upstream is the common case, so the short-circuit is what keeps that fan-out off `O(branches x history)`. |
 | `worktree_paths` | **gix** | `worktrees()` + main worktree; paths canonicalized to match `git worktree list` real paths. |
 | `blame` | **gix** | `blame_file()`; **renamed-history files fall back to CLI** (gix blame lacks `-C`/`-M` rename following). |
 | `commit_log`, `graph_commits` | **gix** | gix has no built-in topo sort, so `gix_topo_order` reproduces `git log --topo-order` (Kahn seeded by commit-date) and `gix_decorations` reproduces `%D` byte-for-byte (reverse-refname order, `tag:` prefix, `HEAD -> branch`). `author_date` UTC is normalized to git's `Z`. |
@@ -53,6 +53,43 @@ Every git subprocess invocation goes through `git_cmd(cwd: &Path) -> GitCmd`. Th
 | `run_raw()` | Full control — returns raw `Output` regardless of exit code |
 
 `GitError` implements `Into<String>` for seamless use in Tauri command returns.
+
+### Deadlines
+
+`.timeout(Duration)` kills the invocation when it outlives the deadline and returns
+`GitError::TimedOut` (`run_silent()` turns that into `None`, with a warning). Without
+it a git call waits forever, which is right for the local reads that dominate this
+module and wrong for anything that can block on something outside this machine —
+a network `fetch`, or a user-supplied setup script.
+
+The deadline path pipes stdout/stderr and drains them on two reader threads, so a
+child that fills a pipe buffer cannot deadlock against our own wait. On timeout the
+child is killed **and reaped** (no zombie), but the reader threads are deliberately
+not joined: a killed git can leave a grandchild (credential helper, `core.askpass`)
+holding the write end open, and joining would reintroduce the unbounded wait the
+deadline exists to prevent.
+
+### Stale `index.lock` reclaim
+
+`git_cmd()` reclaims a `.git/index.lock` left by a crashed process, gated by **two**
+independent checks — age **and** ownership:
+
+1. **Age** (`is_index_lock_stale`): a 0-byte lock is stale after 5s (git crashed
+   before writing the new index); a non-empty one after 30s (index written, rename
+   never happened).
+2. **Ownership** (`index_lock_owner_pids`): `lsof -w -t -- <lock>`. If any live
+   process still holds the lock open, it is kept whatever its age. Age alone cannot
+   tell a crashed git from a merely slow one, and on a large monorepo an `add`/`stash`
+   index write can outrun the threshold — deleting the lock under it corrupts the
+   index.
+
+The `lsof` fork happens only for a lock the age rule has already condemned, never on
+the hot path of an ordinary git call, and it carries a 2s deadline of its own — it
+runs inside `git_cmd`, so an `lsof` stuck on a wedged network mount would otherwise
+wedge every git call in the app. When the probe cannot run or does not answer in
+time it returns `None` and the age rule decides alone, as it did before the ownership
+check existed; on Windows the OS refuses to unlink a file another process holds open,
+which provides the same protection.
 
 ## Tauri Commands
 
@@ -109,10 +146,21 @@ struct RepoInfo {
 }
 ```
 
-`status` is `conflict` only when a `git status --porcelain` record carries an
-unmerged XY code in columns 1-2 (`porcelain_has_conflict` in `git_cli.rs`, the
-same parser `conflict_assist.rs` uses). The code is read positionally, so a file
-named `UUID.md` no longer marks the repository as conflicted.
+`status` is the **same verdict the git panel shows**: `get_repo_info_impl` reads it
+from `git_reads().status_counts()`, so the repo badge no longer forks a
+`git status --porcelain` of its own beside the panel's `--porcelain=v2` read. One
+status source per repo, one set of semantics (`status_counts_from_porcelain_v2` in
+`git.rs`): `conflict` when a porcelain-v2 `u ` (unmerged) record is present, `dirty`
+when anything is staged or changed, `clean` otherwise. Codes are read positionally,
+so a file named `UUID.md` does not mark the repository as conflicted.
+
+A repo git cannot read reports `unknown`, never `clean` — a green tick on an
+unreadable repo is a silent failure.
+
+**Still separate:** the repo watcher's git-state fingerprint (`repo_watcher.rs`)
+runs its own `status --porcelain` v1, and `get_working_tree_status` runs its own
+`--porcelain=v2 --branch --show-stash` because it needs the per-file entries that
+`StatusCounts` discards.
 
 ### DiffStats
 

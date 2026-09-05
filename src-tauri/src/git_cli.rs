@@ -7,7 +7,8 @@
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::cli::{enriched_path, resolve_cli};
 
@@ -22,6 +23,9 @@ pub(crate) enum GitError {
     SpawnFailed(std::io::Error),
     /// Git exited with a non-zero status code.
     NonZeroExit { code: Option<i32>, stderr: String },
+    /// Git outlived its deadline and was killed. Only reachable when the caller
+    /// set one with [`GitCmd::timeout`].
+    TimedOut { after: Duration },
 }
 
 impl fmt::Display for GitError {
@@ -37,6 +41,13 @@ impl fmt::Display for GitError {
                 } else {
                     write!(f, "git exited with code {code_str}: {stderr}")
                 }
+            }
+            Self::TimedOut { after } => {
+                write!(
+                    f,
+                    "git timed out after {:.1}s and was killed",
+                    after.as_secs_f64()
+                )
             }
         }
     }
@@ -73,6 +84,10 @@ pub(crate) struct GitOutput {
 pub(crate) struct GitCmd {
     cmd: Command,
     cwd: PathBuf,
+    /// Deadline for the whole invocation. `None` (the default) waits forever,
+    /// which is right for the local reads that dominate this module and wrong
+    /// for anything that touches a network or a user script.
+    timeout: Option<Duration>,
 }
 
 impl GitCmd {
@@ -92,11 +107,36 @@ impl GitCmd {
         self
     }
 
+    /// Kill the invocation if it has not finished within `timeout`.
+    ///
+    /// Use it for anything that can block on something outside this machine's
+    /// control — a network fetch, a user-supplied setup script — where the
+    /// alternative to a deadline is a thread parked forever.
+    ///
+    // DEFERRED (2026-09-05) — the callers that need this live outside git.rs /
+    // git_cli.rs / git_reads.rs and were out of scope for story 673-19fa:
+    // `git fetch` in conflict_assist.rs, github.rs and worktree.rs, and the
+    // setup scripts run from worktree.rs. Wire each of them to `.timeout(..)`
+    // and drop the dead_code attribute below.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Run the command to completion, honoring [`GitCmd::timeout`] when set.
+    fn output(&mut self) -> Result<std::process::Output, GitError> {
+        match self.timeout {
+            Some(t) => output_with_deadline(&mut self.cmd, t),
+            None => self.cmd.output().map_err(GitError::SpawnFailed),
+        }
+    }
+
     /// Run the git command, requiring success (non-zero exit → `Err`).
     ///
     /// Returns `GitOutput` containing raw (untrimmed) stdout on success.
     pub fn run(mut self) -> Result<GitOutput, GitError> {
-        let output = self.cmd.output().map_err(GitError::SpawnFailed)?;
+        let output = self.output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -131,6 +171,15 @@ impl GitCmd {
                 }
                 None
             }
+            Err(GitError::TimedOut { after }) => {
+                tracing::warn!(
+                    source = "git_cli",
+                    "Timed out after {:.1}s in {}",
+                    after.as_secs_f64(),
+                    cwd.display()
+                );
+                None
+            }
             Err(GitError::NonZeroExit { .. }) => None,
         }
     }
@@ -139,8 +188,68 @@ impl GitCmd {
     /// of exit code. Use for callsites that need to inspect exit code and
     /// stderr independently (e.g. `run_git_command` which never returns Err).
     pub fn run_raw(mut self) -> Result<std::process::Output, GitError> {
-        self.cmd.output().map_err(GitError::SpawnFailed)
+        self.output()
     }
+}
+
+/// Spawn `cmd`, collect its output, and kill it if it outlives `timeout`.
+///
+/// The pipes are drained by two reader threads so a child that fills a pipe
+/// buffer cannot deadlock against our own wait. On the timeout path those
+/// threads are deliberately NOT joined: a killed git can leave a grandchild
+/// (a credential helper, a `core.askpass`) holding the write end open, and
+/// joining would reintroduce exactly the unbounded wait the deadline exists to
+/// prevent. They exit on their own once the last writer closes.
+fn output_with_deadline(
+    cmd: &mut Command,
+    timeout: Duration,
+) -> Result<std::process::Output, GitError> {
+    use std::io::Read;
+
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(GitError::SpawnFailed)?;
+    let mut out_pipe = child.stdout.take().expect("stdout piped above");
+    let mut err_pipe = child.stderr.take().expect("stderr piped above");
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = err_pipe.read_to_end(&mut buf);
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    // Backs off from 1ms to 50ms so a fast command is not delayed by the poll
+    // granularity while a slow one costs almost no wakeups.
+    let mut poll = Duration::from_millis(1);
+    let status = loop {
+        match child.try_wait().map_err(GitError::SpawnFailed)? {
+            Some(status) => break status,
+            None => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    let _ = child.kill();
+                    // Reap it, so a timeout never leaves a zombie behind.
+                    let _ = child.wait();
+                    return Err(GitError::TimedOut { after: timeout });
+                }
+                std::thread::sleep(poll.min(remaining));
+                poll = (poll * 2).min(Duration::from_millis(50));
+            }
+        }
+    };
+
+    Ok(std::process::Output {
+        status,
+        stdout: out_reader.join().unwrap_or_default(),
+        stderr: err_reader.join().unwrap_or_default(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +291,53 @@ fn is_index_lock_stale(len: u64, age_secs: u64) -> bool {
     age_secs >= threshold
 }
 
+/// How long the owner probe may take before we give up and let the age rule decide.
+#[cfg(unix)]
+const LOCK_OWNER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// PIDs of the live processes that currently hold `lock` open.
+///
+/// `None` means the question could not be asked (no `lsof`, or a platform with
+/// no probe) — the caller then falls back to the age rule alone, which is what
+/// it did before the owner check existed.
+///
+/// Only ever consulted for a lock the age rule has already condemned, so the
+/// `lsof` fork happens at most once per reclaim attempt and never on the hot
+/// path of an ordinary git call.
+#[cfg(unix)]
+fn index_lock_owner_pids(lock: &Path) -> Option<Vec<u32>> {
+    // -t: PIDs only, one per line. -w: no warnings on unreadable mounts.
+    // A file nobody has open exits non-zero with empty stdout, which is a
+    // successful answer of "no owner", not a probe failure.
+    //
+    // Deadlined: this runs inside `git_cmd`, so an `lsof` stuck on a wedged
+    // network mount would wedge every git call in the app. Past the deadline we
+    // have no answer and fall back to the age rule.
+    let out = output_with_deadline(
+        Command::new("lsof").args([
+            OsStr::new("-w"),
+            OsStr::new("-t"),
+            OsStr::new("--"),
+            lock.as_os_str(),
+        ]),
+        LOCK_OWNER_PROBE_TIMEOUT,
+    )
+    .ok()?;
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .filter_map(|pid| pid.parse::<u32>().ok())
+            .collect(),
+    )
+}
+
+/// No portable owner probe outside unix. Windows refuses to unlink a file another
+/// process holds open, so the OS itself provides the protection `lsof` gives us here.
+#[cfg(not(unix))]
+fn index_lock_owner_pids(_lock: &Path) -> Option<Vec<u32>> {
+    None
+}
+
 fn remove_stale_index_lock(cwd: &Path) {
     let lock = cwd.join(".git/index.lock");
     let Ok(meta) = std::fs::metadata(&lock) else {
@@ -199,6 +355,20 @@ fn remove_stale_index_lock(cwd: &Path) {
     };
 
     if !is_index_lock_stale(meta.len(), age_secs) {
+        return;
+    }
+
+    // Age says "crashed", but age cannot see a git that is merely slow. On a large
+    // monorepo an `add`/`stash` index write can outrun the threshold, and deleting
+    // the lock under it corrupts the index. Ask who holds it before reclaiming.
+    if let Some(pids) = index_lock_owner_pids(&lock)
+        && !pids.is_empty()
+    {
+        tracing::info!(
+            source = "git_cli",
+            "Keeping index.lock in {} — still held by {pids:?}",
+            cwd.display()
+        );
         return;
     }
 
@@ -221,8 +391,27 @@ fn remove_stale_index_lock(cwd: &Path) {
     }
 }
 
+/// Test-only count of git subprocesses built for a working directory.
+///
+/// Keyed by cwd rather than process-wide: the suite runs tests in parallel, so a
+/// single counter would measure every other test's git calls. Each test owns its
+/// own temp repo, so the key isolates it.
+#[cfg(test)]
+static GIT_CMD_FORKS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+/// How many git subprocesses were built for `cwd`. See [`GIT_CMD_FORKS`].
+#[cfg(test)]
+pub(crate) fn git_cmd_forks(cwd: &Path) -> usize {
+    GIT_CMD_FORKS.get(cwd).map(|n| *n).unwrap_or(0)
+}
+
 /// Create a git command builder rooted at the given directory.
 pub(crate) fn git_cmd(cwd: &Path) -> GitCmd {
+    #[cfg(test)]
+    {
+        *GIT_CMD_FORKS.entry(cwd.to_path_buf()).or_insert(0) += 1;
+    }
     remove_stale_index_lock(cwd);
     let mut cmd = Command::new(resolve_cli("git"));
     cmd.current_dir(cwd);
@@ -233,6 +422,7 @@ pub(crate) fn git_cmd(cwd: &Path) -> GitCmd {
     GitCmd {
         cmd,
         cwd: cwd.to_path_buf(),
+        timeout: None,
     }
 }
 
@@ -448,6 +638,54 @@ DU src/deleted.rs
         assert!(is_index_lock_stale(4096, 120));
     }
 
+    /// Backdate a file's mtime so the age-based staleness rule sees it as old,
+    /// without sleeping in the test.
+    fn age_file(path: &Path, secs: u64) {
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open for set_times");
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+        f.set_times(
+            std::fs::FileTimes::new()
+                .set_accessed(when)
+                .set_modified(when),
+        )
+        .expect("set_times");
+    }
+
+    /// A lock past the age threshold that a live process still holds open must
+    /// survive. Age alone cannot tell a crashed git from a slow one, and
+    /// deleting the lock under a running `git add` on a large monorepo is the
+    /// index-corruption path.
+    #[test]
+    fn stale_by_age_lock_with_a_live_owner_is_kept() {
+        let (_dir, path) = setup_test_repo();
+        let lock = path.join(".git/index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+        age_file(&lock, 120);
+
+        let held = std::fs::File::open(&lock).expect("open lock");
+        remove_stale_index_lock(&path);
+        assert!(
+            lock.exists(),
+            "a lock a live process holds open must not be reclaimed"
+        );
+        drop(held);
+    }
+
+    /// The control: nobody owns the lock, so the age rule still reclaims it.
+    #[test]
+    fn stale_lock_nobody_owns_is_reclaimed() {
+        let (_dir, path) = setup_test_repo();
+        let lock = path.join(".git/index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+        age_file(&lock, 120);
+
+        remove_stale_index_lock(&path);
+        assert!(!lock.exists(), "an unowned stale lock must be reclaimed");
+    }
+
     #[test]
     fn test_run_success() {
         let (_dir, path) = setup_test_repo();
@@ -483,6 +721,7 @@ DU src/deleted.rs
         let gc = GitCmd {
             cmd,
             cwd: path.clone(),
+            timeout: None,
         };
         let result = gc.run();
         assert!(result.is_err());
@@ -515,6 +754,76 @@ DU src/deleted.rs
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(!output.status.success());
+    }
+
+    /// A command that hangs must be killed at the deadline, not waited on.
+    #[test]
+    fn run_kills_a_command_that_outlives_its_timeout() {
+        let (_dir, path) = setup_test_repo();
+        let mut cmd = Command::new("sleep");
+        cmd.current_dir(&path);
+        cmd.arg("30");
+        let gc = GitCmd {
+            cmd,
+            cwd: path.clone(),
+            timeout: None,
+        }
+        .timeout(Duration::from_millis(200));
+
+        let started = Instant::now();
+        let err = gc.run().expect_err("must time out");
+        let waited = started.elapsed();
+
+        assert!(
+            matches!(err, GitError::TimedOut { .. }),
+            "expected TimedOut, got {err:?}"
+        );
+        assert!(
+            waited < Duration::from_secs(5),
+            "must not wait for the child; waited {waited:?}"
+        );
+    }
+
+    /// run_silent must swallow a timeout the same way it swallows a non-zero exit.
+    #[test]
+    fn run_silent_returns_none_on_timeout() {
+        let (_dir, path) = setup_test_repo();
+        let mut cmd = Command::new("sleep");
+        cmd.current_dir(&path);
+        cmd.arg("30");
+        let gc = GitCmd {
+            cmd,
+            cwd: path.clone(),
+            timeout: None,
+        }
+        .timeout(Duration::from_millis(200));
+
+        assert!(gc.run_silent().is_none());
+    }
+
+    /// The deadline must not truncate a command that finishes inside it.
+    #[test]
+    fn timeout_does_not_fire_for_a_command_that_finishes_in_time() {
+        let (_dir, path) = setup_test_repo();
+        std::fs::write(path.join("untracked.txt"), "u\n").expect("write");
+        let out = git_cmd(&path)
+            .timeout(Duration::from_secs(30))
+            .args(["status", "--porcelain"])
+            .run()
+            .expect("status must succeed inside the deadline");
+        assert!(
+            out.stdout.contains("untracked.txt"),
+            "stdout must survive the piped path: {:?}",
+            out.stdout
+        );
+    }
+
+    #[test]
+    fn timed_out_error_names_the_deadline() {
+        let err = GitError::TimedOut {
+            after: Duration::from_millis(2500),
+        };
+        assert_eq!(err.to_string(), "git timed out after 2.5s and was killed");
     }
 
     #[test]
