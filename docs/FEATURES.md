@@ -1354,6 +1354,8 @@ All data persisted to platform config directory via Rust:
 - The daemon ping version must match the installed binary; an older detached daemon is restarted automatically after upgrades
 - Homebrew-managed installs show `brew uninstall mdkb` guidance instead of silent failure
 - Graceful fallback: all commands return empty results when mdkb is unavailable
+- A daemon that goes silent cannot wedge the app: every request/response exchange is bounded (10 s), the liveness probe runs on a shorter 2 s leash, and a connection cut short by a deadline is abandoned rather than reused — a half-read stream would answer the next question with the previous reply
+- The shared daemon lock is held only either side of a query, never across it, so one stalled call cannot make unrelated Code Intelligence calls wait out its deadline. Daemon startup stays exclusive on purpose, so two callers never race two spawns
 
 ### 14.9 macOS Dock Badge
 - Badge count for attention-requiring notifications (questions, errors)

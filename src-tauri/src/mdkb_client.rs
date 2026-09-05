@@ -109,12 +109,19 @@ mod platform {
     use anyhow::Context;
     use serde_json::json;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
 
     static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
     const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+    /// How long one request/response exchange may take before the client gives
+    /// up. A daemon that accepts the connection and then never answers used to
+    /// wedge the caller for ever — and, through the shared `MdkbDaemon` lock,
+    /// every other mdkb caller in the process with it.
+    const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 
     fn unwrap_text_field(resp: &Value) -> Result<String> {
         match resp.get("text").and_then(Value::as_str) {
@@ -136,12 +143,43 @@ mod platform {
         serde_json::from_value(symbols.clone()).context("mdkb: parse code_graph symbols")
     }
 
+    /// Frame the request, send it, and read the framed reply.
+    ///
+    /// Split out of `call` so a single `timeout` can bound the whole exchange
+    /// while borrowing nothing but the socket.
+    async fn exchange(stream: &mut UnixStream, body: &[u8]) -> Result<Vec<u8>> {
+        let len = u32::try_from(body.len()).context("request too large")?;
+
+        stream.write_all(&len.to_le_bytes()).await?;
+        stream.write_all(body).await?;
+        stream.flush().await?;
+
+        let mut hdr = [0u8; 4];
+        stream
+            .read_exact(&mut hdr)
+            .await
+            .context("mdkb: read response header")?;
+        let resp_len = u32::from_le_bytes(hdr) as usize;
+        if resp_len == 0 || resp_len > MAX_RESPONSE_BYTES {
+            bail!("mdkb: invalid response length {resp_len}");
+        }
+
+        let mut resp_buf = vec![0u8; resp_len];
+        stream
+            .read_exact(&mut resp_buf)
+            .await
+            .context("mdkb: read response body")?;
+        Ok(resp_buf)
+    }
+
     #[derive(Debug)]
     pub struct MdkbClient {
-        #[cfg(not(test))]
         stream: UnixStream,
-        #[cfg(test)]
-        pub(super) stream: UnixStream,
+        timeout: Duration,
+        /// Set when a deadline cut an exchange in half. The daemon may still
+        /// write the abandoned reply, and the next `call` would read it as its
+        /// own length header — so the connection can never be trusted again.
+        poisoned: bool,
     }
 
     #[derive(Debug, Deserialize)]
@@ -170,10 +208,29 @@ mod platform {
             let stream = UnixStream::connect(&path)
                 .await
                 .with_context(|| format!("mdkb: connect to {}", path.display()))?;
-            Ok(Self { stream })
+            Ok(Self {
+                stream,
+                timeout: CALL_TIMEOUT,
+                poisoned: false,
+            })
+        }
+
+        /// Build a client on an already-connected socket with an explicit
+        /// deadline. Tests use it to keep the suite fast.
+        #[cfg(test)]
+        pub(crate) fn from_stream(stream: UnixStream, timeout: Duration) -> Self {
+            Self {
+                stream,
+                timeout,
+                poisoned: false,
+            }
         }
 
         pub async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+            if self.poisoned {
+                bail!("mdkb: connection abandoned after a timeout, cannot send '{method}'");
+            }
+
             let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
             let req = json!({
                 "jsonrpc": "2.0",
@@ -182,27 +239,20 @@ mod platform {
                 "params": params,
             });
             let body = serde_json::to_vec(&req)?;
-            let len = u32::try_from(body.len()).context("request too large")?;
 
-            self.stream.write_all(&len.to_le_bytes()).await?;
-            self.stream.write_all(&body).await?;
-            self.stream.flush().await?;
-
-            let mut hdr = [0u8; 4];
-            self.stream
-                .read_exact(&mut hdr)
-                .await
-                .context("mdkb: read response header")?;
-            let resp_len = u32::from_le_bytes(hdr) as usize;
-            if resp_len == 0 || resp_len > MAX_RESPONSE_BYTES {
-                bail!("mdkb: invalid response length {resp_len}");
-            }
-
-            let mut resp_buf = vec![0u8; resp_len];
-            self.stream
-                .read_exact(&mut resp_buf)
-                .await
-                .context("mdkb: read response body")?;
+            // One deadline over the whole exchange, so a stalled write and a
+            // reply that never arrives are bounded by the same budget.
+            let resp_buf =
+                match tokio::time::timeout(self.timeout, exchange(&mut self.stream, &body)).await {
+                    Ok(result) => result?,
+                    Err(_) => {
+                        self.poisoned = true;
+                        bail!(
+                            "mdkb: '{method}' timed out after {}ms",
+                            self.timeout.as_millis()
+                        );
+                    }
+                };
 
             let resp: RpcResponse =
                 serde_json::from_slice(&resp_buf).context("mdkb: parse response")?;
@@ -314,10 +364,11 @@ mod platform {
 pub use platform::MdkbClient;
 
 #[cfg(all(test, unix))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
+    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{UnixListener, UnixStream};
 
@@ -433,9 +484,13 @@ mod tests {
         (path, handle)
     }
 
-    async fn connect_to_mock(path: &Path) -> platform::MdkbClient {
+    /// A deadline short enough to keep the suite fast, long enough that a
+    /// mock answering over a local socket is never a flake.
+    const TEST_TIMEOUT: Duration = Duration::from_millis(300);
+
+    async fn connect_to_mock(path: &Path) -> MdkbClient {
         let stream = UnixStream::connect(path).await.unwrap();
-        platform::MdkbClient { stream }
+        MdkbClient::from_stream(stream, TEST_TIMEOUT)
     }
 
     #[tokio::test]
@@ -544,6 +599,57 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("unknown tool: bad_method"));
+    }
+
+    /// A daemon that accepts the connection and then goes silent. This is the
+    /// shape that used to hang `call` for ever.
+    pub(crate) async fn spawn_silent_server() -> (PathBuf, tokio::task::JoinHandle<()>) {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("silent.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let path = sock_path.clone();
+
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+            // Never reached: the task owns the accepted connection and the
+            // temp dir so both outlive every client the test builds.
+            drop((stream, dir));
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        (path, handle)
+    }
+
+    #[tokio::test]
+    async fn call_times_out_when_the_daemon_never_answers() {
+        let (path, _server) = spawn_silent_server().await;
+        let mut client = connect_to_mock(&path).await;
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.call("ping", json!({})),
+        )
+        .await;
+
+        let err = outcome
+            .expect("call must return on its own deadline, never hang")
+            .unwrap_err();
+        assert!(err.to_string().contains("timed out"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_client_refuses_every_later_call() {
+        // The abandoned reply may still arrive. Reusing the socket would read
+        // it as the length header of the next request and answer the wrong
+        // question with a straight face, so the client must stay shut.
+        let (path, _server) = spawn_silent_server().await;
+        let mut client = connect_to_mock(&path).await;
+
+        client.call("ping", json!({})).await.unwrap_err();
+
+        let err = client.call("ping", json!({})).await.unwrap_err();
+        assert!(err.to_string().contains("abandoned"), "err: {err}");
     }
 
     #[tokio::test]
