@@ -1502,3 +1502,19 @@ needed. Canvas painting is not observable over HTTP, so these need eyes.
   the busy badge stayed suppressed until the agent went quiet for a full second.
   Also confirm a resize during a normal-screen Claude re-render still does NOT
   flip an idle tab to busy — that is the behaviour the grace extension protects.
+
+## Settings search (story 684-35a8, frontend — Vite HMR picks it up)
+
+- [ ] Open Settings. A "Search settings" box now sits at the top of the left nav.
+  Check it reads well at the narrowest (140 px) and widest (280 px) nav widths —
+  the box shares the nav's resize handle area, and only the DOM is covered by
+  tests, not the rendering.
+- [ ] Type `relay`. The tab body is replaced by a result list; each row shows the
+  setting on top and a `Tab › Section` trail underneath. Confirm the trail is
+  legible against the panel background in both light and dark themes.
+- [ ] Click the "Relay Server URL" result. Services & MCP opens and the view
+  scrolls to that field. The smooth-scroll animation itself is not observable
+  over the DOM — confirm it lands on the field, not at the top of the tab.
+- [ ] Search a Dictation setting (e.g. `whisper`) in the desktop app: it appears.
+  In browser mode (`http://localhost:9876/`) the Dictation tab is absent, so the
+  same query must return "No settings match your search."
