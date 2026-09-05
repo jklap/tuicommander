@@ -37,6 +37,7 @@ in every rebase. Adding a `rustfmt.toml` matching upstream would stop it growing
 | `src/grid/storage.rs` | `debug_assert_eq!(size_of::<Row<T>>(), size_of::<usize>() * 5)` (was `* 4`) and the matching cache loop bound | Consequence of the extra `Row` field — the assertion is upstream's guard against an accidentally fat `Row`. |
 | `src/term/cell.rs` | `pub enum Osc133CellType { None, Prompt, Input, Output }` + `Cell.cell_type` (`serde(default)`) | Semantic cell tagging from OSC 133 A/B/C/D, written by `Term::osc133` and read by `TerminalGrid` to emit prompt/input/output zones. Replaces the regex pre-parser TUIC used to run over raw output. |
 | `src/grid/tests.rs` | Upstream resize tests migrated to `ReflowMode`; new `shrink_reflow_history_only` case | Keeps upstream's reflow coverage green after the signature change and pins the new mode. |
+| `src/term/cell.rs` | `CellExtra.zerowidth: ArrayVec<char, MAX_ZEROWIDTH_CHARS>` (was `Vec<char>`), `push_zerowidth` uses `try_push`, `clear_wide` assigns `ArrayVec::new()`; direct `arrayvec` dep | **Backport of upstream `ede2ac14`** (2026-08-26, master only — 0.26.0 predates it, so this is not yet available from crates.io). The unbounded `Vec` let a single cell absorb combining marks forever (`echo -en a; while true; do echo -en '\xcc\x81'; done`), a memory-exhaustion vector any PTY child can reach. Overflow now drops the character instead of allocating. Bound is 9, upstream's value — no glyph cluster we render needs more, and `zerowidth()` still hands out a `&[char]` so no caller changed. **This row exists to stop the next rebase silently reverting the fix:** delete it only once the version we pin actually contains `ede2ac14`. `arrayvec` was already in the lock via `vte`, so the dep costs no new crate. |
 | `src/tty/unix.rs` | `ShellUser::from_env` calls `getpwuid_r` only when `USER`/`HOME`/`SHELL` is missing | Upstream resolves the passwd entry unconditionally on every PTY spawn. TUIC spawns many PTYs; the lookup is skipped when the environment already answers. |
 
 ## VTE patch (`src-tauri/patches/vte/`)
@@ -177,6 +178,12 @@ Driven by the `alacritty-upstream` entry in `.claude/scheduled-checks.json` (eve
 - Check crates.io for new alacritty_terminal releases (`cargo search alacritty_terminal`).
 - Review Zed fork branches for new patches relevant to our embedded backend.
 - **On major issues:** If we hit terminal emulation bugs, check if upstream or Zed has a fix before writing our own.
+
+**Deliberately not ported** (re-evaluate only if the reason changes):
+
+| Upstream | What | Why we skipped it |
+|----------|------|-------------------|
+| `d692748d` (2026-08-31) | Replaces the `unsafe` hand-rolled `Vec` fill in `grid/row.rs` `Row::new` with `iter::repeat_with`, dropping the undocumented `columns >= 1` limit. | Pure cleanup with no user-visible defect, and it collides with our `reflow_wrap` patch: the hunk's closing context is the `Row { inner, occ: 0 }` literal, which in our fork carries a third field. TUIC never builds a zero-column row, so the unsoundness it fixes is unreachable here. Take it for free at the next version bump instead of hand-merging it now. |
 
 ## Planned patches (stories)
 
