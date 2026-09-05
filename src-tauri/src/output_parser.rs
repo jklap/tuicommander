@@ -959,64 +959,115 @@ fn strip_ansi_via_vt100(text: &str) -> String {
         .join("\n")
 }
 
+/// Byte-level rejection for [`parse_status_line`]: can this blob contain ANY
+/// status-line marker at all?
+///
+/// Checks for: '*' (Claude), "[Running]", "Tokens:" (Aider), or multi-byte UTF-8:
+/// 0xC2 leads U+00B7 (the Claude middle dot); 0xE2 leads braille U+2800, the
+/// dingbat asterisks U+2720-273F, the block elements, the bullets, U+2234,
+/// U+25CF and U+25CB.
+///
+/// It is NOT selective on agent output: 0xE2 also leads every box-drawing
+/// character an Ink TUI paints, so an agent screen admits on essentially every
+/// chunk -- proved by `status_line_byte_fast_path_barely_rejects_agent_output`.
+/// It is kept anyway because it is the only guard rejecting `## heading` and
+/// `== divider` lines from the Aider scanner pattern, which is anchored on
+/// `[#=]` and has nothing else to stop it; dropping the byte scan would ADD
+/// false positives rather than remove work. The work it fails to remove is
+/// removed per line by [`status_line_patterns_for`] instead.
+fn status_line_fast_path_admits(clean: &str) -> bool {
+    clean.contains('*')
+        || clean.contains("[Running]")
+        || clean.contains("Tokens:")
+        || clean.contains("Ctrl+C")
+        || clean.as_bytes().contains(&0xe2)
+        || clean.as_bytes().contains(&0xc2)
+}
+
+lazy_static::lazy_static! {
+    // All status-line patterns are anchored to ^\s* because agent status lines
+    // are always the first thing on the visible line (agents use \r to overwrite).
+    // Without anchoring, `*` in code/output would false-positive.
+
+    // Claude Code: "* Task name... (time)" or "✢Task name… (time)" or "· Verb…"
+    // Accepts ASCII *, middle dot · (U+00B7), and dingbat asterisks U+2720-273F.
+    static ref CLAUDE_STATUS_RE: regex::Regex =
+        regex::Regex::new(r"^\s*[*\u{00B7}\u{2720}-\u{273F}]\s*([^.…\n]+)(?:\.{2,3}|…)").unwrap();
+    // "[Running] Task name"
+    static ref RUNNING_STATUS_RE: regex::Regex =
+        regex::Regex::new(r"(?i)^\s*\[Running\]\s+(.+)").unwrap();
+    // Braille spinner: "⠋ Task name" (Gemini CLI dots, generic)
+    static ref SPINNER_STATUS_RE: regex::Regex =
+        regex::Regex::new(r"^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+([^.…]+)").unwrap();
+    // Aider Knight Rider scanner: "░█" or "█░" prefix followed by spaces + task text
+    // The scanner chars (░ U+2591, █ U+2588) bounce back and forth across the line.
+    static ref AIDER_SPINNER_RE: regex::Regex =
+        regex::Regex::new(r"^\s*[\u{2588}\u{2591}#=]{1,2}\s{2,}(.+)").unwrap();
+    // Aider token report: "Tokens: 5.2k sent, 1.3k received."
+    static ref AIDER_TOKENS_RE: regex::Regex =
+        regex::Regex::new(r"^\s*Tokens:\s+(.+?)\.$").unwrap();
+    // Codex CLI bullet spinner: "• Working (5s • esc to interrupt)" or "◦ Working (12s)"
+    // • (U+2022) and ◦ (U+25E6) alternate as a blink spinner.
+    // Requires parenthesized time suffix to avoid false positives from markdown bullets.
+    static ref CODEX_BULLET_RE: regex::Regex =
+        regex::Regex::new(r"^\s*[\u{2022}\u{25E6}]\s+(\w[^(]*?)\s*\(\d+[smh]").unwrap();
+    // Goose CLI spinner: "Honking thoughtfully...  (Ctrl+C to interrupt)"
+    // Random whimsical messages followed by "..." and "(Ctrl+C to interrupt)" suffix.
+    static ref GOOSE_SPINNER_RE: regex::Regex =
+        regex::Regex::new(r"^\s*([A-Z][^.…\n]{2,}?)\.{2,3}\s+\(Ctrl\+C to interrupt\)").unwrap();
+    // Copilot CLI indicators: ∴ (U+2234 thinking), ● (U+25CF active), ○ (U+25CB queued)
+    // Format: "∴ Thinking…" or "● Read file..." or "○ Verify..."
+    static ref COPILOT_STATUS_RE: regex::Regex =
+        regex::Regex::new(r"^\s*[\u{2234}\u{25CF}\u{25CB}]\s+([^.…\n]+)(?:\.{2,3}|…)").unwrap();
+    // Time info — captures compound times like "4m 55s" or "1m32s"
+    static ref TIME_RE: regex::Regex =
+        regex::Regex::new(r"\((\d+[smh](?:\s*\d+[smh])*)").unwrap();
+    // Token info
+    static ref TOKEN_RE: regex::Regex =
+        regex::Regex::new(r"(?i)(\d+(?:[.,]\d+)?k?\s*tokens)").unwrap();
+}
+
+/// Which status patterns a line's leading glyph can possibly match.
+///
+/// Every pattern is anchored `^\s*` followed by a fixed character class, so
+/// the first non-whitespace character decides the candidates. The flat table
+/// ran all eight regexes per line; on an agent screen the byte fast path admits
+/// nearly every chunk, so that was eight matches per changed row, per chunk.
+///
+/// Order inside a bucket is the order the flat table had — the first match
+/// wins, and `Tokens:` is reachable by two patterns. `trim_start` and the regex
+/// `\s` agree on what whitespace is: both are Unicode `White_Space`.
+fn status_line_patterns_for(lead: char) -> &'static [&'static regex::Regex] {
+    lazy_static::lazy_static! {
+        static ref CLAUDE_ONLY: Vec<&'static regex::Regex> = vec![&CLAUDE_STATUS_RE];
+        static ref RUNNING_ONLY: Vec<&'static regex::Regex> = vec![&RUNNING_STATUS_RE];
+        static ref TOKENS_THEN_GOOSE: Vec<&'static regex::Regex> =
+            vec![&AIDER_TOKENS_RE, &GOOSE_SPINNER_RE];
+        static ref AIDER_ONLY: Vec<&'static regex::Regex> = vec![&AIDER_SPINNER_RE];
+        static ref GOOSE_ONLY: Vec<&'static regex::Regex> = vec![&GOOSE_SPINNER_RE];
+        static ref COPILOT_ONLY: Vec<&'static regex::Regex> = vec![&COPILOT_STATUS_RE];
+        static ref CODEX_ONLY: Vec<&'static regex::Regex> = vec![&CODEX_BULLET_RE];
+        static ref BRAILLE_ONLY: Vec<&'static regex::Regex> = vec![&SPINNER_STATUS_RE];
+    }
+    match lead {
+        '*' | '\u{00B7}' | '\u{2720}'..='\u{273F}' => &CLAUDE_ONLY,
+        '[' => &RUNNING_ONLY,
+        // `Tokens:` is also `[A-Z]`, so it must offer the Goose pattern too.
+        'T' => &TOKENS_THEN_GOOSE,
+        '\u{2588}' | '\u{2591}' | '#' | '=' => &AIDER_ONLY,
+        'A'..='Z' => &GOOSE_ONLY,
+        '\u{2234}' | '\u{25CF}' | '\u{25CB}' => &COPILOT_ONLY,
+        '\u{2022}' | '\u{25E6}' => &CODEX_ONLY,
+        '\u{280B}' | '\u{2819}' | '\u{2839}' | '\u{2838}' | '\u{283C}' | '\u{2834}'
+        | '\u{2826}' | '\u{2827}' | '\u{2807}' | '\u{280F}' => &BRAILLE_ONLY,
+        _ => &[],
+    }
+}
+
 /// Parse status line patterns from pre-stripped terminal output.
 fn parse_status_line(clean: &str) -> Option<ParsedEvent> {
-    // Fast path: skip chunks that cannot contain any status line marker.
-    // Checks for: '*' (Claude), "[Running]", "Tokens:" (Aider), or multi-byte UTF-8:
-    //   0xC2 = lead byte for · (U+00B7, Claude middle dot)
-    //   0xE2 = lead byte for braille U+2800, dingbat asterisks U+2720-273F,
-    //          block elements ░█, bullets •◦, ∴ (U+2234), ● (U+25CF), ○ (U+25CB)
-    if !clean.contains('*')
-        && !clean.contains("[Running]")
-        && !clean.contains("Tokens:")
-        && !clean.contains("Ctrl+C")
-        && !clean.as_bytes().contains(&0xe2)
-        && !clean.as_bytes().contains(&0xc2)
-    {
+    if !status_line_fast_path_admits(clean) {
         return None;
-    }
-
-    lazy_static::lazy_static! {
-        // All status-line patterns are anchored to ^\s* because agent status lines
-        // are always the first thing on the visible line (agents use \r to overwrite).
-        // Without anchoring, `*` in code/output would false-positive.
-
-        // Claude Code: "* Task name... (time)" or "✢Task name… (time)" or "· Verb…"
-        // Accepts ASCII *, middle dot · (U+00B7), and dingbat asterisks U+2720-273F.
-        static ref CLAUDE_STATUS_RE: regex::Regex =
-            regex::Regex::new(r"^\s*[*\u{00B7}\u{2720}-\u{273F}]\s*([^.…\n]+)(?:\.{2,3}|…)").unwrap();
-        // "[Running] Task name"
-        static ref RUNNING_STATUS_RE: regex::Regex =
-            regex::Regex::new(r"(?i)^\s*\[Running\]\s+(.+)").unwrap();
-        // Braille spinner: "⠋ Task name" (Gemini CLI dots, generic)
-        static ref SPINNER_STATUS_RE: regex::Regex =
-            regex::Regex::new(r"^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+([^.…]+)").unwrap();
-        // Aider Knight Rider scanner: "░█" or "█░" prefix followed by spaces + task text
-        // The scanner chars (░ U+2591, █ U+2588) bounce back and forth across the line.
-        static ref AIDER_SPINNER_RE: regex::Regex =
-            regex::Regex::new(r"^\s*[\u{2588}\u{2591}#=]{1,2}\s{2,}(.+)").unwrap();
-        // Aider token report: "Tokens: 5.2k sent, 1.3k received."
-        static ref AIDER_TOKENS_RE: regex::Regex =
-            regex::Regex::new(r"^\s*Tokens:\s+(.+?)\.$").unwrap();
-        // Codex CLI bullet spinner: "• Working (5s • esc to interrupt)" or "◦ Working (12s)"
-        // • (U+2022) and ◦ (U+25E6) alternate as a blink spinner.
-        // Requires parenthesized time suffix to avoid false positives from markdown bullets.
-        static ref CODEX_BULLET_RE: regex::Regex =
-            regex::Regex::new(r"^\s*[\u{2022}\u{25E6}]\s+(\w[^(]*?)\s*\(\d+[smh]").unwrap();
-        // Goose CLI spinner: "Honking thoughtfully...  (Ctrl+C to interrupt)"
-        // Random whimsical messages followed by "..." and "(Ctrl+C to interrupt)" suffix.
-        static ref GOOSE_SPINNER_RE: regex::Regex =
-            regex::Regex::new(r"^\s*([A-Z][^.…\n]{2,}?)\.{2,3}\s+\(Ctrl\+C to interrupt\)").unwrap();
-        // Copilot CLI indicators: ∴ (U+2234 thinking), ● (U+25CF active), ○ (U+25CB queued)
-        // Format: "∴ Thinking…" or "● Read file..." or "○ Verify..."
-        static ref COPILOT_STATUS_RE: regex::Regex =
-            regex::Regex::new(r"^\s*[\u{2234}\u{25CF}\u{25CB}]\s+([^.…\n]+)(?:\.{2,3}|…)").unwrap();
-        // Time info — captures compound times like "4m 55s" or "1m32s"
-        static ref TIME_RE: regex::Regex =
-            regex::Regex::new(r"\((\d+[smh](?:\s*\d+[smh])*)").unwrap();
-        // Token info
-        static ref TOKEN_RE: regex::Regex =
-            regex::Regex::new(r"(?i)(\d+(?:[.,]\d+)?k?\s*tokens)").unwrap();
     }
 
     for line in clean.lines() {
@@ -1030,18 +1081,10 @@ fn parse_status_line(clean: &str) -> Option<ParsedEvent> {
             continue;
         }
 
-        // Try each pattern (order matters: more specific first)
-        let patterns: &[&regex::Regex] = &[
-            &CLAUDE_STATUS_RE,
-            &RUNNING_STATUS_RE,
-            &AIDER_TOKENS_RE,
-            &AIDER_SPINNER_RE,
-            &GOOSE_SPINNER_RE,
-            &COPILOT_STATUS_RE,
-            &CODEX_BULLET_RE,
-            &SPINNER_STATUS_RE,
-        ];
-        for pattern in patterns {
+        let Some(lead) = line.chars().find(|c| !c.is_whitespace()) else {
+            continue;
+        };
+        for pattern in status_line_patterns_for(lead) {
             if let Some(caps) = pattern.captures(line) {
                 let task_name = caps[1].trim().to_string();
                 if task_name.len() < 3 {
@@ -6220,5 +6263,117 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             parse_choice_prompt(&rows).is_none(),
             "numbered list without question/verb title must not match"
         );
+    }
+
+    // --- status-line pre-filters ---------------------------------------------
+
+    /// Decode a real PTY capture into the screen text an agent painted.
+    fn agent_capture_lines(name: &str) -> Vec<String> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/fixtures/agent_prompts")
+            .join(name);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("fixture {name}: {e}"));
+        let mut vt = crate::state::VtLogBuffer::new(41, 128, 2000);
+        let mut lines = Vec::new();
+        for record in crate::pty_capture::decode(&bytes).expect("valid capture") {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            for row in vt.process(&record.data) {
+                lines.push(row.text);
+            }
+        }
+        lines
+    }
+
+    /// The byte fast path is named like a filter but is not one on agent
+    /// output: 0xE2 leads every box-drawing glyph an Ink TUI paints, so it
+    /// admits essentially every row and the eight-regex table ran anyway.
+    ///
+    /// Measured, not reasoned about — this is the premise the per-line dispatch
+    /// was built on, so it is asserted against real captures.
+    #[test]
+    fn status_line_byte_fast_path_barely_rejects_agent_output() {
+        for fixture in [
+            "grok-1.0.5-minimal-turn.tcap",
+            "claude-quoted-ink-footer.tcap",
+        ] {
+            let lines = agent_capture_lines(fixture);
+            let nonblank: Vec<&String> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
+            assert!(
+                nonblank.len() > 20,
+                "{fixture}: too little content to measure ({} rows)",
+                nonblank.len()
+            );
+            let admitted = nonblank
+                .iter()
+                .filter(|l| status_line_fast_path_admits(l))
+                .count();
+            let candidates = nonblank
+                .iter()
+                .filter(|l| status_line_fast_path_admits(l))
+                .filter(|l| {
+                    l.chars()
+                        .find(|c| !c.is_whitespace())
+                        .is_some_and(|lead| !status_line_patterns_for(lead).is_empty())
+                })
+                .count();
+            let admit_pct = admitted * 100 / nonblank.len();
+            eprintln!(
+                "{fixture}: {}/{} rows admitted by the byte fast path ({admit_pct}%), \
+                 {candidates} of those have any candidate pattern",
+                admitted,
+                nonblank.len()
+            );
+            assert!(
+                admit_pct >= 50,
+                "{fixture}: the byte fast path is claimed to be non-selective on \
+                 agent output, but it rejected {}% of rows",
+                100 - admit_pct
+            );
+            assert!(
+                candidates < admitted,
+                "{fixture}: the per-line dispatch must reject rows the byte scan \
+                 admitted, otherwise it saves nothing"
+            );
+        }
+    }
+
+    /// The dispatch must be an exact partition of the flat table: for every
+    /// leading glyph, a pattern that CAN match must be offered. Brute-forced
+    /// over the whole BMP against the anchored classes.
+    #[test]
+    fn status_line_dispatch_offers_every_pattern_that_could_match() {
+        let all: [(&regex::Regex, &str); 8] = [
+            (&CLAUDE_STATUS_RE, "claude"),
+            (&RUNNING_STATUS_RE, "running"),
+            (&AIDER_TOKENS_RE, "aider-tokens"),
+            (&AIDER_SPINNER_RE, "aider-spinner"),
+            (&GOOSE_SPINNER_RE, "goose"),
+            (&COPILOT_STATUS_RE, "copilot"),
+            (&CODEX_BULLET_RE, "codex"),
+            (&SPINNER_STATUS_RE, "braille"),
+        ];
+        // A body that satisfies every pattern's tail requirements at once, so a
+        // pattern that fails can only have failed on the leading glyph.
+        let body = "  Tokens: 5.2k sent, 1.3k received... (Ctrl+C to interrupt).";
+        for code in 0u32..=0xFFFF {
+            let Some(lead) = char::from_u32(code) else {
+                continue;
+            };
+            if lead.is_whitespace() || lead.is_control() {
+                continue;
+            }
+            let line = format!("{lead}{body}");
+            let offered = status_line_patterns_for(lead);
+            for (re, name) in all {
+                if re.is_match(&line) {
+                    assert!(
+                        offered.iter().any(|o| std::ptr::eq(*o, re)),
+                        "U+{code:04X} {lead:?}: {name} matches but is not dispatched"
+                    );
+                }
+            }
+        }
     }
 }

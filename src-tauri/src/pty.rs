@@ -4501,6 +4501,12 @@ struct ChunkProcessor {
     /// (grok, Codex, …) drives this. True while the last title signalled
     /// awaiting-approval.
     title_awaiting: bool,
+    /// Reusable screen snapshot handed to the post-lock consumers
+    /// (`parse_slash_menu`, `parse_choice_prompt`, the question-dedup absence
+    /// check and `rearm_awaiting_for_open_dialog`). Retained across chunks so
+    /// the snapshot reuses the row `String` allocations instead of allocating
+    /// one per visible row on every chunk that moved anything.
+    screen_buf: Vec<String>,
 }
 
 impl ChunkProcessor {
@@ -4526,6 +4532,7 @@ impl ChunkProcessor {
             last_session_conflict_mark: None,
             last_agent_block_line: None,
             title_awaiting: false,
+            screen_buf: Vec::new(),
         }
     }
 
@@ -4664,7 +4671,7 @@ impl ChunkProcessor {
     /// Colorize `intent:` tokens and apply alternate-buffer fixes on the xterm
     /// stream. Suggest tokens are NOT concealed here — the frontend's
     /// `eraseSuggestFromBuffer()` handles that via rAF after xterm renders.
-    fn transform_xterm(&mut self, data: String) -> Option<String> {
+    fn transform_xterm<'a>(&mut self, data: &'a str) -> Option<std::borrow::Cow<'a, str>> {
         // Track alternate screen buffer state for the clear-before-home fix below.
         if data.contains("\x1b[?1049h") {
             self.in_alt_buffer = true;
@@ -4682,7 +4689,7 @@ impl ChunkProcessor {
         // in the previous render but aren't overwritten in the new one persist as
         // ghost artifacts — starting from the bottom and expanding upward.
         if self.in_alt_buffer
-            && let Some(n) = extract_largest_cursor_up(&data)
+            && let Some(n) = extract_largest_cursor_up(data)
         {
             if n != self.last_cursor_up_n && self.last_cursor_up_n > 0 {
                 self.alt_buffer_needs_clear = true;
@@ -4694,27 +4701,22 @@ impl ChunkProcessor {
         // needed. Tries cursor-home (ESC[H) first, then falls back to cursor-up
         // (ESC[nA). Ink re-renders use cursor-up for repositioning, not cursor-home,
         // so the fallback is essential — without it the flag accumulates forever.
-        let data = if self.alt_buffer_needs_clear {
-            let injected = inject_clear_before_cursor_home(&data);
-            if injected.len() != data.len() {
-                self.alt_buffer_needs_clear = false;
-                injected
-            } else {
-                let injected = inject_clear_before_cursor_up(&data);
-                if injected.len() != data.len() {
-                    self.alt_buffer_needs_clear = false;
-                }
-                injected
-            }
-        } else {
-            data
-        };
-
-        if data.is_empty() {
-            return Some(String::new());
+        // Borrowed unless an injection actually fires: the overwhelming majority
+        // of chunks pass straight through, and this used to copy every one.
+        if !self.alt_buffer_needs_clear {
+            return Some(std::borrow::Cow::Borrowed(data));
         }
-
-        Some(data)
+        let injected = inject_clear_before_cursor_home(data);
+        if injected.len() != data.len() {
+            self.alt_buffer_needs_clear = false;
+            return Some(std::borrow::Cow::Owned(injected));
+        }
+        let injected = inject_clear_before_cursor_up(data);
+        if injected.len() != data.len() {
+            self.alt_buffer_needs_clear = false;
+            return Some(std::borrow::Cow::Owned(injected));
+        }
+        Some(std::borrow::Cow::Borrowed(data))
     }
 
     /// Resolve a relative plan-file path to absolute using session CWD.
@@ -4820,7 +4822,10 @@ impl ChunkProcessor {
     /// dedup, resize-grace filtering, PlanFile resolution, event emission,
     /// silence state, last_output_ms, and shell state transitions.
     ///
-    /// Returns the data string if non-empty (for callers that need to emit raw output to xterm).
+    /// Returns true when the chunk was non-empty, i.e. the caller should hand
+    /// the SAME borrowed bytes to `transform_xterm`. It used to return an owned
+    /// copy of the chunk, which allocated and memcpy'd up to 64 KB per PTY read
+    /// for a value the caller already held.
     /// `app` is Some for desktop mode (emits Tauri IPC), None for headless.
     fn process_chunk(
         &mut self,
@@ -4828,9 +4833,9 @@ impl ChunkProcessor {
         silence: &Arc<Mutex<SilenceState>>,
         session_id: &str,
         state: &AppState,
-    ) -> Option<String> {
+    ) -> bool {
         if data.is_empty() {
-            return None;
+            return false;
         }
 
         // Check pending plan files: emit if file appeared, drop if deadline expired.
@@ -4844,6 +4849,12 @@ impl ChunkProcessor {
             .get(session_id)
             .and_then(|s| s.agent_type.clone());
 
+        // The screen snapshot is refilled in place: `screen_rows()` is
+        // `prev_rows.clone()`, one allocation per visible row per chunk. Taking
+        // the buffer out of `self` keeps the later `&mut self` uses (parser,
+        // dedup markers) borrow-checkable; it is put back at the end.
+        let mut screen_buf = std::mem::take(&mut self.screen_buf);
+
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
         // `total_lines` comes back with it: a chunk that grew the buffer produced
         // real output, a chunk that did not merely repainted the screen.
@@ -4851,7 +4862,7 @@ impl ChunkProcessor {
             changed_rows,
             vt_output_grew,
             term_events,
-            screen_cache,
+            screen_present,
             screen_activity,
             cursor_row,
             logical_prefix,
@@ -4859,7 +4870,7 @@ impl ChunkProcessor {
             history_size,
         ): VtProcessResult = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
-            let changed = vt.process(data.as_bytes());
+            let mut changed = vt.process(data.as_bytes());
             // Publish the real sync state (a nested BSU keeps it open) so the
             // frame ticker knows whether this session can have a stalled
             // synchronized update worth taking the lock for.
@@ -4896,51 +4907,71 @@ impl ChunkProcessor {
             // Did ANYTHING on screen move? Taken before the chrome filter below,
             // because that filter drops rows under the input-area border and a
             // choice dialog can render there.
+            //
+            // DEFERRED (2026-09-06) — moving this AFTER the chrome filter was
+            // proposed to stop a 1 Hz status line paying for the snapshot, and
+            // it is wrong: Claude Code renders its slash menu BELOW the input
+            // box, so on a slash-menu tick every changed row is under the
+            // cutoff and the menu would never be parsed. Reproduced — flipping
+            // the two lines turns `chunk_path_scenarios_emit_the_same_events`
+            // from `["slash-menu"]` into `[]`. Any future attempt needs a
+            // per-consumer gate, not one shared flag.
             let any_row_changed = !changed.is_empty();
+
+            // ONE borrow of the rendered screen, shared by all three consumers
+            // below (chrome cutoff, screen classification, snapshot refill).
+            // They used to take three independent `screen_rows_ref()` borrows
+            // and the last one cloned.
+            let screen_ref = vt.screen_rows_ref();
 
             // Filter out changed rows below the input area border (horizontal rule).
             // Claude Code (and similar agents) render a quota/budget status bar below
             // the input box separator. Those rows are cosmetic chrome — processing them
             // resets the silence timer and causes false busy→idle→question transitions.
             //
-            // Use screen_rows_ref() to avoid cloning prev_rows for the chrome cutoff
-            // check. The owned snapshot is captured once below for slash-menu/choice-prompt
-            // parsing that happens after the lock is released.
-            let changed = if !changed.is_empty() {
-                if let Some(screen) = vt.screen_rows_ref() {
-                    let refs: Vec<&str> = screen.iter().map(|s| s.as_str()).collect();
-                    if let Some(cutoff) = crate::chrome::find_chrome_cutoff(&refs) {
-                        changed
-                            .into_iter()
-                            .filter(|r| r.row_index < cutoff)
-                            .collect()
-                    } else {
-                        changed
-                    }
-                } else {
-                    changed
+            // `retain` in place: the filter used to rebuild the whole Vec even
+            // when the cutoff dropped nothing.
+            if let Some(screen) = screen_ref
+                && !changed.is_empty()
+            {
+                let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
+                // Fails OPEN by contract: no anchor found is `None`, and `None`
+                // must mean "parse everything", never "parse nothing".
+                if let Some(cutoff) = crate::chrome::find_chrome_cutoff(&refs) {
+                    changed.retain(|r| r.row_index < cutoff);
                 }
-            } else {
-                changed
-            };
+            }
+            let changed = changed;
 
             // Screen classification runs on EVERY chunk, borrowed, never cloned: a
             // repaint that is byte-identical produces no changed rows, and holding
             // BUSY through exactly that case (a frozen spinner, DEC 2026 frame
             // coalescing) is the point of `detect_agent_screen_activity`.
-            let screen_activity = vt
-                .screen_rows_ref()
+            let screen_activity = screen_ref
                 .map(|rows| detect_agent_screen_activity(agent_type.as_deref(), rows))
                 .unwrap_or(AgentScreenActivity::Unknown);
 
-            // The two screen PARSERS are different: a slash menu or a choice
-            // dialog cannot have appeared on a screen where nothing moved, so
-            // skip them — and skip the full-screen clone they need — on a chunk
-            // that changed no row. This is the per-chunk hot path.
-            let screen = if any_row_changed {
-                Some(vt.screen_rows())
-            } else {
-                None
+            // ONE snapshot per tick, cloned into the retained buffer and handed
+            // to every post-lock consumer. A slash menu or a choice dialog
+            // cannot have appeared on a screen where nothing moved, so a chunk
+            // that changed no row skips the snapshot entirely — that is the
+            // per-chunk hot path.
+            //
+            // `any_row_changed` is deliberately the PRE-cutoff answer: Claude
+            // Code renders its slash menu BELOW the input-box chrome, so gating
+            // on the trimmed rows would stop the menu being seen at all
+            // (proved by `chunk_path_scenarios_emit_the_same_events`).
+            let screen_present = match screen_ref.filter(|_| any_row_changed) {
+                Some(rows) => {
+                    screen_buf.truncate(rows.len());
+                    for (slot, row) in screen_buf.iter_mut().zip(rows) {
+                        slot.clear();
+                        slot.push_str(row);
+                    }
+                    screen_buf.extend(rows[screen_buf.len().min(rows.len())..].iter().cloned());
+                    true
+                }
+                None => false,
             };
             let cursor_row = vt.cursor_point().0;
             let logical_prefix = vt.logical_prefix_at_cursor();
@@ -4950,7 +4981,7 @@ impl ChunkProcessor {
                 changed,
                 vt_output_grew,
                 tevts,
-                screen,
+                screen_present,
                 screen_activity,
                 Some(cursor_row),
                 logical_prefix,
@@ -4962,7 +4993,7 @@ impl ChunkProcessor {
                 Vec::new(),
                 false,
                 Vec::new(),
-                None,
+                false,
                 AgentScreenActivity::Unknown,
                 None,
                 None,
@@ -4989,10 +5020,13 @@ impl ChunkProcessor {
             for evt in term_events {
                 match evt {
                     TermEvent::PtyWrite(response) => {
-                        if response.contains("\x1b[?1049")
-                            || response.contains("\x1b[?1047")
-                            || response.contains("\x1b[?47l")
-                            || response.contains("\x1b[?25h")
+                        // Four substring scans of a terminal reply, for a
+                        // diagnostic error line only. Behind the toggle.
+                        if crate::cpu_watchdog::diagnostic_mode()
+                            && (response.contains("\x1b[?1049")
+                                || response.contains("\x1b[?1047")
+                                || response.contains("\x1b[?47l")
+                                || response.contains("\x1b[?25h"))
                         {
                             tracing::error!(source = "terminal", session_id = %session_id,
                                 "PtyWrite contains DEC private mode sequences! response={:?}",
@@ -5179,12 +5213,16 @@ impl ChunkProcessor {
         }
 
         // Parse events: OSC 9;4 progress from raw stream, others from clean rows.
-        let (in_resize_grace, in_startup_grace, parser_dedup_reset) = {
+        // One critical section for every flag this chunk reads out of
+        // SilenceState — `hook_state_seen` used to take the lock a second time
+        // a few lines below, for a single bool.
+        let (in_resize_grace, in_startup_grace, parser_dedup_reset, hook_state_seen) = {
             let mut sl = silence.lock();
             (
                 sl.is_resize_grace(),
                 sl.is_startup_grace(),
                 sl.take_parser_dedup_reset(),
+                sl.hook_state_seen,
             )
         };
         // A line was submitted since the last chunk: the same API error or
@@ -5201,7 +5239,7 @@ impl ChunkProcessor {
             .get(session_id)
             .map(|s| s.hook_instrumented)
             .unwrap_or(false)
-            && silence.lock().hook_state_seen;
+            && hook_state_seen;
         // Capture tap: off by default, one relaxed atomic load when it is.
         // Recorded before any parsing so a fixture replays exactly the bytes
         // the detectors saw, chunk boundaries included — those boundaries are
@@ -5311,7 +5349,9 @@ impl ChunkProcessor {
             }
         }
 
-        // screen_cache was computed once inside the vt_log lock scope above.
+        // The snapshot was refilled once inside the vt_log lock scope above and
+        // is handed to every consumer below as one borrowed slice.
+        let screen_cache: Option<&[String]> = screen_present.then_some(screen_buf.as_slice());
 
         // Slash menu detection — use full screen rows (not chrome-trimmed).
         // Claude Code v2.1+ renders autocomplete items BELOW the prompt chrome,
@@ -5322,7 +5362,7 @@ impl ChunkProcessor {
             .slash_mode
             .get(session_id)
             .is_some_and(|v| v.load(std::sync::atomic::Ordering::Relaxed));
-        if slash_on && let Some(screen) = &screen_cache {
+        if slash_on && let Some(screen) = screen_cache {
             // This runs in the per-PTY-chunk hot path. Do not log each parse:
             // a stale slash-mode flag during sustained output previously sent
             // thousands of identical records through the application logger,
@@ -5339,7 +5379,7 @@ impl ChunkProcessor {
         // Parser uses a strict shape (title with ?/verb + ≥2 numbered options)
         // so false-positive cost is low. Dedup via last_choice_prompt_sig
         // guards against repaint re-emission.
-        if let Some(screen) = &screen_cache {
+        if let Some(screen) = screen_cache {
             match crate::output_parser::parse_choice_prompt(screen) {
                 Some(evt) => events.push(evt),
                 // Dialog is no longer on screen — retire its dedup signature so the
@@ -5362,7 +5402,7 @@ impl ChunkProcessor {
         // one-shot per session. Screen absence is the real end-of-prompt signal:
         // the user answering, the agent withdrawing the prompt, and a repaint that
         // scrolls it away all collapse into it.
-        if let Some(screen) = &screen_cache {
+        if let Some(screen) = screen_cache {
             let prompt_gone = self
                 .last_question_text
                 .as_deref()
@@ -5392,7 +5432,7 @@ impl ChunkProcessor {
         // multi-question AskUserQuestion fires PreToolUse once, so sub-questions 2+
         // have no hook signal either. Needs a capture with hooks ON to confirm
         // before widening this to them.
-        if let Some(screen) = &screen_cache {
+        if let Some(screen) = screen_cache {
             let (awaiting, has_choice) = state
                 .session_states
                 .get(session_id)
@@ -5627,6 +5667,24 @@ impl ChunkProcessor {
             && last_q_line.is_none()
             && !has_status_line
             && no_real_output;
+        // Tool-error detection: scan visible rows for `Error: Exit code N`
+        // emitted by Claude Code / Codex at the end of a failing tool call.
+        // Fires playError() via silence_timer when followed only by chrome
+        // until SILENCE_TOOL_ERROR_THRESHOLD elapses (= turn ended on error).
+        //
+        // The scan is two regexes per changed row and it used to run INSIDE the
+        // SilenceState critical section, holding the lock the silence timer and
+        // every sibling reader contend for while it matched. Only its verdict
+        // needs the lock.
+        let mut error_line: Option<String> = None;
+        let mut retry_seen = false;
+        for row in changed_rows.iter() {
+            if is_retry_line(&row.text) {
+                retry_seen = true;
+            } else if is_tool_error_line(&row.text) {
+                error_line = Some(row.text.trim().to_string());
+            }
+        }
         {
             let mut sl = silence.lock();
             sl.on_chunk(
@@ -5637,19 +5695,6 @@ impl ChunkProcessor {
                 suggest_only,
             );
 
-            // Tool-error detection: scan visible rows for `Error: Exit code N`
-            // emitted by Claude Code / Codex at the end of a failing tool call.
-            // Fires playError() via silence_timer when followed only by chrome
-            // until SILENCE_TOOL_ERROR_THRESHOLD elapses (= turn ended on error).
-            let mut error_line: Option<String> = None;
-            let mut retry_seen = false;
-            for row in changed_rows.iter() {
-                if is_retry_line(&row.text) {
-                    retry_seen = true;
-                } else if is_tool_error_line(&row.text) {
-                    error_line = Some(row.text.trim().to_string());
-                }
-            }
             if retry_seen {
                 // Agent is auto-retrying a failed API call — hold BUSY across the
                 // frozen gap between attempts. Takes precedence over the recovery
@@ -5678,6 +5723,12 @@ impl ChunkProcessor {
             } else {
                 "working-screen"
             };
+            // DEFERRED (2026-09-06) — this is the one SilenceState lock in the
+            // chunk path that is still separate from the coalesced sections
+            // above and below. Folding it in means inlining a helper three
+            // other call sites share, whose early `return`s skip the stamp and
+            // the BUSY transition the tail block performs unconditionally.
+            // Needs its own story; merging it blind changes state transitions.
             apply_working_evidence(state, silence, session_id, now_epoch_ms(), source);
         }
 
@@ -5698,9 +5749,17 @@ impl ChunkProcessor {
             && changed_rows
                 .iter()
                 .any(|r| crate::chrome::is_spinner_row(&r.text));
-        if (!chrome_only || has_spinner) && !explicit_idle_in_chunk {
-            {
-                let mut sl = silence.lock();
+        //
+        // This, the resize-grace re-arm and the BUSY gate below all read or
+        // write the same SilenceState, and each used to take the lock for
+        // itself. They are one critical section now; nothing between them
+        // touches SilenceState (`stamp_last_output_now` writes an AppState
+        // atomic, `begin_suggest_working_turn` the parser), and the ordering
+        // inside the section is the ordering the three had.
+        let real_activity = (!chrome_only || has_spinner) && !explicit_idle_in_chunk;
+        let in_resize_grace_after = {
+            let mut sl = silence.lock();
+            if real_activity {
                 if has_spinner {
                     sl.note_working_screen();
                 } else {
@@ -5708,6 +5767,25 @@ impl ChunkProcessor {
                 }
                 invalidate_background_probe_boundary_locked(state, session_id);
             }
+            // SIGWINCH reflow repaints content rows for longer than the initial 1s
+            // resize grace, but a reflow never grows the buffer — it only repaints
+            // existing rows. While such pure-repaint chunks keep arriving within the
+            // grace window, re-arm the grace so a resize never flips an idle agent to
+            // busy. A growing chunk (genuine new output) is NOT extended, so real work
+            // started right after a resize still registers as busy. An already-busy
+            // session is unaffected (idle transitions are silence-timer only).
+            //
+            // The extension has no stop condition of its own — each qualifying chunk
+            // pushes the deadline a full RESIZE_GRACE forward — so `vt_output_grew`
+            // is the ONLY thing that ends it. It must stay a signal that a working
+            // agent actually trips; see its definition for why the alternate screen
+            // needs its own answer rather than the durable-log total.
+            if !vt_output_grew && sl.is_resize_grace() {
+                sl.on_resize();
+            }
+            sl.is_resize_grace()
+        };
+        if real_activity {
             stamp_last_output_now(state, session_id, now_epoch_ms());
         }
 
@@ -5726,36 +5804,13 @@ impl ChunkProcessor {
             self.parser.begin_suggest_working_turn(turn_epoch);
         }
 
-        // SIGWINCH reflow repaints content rows for longer than the initial 1s
-        // resize grace, but a reflow never grows the buffer — it only repaints
-        // existing rows. While such pure-repaint chunks keep arriving within the
-        // grace window, re-arm the grace so a resize never flips an idle agent to
-        // busy. A growing chunk (genuine new output) is NOT extended, so real work
-        // started right after a resize still registers as busy. An already-busy
-        // session is unaffected (idle transitions are silence-timer only).
-        //
-        // The extension has no stop condition of its own — each qualifying chunk
-        // pushes the deadline a full RESIZE_GRACE forward — so `vt_output_grew`
-        // is the ONLY thing that ends it. It must stay a signal that a working
-        // agent actually trips; see its definition for why the alternate screen
-        // needs its own answer rather than the durable-log total.
-        if !vt_output_grew {
-            let mut sl = silence.lock();
-            if sl.is_resize_grace() {
-                sl.on_resize();
-            }
-        }
-
         // Shell state: reader transitions → BUSY on real output OR active spinner.
         // Idle transitions are handled exclusively by the silence timer to
         // eliminate the two-path race that caused 15+ fix/revert cycles.
         // Load `prev` and drop the shell_states Ref before try_shell_transition (which
         // re-gets the same key): holding a Ref across that second get risks the CONC-C
         // re-entrant-read deadlock (story 099-6526).
-        let prev = if (!chrome_only || has_spinner)
-            && !explicit_idle_in_chunk
-            && !silence.lock().is_resize_grace()
-        {
+        let prev = if real_activity && !in_resize_grace_after {
             state
                 .shell_states
                 .get(session_id)
@@ -5789,7 +5844,8 @@ impl ChunkProcessor {
             }
         }
 
-        Some(data.to_owned())
+        self.screen_buf = screen_buf;
+        true
     }
 }
 
@@ -6037,7 +6093,8 @@ type VtProcessResult = (
     Vec<crate::state::ChangedRow>,
     bool,
     Vec<crate::terminal_grid::TermEvent>,
-    Option<Vec<String>>,
+    // Whether the reusable screen snapshot was refilled this tick.
+    bool,
     AgentScreenActivity,
     Option<usize>,
     Option<crate::terminal_grid::LogicalPrefix>,
@@ -7949,7 +8006,15 @@ pub(crate) fn spawn_reader_thread(
                         let utf8_data = utf8_buf.push(&buf[..n]);
                         let esc_data = esc_buf.push(&utf8_data);
                         let (kitty_clean, kitty_actions) = strip_kitty_sequences(&esc_data);
-                        if kitty_clean.contains("1049l") && !kitty_clean.contains("\x1b[?1049l") {
+                        // Diagnostic-only substring scan over the whole chunk. It ran
+                        // on every PTY read to catch a DECRST leak that has not been
+                        // seen since; behind the Diagnostics toggle it costs one
+                        // relaxed atomic load instead of two passes over 64 KB.
+                        // Enable with POST /diagnostics {"enabled":true} to get it back.
+                        if crate::cpu_watchdog::diagnostic_mode()
+                            && kitty_clean.contains("1049l")
+                            && !kitty_clean.contains("\x1b[?1049l")
+                        {
                             tracing::error!(source = "terminal", session_id = %session_id,
                             "DECRST leak: kitty_clean has bare '1049l' without ESC[? prefix. \
                              esc_data({} bytes)={:?}, kitty_clean({} bytes)={:?}, actions={:?}",
@@ -7961,9 +8026,8 @@ pub(crate) fn spawn_reader_thread(
 
                         process_kitty_actions(&kitty_actions, &session_id, &state);
 
-                        if let Some(processed) =
-                            processor.process_chunk(&data, &silence, &session_id, &state)
-                            && let Some(xterm_data) = processor.transform_xterm(processed)
+                        if processor.process_chunk(&data, &silence, &session_id, &state)
+                            && let Some(xterm_data) = processor.transform_xterm(&data)
                         {
                             let clamped_data = xterm_data;
 
@@ -7972,7 +8036,11 @@ pub(crate) fn spawn_reader_thread(
                                 .get(&session_id)
                                 .map(|s| s.agent_type.is_some())
                                 .unwrap_or(false);
-                            if !processor.in_alt_buffer
+                            // Also diagnostic-only: the ESC scan plus
+                            // `detect_anomalous_sequences` ran on every shell-session
+                            // chunk purely to emit a warning nothing acts on.
+                            if crate::cpu_watchdog::diagnostic_mode()
+                                && !processor.in_alt_buffer
                                 && !agent_active
                                 && clamped_data.as_bytes().contains(&0x1b)
                             {
@@ -17094,7 +17162,7 @@ mod tests {
         );
 
         // Verify the result contains data
-        assert!(result1.is_some(), "first chunk should return data");
+        assert!(result1, "first chunk should report data");
     }
 
     /// The api-error dedup must reopen when the user submits a line. The reset
@@ -17531,15 +17599,15 @@ mod tests {
     #[test]
     fn test_transform_xterm_no_token_passes_through() {
         let mut cp = ChunkProcessor::new(None, None);
-        let result = cp.transform_xterm("just regular output".to_string());
-        assert_eq!(result, Some("just regular output".to_string()));
+        let result = cp.transform_xterm("just regular output");
+        assert_eq!(result.as_deref(), Some("just regular output"));
     }
 
     #[test]
     fn test_transform_xterm_intent_passes_through() {
         // Intent coloring is now handled by the frontend MutationObserver.
         let mut cp = ChunkProcessor::new(None, None);
-        let result = cp.transform_xterm("intent: Fix the bug\n".to_string());
+        let result = cp.transform_xterm("intent: Fix the bug\n");
         assert!(result.is_some());
         let data = result.unwrap();
         assert!(
@@ -17552,7 +17620,7 @@ mod tests {
     fn test_transform_xterm_suggest_passes_through() {
         // Suggest lines are no longer concealed in Rust — the frontend handles it.
         let mut cp = ChunkProcessor::new(None, None);
-        let result = cp.transform_xterm("suggest: A | B | C\n".to_string());
+        let result = cp.transform_xterm("suggest: A | B | C\n");
         assert!(result.is_some());
         let data = result.unwrap();
         assert!(
@@ -17564,7 +17632,7 @@ mod tests {
     #[test]
     fn test_transform_xterm_incomplete_intent_passes_through() {
         let mut cp = ChunkProcessor::new(None, None);
-        let r1 = cp.transform_xterm("intent: doing so".to_string());
+        let r1 = cp.transform_xterm("intent: doing so");
         assert!(r1.is_some(), "incomplete intent must pass through");
     }
 
@@ -17574,10 +17642,10 @@ mod tests {
     fn test_transform_xterm_alt_buffer_injects_clear() {
         let mut cp = ChunkProcessor::new(None, None);
         // Enter alt buffer
-        cp.transform_xterm("\x1b[?1049h".to_string());
+        cp.transform_xterm("\x1b[?1049h");
         assert!(cp.in_alt_buffer);
         // Cursor home should get ESC[2J injected
-        let result = cp.transform_xterm("\x1b[Hcontent".to_string()).unwrap();
+        let result = cp.transform_xterm("\x1b[Hcontent").unwrap();
         assert!(
             result.contains("\x1b[2J\x1b[H"),
             "clear should be injected before cursor home"
@@ -17603,7 +17671,7 @@ mod tests {
     #[test]
     fn test_inline_tui_does_not_override_alt_screen_mode() {
         let mut cp = ChunkProcessor::new(None, None);
-        cp.transform_xterm("\x1b[?1049h".to_string());
+        cp.transform_xterm("\x1b[?1049h");
         cp.apply_inline_tui_mode(true, true, Some("grok"));
         match &cp.terminal_mode {
             crate::ai_agent::tui_detect::TerminalMode::FullscreenTui { depth, .. } => {
@@ -17617,7 +17685,7 @@ mod tests {
     fn test_transform_xterm_normal_buffer_no_inject() {
         let mut cp = ChunkProcessor::new(None, None);
         // NOT in alt buffer — no injection
-        let result = cp.transform_xterm("\x1b[Hcontent".to_string()).unwrap();
+        let result = cp.transform_xterm("\x1b[Hcontent").unwrap();
         assert!(
             !result.contains("\x1b[2J"),
             "should not inject clear in normal buffer"
@@ -17628,10 +17696,10 @@ mod tests {
     fn test_transform_xterm_alt_buffer_exit_stops_inject() {
         let mut cp = ChunkProcessor::new(None, None);
         // Enter then exit alt buffer
-        cp.transform_xterm("\x1b[?1049h".to_string());
-        cp.transform_xterm("\x1b[?1049l".to_string());
+        cp.transform_xterm("\x1b[?1049h");
+        cp.transform_xterm("\x1b[?1049l");
         assert!(!cp.in_alt_buffer);
-        let result = cp.transform_xterm("\x1b[Hcontent".to_string()).unwrap();
+        let result = cp.transform_xterm("\x1b[Hcontent").unwrap();
         assert!(
             !result.contains("\x1b[2J"),
             "should not inject after leaving alt buffer"
@@ -17642,16 +17710,12 @@ mod tests {
     fn test_transform_xterm_alt_buffer_no_clear_on_subsequent_redraws() {
         let mut cp = ChunkProcessor::new(None, None);
         // Enter alt buffer — first cursor-home gets clear
-        cp.transform_xterm("\x1b[?1049h".to_string());
-        let r1 = cp
-            .transform_xterm("\x1b[Hfirst redraw".to_string())
-            .unwrap();
+        cp.transform_xterm("\x1b[?1049h");
+        let r1 = cp.transform_xterm("\x1b[Hfirst redraw").unwrap();
         assert!(r1.contains("\x1b[2J"), "first redraw must inject clear");
 
         // Subsequent redraws must NOT inject clear (prevents per-keystroke flicker)
-        let r2 = cp
-            .transform_xterm("\x1b[Hsecond redraw".to_string())
-            .unwrap();
+        let r2 = cp.transform_xterm("\x1b[Hsecond redraw").unwrap();
         assert!(
             !r2.contains("\x1b[2J"),
             "subsequent redraws must not inject clear"
@@ -17662,17 +17726,15 @@ mod tests {
     fn test_transform_xterm_alt_buffer_clear_on_shrink() {
         let mut cp = ChunkProcessor::new(None, None);
         // Enter alt buffer, consume initial clear
-        cp.transform_xterm("\x1b[?1049h".to_string());
-        cp.transform_xterm("\x1b[Hinit".to_string()); // consumes one-shot
+        cp.transform_xterm("\x1b[?1049h");
+        cp.transform_xterm("\x1b[Hinit"); // consumes one-shot
 
         // Simulate growing content: cursor-up 50 lines
-        cp.transform_xterm("\x1b[50A redraw tall".to_string());
+        cp.transform_xterm("\x1b[50A redraw tall");
         assert_eq!(cp.last_cursor_up_n, 50);
 
         // Simulate shrink: cursor-up only 20 lines (content got shorter)
-        let r = cp
-            .transform_xterm("\x1b[20A\x1b[Hredraw short".to_string())
-            .unwrap();
+        let r = cp.transform_xterm("\x1b[20A\x1b[Hredraw short").unwrap();
         assert!(
             r.contains("\x1b[2J"),
             "clear must be injected when content shrinks"
@@ -17680,9 +17742,7 @@ mod tests {
         assert_eq!(cp.last_cursor_up_n, 20);
 
         // Next redraw at same height — no clear
-        let r2 = cp
-            .transform_xterm("\x1b[20A\x1b[Hsame height".to_string())
-            .unwrap();
+        let r2 = cp.transform_xterm("\x1b[20A\x1b[Hsame height").unwrap();
         assert!(!r2.contains("\x1b[2J"), "no clear when height stays same");
     }
 
@@ -17690,17 +17750,15 @@ mod tests {
     fn test_transform_xterm_alt_buffer_clear_on_growth() {
         let mut cp = ChunkProcessor::new(None, None);
         // Enter alt buffer, consume initial clear via cursor-home
-        cp.transform_xterm("\x1b[?1049h".to_string());
-        cp.transform_xterm("\x1b[Hinit".to_string());
+        cp.transform_xterm("\x1b[?1049h");
+        cp.transform_xterm("\x1b[Hinit");
 
         // Establish baseline height
-        cp.transform_xterm("\x1b[20Aredraw".to_string());
+        cp.transform_xterm("\x1b[20Aredraw");
         assert_eq!(cp.last_cursor_up_n, 20);
 
         // Height grows — clear must fire (chrome shifted down, old top row is ghost)
-        let r = cp
-            .transform_xterm("\x1b[25A\x1b[Hredraw taller".to_string())
-            .unwrap();
+        let r = cp.transform_xterm("\x1b[25A\x1b[Hredraw taller").unwrap();
         assert!(
             r.contains("\x1b[2J"),
             "clear must be injected when content grows"
@@ -17711,11 +17769,11 @@ mod tests {
     fn test_transform_xterm_cursor_up_fallback_on_entry() {
         let mut cp = ChunkProcessor::new(None, None);
         // Enter alt buffer (sets alt_buffer_needs_clear)
-        cp.transform_xterm("\x1b[?1049h".to_string());
+        cp.transform_xterm("\x1b[?1049h");
 
         // Ink re-renders with cursor-up only, no cursor-home.
         // The fallback must inject ESC[2J before the cursor-up.
-        let r = cp.transform_xterm("\x1b[30Acontent".to_string()).unwrap();
+        let r = cp.transform_xterm("\x1b[30Acontent").unwrap();
         assert!(
             r.contains("\x1b[2J\x1b[30A"),
             "clear must inject before cursor-up fallback"
@@ -17726,16 +17784,14 @@ mod tests {
     #[test]
     fn test_transform_xterm_cursor_up_fallback_on_shrink() {
         let mut cp = ChunkProcessor::new(None, None);
-        cp.transform_xterm("\x1b[?1049h".to_string());
-        cp.transform_xterm("\x1b[Hinit".to_string()); // consume entry flag
+        cp.transform_xterm("\x1b[?1049h");
+        cp.transform_xterm("\x1b[Hinit"); // consume entry flag
 
         // Establish height
-        cp.transform_xterm("\x1b[40Aredraw".to_string());
+        cp.transform_xterm("\x1b[40Aredraw");
 
         // Shrink with cursor-up only (no cursor-home) — fallback path
-        let r = cp
-            .transform_xterm("\x1b[25Aredraw short".to_string())
-            .unwrap();
+        let r = cp.transform_xterm("\x1b[25Aredraw short").unwrap();
         assert!(
             r.contains("\x1b[2J\x1b[25A"),
             "cursor-up fallback must fire on shrink"
@@ -17746,7 +17802,7 @@ mod tests {
     fn test_transform_xterm_no_clear_on_normal_buffer_cursor_up() {
         let mut cp = ChunkProcessor::new(None, None);
         // NOT in alt buffer — cursor-up must NOT trigger clear injection
-        let r = cp.transform_xterm("\x1b[10Acontent".to_string()).unwrap();
+        let r = cp.transform_xterm("\x1b[10Acontent").unwrap();
         assert!(!r.contains("\x1b[2J"), "must not inject in normal buffer");
     }
 
@@ -23181,6 +23237,429 @@ mod tests {
             mine.age_seconds.is_some(),
             "this platform's ps must yield a parsable elapsed time"
         );
+    }
+
+    // --- Chunk-path characterization ---------------------------------------
+    //
+    // The chunk path is a refactor target: cutoff placement, snapshot reuse,
+    // lock coalescing and clone removal must all be observationally silent.
+    // These tests pin what a session actually sees — the emitted `PtyParsed`
+    // payloads, the shell state and the awaiting badge — for a real capture
+    // replayed through the real `process_chunk`, so a regression shows up as a
+    // diff in the recorded trace rather than as a subtle live-session bug.
+
+    /// Everything a refactor of `process_chunk` is allowed to leave unchanged.
+    #[derive(Debug, PartialEq)]
+    struct ChunkTrace {
+        /// One entry per chunk: the parsed-event payloads it emitted, in order.
+        per_chunk_events: Vec<Vec<serde_json::Value>>,
+        /// Shell state after the last chunk.
+        shell_state: Option<u8>,
+        /// Non-event side effects the chunk path writes directly.
+        last_question_text: Option<String>,
+        last_choice_prompt_sig: Option<String>,
+        terminal_mode_fullscreen: bool,
+        /// Bytes the ring buffer accumulated (proves the passthrough is intact).
+        ring_len: usize,
+    }
+
+    /// Build the exact set of per-session maps `process_chunk` touches.
+    fn chunk_trace_state(sid: &str) -> (Arc<AppState>, Arc<Mutex<SilenceState>>) {
+        use crate::state::VtLogBuffer;
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(41, 128, 2000)));
+        state.output_buffers.insert(
+            sid.to_string(),
+            Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
+        );
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+        state
+            .session_states
+            .insert(sid.to_string(), crate::state::SessionState::default());
+        (state, silence)
+    }
+
+    /// End the 120 s startup grace so grace-suppression of low-confidence
+    /// questions, rate limits and API errors does not mask what the chrome
+    /// cutoff decided. Mirrors `test_startup_grace_safety_cap`.
+    fn settle_startup_grace(silence: &Arc<Mutex<SilenceState>>) {
+        let mut sl = silence.lock();
+        sl.created_at =
+            std::time::Instant::now() - STARTUP_GRACE_MAX - std::time::Duration::from_secs(1);
+        sl.last_output_at = std::time::Instant::now();
+        sl.check_startup_settle();
+        assert!(!sl.is_startup_grace(), "startup grace must be settled");
+    }
+
+    /// Replay a capture's OUTPUT records through the production `process_chunk`,
+    /// preserving the original chunk boundaries, and record everything observable.
+    fn trace_capture_through_process_chunk(bytes: &[u8], agent_type: Option<&str>) -> ChunkTrace {
+        let sid = "chunk-trace";
+        let (state, silence) = chunk_trace_state(sid);
+        if let Some(agent) = agent_type
+            && let Some(mut entry) = state.session_states.get_mut(sid)
+        {
+            entry.agent_type = Some(agent.to_string());
+        }
+        let mut rx = state.event_bus.subscribe();
+        let mut cp = ChunkProcessor::new(None, None);
+        let mut utf8_buf = Utf8ReadBuffer::new();
+        let mut esc_buf = EscapeAwareBuffer::new();
+        let mut per_chunk_events = Vec::new();
+
+        for record in crate::pty_capture::decode(bytes).expect("valid capture") {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            let utf8_data = utf8_buf.push(&record.data);
+            let esc_data = esc_buf.push(&utf8_data);
+            let (kitty_clean, _actions) = crate::state::strip_kitty_sequences(&esc_data);
+            let _ = cp.process_chunk(&kitty_clean, &silence, sid, state.as_ref());
+            // Drain per chunk: the bus holds 256 messages and a long capture
+            // would otherwise lag and silently drop the evidence.
+            let mut this_chunk = Vec::new();
+            while let Ok(evt) = rx.try_recv() {
+                if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt {
+                    this_chunk.push((*parsed).clone());
+                }
+            }
+            per_chunk_events.push(this_chunk);
+        }
+
+        ChunkTrace {
+            per_chunk_events,
+            shell_state: state
+                .shell_states
+                .get(sid)
+                .map(|a| a.load(std::sync::atomic::Ordering::Acquire)),
+            last_question_text: cp.last_question_text.clone(),
+            last_choice_prompt_sig: cp.last_choice_prompt_sig.clone(),
+            terminal_mode_fullscreen: cp.terminal_mode.is_fullscreen(),
+            ring_len: state
+                .output_buffers
+                .get(sid)
+                .map(|r| r.lock().read_last(usize::MAX).0.len())
+                .unwrap_or(0),
+        }
+    }
+
+    /// The trace is the refactor's contract. Replaying the same bytes twice
+    /// through two independent pipelines must produce the identical trace —
+    /// if this is flaky, every characterization assertion below is worthless.
+    #[test]
+    fn chunk_trace_is_deterministic_for_a_real_capture() {
+        for fixture in [
+            "grok-1.0.5-minimal-turn.tcap",
+            "claude-quoted-ink-footer.tcap",
+        ] {
+            let bytes = agent_prompt_fixture(fixture);
+            let a = trace_capture_through_process_chunk(&bytes, Some("claude"));
+            let b = trace_capture_through_process_chunk(&bytes, Some("claude"));
+            assert_eq!(a, b, "{fixture}: chunk trace must be reproducible");
+            assert!(
+                a.per_chunk_events.iter().any(|c| !c.is_empty()),
+                "{fixture}: a capture that emits nothing cannot characterize anything"
+            );
+        }
+    }
+
+    /// The golden numbers below were recorded against the pre-refactor chunk
+    /// path (2026-09-05). They are deliberately concrete: a refactor that
+    /// changes WHICH chunk emits an event, or how many, breaks this.
+    #[test]
+    fn chunk_trace_matches_recorded_baseline() {
+        for (fixture, agent) in [
+            ("grok-1.0.5-minimal-turn.tcap", "grok"),
+            ("claude-quoted-ink-footer.tcap", "claude"),
+            ("claude-plan-picker.raw", "claude"),
+            ("claude-generic-attention.raw", "claude"),
+        ] {
+            let bytes = agent_prompt_fixture(fixture);
+            let trace = trace_capture_through_process_chunk(&bytes, Some(agent));
+            let summary: Vec<(usize, Vec<String>)> = trace
+                .per_chunk_events
+                .iter()
+                .enumerate()
+                .filter(|(_, evts)| !evts.is_empty())
+                .map(|(i, evts)| {
+                    (
+                        i,
+                        evts.iter()
+                            .map(|e| {
+                                e.get("type")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("?")
+                                    .to_string()
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+            let actual = format!(
+                "{summary:?} shell={:?} q={:?} sig={:?} alt={} ring={}",
+                trace.shell_state,
+                trace.last_question_text,
+                trace.last_choice_prompt_sig,
+                trace.terminal_mode_fullscreen,
+                trace.ring_len
+            );
+            let expected = match fixture {
+                "grok-1.0.5-minimal-turn.tcap" => {
+                    "[(0, [\"shell-state\"]), (225, [\"status-line\"])] \
+                 shell=Some(1) q=None sig=None alt=false ring=28282"
+                }
+                "claude-quoted-ink-footer.tcap" => {
+                    "[(1, [\"shell-state\"]), (3, [\"shell-state\"]), (115, [\"shell-state\"]), \
+                 (118, [\"shell-state\"])] shell=Some(1) q=None sig=None alt=false ring=1902"
+                }
+                "claude-plan-picker.raw" => {
+                    "[(0, [\"status-line\", \"shell-state\"])] \
+                 shell=Some(1) q=None sig=None alt=false ring=8196"
+                }
+                "claude-generic-attention.raw" => {
+                    "[] shell=Some(0) q=None sig=None alt=false ring=59"
+                }
+                other => panic!("no recorded baseline for {other}"),
+            };
+            // The literals above wrap with `\` continuations; normalise the run of
+            // spaces that produces before comparing.
+            let normalise = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert_eq!(
+                normalise(&actual),
+                normalise(expected),
+                "{fixture}: the chunk path changed what a session observes"
+            );
+        }
+    }
+
+    /// Screens the fixtures do not contain: a choice dialog, an Ink question
+    /// footer, a status-line HUD BELOW the input box, and a slash menu. Each is
+    /// fed through the real `process_chunk`; the assertion is the set of event
+    /// types the session observes.
+    ///
+    /// The HUD case is criterion 1's real subject: rows under the input-box
+    /// separator must never reach a parser, and moving the cutoff earlier must
+    /// not change that verdict in either direction.
+    #[test]
+    fn chunk_path_scenarios_emit_the_same_events() {
+        // (name, screen bytes, slash_mode, expected event types in order)
+        let scenarios: &[(&str, &str, bool, &[&str])] = &[
+            (
+                "choice dialog",
+                "\x1b[2J\x1b[HDo you want to make this edit to CLAUDE.md?\r\n\
+                 \x20\u{276f} 1. Yes\r\n\
+                 \x20\x20 2. Yes, allow all edits\r\n\
+                 \x20\x20 3. No\r\n",
+                false,
+                &["choice-prompt", "shell-state"],
+            ),
+            (
+                "ink question footer",
+                "\x1b[2J\x1b[HEnter to select \u{b7} \u{2191}/\u{2193} to navigate \u{b7} Esc to cancel\r\n",
+                false,
+                &["question", "shell-state"],
+            ),
+            (
+                // A rate-limit line ABOVE the input box: real agent output, the
+                // cutoff must keep it.
+                "output above the input box",
+                "\x1b[2J\x1b[HError: rate_limit_error\r\n\
+                 \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\r\n\
+                 \u{276f}\r\n\
+                 \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\r\n\
+                 [Opus 5] 5h: 0% | $15.48\r\n",
+                false,
+                &["rate-limit", "shell-state"],
+            ),
+            (
+                // The SAME status line, with nothing above the box. Everything
+                // that changed is chrome, so nothing may be parsed.
+                "status line below the input box only",
+                "\x1b[2J\x1b[H\r\n\
+                 \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\r\n\
+                 \u{276f}\r\n\
+                 \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\r\n\
+                 Error: rate_limit_error\r\n",
+                false,
+                &[],
+            ),
+            (
+                "slash menu",
+                "\x1b[2J\x1b[H\u{276f} /rev\r\n\
+                 \x20 /review    Review a pull request\r\n\
+                 \x20 /revert    Undo the last change\r\n",
+                true,
+                &["slash-menu"],
+            ),
+        ];
+
+        let mut mismatches: Vec<String> = Vec::new();
+        let mut observed: Vec<(&str, Vec<String>)> = Vec::new();
+        for (name, screen, slash_on, expected) in scenarios {
+            let sid = "chunk-scenario";
+            let (state, silence) = chunk_trace_state(sid);
+            if *slash_on {
+                state
+                    .slash_mode
+                    .insert(sid.to_string(), std::sync::atomic::AtomicBool::new(true));
+            }
+            settle_startup_grace(&silence);
+            let mut rx = state.event_bus.subscribe();
+            let mut cp = ChunkProcessor::new(None, None);
+            cp.process_chunk(screen, &silence, sid, state.as_ref());
+            let mut kinds: Vec<String> = Vec::new();
+            while let Ok(evt) = rx.try_recv() {
+                if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt {
+                    kinds.push(
+                        parsed
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("?")
+                            .to_string(),
+                    );
+                }
+            }
+            observed.push((*name, kinds.clone()));
+            if kinds != *expected {
+                mismatches.push(format!("{name:?}: expected {expected:?}, got {kinds:?}"));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "chunk-path scenarios changed:\n  {}\nfull trace: {observed:?}",
+            mismatches.join("\n  ")
+        );
+    }
+
+    /// `find_chrome_cutoff` fails OPEN: no anchor means NO trim. A screen with
+    /// no input box must therefore still deliver every changed row to the
+    /// parsers — the failure mode of moving the cutoff earlier is turning that
+    /// "parse everything" into "parse nothing".
+    #[test]
+    fn no_chrome_anchor_still_parses_every_row() {
+        let sid = "chunk-no-cutoff";
+        let (state, silence) = chunk_trace_state(sid);
+        let mut rx = state.event_bus.subscribe();
+        let mut cp = ChunkProcessor::new(None, None);
+
+        // Plain scrolling output: no separator, no prompt, no input box at all.
+        let screen = "\x1b[2J\x1b[HError: rate_limit_error\r\n";
+        let refs: Vec<String> = {
+            use crate::state::VtLogBuffer;
+            let mut vt = VtLogBuffer::new(41, 128, 2000);
+            vt.process(screen.as_bytes());
+            vt.screen_rows()
+        };
+        let borrowed: Vec<&str> = refs.iter().map(String::as_str).collect();
+        assert!(
+            crate::chrome::find_chrome_cutoff(&borrowed).is_none(),
+            "precondition: this screen has no chrome anchor"
+        );
+
+        settle_startup_grace(&silence);
+        cp.process_chunk(screen, &silence, sid, state.as_ref());
+        let mut kinds = Vec::new();
+        while let Ok(evt) = rx.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt {
+                kinds.push(
+                    parsed
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("?")
+                        .to_string(),
+                );
+            }
+        }
+        assert!(
+            kinds.iter().any(|k| k == "rate-limit"),
+            "a cutoff of None must mean parse everything, got {kinds:?}"
+        );
+    }
+
+    /// Repeatable CPU measurement for the chunk path. Ignored by default —
+    /// run with `cargo test --lib -- --ignored --nocapture bench_chunk_path`.
+    ///
+    /// Per-session setup (`make_test_app_state`) costs milliseconds and would
+    /// swamp the measurement, so it is hoisted out of the timed region: the
+    /// loop reuses one session and replays the capture into it, which is also
+    /// what a long-lived agent tab actually does.
+    #[test]
+    #[ignore = "benchmark: run explicitly with --nocapture"]
+    fn bench_chunk_path_replay() {
+        const ITERATIONS: u32 = 200;
+        for (fixture, agent) in [
+            ("grok-1.0.5-minimal-turn.tcap", "grok"),
+            ("claude-plan-picker.raw", "claude"),
+            ("claude-quoted-ink-footer.tcap", "claude"),
+        ] {
+            let bytes = agent_prompt_fixture(fixture);
+            let chunks: Vec<Vec<u8>> = crate::pty_capture::decode(&bytes)
+                .expect("valid capture")
+                .into_iter()
+                .filter(|r| r.direction == crate::pty_capture::CaptureDirection::Output)
+                .map(|r| r.data)
+                .collect();
+            let total_bytes: usize = chunks.iter().map(Vec::len).sum();
+
+            let sid = "chunk-bench";
+            let (state, silence) = chunk_trace_state(sid);
+            if let Some(mut entry) = state.session_states.get_mut(sid) {
+                entry.agent_type = Some(agent.to_string());
+            }
+            let mut rx = state.event_bus.subscribe();
+            let mut cp = ChunkProcessor::new(None, None);
+            let mut utf8_buf = Utf8ReadBuffer::new();
+            let mut esc_buf = EscapeAwareBuffer::new();
+
+            let mut run = |cp: &mut ChunkProcessor,
+                           utf8_buf: &mut Utf8ReadBuffer,
+                           esc_buf: &mut EscapeAwareBuffer| {
+                for chunk in &chunks {
+                    let utf8_data = utf8_buf.push(chunk);
+                    let esc_data = esc_buf.push(&utf8_data);
+                    let (kitty_clean, _) = crate::state::strip_kitty_sequences(&esc_data);
+                    let _ = cp.process_chunk(&kitty_clean, &silence, sid, state.as_ref());
+                }
+                while rx.try_recv().is_ok() {}
+            };
+
+            // Warm the lazy_static regexes and the grid allocations.
+            for _ in 0..3 {
+                run(&mut cp, &mut utf8_buf, &mut esc_buf);
+            }
+            // Report the MINIMUM, not the mean: this machine runs many parallel
+            // builds, and a mean is dominated by scheduler interference. The
+            // fastest observed replay is the one least contaminated by it.
+            let mut best = std::time::Duration::MAX;
+            let mut total = std::time::Duration::ZERO;
+            for _ in 0..ITERATIONS {
+                let start = std::time::Instant::now();
+                run(&mut cp, &mut utf8_buf, &mut esc_buf);
+                let elapsed = start.elapsed();
+                best = best.min(elapsed);
+                total += elapsed;
+            }
+            eprintln!(
+                "BENCH {fixture}: {ITERATIONS} x {} chunks / {total_bytes} B \
+                 = min {:.3} ms, mean {:.3} ms per replay ({:.3} us per chunk at min)",
+                chunks.len(),
+                best.as_secs_f64() * 1000.0,
+                total.as_secs_f64() * 1000.0 / f64::from(ITERATIONS),
+                best.as_secs_f64() * 1e6 / chunks.len() as f64,
+            );
+        }
     }
 
     #[cfg(not(windows))]
