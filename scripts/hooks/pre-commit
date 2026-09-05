@@ -44,6 +44,7 @@ chrome_file='src-tauri/src/chrome.rs'
 # Multi-purpose files: a changed code line must name a detection symbol.
 scoped_files='
 src-tauri/src/pty.rs
+src-tauri/src/pty/commands.rs
 src-tauri/src/state.rs
 src-tauri/src/output_parser.rs
 src-tauri/src/relay_client.rs
