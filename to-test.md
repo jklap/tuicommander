@@ -1631,3 +1631,13 @@ so nothing local can prove the install step resolves.
 - [ ] Trigger `audit.yml` manually (`gh workflow run audit.yml`) and confirm the
   `Install cargo-audit` step resolves `taiki-e/install-action@cargo-audit` and
   the scan runs to completion.
+
+## Process manager after the shared `ps` walk (story 669-e059, needs a Rust restart)
+
+The stats refresh now queries the process table ONCE per refresh and walks each
+session's subtree out of that shared map, instead of forking `ps` per session.
+Rust does not hot-reload, so this needs a `make dev` restart to load.
+
+- [ ] With several sessions open (at least one running a nested command such as
+  `cargo test` or a `sh -c 'sleep 30'`), open the process manager and confirm
+  each session still lists its child AND its descendants, with non-zero RSS.

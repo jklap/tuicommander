@@ -10254,6 +10254,9 @@ pub(crate) fn collect_process_stats(state: &AppState) -> Vec<ProcessStats> {
     let own_pid = std::process::id();
     pids.push((None, "TUICommander".to_string(), own_pid));
 
+    // One process-table query serves every session below.
+    let parent_map = process_parent_map();
+
     // Collect child PIDs from all PTY sessions
     for entry in state.sessions.iter() {
         let session_id = entry.key().clone();
@@ -10267,15 +10270,18 @@ pub(crate) fn collect_process_stats(state: &AppState) -> Vec<ProcessStats> {
         let child_pid = session.master.process_group_leader().map(|p| p as u32);
         #[cfg(windows)]
         let child_pid = session._child.process_id();
+        drop(session);
 
         if let Some(pid) = child_pid {
             pids.push((Some(session_id.clone()), display.clone(), pid));
-            // Walk descendants
-            if let Some(descendants) = collect_descendant_pids(pid) {
-                for dpid in descendants {
-                    let name = process_name_from_pid(dpid).unwrap_or_else(|| format!("pid:{dpid}"));
-                    pids.push((Some(session_id.clone()), name, dpid));
-                }
+            // Walk descendants out of the shared map
+            for dpid in parent_map
+                .as_ref()
+                .map(|map| descendants_from_parent_map(map, pid))
+                .unwrap_or_default()
+            {
+                let name = process_name_from_pid(dpid).unwrap_or_else(|| format!("pid:{dpid}"));
+                pids.push((Some(session_id.clone()), name, dpid));
             }
         }
     }
@@ -10307,39 +10313,24 @@ pub(crate) fn get_process_stats(state: State<'_, Arc<AppState>>) -> Vec<ProcessS
     collect_process_stats(&state)
 }
 
-/// Collect all descendant PIDs of a process (excluding the root itself).
-fn collect_descendant_pids(root: u32) -> Option<Vec<u32>> {
+/// Map every live process onto its children, from a SINGLE OS query.
+///
+/// The process-manager refresh walks one subtree per session. Querying the
+/// table inside that loop forked `ps` once per session — N+1 forks per refresh,
+/// each one taken while the session lock was held. One shared map serves every
+/// root, so the cost no longer scales with the number of sessions.
+fn process_parent_map() -> Option<std::collections::HashMap<u32, Vec<u32>>> {
     #[cfg(not(windows))]
     {
         let output = std::process::Command::new("ps")
             .args(["-eo", "pid,ppid"])
             .output()
             .ok()?;
-        let text = String::from_utf8_lossy(&output.stdout);
-        let mut parent_map: std::collections::HashMap<u32, Vec<u32>> =
-            std::collections::HashMap::new();
-        for line in text.lines().skip(1) {
-            let mut parts = line.split_whitespace();
-            let pid: u32 = parts.next()?.parse().ok()?;
-            let ppid: u32 = parts.next()?.parse().ok()?;
-            parent_map.entry(ppid).or_default().push(pid);
-        }
-        let mut result = Vec::new();
-        let mut stack = vec![root];
-        while let Some(p) = stack.pop() {
-            if let Some(children) = parent_map.get(&p) {
-                for &child in children {
-                    result.push(child);
-                    stack.push(child);
-                }
-            }
-        }
-        Some(result)
+        let parent_map = parse_process_parent_map(&String::from_utf8_lossy(&output.stdout));
+        (!parent_map.is_empty()).then_some(parent_map)
     }
     #[cfg(windows)]
     {
-        // On Windows, deepest_descendant_pid already walks the tree.
-        // Reuse the snapshot logic to collect all descendants.
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
         let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
@@ -10362,18 +10353,54 @@ fn collect_descendant_pids(root: u32) -> Option<Vec<u32>> {
             }
         }
         let _ = unsafe { CloseHandle(snap) };
-        let mut result = Vec::new();
-        let mut stack = vec![root];
-        while let Some(p) = stack.pop() {
-            if let Some(children) = parent_map.get(&p) {
-                for &child in children {
-                    result.push(child);
-                    stack.push(child);
-                }
+        (!parent_map.is_empty()).then_some(parent_map)
+    }
+}
+
+/// Parse `ps -eo pid,ppid` output into a parent -> children map.
+///
+/// Rows that do not read as two PIDs (the header, a truncated line) are
+/// skipped. Aborting on the first unreadable row would report every session as
+/// childless, and one shared map makes that failure global instead of local.
+#[cfg(not(windows))]
+fn parse_process_parent_map(text: &str) -> std::collections::HashMap<u32, Vec<u32>> {
+    let mut parent_map: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(Ok(pid)), Some(Ok(parent_pid))) = (
+            parts.next().map(str::parse::<u32>),
+            parts.next().map(str::parse::<u32>),
+        ) else {
+            continue;
+        };
+        parent_map.entry(parent_pid).or_default().push(pid);
+    }
+    parent_map
+}
+
+/// Every transitive descendant of `root`, excluding the root itself.
+///
+/// `seen` guards the walk: the table comes from the OS, and a self-parented row
+/// would otherwise spin forever inside a stats refresh.
+fn descendants_from_parent_map(
+    parent_map: &std::collections::HashMap<u32, Vec<u32>>,
+    root: u32,
+) -> Vec<u32> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::from([root]);
+    let mut stack = vec![root];
+    while let Some(pid) = stack.pop() {
+        let Some(children) = parent_map.get(&pid) else {
+            continue;
+        };
+        for &child in children {
+            if seen.insert(child) {
+                result.push(child);
+                stack.push(child);
             }
         }
-        Some(result)
     }
+    result
 }
 
 /// Query RSS (KB) and CPU% for a batch of PIDs using `ps` on Unix.
@@ -23076,10 +23103,65 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn collect_descendant_pids_returns_some_for_live_pid() {
+    fn process_parent_map_covers_the_live_process_table() {
+        let parent_map = process_parent_map().expect("walking the live process table must succeed");
+        let own = std::process::id();
         assert!(
-            collect_descendant_pids(std::process::id()).is_some(),
-            "walking the process table for a live pid must succeed"
+            parent_map.values().any(|children| children.contains(&own)),
+            "the shared map must place our own pid under its parent"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn parse_process_parent_map_skips_unreadable_rows() {
+        let parent_map = parse_process_parent_map(
+            "  PID  PPID\n    1     0\n  100     1\nbogus row\n  101   100\n  102\n  103   100\n",
+        );
+        assert_eq!(
+            parent_map.get(&1).map(Vec::as_slice),
+            Some([100].as_slice())
+        );
+        assert_eq!(
+            parent_map.get(&100).map(Vec::as_slice),
+            Some([101, 103].as_slice()),
+            "a header, a word row and a truncated row must not drop the rows around them"
+        );
+        assert!(
+            !parent_map.contains_key(&102),
+            "a row without a parent column contributes nothing"
+        );
+    }
+
+    /// The refresh queries `ps` once and walks one subtree per session, so the
+    /// walk must be a pure function of the shared map: each root gets its own
+    /// transitive closure, and an extra root costs no extra query.
+    #[cfg(not(windows))]
+    #[test]
+    fn descendants_are_transitive_and_distributed_per_root() {
+        let parent_map = parse_process_parent_map(
+            "  PID  PPID\n  100     1\n  101   100\n  102   101\n  200     1\n  201   200\n",
+        );
+        let mut first = descendants_from_parent_map(&parent_map, 100);
+        first.sort_unstable();
+        assert_eq!(first, vec![101, 102], "the walk must reach grandchildren");
+        let mut second = descendants_from_parent_map(&parent_map, 200);
+        second.sort_unstable();
+        assert_eq!(second, vec![201], "a second root sees only its own subtree");
+        assert!(
+            descendants_from_parent_map(&parent_map, 999).is_empty(),
+            "an unknown root has no descendants"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn descendants_walk_terminates_on_a_self_parented_row() {
+        let parent_map = parse_process_parent_map("  0     0\n  100     0\n");
+        assert_eq!(
+            descendants_from_parent_map(&parent_map, 0),
+            vec![100],
+            "a self-parented row must neither spin the walk nor make the root its own descendant"
         );
     }
 
