@@ -532,6 +532,37 @@ pub(crate) const GIT_CACHE_TTL: Duration = Duration::from_secs(60);
 /// TTL for GitHub operations (network): aligned with poller BASE_INTERVAL
 pub(crate) const GITHUB_CACHE_TTL: Duration = Duration::from_secs(60);
 
+/// Connect timeout for the shared HTTP client. A TCP handshake to GitHub that
+/// has not completed in 10s is a dead route — a dropped VPN, a captive portal,
+/// a black-holed SYN — not a slow one. Without it the OS default applies
+/// (~75s on macOS) and every caller inherits that stall.
+pub(crate) const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Total timeout for one request on the shared HTTP client, matching
+/// `plugin_http::DEFAULT_TIMEOUT_SECS`. It covers the whole exchange, including
+/// reading the body, so it bounds the half-open socket a VPN drop leaves
+/// behind: the peer keeps the connection open and simply never answers, which
+/// no connect timeout can catch. The GitHub poller awaits these requests inline
+/// in its `select!`, so an unbounded one wedges the poller itself.
+pub(crate) const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Build the shared HTTP client with explicit timeouts.
+///
+/// Split from [`build_http_client`] so tests can drive the same builder with
+/// timeouts short enough to observe.
+fn http_client_with_timeouts(connect: Duration, request: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(connect)
+        .timeout(request)
+        .build()
+        .expect("Failed to build shared HTTP client")
+}
+
+/// The shared async HTTP client used for every GitHub API call.
+pub(crate) fn build_http_client() -> reqwest::Client {
+    http_client_with_timeouts(HTTP_CONNECT_TIMEOUT, HTTP_REQUEST_TIMEOUT)
+}
+
 /// Buffer that handles UTF-8 characters split across read boundaries.
 /// Carries incomplete trailing bytes from one read to the next.
 pub(crate) struct Utf8ReadBuffer {
@@ -1337,6 +1368,8 @@ pub struct AppState {
     /// Shared mdkb daemon client for AST navigation (outline, goto-def, references).
     pub(crate) mdkb_daemon: crate::mdkb_daemon::SharedMdkbDaemon,
     /// Shared async HTTP client for GitHub API requests.
+    /// Built by [`build_http_client`] — always with timeouts, never
+    /// `reqwest::Client::new()`.
     pub(crate) http_client: reqwest::Client,
     /// GitHub API token — updated on fallback when a 401 triggers candidate rotation
     pub(crate) github_token: parking_lot::RwLock<Option<String>>,
@@ -2532,7 +2565,7 @@ impl AppState {
             dir_watchers: DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
-            http_client: reqwest::Client::new(),
+            http_client: build_http_client(),
             github_token: parking_lot::RwLock::new(None),
             github_token_source: parking_lot::RwLock::new(Default::default()),
             github_circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
@@ -5965,7 +5998,7 @@ mod tests {
             dir_watchers: dashmap::DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
-            http_client: reqwest::Client::new(),
+            http_client: build_http_client(),
             github_token: parking_lot::RwLock::new(None),
             github_token_source: parking_lot::RwLock::new(Default::default()),
             github_circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
@@ -8984,5 +9017,54 @@ mod tests {
         assert!(vt.is_alternate_screen());
         vt.process(b"\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
         assert!(!vt.is_alternate_screen());
+    }
+}
+
+#[cfg(test)]
+mod http_client_tests {
+    use super::*;
+
+    /// A `reqwest::Client` with no timeout waits forever on a peer that accepts
+    /// the connection and then goes silent — the half-open socket a VPN drop
+    /// leaves behind. The GitHub poller awaits that request inline in its
+    /// `select!`, so the hang takes the poller's Stop handling down with it.
+    #[tokio::test]
+    async fn request_timeout_fires_when_the_peer_accepts_and_never_answers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind stalling listener");
+        let addr = listener.local_addr().expect("local addr");
+        // Accept and hold the socket open without ever writing a response.
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+
+        let client = http_client_with_timeouts(Duration::from_secs(2), Duration::from_millis(150));
+        let err = client
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect_err("a stalled peer must not resolve");
+
+        assert!(err.is_timeout(), "expected a timeout error, got: {err}");
+    }
+
+    /// The shared client must bound *both* phases: a route that black-holes SYN
+    /// packets never reaches the request phase, so a request-only timeout still
+    /// leaves the connect hanging for the OS default (~75s on macOS).
+    #[test]
+    fn shared_client_timeouts_are_bounded_and_connect_is_the_tighter_one() {
+        assert!(
+            HTTP_CONNECT_TIMEOUT < HTTP_REQUEST_TIMEOUT,
+            "connect ({HTTP_CONNECT_TIMEOUT:?}) must be tighter than the whole \
+             request ({HTTP_REQUEST_TIMEOUT:?})"
+        );
+        assert!(
+            HTTP_REQUEST_TIMEOUT <= Duration::from_secs(30),
+            "a GitHub API call slower than 30s is a wedge, not a slow response"
+        );
     }
 }
