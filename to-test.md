@@ -32,6 +32,21 @@ no items left goes too. What stays open must carry its own stated reason.
 > WebView gets the same change over Vite HMR. If a browser check of a frontend fix
 > shows nothing, check `dist/index.html`'s mtime before blaming the code.
 
+## Idle watchers stop stalling the event loop (2026-09-05, **Rust change — needs `make dev` restart**) — story `674-78a8`
+
+The idle classifier now runs in its own task, gated by the rule cooldown and a
+4-permit lane. Covered by unit tests against a hanging local provider; what the
+tests cannot show is behaviour under a real slow provider with several watchers
+armed at once.
+
+- [ ] Arm an Idle watcher on two busy agent sessions. While one is waiting on the
+  classifier, the other session's Busy/Question/Error watchers must still fire —
+  no lag, no `Watcher lagged N events` line in `GET :9876/logs`.
+- [ ] Let a watcher fire, then trigger it again inside its cooldown. The logs must
+  show `Watcher skipped — cooldown` and NO classifier call for that event.
+- [ ] Fire a watcher until `max_fires`, restart the app, and confirm the rule comes
+  back as `exhausted` in the Watcher Manager — the deferred write must land.
+
 ## A backend-created worktree offers itself as a toast, not a modal (2026-08-30, frontend only — HMR)
 
 The "Switch to new worktree?" confirm was a blocking modal with a ten-second
@@ -1444,6 +1459,27 @@ Same `make dev` restart precondition — the `get_codex_usage_stats` command and
 - [ ] `curl http://localhost:9877/codex/stats` contains **no** `profile` object
   (no username, display name or avatar URL).
 
+## Terminal answers OSC 10/11/12 colour queries
+
+**Rust change — needs a `make dev` restart.** Fixes the `^[[?6c` garbage and the
+1.2 s probe loop: Claude Code asks for the background with `OSC 11 ; ? ST` +
+`ESC[c`, and TUIC used to drop the colour query while answering the fence.
+
+- [ ] With capture on (`POST /diagnostics/capture {"enabled":true}`), start
+  `claude` in a tab and let it sit for a minute. The `.tcap` must show the
+  `ESC]11;?` / `ESC[c` pair **once or twice at startup — not repeating every
+  ~1.2 s**. This is the whole point of the fix.
+- [ ] No `^[[?6c` text appears on screen at startup, and no stray `c2` / `6c`
+  residue is left glued to the shell prompt or prepended to the next command.
+- [ ] `printf '\033]11;?\033\\' | cat -v` in a shell tab prints an
+  `ESC]11;rgb:....` reply whose colour matches the current terminal background.
+- [ ] Switch to a light theme, then repeat the query: the reported colour
+  follows the theme (the frontend republishes on remeasure).
+- [ ] Only one publish per real theme change — `GET /logs` shows no burst of
+  palette traffic when resizing the window with several tabs open.
+- [ ] `curl -X POST http://localhost:9877/terminal/theme-colors -H 'content-type: application/json' -d '{"foreground":[255,0,0],"background":[0,255,0],"cursor":[0,0,255]}'`
+  returns `{"ok":true}` and changes what the query above reports.
+
 ### Upstream MCP OAuth — concurrent flows, expiry, late redirect
 
 **Requires a `make dev` restart** — all of this is Rust (`mcp_oauth/`,
@@ -1550,3 +1586,26 @@ the item below is only the live confirmation that the notification really fires.
 - [ ] Provoke or wait for an `API Error: 5xx` in an agent tab — the error toast/sound
   must fire. Submit a prompt, provoke the same error again: it must notify a
   SECOND time instead of staying silent for the rest of the session.
+
+## MCP handshake and repo issue actions (story 676-89c2, Rust — needs `make dev` restart)
+
+`initialize` used to answer a fixed `2025-11-25` whatever the client asked for,
+and the `repo` tool never dispatched its GitHub issue actions.
+
+- [ ] Reconnect an MCP client that speaks an older revision. The `initialize`
+  result must echo the version the client offered, not `2025-11-25`.
+- [ ] `repo action=issues`, `action=close_issue` and `action=reopen_issue` all
+  reach GitHub instead of answering `Unknown action 'issues' for tool 'repo'`.
+- [ ] Register the same UI tab id repeatedly from one session: it dedupes, and the
+  per-session count stops at the cap instead of growing.
+
+## GitHub poller survives a dropped connection (story 648-051b, Rust — needs `make dev` restart)
+
+The shared HTTP client had no timeout at all, so a dropped VPN wedged the poller
+on a socket the peer never answers.
+
+- [ ] Start the GitHub poller, then drop the network (turn off Wi-Fi or the VPN).
+  Within ~30 s the request must fail and the poller must log the error and carry
+  on, not sit silent forever.
+- [ ] With the network still down, disable GitHub polling in Settings. It must
+  stop immediately, not after the in-flight request gives up.

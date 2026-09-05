@@ -907,7 +907,7 @@ fn build_mcp_instructions_for_mode(
         out.push_str("- `session` (PTY panes, tmux-equivalent): list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats\n");
         out.push_str("- `agent` (AI peers + messaging): spawn, wait, detect, stats, metrics, register, list_peers, send, inbox\n");
         out.push_str("- `task` (poll a spawn that outlives a wait): get, cancel\n");
-        out.push_str("- `repo` (repos, PRs, worktrees): list, active, prs, status, worktree_list, worktree_create, worktree_remove\n");
+        out.push_str("- `repo` (repos, PRs, issues, worktrees): list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove\n");
         out.push_str("- `ui` (tabs, toasts, confirm dialogs): tab, toast, confirm\n");
         out.push_str("- `plugin_dev_guide`: plugin authoring reference\n\n");
         out.push_str("**Worktrees:** always `repo action=worktree_create`/`worktree_remove` — never `git worktree add/remove` (TUIC must track them to spawn a PTY inside).\n\n");
@@ -1014,23 +1014,11 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str =
-    "list, active, prs, status, worktree_list, worktree_create, worktree_remove";
+const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
+const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
-
-// Legacy action constants — still referenced by handlers until dispatch refactor (story 1091).
-// Remove these when handle_mcp_tool_call dispatch is updated.
-const LEGACY_AGENT_ACTIONS: &str = "detect, spawn, stats, metrics";
-const LEGACY_GITHUB_ACTIONS: &str = "prs, status, issues, close_issue, reopen_issue";
-const LEGACY_WORKTREE_ACTIONS: &str = "list, create, remove";
-const LEGACY_WORKSPACE_ACTIONS: &str = "list, active";
-const LEGACY_UI_ACTIONS: &str = "tab";
-const LEGACY_NOTIFY_ACTIONS: &str = "toast, confirm";
-const LEGACY_MESSAGING_ACTIONS: &str = "register, list_peers, send, inbox";
-const LEGACY_DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js";
-const LEGACY_TASK_ACTIONS: &str = "get, cancel";
 
 /// Full MCP tool definitions — 8 base native tools + all `ai_terminal_*` tools.
 ///
@@ -1098,10 +1086,12 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI status, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create worktree. Requires path. Optional: branch, base_ref, spawn_session.\n- worktree_remove: Remove worktree. Requires path, branch.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create worktree. Requires path. Optional: branch, base_ref, spawn_session.\n- worktree_remove: Remove worktree. Requires path, branch.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, prs, status, worktree_list, worktree_create, worktree_remove" },
-                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, worktree_list, worktree_create, worktree_remove)" },
+                "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove" },
+                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove)" },
+                "filter": { "type": "string", "description": "Issue filter, default 'assigned' (action=issues)" },
+                "issue_number": { "type": "integer", "description": "Issue number (action=close_issue/reopen_issue, required)" },
                 "branch": { "type": "string", "description": "Branch name (action=worktree_create optional, action=worktree_remove required)" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" }
@@ -2965,7 +2955,7 @@ fn handle_session(
 }
 
 async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
-    let action = match require_action(args, "github", LEGACY_GITHUB_ACTIONS) {
+    let action = match require_action(args, "repo", REPO_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
@@ -3085,7 +3075,7 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
             }
         }
         other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'github'. Available: {}", other, LEGACY_GITHUB_ACTIONS
+            "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
         )}),
     }
 }
@@ -3129,13 +3119,13 @@ async fn handle_worktree(
     args: &serde_json::Value,
     is_claude_code: bool,
 ) -> serde_json::Value {
-    let action = match require_action(args, "worktree", LEGACY_WORKTREE_ACTIONS) {
+    let action = match require_action(args, "repo", REPO_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
     match action {
-        "list" => {
-            let path = match require_path(args, "list") {
+        "worktree_list" => {
+            let path = match require_path(args, "worktree_list") {
                 Ok(p) => p,
                 Err(e) => return e,
             };
@@ -3147,8 +3137,8 @@ async fn handle_worktree(
                 Err(e) => serde_json::json!({"error": e}),
             }
         }
-        "create" => {
-            let path = match require_path(args, "create") {
+        "worktree_create" => {
+            let path = match require_path(args, "worktree_create") {
                 Ok(p) => p,
                 Err(e) => return e,
             };
@@ -3222,8 +3212,8 @@ async fn handle_worktree(
                 Err((_status, body)) => body.0,
             }
         }
-        "remove" => {
-            let path = match require_path(args, "remove") {
+        "worktree_remove" => {
+            let path = match require_path(args, "worktree_remove") {
                 Ok(p) => p,
                 Err(e) => return e,
             };
@@ -3233,7 +3223,7 @@ async fn handle_worktree(
             let branch = match args["branch"].as_str() {
                 Some(b) => b.to_string(),
                 None => {
-                    return serde_json::json!({"error": "Action 'remove' requires 'branch' parameter"});
+                    return serde_json::json!({"error": "Action 'worktree_remove' requires 'branch' parameter"});
                 }
             };
             let archive = crate::worktree::resolve_archive_script(&path);
@@ -3252,7 +3242,7 @@ async fn handle_worktree(
             }
         }
         other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'worktree'. Available: {}", other, LEGACY_WORKTREE_ACTIONS
+            "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
         )}),
     }
 }
@@ -3337,7 +3327,7 @@ fn handle_agent_with_parent_cwd(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
-    let action = match require_action(args, "agent", LEGACY_AGENT_ACTIONS) {
+    let action = match require_action(args, "agent", AGENT_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
@@ -3837,7 +3827,7 @@ fn handle_agent_with_parent_cwd(
             to_json_or_error(metrics)
         }
         other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'agent'. Available: {}", other, LEGACY_AGENT_ACTIONS
+            "Unknown action '{}' for tool 'agent'. Available: {}", other, AGENT_ACTIONS
         )}),
     }
 }
@@ -3850,7 +3840,7 @@ fn handle_task(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
-    let action = match require_action(args, "task", LEGACY_TASK_ACTIONS) {
+    let action = match require_action(args, "task", TASK_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
@@ -3860,7 +3850,7 @@ fn handle_task(
     };
     if !matches!(action, "get" | "cancel") {
         return serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'task'. Available: {}", action, LEGACY_TASK_ACTIONS
+            "Unknown action '{}' for tool 'task'. Available: {}", action, TASK_ACTIONS
         )});
     }
 
@@ -4001,7 +3991,7 @@ fn handle_messaging(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
-    let action = match require_action(args, "messaging", LEGACY_MESSAGING_ACTIONS) {
+    let action = match require_action(args, "agent", AGENT_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
@@ -4588,7 +4578,7 @@ fn handle_messaging(
             resp
         }
         other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'messaging'. Available: {}", other, LEGACY_MESSAGING_ACTIONS
+            "Unknown action '{}' for tool 'agent'. Available: {}", other, AGENT_ACTIONS
         )}),
     }
 }
@@ -4777,7 +4767,7 @@ fn handle_config(
 }
 
 fn handle_debug(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
-    let action = match require_action(args, "debug", LEGACY_DEBUG_ACTIONS) {
+    let action = match require_action(args, "debug", DEBUG_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
@@ -4873,13 +4863,13 @@ fn handle_debug(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::
             serde_json::json!({"error": "invoke_js must be called via the debug tool (loopback-only)"})
         }
         other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'debug'. Available: {}", other, LEGACY_DEBUG_ACTIONS
+            "Unknown action '{}' for tool 'debug'. Available: {}", other, DEBUG_ACTIONS
         )}),
     }
 }
 
 fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
-    let action = match require_action(args, "workspace", LEGACY_WORKSPACE_ACTIONS) {
+    let action = match require_action(args, "repo", REPO_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
@@ -4994,7 +4984,7 @@ fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_js
             result
         }
         other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'workspace'. Available: {}", other, LEGACY_WORKSPACE_ACTIONS
+            "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
         )}),
     }
 }
@@ -5033,12 +5023,20 @@ fn resolve_mcp_origin_repo_path(
         })
 }
 
+/// How many HTML tab ids one TUIC session may keep registered for auto-close.
+///
+/// The list is replayed into `close-html-tabs` when the session exits, so it is
+/// held for the whole life of the session. A caller that opens tabs in a loop
+/// would otherwise grow it without limit; past the cap the oldest registration
+/// is dropped, which costs at worst one orphaned tab the user can close by hand.
+const SESSION_HTML_TAB_LIMIT: usize = 64;
+
 fn handle_ui(
     state: &Arc<AppState>,
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
-    let action = match require_action(args, "ui", LEGACY_UI_ACTIONS) {
+    let action = match require_action(args, "ui", UI_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
@@ -5098,11 +5096,19 @@ fn handle_ui(
             // Register this tab under the creator's tuic session so it can be
             // closed automatically when that session exits.
             if let Some(ref tuic_session) = caller_tuic {
-                state
+                let mut registered = state
                     .session_html_tabs
                     .entry(tuic_session.clone())
-                    .or_default()
-                    .push(id.clone());
+                    .or_default();
+                // The id IS the dedup key — this same call updates an existing
+                // tab when the id repeats, so registering it twice would only
+                // grow the close list with a duplicate close of one tab.
+                if !registered.contains(&id) {
+                    if registered.len() >= SESSION_HTML_TAB_LIMIT {
+                        registered.remove(0);
+                    }
+                    registered.push(id.clone());
+                }
             }
             // Emit to Tauri webview (native mode)
             #[cfg(feature = "desktop")]
@@ -5122,7 +5128,7 @@ fn handle_ui(
             serde_json::json!({"ok": true, "id": id})
         }
         other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'ui'. Available: {}", other, LEGACY_UI_ACTIONS
+            "Unknown action '{}' for tool 'ui'. Available: {}", other, UI_ACTIONS
         )}),
     }
 }
@@ -5179,7 +5185,7 @@ fn handle_notify(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
-    let action = match require_action(args, "notify", LEGACY_NOTIFY_ACTIONS) {
+    let action = match require_action(args, "ui", UI_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
@@ -5235,7 +5241,7 @@ fn handle_notify(
             serde_json::json!({"ok": true})
         }
         other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'notify'. Available: {}", other, LEGACY_NOTIFY_ACTIONS
+            "Unknown action '{}' for tool 'ui'. Available: {}", other, UI_ACTIONS
         )}),
     }
 }
@@ -5355,7 +5361,26 @@ async fn handle_confirm(
 
 const MCP_SESSION_HEADER: &str = "mcp-session-id";
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2026-07-28", "2025-11-25", "2025-03-26"];
-const LEGACY_PROTOCOL_VERSION: &str = SUPPORTED_PROTOCOL_VERSIONS[1];
+
+/// Answered when the client asks for a revision we do not implement, or sends
+/// none at all. This endpoint is the legacy 2025-11-25 transport, so that is the
+/// revision it can promise — not the newest entry in the supported list.
+const DEFAULT_PROTOCOL_VERSION: &str = SUPPORTED_PROTOCOL_VERSIONS[1];
+
+/// Agree on a protocol revision: the client's own when we support it, otherwise
+/// [`DEFAULT_PROTOCOL_VERSION`]. Echoing an unsupported version back would be a
+/// promise we cannot keep; answering our own version to a client that named a
+/// supported one tells it to switch dialects for no reason.
+fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
+    requested
+        .and_then(|want| {
+            SUPPORTED_PROTOCOL_VERSIONS
+                .iter()
+                .find(|supported| **supported == want)
+                .copied()
+        })
+        .unwrap_or(DEFAULT_PROTOCOL_VERSION)
+}
 
 /// Resolve a filesystem path to one of the known repo roots, picking the longest
 /// matching prefix that respects path-component boundaries (so `/foo/bar` does
@@ -5450,6 +5475,8 @@ pub(super) async fn mcp_post(
                 "MCP initialize"
             );
 
+            let protocol_version =
+                negotiate_protocol_version(body["params"]["protocolVersion"].as_str());
             let effective_collapse = state.config.read().collapse_tools || requires_meta_tools;
             let instructions =
                 build_mcp_instructions_for_mode(&state, client_name, effective_collapse);
@@ -5458,9 +5485,14 @@ pub(super) async fn mcp_post(
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
-                    "protocolVersion": LEGACY_PROTOCOL_VERSION,
+                    "protocolVersion": protocol_version,
                     "capabilities": {
-                        "tools": {},
+                        // The GET /mcp SSE stream emits notifications/tools/list_changed
+                        // (upstream connect/disconnect, config toggles). A client is
+                        // entitled to drop a notification for a capability the server
+                        // never declared, so this declaration is what makes the stream
+                        // mean anything.
+                        "tools": { "listChanged": true },
                         "experimental": { "claude/channel": {} }
                     },
                     "serverInfo": {
@@ -5903,18 +5935,12 @@ async fn handle_repo(
         Err(e) => return e,
     };
     match action {
-        "list" => handle_workspace(state, &serde_json::json!({"action": "list"})),
-        "active" => handle_workspace(state, &serde_json::json!({"action": "active"})),
-        "prs" => handle_github(state, &remap_action(args, "prs")).await,
-        "status" => handle_github(state, &remap_action(args, "status")).await,
-        "worktree_list" => {
-            handle_worktree(state, &remap_action(args, "list"), is_claude_code).await
+        "list" | "active" => handle_workspace(state, args),
+        "prs" | "status" | "issues" | "close_issue" | "reopen_issue" => {
+            handle_github(state, args).await
         }
-        "worktree_create" => {
-            handle_worktree(state, &remap_action(args, "create"), is_claude_code).await
-        }
-        "worktree_remove" => {
-            handle_worktree(state, &remap_action(args, "remove"), is_claude_code).await
+        "worktree_list" | "worktree_create" | "worktree_remove" => {
+            handle_worktree(state, args, is_claude_code).await
         }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
@@ -5945,13 +5971,9 @@ fn handle_agent_unified_with_parent_cwd(
         Err(e) => return e,
     };
     match action {
-        "spawn" | "detect" | "stats" | "metrics" => handle_agent_with_parent_cwd(
-            state,
-            addr,
-            &remap_action(args, action),
-            mcp_session_id,
-            managed_parent_cwd,
-        ),
+        "spawn" | "detect" | "stats" | "metrics" => {
+            handle_agent_with_parent_cwd(state, addr, args, mcp_session_id, managed_parent_cwd)
+        }
         "register" | "list_peers" | "send" | "inbox" => {
             // Inter-agent messaging is same-machine coordination only, so it carries
             // the same loopback restriction as `spawn`. Without this, a non-loopback
@@ -5964,7 +5986,7 @@ fn handle_agent_unified_with_parent_cwd(
                     "error": "Inter-agent messaging is restricted to localhost connections"
                 });
             }
-            handle_messaging(state, &remap_action(args, action), mcp_session_id)
+            handle_messaging(state, args, mcp_session_id)
         }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'agent'. Available: {}", other, AGENT_ACTIONS
@@ -5985,7 +6007,7 @@ async fn handle_ui_unified(
     };
     match action {
         "tab" => handle_ui(state, args, mcp_session_id),
-        "toast" => handle_notify(state, &remap_action(args, action), mcp_session_id),
+        "toast" => handle_notify(state, args, mcp_session_id),
         // Waits for the human, but only on a oneshot — no blocking-pool worker is
         // held, so a confirmation left unanswered costs a pending task and nothing
         // else.
@@ -6138,13 +6160,6 @@ fn handle_debug_unified(
             "Unknown action '{}' for tool 'debug'. Available: {}", other, DEBUG_ACTIONS
         )}),
     }
-}
-
-/// Remap an action value in args — preserves all other fields.
-fn remap_action(args: &serde_json::Value, new_action: &str) -> serde_json::Value {
-    let mut remapped = args.clone();
-    remapped["action"] = serde_json::Value::String(new_action.to_string());
-    remapped
 }
 
 // ---------------------------------------------------------------------------
@@ -6985,6 +7000,48 @@ mod tests {
             assert_eq!(
                 response["error"], "Missing required parameter: issue_number",
                 "{action} must validate issue_number before network access"
+            );
+        }
+    }
+
+    /// The GitHub issue actions are only reachable through the merged `repo`
+    /// tool — nothing else dispatches to `handle_github`. A missing arm here is
+    /// invisible from `handle_github`'s own tests, which call it directly.
+    #[tokio::test]
+    async fn repo_dispatch_reaches_the_github_issue_actions() {
+        let state = test_state();
+
+        for action in ["issues", "close_issue", "reopen_issue"] {
+            let response = handle_repo(&state, &serde_json::json!({"action": action}), false).await;
+            let error = response["error"].as_str().unwrap();
+            assert!(
+                !error.contains("Unknown action"),
+                "repo must dispatch '{action}' to the github handler: {error}"
+            );
+            assert!(
+                error.contains("path"),
+                "{action} must reach the path check in handle_github: {error}"
+            );
+        }
+    }
+
+    /// `repo` still routes the worktree actions after the LEGACY action remap
+    /// was dropped — `handle_worktree` now reads the merged action names
+    /// straight off `args` instead of a rewritten clone.
+    #[tokio::test]
+    async fn repo_dispatch_still_routes_worktree_actions() {
+        let state = test_state();
+
+        for action in ["worktree_list", "worktree_create", "worktree_remove"] {
+            let response = handle_repo(&state, &serde_json::json!({"action": action}), false).await;
+            let error = response["error"].as_str().unwrap();
+            assert!(
+                !error.contains("Unknown action"),
+                "repo must dispatch '{action}' to the worktree handler: {error}"
+            );
+            assert!(
+                error.contains("path"),
+                "{action} must reach the path check in handle_worktree: {error}"
             );
         }
     }
@@ -8021,6 +8078,103 @@ mod tests {
             reverse.iter().filter(|s| *s == "mcp-dup").count(),
             1,
             "same mcp session must not be pushed twice"
+        );
+    }
+
+    /// Run one `initialize` and return its JSON-RPC `result`.
+    async fn initialize_result(
+        state: &Arc<AppState>,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
+        let response = mcp_post(
+            State(Arc::clone(state)),
+            ConnectInfo("127.0.0.1:1".parse().unwrap()),
+            HeaderMap::new(),
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": params,
+            })),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("initialize body");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("initialize json");
+        parsed["result"].clone()
+    }
+
+    /// The spec answer to `initialize` is the client's own version when we
+    /// support it — answering our preferred revision to a client that asked for
+    /// an older one tells it to speak a dialect it may not have.
+    #[tokio::test]
+    async fn initialize_answers_the_version_the_client_asked_for() {
+        let state = test_state();
+        for version in SUPPORTED_PROTOCOL_VERSIONS {
+            let result = initialize_result(
+                &state,
+                serde_json::json!({
+                    "protocolVersion": version,
+                    "capabilities": {},
+                    "clientInfo": { "name": "probe", "version": "test" }
+                }),
+            )
+            .await;
+            assert_eq!(
+                result["protocolVersion"], version,
+                "initialize must echo the supported version the client requested"
+            );
+        }
+    }
+
+    /// An unsupported (or absent) client version falls back to the revision this
+    /// endpoint actually implements, rather than silently agreeing to it.
+    #[tokio::test]
+    async fn initialize_falls_back_when_the_client_version_is_unsupported() {
+        let state = test_state();
+        let unsupported = initialize_result(
+            &state,
+            serde_json::json!({
+                "protocolVersion": "1999-01-01",
+                "capabilities": {},
+                "clientInfo": { "name": "probe", "version": "test" }
+            }),
+        )
+        .await;
+        assert_eq!(unsupported["protocolVersion"], "2025-11-25");
+
+        let absent = initialize_result(
+            &state,
+            serde_json::json!({
+                "capabilities": {},
+                "clientInfo": { "name": "probe", "version": "test" }
+            }),
+        )
+        .await;
+        assert_eq!(absent["protocolVersion"], "2025-11-25");
+    }
+
+    /// The SSE stream emits `notifications/tools/list_changed`, so the handshake
+    /// must declare it — a client is entitled to ignore a notification for a
+    /// capability the server never advertised.
+    #[tokio::test]
+    async fn initialize_declares_the_tools_list_changed_capability() {
+        let state = test_state();
+        let result = initialize_result(
+            &state,
+            serde_json::json!({
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "probe", "version": "test" }
+            }),
+        )
+        .await;
+        assert_eq!(
+            result["capabilities"]["tools"]["listChanged"],
+            serde_json::json!(true),
+            "tools.listChanged must be declared: {result}"
         );
     }
 
@@ -11205,6 +11359,9 @@ mod tests {
             "active",
             "prs",
             "status",
+            "issues",
+            "close_issue",
+            "reopen_issue",
             "worktree_list",
             "worktree_create",
             "worktree_remove",
@@ -11214,6 +11371,15 @@ mod tests {
                 "repo action description must include '{action}'"
             );
         }
+        let params = &repo["inputSchema"]["properties"];
+        assert!(
+            params["issue_number"].is_object(),
+            "the issue mutations need an issue_number parameter: {params}"
+        );
+        assert!(
+            params["filter"].is_object(),
+            "action=issues needs its filter parameter: {params}"
+        );
     }
 
     #[test]
@@ -12744,6 +12910,61 @@ mod tests {
                 .get("550e8400-e29b-41d4-a716-446655440b02")
                 .is_none(),
             "session_html_tabs should be cleared after session close"
+        );
+    }
+
+    /// A tab id is a dedup key — `ui action=tab` with an id it already used
+    /// UPDATES that tab, it does not open a second one. Registering the id again
+    /// therefore has to be a no-op, and an agent that opens tabs all day must
+    /// not grow the close list without bound: this vector lives until the
+    /// session exits, and every entry is replayed into `close-html-tabs`.
+    #[test]
+    fn ui_tab_registration_dedupes_and_caps_per_session() {
+        let tuic = "550e8400-e29b-41d4-a716-446655440b03";
+        let state = test_state();
+        register_peer(&state, tuic, "capper", "mcp-cap");
+        state
+            .mcp_to_session
+            .insert("mcp-cap".to_string(), tuic.to_string());
+
+        let open = |id: String| {
+            handle_ui(
+                &state,
+                &serde_json::json!({
+                    "action": "tab",
+                    "id": id,
+                    "title": "T",
+                    "html": "<p>x</p>"
+                }),
+                Some("mcp-cap"),
+            )
+        };
+
+        for _ in 0..5 {
+            assert_eq!(open("same".to_string())["ok"], serde_json::json!(true));
+        }
+        assert_eq!(
+            state.session_html_tabs.get(tuic).unwrap().len(),
+            1,
+            "re-opening the same tab id must register it once"
+        );
+
+        for i in 0..SESSION_HTML_TAB_LIMIT + 4 {
+            open(format!("tab-{i}"));
+        }
+        let tabs = state.session_html_tabs.get(tuic).unwrap();
+        assert_eq!(
+            tabs.len(),
+            SESSION_HTML_TAB_LIMIT,
+            "registration must be capped"
+        );
+        assert!(
+            tabs.contains(&format!("tab-{}", SESSION_HTML_TAB_LIMIT + 3)),
+            "the newest tab must survive eviction"
+        );
+        assert!(
+            !tabs.contains(&"same".to_string()),
+            "eviction must drop the oldest registration first"
         );
     }
 
