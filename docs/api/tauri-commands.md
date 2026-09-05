@@ -407,6 +407,8 @@ The live registry exposes status via SSE events (`upstream_status_changed`). Val
 | `get_claude_usage_timeline` | `scope, days?` | `Vec<TimelinePoint>` | Hourly token usage from session transcripts |
 | `get_claude_session_stats` | `scope` | `SessionStats` | Aggregated token/session stats from JSONL transcripts |
 | `get_claude_project_list` | -- | `Vec<ProjectEntry>` | List project slugs with session counts |
+| `get_codex_usage_api` | -- | `CodexUsageApiResponse` | Fetch rate-limit usage from the Codex CLI's usage endpoint |
+| `get_codex_usage_stats` | -- | `CodexStatsResponse` | Daily token history + lifetime stats for the Codex dashboard |
 
 `scope` values: `"all"` (all projects) or a specific project slug. `days` defaults to 7.
 

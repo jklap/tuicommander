@@ -1,4 +1,4 @@
-import { destroyClaudeUsage, initClaudeUsage } from "../features/claudeUsage";
+import { destroyAgentUsage, initAgentUsage } from "../features/agentUsage";
 import { pluginStore } from "../stores/pluginStore";
 import { planPlugin } from "./planPlugin";
 import { isPluginDisabled, loadUserPlugins, registerBuiltInPlugin, syncDisabledList } from "./pluginLoader";
@@ -33,22 +33,23 @@ export async function initPlugins(): Promise<void> {
 		}),
 	);
 
-	// Native Claude Usage feature — uses same disabled_plugin_ids toggle
+	// Native agent usage ticker (Claude + Codex) — uses the same
+	// disabled_plugin_ids toggle, still keyed "claude-usage".
 	if (!isPluginDisabled("claude-usage")) {
-		initClaudeUsage();
+		initAgentUsage();
 	}
 
 	await loadUserPlugins(false);
 }
 
 /**
- * Toggle the native Claude Usage feature.
+ * Toggle the native agent usage ticker (Claude + Codex).
  * Called from AgentsTab when user flips the dashboard toggle.
  */
 export function setClaudeUsageEnabled(enabled: boolean): void {
 	if (enabled) {
-		initClaudeUsage();
+		initAgentUsage();
 	} else {
-		destroyClaudeUsage();
+		destroyAgentUsage();
 	}
 }

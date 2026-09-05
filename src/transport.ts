@@ -444,6 +444,8 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Claude Usage dashboard ---
 	get_claude_usage_api: { map: () => ({ method: "GET", path: "/claude/usage" }) },
 	get_claude_project_list: { map: () => ({ method: "GET", path: "/claude/projects" }) },
+	get_codex_usage_api: { map: () => ({ method: "GET", path: "/codex/usage" }) },
+	get_codex_usage_stats: { map: () => ({ method: "GET", path: "/codex/stats" }) },
 	get_claude_usage_timeline: {
 		map: (args, p) => {
 			let path = `/claude/timeline?scope=${p("scope")}`;
