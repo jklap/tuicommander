@@ -35,7 +35,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
 
       - name: pnpm audit
         id: pnpm_audit
@@ -49,6 +49,9 @@ jobs:
           # Save output for issue body (truncate if huge)
           echo "$OUTPUT" | head -100 > /tmp/pnpm-audit.txt
 
+      # Accepted advisories are ignored through src-tauri/.cargo/audit.toml, which
+      # cargo-audit picks up from the working directory. `make check` runs the same
+      # bare command, so local and CI runs share one reasoned ignore list.
       - name: cargo audit
         id: cargo_audit
         continue-on-error: true

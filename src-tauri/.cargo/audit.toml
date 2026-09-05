@@ -1,0 +1,16 @@
+# cargo-audit reads its config from `<cwd>/.cargo/audit.toml` and nowhere else.
+# `make check` and .github/workflows/audit.yml both run `cargo audit` with
+# src-tauri as the working directory, so this file is the single ignore list
+# for local and CI runs. Never pass `--ignore` on the command line: a flag is
+# invisible to the other caller and carries no reason.
+#
+# Every entry needs the advisory id, why it is accepted, and a review date.
+# Re-audit each suppression every quarter. If the review date is older than the
+# quarter, recheck whether an upstream fix or an alternative crate exists.
+#
+# Empty since 2026-09-05. The four advisories ignored until then no longer match
+# Cargo.lock: rand is 0.8.7/0.9.5/0.10.2 and all are patched for
+# RUSTSEC-2026-0097, quick-xml is 0.41.0 and is patched for RUSTSEC-2026-0194
+# and RUSTSEC-2026-0195, and rsa (RUSTSEC-2023-0071) is no longer a dependency.
+[advisories]
+ignore = []

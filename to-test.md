@@ -1621,3 +1621,13 @@ The sidebar dirty badge now reads the gix porcelain-v2 counts, and the stale
 - [ ] Start a long `git add` or `git stash` in a large repo from a TUIC terminal
   and leave it running past 30 s. TUIC must NOT delete that repo's
   `.git/index.lock` while the command still holds it.
+
+## Weekly advisory scan (story 663-feea, CI — verify after merge)
+
+`audit.yml` now installs a prebuilt `cargo-audit` and reads its ignore list from
+`src-tauri/.cargo/audit.toml`. The workflow only runs on Mondays or on demand,
+so nothing local can prove the install step resolves.
+
+- [ ] Trigger `audit.yml` manually (`gh workflow run audit.yml`) and confirm the
+  `Install cargo-audit` step resolves `taiki-e/install-action@cargo-audit` and
+  the scan runs to completion.
