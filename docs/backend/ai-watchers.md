@@ -62,9 +62,40 @@ Persisted in `ai-watchers.json` (app config dir).
 
 Triggers are evaluated in three distinct paths:
 
-- **Idle path** (`on_idle`): Idle, CommandDone, Pattern, and Unseen are evaluated when the terminal transitions to idle. Unseen additionally checks `session_visibility` (tab visible flag from the frontend).
+- **Idle path** (`on_idle`): Idle, CommandDone, Pattern, and Unseen are evaluated when the terminal transitions to idle. Unseen additionally checks `session_visibility` (tab visible flag from the frontend). Idle rules are additionally gated by a one-word LLM verdict — see [Idle classification](#idle-classification).
 - **Event path** (`on_event`): Busy, Question, and Error fire immediately when their corresponding event arrives — they don't wait for idle.
 - **GitHub path** (`on_pr_pushed` / `on_pr_opened`): PrPushed and PrOpened fire from `AppEvent::GitHubTransition` (emitted by `github_poller`), not the terminal paths. They are git-scoped to `repo_path`, apply the `authored_by_others` filter (skips PRs you authored, and skips when the GitHub viewer can't be resolved), and provision/reuse a worktree session to review the PR. `PrOpened` fires at most once per PR appearance (the poller suppresses the first-poll seed so pre-existing PRs don't fire); `PrPushed` dedups by `head_ref_oid` so it fires once per commit.
+
+### Idle classification
+
+An `Idle` rule only nudges when a fast Triage-slot model answers `CONTINUE` (the
+agent stalled mid-task). `DONE` and `WAITING` leave the watcher satisfied.
+
+That verdict is a network call with a 20 s ceiling, so it **never runs on the
+event-loop task**. `on_idle` collects the candidate rules and hands them to a
+spawned task; `WatcherEngine::run` goes straight back to `recv()`. Otherwise one
+slow provider stalls every watcher on every session and the 256-slot broadcast
+buffer starts dropping events.
+
+Two guards bound the cost:
+
+| Guard | Behavior |
+|-------|----------|
+| **Cooldown first** | Rules inside their cooldown are filtered out *before* the classifier runs. A rule that cannot fire never buys a verdict. |
+| **Classifier lane** | At most `MAX_CONCURRENT_CLASSIFICATIONS` (4) verdicts in flight. The permit is taken with `try_acquire`, so a saturated lane drops the nudge rather than queueing work behind a slow provider. |
+
+Both LLM paths carry an explicit token cap (`TRIAGE_MAX_TOKENS` for the verdict,
+`engine::MAX_RESPONSE_TOKENS` for the conversation), and streamed responses fail
+as transient after `engine::STREAM_CHUNK_TIMEOUT` of silence between chunks.
+
+### Persistence
+
+`fire_rule` persists the rule set **once** per fire, after the config write lock
+is released, through `persist_config`: `save_config` writes synchronously under
+the cross-process flock, which the contract at `config.rs:1888` forbids on a
+tokio worker, so the write runs on `spawn_blocking`. A `persist_lock` serializes
+those writes — the snapshot is taken inside the blocking task, so two concurrent
+persists cannot invert and land an older rule set last.
 
 ## Template / Instance Model
 

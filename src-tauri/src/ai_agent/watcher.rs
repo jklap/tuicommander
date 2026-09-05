@@ -584,6 +584,12 @@ fn verdict_fires(verdict: IdleVerdict) -> bool {
     matches!(verdict, IdleVerdict::Continue)
 }
 
+/// Options for the idle classifier call. Capped: the reply is one word, and an
+/// uncapped request lets a misbehaving model bill an essay we then discard.
+fn triage_chat_options() -> genai::chat::ChatOptions {
+    genai::chat::ChatOptions::default().with_max_tokens(TRIAGE_MAX_TOKENS)
+}
+
 /// Build the watcher-fire payload from a rule + the resolved firing context.
 /// Pure so the payload shape is testable without a Tauri app handle.
 fn build_fire_payload(
@@ -607,11 +613,35 @@ fn build_fire_payload(
 
 // ── WatcherEngine ───────────────────────────────────────────────
 
+/// What `fire_rule` decided under the config write lock. Both non-`Skip` arms
+/// changed the rule set, so both are persisted — once, after the lock is released.
+enum FireDecision {
+    /// The rule fires; carries the payload for the frontend. Boxed to keep the
+    /// enum small (clippy::large_enum_variant).
+    Fire(Box<WatcherFirePayload>),
+    /// The rule was exhausted or burst-paused instead of firing.
+    Halted,
+}
+
 const SCREEN_TAIL_LINES: usize = 50;
+
+/// Concurrent idle classifications allowed across all sessions. The classifier is
+/// a network call; past this ceiling the nudge is dropped rather than queued, so a
+/// slow provider cannot build a backlog of work behind it.
+const MAX_CONCURRENT_CLASSIFICATIONS: usize = 4;
+
+/// The idle classifier answers with a single word. Anything longer is a runaway
+/// model burning tokens on a reply we discard.
+const TRIAGE_MAX_TOKENS: u32 = 16;
 
 pub(crate) struct WatcherEngine {
     state: Arc<AppState>,
     config: Arc<RwLock<WatcherConfig>>,
+    /// Permits for in-flight idle classifications (see `MAX_CONCURRENT_CLASSIFICATIONS`).
+    classify_permits: Arc<tokio::sync::Semaphore>,
+    /// Serializes deferred persists so a slower write cannot land an older
+    /// snapshot after a newer one.
+    persist_lock: tokio::sync::Mutex<()>,
     last_fire: DashMap<String, Instant>,
     fire_history: DashMap<String, VecDeque<Instant>>,
     regex_cache: DashMap<String, regex::Regex>,
@@ -631,6 +661,8 @@ impl WatcherEngine {
         Self {
             state,
             config: Arc::new(RwLock::new(config)),
+            classify_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CLASSIFICATIONS)),
+            persist_lock: tokio::sync::Mutex::new(()),
             last_fire: DashMap::new(),
             fire_history: DashMap::new(),
             regex_cache: DashMap::new(),
@@ -643,7 +675,9 @@ impl WatcherEngine {
         Arc::clone(&self.config)
     }
 
-    pub async fn run(&self) {
+    /// Consume the event bus. `Arc<Self>` because the idle path spawns its
+    /// classification into a task of its own (see `on_idle`).
+    pub async fn run(self: Arc<Self>) {
         let mut rx = self.state.event_bus.subscribe();
         loop {
             match rx.recv().await {
@@ -654,7 +688,7 @@ impl WatcherEngine {
                             let state_val =
                                 parsed.get("state").and_then(|s| s.as_str()).unwrap_or("");
                             match state_val {
-                                "idle" => self.on_idle(&session_id).await,
+                                "idle" => Arc::clone(&self).on_idle(&session_id).await,
                                 "busy" => {
                                     self.on_event(&session_id, EventKind::Busy).await;
                                 }
@@ -718,7 +752,7 @@ impl WatcherEngine {
         }
     }
 
-    async fn on_idle(&self, session_id: &str) {
+    async fn on_idle(self: Arc<Self>, session_id: &str) {
         #[cfg(unix)]
         if self.state.standby_sessions.contains_key(session_id) {
             return;
@@ -774,19 +808,52 @@ impl WatcherEngine {
             }
         }
 
-        // One classifier call per idle event: only nudge on CONTINUE. DONE/WAITING
-        // leave the watcher satisfied (cooldown/max_fires remain as backstops).
-        if !idle_changed.is_empty() {
-            let verdict = self.classify_idle(&screen_tail).await;
-            if verdict_fires(verdict) {
-                let hash = screen_hash(&screen_tail);
-                for (rule_id, sid) in idle_changed {
-                    self.fire_rule(&rule_id, &sid, &screen_tail, None).await;
-                    self.last_fire_hash.insert(rule_id, hash.clone());
-                }
-            } else {
-                tracing::debug!(?verdict, session_id, "Idle gate: not nudging");
-            }
+        // Cooldown before the classifier: a rule that cannot fire yet must never
+        // buy a verdict it is going to throw away (audit §3.4).
+        idle_changed.retain(|(rule_id, _)| !self.in_cooldown(rule_id));
+        if idle_changed.is_empty() {
+            return;
+        }
+
+        // The classifier is a network call with a 20 s ceiling. Awaiting it here
+        // would stall the single event-loop task for every watcher on every
+        // session and drop bus events past the 256-slot broadcast buffer, so it
+        // gets a task of its own. `try_acquire` bounds the concurrency AND the
+        // queue: when the lane is saturated the nudge is dropped, not stacked.
+        let Ok(permit) = Arc::clone(&self.classify_permits).try_acquire_owned() else {
+            tracing::debug!(
+                session_id,
+                "Idle gate: classifier saturated — nudge dropped"
+            );
+            return;
+        };
+        let session = session_id.to_string();
+        tokio::spawn(async move {
+            let _permit = permit;
+            self.classify_and_fire(&session, idle_changed, screen_tail)
+                .await;
+        });
+    }
+
+    /// Gate the collected Idle rules behind one classifier verdict, then fire the
+    /// survivors. Only `CONTINUE` nudges; `DONE`/`WAITING` leave the watcher
+    /// satisfied (cooldown/max_fires remain the backstops). Runs off the event
+    /// loop — see `on_idle`.
+    async fn classify_and_fire(
+        &self,
+        session_id: &str,
+        candidates: Vec<(String, String)>,
+        screen_tail: Vec<String>,
+    ) {
+        let verdict = self.classify_idle(&screen_tail).await;
+        if !verdict_fires(verdict) {
+            tracing::debug!(?verdict, session_id, "Idle gate: not nudging");
+            return;
+        }
+        let hash = screen_hash(&screen_tail);
+        for (rule_id, sid) in candidates {
+            self.fire_rule(&rule_id, &sid, &screen_tail, None).await;
+            self.last_fire_hash.insert(rule_id, hash.clone());
         }
     }
 
@@ -816,9 +883,10 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
             )
             .append_message(ChatMessage::user(format!("Last screen lines:\n{screen}")));
 
+        let options = triage_chat_options();
         match tokio::time::timeout(
             std::time::Duration::from_secs(20),
-            client.exec_chat(&resolved.config.model, chat_req, None),
+            client.exec_chat(&resolved.config.model, chat_req, Some(&options)),
         )
         .await
         {
@@ -1070,25 +1138,15 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
             return;
         }
 
-        // Check cooldown
-        if let Some(last) = self.last_fire.get(rule_id) {
-            let cooldown = {
-                let config = self.config.read();
-                config
-                    .rules
-                    .iter()
-                    .find(|r| r.id == rule_id)
-                    .map(|r| r.cooldown_secs)
-                    .unwrap_or(10)
-            };
-            if last.elapsed() < std::time::Duration::from_secs(cooldown as u64) {
-                tracing::debug!(rule_id, "Watcher skipped — cooldown");
-                return;
-            }
+        if self.in_cooldown(rule_id) {
+            tracing::debug!(rule_id, "Watcher skipped — cooldown");
+            return;
         }
 
-        // Check and update under write lock; produce the fire payload.
-        let payload = {
+        // Check and update under write lock; produce the fire payload. The lock is
+        // released before anything is written to disk — the rule set is persisted
+        // once, after the decision, by `persist_config`.
+        let decision = {
             let mut config = self.config.write();
             let idx = match config.rules.iter().position(|r| r.id == rule_id) {
                 Some(i) => i,
@@ -1102,40 +1160,35 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
             if config.rules[idx].fire_count >= config.rules[idx].max_fires {
                 config.rules[idx].status = WatcherStatus::Exhausted;
                 tracing::info!(rule_id, "Watcher exhausted — max_fires reached");
-                if let Err(e) = save_config(&config) {
-                    tracing::warn!(rule_id, "Failed to persist exhaustion state: {e}");
-                }
                 #[cfg(feature = "desktop")]
                 self.notify_status(&config.rules[idx]);
-                return;
-            }
-
-            if self.is_burst(
+                FireDecision::Halted
+            } else if self.is_burst(
                 rule_id,
                 config.rules[idx].burst_threshold,
                 config.rules[idx].burst_window_secs,
             ) {
                 config.rules[idx].status = WatcherStatus::Paused;
                 tracing::warn!(rule_id, "Watcher burst detected — auto-paused");
-                if let Err(e) = save_config(&config) {
-                    tracing::warn!(rule_id, "Failed to persist burst-pause state: {e}");
-                }
                 #[cfg(feature = "desktop")]
                 self.notify_status(&config.rules[idx]);
-                return;
+                FireDecision::Halted
+            } else {
+                let context = self.build_context(session_id, screen_tail);
+                let payload =
+                    build_fire_payload(&config.rules[idx], session_id, context, pr_meta.as_ref());
+                config.rules[idx].fire_count += 1;
+                #[cfg(feature = "desktop")]
+                self.notify_status(&config.rules[idx]);
+                FireDecision::Fire(Box::new(payload))
             }
+        };
 
-            let context = self.build_context(session_id, screen_tail);
-            let payload =
-                build_fire_payload(&config.rules[idx], session_id, context, pr_meta.as_ref());
+        // Exactly one write per fire, off the async worker.
+        self.persist_config().await;
 
-            config.rules[idx].fire_count += 1;
-            if let Err(e) = save_config(&config) {
-                tracing::warn!(rule_id, "Failed to persist fire_count: {e}");
-            }
-            #[cfg(feature = "desktop")]
-            self.notify_status(&config.rules[idx]);
-            payload
+        let FireDecision::Fire(payload) = decision else {
+            return;
         };
 
         // Hand off to the frontend, which resolves the smart prompt (or falls back
@@ -1147,6 +1200,41 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
         self.last_fire.insert(rule_id.to_string(), Instant::now());
         self.record_fire(rule_id);
         tracing::info!(rule_id, session_id, "Watcher fired — watcher-fire emitted");
+    }
+
+    /// True while `rule_id` is inside its configured cooldown window. Shared by
+    /// `fire_rule` and the idle gate, which must agree — the gate exists so the
+    /// classifier is never paid for a rule `fire_rule` would refuse.
+    fn in_cooldown(&self, rule_id: &str) -> bool {
+        let Some(last) = self.last_fire.get(rule_id) else {
+            return false;
+        };
+        let cooldown = self
+            .config
+            .read()
+            .rules
+            .iter()
+            .find(|r| r.id == rule_id)
+            .map(|r| r.cooldown_secs)
+            .unwrap_or_else(default_cooldown);
+        last.elapsed() < std::time::Duration::from_secs(cooldown as u64)
+    }
+
+    /// Persist the rule set without blocking the async worker.
+    ///
+    /// `save_config` writes synchronously under the cross-process flock, which the
+    /// contract at `config.rs:1888` forbids on a tokio worker. The snapshot is taken
+    /// inside the blocking task and the whole thing is serialized by `persist_lock`,
+    /// so two concurrent persists can never invert and land an older rule set last.
+    async fn persist_config(&self) {
+        let _serial = self.persist_lock.lock().await;
+        let config = Arc::clone(&self.config);
+        let result = tokio::task::spawn_blocking(move || save_config(&config.read().clone())).await;
+        match result {
+            Ok(Err(e)) => tracing::warn!("Failed to persist watcher rules: {e}"),
+            Err(e) => tracing::warn!("Watcher persist task failed: {e}"),
+            Ok(Ok(())) => {}
+        }
     }
 
     /// Emit the `watcher-fire` Tauri event to the frontend. No-op when no app
@@ -2685,6 +2773,168 @@ mod tests {
             evaluate_trigger(&WatcherTrigger::Error, None, &[]),
             TriggerOutcome::Skip,
             "Error must Skip in evaluate_trigger (handled by on_event)"
+        );
+    }
+
+    // ── Engine integration: classifier gating and persistence ────
+    //
+    // These drive the real `on_idle` / `fire_rule` against a local TCP listener
+    // standing in for an LLM provider: it accepts the connection, counts it and
+    // never answers. "Did we call the LLM?" is an observed fact here, not a mock.
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct HangingProvider {
+        port: u16,
+        connections: Arc<AtomicUsize>,
+    }
+
+    /// Bind a listener that accepts, counts and then stonewalls — the stand-in
+    /// for a provider that takes the full request timeout to answer.
+    async fn spawn_hanging_provider() -> HangingProvider {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&connections);
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                held.push(stream); // hold the socket open, never answer
+            }
+        });
+        HangingProvider { port, connections }
+    }
+
+    /// Point the Triage slot at the hanging listener so `classify_idle` resolves
+    /// a provider and actually dials it.
+    fn configure_triage_provider(port: u16) {
+        use crate::provider_registry::{
+            ModelEntry, ModelTier, ProviderEntry, ProviderRegistry, ProviderType, SlotName,
+            save_registry,
+        };
+        let mut registry = ProviderRegistry::default();
+        registry.providers.push(ProviderEntry {
+            id: "test-provider".into(),
+            provider_type: ProviderType::Ollama,
+            label: "test".into(),
+            base_url: Some(format!("http://127.0.0.1:{port}/v1/")),
+        });
+        registry.models.push(ModelEntry {
+            id: "test-model".into(),
+            provider_id: "test-provider".into(),
+            model_name: "test".into(),
+            tier: ModelTier::Economic,
+        });
+        registry.slots.insert(SlotName::Triage, "test-model".into());
+        save_registry(&registry).unwrap();
+    }
+
+    fn engine_with_rule(rule: WatcherRule) -> (Arc<WatcherEngine>, String) {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let engine = Arc::new(WatcherEngine::new(state));
+        let id = rule.id.clone();
+        engine.config.write().rules.push(rule);
+        (engine, id)
+    }
+
+    fn idle_rule(id: &str) -> WatcherRule {
+        let mut rule = make_rule(Some("s1"), "keep going");
+        rule.id = id.into();
+        rule
+    }
+
+    #[tokio::test]
+    async fn idle_classification_does_not_block_the_event_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let provider = spawn_hanging_provider().await;
+        configure_triage_provider(provider.port);
+
+        let (engine, _id) = engine_with_rule(idle_rule("rule-1"));
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            Arc::clone(&engine).on_idle("s1"),
+        )
+        .await
+        .expect("on_idle must return while the classifier is still in flight");
+
+        // …and the classifier must still have been dispatched, just off the loop.
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert!(
+            provider.connections.load(Ordering::SeqCst) >= 1,
+            "the classifier must still run, just not inline"
+        );
+    }
+
+    #[tokio::test]
+    async fn idle_in_cooldown_never_reaches_the_classifier() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let provider = spawn_hanging_provider().await;
+        configure_triage_provider(provider.port);
+
+        let (engine, id) = engine_with_rule(idle_rule("rule-1"));
+        engine.last_fire.insert(id, Instant::now());
+
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(600),
+            Arc::clone(&engine).on_idle("s1"),
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        assert_eq!(
+            provider.connections.load(Ordering::SeqCst),
+            0,
+            "a rule inside its cooldown must not burn an LLM call"
+        );
+    }
+
+    #[tokio::test]
+    async fn fire_rule_persists_fire_count_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let (engine, id) = engine_with_rule(idle_rule("rule-1"));
+        engine.fire_rule(&id, "s1", &[], None).await;
+
+        let on_disk = load_config();
+        assert_eq!(on_disk.rules.len(), 1);
+        assert_eq!(
+            on_disk.rules[0].fire_count, 1,
+            "the fire must be persisted, off the async worker"
+        );
+        assert!(engine.last_fire.contains_key(&id));
+    }
+
+    #[tokio::test]
+    async fn fire_rule_persists_exhaustion_without_firing() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let mut rule = idle_rule("rule-1");
+        rule.max_fires = 1;
+        rule.fire_count = 1;
+        let (engine, id) = engine_with_rule(rule);
+        engine.fire_rule(&id, "s1", &[], None).await;
+
+        let on_disk = load_config();
+        assert_eq!(on_disk.rules[0].status, WatcherStatus::Exhausted);
+        assert_eq!(on_disk.rules[0].fire_count, 1);
+        assert!(
+            !engine.last_fire.contains_key(&id),
+            "an exhausted rule must not record a fire"
+        );
+    }
+
+    #[test]
+    fn triage_options_cap_the_response() {
+        assert_eq!(
+            triage_chat_options().max_tokens,
+            Some(TRIAGE_MAX_TOKENS),
+            "the idle classifier answers in one word — cap it"
         );
     }
 }
