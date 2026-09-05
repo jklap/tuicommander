@@ -1147,6 +1147,12 @@ pub(crate) struct SilenceState {
     /// Cleared on explicit user input so a recurring failure in a later turn
     /// can notify again.
     surfaced_tool_errors: std::collections::HashSet<String>,
+    /// Parked request to reopen `OutputParser`'s error dedup. The parser lives
+    /// in the reader thread's `ChunkProcessor` and never sees the input path, so
+    /// a submitted line leaves the request here and `process_chunk` drains it
+    /// before the next parse. Same "the user is engaging again" epoch as
+    /// `surfaced_tool_errors`, for the parser-side half of the same dedup.
+    parser_dedup_reset_pending: bool,
     /// Parsed `suggest:` items awaiting silence-based flush. The parser detects
     /// the token synchronously with output, but we hold the event here until
     /// `check_suggest` confirms the turn has ended (`SILENCE_SUGGEST_THRESHOLD`
@@ -1229,6 +1235,7 @@ impl SilenceState {
             startup_settled: false,
             pending_tool_error: None,
             surfaced_tool_errors: std::collections::HashSet::new(),
+            parser_dedup_reset_pending: false,
             pending_suggest_items: None,
             pending_suggest_turn_epoch: 0,
             pending_suggest_at: None,
@@ -1711,6 +1718,19 @@ impl SilenceState {
         self.pending_tool_error = None;
         self.surfaced_tool_errors.clear();
         self.api_retry_hold_until = None;
+    }
+
+    /// Park a request to reopen `OutputParser::reset_input_dedup`. Called on the
+    /// input thread; the reader consumes it with `take_parser_dedup_reset` on the
+    /// next chunk, which is the first moment the parser is reachable again.
+    pub(crate) fn request_parser_dedup_reset(&mut self) {
+        self.parser_dedup_reset_pending = true;
+    }
+
+    /// Consume a parked parser-dedup reset. Returns true at most once per
+    /// submitted line.
+    pub(crate) fn take_parser_dedup_reset(&mut self) -> bool {
+        std::mem::take(&mut self.parser_dedup_reset_pending)
     }
 
     /// Called by the timer thread. Returns the error text if the silence
@@ -5159,10 +5179,19 @@ impl ChunkProcessor {
         }
 
         // Parse events: OSC 9;4 progress from raw stream, others from clean rows.
-        let (in_resize_grace, in_startup_grace) = {
-            let sl = silence.lock();
-            (sl.is_resize_grace(), sl.is_startup_grace())
+        let (in_resize_grace, in_startup_grace, parser_dedup_reset) = {
+            let mut sl = silence.lock();
+            (
+                sl.is_resize_grace(),
+                sl.is_startup_grace(),
+                sl.take_parser_dedup_reset(),
+            )
         };
+        // A line was submitted since the last chunk: the same API error or
+        // session conflict recurring now is a new failure, not a repaint.
+        if parser_dedup_reset {
+            self.parser.reset_input_dedup();
+        }
         let suppress_notifications = in_resize_grace || in_startup_grace;
         let mut events = tuic_events;
         // Hook-instrumented sessions get awaiting from OSC 7770; drop heuristic
@@ -7586,7 +7615,11 @@ pub(crate) fn record_submitted_line(
         }
     }
     if let Some(ss) = state.silence_states.get(session_id) {
-        ss.lock().suppress_user_input();
+        let mut sl = ss.lock();
+        sl.suppress_user_input();
+        // The parser's api-error / session-conflict dedup lives in the reader
+        // thread and cannot observe this event; park the reset for it.
+        sl.request_parser_dedup_reset();
     }
 }
 
@@ -17035,6 +17068,81 @@ mod tests {
 
         // Verify the result contains data
         assert!(result1.is_some(), "first chunk should return data");
+    }
+
+    /// The api-error dedup must reopen when the user submits a line. The reset
+    /// used to live in `parse_clean_lines`, keyed on a `ParsedEvent::UserInput`
+    /// no output parser ever produces — that event is emitted on the INPUT
+    /// thread by `record_submitted_line` — so the branch was dead and the first
+    /// API error of a session silenced every later one for the whole session.
+    #[test]
+    fn user_submission_rearms_the_api_error_dedup() {
+        use crate::state::VtLogBuffer;
+        use std::sync::atomic::AtomicU64;
+
+        const API_ERROR: &str = "API Error: 500 Internal server error.\r\n";
+
+        /// Drain the bus and count the api-error notifications it carried.
+        fn api_errors(rx: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>) -> usize {
+            let mut count = 0;
+            while let Ok(evt) = rx.try_recv() {
+                if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
+                    && parsed.get("type").and_then(|t| t.as_str()) == Some("api-error")
+                {
+                    count += 1;
+                }
+            }
+            count
+        }
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "api-error-rearm";
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        // The startup grace drops ApiError outright; this test is about dedup.
+        silence.lock().startup_settled = true;
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+
+        let mut cp = ChunkProcessor::new(None, None);
+        let mut rx = state.event_bus.subscribe();
+
+        cp.process_chunk("boot\r\n", &silence, sid, &state);
+        cp.process_chunk(API_ERROR, &silence, sid, &state);
+        assert_eq!(api_errors(&mut rx), 1, "the first API error must notify");
+
+        // Same error text, same turn: still on screen, so it stays deduped.
+        cp.process_chunk("retrying\r\n", &silence, sid, &state);
+        cp.process_chunk(API_ERROR, &silence, sid, &state);
+        assert_eq!(
+            api_errors(&mut rx),
+            0,
+            "a repaint of the same error inside one turn must stay deduped"
+        );
+
+        // The user answers. That is the signal that reopens the dedup.
+        record_submitted_line(&state, sid, "try again".to_string(), -1);
+        api_errors(&mut rx); // drop the submission bookkeeping events
+
+        cp.process_chunk(API_ERROR, &silence, sid, &state);
+        assert_eq!(
+            api_errors(&mut rx),
+            1,
+            "the same API error after a user submission is a NEW failure and must notify"
+        );
     }
 
     /// A new turn must re-emit its status line even when the task name is
