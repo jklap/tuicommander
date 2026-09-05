@@ -689,9 +689,9 @@ mod tests {
 
         match &final_status {
             TunnelStatus::Stopped { .. } => {} // expected: exited promptly, no stall
-            other => panic!(
-                "expected Stopped (chatty stderr must not stall the tunnel), got {other:?}"
-            ),
+            other => {
+                panic!("expected Stopped (chatty stderr must not stall the tunnel), got {other:?}")
+            }
         }
 
         sup.stop();
