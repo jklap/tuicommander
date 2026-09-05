@@ -109,6 +109,11 @@ struct RepoInfo {
 }
 ```
 
+`status` is `conflict` only when a `git status --porcelain` record carries an
+unmerged XY code in columns 1-2 (`porcelain_has_conflict` in `git_cli.rs`, the
+same parser `conflict_assist.rs` uses). The code is read positionally, so a file
+named `UUID.md` no longer marks the repository as conflicted.
+
 ### DiffStats
 
 ```rust

@@ -7,7 +7,7 @@ use std::sync::Arc;
 #[cfg(feature = "desktop")]
 use tauri::State;
 
-use crate::git_cli::{finish_failed_git_operation_after_abort, git_cmd};
+use crate::git_cli::{finish_failed_git_operation_after_abort, git_cmd, porcelain_has_conflict};
 use crate::git_reads::git_reads;
 use crate::state::{AppState, GitCache};
 
@@ -302,8 +302,7 @@ pub(crate) fn get_repo_info_impl(path: &str) -> RepoInfo {
         .map(|o| {
             if o.stdout.is_empty() {
                 "clean".to_string()
-            } else if o.stdout.contains("UU") || o.stdout.contains("AA") || o.stdout.contains("DD")
-            {
+            } else if porcelain_has_conflict(&o.stdout) {
                 "conflict".to_string()
             } else {
                 "dirty".to_string()
@@ -4356,6 +4355,44 @@ mod tests {
             .output()
             .expect("commit");
         (dir, path)
+    }
+
+    // --- get_repo_info_impl status classification ---
+
+    #[test]
+    fn repo_info_status_ignores_conflict_codes_inside_file_names() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("UUID.md"), "notes").expect("write UUID.md");
+        let info = get_repo_info_impl(&path.to_string_lossy());
+        assert_eq!(
+            info.status, "dirty",
+            "an untracked file named UUID.md is not a conflict"
+        );
+    }
+
+    #[test]
+    fn repo_info_status_reports_unmerged_paths_as_conflict() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&path)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        std::fs::write(path.join("file.rs"), "base\n").expect("write base");
+        git(&["add", "file.rs"]);
+        git(&["commit", "-m", "base"]);
+        git(&["checkout", "-b", "other"]);
+        std::fs::write(path.join("file.rs"), "other\n").expect("write other");
+        git(&["commit", "-am", "other"]);
+        git(&["checkout", "-"]);
+        std::fs::write(path.join("file.rs"), "main\n").expect("write main");
+        git(&["commit", "-am", "main"]);
+        git(&["merge", "other"]);
+
+        let info = get_repo_info_impl(&path.to_string_lossy());
+        assert_eq!(info.status, "conflict", "an unmerged file.rs is a conflict");
     }
 
     #[tokio::test]
