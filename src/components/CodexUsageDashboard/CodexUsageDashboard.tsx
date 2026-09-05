@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
 	type CodexRateWindow,
 	type CodexUsageApiResponse,
@@ -122,7 +122,7 @@ export const CodexUsageDashboard: Component = () => {
 	const [statsError, setStatsError] = createSignal<string | null>(null);
 	const [loading, setLoading] = createSignal(true);
 
-	onMount(async () => {
+	const refresh = async () => {
 		// Independent endpoints: one failing must not blank the other's section.
 		const [usageResult, statsResult] = await Promise.allSettled([
 			invoke<CodexUsageApiResponse>("get_codex_usage_api"),
@@ -131,6 +131,9 @@ export const CodexUsageDashboard: Component = () => {
 
 		if (usageResult.status === "fulfilled") {
 			setUsage(usageResult.value);
+			// A refresh that succeeds must retract the previous failure, else the
+			// section keeps showing an error next to fresh numbers.
+			setUsageError(null);
 		} else {
 			const message = String(usageResult.reason);
 			setUsageError(message);
@@ -139,14 +142,24 @@ export const CodexUsageDashboard: Component = () => {
 
 		if (statsResult.status === "fulfilled") {
 			setStats(statsResult.value.stats);
+			setStatsError(null);
 		} else {
 			const message = String(statsResult.reason);
 			setStatsError(message);
 			appLogger.warn("network", "Codex stats fetch failed", message);
 		}
+	};
 
-		setLoading(false);
+	// Only the first load blanks the dashboard; a periodic refresh swaps the
+	// numbers in place.
+	onMount(() => {
+		void refresh().finally(() => setLoading(false));
 	});
+
+	// Auto-refresh every 5 minutes, same cadence as the Claude dashboard and the
+	// Rust-side cache behind both endpoints.
+	const timer = setInterval(() => void refresh(), 5 * 60 * 1000);
+	onCleanup(() => clearInterval(timer));
 
 	const windows = createMemo(() => {
 		const api = usage();

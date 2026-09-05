@@ -1,13 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { render } from "@solidjs/testing-library";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	barHeightPercent,
+	CodexUsageDashboard,
 	formatDuration,
 	formatPercent,
 	formatTokens,
 	labelWindows,
 } from "../../components/CodexUsageDashboard/CodexUsageDashboard";
 import type { CodexUsageApiResponse } from "../../features/codexUsage";
+import { mockInvoke } from "../mocks/tauri";
 
 const win = (usedPercent: number, seconds: number | null) => ({
 	used_percent: usedPercent,
@@ -123,5 +126,88 @@ describe("barHeightPercent", () => {
 
 	it("does not divide by a zero peak", () => {
 		expect(barHeightPercent(0, 0)).toBe(0);
+	});
+});
+
+describe("CodexUsageDashboard refresh", () => {
+	const REFRESH_MS = 5 * 60 * 1000;
+
+	const emptyApi: CodexUsageApiResponse = {
+		plan_type: "pro",
+		rate_limit: null,
+		additional_rate_limits: [],
+		credits: null,
+		model_usage: {},
+	};
+
+	const emptyStats = {
+		stats: {
+			lifetime_tokens: null,
+			peak_daily_tokens: null,
+			current_streak_days: null,
+			longest_streak_days: null,
+			total_threads: null,
+			longest_running_turn_sec: null,
+			fast_mode_usage_percentage: null,
+			total_skills_used: null,
+			unique_skills_used: null,
+			most_used_reasoning_effort: null,
+			most_used_reasoning_effort_percentage: null,
+			daily_usage_buckets: [],
+		},
+	};
+
+	/** Calls the dashboard made for one endpoint — other stores share the mock. */
+	const callsFor = (command: string) => mockInvoke.mock.calls.filter((c) => c[0] === command).length;
+
+	const respondOk = () =>
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(command === "get_codex_usage_api" ? emptyApi : emptyStats),
+		);
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		mockInvoke.mockReset();
+		respondOk();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("refetches both endpoints on the interval instead of freezing at mount", async () => {
+		render(() => CodexUsageDashboard({}));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(callsFor("get_codex_usage_api")).toBe(1);
+
+		await vi.advanceTimersByTimeAsync(REFRESH_MS);
+
+		expect(callsFor("get_codex_usage_api")).toBe(2);
+		expect(callsFor("get_codex_usage_stats")).toBe(2);
+	});
+
+	it("stops refreshing once the tab is closed", async () => {
+		const { unmount } = render(() => CodexUsageDashboard({}));
+		await vi.advanceTimersByTimeAsync(0);
+		unmount();
+
+		await vi.advanceTimersByTimeAsync(3 * REFRESH_MS);
+
+		expect(callsFor("get_codex_usage_api")).toBe(1);
+	});
+
+	it("clears a stale error once a later refresh succeeds", async () => {
+		mockInvoke.mockImplementation((command: string) =>
+			command === "get_codex_usage_api" ? Promise.reject(new Error("codex offline")) : Promise.resolve(emptyStats),
+		);
+
+		const { container } = render(() => CodexUsageDashboard({}));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(container.textContent).toContain("codex offline");
+
+		respondOk();
+		await vi.advanceTimersByTimeAsync(REFRESH_MS);
+
+		expect(container.textContent).not.toContain("codex offline");
 	});
 });
