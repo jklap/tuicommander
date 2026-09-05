@@ -1203,7 +1203,8 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - The index is committed, not scanned from the DOM: only one tab mounts at a time, and mounting the rest would fire CLI status, mdkb status, GitHub and audio probes on every keystroke. A drift test re-derives it from the sources, so a setting added without indexing fails CI
 
 ### 11.1 General
-- Language, Default IDE, Shell
+- Language: the locales that ship a message catalog, each named in its own language. The pick persists to `config.json` and re-renders every translated string without a reload. Locales with no catalog are not listed — they would render English while claiming to be translated — so the list holds only English until more catalogs land
+- Default IDE, Shell
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
 - Power management: prevent sleep when busy
 - Updates: auto-check, check now

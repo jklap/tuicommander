@@ -1641,3 +1641,22 @@ Rust does not hot-reload, so this needs a `make dev` restart to load.
 - [ ] With several sessions open (at least one running a nested command such as
   `cargo test` or a `sh -c 'sleep 30'`), open the process manager and confirm
   each session still lists its child AND its descendants, with non-zero RSS.
+
+## Language picker in Settings → General (story 689-52d8, visual)
+
+The General tab now renders a Language select above Shell, listing every locale
+that ships a message catalog. Only `en.json` exists today, so the list has one
+entry ("English"). Frontend-only change, so Vite HMR loads it, but the rendering
+cannot be checked from a test.
+
+- [ ] Open Settings → General and confirm the Language select sits directly under
+  the "General" heading, above Shell, with the same field styling as the IDE and
+  update-channel selects (label, control width, hint line).
+- [ ] Confirm the option reads "English" and the hint reads "Language of the
+  TUICommander interface".
+- [ ] Type "language" in the Settings search box and confirm the result reads
+  `General › General` and scrolls to the field when selected.
+- [ ] The single option is by design: only locales that ship a catalog are
+  offered, and listing others would show English under a foreign name. The
+  control stays visible so the docs that already promise it stay true. Say if
+  you would rather it were hidden until a second catalogue lands.

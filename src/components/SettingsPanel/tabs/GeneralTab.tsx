@@ -1,5 +1,5 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
-import { t } from "../../../i18n";
+import { AVAILABLE_LOCALES, localeName, t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { appLogger } from "../../../stores/appLogger";
 import type { CustomLauncher, IdeType, UpdateChannel } from "../../../stores/settings";
@@ -103,6 +103,8 @@ export const GeneralTab: Component = () => {
 
 	const ideOptions = Object.entries(IDE_NAMES).map(([value, label]) => ({ value, label }));
 
+	const languageOptions = AVAILABLE_LOCALES.map((value) => ({ value, label: localeName(value) }));
+
 	// --- Custom launchers (GH #71) ---
 	const launchers = (): CustomLauncher[] => settingsStore.state.customLaunchers;
 	const updateLauncher = (id: string, patch: Partial<CustomLauncher>) =>
@@ -122,6 +124,14 @@ export const GeneralTab: Component = () => {
 	return (
 		<div class={s.section}>
 			<h3>{t("general.heading.general", "General")}</h3>
+
+			<SettingSelect
+				label={t("general.label.language", "Language")}
+				value={settingsStore.state.language}
+				onChange={(v) => settingsStore.setLanguage(v)}
+				options={languageOptions}
+				hint={t("general.hint.language", "Language of the TUICommander interface")}
+			/>
 
 			<SettingInput
 				label={t("general.label.shell", "Shell")}
