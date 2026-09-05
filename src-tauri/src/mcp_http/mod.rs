@@ -2136,9 +2136,9 @@ mod tests {
             mcp_upstream_registry: std::sync::Arc::new(
                 crate::mcp_proxy::registry::UpstreamRegistry::new(),
             ),
-            oauth_flow_manager: std::sync::Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new(
-                std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
-            )),
+            oauth_flow_manager: std::sync::Arc::new(
+                crate::mcp_oauth::flow::OAuthFlowManager::new(),
+            ),
             mcp_tools_changed: tokio::sync::broadcast::channel(16).0,
             tool_search_index: std::sync::Arc::new(parking_lot::RwLock::new(
                 crate::tool_search::ToolSearchIndex::build(&[]),

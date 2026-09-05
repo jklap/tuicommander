@@ -228,9 +228,6 @@ pub(crate) struct UpstreamRegistry {
     event_bus: parking_lot::RwLock<Option<tokio::sync::broadcast::Sender<crate::state::AppEvent>>>,
     /// MCP tools_changed signal — fired when upstream tool availability changes.
     mcp_tools_tx: parking_lot::RwLock<Option<tokio::sync::broadcast::Sender<()>>>,
-    /// Serializes concurrent OAuth flows so only one browser auth runs at a time.
-    /// Shared with `OAuthFlowManager` — both hold the same `Arc`.
-    pub(crate) auth_semaphore: Arc<tokio::sync::Semaphore>,
     /// OAuth flow orchestrator. Stored as `Weak` to avoid an `Arc` cycle since
     /// `AppState` holds both the registry and the flow manager as `Arc`s.
     oauth_flow:
@@ -250,7 +247,6 @@ impl UpstreamRegistry {
             entries: DashMap::new(),
             event_bus: parking_lot::RwLock::new(None),
             mcp_tools_tx: parking_lot::RwLock::new(None),
-            auth_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             oauth_flow: parking_lot::RwLock::new(None),
             initial_connect_complete: std::sync::atomic::AtomicBool::new(false),
             initial_settle_done: std::sync::atomic::AtomicBool::new(false),
@@ -1966,12 +1962,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn auth_semaphore_has_one_permit() {
-        let registry = UpstreamRegistry::new();
-        assert_eq!(registry.auth_semaphore.available_permits(), 1);
-    }
-
     // -----------------------------------------------------------------------
     // OAuth integration (#1197)
     // -----------------------------------------------------------------------
@@ -1981,9 +1971,7 @@ mod tests {
         let registry = UpstreamRegistry::new();
         assert!(registry.oauth_flow().is_none());
 
-        let flow = Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new(
-            registry.auth_semaphore.clone(),
-        ));
+        let flow = Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new());
         registry.set_oauth_flow_manager(flow.clone());
         assert!(registry.oauth_flow().is_some());
 
