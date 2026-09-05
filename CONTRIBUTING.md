@@ -14,6 +14,15 @@ Thanks for your interest in contributing! This guide covers what we expect from 
 # Prerequisites: Node.js 24+, Rust stable, platform dependencies (see README)
 pnpm install --frozen-lockfile
 cd src-tauri && cargo build
+
+# Run the app in development mode (installs the git hooks on first run)
+make dev
+```
+
+`make check` also needs two cargo subcommands:
+
+```bash
+cargo install cargo-nextest cargo-audit
 ```
 
 ## Quality Gates
@@ -43,22 +52,28 @@ We have thousands of frontend and Rust tests. We expect that number to go up wit
 ### Run the Full Suite Locally
 
 ```bash
-# Frontend: typecheck + tests
-pnpm exec tsc --noEmit
-pnpm exec vitest run
-
-# Rust: clippy + tests
-cd src-tauri
-cargo clippy -- -D warnings
-cargo test
+make fmt    # auto-format the frontend (Biome) and Rust (rustfmt)
+make check  # every gate CI enforces
 ```
 
-All four commands must pass with zero errors, zero warnings.
+`make check` must pass with zero errors and zero warnings. It runs, in order:
+`tsc --noEmit`, Biome, the architecture cycle checks, the plugin capability doc
+sync check, `cargo fmt --check`, `cargo clippy --release -- -D warnings`,
+`cargo nextest run --workspace` plus doctests, Vitest, the plugin tests,
+`pnpm audit`, and `cargo audit`.
+
+To run a single gate, copy its command out of the `check` target in the
+[Makefile](Makefile) — that target is the source of truth for what CI enforces.
+
+The Makefile prefixes each gate with `rtk`, an optional output compactor, when
+it is on your `PATH`. It is not a project dependency: with `rtk` absent every
+gate runs raw and unfiltered. Use `make RTK= check` to bypass it even when it
+is installed.
 
 ### Code Style
 
 - Match the style of surrounding code. Consistency within a file matters more than any external style guide.
-- Rust: `cargo clippy -- -D warnings` must be clean.
+- Rust: `cargo clippy --release -- -D warnings` must be clean — that is the exact gate in `make check`.
 - TypeScript: `tsc --noEmit` must be clean. No `any` types.
 - Use `appLogger` for logging, never `console.log`.
 
