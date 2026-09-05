@@ -648,4 +648,66 @@ describe("useAgentPolling", () => {
 			});
 		});
 	});
+
+	describe("timer lifecycle", () => {
+		it("does not restart the 30s fallback poll when a terminal is added mid-cycle", async () => {
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_session_foreground_process") return Promise.resolve(null);
+				// Listing both sessions up front (sess-2 doesn't exist yet) keeps the
+				// 1Hz lifecycle poll from treating either as exited and clearing its
+				// sessionId — which would make detectAgentForTerminal bail out before
+				// the fallback poll under test ever gets a chance to run.
+				if (cmd === "list_active_sessions")
+					return Promise.resolve([{ session_id: "sess-1" }, { session_id: "sess-2" }]);
+				return Promise.resolve(null);
+			});
+
+			await testInScopeAsync(async () => {
+				store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0); // flush the initial lifecycle sync
+				mockInvoke.mockClear();
+
+				await tick(25_000); // just short of the 30s fallback poll
+
+				// Tab churn mid-cycle must not reset the fallback timer's countdown.
+				store.add(makeTerminal({ name: "T2", sessionId: "sess-2" }));
+
+				await tick(5_000); // total 30s since useAgentPolling() started
+
+				expect(mockInvoke).toHaveBeenCalledWith("get_session_foreground_process", { sessionId: "sess-1" });
+				expect(mockInvoke).toHaveBeenCalledWith("get_session_foreground_process", { sessionId: "sess-2" });
+			});
+		});
+
+		it("pauses the 1Hz lifecycle poll while the document is hidden and resyncs on visibility regain", async () => {
+			mockInvoke.mockResolvedValue([]);
+			Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+
+			try {
+				await testInScopeAsync(async () => {
+					store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+
+					const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+					useAgentPolling();
+					await tick(0);
+					mockInvoke.mockClear();
+
+					await tick(5_000); // 5 lifecycle-poll ticks would fire if not gated
+
+					expect(mockInvoke).not.toHaveBeenCalledWith("list_active_sessions");
+
+					Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+					document.dispatchEvent(new Event("visibilitychange"));
+					await tick(0);
+
+					expect(mockInvoke).toHaveBeenCalledWith("list_active_sessions");
+				});
+			} finally {
+				Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+			}
+		});
+	});
 });
