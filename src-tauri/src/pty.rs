@@ -7634,6 +7634,13 @@ pub(crate) fn spawn_reader_thread(
         // Safety net: if in_flight stays true for this long (~500 ms),
         // force-reset it so frame delivery resumes. Prevents permanent blank
         // terminal when the frontend fails to ack (crash, corrupt frame, etc.).
+        //
+        // This is also the deadline a HIDDEN tab races on purpose: it acks on a
+        // trailing timer (HIDDEN_ACK_INTERVAL_MS in canvasTerminalUtils.ts), so
+        // the two constants are coupled and neither may be re-tuned alone. The
+        // difference between them is the frontend's drift budget — at 400 vs 500
+        // it was 100 ms and lost constantly, logging the warning below for tabs
+        // that were merely in the background.
         const MAX_IN_FLIGHT_MS: u64 = 500;
         // After this many consecutive force-resets, back off for STUCK_PAUSE_MS
         // to let the JS event loop drain the Tauri channel backlog before
