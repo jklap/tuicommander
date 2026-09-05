@@ -4055,6 +4055,14 @@ branch refs/heads/feat
             .run()
             .expect("create the remote-tracking ref");
 
+        // Zombies owned by this process BEFORE the fetch. Under `cargo nextest`
+        // this is always empty — one process per test — but under `cargo test`
+        // every test in the binary is a thread of the SAME process, so other
+        // tests' unreaped children are counted too. Comparing against a
+        // baseline instead of against zero is what makes the assertion below
+        // mean "this fetch leaked a zombie" under either runner.
+        let zombies_before = own_zombie_pids();
+
         // Off-thread behind a hard receive deadline: an unwired timeout means
         // the call never returns, and this must report that rather than hang
         // the suite on it.
@@ -4073,22 +4081,39 @@ branch refs/heads/feat
         );
 
         // The killed git must be reaped, not left as a zombie of this process.
-        // nextest gives each test its own process, so every child here is ours.
+        let leaked: Vec<u32> = own_zombie_pids()
+            .into_iter()
+            .filter(|pid| !zombies_before.contains(pid))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "the timed-out git was left as a zombie child: {leaked:?}"
+        );
+    }
+
+    /// PIDs of this process's children currently in the zombie state.
+    ///
+    /// Returns pids rather than a count so a caller can diff two samples: a
+    /// count would report "2 before, 2 after" as unchanged even if one child
+    /// had been reaped and a different one leaked in the same window.
+    fn own_zombie_pids() -> Vec<u32> {
         let ps = Command::new("ps")
-            .args(["-o", "ppid=,stat=", "-ax"])
+            .args(["-o", "pid=,ppid=,stat=", "-ax"])
             .output()
             .expect("ps");
         let table = String::from_utf8_lossy(&ps.stdout);
         let mine = std::process::id().to_string();
-        let zombies = table
+        table
             .lines()
-            .filter(|line| {
+            .filter_map(|line| {
                 let mut fields = line.split_whitespace();
-                fields.next() == Some(mine.as_str())
-                    && fields.next().is_some_and(|stat| stat.starts_with('Z'))
+                let pid = fields.next()?;
+                if fields.next()? != mine {
+                    return None;
+                }
+                fields.next()?.starts_with('Z').then(|| pid.parse().ok())?
             })
-            .count();
-        assert_eq!(zombies, 0, "the timed-out git was left as a zombie child");
+            .collect()
     }
 
     /// End-to-end companion to `test_fetch_local_branch_with_slash_is_noop`:
