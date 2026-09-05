@@ -511,6 +511,12 @@ pub(crate) fn batched_conversation_stream(
                         break;
                     }
                 }
+                // The consumer (WS bridge or Tauri Channel) went away. Without this
+                // arm a *quiet* conversation never notices: `flush` returns early on
+                // empty batches and never touches `tx`, so the only other exits need
+                // an event that may never come — an approval-blocked conversation
+                // would spin here at 20Hz holding its broadcast subscription forever.
+                _ = tx.closed() => break,
             }
         }
     });

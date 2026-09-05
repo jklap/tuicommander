@@ -1403,7 +1403,10 @@ bypassedTools?, reasoningEffort? }` — then receives `ConversationEvent` frames
 (`{"type":"text_chunk",...}` etc.) with the same 50ms batching as desktop. Dedicated
 per-session WS, NOT the global `/events` bus (high-frequency token stream). A client
 disconnect stops forwarding but leaves the conversation running — cancel explicitly
-via `/ai/conversation/cancel`.
+via `/ai/conversation/cancel`. The bridge watches the socket alongside the event
+stream (same `forward_until_closed` helper as the chat bridge), so a disconnect on a
+*quiet* conversation — one blocked on tool approval, say — is noticed at once instead
+of waiting for a send failure on the next event, which may never arrive.
 
 **Diff triage** (`POST /ai/triage/run`, event-bridge plan Step 2): triggers
 `run_diff_triage`; progress frames stream over the global `/events` SSE bus as
