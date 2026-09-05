@@ -853,6 +853,15 @@ pub(crate) enum Backend {
     // CLI internally for its unsupported edge cases). `Cli` is retained as the
     // per-op rollback lever: set any field in `PerOpBackend::default` back to
     // `Cli` to instantly route that op through the CLI adapter again.
+    //
+    // DEFERRED (2026-09-05) — the rollback lever is temporary, not permanent.
+    // After 2026-12-05, if the 8 `shootout_*` parity tests have stayed green
+    // and no op has been rolled back in the meantime, delete `Backend::Cli`,
+    // the 8 `Backend::Cli` arms in `GitReadsRouter`, `PerOpBackend` and the
+    // `GitReadsRouter::cli` field. `CliGitReads` itself stays: the gix adapters
+    // call it for their unsupported edge cases, and the parity tests compare
+    // against it. Rolling an op back before that date resets the clock — move
+    // the date out and say which op needed the CLI and why.
     #[allow(dead_code)]
     Cli,
     Gix,
