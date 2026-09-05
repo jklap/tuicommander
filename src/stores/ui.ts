@@ -138,17 +138,37 @@ function createUIStore() {
 		}, SAVE_DEBOUNCE_MS);
 	}
 
+	/** Keys of the mutually exclusive right-side panels, paired with their
+	 *  backend (snake_case) pref field name. Single source of truth for the
+	 *  exclusivity logic (`setExclusivePanel`) AND for save/load (`writeUIPrefs`,
+	 *  `hydrate`) — extend this list, not the functions that read it, when
+	 *  adding a new exclusive panel (story 653-4cdf). */
+	const exclusivePanelPrefs = [
+		{ stateKey: "markdownPanelVisible", backendKey: "markdown_panel_visible" },
+		{ stateKey: "fileBrowserPanelVisible", backendKey: "file_browser_panel_visible" },
+		{ stateKey: "gitPanelVisible", backendKey: "git_panel_visible" },
+		{ stateKey: "outlinePanelVisible", backendKey: "outline_panel_visible" },
+		{ stateKey: "referencesPanelVisible", backendKey: "references_panel_visible" },
+		{ stateKey: "aiChatPanelVisible", backendKey: "ai_chat_panel_visible" },
+		{ stateKey: "aiTriagePanelVisible", backendKey: "ai_triage_panel_visible" },
+		{ stateKey: "notesPanelVisible", backendKey: "notes_panel_visible" },
+	] as const;
+
+	/** Keys of the mutually exclusive right-side panels */
+	type ExclusivePanel = (typeof exclusivePanelPrefs)[number]["stateKey"];
+	const exclusivePanels: ExclusivePanel[] = exclusivePanelPrefs.map((p) => p.stateKey);
+
 	/** Write the current prefs to the Rust backend (fire-and-forget) */
 	function writeUIPrefs(): void {
+		const panelVisibility: Record<string, boolean> = {};
+		for (const { stateKey, backendKey } of exclusivePanelPrefs) {
+			panelVisibility[backendKey] = state[stateKey];
+		}
 		invoke("save_ui_prefs", {
 			config: {
 				sidebar_visible: state.sidebarVisible,
 				sidebar_width: state.sidebarWidth,
-				markdown_panel_visible: state.markdownPanelVisible,
-				notes_panel_visible: state.notesPanelVisible,
-				file_browser_panel_visible: state.fileBrowserPanelVisible,
-				git_panel_visible: state.gitPanelVisible,
-				ai_chat_panel_visible: state.aiChatPanelVisible,
+				...panelVisibility,
 				settings_nav_width: state.settingsNavWidth,
 				diff_view_mode: state.diffViewMode,
 				file_browser_view_mode: state.fileBrowserViewMode,
@@ -157,27 +177,6 @@ function createUIStore() {
 			},
 		}).catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
 	}
-
-	/** Keys of the mutually exclusive right-side panels */
-	type ExclusivePanel =
-		| "markdownPanelVisible"
-		| "fileBrowserPanelVisible"
-		| "gitPanelVisible"
-		| "outlinePanelVisible"
-		| "referencesPanelVisible"
-		| "aiChatPanelVisible"
-		| "aiTriagePanelVisible"
-		| "notesPanelVisible";
-	const exclusivePanels: ExclusivePanel[] = [
-		"markdownPanelVisible",
-		"fileBrowserPanelVisible",
-		"gitPanelVisible",
-		"outlinePanelVisible",
-		"referencesPanelVisible",
-		"aiChatPanelVisible",
-		"aiTriagePanelVisible",
-		"notesPanelVisible",
-	];
 
 	/** Open one exclusive panel and close the others, or close all if `key` is already open (toggle). */
 	function setExclusivePanel(key: ExclusivePanel, visible: boolean): void {
@@ -210,20 +209,17 @@ function createUIStore() {
 					localStorage.removeItem(LEGACY_SIDEBAR_WIDTH_KEY);
 				}
 
-				const loaded = await invoke<{
-					sidebar_visible?: boolean;
-					sidebar_width?: number;
-					markdown_panel_visible?: boolean;
-					notes_panel_visible?: boolean;
-					file_browser_panel_visible?: boolean;
-					git_panel_visible?: boolean;
-					ai_chat_panel_visible?: boolean;
-					settings_nav_width?: number;
-					diff_view_mode?: string;
-					file_browser_view_mode?: string;
-					detached_panels?: Record<string, string>;
-					github_section_collapsed?: Record<string, boolean>;
-				}>("load_ui_prefs");
+				const loaded = await invoke<
+					{
+						sidebar_visible?: boolean;
+						sidebar_width?: number;
+						settings_nav_width?: number;
+						diff_view_mode?: string;
+						file_browser_view_mode?: string;
+						detached_panels?: Record<string, string>;
+						github_section_collapsed?: Record<string, boolean>;
+					} & Partial<Record<(typeof exclusivePanelPrefs)[number]["backendKey"], boolean>>
+				>("load_ui_prefs");
 				if (loaded) {
 					if (loaded.sidebar_visible !== undefined) {
 						setState("sidebarVisible", loaded.sidebar_visible);
@@ -231,20 +227,11 @@ function createUIStore() {
 					if (loaded.sidebar_width !== undefined) {
 						setState("sidebarWidth", clampWidth(loaded.sidebar_width));
 					}
-					if (loaded.markdown_panel_visible !== undefined) {
-						setState("markdownPanelVisible", loaded.markdown_panel_visible);
-					}
-					if (loaded.notes_panel_visible !== undefined) {
-						setState("notesPanelVisible", loaded.notes_panel_visible);
-					}
-					if (loaded.file_browser_panel_visible !== undefined) {
-						setState("fileBrowserPanelVisible", loaded.file_browser_panel_visible);
-					}
-					if (loaded.git_panel_visible !== undefined) {
-						setState("gitPanelVisible", loaded.git_panel_visible);
-					}
-					if (loaded.ai_chat_panel_visible !== undefined) {
-						setState("aiChatPanelVisible", loaded.ai_chat_panel_visible);
+					for (const { stateKey, backendKey } of exclusivePanelPrefs) {
+						const value = loaded[backendKey];
+						if (value !== undefined) {
+							setState(stateKey, value);
+						}
 					}
 					if (loaded.settings_nav_width !== undefined) {
 						setState("settingsNavWidth", loaded.settings_nav_width);

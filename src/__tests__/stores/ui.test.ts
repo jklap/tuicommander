@@ -471,6 +471,53 @@ describe("uiStore", () => {
 		});
 	});
 
+	describe("exclusive panel persistence (story 653-4cdf)", () => {
+		// All 8 mutually exclusive panels must round-trip through save/load —
+		// stores/ui.ts previously dropped outline, references and aiTriage.
+		const panels: Array<{
+			label: string;
+			setVisible: (v: boolean) => void;
+			stateKey:
+				| "markdownPanelVisible"
+				| "notesPanelVisible"
+				| "fileBrowserPanelVisible"
+				| "gitPanelVisible"
+				| "outlinePanelVisible"
+				| "referencesPanelVisible"
+				| "aiChatPanelVisible"
+				| "aiTriagePanelVisible";
+			backendKey: string;
+		}> = [
+			{ label: "markdown", setVisible: (v: boolean) => store.setMarkdownPanelVisible(v), stateKey: "markdownPanelVisible", backendKey: "markdown_panel_visible" },
+			{ label: "notes", setVisible: (v: boolean) => store.setNotesPanelVisible(v), stateKey: "notesPanelVisible", backendKey: "notes_panel_visible" },
+			{ label: "fileBrowser", setVisible: (v: boolean) => store.setFileBrowserPanelVisible(v), stateKey: "fileBrowserPanelVisible", backendKey: "file_browser_panel_visible" },
+			{ label: "git", setVisible: (v: boolean) => store.setGitPanelVisible(v), stateKey: "gitPanelVisible", backendKey: "git_panel_visible" },
+			{ label: "outline", setVisible: (v: boolean) => store.setOutlinePanelVisible(v), stateKey: "outlinePanelVisible", backendKey: "outline_panel_visible" },
+			{ label: "references", setVisible: (v: boolean) => store.setReferencesPanelVisible(v), stateKey: "referencesPanelVisible", backendKey: "references_panel_visible" },
+			{ label: "aiChat", setVisible: (v: boolean) => store.setAiChatPanelVisible(v), stateKey: "aiChatPanelVisible", backendKey: "ai_chat_panel_visible" },
+			{ label: "aiTriage", setVisible: (v: boolean) => store.setAiTriagePanelVisible(v), stateKey: "aiTriagePanelVisible", backendKey: "ai_triage_panel_visible" },
+		];
+
+		it.each(panels)("save persists $backendKey when $label panel is opened", ({ setVisible, backendKey }) => {
+			testInScope(() => {
+				setVisible(true);
+				flushPersist();
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					config: expect.objectContaining({ [backendKey]: true }),
+				});
+			});
+		});
+
+		it.each(panels)("hydrate loads $backendKey into $label panel state", async ({ stateKey, backendKey }) => {
+			mockInvoke.mockResolvedValueOnce({ [backendKey]: true });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state[stateKey]).toBe(true);
+			});
+		});
+	});
+
 	describe("detachedPanels", () => {
 		it("setDetached adds entry to map", () => {
 			testInScope(() => {
