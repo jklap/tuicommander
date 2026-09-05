@@ -1395,3 +1395,77 @@ runs in the backend, so nothing changes until the Rust process is rebuilt.
   fires): detection still happens — the pattern anchors on `API Error: 5xx`.
 - [ ] A 429/overload (`API Error: 529` or "temporarily limiting requests") is
   still logged as a rate limit, not as a server error, and injects nothing.
+
+## Usage ticker follows the agent in the terminal (Claude / Codex)
+
+**Rust change — a `make dev` restart (or `make build`) is required.** The new
+`get_codex_usage_api` command and the `GET /codex/usage` route live in the
+backend, so the ticker shows `offline` until the Rust process is rebuilt.
+
+**Precondition:** Settings → Agents → the Claude Usage toggle must stay enabled;
+it now drives both agents. A Codex login must exist (`~/.codex/auth.json`).
+
+- [ ] Focus a tab running Claude: the status bar ticker is labelled `Claude` and
+  shows the `5h` / `7d` numbers as before. Clicking it still opens the Claude
+  Usage dashboard tab.
+- [ ] Focus a tab running Codex: the label becomes `Codex` and the text shows
+  the Codex windows (e.g. `7d: 100% -1d`). The switch happens on tab focus,
+  without waiting for the 5-minute poll.
+- [ ] Clicking the Codex ticker opens a **Codex Usage Dashboard** tab (a
+  singleton — clicking again focuses the existing tab, it does not duplicate).
+- [ ] Switch to a plain shell tab: the ticker keeps showing the last agent
+  rather than blanking or reverting to Claude.
+- [ ] Switch Claude → Codex → Claude quickly. No stale value from the previous
+  agent lands on the ticker (the seq guard should drop late responses).
+- [ ] `curl http://localhost:9877/codex/usage` returns the JSON payload and
+  contains **no** `email`, `user_id` or `account_id` field.
+- [ ] Rename `~/.codex/auth.json` away and focus a Codex tab: the ticker shows
+  `no token`, and `GET /logs` has no warn line for it (missing token is not an
+  error worth logging).
+- [ ] With the Claude Usage toggle off, no ticker appears for either agent.
+
+### Codex Usage Dashboard
+
+Same `make dev` restart precondition — the `get_codex_usage_stats` command and
+`GET /codex/stats` are new Rust.
+
+- [ ] **Rate Limits** section shows the account windows first with plain `5h` /
+  `7d` names, then the per-model windows prefixed with the model name. A window
+  at 100% is red, ≥70% amber, below that normal.
+- [ ] **Tokens per Day** renders one bar per day; hovering a bar shows the date
+  and the token count. The tallest bar is the busiest day, and a near-zero day
+  is still visible as a sliver rather than invisible.
+- [ ] **Insights** tiles are populated (lifetime tokens, peak day, threads,
+  streak, longest turn, fast mode, skills, reasoning effort) — no `NaN`, and
+  absent values read `--`.
+- [ ] Kill the network (or rename `~/.codex/auth.json`) and open the dashboard:
+  each section shows its own error hint independently — one failing endpoint
+  must not blank the other section.
+- [ ] `curl http://localhost:9877/codex/stats` contains **no** `profile` object
+  (no username, display name or avatar URL).
+
+### Upstream MCP OAuth — concurrent flows, expiry, late redirect
+
+**Requires a `make dev` restart** — all of this is Rust (`mcp_oauth/`,
+`mcp_proxy/registry.rs`). The running instance still has the old serialized
+behaviour.
+
+- [ ] Settings → Services → MCP: click **Authorize** on two different upstreams
+  back to back. Both show the consent dialog and open a browser tab within a
+  second. Previously the second click hung silently for 5 minutes: no browser,
+  no dialog, no error, while the row already read "Awaiting authorization…".
+- [ ] Click **Authorize**, then **Cancel** before completing consent: the row
+  leaves "Awaiting authorization…" immediately and Authorize works again on the
+  next click (no queue built up behind it).
+- [ ] Click **Authorize** and then do nothing for >5 minutes. The row returns to
+  **Authorize to connect** (`needs_auth`) on its own, and
+  `GET http://localhost:9877/logs?source=mcp_oauth` shows
+  `Cleaned up expired OAuth flows` naming the upstream. It must not stay stuck
+  on "Awaiting authorization…".
+- [ ] Click **Authorize**, wait out the full 5-minute timeout *in the browser*,
+  then complete consent. The browser shows the TUIC "Authentication failed" card
+  reading "This authorization request expired or was cancelled…" plus "press
+  Authorize again" — **not** the browser's own "can't connect to the server"
+  page.
+- [ ] A normal successful authorization still lands on the green
+  "Authentication complete" card and the upstream goes `ready`.
