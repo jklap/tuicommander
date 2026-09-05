@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 #[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 use crate::github::BranchPrStatus;
 use crate::state::{AppEvent, AppState};
@@ -235,19 +235,27 @@ pub(crate) enum PollerCmd {
     /// standby): the frontend store reset to empty, but the poller's change-detection
     /// would otherwise suppress re-sending unchanged data, leaving the UI blank.
     ForceResync,
-    Stop,
 }
 
 pub(crate) struct GitHubPoller {
     pub(crate) cmd_tx: mpsc::Sender<PollerCmd>,
+    /// Stop signal, raised by [`stop_poller`].
+    ///
+    /// Stop does not travel on `cmd_tx`: the loop only drains that channel
+    /// between polls, so a Stop sent while a request is in flight waits for the
+    /// request — and a request against a half-open socket may never return.
+    /// The notify is awaited *alongside* the poll instead, so it lands whatever
+    /// the loop is doing.
+    pub(crate) stop: Arc<Notify>,
 }
 
 impl GitHubPoller {
     #[cfg(feature = "desktop")]
     pub(crate) fn start(state: Arc<AppState>, handle: AppHandle) -> Self {
         let (tx, rx) = mpsc::channel(32);
-        tokio::spawn(poll_loop(state, handle, rx));
-        Self { cmd_tx: tx }
+        let stop = Arc::new(Notify::new());
+        tokio::spawn(poll_loop(state, handle, rx, Arc::clone(&stop)));
+        Self { cmd_tx: tx, stop }
     }
 }
 
@@ -269,8 +277,27 @@ struct PollMutableState {
     force_resync: bool,
 }
 
+/// Await a poll batch, giving up as soon as `stop` is raised.
+///
+/// Returns `false` when Stop cut the poll short. `biased` makes a Stop that is
+/// already pending win over a poll that happens to be ready in the same tick —
+/// a shutdown must not be delayed by one more round of event emission.
+#[cfg(any(feature = "desktop", test))]
+async fn poll_batch_or_stop(stop: &Notify, batch: impl std::future::Future<Output = ()>) -> bool {
+    tokio::select! {
+        biased;
+        _ = stop.notified() => false,
+        _ = batch => true,
+    }
+}
+
 #[cfg(feature = "desktop")]
-async fn poll_loop(state: Arc<AppState>, handle: AppHandle, mut rx: mpsc::Receiver<PollerCmd>) {
+async fn poll_loop(
+    state: Arc<AppState>,
+    handle: AppHandle,
+    mut rx: mpsc::Receiver<PollerCmd>,
+    stop: Arc<Notify>,
+) {
     let mut visible = true;
     let mut paths: Vec<String> = Vec::new();
     let mut issue_filter = String::new();
@@ -308,7 +335,14 @@ async fn poll_loop(state: Arc<AppState>, handle: AppHandle, mut rx: mpsc::Receiv
                 pending_poll_at = None;
                 let rate_budget = crate::github::min_rate_budget(&state);
                 let batch = if pending_poll_paths.is_empty() { &paths } else { &pending_poll_paths };
-                poll_batch(&state, &handle, batch, false, &issue_filter, pr_hide_drafts, &mut ps).await;
+                let finished = poll_batch_or_stop(
+                    &stop,
+                    poll_batch(&state, &handle, batch, false, &issue_filter, pr_hide_drafts, &mut ps),
+                )
+                .await;
+                if !finished {
+                    break;
+                }
                 pending_poll_paths.clear();
                 let dur = current_interval(visible, ps.fail_count, rate_budget);
                 interval = tokio::time::interval_at(tokio::time::Instant::now() + dur, dur);
@@ -322,7 +356,14 @@ async fn poll_loop(state: Arc<AppState>, handle: AppHandle, mut rx: mpsc::Receiv
                     let hot = state.hot_repo_paths.read();
                     tiered_paths(&paths, &ps.last_changed, poll_cycle, &hot)
                 };
-                poll_batch(&state, &handle, &batch_paths, startup, &issue_filter, pr_hide_drafts, &mut ps).await;
+                let finished = poll_batch_or_stop(
+                    &stop,
+                    poll_batch(&state, &handle, &batch_paths, startup, &issue_filter, pr_hide_drafts, &mut ps),
+                )
+                .await;
+                if !finished {
+                    break;
+                }
                 startup = false;
                 poll_cycle = poll_cycle.wrapping_add(1);
                 pending_poll_at = None;
@@ -372,7 +413,9 @@ async fn poll_loop(state: Arc<AppState>, handle: AppHandle, mut rx: mpsc::Receiv
                         pending_poll_paths.clear();
                         pending_poll_at = Some(tokio::time::Instant::now());
                     }
-                    Some(PollerCmd::Stop) | None => break,
+                    // The sender lives in the `GitHubPoller` that `stop_poller`
+                    // takes out of state, so a closed channel also means stop.
+                    None => break,
                 }
             }
         }
@@ -760,20 +803,20 @@ pub(crate) fn send_poller_cmd(state: &AppState, cmd: PollerCmd) -> Result<(), St
 
 /// Stop the poller and clear it from state.
 ///
-/// Separate from [`send_poller_cmd`] because it takes ownership of the poller and
-/// uses the awaiting `send` — a Stop must not be dropped just because the command
-/// channel is momentarily full.
+/// Separate from [`send_poller_cmd`] because Stop does not travel on the command
+/// channel at all. It used to, and that made stopping only as reliable as the
+/// loop's willingness to read the channel: a poll awaited inline in the loop's
+/// `select!` blocks the read, and against a half-open socket that poll never
+/// returns, so the Stop was stranded for good. Raising the notify instead lands
+/// on the poll itself — see [`GitHubPoller::stop`].
 pub(crate) async fn stop_poller(state: &AppState) -> Result<(), String> {
     let poller = state
         .github_poller
         .lock()
         .take()
         .ok_or_else(|| "GitHub poller is not running".to_string())?;
-    poller
-        .cmd_tx
-        .send(PollerCmd::Stop)
-        .await
-        .map_err(|e| format!("GitHub poller stop not delivered: {e}"))
+    poller.stop.notify_one();
+    Ok(())
 }
 
 #[cfg(feature = "desktop")]
@@ -889,6 +932,64 @@ mod tests {
         assert!(err.contains("not running"), "unexpected error: {err}");
     }
 
+    /// A poll request that never resolves is exactly what a half-open socket
+    /// produces after a VPN drop. `poll_batch` is awaited inline in the poller's
+    /// `select!`, so without an abort path the loop never reaches `rx.recv()`
+    /// again and the Stop is stranded behind a request that will never land.
+    #[tokio::test]
+    async fn stop_aborts_a_poll_that_never_resolves() {
+        let stop = Arc::new(tokio::sync::Notify::new());
+        let signal = Arc::clone(&stop);
+        let task =
+            tokio::spawn(
+                async move { poll_batch_or_stop(&signal, std::future::pending::<()>()).await },
+            );
+
+        // Give the task a chance to park on the never-resolving poll.
+        tokio::task::yield_now().await;
+        stop.notify_one();
+
+        let completed = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("stop must abort the in-flight poll")
+            .expect("poll task panicked");
+        assert!(
+            !completed,
+            "a poll cancelled by Stop must report that it did not finish"
+        );
+    }
+
+    /// The end-to-end stop path: `stop_poller` must reach a loop that is parked
+    /// inside a request, not just one sitting idle on its command channel.
+    #[tokio::test]
+    async fn stop_poller_reaches_a_loop_parked_inside_a_request() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel(8);
+        let stop = Arc::new(tokio::sync::Notify::new());
+        *state.github_poller.lock() = Some(GitHubPoller {
+            cmd_tx,
+            stop: Arc::clone(&stop),
+        });
+
+        let task =
+            tokio::spawn(
+                async move { poll_batch_or_stop(&stop, std::future::pending::<()>()).await },
+            );
+        tokio::task::yield_now().await;
+
+        stop_poller(&state).await.expect("stop must be delivered");
+
+        let completed = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("stop_poller must unpark the in-flight poll")
+            .expect("poll task panicked");
+        assert!(!completed, "the poll must report that Stop cut it short");
+        assert!(
+            state.github_poller.lock().is_none(),
+            "stop_poller must clear the poller from state"
+        );
+    }
+
     /// A running poller receives the command and the send is reported as
     /// delivered — the filter must narrow the failure case, not break the
     /// success case.
@@ -896,7 +997,10 @@ mod tests {
     async fn a_command_for_a_running_poller_is_delivered() {
         let state = crate::state::tests_support::make_test_app_state();
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(8);
-        *state.github_poller.lock() = Some(GitHubPoller { cmd_tx });
+        *state.github_poller.lock() = Some(GitHubPoller {
+            cmd_tx,
+            stop: Arc::new(Notify::new()),
+        });
 
         send_poller_cmd(&state, PollerCmd::PollRepo("/repo".to_string())).expect("delivered");
 
@@ -1263,7 +1367,10 @@ mod tests {
     #[test]
     fn send_poller_config_resync_sends_full_sequence() {
         let (tx, mut rx) = mpsc::channel(8);
-        let poller = GitHubPoller { cmd_tx: tx };
+        let poller = GitHubPoller {
+            cmd_tx: tx,
+            stop: Arc::new(Notify::new()),
+        };
         send_poller_config(
             &poller,
             vec!["/repo".to_string()],
@@ -1288,7 +1395,10 @@ mod tests {
         // A freshly started poller has no prior state to re-emit, so cold start
         // passes resync = false: hide-drafts is still forwarded, ForceResync is not.
         let (tx, mut rx) = mpsc::channel(8);
-        let poller = GitHubPoller { cmd_tx: tx };
+        let poller = GitHubPoller {
+            cmd_tx: tx,
+            stop: Arc::new(Notify::new()),
+        };
         send_poller_config(&poller, vec![], String::new(), false, false);
         assert!(matches!(rx.try_recv(), Ok(PollerCmd::UpdatePaths(_))));
         assert!(matches!(rx.try_recv(), Ok(PollerCmd::SetIssueFilter(_))));
