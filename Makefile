@@ -35,7 +35,9 @@ DIST_DIR=dist-release
 
 all: build sign
 
-# Install tracked git hooks (pre-push issue-keyword guard). Idempotent.
+# Install tracked git hooks. Idempotent.
+#   pre-commit — agent-state fixture gate (bypass: TUIC_SKIP_FIXTURE_GATE=1)
+#   pre-push   — GitHub-issue closing-keyword guard (bypass: TUIC_SKIP_ISSUE_CHECK=1)
 hooks:
 	@bash scripts/hooks/install-hooks.sh
 

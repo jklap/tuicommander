@@ -221,6 +221,22 @@ through `raw_stream_events` + `parse_clean_lines` + `suppress_heuristic_question
 assert against a pipeline that does not exist. Unit tests on the individual
 parsers were never the gap; the pipeline around them was.
 
+**That rule is mechanical, not honour-system.** `scripts/hooks/pre-commit`
+(installed by `make hooks` / `make dev`) blocks a commit that changes detection
+logic without staging anything under `src-tauri/src/fixtures/agent_prompts/`.
+It is deliberately narrow — only added/removed lines count, comments and blank
+lines are stripped, and outside `chrome.rs` (detection end to end) a detection
+symbol must be named by a changed line or by the hunk's enclosing function.
+Touching `pty.rs` is not the trigger; touching `awaiting_input`, or any line
+inside `suppress_heuristic_question`, is. Replayed over the last 120 commits
+that touch a gated file it fired on 24 — every `fix(agent-state):` among them.
+
+For a rename or a refactor that genuinely needs no capture, say so and move on:
+
+```
+TUIC_SKIP_FIXTURE_GATE=1 git commit ...     # or: git commit --no-verify
+```
+
 **Three signals report awaiting, and they are not interchangeable:**
 
 | Signal | Source | Applies to |
