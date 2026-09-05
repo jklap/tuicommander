@@ -898,6 +898,17 @@ pub(crate) struct UIPrefsConfig {
     pub(crate) plan_panel_visible: bool,
     #[serde(default)]
     pub(crate) git_panel_visible: bool,
+    #[serde(default)]
+    pub(crate) outline_panel_visible: bool,
+    #[serde(default)]
+    pub(crate) references_panel_visible: bool,
+    #[serde(default)]
+    pub(crate) ai_chat_panel_visible: bool,
+    #[serde(default)]
+    pub(crate) ai_triage_panel_visible: bool,
+    /// File browser listing: "flat" or "tree".
+    #[serde(default = "default_file_browser_view_mode")]
+    pub(crate) file_browser_view_mode: String,
     #[serde(default = "default_panel_width")]
     pub(crate) diff_panel_width: u32,
     #[serde(default = "default_panel_width")]
@@ -925,6 +936,10 @@ fn default_diff_view_mode() -> String {
     "split".to_string()
 }
 
+fn default_file_browser_view_mode() -> String {
+    "flat".to_string()
+}
+
 impl Default for UIPrefsConfig {
     fn default() -> Self {
         Self {
@@ -936,6 +951,11 @@ impl Default for UIPrefsConfig {
             file_browser_panel_visible: false,
             plan_panel_visible: false,
             git_panel_visible: false,
+            outline_panel_visible: false,
+            references_panel_visible: false,
+            ai_chat_panel_visible: false,
+            ai_triage_panel_visible: false,
+            file_browser_view_mode: default_file_browser_view_mode(),
             diff_panel_width: default_panel_width(),
             markdown_panel_width: default_panel_width(),
             notes_panel_width: default_notes_panel_width(),
@@ -3578,6 +3598,11 @@ mod tests {
             file_browser_panel_visible: true,
             plan_panel_visible: false,
             git_panel_visible: false,
+            outline_panel_visible: true,
+            references_panel_visible: false,
+            ai_chat_panel_visible: false,
+            ai_triage_panel_visible: true,
+            file_browser_view_mode: "tree".to_string(),
             diff_panel_width: 500,
             markdown_panel_width: 450,
             notes_panel_width: 320,
@@ -3608,6 +3633,11 @@ mod tests {
         assert_eq!(loaded.diff_view_mode, "split");
         assert_eq!(loaded.github_section_collapsed.get("issues"), Some(&true));
         assert_eq!(loaded.github_section_collapsed.get("prs"), Some(&false));
+        assert!(loaded.outline_panel_visible);
+        assert!(!loaded.references_panel_visible);
+        assert!(!loaded.ai_chat_panel_visible);
+        assert!(loaded.ai_triage_panel_visible);
+        assert_eq!(loaded.file_browser_view_mode, "tree");
     }
 
     /// A prefs file written before the field existed must still load, with the
@@ -3616,6 +3646,54 @@ mod tests {
     fn ui_prefs_without_github_section_collapsed_defaults_to_empty() {
         let loaded: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
         assert!(loaded.github_section_collapsed.is_empty());
+    }
+
+    /// Every key the frontend puts in the `save_ui_prefs` payload must come
+    /// back out of `load_ui_prefs`. Serde drops unknown keys silently, so a
+    /// field the frontend sends and the struct does not declare is discarded
+    /// without an error anywhere: the panel simply never survives a restart.
+    /// These five were in exactly that state.
+    #[test]
+    fn ui_prefs_keeps_every_panel_field_the_frontend_sends() {
+        let sent = r#"{
+            "outline_panel_visible": true,
+            "references_panel_visible": true,
+            "ai_triage_panel_visible": true,
+            "ai_chat_panel_visible": true,
+            "file_browser_view_mode": "tree"
+        }"#;
+        let cfg: UIPrefsConfig = serde_json::from_str(sent).unwrap();
+        let written = serde_json::to_value(&cfg).unwrap();
+
+        for key in [
+            "outline_panel_visible",
+            "references_panel_visible",
+            "ai_triage_panel_visible",
+            "ai_chat_panel_visible",
+        ] {
+            assert_eq!(
+                written.get(key),
+                Some(&serde_json::json!(true)),
+                "{key} was dropped on the way through UIPrefsConfig"
+            );
+        }
+        assert_eq!(
+            written.get("file_browser_view_mode"),
+            Some(&serde_json::json!("tree")),
+            "file_browser_view_mode was dropped on the way through UIPrefsConfig"
+        );
+    }
+
+    /// A prefs file written before these fields existed must still load, with
+    /// each panel closed and the file browser flat -- the frontend defaults.
+    #[test]
+    fn ui_prefs_panel_fields_default_when_absent() {
+        let loaded: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
+        assert!(!loaded.outline_panel_visible);
+        assert!(!loaded.references_panel_visible);
+        assert!(!loaded.ai_triage_panel_visible);
+        assert!(!loaded.ai_chat_panel_visible);
+        assert_eq!(loaded.file_browser_view_mode, "flat");
     }
 
     #[test]
