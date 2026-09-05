@@ -7,7 +7,7 @@ use std::sync::Arc;
 #[cfg(feature = "desktop")]
 use tauri::State;
 
-use crate::git_cli::{finish_failed_git_operation_after_abort, git_cmd, porcelain_has_conflict};
+use crate::git_cli::{finish_failed_git_operation_after_abort, git_cmd};
 use crate::git_reads::git_reads;
 use crate::state::{AppState, GitCache};
 
@@ -295,20 +295,10 @@ pub(crate) fn get_repo_info_impl(path: &str) -> RepoInfo {
     // Read branch from .git/HEAD (no subprocess)
     let branch = read_branch_from_head(&repo_path).unwrap_or_else(|| "unknown".to_string());
 
-    // Get status
-    let status = git_cmd(&repo_path)
-        .args(["status", "--porcelain"])
-        .run_silent()
-        .map(|o| {
-            if o.stdout.is_empty() {
-                "clean".to_string()
-            } else if porcelain_has_conflict(&o.stdout) {
-                "conflict".to_string()
-            } else {
-                "dirty".to_string()
-            }
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    // Status comes from the same porcelain-v2 read the git panel uses, through
+    // the GitReads port — one status source per repo instead of this badge
+    // forking its own `git status --porcelain` beside the panel's.
+    let status = git_reads().status_counts(&repo_path).status;
 
     let name = repo_path
         .file_name()
@@ -1035,7 +1025,7 @@ pub(crate) async fn get_file_diff(
                 {
                     Ok(_) => false,
                     Err(crate::git_cli::GitError::NonZeroExit { .. }) => true,
-                    Err(crate::git_cli::GitError::SpawnFailed(e)) => {
+                    Err(e) => {
                         return Err(format!("Failed to check file tracking status: {e}"));
                     }
                 }
@@ -2002,15 +1992,29 @@ pub(crate) struct GitPanelContext {
 /// CLI status counts via `git status --porcelain=v2` (staged/changed/conflict).
 /// Untracked entries count toward `changed` (matches the panel's prior behavior).
 pub(crate) fn status_counts_cli(path: &Path) -> crate::git_reads::StatusCounts {
-    let porcelain = git_cmd(path)
+    let Some(out) = git_cmd(path)
         // `--untracked-files=all` recurses untracked directories so the badge
         // count matches the per-file expansion in get_working_tree_status (a
         // collapsed `? dir/` would otherwise count as 1 while the panel lists N).
         .args(["status", "--porcelain=v2", "--untracked-files=all"])
         .run_silent()
-        .map(|o| o.stdout)
-        .unwrap_or_default();
+    else {
+        // An unreadable repo is not a clean one. Reporting "clean" here is a
+        // silent failure the sidebar renders as a green tick, and it is the
+        // verdict `get_repo_info` shows too.
+        return crate::git_reads::StatusCounts {
+            status: "unknown".to_string(),
+            staged: 0,
+            changed: 0,
+        };
+    };
+    status_counts_from_porcelain_v2(&out.stdout)
+}
 
+/// Fold `status --porcelain=v2` output into the staged/changed counts and the
+/// clean/dirty/conflict verdict. The single place those semantics are defined:
+/// the repo badge, the git panel and the CLI fallback all read it from here.
+fn status_counts_from_porcelain_v2(porcelain: &str) -> crate::git_reads::StatusCounts {
     let mut staged = 0u32;
     let mut changed = 0u32;
     let mut has_conflict = false;
@@ -4368,6 +4372,52 @@ mod tests {
             info.status, "dirty",
             "an untracked file named UUID.md is not a conflict"
         );
+    }
+
+    /// The repo badge must not fork a `git status` of its own — it reads the
+    /// same porcelain-v2 verdict the git panel does, through the GitReads port
+    /// (gix in the default config, so no subprocess at all).
+    #[test]
+    fn repo_info_status_forks_no_git_of_its_own() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("untracked.txt"), "u").expect("write untracked");
+
+        let before = crate::git_cli::git_cmd_forks(&path);
+        let info = get_repo_info_impl(&path.to_string_lossy());
+        let forked = crate::git_cli::git_cmd_forks(&path) - before;
+
+        assert_eq!(info.status, "dirty");
+        assert_eq!(
+            forked, 0,
+            "repo_info must reuse the shared status read, not fork its own"
+        );
+    }
+
+    /// The badge and the panel must never disagree: one read, one verdict.
+    #[test]
+    fn repo_info_status_matches_the_git_panel_verdict() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        for expected in ["clean", "dirty"] {
+            if expected == "dirty" {
+                std::fs::write(path.join("untracked.txt"), "u").expect("write untracked");
+            }
+            let info = get_repo_info_impl(&path.to_string_lossy());
+            assert_eq!(info.status, expected);
+            assert_eq!(
+                info.status,
+                git_reads().status_counts(&path).status,
+                "badge and panel must share the verdict"
+            );
+        }
+    }
+
+    /// A repo git cannot read is "unknown", never "clean" — a green tick on an
+    /// unreadable repo is a silent failure.
+    #[test]
+    fn status_counts_cli_reports_unknown_when_the_repo_cannot_be_read() {
+        let counts = status_counts_cli(Path::new("/nonexistent/repo/xyz"));
+        assert_eq!(counts.status, "unknown");
+        assert_eq!((counts.staged, counts.changed), (0, 0));
     }
 
     #[test]

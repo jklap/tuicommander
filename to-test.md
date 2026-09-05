@@ -1609,3 +1609,15 @@ on a socket the peer never answers.
   on, not sit silent forever.
 - [ ] With the network still down, disable GitHub polling in Settings. It must
   stop immediately, not after the in-flight request gives up.
+
+## Git status and index.lock ownership (story 673-19fa, Rust — needs `make dev` restart)
+
+The sidebar dirty badge now reads the gix porcelain-v2 counts, and the stale
+`index.lock` sweep asks `lsof` who owns the lock before trusting the age rule.
+
+- [ ] The sidebar repo badge still shows clean / dirty / conflict correctly:
+  edit a file, stage it, create a merge conflict, then clean up. Each state must
+  match what `git status` reports.
+- [ ] Start a long `git add` or `git stash` in a large repo from a TUIC terminal
+  and leave it running past 30 s. TUIC must NOT delete that repo's
+  `.git/index.lock` while the command still holds it.
