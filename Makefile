@@ -85,7 +85,7 @@ check:
 	@bash -o pipefail -c '$(RTK) pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
 	@bash -o pipefail -c '$(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
 	@$(RTK) pnpm audit --audit-level=high && echo "  pnpm audit ✓"
-	@cd src-tauri && $(RTK_ERR) cargo audit -q --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 && echo "  cargo audit ✓"
+	@cd src-tauri && $(RTK_ERR) cargo audit -q && echo "  cargo audit ✓"
 
 # Rust coverage: cargo-llvm-cov + nextest. Terminal summary + HTML report.
 # Instrumented artifacts live in target/llvm-cov-target — the normal build

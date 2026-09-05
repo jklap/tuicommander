@@ -7,7 +7,7 @@ Four GitHub Actions workflows compile Rust:
 | [`ci.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/ci.yml) | pull request, push to `main` | clippy + `cargo nextest` + doctests on Linux, `tuic-remote` without the desktop feature, macOS and Windows builds on push |
 | [`release.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/release.yml) | version tag | the signed artifacts users install |
 | [`nightly.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/nightly.yml) | push to `main` | the rolling `nightly` release |
-| [`audit.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/audit.yml) | Monday 09:00 UTC | `cargo install cargo-audit`, then the advisory scan |
+| [`audit.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/audit.yml) | Monday 09:00 UTC | nothing — a prebuilt `cargo-audit` runs the advisory scan; accepted advisories live in `src-tauri/.cargo/audit.toml` |
 
 ## The Rust toolchain is pinned
 
