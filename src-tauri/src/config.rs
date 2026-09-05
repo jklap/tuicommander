@@ -1947,6 +1947,93 @@ where
     Ok(effects)
 }
 
+/// Set `value` at a dotted `path` inside `doc`, requiring every segment to already
+/// exist.
+///
+/// Missing keys are an error rather than being created: `AppConfig` does not
+/// `deny_unknown_fields`, so a misspelled path would be dropped by serde on the way
+/// back and the patch would report success while changing nothing. A created key and a
+/// typo are indistinguishable here, so neither is allowed.
+fn set_json_path(
+    doc: &mut serde_json::Value,
+    path: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("Config patch path must not be empty".to_string());
+    }
+    let mut segments: Vec<&str> = path.split('.').collect();
+    if segments.iter().any(|segment| segment.is_empty()) {
+        return Err(format!("Config patch path `{path}` has an empty segment"));
+    }
+    let leaf = segments
+        .pop()
+        .expect("split on a non-empty string yields at least one segment");
+
+    let mut cursor = doc;
+    for segment in segments {
+        let map = cursor.as_object_mut().ok_or_else(|| {
+            format!("Config patch path `{path}` descends into a non-object at `{segment}`")
+        })?;
+        cursor = map
+            .get_mut(segment)
+            .ok_or_else(|| format!("Unknown config patch path `{path}`: no field `{segment}`"))?;
+    }
+
+    let map = cursor.as_object_mut().ok_or_else(|| {
+        format!("Config patch path `{path}` descends into a non-object at `{leaf}`")
+    })?;
+    if !map.contains_key(leaf) {
+        return Err(format!(
+            "Unknown config patch path `{path}`: no field `{leaf}`"
+        ));
+    }
+    map.insert(leaf.to_string(), value);
+    Ok(())
+}
+
+/// Apply a single value at a dotted `path` (`"font_size"`, `"services.server.port"`).
+///
+/// Deliberately delegates to `commit_config_change` instead of touching the file
+/// itself: that keeps the patch on the SAME `CONFIG_WRITE_LOCK`, the SAME advisory file
+/// lock and the SAME delta merge as every whole-object save. A second write path would
+/// have to re-derive all three correctly, and the whole point of a per-key patch is to
+/// narrow the delta, not to bypass the locking. Because the mutation touches exactly
+/// one path, the delta `commit_config_change` computes IS that one key — so a
+/// concurrent whole-object save in another process keeps its own fields.
+///
+/// DEFERRED (2026-09-06) — no transport exposes this yet, which is why it is
+/// `#[allow(dead_code)]`: the only callers so far are its tests. Wiring it needs four
+/// registrations, every one of them in a file held by another session at the time this
+/// landed, so none could be added without clobbering peer work:
+///
+/// 1. `src-tauri/src/lib.rs` — a `#[tauri::command] config_patch` wrapper in the
+///    `invoke_handler`. That wrapper MUST action the returned `ConfigSaveEffects`
+///    exactly as `save_config` does (`state.mcp_tools_changed.send(())` on
+///    `tools_changed`, `restart_server(...)` on `server_changed`); dropping them would
+///    make patching `services.server.port` persist without rebinding the listener.
+/// 2. `src-tauri/src/mcp_http/mod.rs` — the matching axum route (IPC/HTTP parity).
+/// 3. `src/transport.ts` — the `COMMAND_TABLE` entry.
+/// 4. `src/__tests__/transport.test.ts` — the mapping assertion.
+///
+/// Until 2-4 exist, a frontend caller would throw `No HTTP mapping for command` in
+/// browser/PWA/remote mode (`transport.ts` `mapCommandToHttp`), so `settings.ts` is
+/// deliberately NOT switched over to it — doing so would trade a working whole-object
+/// save for a per-key path that is broken on every non-desktop transport.
+#[allow(dead_code)]
+pub(crate) fn apply_config_patch(
+    state: &crate::AppState,
+    path: &str,
+    value: serde_json::Value,
+) -> Result<ConfigSaveEffects, String> {
+    commit_config_change(state, |current| {
+        let mut doc = serde_json::to_value(current)
+            .map_err(|e| format!("Could not serialize config: {e}"))?;
+        set_json_path(&mut doc, path, value.clone())?;
+        serde_json::from_value(doc).map_err(|e| format!("Invalid value for `{path}`: {e}"))
+    })
+}
+
 /// Issue a fresh remote-access session token and persist it.
 ///
 /// Shared by the desktop IPC command and `POST /auth/rotate-session-token`, which each
@@ -5574,6 +5661,39 @@ mod tests {
                 })
                 .expect("commit child config delta");
             }
+            // One child patches a single key, the other saves a whole document — the
+            // exact pairing `save_config` and a future `config_patch` produce in the
+            // field when a debug and a release build share one config directory.
+            "patch-font" | "whole-save-collapse" => {
+                let cached = load_app_config();
+                let state = crate::state::tests_support::make_test_app_state();
+                *state.config.write() = cached;
+
+                std::fs::write(config_dir().join(format!("{role}.ready")), b"ready")
+                    .expect("write child ready marker");
+                let release = config_dir().join("patch.release");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !release.exists() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "timed out waiting for patch test release"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+
+                if role == "patch-font" {
+                    apply_config_patch(&state, "font_size", serde_json::json!(18))
+                        .expect("child config patch");
+                } else {
+                    // Byte-for-byte what `save_config` does with a whole AppConfig.
+                    commit_config_change(&state, |current| {
+                        let mut next = current.clone();
+                        next.collapse_tools = true;
+                        Ok(next)
+                    })
+                    .expect("child whole-object save");
+                }
+            }
             "repo-delta-a" | "repo-delta-b" => {
                 let path = if role == "repo-delta-a" { "/a" } else { "/b" };
                 std::fs::write(config_dir().join(format!("{role}.ready")), b"ready")
@@ -5724,6 +5844,149 @@ mod tests {
         .unwrap();
         assert_eq!(on_disk.font_size, 18, "font delta was lost");
         assert!(on_disk.collapse_tools, "collapse-tools delta was lost");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn config_patch_applies_only_the_named_key() {
+        crate::credentials::reset_test_faults();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        let before = state.config.read().clone();
+
+        apply_config_patch(&state, "font_size", serde_json::json!(21)).expect("patch font_size");
+
+        assert_eq!(state.config.read().font_size, 21);
+        let on_disk: AppConfig = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(APP_CONFIG_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(on_disk.font_size, 21);
+        assert_eq!(
+            on_disk.theme, before.theme,
+            "a per-key patch must not disturb unrelated fields"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn config_patch_applies_a_nested_key() {
+        crate::credentials::reset_test_faults();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+
+        apply_config_patch(&state, "services.server.port", serde_json::json!(9911))
+            .expect("patch nested key");
+
+        assert_eq!(state.config.read().services.server.port, 9911);
+    }
+
+    /// `AppConfig` has no `deny_unknown_fields`, so serde silently DROPS a misspelled
+    /// key: without this check a typo would report success and change nothing.
+    #[test]
+    #[serial_test::serial]
+    fn config_patch_rejects_an_unknown_path() {
+        crate::credentials::reset_test_faults();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+
+        let err = apply_config_patch(&state, "font_sizee", serde_json::json!(21))
+            .expect_err("an unknown path must be rejected, not silently dropped");
+        assert!(err.contains("font_sizee"), "unhelpful error: {err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn config_patch_rejects_a_type_mismatch() {
+        crate::credentials::reset_test_faults();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+
+        apply_config_patch(&state, "font_size", serde_json::json!("enormous"))
+            .expect_err("a string is not a valid font_size");
+        assert_eq!(
+            state.config.read().font_size,
+            AppConfig::default().font_size,
+            "a rejected patch must leave the cached config untouched"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn config_patch_rejects_a_malformed_path() {
+        crate::credentials::reset_test_faults();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+
+        apply_config_patch(&state, "", serde_json::json!(1)).expect_err("empty path");
+        apply_config_patch(&state, "services..port", serde_json::json!(1))
+            .expect_err("empty segment");
+        apply_config_patch(&state, "font_size.nested", serde_json::json!(1))
+            .expect_err("cannot descend into a scalar");
+    }
+
+    /// The story's core claim: a per-key patch and a whole-object save running in two
+    /// SEPARATE OS PROCESSES must both survive. Two threads would prove nothing — they
+    /// share `CONFIG_WRITE_LOCK`, so the second always sees the first's write. Only a
+    /// real second process contends for the advisory file lock, which is tied to the
+    /// open file description rather than the process.
+    #[test]
+    #[serial_test::serial]
+    fn config_patch_and_whole_object_save_compose_across_two_processes() {
+        crate::credentials::reset_test_faults();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let seed = AppConfig::default();
+        std::fs::write(
+            dir.path().join(APP_CONFIG_FILE),
+            serde_json::to_string_pretty(&seed).unwrap(),
+        )
+        .unwrap();
+
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut children = ["patch-font", "whole-save-collapse"].map(|role| {
+            std::process::Command::new(&exe)
+                .arg("two_process_child")
+                .env("TUIC_CONFIG_TEST_ROLE", role)
+                .env("TUIC_CONFIG_TEST_DIR", dir.path())
+                .spawn()
+                .unwrap_or_else(|e| panic!("spawn {role} child: {e}"))
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        for role in ["patch-font", "whole-save-collapse"] {
+            let ready = dir.path().join(format!("{role}.ready"));
+            while !ready.exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out waiting for {role} child"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        // Both children now hold the SAME stale cache. Releasing them together is what
+        // makes the two writes overlap.
+        std::fs::write(dir.path().join("patch.release"), b"release").unwrap();
+
+        for child in &mut children {
+            let status = child.wait().expect("wait for patch child");
+            assert!(status.success(), "patch child failed: {status:?}");
+        }
+
+        let on_disk: AppConfig = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(APP_CONFIG_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(on_disk.font_size, 18, "the per-key patch was lost");
+        assert!(
+            on_disk.collapse_tools,
+            "the whole-object save was lost by the concurrent patch"
+        );
     }
 
     #[test]
