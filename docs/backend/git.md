@@ -62,12 +62,29 @@ it a git call waits forever, which is right for the local reads that dominate th
 module and wrong for anything that can block on something outside this machine —
 a network `fetch`, or a user-supplied setup script.
 
-The deadline path pipes stdout/stderr and drains them on two reader threads, so a
-child that fills a pipe buffer cannot deadlock against our own wait. On timeout the
-child is killed **and reaped** (no zombie), but the reader threads are deliberately
-not joined: a killed git can leave a grandchild (credential helper, `core.askpass`)
-holding the write end open, and joining would reintroduce the unbounded wait the
-deadline exists to prevent.
+The deadline path pipes stdout/stderr, nulls stdin (matching `Command::output()`, so a
+child cannot park on a read of the app's own stdin) and drains the pipes on two reader
+threads, so a child that fills a pipe buffer cannot deadlock against our own wait. On
+timeout the child is killed **and reaped** (no zombie), but the reader threads are
+deliberately not joined: a killed git can leave a grandchild (credential helper,
+`core.askpass`) holding the write end open, and joining would reintroduce the unbounded
+wait the deadline exists to prevent.
+
+Two deadlines are in force:
+
+| Constant | Value | Applies to |
+|----------|-------|------------|
+| `git_cli::FETCH_TIMEOUT` | 180s | Every `git fetch`: `conflict_assist.rs` (base refspec + PR head), `github.rs` `local_pr_diff` (base, `refs/pull/N/head`, head fallback), `worktree.rs` `fetch_if_remote` |
+| `worktree::SCRIPT_TIMEOUT` | 900s | The user's worktree setup and archive/delete scripts, via `run_shell_script` |
+
+Both are deliberately generous. A fetch is the only git call that waits on something
+off this machine (`GIT_TERMINAL_PROMPT=0` stops git's own prompt but not a blocking
+`credential.helper`, a half-open TCP connection or a wedged mount); 180s clears a
+dual-stack connect timeout, so an unreachable host still reports git's own error rather
+than ours, and leaves room for a large branch delta on a slow link. The script deadline
+is not there to bound how long a build may take — 900s sits above any plausible
+cold-cache install-and-build — but to end the script that will never finish. Killing
+work that would have succeeded is a worse outcome than waiting for it.
 
 ### Stale `index.lock` reclaim
 

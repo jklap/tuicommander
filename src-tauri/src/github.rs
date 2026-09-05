@@ -3332,6 +3332,7 @@ fn local_pr_diff(repo_path: &str, pr_number: i64, refs: &PrRefs) -> Result<Strin
     let mut fetch_errors = Vec::new();
     let base_refspec = format!("+refs/heads/{}:{base_remote_ref}", refs.base_ref);
     if let Err(e) = crate::git_cli::git_cmd(repo)
+        .timeout(crate::git_cli::FETCH_TIMEOUT)
         .args(["fetch", "--no-tags", "origin", &base_refspec])
         .run()
     {
@@ -3340,12 +3341,14 @@ fn local_pr_diff(repo_path: &str, pr_number: i64, refs: &PrRefs) -> Result<Strin
 
     let pull_refspec = format!("+refs/pull/{pr_number}/head:{head_remote_ref}");
     let mut fetched_head = crate::git_cli::git_cmd(repo)
+        .timeout(crate::git_cli::FETCH_TIMEOUT)
         .args(["fetch", "--no-tags", "origin", &pull_refspec])
         .run()
         .is_ok();
     if !fetched_head && !refs.head_from_fork {
         let head_refspec = format!("+refs/heads/{}:{head_remote_ref}", refs.head_ref);
         match crate::git_cli::git_cmd(repo)
+            .timeout(crate::git_cli::FETCH_TIMEOUT)
             .args(["fetch", "--no-tags", "origin", &head_refspec])
             .run()
         {

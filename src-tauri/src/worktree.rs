@@ -1,9 +1,10 @@
-use crate::git_cli::{finish_failed_git_operation_after_abort, git_cmd};
+use crate::git_cli::{FETCH_TIMEOUT, finish_failed_git_operation_after_abort, git_cmd};
 use crate::state::{AppState, WorktreeInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 #[cfg(feature = "desktop")]
 use tauri::State;
 
@@ -1407,6 +1408,7 @@ pub(crate) fn fetch_if_remote(repo_path: &str, ref_name: &str) -> Result<(), Str
         let branch = &ref_name[slash_pos + 1..];
         if !remote.is_empty() && !branch.is_empty() {
             git_cmd(Path::new(repo_path))
+                .timeout(FETCH_TIMEOUT)
                 .args(["fetch", remote, branch])
                 .run()
                 .map_err(|e| format!("Failed to fetch {ref_name}: {e}"))?;
@@ -2115,24 +2117,49 @@ pub(crate) fn archive_worktree(
     Ok(archive_dest.to_string_lossy().to_string())
 }
 
-/// Run a shell script in a directory and return an error if it exits non-zero.
+/// Deadline for a user-supplied worktree script.
 ///
-/// Used by archive/delete operations to run cleanup scripts before the operation.
-fn run_script_in_dir(script: &str, cwd: &Path) -> Result<(), String> {
+/// These are the user's own scripts — `pnpm install`, `cargo build`, a cleanup
+/// hook — so the deadline is not there to bound how long a build may take. It is
+/// there for the script that will never finish: one reading a stdin it can never
+/// be given (`apply_no_window` leaves no window to type into, which is what
+/// issue #7 reported), or waiting on a lock nobody will release. Fifteen minutes
+/// sits above any plausible cold-cache install-and-build, so no real setup dies
+/// on it.
+const SCRIPT_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// Run `script` through the platform shell in `cwd`, killing it at `timeout`.
+///
+/// Both callers pass [`SCRIPT_TIMEOUT`]; the parameter is what lets a test drive
+/// the kill path without waiting a quarter of an hour for it.
+fn run_shell_script(
+    script: &str,
+    cwd: &Path,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
     let (shell, flag) = if cfg!(target_os = "windows") {
         ("cmd", "/C")
     } else {
         ("sh", "-c")
     };
 
-    // TODO: add a timeout — a hung script with CREATE_NO_WINDOW has no visible
-    // window, so users can't see or interrupt it (issue #7 follow-up).
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(flag).arg(script).current_dir(cwd);
     crate::cli::apply_no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to execute script: {e}"))?;
+    crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|e| match e {
+        crate::git_cli::GitError::TimedOut { after } => format!(
+            "Script timed out after {:.0}s and was killed",
+            after.as_secs_f64()
+        ),
+        e => format!("Failed to execute script: {e}"),
+    })
+}
+
+/// Run a shell script in a directory and return an error if it exits non-zero.
+///
+/// Used by archive/delete operations to run cleanup scripts before the operation.
+fn run_script_in_dir(script: &str, cwd: &Path) -> Result<(), String> {
+    let output = run_shell_script(script, cwd, SCRIPT_TIMEOUT)?;
 
     let exit_code = output.status.code().unwrap_or(-1);
     if exit_code != 0 {
@@ -2156,20 +2183,7 @@ pub(crate) fn run_setup_script(script: String, cwd: String) -> Result<serde_json
         return Err(format!("Working directory does not exist: {cwd}"));
     }
 
-    let (shell, flag) = if cfg!(target_os = "windows") {
-        ("cmd", "/C")
-    } else {
-        ("sh", "-c")
-    };
-
-    // TODO: add a timeout — a hung script with CREATE_NO_WINDOW has no visible
-    // window, so users can't see or interrupt it (issue #7 follow-up).
-    let mut cmd = std::process::Command::new(shell);
-    cmd.arg(flag).arg(&script).current_dir(cwd_path);
-    crate::cli::apply_no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to execute script: {e}"))?;
+    let output = run_shell_script(&script, cwd_path, SCRIPT_TIMEOUT)?;
 
     Ok(serde_json::json!({
         "exit_code": output.status.code().unwrap_or(-1),
@@ -3728,6 +3742,40 @@ branch refs/heads/feat
         assert_eq!(result["stderr"].as_str().unwrap(), "");
     }
 
+    /// A setup script that never finishes must be killed at its deadline, and
+    /// the caller must be told so rather than getting a plausible-looking
+    /// exit code. `sleep` stands in for the real cases: a script blocked on a
+    /// stdin it can never be given, or on a lock nobody releases.
+    #[cfg(unix)]
+    #[test]
+    fn run_shell_script_gives_up_at_the_deadline() {
+        let dir = TempDir::new().expect("temp dir");
+
+        let started = std::time::Instant::now();
+        let err = run_shell_script("sleep 30", dir.path(), Duration::from_millis(300))
+            .expect_err("a script that never finishes must fail");
+        let waited = started.elapsed();
+
+        assert!(
+            err.contains("timed out"),
+            "expected a timeout error, got: {err}"
+        );
+        assert!(
+            waited < Duration::from_secs(5),
+            "must not wait for the script; waited {waited:?}"
+        );
+    }
+
+    /// The control: a script that finishes inside its deadline is not truncated.
+    #[test]
+    fn run_shell_script_keeps_output_of_a_script_that_finishes_in_time() {
+        let dir = TempDir::new().expect("temp dir");
+
+        let out = run_shell_script("echo alive", dir.path(), Duration::from_secs(30))
+            .expect("a fast script must succeed");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "alive");
+    }
+
     #[test]
     fn run_setup_script_failure() {
         let dir = TempDir::new().expect("temp dir");
@@ -3976,6 +4024,71 @@ branch refs/heads/feat
             "slashed local branch should be a no-op, not a failed fetch: {:?}",
             result
         );
+    }
+
+    /// A fetch that never answers must be killed at its deadline, not waited on.
+    ///
+    /// The remote is an `ext::` transport helper that only sleeps, so the hang
+    /// is deterministic and needs no network — and, like a real credential
+    /// helper, the sleeper is a grandchild holding git's pipes open, which is
+    /// the case `output_with_deadline` refuses to join on.
+    ///
+    /// Unix only: the helper is `sleep`.
+    #[cfg(unix)]
+    #[test]
+    fn fetch_if_remote_gives_up_at_the_deadline() {
+        let repo = setup_test_repo();
+        let path = repo.path().to_string_lossy().to_string();
+
+        git_cmd(repo.path())
+            .args(["remote", "add", "origin", "ext::sleep 45"])
+            .run()
+            .expect("add the hanging remote");
+        // git refuses the ext transport unless the repo opts in.
+        git_cmd(repo.path())
+            .args(["config", "protocol.ext.allow", "always"])
+            .run()
+            .expect("allow the ext transport");
+        // fetch_if_remote only fetches a ref that resolves under refs/remotes/.
+        git_cmd(repo.path())
+            .args(["update-ref", "refs/remotes/origin/main", "HEAD"])
+            .run()
+            .expect("create the remote-tracking ref");
+
+        // Off-thread behind a hard receive deadline: an unwired timeout means
+        // the call never returns, and this must report that rather than hang
+        // the suite on it.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(fetch_if_remote(&path, "origin/main"));
+        });
+        let result = rx
+            .recv_timeout(FETCH_TIMEOUT + std::time::Duration::from_secs(30))
+            .expect("fetch_if_remote must return — its deadline is not wired");
+
+        let err = result.expect_err("a fetch that never answers must fail");
+        assert!(
+            err.contains("timed out"),
+            "expected a timeout error, got: {err}"
+        );
+
+        // The killed git must be reaped, not left as a zombie of this process.
+        // nextest gives each test its own process, so every child here is ours.
+        let ps = Command::new("ps")
+            .args(["-o", "ppid=,stat=", "-ax"])
+            .output()
+            .expect("ps");
+        let table = String::from_utf8_lossy(&ps.stdout);
+        let mine = std::process::id().to_string();
+        let zombies = table
+            .lines()
+            .filter(|line| {
+                let mut fields = line.split_whitespace();
+                fields.next() == Some(mine.as_str())
+                    && fields.next().is_some_and(|stat| stat.starts_with('Z'))
+            })
+            .count();
+        assert_eq!(zombies, 0, "the timed-out git was left as a zombie child");
     }
 
     /// End-to-end companion to `test_fetch_local_branch_with_slash_is_noop`:
