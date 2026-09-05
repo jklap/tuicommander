@@ -1,4 +1,4 @@
-import { createEffect, onCleanup } from "solid-js";
+import { createEffect, createMemo, onCleanup, untrack } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
 import { pluginRegistry } from "../plugins/pluginRegistry";
@@ -284,9 +284,17 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
  * This 30s fallback catches cold starts and edge cases.
  */
 export function useAgentPolling(): void {
+	// Tracked as a boolean, not the raw id list: the effect below only needs to
+	// know "are there any terminals at all", but `terminalsStore.getIds()` is a
+	// fresh array on every add/remove. Depending on it directly re-ran this
+	// whole effect (tearing down and restarting both timers) on every tab
+	// add/remove, which reset the 30s discovery poll's countdown on every
+	// churn — during rapid tab churn it could starve indefinitely. A memo
+	// only notifies downstream when the boolean actually flips.
+	const hasTerminals = createMemo(() => terminalsStore.getIds().length > 0);
+
 	createEffect(() => {
-		const allIds = terminalsStore.getIds();
-		if (allIds.length === 0) return;
+		if (!hasTerminals()) return;
 
 		const pollAll = async () => {
 			const currentIds = terminalsStore.getIds();
@@ -304,17 +312,46 @@ export function useAgentPolling(): void {
 		const timer = setInterval(() => {
 			pollAll().catch((err) => appLogger.debug("app", "[AgentPoll] poll failed", err));
 		}, POLL_INTERVAL_MS);
-		// Lifecycle must converge quickly enough for the Activity Dashboard to
-		// avoid presenting an idle composer as a completed task. It is not used
-		// to discover agents, so the slower foreground-process poll remains intact.
-		void syncAgentLifecycleStates();
-		const lifecycleTimer = setInterval(() => {
-			void syncAgentLifecycleStates();
-		}, LIFECYCLE_POLL_INTERVAL_MS);
+
+		// Lifecycle must converge quickly enough for the Activity Dashboard (and
+		// tab awaiting/busy badges) to avoid presenting stale state — but a
+		// hidden/backgrounded document has nothing to converge for. No backend
+		// event pushes SessionState on desktop today (Terminal.tsx's
+		// onStateChange is a browser-mode-only WS frame; Tauri's subscribePty
+		// listens only for activity/exit), so this snapshot poll is the sole
+		// source — gate it on visibility instead, matching the same
+		// `visibilitychange` pattern already used for the GitHub poller
+		// (stores/github.ts). Catches up with one immediate sync on regain.
+		let lifecycleTimer: ReturnType<typeof setInterval> | null = null;
+		const startLifecyclePolling = () => {
+			if (lifecycleTimer !== null) return;
+			// untrack: syncAgentLifecycleStates() synchronously reads
+			// terminalsStore.getIds() before its first await (list_active_sessions
+			// invoke). Called un-tracked, that raw read would subscribe THIS
+			// effect directly to the id-list signal — bypassing the `hasTerminals`
+			// memo above and reintroducing the exact restart-on-churn bug this
+			// effect exists to avoid (proven via a failing test without this).
+			untrack(() => void syncAgentLifecycleStates());
+			lifecycleTimer = setInterval(() => {
+				void syncAgentLifecycleStates();
+			}, LIFECYCLE_POLL_INTERVAL_MS);
+		};
+		const stopLifecyclePolling = () => {
+			if (lifecycleTimer === null) return;
+			clearInterval(lifecycleTimer);
+			lifecycleTimer = null;
+		};
+		const onVisibilityChange = () => {
+			if (document.visibilityState === "hidden") stopLifecyclePolling();
+			else startLifecyclePolling();
+		};
+		if (document.visibilityState !== "hidden") startLifecyclePolling();
+		document.addEventListener("visibilitychange", onVisibilityChange);
 
 		onCleanup(() => {
 			clearInterval(timer);
-			clearInterval(lifecycleTimer);
+			stopLifecyclePolling();
+			document.removeEventListener("visibilitychange", onVisibilityChange);
 		});
 	});
 }
