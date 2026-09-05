@@ -52,6 +52,71 @@ export function orderedThenRemainder(
 }
 
 /**
+ * The one display order that spans every tab kind.
+ *
+ * A per-store `_order` cannot express it: a drag between a terminal and a diff moves
+ * an id across store boundaries, and terminals keep their own order in
+ * repositoriesStore (per repo, per branch). So the stores mirror their adds and
+ * removes here, and the tab bar reads this list in the ordering modes that mix kinds.
+ * Lives in tabManager because every tab store already imports it and it imports none.
+ */
+function createTabOrderingStore() {
+	const [state, setState] = createStore<{ order: string[] }>({ order: [] });
+
+	return {
+		state,
+
+		/** Track a newly opened tab, at the end or right after `afterId`. */
+		insert(id: string, afterId?: string): void {
+			if (state.order.includes(id)) return;
+			setState(
+				produce((s) => {
+					if (afterId) {
+						const idx = s.order.indexOf(afterId);
+						if (idx !== -1) {
+							s.order.splice(idx + 1, 0, id);
+							return;
+						}
+					}
+					s.order.push(id);
+				}),
+			);
+		},
+
+		/** Forget a closed tab. No-op for an unknown id. */
+		remove(id: string): void {
+			setState(
+				produce((s) => {
+					const idx = s.order.indexOf(id);
+					if (idx !== -1) s.order.splice(idx, 1);
+				}),
+			);
+		},
+
+		/** Move sourceId immediately before or after targetId. No-op on bad IDs. */
+		reorder(sourceId: string, targetId: string, side: "before" | "after"): void {
+			if (sourceId === targetId) return;
+			setState(
+				produce((s) => {
+					reorderIds(s.order, sourceId, targetId, side);
+				}),
+			);
+		},
+
+		/** The visible ids, in user order, with never-dragged ones appended. */
+		getOrdered(visibleIds: Set<string>): string[] {
+			return orderedThenRemainder(state.order, visibleIds, (id) => visibleIds.has(id));
+		},
+
+		clear(): void {
+			setState("order", []);
+		},
+	};
+}
+
+export const tabOrderingStore = createTabOrderingStore();
+
+/**
  * Internal store state shape for all tab managers.
  */
 export interface TabStoreState<T extends BaseTab> {
@@ -129,6 +194,7 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 			setState("tabs", tab.id, tab);
 			setState("activeId", tab.id);
 			setState("_order", (o) => [...o, tab.id]);
+			tabOrderingStore.insert(tab.id);
 			activatePaneExclusively(storeName);
 			onTabAdded?.(tab.id, storeName);
 			return tab.id;
@@ -138,6 +204,7 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 		_addTabBackground(tab: T): string {
 			setState("tabs", tab.id, tab);
 			setState("_order", (o) => [...o, tab.id]);
+			tabOrderingStore.insert(tab.id);
 			return tab.id;
 		},
 
@@ -153,6 +220,7 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 		 *  auto-promoting an arbitrary remaining tab could activate one hidden from the
 		 *  tab bar — a ghost full-screen panel with no visible tab. */
 		remove(id: string): void {
+			tabOrderingStore.remove(id);
 			setState(
 				produce((s) => {
 					delete s.tabs[id];
@@ -174,6 +242,7 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 		},
 
 		clearAll(): void {
+			for (const id of Object.keys(state.tabs)) tabOrderingStore.remove(id);
 			setState({ tabs: {} as Record<string, T>, activeId: null, counter: state.counter, _order: [] });
 		},
 
@@ -234,12 +303,12 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 
 		/** Clear tabs matching a predicate */
 		_clearWhere(predicate: (tab: T) => boolean): void {
+			const idsToRemove = Object.values(state.tabs)
+				.filter((tab) => predicate(tab as T))
+				.map((tab) => (tab as T).id);
+			for (const id of idsToRemove) tabOrderingStore.remove(id);
 			setState(
 				produce((s) => {
-					const idsToRemove = Object.values(s.tabs)
-						.filter((tab) => predicate(tab as T))
-						.map((tab) => (tab as T).id);
-
 					for (const id of idsToRemove) {
 						delete s.tabs[id];
 					}
