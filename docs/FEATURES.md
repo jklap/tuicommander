@@ -1195,6 +1195,13 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 
 ## 11. Settings
 
+### 11.0 Search
+- Search box at the top of the tab list; filters every setting across every tab at once
+- Each result shows the setting name and its `Tab › Section` trail; selecting one opens that tab and scrolls to the field
+- Repository tabs are not indexed — a global box cannot know which repository a query means
+- Settings the current build does not render (Dictation in browser mode, for example) report no match instead of opening an empty tab
+- The index is committed, not scanned from the DOM: only one tab mounts at a time, and mounting the rest would fire CLI status, mdkb status, GitHub and audio probes on every keystroke. A drift test re-derives it from the sources, so a setting added without indexing fails CI
+
 ### 11.1 General
 - Language, Default IDE, Shell
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
