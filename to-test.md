@@ -495,6 +495,34 @@ cannot be checked from a test.
   control stays visible so the docs that already promise it stay true. Say if
   you would rather it were hidden until a second catalogue lands.
 
+## PTY chunk-path refactor (story `668-59be`, **Rust — needs `make dev` restart**)
+
+Behaviour must be IDENTICAL to before; five characterization tests assert that,
+so these checks are looking for what a test cannot see on a live agent.
+
+- [ ] On a live Claude tab and a live grok tab: the state badge still moves
+  working → idle → awaiting as it did. The chunk path was reordered around the
+  chrome cutoff and the SilenceState locks; the tests cover the events, not the
+  feel.
+- [ ] A slash menu (`/` in Claude Code) still opens and is detected. This is the
+  case that killed the proposed optimisation — the menu renders BELOW the input
+  box, so it is the first thing to break if the cutoff order is ever touched
+  again (`DEFERRED (2026-09-06)` at `pty.rs:4911`).
+- [ ] A choice dialog and an Ink question footer still badge the tab as awaiting,
+  and the badge still CLEARS afterwards.
+- [ ] **Observability trade — check this deliberately.** The DECRST-leak
+  `error!` and the "Anomalous ANSI sequence" `warn!` no longer appear unless
+  Diagnostics is on. Run `curl -X POST localhost:9876/diagnostics -d
+  '{"enabled":true}' -H 'content-type: application/json'`, then confirm they
+  reappear in `GET /logs`. If either turns out to be load-bearing for an open
+  bug while OFF, revert the three `&& crate::cpu_watchdog::diagnostic_mode()`
+  guards at `pty.rs:5025`, `pty.rs:8014`, `pty.rs:8042` — they are isolated.
+- [ ] Resize a tab mid-turn on an agent that was busy: the resize grace still
+  suppresses the false idle. `on_resize` and the `is_resize_grace` read now run
+  BEFORE `stamp_last_output_now` rather than after (`pty.rs:5741-5770`). Both
+  touch only `SilenceState.last_resize_at`, but that machinery has a long
+  fix/revert history, which is why it is here and not left to the suite.
+
 ## Still needs a human
 
 Every item here failed the ladder for a stated reason — real hardware, a second
