@@ -1,11 +1,14 @@
 // --- Phase 1.3 shared grid renderer (single paint implementation) ---
 //
-// THE one canvas2d grid paint path, used by BOTH the main thread
-// (CanvasTerminal base canvas) and the render worker (OffscreenCanvas). The
-// per-cell fillText/box-drawing logic was moved here verbatim from
-// CanvasTerminal so there is exactly one implementation — parity is by
-// construction, not by test. The 2D context is injected, so the same code
-// drives CanvasRenderingContext2D and OffscreenCanvasRenderingContext2D.
+// THE one canvas2d grid paint path. The per-cell fillText/box-drawing logic
+// was moved here verbatim from CanvasTerminal so there is exactly one
+// implementation — parity is by construction, not by test.
+//
+// It runs on the MAIN THREAD. There is no render worker: `new Worker` does not
+// appear anywhere in src/. The injected 2D context is still typed as the union
+// CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D because an
+// OffscreenCanvas is also usable as a main-thread backing buffer (see
+// CommitGraph.tsx), not because this code has ever been posted to a worker.
 //
 // NOTE: this module paints ONLY the base grid (clear + rows). Cursor,
 // selection, search, links, scrollbar and suggest overlays stay on the main

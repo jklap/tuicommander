@@ -10,8 +10,9 @@ import { isPerfDebug } from "./perfDebug";
 // detector reports the freshest breadcrumb when it catches a gap. A FRESH crumb
 // (small ageMs) names the culprit; a STALE crumb means the block is unmarked.
 //
-// Off-main-thread rendering is active, so canvas PAINT is offloaded — these marks
-// cover the main-thread work that remains (reactivity, git refresh, frame ack).
+// Everything runs on the main thread, canvas paint included — there is no
+// render worker. So these marks cover reactivity, git refresh, frame ack AND
+// paint; any of them can be the block a freeze breadcrumb names.
 
 interface Breadcrumb {
 	label: string;

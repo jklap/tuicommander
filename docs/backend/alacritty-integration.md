@@ -8,18 +8,36 @@ TUICommander uses `alacritty_terminal` 0.26.0 as its terminal emulation backend.
 
 ## Our patches
 
+**Scope, measured against pristine 0.26.0** (`cargo` registry copy): 22 of the crate's
+`.rs` files differ, ~2,580 diff lines. Only **10** carry a semantic change —
+`event.rs`, `grid/mod.rs`, `grid/resize.rs`, `grid/row.rs`, `grid/storage.rs`,
+`grid/tests.rs`, `term/cell.rs`, `term/color.rs`, `term/mod.rs`, `tty/unix.rs`. The
+other 12 (`event_loop.rs`, `index.rs`, `lib.rs`, `selection.rs`, `sync.rs`,
+`term/search.rs`, `thread.rs`, `tty/mod.rs`, `tty/windows/*`, `vi_mode.rs`) differ
+**only in formatting** — ~856 lines of reflow, upstream's compact style rewritten in
+default rustfmt. The cause is mechanical: `patches/alacritty_terminal` is a workspace
+member (`src-tauri/Cargo.toml`) with no `rustfmt.toml` of its own, so `cargo fmt`
+reformats the vendored crate along with our code. That noise conflicts on whitespace
+in every rebase. Adding a `rustfmt.toml` matching upstream would stop it growing.
+
 | File | Change | Why |
 |------|--------|-----|
-| `src/term/mod.rs` | `pub fn resize_reflow(size, reflow: bool)` | Disable reflow on resize. Ink/Claude Code uses CUU cursor positioning that breaks when reflow merges/splits lines. |
+| `src/term/mod.rs` | `pub fn resize_reflow(size, reflow: crate::grid::ReflowMode)` | Choose the reflow policy on resize. Ink/Claude Code uses CUU cursor positioning that breaks when reflow merges/splits screen lines. |
 | `src/term/mod.rs` | `pub fn mark_fully_damaged()` (was `fn`) | Lets us force full-frame damage directly instead of maintaining a parallel flag. |
 | `src/term/mod.rs` | Parse-side damage: `TermParseDamage` enum, `TermDamageState.parse_lines`/`parse_full`, `pub fn parse_damage()`/`reset_parse_damage()`, damage recorded in `write_at_cursor` | A SECOND, independent damage view for TUIC's PTY parse path (`TerminalGrid::process` → `ChangedRow`), read+reset separately from the render damage so the two consumers never steal each other's damage. Lets `process()` diff only changed rows instead of rebuilding+diffing the whole screen per PTY chunk. `write_at_cursor` now damages the written cell (upstream reconstructs input damage lazily at `damage()` time from cursor deltas, which left the parse consumer blind to typed text); this is at worst a safe over-damage for the render consumer. Correctness pinned by the `process_damage_matches_full_diff` differential test. |
 | `src/term/mod.rs` | `fn osc7770(&mut self, verb, payload)` | OSC 7770 TUIC protocol handler. Fires `Event::Tuic { verb, payload }` for in-band state/suggest/intent signalling. |
 | `src/term/color.rs` | `pub fn named_color_to_index(NamedColor) -> Option<u8>` | Maps named colors to xterm-256 indices. Eliminates 30-line match duplication in our serializer. |
-| `src/event.rs` | `Event::Tuic { verb, payload }` variant | Carries parsed OSC 7770 events from VTE to the application layer. |
+| `src/event.rs` | `Event::Osc133 { command, params, line }`, `Event::Osc7(String)`, `Event::Tuic { verb, payload, line }` variants | Carry parsed OSC 133 / OSC 7 / OSC 7770 events from VTE to the application layer. All three carry the grid `line` where the marker landed. |
 | `src/term/mod.rs` | `Config.alt_scrolling_history` + alt-grid history in `Term::new`/`set_options`, era reset in `swap_alt` | User-visible parity with iTerm2's optional alternate-screen scrollback, implemented with Alacritty's separate grids rather than iTerm2's shared persistent line buffer. Upstream gives the alternate grid capacity 0 (XTerm semantics), so an app printing more than a screenful (`gh run watch`, `less`, `man`) loses whatever scrolls off. The field defaults to `0`, preserving upstream behavior for consumers that do not opt in; TUICommander uses the primary cap. Each enter/exit starts a fresh alternate era, so sessions never inherit one another and no alternate lines remain logically retained after exit. Oversized repeated redraws remain repeated because the emulator is byte-faithful, not a semantic snapshot deduplicator. |
 | `src/term/mod.rs` | `pub fn primary_history_size()` | Returns primary-grid history even while the alternate grid is active. Durable-log resize synchronization must stay in this coordinate space; using active alternate history can suppress the first normal-shell lines after exit. |
 | `src/grid/mod.rs` | `pub fn reset_history_era()` | `clear_history()` keeps `lines_scrolled` monotonic because absolute row ids must be stable for the life of a physical line. The alternate screen is a separate content universe wiped on every enter/exit, so it gets a fresh era instead: history *and* counter reset. Frame-protocol `keyboard_flags` bit 5 marks the transition; the frontend then atomically invalidates row, scroll, selection, search, and link state. |
 | `src/grid/mod.rs` | `lines_scrolled` field + `pub fn total_scrolled()` | Monotonic count of lines ever scrolled into history (incremented in `scroll_up`). `total_scrolled() - history_size()` gives lines evicted from the top, the base for an eviction-stable absolute row coordinate. Excluded from `PartialEq`; `serde(default)` so old ref fixtures still load. |
+| `src/grid/resize.rs` | `pub enum ReflowMode { None, All, HistoryOnly }`; `Grid::resize` and `grow_columns`/`shrink_columns` take it instead of `bool` | `HistoryOnly` is the mode TUIC runs: scrollback stays readable across resize cycles while visible screen rows are truncated/padded, so a cursor-addressed TUI is not re-wrapped under itself. The screen/history boundary is derived from the post-`rezero()` storage layout (`i < self.lines` is screen). |
+| `src/grid/row.rs` | `Row.reflow_wrap: bool` (`serde(default)`) | Marks a wrap produced by *this* shrink. History rows only merge when it is set, so a stale natural wrap from an earlier width is never joined. Reset by `Row::reset`, propagated when a row is absorbed. |
+| `src/grid/storage.rs` | `debug_assert_eq!(size_of::<Row<T>>(), size_of::<usize>() * 5)` (was `* 4`) and the matching cache loop bound | Consequence of the extra `Row` field — the assertion is upstream's guard against an accidentally fat `Row`. |
+| `src/term/cell.rs` | `pub enum Osc133CellType { None, Prompt, Input, Output }` + `Cell.cell_type` (`serde(default)`) | Semantic cell tagging from OSC 133 A/B/C/D, written by `Term::osc133` and read by `TerminalGrid` to emit prompt/input/output zones. Replaces the regex pre-parser TUIC used to run over raw output. |
+| `src/grid/tests.rs` | Upstream resize tests migrated to `ReflowMode`; new `shrink_reflow_history_only` case | Keeps upstream's reflow coverage green after the signature change and pins the new mode. |
+| `src/tty/unix.rs` | `ShellUser::from_env` calls `getpwuid_r` only when `USER`/`HOME`/`SHELL` is missing | Upstream resolves the passwd entry unconditionally on every PTY spawn. TUIC spawns many PTYs; the lookup is skipped when the environment already answers. |
 
 ## VTE patch (`src-tauri/patches/vte/`)
 
@@ -91,7 +109,7 @@ Zed maintains branches on their fork with patches not yet upstream:
 
 | Branch | What | Relevance |
 |--------|------|-----------|
-| `osc-133` | Semantic cell tagging — cells get `Osc133CellType` (Prompt/Input/Output) from OSC 133 sequences. Fires `Event::Osc133`. Requires Zed's VTE fork (`osc-133-2` branch). | **High** — would replace our regex-based `extract_osc133()` pre-parser. Enables prompt zone rendering. See story 1552. |
+| `osc-133` | Semantic cell tagging — cells get `Osc133CellType` (Prompt/Input/Output) from OSC 133 sequences. Fires `Event::Osc133`. Requires Zed's VTE fork (`osc-133-2` branch). | **None — already implemented in our own patch** (`term/cell.rs` + `Term::osc133` + our VTE `osc133` hook). The regex pre-parser this was meant to replace no longer exists. |
 | `v0.16-child-exit-patch` | ~~Uses `exit_status.into_raw()` for `ChildExit`.~~ **Removed from fork (confirmed 2026-05-04).** | Story 1553 needs re-evaluation — implement independently if needed. |
 | `use-zed-vte` | ~~Pins to Zed's VTE fork with `Serialize`/`Deserialize` on parser state.~~ **Removed from fork (confirmed 2026-05-04).** | Was prerequisite for OSC 133; check if osc-133 branch still depends on it. |
 | `grid-mut` | Makes `grid_mut()` public (removes `#[cfg(test)]`). | **Low** — we already expose grid access via our own patches. |

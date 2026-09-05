@@ -87,16 +87,14 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 3. Push through `Utf8ReadBuffer` — accumulates bytes until valid UTF-8 boundary, returns safe string
 4. Push through `EscapeAwareBuffer` — holds incomplete ANSI escape sequences (CSI, OSC, etc.)
 5. Feed into `VtLogBuffer` for VT100-aware changed-row parsing and primary-screen log extraction (mobile/MCP consumers)
-6. Write to `OutputRingBuffer` (64KB circular buffer for MCP access)
+6. Write to `OutputRingBuffer` (2 MB circular buffer for MCP access — `OUTPUT_RING_BUFFER_CAPACITY`)
 7. Serialize parsed events once with `serde_json::to_value` — reused for both Tauri IPC and event bus (avoids double serialization)
 8. Broadcast to WebSocket clients (if any connected)
 9. Assemble the lines of the chunk and match them against the compiled plugin OutputWatchers (`output_watchers.rs`), then emit `pty-watcher-lines-{session_id}` with the batch — see [Plugin OutputWatcher matching](#plugin-outputwatcher-matching) below. No raw-output Tauri event is emitted any more: the desktop canvas renders from grid frames, and the assembled lines are the only text the WebView needs. (The raw `output` frame of step 8 is unaffected — it is fed from the output ring buffer to raw-mode WebSocket clients.)
 
-**Cursor-up clamping** — The `clamp_cursor_up()` function limits `ESC[nA` (cursor up) and `ESC[nF` (cursor previous line) sequences to prevent them from moving the cursor beyond the visible viewport. This replaced the previous DiffRenderer approach for simpler escape sequence handling.
-
 **ANSI anomaly detection** — The `detect_anomalous_sequences()` function scans PTY output for unusual escape sequences (screen clears, cursor home, alt-screen toggles, scrollback clears) and logs them at warn level. This is a diagnostic tool for investigating scroll-jump issues.
 
-**Pause behavior:** When `paused` flag is set (`AtomicBool`), the reader thread sleeps for 50ms instead of reading. This prevents output flooding during background operations.
+**Pause behavior:** When `paused` flag is set (`AtomicBool`), the reader thread sleeps in 10 ms slices instead of reading. This prevents output flooding during background operations.
 
 **Exit detection:** When the read returns 0 bytes or an error, the thread:
 1. Flushes remaining buffered data
@@ -275,7 +273,7 @@ impl EscapeAwareBuffer {
 
 ### OutputRingBuffer
 
-Fixed-capacity circular buffer (64KB) that stores recent output for MCP access:
+Fixed-capacity circular buffer (2 MB, `OUTPUT_RING_BUFFER_CAPACITY`) that stores recent output for MCP access:
 
 ```rust
 impl OutputRingBuffer {
