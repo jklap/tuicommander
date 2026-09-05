@@ -64,6 +64,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "general", section: "Updates", sectionKey: "general.heading.updates" },
 	{ tab: "general", section: "Custom Launchers", sectionKey: "general.heading.customLaunchers" },
 	{ tab: "general", section: "Experimental Features", sectionKey: "general.heading.experimental" },
+	{ tab: "general", section: "General", label: "Language", labelKey: "general.label.language" },
 	{ tab: "general", section: "General", label: "Shell", labelKey: "general.label.shell" },
 	{
 		tab: "general",
