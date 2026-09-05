@@ -878,6 +878,18 @@ impl OutputRingBuffer {
         (result, self.total_written)
     }
 
+    /// Number of bytes currently readable, which saturates at `capacity` once
+    /// the ring wraps — unlike `total_written`, which keeps climbing. Returns a
+    /// count rather than making callers do `read_last(usize::MAX).0.len()`,
+    /// which copies the whole ring just to measure it.
+    ///
+    /// Test-only for now, like `total_written()` below: the production readers
+    /// all want the bytes, not the count.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        std::cmp::min(self.total_written as usize, self.capacity)
+    }
+
     /// Read bytes written after `since_offset` (based on `total_written`).
     /// Returns (bytes, current_total_written).
     /// If `since_offset` is older than the buffer capacity, returns whatever is still available.
@@ -5690,6 +5702,29 @@ mod tests {
         assert_eq!(out.chars().count(), 64 * 1024);
         assert!(out.chars().all(|c| c == '\u{FFFD}'));
         assert!(buf.remainder.is_empty());
+    }
+
+    /// `len()` must track what `read_last` would actually return, which stops
+    /// short of `total_written` the moment the ring wraps. A naive accessor
+    /// returning the monotonic counter passes the pre-wrap half of this and
+    /// fails the rest.
+    #[test]
+    fn ring_buffer_len_matches_readable_bytes_across_the_wrap() {
+        let mut rb = OutputRingBuffer::new(8);
+        assert_eq!(rb.len(), 0);
+
+        rb.write(b"abc");
+        assert_eq!(rb.len(), 3, "below capacity, len is everything written");
+        assert_eq!(rb.len(), rb.read_last(usize::MAX).0.len());
+
+        rb.write(b"defgh");
+        assert_eq!(rb.len(), 8, "exactly full");
+        assert_eq!(rb.len(), rb.read_last(usize::MAX).0.len());
+
+        rb.write(b"ijklm");
+        assert_eq!(rb.len(), 8, "past the wrap, len saturates at capacity");
+        assert_eq!(rb.total_written, 13, "the monotonic counter keeps climbing");
+        assert_eq!(rb.len(), rb.read_last(usize::MAX).0.len());
     }
 
     #[test]

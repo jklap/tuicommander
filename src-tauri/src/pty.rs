@@ -22098,7 +22098,7 @@ mod tests {
             ring_len: state
                 .output_buffers
                 .get(sid)
-                .map(|r| r.lock().read_last(usize::MAX).0.len())
+                .map(|r| r.lock().len())
                 .unwrap_or(0),
         }
     }
