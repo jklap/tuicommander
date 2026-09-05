@@ -58,7 +58,7 @@ UTF-8 String ──> EscapeAwareBuffer
     │             (prevents splitting ANSI escape sequences)
     ▼
 Safe String
-    ├──> Ring Buffer (64KB, for MCP access)
+    ├──> Ring Buffer (2 MB, for MCP access)
     ├──> WebSocket broadcast (for browser clients)
     ├──> Grid frame (alacritty_terminal) ──> Frontend: CanvasTerminal renders it
     ├──> OutputParser detects special events

@@ -10,7 +10,7 @@
 | Terminal | alacritty_terminal + canvas | Native VT engine with GPU-accelerated rendering |
 | State | SolidJS reactive stores | Frontend state management |
 | Persistence | JSON files via Rust | Platform-specific config directory |
-| Testing | Vitest + SolidJS Testing Library | Unit/integration tests (~830 tests) |
+| Testing | Vitest + SolidJS Testing Library (frontend), `cargo nextest` (backend) | ~5,700 frontend tests (`vitest list`) plus a comparable Rust suite (~4,800 `#[test]`/`#[tokio::test]` attributes under `src-tauri/src`) |
 
 ## Hexagonal Architecture
 
@@ -97,7 +97,7 @@ src-tauri/src/
 ├── prompt.rs             # Prompt template processing
 ├── error_classification.rs # Error classification and backoff
 ├── menu.rs               # Native menu bar
-├── mcp_http.rs           # HTTP/WebSocket server
+├── mcp_http/             # HTTP/WebSocket + MCP server (routes split per area)
 └── dictation/            # Voice dictation (Whisper)
     ├── mod.rs            # State management
     ├── audio.rs          # Audio capture (CPAL)

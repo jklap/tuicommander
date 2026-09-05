@@ -130,6 +130,7 @@ When changing an awaiting/idle/busy signal — a parser, the hook suppression, o
 | `src-tauri/src/fixtures/agent_prompts/` | A framed `.tcap` capture of the failure, recorded via `/diagnostics/capture` (`.raw` remains legacy-readable) |
 | `src-tauri/src/pty.rs` tests | A case in the `Awaiting-signal fixtures` block replaying that capture |
 | `src-tauri/src/pty.rs` tests | A case in the `Awaiting RETRACTION` block when the failure is a state that never clears — fixtures assert emitted events and cannot express a MISSING one |
+| `scripts/hooks/pre-commit` | The fixture gate's symbol/file lists — a new detection symbol or a new detection-carrying file must be added, or the gate silently stops covering it |
 | `AGENTS.md` | "Agent state detection" section (signal table, capture workflow, retraction) |
 
 ### MCP Tool Surface (native tools, upstream proxy, meta-tools)
@@ -175,7 +176,7 @@ When modifying customizable AI service prompts (diff triage, future services):
 | `src-tauri/src/config.rs` | `AiPromptsConfig` struct, load/save commands |
 | `src-tauri/src/diff_triage.rs` | `build_chat_request` system_prompt param, `default_system_prompt()` |
 | `src/stores/aiPrompts.ts` | Frontend store: hydrate, save, `DEFAULT_DIFF_TRIAGE_PROMPT` const |
-| `src/components/SettingsPanel/tabs/AiPromptsTab.tsx` | Settings UI: textarea per service, reset button |
+| `src/components/SettingsPanel/tabs/AgentsTab.tsx` | Settings UI: diff-triage prompt textarea + reset button (`aiPromptsStore`) |
 | `src-tauri/src/mcp_http/mcp_transport.rs` | MCP config tool: `list_ai_prompts`, `load_ai_prompt`, `save_ai_prompt` actions |
 | `docs/backend/config.md` | `ai-prompts.json` schema documentation |
 
@@ -186,7 +187,7 @@ When modifying AI Chat panel, settings, context menu actions, or streaming backe
 |------|----------------|
 | `src-tauri/src/ai_chat.rs` | Backend: config, streaming, context assembly, Ollama detection |
 | `src-tauri/src/ai_chat_registry.rs` | Chat Registry: cross-window state sync, Channel fan-out, subscribe/unsubscribe |
-| `src/stores/aiChatStore.ts` | Frontend store: messages, streaming state, registry subscription (sessionId passed per-call, derived from focused terminal) |
+| `src/stores/conversationStore.ts` | Frontend store: messages, streaming state, registry subscription (sessionId passed per-call, derived from focused terminal) |
 | `src/components/AIChatPanel/AIChatPanel.tsx` | Chat panel component + detach button + registry lifecycle + the optional `terminal` binding a detached window is handed |
 | `src/panelAdapters/aiChat.tsx` | Detached-window adapter: params handed over at detach, terminal + chat id adoption on mount, re-read on reattach |
 | `src/components/AIChatPanel/contextMenuActions.ts` | Terminal context menu integration |
@@ -234,7 +235,7 @@ OSC 133 outcome capture, or the `ai_terminal_*` MCP tools:
 | `src-tauri/src/state.rs` | session_knowledge DashMap, knowledge_dirty set, has_osc133_integration, record_outcome helper |
 | `src-tauri/src/lib.rs` | Register new commands in `invoke_handler`; spawn_persist_task at boot |
 | `src-tauri/src/mcp_http/mcp_transport.rs` | `ai_terminal_*` MCP tool defs + dispatch |
-| `src/stores/aiAgentStore.ts` | Frontend agent state (running/paused), tool-call log, approvals |
+| `src/stores/conversationStore.ts` | Frontend agent state (`AgentState`), `ToolCallEntry` log, `PendingApproval` |
 | `src/components/AIChatPanel/AIChatPanel.tsx` | Agent banner, approval card, tool-call cards |
 | `src/components/AIChatPanel/SessionKnowledgeBar.tsx` | Collapsible footer summarising the session's knowledge store |
 | `docs/api/tauri-commands.md` | `start_agent_loop`, `cancel_agent_loop`, `pause_agent_loop`, `resume_agent_loop`, `agent_loop_status`, `approve_agent_action`, `get_session_knowledge` |
@@ -300,8 +301,8 @@ When modifying remote connection config, storage, or transport routing:
 | `src-tauri/src/remote_connection.rs` | RemoteConnection, RemoteTransport, RemoteConnectionStore |
 | `src/stores/remoteConnections.ts` | Frontend remote connections store |
 | `src/utils/remoteEventBridge.ts` | SSE event bridge for remote daemons |
-| `src/utils/transport.ts` | connectionId-based routing in COMMAND_TABLE |
-| `src/utils/canvasTerminalTransport.ts` | baseUrl support for remote WebSocket |
+| `src/transport.ts` | connectionId-based routing in COMMAND_TABLE |
+| `src/components/Terminal/canvasTerminalTransport.ts` | baseUrl support for remote WebSocket |
 | `docs/FEATURES.md` | Section 24 (Remote Connection Manager) |
 | `docs/user-guide/remote-access.md` | Remote Connection Manager section |
 

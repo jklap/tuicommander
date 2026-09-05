@@ -1,6 +1,6 @@
 # GitHub Integration
 
-**Modules:** `src-tauri/src/github.rs`, `src-tauri/src/github_auth.rs`, `src-tauri/src/github_account.rs`, `src-tauri/src/improvement_scan.rs`
+**Modules:** `src-tauri/src/github.rs`, `src-tauri/src/github_auth.rs`, `src-tauri/src/github_account.rs`, `src-tauri/src/github_poller.rs`, `src-tauri/src/improvement_scan.rs`
 
 Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
 
@@ -54,17 +54,16 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 
 | Command | Signature | Description |
 |---------|-----------|-------------|
-| `get_github_status` | `(path: String) -> GitHubStatus` | PR + CI status for current branch |
-| `get_ci_checks` | `(path: String) -> Vec<Value>` | Detailed CI check list |
-| `get_repo_pr_statuses` | `(path: String, include_merged: bool) -> Vec<BranchPrStatus>` | Batch PR status for all branches |
-| `approve_pr` | `(repo_path: String, pr_number: i32) -> String` | Submit approving review via GitHub API |
-| `get_all_pr_statuses` | `(path: String) -> Vec<BranchPrStatus>` | Batch PR status for all branches (includes merged) |
-| `get_pr_diff` | `(repo_path: String, pr_number: i32) -> String` | Get PR diff content; falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
-| `merge_pr_via_github` | `(repo_path: String, pr_number: i32, merge_method: String) -> String` | Merge PR via GitHub API |
-| `fetch_ci_failure_logs` | `(repo_path: String, run_id: i64) -> String` | Fetch failure logs from a GitHub Actions run for CI auto-heal |
+| `get_github_status` | `(path: String) -> GitHubStatus` | Remote presence, current branch, ahead/behind counts |
+| `get_ci_checks` | `(path: String, pr_number: i64) -> Vec<Value>` | Detailed CI check list for one PR |
+| `get_repo_pr_statuses` | `(path: String, include_merged: Option<bool>) -> Vec<BranchPrStatus>` | PR status for every branch of one repo (TTL-cached unless `include_merged`) |
+| `approve_pr` | `(repo_path: String, pr_number: i64) -> ()` | Submit approving review via the REST reviews endpoint |
+| `get_all_pr_statuses` | `(paths: Vec<String>, include_merged: bool) -> HashMap<String, Vec<BranchPrStatus>>` | Batch PR status across many repos in one GraphQL call |
+| `get_pr_diff` | `(repo_path: String, pr_number: i64) -> String` | Get PR diff content; falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
+| `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String) -> String` | Merge PR via GitHub API |
+| `fetch_ci_failure_logs` | `(repo_path: String, branch: String) -> String` | Fetch failure logs for the branch's latest head commit, for CI auto-heal |
 | `run_improvement_scan` | `(repo_path: String, focus: ImprovementFocus) -> ImprovementScanResult` | Headless-slot one-shot AI scan for refactor/testing/perf proposals; emits `proposals-ready` |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
-| `check_github_circuit` | `(path: String) -> CircuitState` | Check GitHub API circuit breaker state |
 
 ### Circuit breaker coverage
 
@@ -88,6 +87,18 @@ login — without that, switching accounts kept showing the previous account's P
 and issues for the rest of the session. Named accounts cache their own login in
 `ghe_state` and are deliberately untouched by that invalidation.
 
+## Tauri Commands — Polling (`github_poller.rs`)
+
+| Command | Signature | Description |
+|---------|-----------|-------------|
+| `github_start_polling` | `(paths: Vec<String>, issue_filter: String, pr_hide_drafts: bool) -> ()` | Start/reconfigure the background poller |
+| `github_stop_polling` | `() -> ()` | Stop the poller task |
+| `github_set_visibility` | `(visible: bool) -> ()` | Switch between the visible and hidden poll intervals |
+| `github_poll_repo` | `(path: String) -> ()` | Request a debounced one-off poll of a single repo |
+| `github_update_paths` | `(paths: Vec<String>) -> ()` | Replace the polled repo set |
+| `github_set_issue_filter` | `(filter: String) -> ()` | Change the issue filter mode live |
+| `github_set_pr_hide_drafts` | `(hide: bool) -> ()` | Toggle draft-PR filtering live |
+
 ## Data Types
 
 ### GitHubStatus
@@ -96,23 +107,13 @@ and issues for the rest of the session. Named accounts cache their own login in
 struct GitHubStatus {
     has_remote: bool,
     current_branch: String,
-    pr_status: Option<PrStatus>,
-    ci_status: Option<CiStatus>,
     ahead: i32,
     behind: i32,
 }
 ```
 
-### PrStatus
-
-```rust
-struct PrStatus {
-    number: i32,
-    title: String,
-    state: String,    // "OPEN", "CLOSED", "MERGED"
-    url: String,
-}
-```
+PR and CI data are **not** on this type. They arrive through `BranchPrStatus`, which
+the batch endpoints return per branch.
 
 ### BranchPrStatus (Batch Endpoint)
 
@@ -133,13 +134,19 @@ struct BranchPrStatus {
     mergeable: String,           // "MERGEABLE", "CONFLICTING", "UNKNOWN"
     merge_state_status: String,  // "CLEAN", "DIRTY", "BEHIND", etc.
     review_decision: String,     // "APPROVED", "CHANGES_REQUESTED", etc.
+    viewer_did_approve: bool,    // Viewer's own latest review is APPROVED
     labels: Vec<PrLabel>,        // Labels with pre-computed colors
     is_draft: bool,
     base_ref_name: String,
+    head_ref_oid: String,
     created_at: String,
     updated_at: String,
     merge_state_label: Option<StateLabel>,   // Pre-classified display label
+    conflict_state: ConflictState,           // The single conflict verdict both surfaces render
     review_state_label: Option<StateLabel>,  // Pre-classified display label
+    merge_commit_allowed: bool,  // Repo-level merge settings
+    squash_merge_allowed: bool,
+    rebase_merge_allowed: bool,
 }
 ```
 
@@ -176,46 +183,55 @@ struct StateLabel {
 
 ## Utility Functions
 
-### `parse_pr_list_json(json_str: &str) -> Vec<BranchPrStatus>`
+### `parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus>`
 
-Parses the JSON output from `gh pr list --json ...` and enriches with computed fields (merge state classification, review state classification, label colors).
+Parses one PR node out of the batched GraphQL response and enriches it with computed
+fields (merge state classification, conflict verdict, review state classification,
+label colors).
 
-### `classify_merge_state(mergeable, merge_state_status) -> Option<StateLabel>`
+### `classify_merge_state(mergeable: Option<&str>, merge_state_status: Option<&str>) -> Option<StateLabel>`
 
-Maps GitHub merge state to display labels:
+Delegates the conflict question to `classify_conflict_state` first, then maps the
+merge state to a display label:
 
-| mergeable | merge_state_status | Label | CSS Class |
-|-----------|-------------------|-------|-----------|
-| MERGEABLE | CLEAN | Ready to merge | merge-ready |
-| MERGEABLE | UNSTABLE | Checks failing | merge-unstable |
-| CONFLICTING | * | Has conflicts | merge-conflict |
-| * | BEHIND | Behind base | merge-behind |
-| * | BLOCKED | Blocked | merge-blocked |
-| * | DRAFT | Draft | merge-draft |
+| Condition | Label | CSS Class |
+|-----------|-------|-----------|
+| `ConflictState::Conflicting` | Conflicts | conflicting |
+| `ConflictState::Checking` | *(no chip — GitHub is still recomputing)* | — |
+| CLEAN | Ready to merge | clean |
+| BEHIND | Behind base | behind |
+| BLOCKED | Blocked | blocked |
+| UNSTABLE | Unstable | blocked |
+| DRAFT | Draft | behind |
+| DIRTY | Conflicts | conflicting |
+| UNKNOWN, HAS_HOOKS | *(no chip)* | — |
 
-### `classify_review_state(review_decision) -> Option<StateLabel>`
+### `classify_review_state(review_decision: Option<&str>) -> Option<StateLabel>`
 
 | review_decision | Label | CSS Class |
 |-----------------|-------|-----------|
-| APPROVED | Approved | review-approved |
-| CHANGES_REQUESTED | Changes requested | review-changes |
+| APPROVED | Approved | approved |
+| CHANGES_REQUESTED | Changes requested | changes-requested |
 | REVIEW_REQUIRED | Review required | review-required |
 
 ### `hex_to_rgba(hex: &str, alpha: f64) -> String`
 
-Converts hex color (e.g., "#ff0000") to rgba string (e.g., "rgba(255, 0, 0, 0.5)").
+Converts a **bare** 6-char hex color (e.g. `"ff0000"`, no leading `#` — that is what
+GitHub's label API returns) to an rgba string (e.g. `"rgba(255, 0, 0, 0.5)"`). Invalid
+input parses as `(0, 0, 0)`.
 
 ### `is_light_color(hex: &str) -> bool`
 
-Calculates relative luminance using the sRGB formula to determine if a color is light (for choosing black vs white text).
+Computes BT.601 luma (`(r*299 + g*587 + b*114) / 1000 > 128`) on the same bare hex to
+decide whether a label needs dark text.
 
 ## Tauri Commands — Issues
 
 | Command | Signature | Description |
 |---------|-----------|-------------|
-| `poll_issues` | `(repos: Vec<(String, String, String)>, login: String, filter: String) -> Vec<RepoIssues>` | Fetch issues for multiple repos using GitHub Search API |
-| `close_issue` | `(repo_path: String, issue_number: i32) -> String` | Close an issue via GitHub GraphQL mutation |
-| `reopen_issue` | `(repo_path: String, issue_number: i32) -> String` | Reopen a closed issue via GitHub GraphQL mutation |
+| `get_all_issues` | `(paths: Vec<String>, filter_mode: String) -> HashMap<String, Vec<GitHubIssue>>` | Fetch issues for multiple repos in one batched GraphQL call |
+| `close_issue` | `(repo_path: String, issue_number: i64) -> ()` | Close an issue via the REST issues endpoint |
+| `reopen_issue` | `(repo_path: String, issue_number: i64) -> ()` | Reopen a closed issue via the REST issues endpoint |
 
 ### GitHubIssue
 
@@ -231,39 +247,49 @@ struct GitHubIssue {
     labels: Vec<PrLabel>,    // Reuses PrLabel with computed colors
     assignees: Vec<String>,
     milestone: Option<String>,
-    comments_count: u32,
+    comments_count: i32,
 }
 ```
 
 ### Issue Filter Modes
 
-The `filter` parameter in `poll_issues` controls which issues are fetched:
+The `filter_mode` parameter controls which issues are fetched. It is applied as a
+GraphQL `filterBy` argument (`issues_filter_clause`), **not** a Search API qualifier:
 
-| Filter | GitHub Search Qualifier | Description |
-|--------|------------------------|-------------|
-| `assigned` | `assignee:{login}` | Issues assigned to the authenticated user (default) |
-| `created` | `author:{login}` | Issues created by the authenticated user |
-| `mentioned` | `mentions:{login}` | Issues mentioning the authenticated user |
-| `all` | *(no user qualifier)* | All open issues in the repo |
-| `disabled` | *(no query)* | Issue fetching disabled |
+| filter_mode | GraphQL `filterBy` | Description |
+|-------------|--------------------|-------------|
+| `assigned` | `{ assignee: "{viewer}" }` | Issues assigned to the authenticated user |
+| `created` | `{ createdBy: "{viewer}" }` | Issues created by the authenticated user |
+| `mentioned` | `{ mentioned: "{viewer}" }` | Issues mentioning the authenticated user |
+| `all` | *(none)* | All open issues in the repo |
+| `disabled` | *(issues sub-selection omitted)* | Issue fetching disabled — `get_all_batch_impl` drops the whole section |
 
 ### Issue Query Construction
 
-`build_multi_repo_issues_query` constructs a GitHub Search API query per repo:
-- Format: `repo:{owner}/{name} is:issue is:open {user_qualifier}`
-- Results parsed via `parse_issue_node` which extracts labels with `hex_to_rgba` color computation (same opacity constant `LABEL_BG_OPACITY = 0.7` as PRs)
+`build_multi_repo_issues_query` builds one aliased `repository(owner:, name:)` block
+per repo, each embedding an `issues(first: 30, states: [OPEN], orderBy: UPDATED_AT
+DESC)` sub-selection. It uses `repository().issues()` rather than `search()` because it
+costs fewer GraphQL points. Results are parsed via `parse_issue_node`, which extracts
+labels with `hex_to_rgba` color computation (same opacity constant
+`LABEL_BG_OPACITY = 0.7` as PRs).
 
 ## GraphQL Batching
 
-`get_repo_pr_statuses` uses `gh pr list` with extensive `--json` fields to fetch all open PRs in a single call. This is efficient: 1 API call returns all branches with PR data.
+`get_repo_pr_statuses` reuses the multi-repo query builder (`build_multi_repo_pr_query`)
+and sends it through `graphql_with_retry` — one GraphQL call returns every branch with
+PR data. `gh pr list` is used only as the parity oracle in tests.
 
-**Polling budget:** ~2 calls/min/repo = 1,200/hr for 10 repos, well within GitHub's 5,000/hr rate limit.
+**Polling budget:** `github_poller.rs` batches **all** polled repos into one GraphQL
+call per tick, so the cost does not scale with repo count. Intervals: `BASE_INTERVAL`
+60 s when visible, `HIDDEN_INTERVAL` 120 s when hidden, backing off to `MAX_INTERVAL`
+300 s on failures or a critically low rate budget.
 
 ## PR Approval & Merge
 
 ### `approve_pr`
 
-Submits an approving review on a pull request via `gh api`. Used by the remote-only PR popover.
+`POST {rest_base}/repos/{owner}/{repo}/pulls/{n}/reviews` with `{"event": "APPROVE"}`,
+sent through `send_rest_with_breaker`. Used by the remote-only PR popover.
 
 ### PR Diff Fetching
 
