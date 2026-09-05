@@ -32,9 +32,13 @@ pub(crate) async fn get_logs(
     Query(q): Query<GetLogsQuery>,
 ) -> Json<Vec<LogEntry>> {
     let buf = state.log_buffer.lock();
-    let mut entries = buf.get_entries(q.limit);
+    let mut entries = buf.get_entries(0);
+    drop(buf);
 
-    // Apply optional filters
+    // Apply optional filters BEFORE the limit: filtering after slicing to the
+    // last N entries starves any query where the matching entries aren't
+    // among the most recent N (#655 — `?level=error&limit=50` would return
+    // nothing if the last 50 lines happened to all be info).
     if let Some(ref level) = q.level {
         entries.retain(|e| e.level == *level);
     }
@@ -43,6 +47,10 @@ pub(crate) async fn get_logs(
     }
     if let Some(ref audience) = q.audience {
         entries.retain(|e| e.audience == *audience);
+    }
+
+    if q.limit > 0 && entries.len() > q.limit {
+        entries.drain(0..entries.len() - q.limit);
     }
 
     Json(entries)
@@ -249,4 +257,56 @@ pub(crate) fn eval_debug_script(state: &Arc<AppState>, script: &str) -> serde_js
 #[cfg(not(feature = "desktop"))]
 pub(crate) fn eval_debug_script(_state: &Arc<AppState>, _script: &str) -> serde_json::Value {
     serde_json::json!({"error": "invoke_js requires desktop feature"})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Query;
+
+    /// The newest entries in the buffer are all "info"; the older ones are the
+    /// 3 "error" lines we care about. A limit-then-filter implementation slices
+    /// the last 50 (all info) before filtering, so `?level=error&limit=50`
+    /// would come back empty. Filtering first must still surface the 3 older
+    /// error entries, in their original chronological order.
+    #[tokio::test]
+    async fn get_logs_filters_before_applying_limit() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        {
+            let mut buf = state.log_buffer.lock();
+            for i in 0..3 {
+                buf.push_with_audience(
+                    "error".to_string(),
+                    "app".to_string(),
+                    format!("error-{i}"),
+                    None,
+                    None,
+                );
+            }
+            for i in 0..200 {
+                buf.push_with_audience(
+                    "info".to_string(),
+                    "app".to_string(),
+                    format!("info-{i}"),
+                    None,
+                    None,
+                );
+            }
+        }
+
+        let query = Query(GetLogsQuery {
+            limit: 50,
+            level: Some("error".to_string()),
+            source: None,
+            audience: None,
+        });
+        let Json(entries) = get_logs(State(state), query).await;
+
+        let messages: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            vec!["error-0", "error-1", "error-2"],
+            "expected the 3 older error entries, in order, not truncated away by the limit"
+        );
+    }
 }
