@@ -443,18 +443,6 @@ impl OutputParser {
             events.push(evt);
         }
 
-        // Reset dedup state on user-input (new agent cycle may produce new errors/suggestions).
-        // Keep `last_suggest_items` intact: the old suggest text is still visible on screen
-        // and changed-row detection will re-parse it after the input scrolls the viewport.
-        // Resetting the dedup cache would cause stale chips to reappear on the next idle.
-        if events
-            .iter()
-            .any(|e| matches!(e, ParsedEvent::UserInput { .. }))
-        {
-            self.last_api_error_match = None;
-            self.session_conflict_fired = false;
-        }
-
         events
     }
 
@@ -462,6 +450,26 @@ impl OutputParser {
     /// This deliberately does not touch emission deduplication state.
     pub(crate) fn is_complete_suggest(&self, text: &str, agent_active: bool) -> bool {
         parse_suggest_with_line(text, agent_active).is_some()
+    }
+
+    /// Reopen the error dedup when the user submits a line: the agent is being
+    /// asked again, so a recurrence of the same failure is a NEW failure and
+    /// must notify.
+    ///
+    /// Called by the reader thread, not from `parse_clean_lines`: no parser
+    /// here produces `UserInput` — that event is emitted on the input thread by
+    /// `record_submitted_line` — so a submission is invisible to this type and
+    /// has to be pushed in. `pty.rs` parks the request on `SilenceState` and
+    /// `ChunkProcessor::process_chunk` drains it before the next parse.
+    ///
+    /// `last_suggest_items` is deliberately left alone: the old suggest text is
+    /// still on screen and changed-row detection re-parses it once the input
+    /// scrolls the viewport, so clearing it here would make stale chips
+    /// reappear on the next idle. `begin_suggest_working_turn` reopens that one
+    /// on real working evidence instead.
+    pub(crate) fn reset_input_dedup(&mut self) {
+        self.last_api_error_match = None;
+        self.session_conflict_fired = false;
     }
 
     /// Reopen suggest emission once for a turn that has produced real working
@@ -3818,10 +3826,69 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert!(has_api_error(&parser.parse(error_input)));
         // Suppressed on repeat
         assert!(!has_api_error(&parser.parse(error_input)));
-        // Manually clear dedup (simulates user-input reset in production)
-        parser.last_api_error_match = None;
+        // The production reset: the reader calls this when the user submits.
+        parser.reset_input_dedup();
         // Same error text should fire again (new agent cycle)
         assert!(has_api_error(&parser.parse(error_input)));
+    }
+
+    /// `parse_clean_lines` is the production pipeline, and none of its parsers
+    /// emits `UserInput` — the dedup reset must therefore be driven from the
+    /// outside. Without it the FIRST api error of a session silences every
+    /// later identical one, for the whole session.
+    #[test]
+    fn test_parse_clean_lines_api_error_dedup_reopens_on_input_reset() {
+        let mut parser = OutputParser::new();
+        let rows = vec![row(0, "API Error: 500 Internal server error.")];
+
+        assert!(
+            has_api_error(&parser.parse_clean_lines(&rows, true)),
+            "first API error must be reported"
+        );
+        assert!(
+            !has_api_error(&parser.parse_clean_lines(&rows, true)),
+            "the same error still on screen must stay deduped"
+        );
+
+        parser.reset_input_dedup();
+        assert!(
+            has_api_error(&parser.parse_clean_lines(&rows, true)),
+            "the same API error after user input is a new failure and must be reported again"
+        );
+    }
+
+    /// `session_conflict_fired` is a session-lifetime latch. It has to be
+    /// released on user input too, or a second conflict — a new agent launched
+    /// in the same tab hitting the same stale session id — is never surfaced
+    /// and the no-inject mitigation never fires for it.
+    #[test]
+    fn test_parse_clean_lines_session_conflict_reopens_on_input_reset() {
+        fn has_conflict(events: &[ParsedEvent]) -> bool {
+            events
+                .iter()
+                .any(|e| matches!(e, ParsedEvent::AgentSessionConflict { .. }))
+        }
+
+        let mut parser = OutputParser::new();
+        let rows = vec![row(
+            0,
+            "Error: Session ID 48ab1308-3b52-4ed3-af0f-e67c8f4ee890 is already in use.",
+        )];
+
+        assert!(
+            has_conflict(&parser.parse_clean_lines(&rows, true)),
+            "first session conflict must be reported"
+        );
+        assert!(
+            !has_conflict(&parser.parse_clean_lines(&rows, true)),
+            "the same conflict still in the buffer must stay deduped"
+        );
+
+        parser.reset_input_dedup();
+        assert!(
+            has_conflict(&parser.parse_clean_lines(&rows, true)),
+            "a session conflict after the reset must be reported again"
+        );
     }
 
     #[test]

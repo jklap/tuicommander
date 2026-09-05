@@ -1538,3 +1538,15 @@ The DOM order is covered by tests; a real pointer drag in the WebView is not.
   before this story: kinds stay grouped, and dragging only reorders within a kind.
 - [ ] Close a tab you dragged, then reopen one. No ghost position: the reopened tab
   appears at the end, not at the closed tab's old slot.
+
+## API-error dedup reopens on user input (story 646-1a9f, Rust — needs `make dev` restart)
+
+The reset lived in `parse_clean_lines` keyed on a `UserInput` event no output
+parser emits, so after the first API error of a session the identical error was
+never reported again. The input path now parks the reset on `SilenceState` and
+the reader drains it. Covered by `pty::tests::user_submission_rearms_the_api_error_dedup`;
+the item below is only the live confirmation that the notification really fires.
+
+- [ ] Provoke or wait for an `API Error: 5xx` in an agent tab — the error toast/sound
+  must fire. Submit a prompt, provoke the same error again: it must notify a
+  SECOND time instead of staying silent for the rest of the session.
