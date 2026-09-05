@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#
+# pre-commit — the agent-state fixture gate (AGENTS.md → "Agent state detection
+# — capture before you theorise").
+#
+# That section already states the rule in prose: "A reproduced failure becomes a
+# fixture, always." This hook makes it mechanical. A commit that changes
+# agent-state detection LOGIC is blocked unless it also stages something under
+# src-tauri/src/fixtures/agent_prompts/. The corpus was 2 captures against 14
+# agent-state fixes, which is how a regression ships twice.
+#
+# Deliberately narrow, because a gate that cries wolf gets bypassed by reflex:
+#   • only ADDED/REMOVED lines count — a change elsewhere in pty.rs is invisible;
+#   • comment-only and blank-line changes are stripped — a doc edit or a rustfmt
+#     reflow is not a behaviour change;
+#   • outside chrome.rs (detection end to end) a detection symbol must be named
+#     either by a changed line or by the hunk's enclosing function. Touching
+#     pty.rs is not the trigger; touching `awaiting_input`, or any line inside
+#     `suppress_heuristic_question`, is.
+#
+# Replayed over the last 120 commits that touch a gated file it fired on 24 —
+# every `fix(agent-state):` among them. If it starts firing on everything, the
+# symbol list has drifted; tighten it rather than teaching people to bypass.
+#
+# Never blocks on a verification failure, and stands down during merge /
+# cherry-pick / revert conflict resolution — you did not author those lines.
+#
+# Escape hatch for a rename or refactor that genuinely needs no capture:
+#   TUIC_SKIP_FIXTURE_GATE=1 git commit ...   (or git commit --no-verify)
+set -euo pipefail
+
+[ "${TUIC_SKIP_FIXTURE_GATE:-}" = "1" ] && exit 0
+
+git_dir="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
+for in_progress in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+  [ -e "$git_dir/$in_progress" ] && exit 0
+done
+
+fixtures_dir='src-tauri/src/fixtures/agent_prompts'
+
+# chrome.rs is the bottom-zone cutoff and nothing else — any code line counts.
+chrome_file='src-tauri/src/chrome.rs'
+
+# Multi-purpose files: a changed code line must name a detection symbol.
+scoped_files='
+src-tauri/src/pty.rs
+src-tauri/src/state.rs
+src-tauri/src/output_parser.rs
+src-tauri/src/relay_client.rs
+src-tauri/src/mcp_http/session.rs
+'
+
+# The awaiting set/clear sites, the parsers they read, and the OSC that feeds
+# them. 7770 is the TUIC hook's state sequence.
+detection_symbols='awaiting_input|question_confident|question_text|question-cleared|suppress_heuristic_question|rearm_awaiting_for_open_dialog|find_chrome_cutoff|find_scrollback_chrome_cutoff|parse_clean_lines|parse_choice_prompt|parse_slash_menu|is_ink_dialog_footer_row|resolve_choice_prompt_input|raw_stream_events|7770'
+
+# A capture staged alongside satisfies the gate, whatever else changed.
+staged_fixtures="$(git diff --cached --name-only --diff-filter=ACMR -- "$fixtures_dir" 2>/dev/null || true)"
+[ -n "$staged_fixtures" ] && exit 0
+
+staged_diff() { git diff --cached -U0 --diff-filter=ACMR -- "$1" 2>/dev/null || true; }
+
+# Added/removed lines, minus diff headers, blanks and comments.
+code_changes() {
+  printf '%s\n' "$1" \
+    | grep -E '^[-+]' \
+    | grep -vE '^(\+\+\+|---) ' \
+    | sed -E 's/^[-+][[:space:]]*//' \
+    | grep -vE '^(//|/\*|\*|$)' || true
+}
+
+# The function enclosing each hunk, off the `@@ ... @@ <ctx>` header. Without it
+# an edit to the *body* of a detection function names no symbol and slips past.
+hunk_contexts() { printf '%s\n' "$1" | sed -nE 's/^@@ [^@]*@@ ?//p' || true; }
+
+offenders=()                     # "path — symbol symbol" lines to report
+
+[ -n "$(code_changes "$(staged_diff "$chrome_file")")" ] && offenders+=("$chrome_file — bottom-zone cutoff")
+
+for f in $scoped_files; do
+  d="$(staged_diff "$f")"
+  hits="$(printf '%s\n%s\n' "$(code_changes "$d")" "$(hunk_contexts "$d")" \
+    | grep -oE "$detection_symbols" | sort -u | tr '\n' ' ' || true)"
+  [ -n "$hits" ] && offenders+=("$f — ${hits% }")
+done
+
+[ "${#offenders[@]}" -eq 0 ] && exit 0
+
+printf '\n\033[1;31m✗ pre-commit blocked:\033[0m agent-state detection changed with no capture\n\n' >&2
+printf '%s\n' "${offenders[@]}" | sed 's/^/  /' >&2
+cat >&2 <<EOF
+
+AGENTS.md → "Agent state detection — capture before you theorise":
+"A reproduced failure becomes a fixture, always." The output ring holds 8 KB,
+so the bytes that prove this fix are gone minutes after you stop reading them.
+
+  • Reproduced a failure? Record it, then stage the capture:
+      curl -X POST localhost:9876/diagnostics/capture \\
+           -H 'content-type: application/json' -d '{"enabled":true}'
+    Captures land in <config dir>/captures/<session-id>.tcap — copy it into
+    $fixtures_dir/ and add a case to the
+    "Awaiting-signal fixtures" block in src-tauri/src/pty.rs tests.
+
+  • Rename, refactor or no behaviour change:
+      TUIC_SKIP_FIXTURE_GATE=1 git commit ...   (or git commit --no-verify)
+EOF
+exit 1
