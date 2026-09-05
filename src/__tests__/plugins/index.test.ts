@@ -17,7 +17,7 @@ vi.mock("../../plugins/pluginRegistry", () => ({ pluginRegistry: { register: moc
 vi.mock("../../plugins/planPlugin", () => ({ planPlugin: { id: "plan" } }));
 vi.mock("../../plugins/storiesTickerPlugin", () => ({ storiesTickerPlugin: { id: "stories" } }));
 vi.mock("../../stores/pluginStore", () => ({ pluginStore: { registerPlugin: vi.fn() } }));
-vi.mock("../../features/claudeUsage", () => ({ initClaudeUsage: vi.fn(), destroyClaudeUsage: vi.fn() }));
+vi.mock("../../features/agentUsage", () => ({ initAgentUsage: vi.fn(), destroyAgentUsage: vi.fn() }));
 
 import { initPlugins } from "../../plugins";
 

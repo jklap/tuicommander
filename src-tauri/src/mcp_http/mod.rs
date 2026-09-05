@@ -820,6 +820,9 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(claude_routes::claude_session_stats),
         )
         .route("/claude/projects", get(claude_routes::claude_project_list))
+        // Codex usage (same ticker, different agent)
+        .route("/codex/usage", get(claude_routes::codex_usage_api))
+        .route("/codex/stats", get(claude_routes::codex_usage_stats))
         // Recent commits / git panel
         .route(
             "/repo/recent-commits",
@@ -2290,6 +2293,8 @@ mod tests {
             "/fs/stat",
             "/claude/usage",
             "/claude/projects",
+            "/codex/usage",
+            "/codex/stats",
             "/system/local-ip",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():

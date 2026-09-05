@@ -1177,19 +1177,38 @@ contains multibyte characters or non-BMP emoji.
 
 Sandboxed filesystem operations for the file manager panel. `/fs/read-external` reads an arbitrary absolute path (not sandboxed to a repo).
 
-## Claude Usage Endpoints
+## Agent Usage Endpoints
 
 ```
 GET /claude/usage                              -> UsageApiResponse (rate-limit usage, 5-min cached)
 GET /claude/projects                           -> ProjectEntry[]
 GET /claude/timeline?scope=all&days=7          -> TimelinePoint[] (hourly token aggregation)
 GET /claude/session-stats?scope=current        -> SessionStats
+GET /codex/usage                               -> CodexUsageApiResponse (rate-limit usage, 5-min cached)
+GET /codex/stats                               -> CodexStatsResponse (token history + lifetime stats)
 ```
 
 Powers the Claude Usage dashboard in browser/PWA/remote. `scope` is `"all"`,
 `"current"`, or a project slug. `timeline`/`session-stats` are desktop-only Tauri
 commands; the handlers call non-gated `*_impl` siblings so they also serve the
 remote daemon.
+
+Both Codex routes read the OAuth token from `~/.codex/auth.json`; TUIC never
+refreshes it, so an expired token surfaces as a 401 rather than a silent retry.
+
+`/codex/usage` calls the endpoint the Codex CLI itself polls. It returns
+rate-limit windows, the per-model limits under `additional_rate_limits`, credits
+and `model_usage`.
+
+`/codex/stats` calls `/wham/profiles/me` upstream — the daily token history does
+**not** live under any `/usage` path. It returns `stats` with
+`daily_usage_buckets` (~30 days of `{start_date, tokens}`) plus lifetime totals,
+streaks, thread count, fast-mode share and reasoning-effort mix.
+
+Identity fields the upstream sends are deliberately dropped before either
+response leaves `codex_usage.rs`: `user_id`, `email` and `account_id` from the
+usage payload, and the whole `profile` object (username, display name, avatar
+URL) from the stats payload.
 
 **Absolute-path write boundary.** `/fs/write-external`, `/fs/copy-abs`, and `/fs/move-abs` are gated to **registered repository roots** for the HTTP boundary (a 403 otherwise), mirroring `/fs/read-external`. The gate rejects traversal syntax (`..`), NUL bytes, and relative paths *before* the containment check: containment is `Path::starts_with`, which is purely lexical, so `/repo/../../etc/passwd` is "inside" `/repo` by components while the OS resolves it far outside. Paths are deliberately **not** canonicalized — a symlink inside a registered repo that points outside it is an accepted design decision in this project. `/fs/transfer` gates only its `destDir` — sources are commonly external (a file dragged in from the desktop). `/fs/stat` and `/fs/resolve-terminal-path` return only metadata (no content) so they are not repo-gated; both also refuse macOS TCC-protected directories. `/fs/resolve-terminal-path` returns JSON `null` on a miss (`Option<ResolvedFilePath>`). `/fs/resolve-terminal-paths` is its batched sibling and is a POST for one reason: a whole terminal screen's candidates do not fit a query string, and being able to send many of them is the point. It answers **positionally** — the array it returns has one entry per input candidate, in order, `null` where that candidate resolved to nothing — so a caller may index the response by the index of the request.
 

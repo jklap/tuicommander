@@ -21,6 +21,14 @@ pub(super) async fn claude_project_list() -> Response {
     json_result(crate::claude_usage::get_claude_project_list().await)
 }
 
+pub(super) async fn codex_usage_api() -> Response {
+    json_result(crate::codex_usage::get_codex_usage_api().await)
+}
+
+pub(super) async fn codex_usage_stats() -> Response {
+    json_result(crate::codex_usage::get_codex_usage_stats().await)
+}
+
 pub(super) async fn claude_usage_timeline(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ClaudeTimelineQuery>,

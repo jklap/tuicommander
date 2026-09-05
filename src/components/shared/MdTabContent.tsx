@@ -4,6 +4,9 @@ import type { GithubOpsTab as GithubOpsTabData, MdTabData, PrDiffTab as PrDiffTa
 const ClaudeUsageDashboard = lazy(() =>
 	import("../ClaudeUsageDashboard").then((module) => ({ default: module.ClaudeUsageDashboard })),
 );
+const CodexUsageDashboard = lazy(() =>
+	import("../CodexUsageDashboard").then((module) => ({ default: module.CodexUsageDashboard })),
+);
 const CommandOverview = lazy(() =>
 	import("../CommandOverview").then((module) => ({ default: module.CommandOverview })),
 );
@@ -22,6 +25,7 @@ export const MdTabContent: Component<{ tab: MdTabData; onClose: () => void; visi
 		<Suspense>
 			{(() => {
 				if (tab.type === "claude-usage") return <ClaudeUsageDashboard />;
+				if (tab.type === "codex-usage") return <CodexUsageDashboard />;
 				if (tab.type === "github-ops") return <GithubOpsDashboard repoPath={(tab as GithubOpsTabData).repoPath} />;
 				if (tab.type === "command-overview") return <CommandOverview />;
 				if (tab.type === "plugin-panel")

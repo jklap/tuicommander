@@ -65,6 +65,12 @@ export interface ClaudeUsageTab extends BaseTab {
 	title: string;
 }
 
+/** Native Codex Usage Dashboard tab */
+export interface CodexUsageTab extends BaseTab {
+	type: "codex-usage";
+	title: string;
+}
+
 /** Native GitHub Ops Dashboard tab (repo-scoped) */
 export interface GithubOpsTab extends BaseTab {
 	type: "github-ops";
@@ -105,6 +111,7 @@ export type MdTabData =
 	| VirtualTab
 	| PluginPanelTab
 	| ClaudeUsageTab
+	| CodexUsageTab
 	| GithubOpsTab
 	| PrDiffTab
 	| HtmlPreviewTab
@@ -415,6 +422,22 @@ function createMdTabsStore() {
 			const tabId = base._addTab({ type: "claude-usage", id, title: "Claude Usage", pinned: true } as ClaudeUsageTab);
 
 			return tabId;
+		},
+
+		/** Add the Codex Usage Dashboard tab (singleton — reuses existing if open) */
+		addCodexUsage(): string {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "codex-usage") as
+				| CodexUsageTab
+				| undefined;
+			if (existing) {
+				base.setActive(existing.id);
+
+				return existing.id;
+			}
+
+			const id = base._nextId("md");
+
+			return base._addTab({ type: "codex-usage", id, title: "Codex Usage", pinned: true } as CodexUsageTab);
 		},
 
 		/** Add the GitHub Ops Dashboard tab (singleton per repo — reuses existing if open) */

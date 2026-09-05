@@ -20,6 +20,7 @@ pub(crate) mod changelog;
 pub(crate) mod chrome;
 pub(crate) mod claude_usage;
 pub(crate) mod cli;
+pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
@@ -1971,6 +1972,8 @@ pub fn run() {
             claude_usage::get_claude_usage_timeline,
             claude_usage::get_claude_session_stats,
             claude_usage::get_claude_project_list,
+            codex_usage::get_codex_usage_api,
+            codex_usage::get_codex_usage_stats,
             screenshot_response,
             mcp_confirm_response,
             app_logger::push_log,
