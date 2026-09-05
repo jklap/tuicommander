@@ -13,8 +13,10 @@ import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
 import { DictationSettings } from "./DictationSettings";
 import s from "./Settings.module.css";
+import { SettingsSearchBox, SettingsSearchResults, scrollToSetting } from "./SettingsSearch";
 import type { SettingsShellTab } from "./SettingsShell";
 import { SettingsShell } from "./SettingsShell";
+import { entryLabel, entrySection, type SettingsSearchEntry, searchSettings } from "./settingsSearchIndex";
 import {
 	AgentsTab,
 	AiChatTab,
@@ -94,25 +96,47 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const ctx = () => props.context ?? { kind: "global" as const };
 	const [activeTab, setActiveTab] = createSignal(props.initialTab ?? defaultTab(ctx()));
 
+	const [query, setQuery] = createSignal("");
+
 	// Reset active tab when context changes or panel opens
 	createEffect(() => {
 		if (props.visible) {
 			setActiveTab(props.initialTab ?? defaultTab(ctx()));
+			// A stale query would hide the tab the caller asked for behind results
+			setQuery("");
 		}
 	});
 
-	// A deep link (the MCP popup's "Manage in Settings") opens a long tab where
-	// the block it promised sits below the fold. Scroll to it, after the frame
-	// that inserts the tab content into the document.
+	// Setting a search result asked for, consumed by the scroll effect below
+	const [pendingTarget, setPendingTarget] = createSignal<{ section: string; label?: string } | null>(null);
+
+	// Two callers need the panel scrolled to a block that sits below the fold:
+	// a deep link (the MCP popup's "Manage in Settings", which names a DOM id)
+	// and a search result (which names a section heading). Both have to wait for
+	// the frame that inserts the tab content into the document.
 	createEffect(() => {
 		if (!props.visible) return;
+		const target = pendingTarget();
 		const section = props.initialSection;
-		if (!section) return;
+		if (!target && !section) return;
 		const frame = requestAnimationFrame(() => {
-			document.getElementById(section)?.scrollIntoView({ block: "start", behavior: "smooth" });
+			if (target) {
+				const content = document.querySelector("[data-settings-content]");
+				if (content) scrollToSetting(content, target.section, target.label);
+				setPendingTarget(null);
+				return;
+			}
+			if (section) document.getElementById(section)?.scrollIntoView({ block: "start", behavior: "smooth" });
 		});
 		onCleanup(() => cancelAnimationFrame(frame));
 	});
+
+	/** Open the tab a search result lives in, then scroll to its section. */
+	const openResult = (entry: SettingsSearchEntry) => {
+		setQuery("");
+		setActiveTab(entry.tab);
+		setPendingTarget({ section: entrySection(entry), label: entryLabel(entry) });
+	};
 
 	// Auto-reset to general when the current tab vanishes (e.g. AI Chat flag
 	// toggled off while AI Chat tab is active). Without this, the body would
@@ -134,6 +158,10 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 		const path = activeRepoPath();
 		return path ? repositoriesStore.getConnectionId(path) : undefined;
 	};
+
+	// Only tabs the nav actually offers: Dictation is absent in browser mode and
+	// AI Chat behind a flag, so their settings must not be offered either.
+	const results = () => searchSettings(query(), new Set(getGlobalTabs().map((tab) => tab.key)));
 
 	const repoSettings = (path: string) => repoSettingsStore.getOrCreate(path, shortenHomePath(path));
 
@@ -189,71 +217,77 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			navWidth={uiStore.state.settingsNavWidth}
 			onNavWidthChange={uiStore.setSettingsNavWidth}
 			onNavWidthPersist={uiStore.persistUIPrefs}
+			navHeader={<SettingsSearchBox value={query()} onInput={setQuery} />}
 			footer={footer()}
 		>
-			{/* Repo settings (shown when a repo nav item is active) */}
-			<Show when={activeRepoPath()} keyed>
-				{(path) => {
-					const settings = repoSettings(path);
-					const onUpdate = updateRepoSetting(path);
-					return (
-						<>
-							<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-							<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-							<Show when={isTauri()}>
-								<div class={s.section}>
-									<h3>{t("settings.copyToProject.heading", "Share with Team")}</h3>
-									<p class={s.hint}>
-										{t(
-											"settings.copyToProject.hint",
-											"Write this repo's worktree/branch settings to a .tuic.json in the project root. Commit it so teammates inherit the same defaults. Scripts are never exported.",
-										)}
-									</p>
-									<div class={s.actions}>
-										<button onClick={() => copyToProject(path)}>
-											{t("settings.copyToProject.button", "Copy settings to .tuic.json")}
-										</button>
+			<Show
+				when={!query()}
+				fallback={<SettingsSearchResults results={results()} tabs={buildNavItems()} onSelect={openResult} />}
+			>
+				{/* Repo settings (shown when a repo nav item is active) */}
+				<Show when={activeRepoPath()} keyed>
+					{(path) => {
+						const settings = repoSettings(path);
+						const onUpdate = updateRepoSetting(path);
+						return (
+							<>
+								<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								<Show when={isTauri()}>
+									<div class={s.section}>
+										<h3>{t("settings.copyToProject.heading", "Share with Team")}</h3>
+										<p class={s.hint}>
+											{t(
+												"settings.copyToProject.hint",
+												"Write this repo's worktree/branch settings to a .tuic.json in the project root. Commit it so teammates inherit the same defaults. Scripts are never exported.",
+											)}
+										</p>
+										<div class={s.actions}>
+											<button onClick={() => copyToProject(path)}>
+												{t("settings.copyToProject.button", "Copy settings to .tuic.json")}
+											</button>
+										</div>
 									</div>
-								</div>
-							</Show>
-						</>
-					);
-				}}
-			</Show>
+								</Show>
+							</>
+						);
+					}}
+				</Show>
 
-			{/* Global sections */}
-			<Show when={activeTab() === "general"}>
-				<GeneralTab />
-			</Show>
-			<Show when={activeTab() === "appearance"}>
-				<AppearanceTab />
-			</Show>
-			<Show when={activeTab() === "notifications"}>
-				<NotificationsTab />
-			</Show>
-			<Show when={activeTab() === "dictation"}>
-				<DictationSettings />
-			</Show>
-			<Show when={activeTab() === "github"}>
-				<GitHubTab />
-			</Show>
-			<Show when={activeTab() === "services"}>
-				<ServicesTab />
-			</Show>
-			<Show when={activeTab() === "plugins"}>
-				<PluginsTab onClose={props.onClose} />
-			</Show>
-			<Show when={activeTab() === "smart-prompts"}>
-				<SmartPromptsTab />
-			</Show>
-			<Show when={activeTab() === "providers"}>
-				<ProvidersTab />
-			</Show>
-			<Show when={activeTab() === "agents"}>
-				<AgentsTab connectionId={activeConnectionId()} />
-			</Show>
-			<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
-				<AiChatTab />
+				{/* Global sections */}
+				<Show when={activeTab() === "general"}>
+					<GeneralTab />
+				</Show>
+				<Show when={activeTab() === "appearance"}>
+					<AppearanceTab />
+				</Show>
+				<Show when={activeTab() === "notifications"}>
+					<NotificationsTab />
+				</Show>
+				<Show when={activeTab() === "dictation"}>
+					<DictationSettings />
+				</Show>
+				<Show when={activeTab() === "github"}>
+					<GitHubTab />
+				</Show>
+				<Show when={activeTab() === "services"}>
+					<ServicesTab />
+				</Show>
+				<Show when={activeTab() === "plugins"}>
+					<PluginsTab onClose={props.onClose} />
+				</Show>
+				<Show when={activeTab() === "smart-prompts"}>
+					<SmartPromptsTab />
+				</Show>
+				<Show when={activeTab() === "providers"}>
+					<ProvidersTab />
+				</Show>
+				<Show when={activeTab() === "agents"}>
+					<AgentsTab connectionId={activeConnectionId()} />
+				</Show>
+				<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
+					<AiChatTab />
+				</Show>
 			</Show>
 		</SettingsShell>
 	);

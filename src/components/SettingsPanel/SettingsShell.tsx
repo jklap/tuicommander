@@ -21,6 +21,8 @@ export interface SettingsShellProps {
 	tabs: SettingsShellTab[];
 	activeTab: string;
 	onTabChange: (key: string) => void;
+	/** Rendered above the nav items — the Settings search box lives here */
+	navHeader?: JSX.Element;
 	/** Width of the nav sidebar in px (persisted externally) */
 	navWidth?: number;
 	/** Called on every pixel during nav resize drag (update state only) */
@@ -88,6 +90,7 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 					{/* Body: nav sidebar + scrollable content */}
 					<div class={s.body}>
 						<nav class={s.nav} style={{ width: `${navWidth()}px` }}>
+							{props.navHeader}
 							<For each={props.tabs}>
 								{(tab) =>
 									tab.key === "__sep__" ? (
@@ -112,8 +115,10 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 							<div class={s.navResizeHandle} onMouseDown={handleNavResizeStart} />
 						</nav>
 
-						{/* Content */}
-						<div class={s.content}>{props.children}</div>
+						{/* Content — `data-settings-content` scopes the search's scroll-to-section lookup */}
+						<div class={s.content} data-settings-content>
+							{props.children}
+						</div>
 					</div>
 
 					{/* Footer (optional) */}
