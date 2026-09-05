@@ -71,7 +71,8 @@ code{{display:block;margin:1rem 0;padding:.75rem;border-radius:6px;background:#0
 /// cancelled. The listener deliberately outlives the flow so this page can be
 /// served at all; before, the port was already closed and the browser showed a
 /// bare "can't connect to the server".
-const EXPIRED_REASON: &str = "This authorization request expired or was cancelled before the browser redirected back.";
+const EXPIRED_REASON: &str =
+    "This authorization request expired or was cancelled before the browser redirected back.";
 
 /// Handle returned by [`spawn`] — dropping triggers graceful shutdown.
 pub(crate) struct CallbackServer {
