@@ -6,6 +6,14 @@ BINARY_NAME=tuicommander
 BUNDLE_ID=com.tuic.commander
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
+# rtk (Rust Token Killer) is an optional output-compacting proxy: `rtk <cmd>`
+# runs <cmd> and trims its output. It is a personal tool, not a project
+# dependency, so every use below degrades to the raw command when it is absent.
+# Force the raw commands with `make RTK= check`.
+RTK?=$(shell command -v rtk)
+# `rtk err <cmd>` keeps only <cmd>'s errors; with no rtk, run <cmd> unfiltered.
+RTK_ERR=$(if $(RTK),$(RTK) err,)
+
 # Code signing identity: override with SIGN_IDENTITY env var.
 # Auto-detection order: Developer ID > ad-hoc.
 SIGN_IDENTITY?=-
@@ -67,17 +75,17 @@ fmt:
 # Type-check, lint, format, and test (no Tauri build)
 check:
 	@echo "Running checks..."
-	@rtk pnpm exec tsc --noEmit && echo "  tsc ✓"
-	@rtk pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
-	@rtk pnpm architecture:cycles && rtk pnpm architecture:cycles:test && echo "  architecture cycles ✓"
+	@$(RTK) pnpm exec tsc --noEmit && echo "  tsc ✓"
+	@$(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
+	@$(RTK) pnpm architecture:cycles && $(RTK) pnpm architecture:cycles:test && echo "  architecture cycles ✓"
 	@bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
-	@cd src-tauri && rtk cargo fmt --check && echo "  rustfmt ✓"
-	@cd src-tauri && rtk cargo clippy --release -- -D warnings && echo "  clippy ✓"
-	@cd src-tauri && ulimit -n 10240 && rtk cargo nextest run --workspace && rtk cargo test --doc -q && echo "  rust tests ✓"
-	@bash -o pipefail -c 'rtk pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
-	@bash -o pipefail -c 'rtk pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
-	@rtk pnpm audit --audit-level=high && echo "  pnpm audit ✓"
-	@cd src-tauri && rtk err cargo audit -q --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 && echo "  cargo audit ✓"
+	@cd src-tauri && $(RTK) cargo fmt --check && echo "  rustfmt ✓"
+	@cd src-tauri && $(RTK) cargo clippy --release -- -D warnings && echo "  clippy ✓"
+	@cd src-tauri && ulimit -n 10240 && $(RTK) cargo nextest run --workspace && $(RTK) cargo test --doc -q && echo "  rust tests ✓"
+	@bash -o pipefail -c '$(RTK) pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
+	@bash -o pipefail -c '$(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
+	@$(RTK) pnpm audit --audit-level=high && echo "  pnpm audit ✓"
+	@cd src-tauri && $(RTK_ERR) cargo audit -q --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 && echo "  cargo audit ✓"
 
 # Rust coverage: cargo-llvm-cov + nextest. Terminal summary + HTML report.
 # Instrumented artifacts live in target/llvm-cov-target — the normal build
@@ -85,9 +93,9 @@ check:
 # included), so expect several minutes. Doctests are not measured
 # (doctest coverage requires nightly).
 cov:
-	@cd src-tauri && ulimit -n 10240 && rtk cargo llvm-cov nextest
-	@cd src-tauri && rtk cargo llvm-cov report --html
-	@cd src-tauri && rtk cargo llvm-cov report --lcov --output-path lcov.info
+	@cd src-tauri && ulimit -n 10240 && $(RTK) cargo llvm-cov nextest
+	@cd src-tauri && $(RTK) cargo llvm-cov report --html
+	@cd src-tauri && $(RTK) cargo llvm-cov report --lcov --output-path lcov.info
 	@echo "HTML report: src-tauri/target/llvm-cov/html/index.html"
 
 # CRAP metric (complexity² × uncovered³ + complexity) over the coverage data
@@ -100,7 +108,7 @@ cov:
 # actually match.
 crap:
 	@cd src-tauri && test -f lcov.info || { echo "src-tauri/lcov.info missing — run 'make cov' first"; exit 1; }
-	@cd src-tauri && rtk cargo crap --lcov lcov.info --top 30
+	@cd src-tauri && $(RTK) cargo crap --lcov lcov.info --top 30
 
 # GitHub API debug logging — toggle at runtime, view logs
 gh-debug-on:
