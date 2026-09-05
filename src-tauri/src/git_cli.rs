@@ -113,12 +113,7 @@ impl GitCmd {
     /// control — a network fetch, a user-supplied setup script — where the
     /// alternative to a deadline is a thread parked forever.
     ///
-    // DEFERRED (2026-09-05) — the callers that need this live outside git.rs /
-    // git_cli.rs / git_reads.rs and were out of scope for story 673-19fa:
-    // `git fetch` in conflict_assist.rs, github.rs and worktree.rs, and the
-    // setup scripts run from worktree.rs. Wire each of them to `.timeout(..)`
-    // and drop the dead_code attribute below.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Every `git fetch` in the app passes [`FETCH_TIMEOUT`].
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
@@ -200,13 +195,20 @@ impl GitCmd {
 /// (a credential helper, a `core.askpass`) holding the write end open, and
 /// joining would reintroduce exactly the unbounded wait the deadline exists to
 /// prevent. They exit on their own once the last writer closes.
-fn output_with_deadline(
+///
+/// Not git-specific: the owner probe below runs `lsof` through it, and
+/// `worktree.rs` runs the user's setup scripts through it.
+pub(crate) fn output_with_deadline(
     cmd: &mut Command,
     timeout: Duration,
 ) -> Result<std::process::Output, GitError> {
     use std::io::Read;
 
+    // `Command::output()` nulls stdin; `spawn()` inherits it. Match `output()`,
+    // or a deadlined child could park on a read of the app's stdin — the exact
+    // unbounded wait this function exists to bound.
     let mut child = cmd
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -251,6 +253,28 @@ fn output_with_deadline(
         stderr: err_reader.join().unwrap_or_default(),
     })
 }
+
+/// Deadline for every `git fetch` in the app.
+///
+/// A fetch is the only git call here that waits on something off this machine,
+/// so it is the only one that can park a blocking thread forever: a
+/// `credential.helper` sitting on a prompt, a half-open TCP connection with no
+/// keepalive, a wedged network mount. `GIT_TERMINAL_PROMPT=0` in [`git_cmd`]
+/// stops git's own prompt but not any of those.
+///
+/// Three minutes is deliberately generous. It clears a dual-stack connect
+/// timeout (~75s per address family), so a genuinely unreachable host still
+/// reports git's own error rather than ours, and it leaves room for a large
+/// incremental fetch on a slow link. Every fetch below is a single refspec into
+/// an existing clone, never a clone, so the transfer is a branch delta — killing
+/// one that would have succeeded is a worse outcome than waiting for it.
+#[cfg(not(test))]
+pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Tests exercise the shipped wiring through a deadline they can afford to wait
+/// for. Only the number differs from the value above.
+#[cfg(test)]
+pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
 // Entry point

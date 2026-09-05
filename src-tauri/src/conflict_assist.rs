@@ -131,6 +131,7 @@ fn resolve_rebase_target(repo: &Path, base_ref: &str) -> Result<ResolvedBase, St
     let remote_ref = format!("refs/remotes/origin/{base_ref}");
     let refspec = format!("+refs/heads/{base_ref}:{remote_ref}");
     let fetch = crate::git_cli::git_cmd(repo)
+        .timeout(crate::git_cli::FETCH_TIMEOUT)
         .args(["fetch", "--no-tags", "origin", &refspec])
         .run();
 
@@ -222,6 +223,7 @@ pub(crate) async fn start_conflict_assist_impl(
             // Make the head branch available locally. Best-effort: it may already
             // be present, or origin may be unreachable for a local-only branch.
             let _ = crate::git_cli::git_cmd(Path::new(&repo_path_for_git))
+                .timeout(crate::git_cli::FETCH_TIMEOUT)
                 .args(["fetch", "origin", "--", &head_ref])
                 .run_silent();
 
