@@ -21,6 +21,37 @@ export function makeBranchKey(repoPath: string, branchName: string): string {
 }
 
 /**
+ * Move sourceId immediately before or after targetId, in place. No-op on bad IDs.
+ *
+ * The single ordering primitive: every display order in the app (per-store `_order`,
+ * the cross-kind free-mode order) splices through here, so a fix lands once.
+ */
+export function reorderIds(order: string[], sourceId: string, targetId: string, side: "before" | "after"): void {
+	if (sourceId === targetId) return;
+	const src = order.indexOf(sourceId);
+	const tgt = order.indexOf(targetId);
+	if (src === -1 || tgt === -1) return;
+	order.splice(src, 1);
+	const newTgt = order.indexOf(targetId);
+	order.splice(side === "before" ? newTgt : newTgt + 1, 0, sourceId);
+}
+
+/**
+ * Ids from `order` that are still visible, followed by visible `candidateIds` the
+ * order has never seen — a tab opened after the last drag still shows up, at the end.
+ */
+export function orderedThenRemainder(
+	order: readonly string[],
+	candidateIds: Iterable<string>,
+	isVisible: (id: string) => boolean,
+): string[] {
+	const inOrder = order.filter(isVisible);
+	const seen = new Set(inOrder);
+	const remainder = [...candidateIds].filter((id) => !seen.has(id) && isVisible(id));
+	return [...inOrder, ...remainder];
+}
+
+/**
  * Internal store state shape for all tab managers.
  */
 export interface TabStoreState<T extends BaseTab> {
@@ -188,10 +219,7 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 				return tab.branchKey === currentBranchKey;
 			};
 			// Ordered tabs first (those tracked in _order), then any remainder
-			const inOrder = state._order.filter(isVisible);
-			const inOrderSet = new Set(inOrder);
-			const remainder = Object.keys(state.tabs).filter((id) => !inOrderSet.has(id) && isVisible(id));
-			return [...inOrder, ...remainder];
+			return orderedThenRemainder(state._order, Object.keys(state.tabs), isVisible);
 		},
 
 		/** Move sourceId immediately before or after targetId in the display order. No-op on bad IDs. */
@@ -199,12 +227,7 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 			if (sourceId === targetId) return;
 			setState(
 				produce((s) => {
-					const src = s._order.indexOf(sourceId);
-					const tgt = s._order.indexOf(targetId);
-					if (src === -1 || tgt === -1) return;
-					s._order.splice(src, 1);
-					const newTgt = s._order.indexOf(targetId);
-					s._order.splice(side === "before" ? newTgt : newTgt + 1, 0, sourceId);
+					reorderIds(s._order, sourceId, targetId, side);
 				}),
 			);
 		},
