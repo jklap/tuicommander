@@ -478,6 +478,13 @@ pub(crate) fn register_loaded_plugin_impl(
         }
     }
 
+    // A WebView reload re-registers an already-loaded plugin without ever
+    // calling uninstall. Dispose its previous runtime state (fs watchers,
+    // rate-limiter history) before granting the fresh capability set, or
+    // each reload leaks a watcher set and MAX_WATCHERS_PER_PLUGIN caps out
+    // after a handful of reloads (#649-56fb). Idempotent: a no-op on first load.
+    dispose_plugin_runtime_state(state, &plugin_id);
+
     state.loaded_plugins.insert(plugin_id, capabilities);
     Ok(())
 }
@@ -2024,6 +2031,63 @@ mod tests {
                 .unwrap_err();
         assert!(err.contains("not declared in manifest"), "got: {err}");
         assert!(!state.loaded_plugins.contains_key("gate-plugin"));
+    }
+
+    /// A WebView reload calls register_loaded_plugin again for an already-loaded
+    /// plugin — uninstall is never invoked. Without disposing the previous
+    /// runtime state first, each reload leaks the old fs-watcher set and
+    /// MAX_WATCHERS_PER_PLUGIN caps out after a handful of reloads (#649-56fb).
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn register_disposes_previous_runtime_state_on_reregister() {
+        use notify::{Config, RecommendedWatcher, Watcher};
+
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let plugin_dir = dir.path().join("plugins").join("reload-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("manifest.json"),
+            r#"{
+                "id": "reload-plugin",
+                "name": "Reload Plugin",
+                "version": "1.0.0",
+                "minAppVersion": "0.0.0",
+                "main": "main.js",
+                "capabilities": ["fs:watch"]
+            }"#,
+        )
+        .unwrap();
+
+        let state = crate::state::tests_support::make_test_app_state();
+
+        register_loaded_plugin_impl(&state, "reload-plugin".into(), vec!["fs:watch".into()])
+            .unwrap();
+
+        // The plugin sets up a watcher after loading.
+        let (tx, _rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+        let watcher = RecommendedWatcher::new(tx, Config::default()).unwrap();
+        state
+            .plugin_watchers
+            .insert("w1".into(), ("reload-plugin".into(), watcher));
+        assert_eq!(state.plugin_watchers.len(), 1);
+
+        // WebView reload re-registers the same plugin without ever unloading it.
+        register_loaded_plugin_impl(&state, "reload-plugin".into(), vec!["fs:watch".into()])
+            .unwrap();
+
+        // The stale watcher set from before the reload must be gone, not
+        // accumulated alongside whatever the reloaded plugin sets up next.
+        assert!(
+            state.plugin_watchers.is_empty(),
+            "reload must dispose the previous watcher set"
+        );
+        // The capability grant itself survives the reload.
+        assert_eq!(
+            state.loaded_plugins.get("reload-plugin").map(|c| c.clone()),
+            Some(vec!["fs:watch".to_string()])
+        );
     }
 
     // -- install data/ preservation (AppHandle-free seam) --
