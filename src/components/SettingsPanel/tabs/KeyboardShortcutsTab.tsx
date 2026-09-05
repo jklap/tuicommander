@@ -310,7 +310,7 @@ export function getShortcutSections(): ShortcutSection[] {
 				{
 					action: "toggle-file-browser",
 					keys: keyFor("toggle-file-browser"),
-					description: t("helpPanel.toggleFileBrowser", "Toggle file browser panel"),
+					description: t("helpPanel.toggleFileBrowser", "Toggle file browser"),
 				},
 				{
 					action: "toggle-file-browser-content-search",

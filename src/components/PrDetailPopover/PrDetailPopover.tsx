@@ -374,7 +374,7 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 									<span
 										class={cx(s.number, s.link)}
 										onClick={() => pr().url && handleOpenUrl(pr().url)}
-										title={t("prDetail.openOnGithub", "Open PR on GitHub")}
+										title={t("prDetail.openOnGithub", "Open on GitHub")}
 									>
 										#{pr().number}
 									</span>

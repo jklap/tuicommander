@@ -595,7 +595,7 @@ export const GitHubPanel: Component<{
 																				<button
 																					class={s.ghActionBtn}
 																					onClick={() => setAutofixIssue(issue.number)}
-																					title={t("github.autofix", "Auto-fix in a worktree agent")}
+																					title={t("github.autofixTooltip", "Auto-fix in a worktree agent")}
 																				>
 																					{t("github.autofix", "Auto-fix")}
 																				</button>
@@ -603,7 +603,7 @@ export const GitHubPanel: Component<{
 																					class={s.ghActionBtn}
 																					onClick={() => handleCreatePr(issue)}
 																					disabled={creatingPr() === issue.number}
-																					title={t("github.createPr", "Create draft PR from auto-fix branch")}
+																					title={t("github.createPrTooltip", "Create draft PR from auto-fix branch")}
 																				>
 																					{creatingPr() === issue.number ? "..." : t("github.createPr", "Create PR")}
 																				</button>
