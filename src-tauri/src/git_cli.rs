@@ -512,13 +512,6 @@ fn is_unmerged_code(code: &str) -> bool {
     matches!(code, "DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU")
 }
 
-/// True when the porcelain status lists at least one unmerged (conflicted) path.
-pub(crate) fn porcelain_has_conflict(status: &str) -> bool {
-    status
-        .lines()
-        .any(|line| split_porcelain_line(line).is_some_and(|(code, _)| is_unmerged_code(code)))
-}
-
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_conflicted_files_porcelain(status: &str) -> Vec<String> {
     status
@@ -588,18 +581,18 @@ DU src/deleted.rs
         );
     }
 
-    #[test]
-    fn porcelain_has_conflict_reads_the_status_columns_only() {
-        assert!(porcelain_has_conflict("UU file.rs\n"));
-        assert!(porcelain_has_conflict("?? notes.txt\nUU file.rs\n"));
-        assert!(!porcelain_has_conflict("?? UUID.md\n"));
-        assert!(!porcelain_has_conflict("?? AAA.md\n M src/DD.rs\n"));
-        assert!(!porcelain_has_conflict(""));
-    }
-
+    /// The XY field lives in columns 1-2; a path is never read as a status. The
+    /// `DD.rs` case is the one that bites — a real conflict code appearing in a
+    /// filename, on a line whose actual code is a plain modification.
     #[test]
     fn parse_conflicted_files_porcelain_ignores_conflict_codes_inside_names() {
         assert!(parse_conflicted_files_porcelain("?? UUID.md\n").is_empty());
+        assert!(parse_conflicted_files_porcelain("?? AAA.md\n M src/DD.rs\n").is_empty());
+        assert!(parse_conflicted_files_porcelain("").is_empty());
+        assert_eq!(
+            parse_conflicted_files_porcelain("?? notes.txt\nUU file.rs\n"),
+            vec!["file.rs".to_string()]
+        );
     }
 
     #[test]
