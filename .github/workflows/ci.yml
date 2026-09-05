@@ -28,6 +28,7 @@ env:
 
 jobs:
   socket:
+    timeout-minutes: 15
     name: Socket Security
     runs-on: ubuntu-22.04
     if: github.event_name == 'pull_request'
@@ -68,6 +69,7 @@ jobs:
         run: cd src-tauri && sfw cargo fetch
 
   frontend:
+    timeout-minutes: 20
     name: Frontend (typecheck + tests)
     runs-on: ubuntu-22.04
     steps:
@@ -97,6 +99,7 @@ jobs:
 
   # Always runs: clippy + tests on Linux (fastest, catches most issues)
   rust:
+    timeout-minutes: 60
     name: Rust (Linux-x64)
     runs-on: ubuntu-22.04
     steps:
@@ -178,6 +181,7 @@ jobs:
 
   # Verify tuic-remote compiles without the desktop feature (catches missing cfg gates)
   check-remote:
+    timeout-minutes: 30
     name: Remote daemon (no-default-features)
     runs-on: ubuntu-22.04
     steps:
@@ -221,8 +225,10 @@ jobs:
   #   sub-build is chronically broken on the runner, so dictation runs on CPU.
   #   CUDA support is optional (add Jimver/cuda-toolkit + --features cuda if needed).
   rust-cross:
+    timeout-minutes: 90
     name: Rust (${{ matrix.label }})
-    if: github.event_name == 'push'
+    # Runs on pull_request too, not just push. Gating it on push meant macOS and
+    # Windows breakage was only ever discovered after a merge to main.
     strategy:
       fail-fast: false
       matrix:
@@ -264,9 +270,7 @@ jobs:
           # an absolute path — use `cache-directories` instead.
           cache-directories: ${{ matrix.platform == 'windows-latest' && 'C:/t' || '' }}
 
-      # Only macOS runs the test suite below (Windows tests are skipped).
       - name: Install nextest
-        if: matrix.platform != 'windows-latest'
         uses: taiki-e/install-action@nextest
 
       # A restored Windows build cache (C:/t) may hold a CMakeCache.txt from an
@@ -313,8 +317,9 @@ jobs:
           CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
         run: cargo clippy -- -D warnings
 
+      # Windows runs the suite too. It used to be skipped, which is why Windows
+      # regressions only ever surfaced in a user's build.
       - name: Tests
-        if: matrix.platform != 'windows-latest'
         working-directory: src-tauri
         env:
           SCCACHE_GHA_ENABLED: "true"
@@ -322,6 +327,6 @@ jobs:
           CARGO_INCREMENTAL: "0"
           CMAKE_C_COMPILER_LAUNCHER: "sccache"
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
-          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || '' }}
-          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || '' }}
+          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
+          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
         run: cargo nextest run --workspace --profile ci
