@@ -488,14 +488,54 @@ describe("uiStore", () => {
 				| "aiTriagePanelVisible";
 			backendKey: string;
 		}> = [
-			{ label: "markdown", setVisible: (v: boolean) => store.setMarkdownPanelVisible(v), stateKey: "markdownPanelVisible", backendKey: "markdown_panel_visible" },
-			{ label: "notes", setVisible: (v: boolean) => store.setNotesPanelVisible(v), stateKey: "notesPanelVisible", backendKey: "notes_panel_visible" },
-			{ label: "fileBrowser", setVisible: (v: boolean) => store.setFileBrowserPanelVisible(v), stateKey: "fileBrowserPanelVisible", backendKey: "file_browser_panel_visible" },
-			{ label: "git", setVisible: (v: boolean) => store.setGitPanelVisible(v), stateKey: "gitPanelVisible", backendKey: "git_panel_visible" },
-			{ label: "outline", setVisible: (v: boolean) => store.setOutlinePanelVisible(v), stateKey: "outlinePanelVisible", backendKey: "outline_panel_visible" },
-			{ label: "references", setVisible: (v: boolean) => store.setReferencesPanelVisible(v), stateKey: "referencesPanelVisible", backendKey: "references_panel_visible" },
-			{ label: "aiChat", setVisible: (v: boolean) => store.setAiChatPanelVisible(v), stateKey: "aiChatPanelVisible", backendKey: "ai_chat_panel_visible" },
-			{ label: "aiTriage", setVisible: (v: boolean) => store.setAiTriagePanelVisible(v), stateKey: "aiTriagePanelVisible", backendKey: "ai_triage_panel_visible" },
+			{
+				label: "markdown",
+				setVisible: (v: boolean) => store.setMarkdownPanelVisible(v),
+				stateKey: "markdownPanelVisible",
+				backendKey: "markdown_panel_visible",
+			},
+			{
+				label: "notes",
+				setVisible: (v: boolean) => store.setNotesPanelVisible(v),
+				stateKey: "notesPanelVisible",
+				backendKey: "notes_panel_visible",
+			},
+			{
+				label: "fileBrowser",
+				setVisible: (v: boolean) => store.setFileBrowserPanelVisible(v),
+				stateKey: "fileBrowserPanelVisible",
+				backendKey: "file_browser_panel_visible",
+			},
+			{
+				label: "git",
+				setVisible: (v: boolean) => store.setGitPanelVisible(v),
+				stateKey: "gitPanelVisible",
+				backendKey: "git_panel_visible",
+			},
+			{
+				label: "outline",
+				setVisible: (v: boolean) => store.setOutlinePanelVisible(v),
+				stateKey: "outlinePanelVisible",
+				backendKey: "outline_panel_visible",
+			},
+			{
+				label: "references",
+				setVisible: (v: boolean) => store.setReferencesPanelVisible(v),
+				stateKey: "referencesPanelVisible",
+				backendKey: "references_panel_visible",
+			},
+			{
+				label: "aiChat",
+				setVisible: (v: boolean) => store.setAiChatPanelVisible(v),
+				stateKey: "aiChatPanelVisible",
+				backendKey: "ai_chat_panel_visible",
+			},
+			{
+				label: "aiTriage",
+				setVisible: (v: boolean) => store.setAiTriagePanelVisible(v),
+				stateKey: "aiTriagePanelVisible",
+				backendKey: "ai_triage_panel_visible",
+			},
 		];
 
 		it.each(panels)("save persists $backendKey when $label panel is opened", ({ setVisible, backendKey }) => {
