@@ -283,17 +283,35 @@ pub(crate) fn finish_failed_git_operation_after_abort(
     )
 }
 
+/// Split a `git status --porcelain` v1 record into its XY status field and path.
+///
+/// The status codes are positional, so a path is only ever read from column 3
+/// onward — never matched anywhere in the line. The mandatory space at index 2
+/// also proves indices 2 and 3 are char boundaries, so the slices cannot panic.
+fn split_porcelain_line(line: &str) -> Option<(&str, &str)> {
+    let bytes = line.as_bytes();
+    (bytes.len() >= 4 && bytes[2] == b' ').then(|| (&line[..2], &line[3..]))
+}
+
+/// True when an XY status field marks an unmerged (conflicted) path.
+fn is_unmerged_code(code: &str) -> bool {
+    matches!(code, "DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU")
+}
+
+/// True when the porcelain status lists at least one unmerged (conflicted) path.
+pub(crate) fn porcelain_has_conflict(status: &str) -> bool {
+    status
+        .lines()
+        .any(|line| split_porcelain_line(line).is_some_and(|(code, _)| is_unmerged_code(code)))
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_conflicted_files_porcelain(status: &str) -> Vec<String> {
     status
         .lines()
         .filter_map(|line| {
-            if line.len() < 4 {
-                return None;
-            }
-            let code = &line[..2];
-            let conflicted = matches!(code, "DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU");
-            conflicted.then(|| line[3..].trim().to_string())
+            let (code, path) = split_porcelain_line(line)?;
+            is_unmerged_code(code).then(|| path.trim().to_string())
         })
         .filter(|path| !path.is_empty())
         .collect()
@@ -354,6 +372,20 @@ DU src/deleted.rs
             parse_conflicted_files_porcelain(status),
             vec!["src/lib.rs", "src/new.rs", "src/deleted.rs"]
         );
+    }
+
+    #[test]
+    fn porcelain_has_conflict_reads_the_status_columns_only() {
+        assert!(porcelain_has_conflict("UU file.rs\n"));
+        assert!(porcelain_has_conflict("?? notes.txt\nUU file.rs\n"));
+        assert!(!porcelain_has_conflict("?? UUID.md\n"));
+        assert!(!porcelain_has_conflict("?? AAA.md\n M src/DD.rs\n"));
+        assert!(!porcelain_has_conflict(""));
+    }
+
+    #[test]
+    fn parse_conflicted_files_porcelain_ignores_conflict_codes_inside_names() {
+        assert!(parse_conflicted_files_porcelain("?? UUID.md\n").is_empty());
     }
 
     #[test]
