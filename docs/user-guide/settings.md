@@ -2,6 +2,21 @@
 
 Open settings with `Cmd+,`. Settings are organized into tabs.
 
+## Search
+
+A search box sits at the top of the tab list. Typing filters every setting across
+every tab at once, so you do not have to know which tab owns the one you want.
+Each result shows the setting name and the `Tab › Section` trail it lives under;
+selecting one opens that tab and scrolls to the field.
+
+Two limits are deliberate:
+
+- **Repository tabs are not searched.** A repository tab belongs to one specific
+  repository, and a global box has no way to know which one you mean.
+- **Settings the current build does not render are not listed.** Dictation, for
+  example, is desktop-only, so searching for it in a browser session reports no
+  match rather than opening a tab with nothing in it.
+
 ## General Tab
 
 | Setting | Description |
