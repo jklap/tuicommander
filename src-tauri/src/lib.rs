@@ -2075,7 +2075,11 @@ fn build_connect_url(scheme: &str, host: &str, port: u16, token: &str) -> String
 /// Spawn background tasks shared by both desktop and headless modes.
 fn spawn_background_tasks(state: &Arc<AppState>) {
     AppState::spawn_session_state_accumulator(state.clone());
-    drop(state.oauth_flow_manager.spawn_cleanup_task());
+    drop(
+        state
+            .oauth_flow_manager
+            .spawn_cleanup_task(state.mcp_upstream_registry.clone()),
+    );
     mcp_http::mcp_transport::spawn_tool_search_index_updater(state.clone());
     pty::spawn_tombstone_sweeper(state.clone());
     content_index::spawn_content_index_updater(state.clone());

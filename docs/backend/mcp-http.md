@@ -669,11 +669,23 @@ A `NeedsOAuth` on any request transitions the upstream registry to `needs_auth`.
 
 ### Flow
 
-1. **Start** — `start_mcp_upstream_oauth(name)` generates a PKCE verifier/challenge (S256), mints an opaque `state`, records the pending flow in a DashMap keyed by state, sets upstream status to `authenticating`, and returns the authorization URL + AS origin.
+1. **Start** — `start_mcp_upstream_oauth(name)` generates a PKCE verifier/challenge (S256), mints an opaque `state`, records the pending flow in a DashMap keyed by state, and returns the authorization URL + AS origin. The upstream moves to `authenticating` only *after* the flow is recorded — the status must never claim "Awaiting authorization…" for a flow that does not exist.
+
+   **Flows are not serialized.** Each one owns its `state` nonce, PKCE verifier and callback port, so concurrent authorizations share nothing. An earlier design held a single-permit semaphore for the whole browser round-trip: a second *Authorize* click then blocked inside `start_flow` for the full 5-minute timeout with no browser, no dialog and no error, and `cancel_mcp_upstream_oauth` could not release it because the queued flow had never reached the pending map. Do not reintroduce a shared permit here.
 2. **Consent UI** — The frontend opens the URL via `tauri-plugin-opener` after user approval. The status bar and Services tab show "Awaiting authorization…".
 3. **Callback** — The AS redirects to `tuic://oauth-callback?code=…&state=…`. The OS routes the deep link to the desktop app (`src-tauri/src/mcp_oauth/mod.rs` — `DEEP_LINK_SCHEME = "tuic://oauth-callback"`). The deep-link handler calls `mcp_oauth_callback(code, oauth_state)`.
 4. **Exchange** — `TokenManager` posts code + PKCE verifier to the token endpoint, receives `{ access_token, refresh_token?, expires_in? }`, serializes into `OAuthTokenSet`, persists to the OS keyring (`mcp_upstream_credentials.rs` — structured JSON format with `"type": "oauth2"`), and transitions upstream to `connecting`.
 5. **Refresh** — `TokenManager` is shared across every `HttpMcpClient` refresh path (unified per upstream); a semaphore serializes concurrent refresh attempts to defeat thundering-herd. `expires_at` uses a 60 s margin; `None` means "no known expiry — do not treat as expired". A 401 recovery carries the exact bearer rejected by the server into the serialized refresh check. If an authorization exchange wrote a different valid credential between the request and recovery, that generation is retried as-is instead of being immediately refreshed or rotated; only the still-rejected or an invalid generation reaches the token endpoint.
+
+### Callback server lifetime
+
+The localhost callback server outlives the flow it serves — flow timeout plus a 120 s grace period (`CALLBACK_SERVER_GRACE` in `mcp_oauth/commands.rs`). A *successful* callback still closes it promptly, 2 s after the response is served.
+
+It used to shut down as soon as the flow left the pending map. A user who spent more than five minutes at the identity provider — MFA, password manager, account picker — then redirected back to a closed port and got the browser's own "can't connect to the server" page, with nothing saying the request had expired. Outliving the flow means `handle_callback` can answer a late redirect with a page naming the reason and the retry step.
+
+### Expiry sweep
+
+A background sweep (`spawn_cleanup_task`) drops pending flows past the 5-minute timeout and returns each one's upstream name so the registry can `rollback_authenticating` it back to `needs_auth`. Without that rollback an abandoned flow left its upstream on `authenticating` permanently, with no path to a retryable state.
 
 ### Cancel
 
@@ -689,7 +701,7 @@ Registered at boot via Tauri's single-instance + deep-link plugins. The frontend
 
 ### Threat model
 
-OAuth callbacks arrive exclusively through the OS-level `tuic://` deep link — not over the network. There is no adversary position from which a remote attacker can probe the pending-flow map, so state comparison uses a direct DashMap lookup (no constant-time compare). The localhost dev callback server (used only in development) binds `127.0.0.1` with a random port; it is never exposed in production builds.
+OAuth callbacks arrive on a loopback HTTP server bound to `127.0.0.1:0` (OS-assigned port), spawned per flow by `start_mcp_upstream_oauth`; the `tuic://` deep link is the manual fallback. Neither path is reachable from the network, so there is no adversary position from which a remote attacker can probe the pending-flow map, and state comparison uses a direct DashMap lookup (no constant-time compare).
 
 ## Inter-Agent Messaging
 

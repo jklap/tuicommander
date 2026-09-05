@@ -22,6 +22,11 @@ use crate::mcp_oauth::discovery::{discover_auth_server, discover_protected_resou
 use crate::mcp_upstream_config::UpstreamAuth;
 use crate::state::AppState;
 
+/// How long the localhost callback server outlives the flow it serves, so a
+/// browser that redirects back just after the flow expired gets an explanatory
+/// page instead of a connection refusal.
+const CALLBACK_SERVER_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Output of [`start_mcp_upstream_oauth`] — the frontend opens
 /// `authorization_url` in the user's browser.
 #[derive(Debug, serde::Serialize)]
@@ -75,7 +80,10 @@ pub(crate) async fn start_mcp_upstream_oauth(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
-    // Pull the upstream's config and transition it to Authenticating.
+    // Pull the upstream's config. The transition to `Authenticating` happens
+    // only once a flow actually exists (see below) — announcing it up front
+    // made the UI claim "Awaiting authorization…" for a flow that had not
+    // started, and that lie outlived every failure path.
     let (server_url, existing_auth) = {
         let entry = registry
             .entry(&name)
@@ -88,23 +96,16 @@ pub(crate) async fn start_mcp_upstream_oauth(
                 ));
             }
         };
-        let auth = entry.config.auth.clone();
-        registry.set_authenticating(&name);
-        (server_url, auth)
+        (server_url, entry.config.auth.clone())
     };
 
     // Start the localhost callback server — the redirect_uri is dynamic
     // based on the OS-assigned port.
     let cb_server = callback_server::spawn(flow_mgr.clone(), registry.clone())
         .await
-        .map_err(|e| {
-            registry.rollback_authenticating(&name);
-            format!("Failed to start OAuth callback server: {e}")
-        })?;
+        .map_err(|e| format!("Failed to start OAuth callback server: {e}"))?;
     let redirect_uri = callback_server::redirect_uri(cb_server.port);
 
-    // Everything after set_authenticating is fallible — rollback on error so
-    // the UI returns to "needs_auth" (retryable) instead of stuck on "authenticating".
     let result = async {
         // If no auth config, attempt DCR (RFC 7591) to obtain a client_id.
         let auth = match existing_auth {
@@ -167,23 +168,27 @@ pub(crate) async fn start_mcp_upstream_oauth(
             .await
             .map_err(|e| e.to_string())?;
 
+        // The flow exists and the browser is about to open — only now is
+        // "Awaiting authorization…" true.
+        registry.set_authenticating(&name);
         registry.emit_oauth_start(&name, &outcome.authorization_url);
 
-        // Keep the callback server alive until the flow completes or times out.
-        // The server handle is moved into a background task — dropping it would
-        // shut down the listener before the browser can redirect back.
-        let flow_mgr_bg = flow_mgr.clone();
-        let state_nonce = outcome.state.clone();
+        // Keep the callback server alive for the flow timeout plus a grace
+        // period. The server handle is moved into a background task — dropping
+        // it shuts down the listener.
+        //
+        // This deliberately does NOT stop early when the flow leaves `pending`.
+        // It used to, and a flow that expired or was cancelled took its listener
+        // down with it: the user finished consent a moment later and the browser
+        // landed on a dead port ("Safari can't connect to the server") with
+        // nothing explaining why. Outliving the flow lets `handle_callback`
+        // answer a late redirect with a real page. A *successful* callback still
+        // closes promptly — `done_notify` shuts the server down 2 s after it
+        // serves the response (callback_server.rs).
+        let linger = flow_mgr.flow_timeout() + CALLBACK_SERVER_GRACE;
         tokio::spawn(async move {
             let _keep_alive = cb_server;
-            // Wait until the flow is consumed (complete or cancel) or 5 min timeout.
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-            for _ in 0..150 {
-                interval.tick().await;
-                if flow_mgr_bg.upstream_name_for_state(&state_nonce).is_none() {
-                    break;
-                }
-            }
+            tokio::time::sleep(linger).await;
         });
 
         Ok::<_, String>(StartOAuthResponse {
@@ -193,9 +198,8 @@ pub(crate) async fn start_mcp_upstream_oauth(
         })
     }.await;
 
-    if result.is_err() {
-        registry.rollback_authenticating(&name);
-    }
+    // No rollback needed on the start path: `set_authenticating` now runs only
+    // after the flow exists, so a failure here leaves the status untouched.
     result
 }
 

@@ -1454,9 +1454,9 @@ pub struct AppState {
     pub(crate) session_state_events: SessionStateEventQueue,
     /// Upstream MCP proxy registry — aggregates tools from all connected upstreams.
     pub(crate) mcp_upstream_registry: Arc<crate::mcp_proxy::registry::UpstreamRegistry>,
-    /// Orchestrator for in-flight OAuth 2.1 authorization flows. Shares the
-    /// `auth_semaphore` with `mcp_upstream_registry` so concurrent browser
-    /// flows are serialized.
+    /// Orchestrator for in-flight OAuth 2.1 authorization flows. Flows run
+    /// concurrently — each one owns its `state` nonce, PKCE verifier and
+    /// callback port, so there is nothing to serialize.
     pub(crate) oauth_flow_manager: Arc<crate::mcp_oauth::flow::OAuthFlowManager>,
     /// Broadcast channel for MCP `notifications/tools/list_changed`.
     /// Fired when native tools are toggled or upstream tool lists change.
@@ -2569,9 +2569,7 @@ impl AppState {
             sse_filters: Default::default(),
             session_states: DashMap::new(),
             session_state_events: SessionStateEventQueue::new(),
-            oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new(
-                mcp_upstream_registry.auth_semaphore.clone(),
-            )),
+            oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
             mcp_upstream_registry,
             mcp_tools_changed: tokio::sync::broadcast::channel(16).0,
             tool_search_index: Arc::new(parking_lot::RwLock::new(
@@ -6009,9 +6007,7 @@ mod tests {
             mcp_upstream_registry: {
                 Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new())
             },
-            oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new(Arc::new(
-                tokio::sync::Semaphore::new(1),
-            ))),
+            oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
             mcp_tools_changed: tokio::sync::broadcast::channel(16).0,
             tool_search_index: Arc::new(parking_lot::RwLock::new(
                 crate::tool_search::ToolSearchIndex::build(&[]),
