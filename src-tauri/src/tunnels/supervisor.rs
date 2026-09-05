@@ -186,6 +186,13 @@ async fn supervision_loop(
             return;
         };
 
+        // Drain stderr concurrently on a background task, retaining only a
+        // bounded tail for diagnostics. Without this, a chatty ssh fills the
+        // OS pipe buffer (64KB on Linux, 16KB on macOS) and blocks on write()
+        // forever — the child never exits and the status stays stuck at
+        // Connected even though ssh is effectively hung.
+        let stderr_tail = child.stderr.take().map(spawn_stderr_drainer);
+
         // Brief health check — if the process dies within 500ms it never connected.
         let health_check = tokio::time::sleep(Duration::from_millis(500));
         tokio::pin!(health_check);
@@ -202,7 +209,7 @@ async fn supervision_loop(
 
         if let Some(wait_result) = died_early {
             // Process died during health check.
-            let stderr = read_stderr(&mut child).await;
+            let stderr = stderr_tail_snapshot(&stderr_tail);
             let code = wait_result.ok().and_then(|s| s.code());
             let reason = classify_exit(&stderr, code);
             if handle_exit(&reason, &mut backoff, &status, &callback) {
@@ -244,7 +251,7 @@ async fn supervision_loop(
             }
         };
 
-        let stderr = read_stderr(&mut child).await;
+        let stderr = stderr_tail_snapshot(&stderr_tail);
         let code = wait_result.ok().and_then(|s| s.code());
         let reason = classify_exit(&stderr, code);
 
@@ -312,21 +319,51 @@ fn backoff_delay(backoff: &mut BackoffCalculator) -> Option<Duration> {
     backoff.next_delay()
 }
 
-/// Read whatever stderr the child has buffered.
-async fn read_stderr(child: &mut tokio::process::Child) -> String {
-    let Some(mut stderr) = child.stderr.take() else {
-        return String::new();
-    };
-    let mut buf = String::new();
-    // Read with a size limit to avoid unbounded allocation.
-    let mut raw = vec![0u8; 8192];
-    match stderr.read(&mut raw).await {
-        Ok(n) => buf.push_str(&String::from_utf8_lossy(&raw[..n])),
-        Err(e) => {
-            tracing::warn!(source = "tunnel_supervisor", error = %e, "Failed to read ssh stderr");
+/// Cap on the retained stderr tail, in bytes. Diagnostics only need the most
+/// recent output (e.g. the auth-failure or connection-refused message), not
+/// the full chatty stream.
+const STDERR_TAIL_LIMIT: usize = 8192;
+
+/// Spawn a background task that continuously drains the child's stderr pipe
+/// for as long as the process runs, keeping only a bounded tail.
+///
+/// This must run concurrently with the process, not after it exits: ssh's
+/// stderr is a pipe with a small OS buffer (64KB on Linux, 16KB on macOS).
+/// A chatty process fills it and blocks on write() until someone reads —
+/// reading only after `child.wait()` returns means nobody ever reads while
+/// the process is alive, so it can block forever and never exit.
+fn spawn_stderr_drainer(mut stderr: tokio::process::ChildStderr) -> Arc<Mutex<Vec<u8>>> {
+    let tail = Arc::new(Mutex::new(Vec::new()));
+    let task_tail = Arc::clone(&tail);
+    tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            match stderr.read(&mut buf).await {
+                Ok(0) => break, // EOF — pipe closed (process exited).
+                Ok(n) => {
+                    let mut guard = task_tail.lock();
+                    guard.extend_from_slice(&buf[..n]);
+                    if guard.len() > STDERR_TAIL_LIMIT {
+                        let excess = guard.len() - STDERR_TAIL_LIMIT;
+                        guard.drain(0..excess);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(source = "tunnel_supervisor", error = %e, "Failed to read ssh stderr");
+                    break;
+                }
+            }
         }
+    });
+    tail
+}
+
+/// Snapshot whatever stderr tail has been drained so far, for diagnostics.
+fn stderr_tail_snapshot(tail: &Option<Arc<Mutex<Vec<u8>>>>) -> String {
+    match tail {
+        Some(tail) => String::from_utf8_lossy(&tail.lock()).into_owned(),
+        None => String::new(),
     }
-    buf
 }
 
 /// Send SIGTERM, wait 5s, escalate to SIGKILL.
@@ -634,5 +671,29 @@ mod tests {
         }
 
         drop(listener); // release the port
+    }
+
+    #[tokio::test]
+    async fn chatty_stderr_does_not_stall() {
+        // Emit >64KB of stderr, then exit cleanly. If stderr isn't drained
+        // concurrently while the process runs, the OS pipe buffer (64KB on
+        // Linux, 16KB on macOS) fills, the child blocks forever on write(),
+        // and the tunnel never reaches Stopped — it stalls at Connected.
+        let script = fake_ssh_script("yes x | head -c 100000 1>&2; exit 0");
+        let (cb, _statuses) = status_collector();
+
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
+
+        let final_status = wait_for_stopped(&sup).await;
+
+        match &final_status {
+            TunnelStatus::Stopped { .. } => {} // expected: exited promptly, no stall
+            other => panic!(
+                "expected Stopped (chatty stderr must not stall the tunnel), got {other:?}"
+            ),
+        }
+
+        sup.stop();
     }
 }
