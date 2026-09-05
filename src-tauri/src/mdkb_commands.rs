@@ -1,4 +1,5 @@
 use crate::AppState;
+use crate::mdkb_daemon::with_client;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -71,21 +72,21 @@ pub async fn mdkb_outline(
     repo_path: String,
     file_path: String,
 ) -> Result<Vec<OutlineSymbol>, String> {
-    let mut daemon = state.mdkb_daemon.lock().await;
-    let client = match daemon.ensure_running().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::debug!("mdkb unavailable: {e}");
-            return Ok(vec![]);
-        }
-    };
-    match client.symbols_in_file(&repo_path, &file_path).await {
-        Ok(symbols) => Ok(symbols.into_iter().map(OutlineSymbol::from).collect()),
-        Err(e) => {
-            tracing::warn!("mdkb_outline failed: {e}");
-            Ok(vec![])
-        }
-    }
+    let symbols = with_client(
+        &state.mdkb_daemon,
+        "mdkb_outline",
+        |mut client| async move {
+            let result = client.symbols_in_file(&repo_path, &file_path).await;
+            (client, result)
+        },
+    )
+    .await;
+
+    Ok(symbols
+        .unwrap_or_default()
+        .into_iter()
+        .map(OutlineSymbol::from)
+        .collect())
 }
 
 #[tauri::command]
@@ -96,28 +97,23 @@ pub async fn mdkb_goto_definition(
     line: u32,
     col: Option<u32>,
 ) -> Result<Option<DefinitionLocation>, String> {
-    let mut daemon = state.mdkb_daemon.lock().await;
-    let client = match daemon.ensure_running().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::debug!("mdkb unavailable: {e}");
-            return Ok(None);
-        }
-    };
-    match client
-        .symbol_at_position(&repo_path, &file_path, line, col)
-        .await
-    {
-        Ok(Some(sym)) => Ok(Some(DefinitionLocation {
-            file_path: sym.file_path,
-            line: editor_line(sym.line_start),
-        })),
-        Ok(None) => Ok(None),
-        Err(e) => {
-            tracing::warn!("mdkb_goto_definition failed: {e}");
-            Ok(None)
-        }
-    }
+    let symbol = with_client(
+        &state.mdkb_daemon,
+        "mdkb_goto_definition",
+        |mut client| async move {
+            let result = client
+                .symbol_at_position(&repo_path, &file_path, line, col)
+                .await;
+            (client, result)
+        },
+    )
+    .await
+    .flatten();
+
+    Ok(symbol.map(|sym| DefinitionLocation {
+        file_path: sym.file_path,
+        line: editor_line(sym.line_start),
+    }))
 }
 
 /// A caller symbol is a jump target: the panel needs where it is and what it is
@@ -139,21 +135,17 @@ pub async fn mdkb_references(
     repo_path: String,
     symbol_name: String,
 ) -> Result<Vec<ReferenceLocation>, String> {
-    let mut daemon = state.mdkb_daemon.lock().await;
-    let client = match daemon.ensure_running().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::debug!("mdkb unavailable: {e}");
-            return Ok(vec![]);
-        }
-    };
-    match client.code_graph(&repo_path, &symbol_name, "callers").await {
-        Ok(symbols) => Ok(to_reference_locations(symbols)),
-        Err(e) => {
-            tracing::warn!("mdkb_references failed: {e}");
-            Ok(vec![])
-        }
-    }
+    let symbols = with_client(
+        &state.mdkb_daemon,
+        "mdkb_references",
+        |mut client| async move {
+            let result = client.code_graph(&repo_path, &symbol_name, "callers").await;
+            (client, result)
+        },
+    )
+    .await;
+
+    Ok(to_reference_locations(symbols.unwrap_or_default()))
 }
 
 #[tauri::command]
@@ -163,21 +155,21 @@ pub async fn mdkb_code_find(
     name: String,
     kind: Option<String>,
 ) -> Result<Vec<OutlineSymbol>, String> {
-    let mut daemon = state.mdkb_daemon.lock().await;
-    let client = match daemon.ensure_running().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::debug!("mdkb unavailable: {e}");
-            return Ok(vec![]);
-        }
-    };
-    match client.code_find(&repo_path, &name, kind.as_deref()).await {
-        Ok(symbols) => Ok(symbols.into_iter().map(OutlineSymbol::from).collect()),
-        Err(e) => {
-            tracing::warn!("mdkb_code_find failed: {e}");
-            Ok(vec![])
-        }
-    }
+    let symbols = with_client(
+        &state.mdkb_daemon,
+        "mdkb_code_find",
+        |mut client| async move {
+            let result = client.code_find(&repo_path, &name, kind.as_deref()).await;
+            (client, result)
+        },
+    )
+    .await;
+
+    Ok(symbols
+        .unwrap_or_default()
+        .into_iter()
+        .map(OutlineSymbol::from)
+        .collect())
 }
 
 #[tauri::command]
