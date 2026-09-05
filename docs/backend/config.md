@@ -351,9 +351,37 @@ Each `ScheduledJob`:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `sidebar_visible` | `bool` | `true` | Sidebar visibility |
-| `sidebar_width` | `u32` | `280` | Sidebar width in pixels |
-| `error_handling.strategy` | `String` | `"retry"` | Error strategy |
-| `error_handling.max_retries` | `u32` | `3` | Max retry count |
+| `sidebar_width` | `u32` | `260` | Sidebar width in pixels |
+| `diff_panel_visible` | `bool` | `false` | Diff panel open |
+| `markdown_panel_visible` | `bool` | `false` | Markdown panel open |
+| `notes_panel_visible` | `bool` | `false` | Notes panel open |
+| `file_browser_panel_visible` | `bool` | `false` | File browser panel open |
+| `plan_panel_visible` | `bool` | `false` | Plan panel open |
+| `git_panel_visible` | `bool` | `false` | Git panel open |
+| `outline_panel_visible` | `bool` | `false` | Outline panel open |
+| `references_panel_visible` | `bool` | `false` | References panel open |
+| `ai_chat_panel_visible` | `bool` | `false` | AI chat panel open |
+| `ai_triage_panel_visible` | `bool` | `false` | AI triage panel open |
+| `file_browser_view_mode` | `String` | `"flat"` | File browser listing: `flat` or `tree` |
+| `diff_panel_width` | `u32` | `400` | Diff panel width in pixels |
+| `markdown_panel_width` | `u32` | `400` | Markdown panel width in pixels |
+| `notes_panel_width` | `u32` | `350` | Notes panel width in pixels |
+| `plan_panel_width` | `u32` | `350` | Plan panel width in pixels |
+| `git_panel_width` | `u32` | `380` | Git panel width in pixels |
+| `settings_nav_width` | `u32` | `180` | Settings nav column width in pixels |
+| `diff_view_mode` | `String` | `"split"` | Diff viewer: `split` or `unified` |
+| `detached_panels` | `HashMap<String, String>` | `{}` | Panel id to detached window label |
+| `github_section_collapsed` | `HashMap<String, bool>` | `{}` | Collapsed GitHub sections (`my-prs`, `prs`, `issues`); absent key means the section's own default |
+
+The eight `*_panel_visible` flags for markdown, file browser, git, outline,
+references, AI chat, AI triage and notes are **mutually exclusive** — the
+frontend opens one and closes the rest. The backend does not enforce that; it
+stores whatever it is sent.
+
+Every key the frontend sends must be declared here. Serde has no
+`deny_unknown_fields` on this struct, so an undeclared key is dropped on the
+way in without an error and `load_ui_prefs` can never return it. The panel
+then looks like it saves and silently fails to survive a restart.
 
 **Commands:** `load_ui_prefs()`, `save_ui_prefs(config)`
 
