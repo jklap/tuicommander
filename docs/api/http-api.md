@@ -12,6 +12,32 @@ REST API served by the Axum HTTP server when MCP server is enabled. All Tauri co
 - **MCP mode (localhost):** No authentication
 - **Remote access mode:** HTTP Basic Auth with configured username/password
 
+## Unknown Paths
+
+The desktop server also serves the frontend, so any path that matches no route
+falls through to a catch-all. That catch-all splits on the first path segment:
+
+- **API path** — the first segment is one of `agent`, `agents`, `ai`, `api`,
+  `audio`, `claude`, `codex`, `config`, `debug`, `diagnostics`, `dictation`,
+  `events`, `exec`, `fs`, `generators`, `github`, `health`, `logs`, `mcp`,
+  `metrics`, `plugins`, `process`, `prompt`, `registry`, `repo`, `sessions`,
+  `stats`, `system`, `terminal`, `tunnels`, `watchers`, `worktrees`. The
+  response is `404` with `{ "error": "no such endpoint: /<path>" }`.
+- **Anything else** — a deep link such as `/settings` or `/mobile/session/<id>`.
+  The response is `200` with the SPA shell (`index.html`, or `mobile.html` under
+  `/mobile`), so client-side routing takes over.
+
+A registered path called with the wrong method still returns `405`, not `404`.
+
+Without this split an unregistered API path answered `200` with HTML, which the
+client read as success and then failed to parse as a command result — every
+missing route looked like a malformed response. The prefix list is checked
+against the registered routes by a test, so a new route family cannot silently
+drop back to the HTML answer.
+
+The `tuic-remote` daemon embeds no frontend and has no catch-all: unknown paths
+there return a bare `404`.
+
 ## Session Endpoints
 
 ### List Sessions
