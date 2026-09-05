@@ -1469,3 +1469,21 @@ behaviour.
   page.
 - [ ] A normal successful authorization still lands on the green
   "Authentication complete" card and the upstream goes `ready`.
+
+### Terminal: no grid wipe on tab switch, resubscribe on reattach (#657-4345)
+
+Frontend only (`Terminal.tsx`) — Vite HMR picks it up, no `make dev` restart
+needed. Canvas painting is not observable over HTTP, so these need eyes.
+
+- [ ] Switch back and forth between two busy terminal tabs. The returning tab
+  shows its content immediately with no blank flash. Previously every switch ran
+  `resubscribe()` + `refresh()`, which cleared the grid and repainted it
+  (paint → wipe → paint).
+- [ ] Detach a tab into a floating window, then close that window to reattach.
+  The reattached tab still paints live output and scrolls — the grid channel is
+  resubscribed on this path, which is the only path that still resubscribes.
+- [ ] Open a terminal in a split pane, collapse the pane to zero width, leave it
+  collapsed for a minute. `GET http://localhost:9876/logs?source=terminal` shows
+  one `Container stayed zero-size for 120 frames` warning and CPU stays flat.
+  Previously that container kept a `requestAnimationFrame` loop re-arming every
+  frame for the lifetime of the page, one loop per terminal, surviving unmount.
