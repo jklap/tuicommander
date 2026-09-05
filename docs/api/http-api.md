@@ -868,6 +868,8 @@ Retrieve log entries from the ring buffer (1000 entries max). All query params o
 - `level` — filter by level: `debug`, `info`, `warn`, `error`
 - `source` — filter by source: `app`, `plugin`, `git`, `network`, `terminal`, `github`, `dictation`, `store`, `config`
 
+`level`/`source` filters are applied first, then `limit` takes the most recent N of the *filtered* results — not the last N of the whole buffer. `?level=error&limit=50` returns up to 50 error entries, even if none of the errors are among the newest lines overall.
+
 ### Push Log
 
 ```
