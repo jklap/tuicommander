@@ -30,6 +30,13 @@ import { handleIntentEvent } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
 import s from "./Terminal.module.css";
 import { TerminalSearch } from "./TerminalSearch";
+import {
+	REATTACH_PHASE_INITIAL,
+	type ReattachPhase,
+	retryUntilSized,
+	SIZE_RETRY_MAX_FRAMES,
+	stepReattachPhase,
+} from "./visibilityLifecycle";
 
 const ComposePanel = lazy(() =>
 	import("../ComposePanel/ComposePanel").then((module) => ({ default: module.ComposePanel })),
@@ -204,6 +211,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	let retryTimer: ReturnType<typeof setTimeout> | undefined;
 	let agentDetectTimer: ReturnType<typeof setTimeout> | undefined;
 	let rafHandle = 0;
+	/** Disposer for the bounded zero-size retry, so it cannot outlive the effect run. */
+	let cancelSizeRetry: (() => void) | null = null;
 
 	let activityFlagged = false;
 	const mountedAt = performance.now();
@@ -895,23 +904,28 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	createEffect(
 		on(isVisible, (visible) => {
 			if (!visible) return;
+			const containerIsSized = () => !!containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0;
+
 			rafHandle = requestAnimationFrame(() => {
 				rafHandle = 0;
-				if (!containerRef || containerRef.offsetWidth <= 0 || containerRef.offsetHeight <= 0) {
-					// Container not ready — retry on next frame
-					const retry = () => {
-						requestAnimationFrame(() => {
-							if (containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0) {
-								initSession();
-							} else {
-								retry();
-							}
-						});
-					};
-					retry();
+				if (!containerIsSized()) {
+					// Container not ready — retry on the next frames, but bounded and
+					// cancellable: a pane the user leaves collapsed never gets a size.
+					cancelSizeRetry = retryUntilSized(
+						containerIsSized,
+						() =>
+							initSession().catch((e) =>
+								appLogger.error("terminal", "initSession failed after size retry", { error: String(e) }),
+							),
+						() =>
+							appLogger.warn(
+								"terminal",
+								`Container stayed zero-size for ${SIZE_RETRY_MAX_FRAMES} frames — giving up on init for ${props.id}`,
+							),
+					);
 					return;
 				}
-				initSession();
+				initSession().catch((e) => appLogger.error("terminal", "initSession failed", { error: String(e) }));
 
 				// Never steal the caret from a field the user is typing in — the search
 				// bar and the compose panel live inside this same terminal wrapper.
@@ -922,6 +936,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
 			onCleanup(() => {
 				if (rafHandle) cancelAnimationFrame(rafHandle);
+				rafHandle = 0;
+				cancelSizeRetry?.();
+				cancelSizeRetry = null;
 			});
 		}),
 	);
@@ -1081,24 +1098,31 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		terminalsStore.update(props.id, { ref: refMethods });
 	});
 
-	// Re-register ref and resubscribe to grid channel when this terminal becomes
-	// visible again (e.g. after reattach from a floating window whose Terminal
-	// overwrote the grid channel subscription and ref in the store).
-	createEffect((prev: boolean) => {
-		const vis = isVisible();
-		if (vis && prev === false) {
+	// Re-register ref and resubscribe to grid channel after a REAL reattach: the
+	// tab was detached into a floating window whose Terminal overwrote the grid
+	// channel subscription and the ref in the store.
+	//
+	// Keyed on the detach, not on visibility alone. A plain tab switch also flips
+	// visibility false→true, and resubscribing there wiped the grid on every
+	// switch — `refresh()` drops the current frame before the replacement arrives,
+	// so the user saw paint → wipe → paint.
+	createEffect((prev: ReattachPhase) => {
+		const { phase, resubscribe } = stepReattachPhase(prev, isVisible(), terminalsStore.isDetached(props.id));
+		if (resubscribe) {
 			terminalsStore.update(props.id, { ref: refMethods });
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
 					const ref = canvasTerminalRef();
-					if (ref) {
-						ref.resubscribe().then(() => ref.refresh());
-					}
+					if (!ref) return;
+					ref
+						.resubscribe()
+						.then(() => ref.refresh())
+						.catch((e) => appLogger.warn("terminal", "Grid resubscribe after reattach failed", { error: String(e) }));
 				});
 			});
 		}
-		return vis;
-	}, false);
+		return phase;
+	}, REATTACH_PHASE_INITIAL);
 
 	const handleBell = () => {
 		const style = settingsStore.state.bellStyle;
