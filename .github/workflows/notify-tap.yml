@@ -6,6 +6,7 @@ on:
 
 jobs:
   notify:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch to homebrew-tap

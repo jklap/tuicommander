@@ -15,6 +15,7 @@ env:
 
 jobs:
   audit:
+    timeout-minutes: 15
     name: Security audit
     runs-on: ubuntu-22.04
     steps:

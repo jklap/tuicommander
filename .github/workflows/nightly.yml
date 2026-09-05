@@ -24,6 +24,7 @@ env:
 
 jobs:
   cleanup:
+    timeout-minutes: 10
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -57,6 +58,7 @@ jobs:
           gh release delete nightly --repo "$GITHUB_REPOSITORY" --cleanup-tag=false --yes || true
 
   build:
+    timeout-minutes: 90
     needs: cleanup
     permissions:
       contents: write
@@ -251,6 +253,7 @@ jobs:
           rm -f "$APPLE_API_KEY_PATH" 2>/dev/null || true
 
   update-notes:
+    timeout-minutes: 15
     needs: build
     if: always() && needs.build.result != 'cancelled'
     permissions:
@@ -332,6 +335,7 @@ jobs:
             --prerelease
 
   retry-failed:
+    timeout-minutes: 15
     needs: build
     if: failure()
     permissions:

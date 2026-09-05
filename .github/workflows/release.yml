@@ -22,6 +22,7 @@ env:
 
 jobs:
   build:
+    timeout-minutes: 90
     permissions:
       contents: write
     strategy:
@@ -190,6 +191,7 @@ jobs:
           rm -f "$APPLE_API_KEY_PATH" 2>/dev/null || true
 
   remote-daemon:
+    timeout-minutes: 45
     permissions:
       contents: write
     strategy:
@@ -329,6 +331,7 @@ jobs:
           exit 1
 
   finalize-release:
+    timeout-minutes: 15
     needs: [build, remote-daemon]
     runs-on: ubuntu-latest
     permissions:
