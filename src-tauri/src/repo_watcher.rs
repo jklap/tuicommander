@@ -517,6 +517,16 @@ fn resolve_head_target(git_dir: &Path) -> Option<String> {
 /// `--no-optional-locks` (non-writing) read path — and folds them with
 /// `compute_git_fingerprint`. Runs on the post-debounce emit task, not the
 /// FSEvents hot path.
+///
+/// DEFERRED (2026-09-05) — story 693-1711 asked for this read to come from the
+/// shared `git_reads().status_counts()` instead of a fork. It cannot: that read
+/// returns only the clean/dirty/conflict verdict and the staged/changed counts,
+/// and swapping *which* file is staged leaves all three — plus the index size
+/// and HEAD — byte-identical (measured). The fingerprint would go blind to a
+/// stage swap and suppress the emit, which is worse than the fork it saves. See
+/// `test_real_fingerprint_moves_across_stage_commit_conflict_and_clean`, whose
+/// last leg fails the moment the counts are substituted. A conversion needs a
+/// per-file digest carried on `StatusCounts` first.
 fn repo_git_fingerprint(repo_root: &Path, git_dir: &Path) -> u64 {
     let index_size = std::fs::metadata(git_dir.join("index"))
         .map(|m| m.len())
@@ -2026,6 +2036,97 @@ mod tests {
         assert_eq!(
             before, after_remove,
             "back to the original worktree set → back to the original fingerprint"
+        );
+    }
+
+    /// Every git-state transition the watcher must report has to move the
+    /// fingerprint: stage, commit, conflict, and back to clean. The last leg is
+    /// the demanding one — swapping *which* file is staged leaves the staged and
+    /// changed counts, the index size and HEAD all identical, so only a per-file
+    /// status read tells the two states apart. A fingerprint folded from counts
+    /// alone goes blind there and the emit is skipped, leaving the git panel
+    /// showing the file that is no longer staged.
+    #[test]
+    fn test_real_fingerprint_moves_across_stage_commit_conflict_and_clean() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+        };
+        let git = |args: &[&str]| {
+            let out = run(args);
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        let write = |name: &str, body: &str| std::fs::write(repo.join(name), body).unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        write("a.txt", "one\n");
+        write("b.txt", "one\n");
+        git(&["add", "."]);
+        git(&["commit", "-m", "init"]);
+
+        let git_dir = repo.join(".git");
+        let fp = || repo_git_fingerprint(&repo, &git_dir);
+
+        let clean = fp();
+        write("a.txt", "two\n");
+        let dirty = fp();
+        assert_ne!(
+            clean, dirty,
+            "a working-tree edit must move the fingerprint"
+        );
+
+        git(&["add", "a.txt"]);
+        let staged = fp();
+        assert_ne!(dirty, staged, "staging must move the fingerprint");
+
+        git(&["commit", "-m", "two"]);
+        let committed = fp();
+        assert_ne!(staged, committed, "committing must move the fingerprint");
+
+        // Conflict: a sibling commit on the same file, merged back.
+        git(&["checkout", "-b", "feat", "HEAD~1"]);
+        write("a.txt", "feat\n");
+        git(&["commit", "-am", "feat"]);
+        git(&["checkout", "main"]);
+        assert!(
+            !run(&["merge", "feat"]).status.success(),
+            "the merge must conflict for this leg to test anything"
+        );
+        let conflict = fp();
+        assert_ne!(committed, conflict, "a conflict must move the fingerprint");
+
+        git(&["merge", "--abort"]);
+        let resolved = fp();
+        assert_ne!(
+            conflict, resolved,
+            "leaving the conflict must move the fingerprint back"
+        );
+
+        // Same counts, different file: staged a.txt -> staged b.txt.
+        write("a.txt", "swap-a\n");
+        write("b.txt", "swap-b\n");
+        git(&["add", "a.txt"]);
+        let staged_a = fp();
+        git(&["restore", "--staged", "a.txt"]);
+        git(&["add", "b.txt"]);
+        let staged_b = fp();
+        assert_ne!(
+            staged_a, staged_b,
+            "staging a different file must move the fingerprint even though the \
+             staged/changed counts and the index size are unchanged"
         );
     }
 
