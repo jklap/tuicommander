@@ -4829,7 +4829,7 @@ impl ChunkProcessor {
         // real output, a chunk that did not merely repainted the screen.
         let (
             changed_rows,
-            vt_log_total,
+            vt_output_grew,
             term_events,
             screen_cache,
             screen_activity,
@@ -4848,6 +4848,23 @@ impl ChunkProcessor {
             }
             let total = vt.total_lines();
             let hist = vt.grid_history_size();
+            // Did this chunk produce real output, or merely repaint rows that were
+            // already there (SIGWINCH reflow, cursor blink, statusline)? In the
+            // PRIMARY screen a repaint never grows the durable log while real work
+            // scrolls new lines into it, so the total answers the question.
+            //
+            // In the ALTERNATE screen it cannot: `VtLogBuffer::process` skips log
+            // capture entirely while alt is active, so the total is frozen however
+            // much the agent writes, and "did not grow" is not evidence of a
+            // repaint. Nothing is lost by reporting growth there — the only reader
+            // is the resize-grace extension below, which covers a reflow, and the
+            // grid performs no reflow in alt (`VtLogBuffer::resize` picks
+            // `ReflowMode::None`). Reading a frozen total as a repaint instead
+            // re-armed the grace on every chunk, so a single resize suppressed
+            // low-confidence questions, rate-limit and API-error events and the
+            // BUSY transition until the agent paused for a full second.
+            let vt_output_grew = vt.is_alternate_screen() || total > self.last_vt_log_total;
+            self.last_vt_log_total = self.last_vt_log_total.max(total);
             // Grid is the source of truth for mouse DECSET (including combined
             // `?1000;1002;1006h`). String-matching the chunk would miss grok.
             self.apply_inline_tui_mode(
@@ -4911,7 +4928,7 @@ impl ChunkProcessor {
 
             (
                 changed,
-                Some(total),
+                vt_output_grew,
                 tevts,
                 screen,
                 screen_activity,
@@ -4923,7 +4940,7 @@ impl ChunkProcessor {
         } else {
             (
                 Vec::new(),
-                None,
+                false,
                 Vec::new(),
                 None,
                 AgentScreenActivity::Unknown,
@@ -4934,14 +4951,6 @@ impl ChunkProcessor {
             )
         };
 
-        // Did this chunk grow the scrollback (genuine new output) or merely
-        // repaint existing rows (SIGWINCH reflow, cursor blink, statusline)?
-        // Captured BEFORE `last_vt_log_total` is updated below. A pure reflow
-        // never grows the buffer; real agent work scrolls in new lines.
-        let vt_log_grew = vt_log_total
-            .map(|t| t > self.last_vt_log_total)
-            .unwrap_or(false);
-
         // Nothing is emitted for scrollback growth. There was a throttled
         // `pty-vt-log-total-{session_id}` here whose comment claimed the frontend
         // listened for it and refreshed the scrollback overlay; no such listener
@@ -4950,10 +4959,7 @@ impl ChunkProcessor {
         // not free — and a comment describing a consumer that is not there costs
         // more, because the next reader builds the frontend half rather than
         // deleting the emit. The overlay reads the totals when it fetches a
-        // chunk. `last_vt_log_total` stays: `vt_log_grew` above is a real reader.
-        if let Some(new_total) = vt_log_total {
-            self.last_vt_log_total = self.last_vt_log_total.max(new_total);
-        }
+        // chunk. `last_vt_log_total` stays: `vt_output_grew` is a real reader.
 
         // Handle terminal events from alacritty (title, clipboard, PTY writes, OSC 133, TUIC)
         let mut tuic_events: Vec<ParsedEvent> = Vec::new();
@@ -5698,7 +5704,13 @@ impl ChunkProcessor {
         // busy. A growing chunk (genuine new output) is NOT extended, so real work
         // started right after a resize still registers as busy. An already-busy
         // session is unaffected (idle transitions are silence-timer only).
-        if !vt_log_grew {
+        //
+        // The extension has no stop condition of its own — each qualifying chunk
+        // pushes the deadline a full RESIZE_GRACE forward — so `vt_output_grew`
+        // is the ONLY thing that ends it. It must stay a signal that a working
+        // agent actually trips; see its definition for why the alternate screen
+        // needs its own answer rather than the durable-log total.
+        if !vt_output_grew {
             let mut sl = silence.lock();
             if sl.is_resize_grace() {
                 sl.on_resize();
@@ -5994,7 +6006,7 @@ struct ParentLifecycleDispatch {
 
 type VtProcessResult = (
     Vec<crate::state::ChangedRow>,
-    Option<usize>,
+    bool,
     Vec<crate::terminal_grid::TermEvent>,
     Option<Vec<String>>,
     AgentScreenActivity,
@@ -8058,6 +8070,13 @@ pub(crate) fn spawn_reader_thread(
                 "unknown panic payload".to_string()
             };
             tracing::error!(session_id = %sid_for_panic, "READER THREAD PANICKED: {msg}");
+            // The store that ends the frame ticker and the 1 Hz silence timer
+            // lives inside the closure above, so a panic skips it: without this
+            // the ticker keeps waking ~62 times a second and the tokio timer
+            // keeps ticking for the life of the process, and the ticker never
+            // reaches the code after its loop that removes this session's
+            // grid_frame_dirty / sync_update_active entries.
+            running.store(false, Ordering::Relaxed);
             mark_session_exited(&sid_for_panic, &state_for_panic);
         }
     });
@@ -11063,6 +11082,98 @@ mod tests {
             after, before,
             "a panicking keystroke left the blocking-pool thread promoted"
         );
+    }
+
+    /// The reader thread runs its whole body inside `catch_unwind`, and the
+    /// `running.store(false)` that stops the frame ticker and the 1 Hz silence
+    /// timer sits INSIDE that closure. A panic skips it: the ticker keeps waking
+    /// ~62 times a second and the tokio timer keeps ticking for the life of the
+    /// process, and the ticker never reaches the code after its loop that removes
+    /// the session's `grid_frame_dirty` / `sync_update_active` entries.
+    ///
+    /// Liveness is read off the two things each loop owns: the ticker removes its
+    /// map entries only after the loop ends, and the silence timer holds a clone
+    /// of the `SilenceState` Arc that teardown drops from `silence_states`.
+    #[tokio::test(flavor = "current_thread", start_paused = false)]
+    async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
+        const PAYLOAD: &str = "simulated PTY reader panic";
+
+        struct PanicOnRead(Arc<AtomicBool>);
+        impl Read for PanicOnRead {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                while !self.0.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                panic!("{PAYLOAD}");
+            }
+        }
+
+        // The injected panic is the fixture, not a failure. Swallow that one
+        // payload so the suite prints no stray backtrace, record that it fired so
+        // the test still proves the panic path ran, and delegate anything else.
+        let observed = Arc::new(AtomicBool::new(false));
+        let seen = observed.clone();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if info
+                .payload()
+                .downcast_ref::<String>()
+                .is_some_and(|s| s == PAYLOAD)
+            {
+                seen.store(true, Ordering::Relaxed);
+            } else {
+                previous(info);
+            }
+        }));
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "reader-panic-session".to_string();
+        let detonate = Arc::new(AtomicBool::new(false));
+        spawn_reader_thread(
+            Box::new(PanicOnRead(detonate.clone())),
+            Arc::new(AtomicBool::new(false)),
+            sid.clone(),
+            state.clone(),
+            None,
+        );
+
+        // Take the handle BEFORE the panic: teardown removes the map entry, so
+        // afterwards the only clones left are this one and the timer's.
+        let silence = state
+            .silence_states
+            .get(&sid)
+            .map(|e| Arc::clone(e.value()))
+            .expect("silence state is registered before the threads start");
+        assert!(
+            state.grid_frame_dirty.contains_key(&sid)
+                && state.sync_update_active.contains_key(&sid),
+            "precondition: the ticker owns both per-session entries"
+        );
+
+        detonate.store(true, Ordering::Relaxed);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let ticker_alive = state.grid_frame_dirty.contains_key(&sid)
+                || state.sync_update_active.contains_key(&sid);
+            let timer_alive = Arc::strong_count(&silence) > 1;
+            if !ticker_alive && !timer_alive {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reader panic leaked: ticker still live={ticker_alive}, \
+                 1 Hz timer still live={timer_alive} ({} silence refs)",
+                Arc::strong_count(&silence)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(
+            observed.load(Ordering::Relaxed),
+            "the injected reader panic never fired — the test proved nothing"
+        );
+        let _ = std::panic::take_hook();
     }
 
     #[test]
@@ -15703,6 +15814,106 @@ mod tests {
         assert!(
             s.is_resize_grace(),
             "second resize should restart grace period"
+        );
+    }
+
+    /// The grace re-arm reads "the durable log did not grow" as "this chunk was a
+    /// SIGWINCH repaint". In the ALTERNATE screen that reading is always wrong:
+    /// `VtLogBuffer::process` skips log capture entirely while alt is active, so
+    /// `total_lines()` is frozen no matter how much the agent writes. Every chunk
+    /// therefore re-armed the grace, and one resize suppressed low-confidence
+    /// questions, rate-limit and API-error events plus the BUSY transition until
+    /// the agent went quiet for a full second.
+    ///
+    /// The probe reads `last_resize_at` directly instead of sleeping out the
+    /// window: the re-arm IS that assignment, so whether the stamp moved is the
+    /// behaviour, not a proxy for it.
+    ///
+    /// This latch cannot become a `.tcap` fixture. A capture records PTY output
+    /// and user input bytes, and `replay_capture` drives `VtLogBuffer::process` +
+    /// `raw_stream_events` + `parse_clean_lines` with no `SilenceState` at all —
+    /// but the trigger here is `resize_pty` calling `on_resize()`, which is
+    /// out-of-band and appears nowhere in the byte stream. The grace is only
+    /// reachable through `process_chunk`, so that is where the test has to sit.
+    #[test]
+    fn resize_grace_re_arms_only_on_a_repaint_never_on_agent_output() {
+        use crate::state::VtLogBuffer;
+        use std::sync::atomic::AtomicU64;
+
+        /// Feeds `prelude` then `chunk` through the real `process_chunk` with the
+        /// grace armed and 200 ms left to run, and reports whether `chunk`
+        /// pushed the grace deadline forward.
+        fn re_armed_by(sid: &str, prelude: &str, chunk: &str) -> bool {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let silence = Arc::new(Mutex::new(SilenceState::new()));
+            state
+                .silence_states
+                .insert(sid.to_string(), silence.clone());
+            state.shell_states.insert(
+                sid.to_string(),
+                std::sync::atomic::AtomicU8::new(SHELL_NULL),
+            );
+            // Six rows: a screenful plus one line is enough to scroll and grow
+            // the durable log, which is what "real output" means in primary.
+            state
+                .vt_log_buffers
+                .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(6, 40, 1000)));
+            state
+                .output_buffers
+                .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+            state
+                .last_output_ms
+                .insert(sid.to_string(), AtomicU64::new(0));
+
+            let mut cp = ChunkProcessor::new(None, None);
+            cp.process_chunk(prelude, &silence, sid, &state);
+
+            // Arm the grace with 200 ms left: a re-arm is visible as a moved
+            // stamp, and no sleep is needed to tell the two apart.
+            let armed_at =
+                std::time::Instant::now() - RESIZE_GRACE + std::time::Duration::from_millis(200);
+            silence.lock().last_resize_at = Some(armed_at);
+            assert!(
+                silence.lock().is_resize_grace(),
+                "precondition: the grace must still be running when the chunk lands"
+            );
+
+            cp.process_chunk(chunk, &silence, sid, &state);
+            silence.lock().last_resize_at != Some(armed_at)
+        }
+
+        // Primary screen, pure repaint: no new line scrolled in, so this is the
+        // post-SIGWINCH reflow the extension exists for. It must still re-arm.
+        assert!(
+            re_armed_by(
+                "grace-primary-repaint",
+                "one\r\ntwo\r\n",
+                "\x1b[H\x1b[2Kone"
+            ),
+            "a primary-screen repaint must still extend the grace"
+        );
+
+        // Primary screen, real output: eight lines on a six-row screen scroll the
+        // oldest into the durable log. Genuine work must end the extension.
+        assert!(
+            !re_armed_by(
+                "grace-primary-growth",
+                "boot\r\n",
+                "l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\n"
+            ),
+            "growing output must not extend the grace"
+        );
+
+        // Alternate screen, the same real output. The log cannot grow here, so
+        // the unfixed check calls it a repaint and latches the grace forever.
+        assert!(
+            !re_armed_by(
+                "grace-alt-output",
+                "\x1b[?1049h",
+                "l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\n"
+            ),
+            "alternate-screen output must not extend the grace — the durable log \
+             is frozen there, so a frozen total is not evidence of a repaint"
         );
     }
 

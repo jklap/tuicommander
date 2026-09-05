@@ -1487,3 +1487,18 @@ needed. Canvas painting is not observable over HTTP, so these need eyes.
   one `Container stayed zero-size for 120 frames` warning and CPU stays flat.
   Previously that container kept a `requestAnimationFrame` loop re-arming every
   frame for the lifetime of the page, one loop per terminal, surviving unmount.
+
+- [ ] (story 644-2cf4, Rust — needs a `make dev` restart) A reader-thread panic no
+  longer leaks its ticker. The panic path now clears the `running` flag, so the
+  16 ms frame ticker and the 1 Hz silence timer both stop. Hard to force by hand;
+  the observable if it ever happens is that a session logging
+  `READER THREAD PANICKED` leaves no residual CPU and its tab stops repainting.
+  Enable diagnostics and watch `thread count` stay flat after such a log line.
+
+- [ ] (story 645-9bfb, Rust — needs a `make dev` restart) Resize an alternate-screen
+  agent (grok) while it is streaming, then let it ask a low-confidence question.
+  The tab must badge within about a second of the resize. Before the fix the resize
+  grace re-armed on every chunk, so questions, rate-limit and API-error events and
+  the busy badge stayed suppressed until the agent went quiet for a full second.
+  Also confirm a resize during a normal-screen Claude re-render still does NOT
+  flip an idle tab to busy — that is the behaviour the grace extension protects.
