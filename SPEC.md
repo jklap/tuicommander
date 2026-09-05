@@ -198,6 +198,38 @@ type AgentType = "claude" | "gemini" | "opencode" | "aider" | "codex" | "amp" | 
 
 Full agent configuration (binary, resume command, session discovery, detection patterns) lives in `src/agents.ts`.
 
+### PTY versus ACP routing
+
+Two transports carry an assistant, and a session belongs to exactly one of them.
+There is no hybrid route and no fallback between them.
+
+- **PTY.** Every member of `AgentType` above. TUICommander allocates a terminal,
+  runs the CLI executable, and infers state by parsing the rendered rows into
+  `ParsedEvent`. Session state is recovered from the agent's own session files
+  on disk (see AGENTS.md, "Agent Session Management").
+- **ACP.** `ego` only, through the Agent Client Protocol v1 client in
+  `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly and
+  owns its stdio JSON-RPC connection. No terminal is allocated, no shell is
+  invoked, and no output is scraped.
+
+`ego` is deliberately **not** an `AgentType`. `AgentType` describes a CLI
+executable, its launch arguments and its parser behaviour; it carries no
+negotiated protocol version, connection lifetime, capability snapshot, reverse
+request, or durable ACP session ID. Adding `ego` to it would make the ACP
+process look like a terminal and would recreate exactly the hybrid this rule
+forbids. ACP data is already structured and must never pass through the terminal
+parser or be projected into `ParsedEvent`.
+
+When the ACP connection fails, it settles as a failure. It does not degrade to a
+PTY session, to reading ego's files, or to terminal input. There is no runtime
+feature flag selecting between the two paths.
+
+The source contract is `plans/ego-acp-client.md`, which is final rather than
+exploratory. It supersedes `plans/acp-transport-integration.md` and
+`ideas/acp-integration.md`; those describe an early proof of concept whose PTY
+fallback and feature gate were rejected, and they do not define the
+implementation.
+
 ## Rate Limit Detection
 
 Provider-specific patterns detect rate limits in terminal output:

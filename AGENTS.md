@@ -112,6 +112,8 @@ TUIC tracks each agent's session ID for resume-after-restart. Two strategies coe
 
 When adding a new agent: choose discovery-based if the agent writes session files to disk (add `sessionDiscovery` to `agents.ts` and a Rust `discover_*_session` to `agent_session.rs`). Choose forced injection only when discovery is impossible (e.g., SQLite-only storage).
 
+All of the above describes the **PTY** transport. `ego` does not use it — it runs over ACP and is deliberately not an `AgentType`. Read SPEC.md → "PTY versus ACP routing" before wiring any assistant that speaks a protocol instead of a terminal: the hybrid PTY/ACP route, and every fallback between the two, are rejected by contract rather than merely unimplemented.
+
 ## Logging
 
 Use `appLogger` from `src/stores/appLogger.ts` — never `console.log/warn/error`. Check app logs via `GET http://localhost:9876/logs` (supports `?level=`, `?source=`, `?limit=` filters) before asking Boss for logs.
