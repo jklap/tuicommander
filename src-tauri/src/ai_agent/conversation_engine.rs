@@ -111,6 +111,26 @@ fn resolve_reasoning(level: ReasoningLevel, model: &str) -> Option<genai::chat::
     }
 }
 
+/// Options for one LLM turn. `capture_usage` gives us the real prompt-token count
+/// (the compaction trigger); `max_tokens` is the hard ceiling on the reply.
+fn build_chat_options(
+    temperature: f32,
+    reasoning: ReasoningLevel,
+    model: &str,
+) -> genai::chat::ChatOptions {
+    let mut options = genai::chat::ChatOptions::default()
+        .with_capture_tool_calls(true)
+        .with_capture_usage(true)
+        .with_max_tokens(engine::MAX_RESPONSE_TOKENS)
+        .with_temperature(temperature.into());
+    if let Some(effort) = resolve_reasoning(reasoning, model) {
+        options = options
+            .with_reasoning_effort(effort)
+            .with_capture_reasoning_content(true);
+    }
+    options
+}
+
 impl Default for ConversationConfig {
     fn default() -> Self {
         Self {
@@ -566,14 +586,27 @@ enum DrainOutcome {
     },
 }
 
+/// How often the drain loop wakes to check cancellation and stream liveness.
+const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 /// Drain one streamed LLM response, emitting TextChunk/ReasoningChunk events as
 /// content arrives. On a stream error, reports whether it's transient and
 /// whether anything was already emitted so the caller can decide to retry.
-async fn drain_stream(
-    mut stream: genai::chat::ChatStream,
+///
+/// A stream that goes quiet without ending is reported as a transient failure
+/// after `engine::STREAM_CHUNK_TIMEOUT`: a half-open connection never yields an
+/// error and never yields `None`, so without this the loop waits forever.
+///
+/// Generic over the stream so the stall path is testable — `genai::chat::ChatStream`
+/// has no public constructor.
+async fn drain_stream<S>(
+    mut stream: S,
     event_tx: &broadcast::Sender<ConversationEvent>,
     cancel: &Arc<AtomicBool>,
-) -> DrainOutcome {
+) -> DrainOutcome
+where
+    S: futures_util::Stream<Item = genai::Result<genai::chat::ChatStreamEvent>> + Unpin,
+{
     use futures_util::StreamExt;
     use genai::chat::ChatStreamEvent as GenaiStreamEvent;
 
@@ -581,10 +614,13 @@ async fn drain_stream(
     let mut captured = None;
     let mut usage = None;
     let mut emitted = false;
+    // tokio's clock, not std's, so a paused-time test can drive the timeout.
+    let mut last_activity = tokio::time::Instant::now();
 
     loop {
         tokio::select! {
             event = stream.next() => {
+                last_activity = tokio::time::Instant::now();
                 match event {
                     Some(Ok(GenaiStreamEvent::Chunk(chunk))) => {
                         emitted = true;
@@ -613,9 +649,19 @@ async fn drain_stream(
                     _ => {}
                 }
             }
-            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+            _ = tokio::time::sleep(DRAIN_POLL_INTERVAL) => {
                 if cancel.load(Ordering::Acquire) {
                     return DrainOutcome::Cancelled;
+                }
+                if last_activity.elapsed() >= engine::STREAM_CHUNK_TIMEOUT {
+                    return DrainOutcome::Failed {
+                        transient: true,
+                        emitted,
+                        msg: format!(
+                            "stream stalled: no chunk for {}s",
+                            engine::STREAM_CHUNK_TIMEOUT.as_secs()
+                        ),
+                    };
                 }
             }
         }
@@ -642,9 +688,7 @@ async fn run_conversation(
     event_tx: broadcast::Sender<ConversationEvent>,
     approval_tx: Arc<Mutex<Option<oneshot::Sender<bool>>>>,
 ) -> Result<String, String> {
-    use genai::chat::{
-        ChatMessage, ChatOptions, ChatRequest, ContentPart, Tool, ToolCall, ToolResponse,
-    };
+    use genai::chat::{ChatMessage, ChatRequest, ContentPart, Tool, ToolCall, ToolResponse};
 
     // Create filesystem sandbox from the session's CWD so that file tools
     // (list_files, read_file, etc.) can resolve paths during the conversation.
@@ -805,16 +849,7 @@ async fn run_conversation(
         let model = select_model_for_phase(&base_model, &model_overrides, phase);
 
         // Reasoning effort depends on the active per-phase model.
-        // capture_usage gives us the real prompt-token count (compaction trigger).
-        let mut chat_options = ChatOptions::default()
-            .with_capture_tool_calls(true)
-            .with_capture_usage(true)
-            .with_temperature(config.temperature.into());
-        if let Some(effort) = resolve_reasoning(config.reasoning, model) {
-            chat_options = chat_options
-                .with_reasoning_effort(effort)
-                .with_capture_reasoning_content(true);
-        }
+        let chat_options = build_chat_options(config.temperature, config.reasoning, model);
 
         // LLM call with bounded retry on transient errors (429/5xx/network).
         // We only retry when nothing was streamed yet, so the UI never sees
@@ -1355,5 +1390,80 @@ mod tests {
         };
         assert_eq!(config.max_steps, Some(20));
         assert_eq!(config.autonomy, Autonomy::Autonomous);
+    }
+
+    // ── LLM call bounds ───────────────────────────────────────
+
+    #[test]
+    fn chat_options_cap_the_response() {
+        let options = build_chat_options(0.7, ReasoningLevel::Off, "gpt-4o-mini");
+        assert_eq!(
+            options.max_tokens,
+            Some(engine::MAX_RESPONSE_TOKENS),
+            "every LLM call must carry a token ceiling"
+        );
+        assert_eq!(options.temperature, Some(0.7f32.into()));
+    }
+
+    #[test]
+    fn chat_options_keep_reasoning_capture_on_capable_models() {
+        let options = build_chat_options(0.7, ReasoningLevel::High, "claude-opus-4-7");
+        assert_eq!(options.max_tokens, Some(engine::MAX_RESPONSE_TOKENS));
+        assert!(matches!(
+            options.reasoning_effort,
+            Some(genai::chat::ReasoningEffort::High)
+        ));
+    }
+
+    /// A provider that opens the stream, sends one chunk and then goes quiet
+    /// yields neither an error nor `None`. Without the stall timeout the drain
+    /// loop parks on it for the lifetime of the process.
+    #[tokio::test(start_paused = true)]
+    async fn drain_stream_gives_up_on_a_stalled_stream() {
+        use futures_util::StreamExt as _;
+        use genai::chat::{ChatStreamEvent, StreamChunk};
+
+        let (event_tx, _rx) = broadcast::channel(64);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stream = futures_util::stream::iter(vec![Ok(ChatStreamEvent::Chunk(StreamChunk {
+            content: "partial".into(),
+        }))])
+        .chain(futures_util::stream::pending());
+
+        let outcome = drain_stream(Box::pin(stream), &event_tx, &cancel).await;
+
+        match outcome {
+            DrainOutcome::Failed {
+                transient,
+                emitted,
+                msg,
+            } => {
+                assert!(transient, "a stalled stream is worth retrying");
+                assert!(emitted, "one chunk had already reached the UI");
+                assert!(msg.contains("stalled"), "got: {msg}");
+            }
+            _ => panic!("a stalled stream must not drain successfully"),
+        }
+    }
+
+    /// The same silence, but under the timeout, must not be reported as a stall.
+    #[tokio::test(start_paused = true)]
+    async fn drain_stream_completes_when_the_stream_ends() {
+        use genai::chat::{ChatStreamEvent, StreamChunk, StreamEnd};
+
+        let (event_tx, _rx) = broadcast::channel(64);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stream = futures_util::stream::iter(vec![
+            Ok(ChatStreamEvent::Chunk(StreamChunk {
+                content: "hello".into(),
+            })),
+            Ok(ChatStreamEvent::End(StreamEnd::default())),
+        ]);
+
+        let outcome = drain_stream(Box::pin(stream), &event_tx, &cancel).await;
+        match outcome {
+            DrainOutcome::Done { text_buf, .. } => assert_eq!(text_buf, "hello"),
+            _ => panic!("a stream that ends cleanly must drain successfully"),
+        }
     }
 }

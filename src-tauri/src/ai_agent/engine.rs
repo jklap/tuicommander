@@ -30,6 +30,13 @@ pub(crate) const TOOL_DISPATCH_LIMIT_PER_SESSION: usize = 500;
 
 /// Max retry attempts for a single transient LLM call (excludes the first try).
 pub(crate) const MAX_LLM_RETRIES: u32 = 4;
+/// Hard ceiling on the tokens one LLM response may generate. Without it a model
+/// that loses the plot bills an unbounded reply and holds the loop open for it.
+pub(crate) const MAX_RESPONSE_TOKENS: u32 = 8192;
+/// Longest silence tolerated between two streamed chunks. A provider that opens
+/// the stream and then stops sending is otherwise indistinguishable from one that
+/// is still thinking, and the loop waits forever.
+pub(crate) const STREAM_CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
 const BACKOFF_BASE_MS: u64 = 500;
 const BACKOFF_CAP: Duration = Duration::from_secs(16);
 
