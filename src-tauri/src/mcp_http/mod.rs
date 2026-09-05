@@ -502,6 +502,73 @@ async fn inject_localhost_connect_info(
     next.run(req).await
 }
 
+/// Top-level path segments owned by the HTTP API.
+///
+/// The SPA catch-all serves index.html for anything no route matched, which is
+/// right for a deep link like `/settings` and wrong for `/repo/typo`: the caller
+/// gets 200 + HTML, `rpc()` reads that as success and then fails parsing it as a
+/// command result, so every unregistered route hides in plain sight. A path
+/// under one of these prefixes 404s with a JSON error instead.
+///
+/// Kept honest by `api_prefixes_cover_every_registered_route`, which reads the
+/// route literals out of this file — a new family added here without a matching
+/// entry fails that test instead of quietly serving HTML again.
+#[cfg(feature = "desktop")]
+const API_PREFIXES: &[&str] = &[
+    "agent",
+    "agents",
+    "ai",
+    "api",
+    "audio",
+    "claude",
+    "codex",
+    "config",
+    "debug",
+    "diagnostics",
+    "dictation",
+    "events",
+    "exec",
+    "fs",
+    "generators",
+    "github",
+    "health",
+    "logs",
+    "mcp",
+    "metrics",
+    "plugins",
+    "process",
+    "prompt",
+    "registry",
+    "repo",
+    "sessions",
+    "stats",
+    "system",
+    "terminal",
+    "tunnels",
+    "watchers",
+    "worktrees",
+];
+
+/// Catch-all for every path no route matched.
+///
+/// Under an API prefix that means a missing route, so answer 404 with a JSON
+/// error; anything else is an SPA deep link and gets the frontend shell.
+#[cfg(feature = "desktop")]
+async fn spa_or_api_404(path: AxumPath<String>) -> Response {
+    // `{*path}` captures without the leading slash.
+    let head = path.0.split('/').next().unwrap_or("");
+    if API_PREFIXES.contains(&head) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("no such endpoint: /{}", path.0),
+            })),
+        )
+            .into_response();
+    }
+    static_files::serve_static(path).await
+}
+
 /// Build the router (exposed for testing).
 /// When `remote_auth` is true, applies Basic Auth middleware (requires ConnectInfo).
 /// When `mcp_enabled` is false, excludes MCP Streamable HTTP route (/mcp).
@@ -1507,7 +1574,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     #[cfg(feature = "desktop")]
     let routes = routes
         .route("/", get(static_files::serve_index))
-        .route("/{*path}", get(static_files::serve_static));
+        .route("/{*path}", get(spa_or_api_404));
 
     let routes = routes
         .with_state(state.clone())
@@ -4491,6 +4558,138 @@ mod tests {
         assert!(
             ct.contains("text/html"),
             "SPA fallback should return HTML, got {ct}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_api_path_404s_while_spa_deep_links_still_load() {
+        // A path under an API prefix that matched no route is a missing route,
+        // not an SPA deep link. Serving index.html with 200 makes `rpc()` see a
+        // success and then choke parsing HTML as a command result, which hides
+        // every unregistered route (audit §2 #1).
+        let state = test_state();
+        let app = build_router(state, false, true);
+        for p in [
+            "/sessions/abc/no-such-endpoint",
+            "/repo/no-such-endpoint",
+            "/system/no-such-endpoint",
+            "/fs/no-such-endpoint",
+            "/worktrees/a/b/c",
+            "/api/no-such-endpoint",
+            "/dictation/no-such-endpoint",
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(Request::get(p).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{p} should 404");
+            let ct = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            assert!(
+                ct.contains("application/json"),
+                "{p} should answer JSON, got {ct}"
+            );
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(
+                json["error"].is_string(),
+                "{p} should carry an error message, got {json}"
+            );
+        }
+        // Deep links outside the API surface keep booting the SPA shell.
+        for p in ["/settings", "/some/unknown/spa/route", "/mobile/session/x"] {
+            let resp = app
+                .clone()
+                .oneshot(Request::get(p).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{p} should serve the SPA");
+            let ct = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            assert!(ct.contains("text/html"), "{p} should be HTML, got {ct}");
+        }
+    }
+
+    /// Drift guard for `API_PREFIXES`: the catch-all decides 404-vs-index.html
+    /// from that list, so a route family nobody adds to it silently goes back to
+    /// answering HTML for its own typos. Derive the truth from the registered
+    /// routes instead of trusting the list: every `.route(...)`/`.nest(...)` path
+    /// literal in this file — every route this server serves is declared here —
+    /// must have its first segment covered.
+    #[test]
+    fn api_prefixes_cover_every_registered_route() {
+        const SRC: &str = include_str!("mod.rs");
+        let prod = SRC
+            .split("#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("source has a production half");
+        // `tunnel_routes()` is merged with `.nest("/tunnels", ...)`, so its own
+        // literals are relative to that prefix — skip its body, the nest covers it.
+        let (head, rest) = prod
+            .split_once("fn tunnel_routes()")
+            .expect("tunnel_routes() is declared here");
+        let (_body, tail) = rest.split_once("\n}\n").expect("tunnel_routes() body ends");
+
+        fn route_call_end(line: &str) -> Option<usize> {
+            let a = line.find(".route(").map(|i| i + ".route(".len());
+            let b = line.find(".nest(").map(|i| i + ".nest(".len());
+            match (a, b) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, y) => x.or(y),
+            }
+        }
+        fn quoted_path(s: &str) -> Option<&str> {
+            let start = s.find('"')? + 1;
+            let end = start + s[start..].find('"')?;
+            let lit = &s[start..end];
+            lit.starts_with('/').then_some(lit)
+        }
+
+        let mut registered: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for source in [head, tail] {
+            let mut awaiting = false;
+            for line in source.lines() {
+                let mut rest = line;
+                if let Some(i) = route_call_end(line) {
+                    rest = &line[i..];
+                    awaiting = true;
+                }
+                if awaiting && let Some(path) = quoted_path(rest) {
+                    awaiting = false;
+                    let seg = path.trim_start_matches('/').split('/').next().unwrap_or("");
+                    // "" is `/` itself; `{*path}` is the catch-all being guarded.
+                    if !seg.is_empty() && !seg.starts_with('{') {
+                        registered.insert(seg);
+                    }
+                }
+            }
+        }
+
+        // A scanner that silently matches nothing would pass every assertion below.
+        assert!(
+            registered.len() > 20,
+            "route scanner found only {registered:?} — it stopped matching the source"
+        );
+        let missing: Vec<&str> = registered
+            .iter()
+            .copied()
+            .filter(|seg| !API_PREFIXES.contains(seg))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "route prefixes missing from API_PREFIXES: {missing:?} — \
+             unregistered paths under them would serve index.html with 200"
         );
     }
 
