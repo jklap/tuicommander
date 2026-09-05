@@ -487,8 +487,8 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 				: `Discard ${count} selected line${count > 1 ? "s" : ""}?`;
 		}
 		return isStaged()
-			? t("diffTab.unstageHunk", "Unstage this change?")
-			: t("diffTab.discardHunk", "Discard this change?");
+			? t("diffTab.unstageHunkTitle", "Unstage this change?")
+			: t("diffTab.discardHunkTitle", "Discard this change?");
 	};
 	const confirmMessage = () =>
 		isStaged()
