@@ -2932,7 +2932,8 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["jsonrpc"], "2.0");
         assert_eq!(json["id"], 1);
-        assert_eq!(json["result"]["protocolVersion"], "2025-11-25");
+        // Echoes back what the client asked for, not a fixed server version.
+        assert_eq!(json["result"]["protocolVersion"], "2025-03-26");
         assert!(json["result"]["serverInfo"]["name"].as_str().is_some());
     }
 
@@ -2967,7 +2968,7 @@ mod tests {
                 .unwrap();
             let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(
-                json["result"]["protocolVersion"], "2025-11-25",
+                json["result"]["protocolVersion"], offered_version,
                 "header={header_value:?}"
             );
         }

@@ -163,12 +163,20 @@ Client ──GET───> /mcp   (SSE stream for server notifications, requires
 Client ──DELETE─> /mcp  (end session, pass Mcp-Session-Id header)
 ```
 
-`initialize` returns `2025-11-25`. A missing `MCP-Protocol-Version` request
-header remains accepted for older clients; `tuic-bridge` supplies the version
-carried by each proxied stdio request and falls back to `2025-11-25` when the
-request carries none. Modern `2026-07-28` `server/discover` remains outside
-this legacy endpoint and returns JSON-RPC method-not-found as documented in the
-dual-era migration plan.
+`initialize` negotiates the revision: it echoes `params.protocolVersion` when
+that value is one of `2026-07-28`, `2025-11-25` or `2025-03-26`, and answers
+`2025-11-25` (the revision this endpoint implements) for anything else or for a
+request that names no version. A missing `MCP-Protocol-Version` request header
+remains accepted for older clients; `tuic-bridge` supplies the version carried
+by each proxied stdio request and falls back to `2025-11-25` when the request
+carries none. Modern `2026-07-28` `server/discover` remains outside this legacy
+endpoint and returns JSON-RPC method-not-found as documented in the dual-era
+migration plan.
+
+The handshake declares `tools.listChanged` (plus `experimental.claude/channel`).
+The GET `/mcp` SSE stream emits `notifications/tools/list_changed` when the
+upstream set changes, and a client may ignore a notification for a capability
+the server never advertised.
 
 **`tools/call` does not require `Mcp-Session-Id`.** Identity is resolved per call
 rather than demanded up front. A caller that sends the header gets its protocol
@@ -289,7 +297,7 @@ Eight native tools, organized by domain. Two (`config`, `debug`) are hidden by d
 | `session` | list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
-| `repo` | list, active, prs, status, worktree_list, worktree_create, worktree_remove | Enabled |
+| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove | Enabled |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `config` | get, save | Disabled |
