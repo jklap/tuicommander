@@ -227,6 +227,30 @@ export function createLeadingThrottle(work: () => void, intervalMs: number): Lea
 	};
 }
 
+/**
+ * The backend abandons an unacked frame after this long (`MAX_IN_FLIGHT_MS` in
+ * `src-tauri/src/pty.rs`). Mirrored here only so the margin below is arithmetic
+ * a reader can check, not a number two files apart that happen to agree.
+ */
+export const BACKEND_FRAME_ABANDON_MS = 500;
+
+/**
+ * Interval for the hidden terminal's trailing ack.
+ *
+ * This is a `setTimeout` on the WebView main thread — the most contended thread
+ * in the app — racing a deadline the backend measures on its own clock, so the
+ * gap between the two IS the drift budget. At 400 ms the budget was 100 ms and
+ * lost routinely: a busy window logged `grid frame gate stuck` every few seconds
+ * with `elapsed_ms` of 506-508, i.e. a timer that fired ~110 ms late. The ack was
+ * on its way; only the margin was wrong.
+ *
+ * 200 ms leaves 300 ms of drift. The cost is one extra frame per second for a
+ * hidden tab that is actively producing output, which is the cheaper half of the
+ * trade: past 300 ms of main-thread block the frontend really is stuck, and the
+ * warning should fire.
+ */
+export const HIDDEN_ACK_INTERVAL_MS = 200;
+
 /** Trailing ack scheduler for a hidden terminal (see createHiddenAckThrottle). */
 export interface HiddenAckThrottle {
 	/** A frame arrived while hidden: arm the trailing ack if it is not already armed. */
@@ -247,8 +271,7 @@ export interface HiddenAckThrottle {
  *
  * One trailing ack per interval gets both: the hidden tab keeps receiving frames
  * at ~1/interval, and the "gate stuck" warning goes back to meaning what it says.
- * Call with an interval BELOW the backend's MAX_IN_FLIGHT_MS so the gate reopens
- * on its own before the ticker gives up on the frame.
+ * Call with {@link HIDDEN_ACK_INTERVAL_MS}, which carries the margin this needs.
  */
 export function createHiddenAckThrottle(ack: () => void, intervalMs: number): HiddenAckThrottle {
 	let timer: ReturnType<typeof setTimeout> | null = null;

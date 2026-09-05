@@ -34,6 +34,7 @@ import {
 	decodeStyledRange,
 	GUTTER_PX,
 	gridDimsForBox,
+	HIDDEN_ACK_INTERVAL_MS,
 	reconcileDelay,
 	rowText,
 	shouldFireReconcile,
@@ -265,9 +266,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		transport?.ackFrame(framesReceived);
 	}
 
-	// Below the backend's MAX_IN_FLIGHT_MS (500 ms): the gate must reopen on this
-	// ack, not on the ticker deciding the frontend is stuck.
-	const hiddenAck = createHiddenAckThrottle(ackFrame, 400);
+	// The gate must reopen on this ack, not on the ticker deciding the frontend is
+	// stuck. The margin that buys is in HIDDEN_ACK_INTERVAL_MS — do not inline it.
+	const hiddenAck = createHiddenAckThrottle(ackFrame, HIDDEN_ACK_INTERVAL_MS);
 
 	function writePtyNoScroll(data: string) {
 		invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
