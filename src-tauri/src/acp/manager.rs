@@ -15,12 +15,15 @@ use tokio::{
     task::JoinHandle,
 };
 
-use super::connection::{Command, ConnectionActor};
+use futures_util::StreamExt;
+
+use super::connection::{Accepted, Command, ConnectionActor, InFlight};
+use super::events::{AcpEventJournal, AcpEventStream};
 use super::{
     AcpAttachKind, AcpAttachmentSnapshot, AcpCapabilitySnapshot, AcpClientError, AcpConnectRequest,
     AcpConnectionId, AcpConnectionSettlement, AcpConnectionSettlementReason, AcpConnectionSnapshot,
-    AcpConnectionState, AcpDetachKind, AcpReconnectRequest, AcpSessionAuthority, EgoAcpConfig,
-    build_initialize_request, capability_snapshot, launch_spec,
+    AcpConnectionState, AcpDetachKind, AcpReconnectRequest, AcpSessionAuthority, AcpTurnId,
+    EgoAcpConfig, build_initialize_request, capability_snapshot, launch_spec,
 };
 
 const INITIAL_GENERATION: u64 = 1;
@@ -33,6 +36,15 @@ const INITIAL_GENERATION: u64 = 1;
 /// is not keeping up, and the honest thing then is backpressure on the caller.
 const COMMAND_QUEUE: usize = 32;
 
+/// How many incoming updates may wait for the actor.
+///
+/// Deep because the producer is the SDK dispatch loop, which cannot be made to
+/// wait without stalling the protocol, and a replayed session arrives as a
+/// burst of chunks. Overflowing it is a fatal connection error rather than a
+/// dropped update: a host that renders a turn with a hole in the middle of it
+/// is confidently wrong about what the agent said.
+const UPDATE_QUEUE: usize = 4096;
+
 pub struct AcpClientManager {
     config: EgoAcpConfig,
     connections: Arc<Mutex<HashMap<AcpConnectionId, ConnectionHandle>>>,
@@ -42,6 +54,7 @@ pub struct AcpClientManager {
 struct ConnectionHandle {
     snapshot: AcpConnectionSnapshot,
     commands: mpsc::Sender<Command>,
+    journal: Arc<AcpEventJournal>,
     shutdown: Option<oneshot::Sender<()>>,
     supervisor: Option<JoinHandle<()>>,
 }
@@ -49,6 +62,12 @@ struct ConnectionHandle {
 struct InitializedConnection {
     agent_info: Option<v1::Implementation>,
     capabilities: AcpCapabilitySnapshot,
+}
+
+/// What one pass of the supervisor's select decided to do.
+enum Step {
+    Command(Command),
+    Accept(Accepted),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,6 +101,8 @@ impl AcpClientManager {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (registered_tx, registered_rx) = oneshot::channel();
         let (commands_tx, commands_rx) = mpsc::channel(COMMAND_QUEUE);
+        let (inbound, updates_rx) = mpsc::channel(UPDATE_QUEUE);
+        let journal = Arc::new(AcpEventJournal::new(connection_id, generation));
 
         let supervisor = tokio::spawn(supervise_connection(
             connection_id,
@@ -91,7 +112,10 @@ impl AcpClientManager {
                 initialized: initialized_tx,
                 registered: registered_rx,
                 commands: commands_rx,
+                inbound,
+                updates: updates_rx,
                 shutdown: shutdown_rx,
+                journal: Arc::clone(&journal),
             },
             Arc::clone(&self.connections),
         ));
@@ -111,6 +135,10 @@ impl AcpClientManager {
             }
         };
 
+        // The bounds come from the journal here too, so what this returns and
+        // what a later `snapshot` reports answer to one convention rather than
+        // to a literal that happens to agree with an empty journal.
+        let (earliest_sequence, latest_sequence) = journal.bounds();
         let snapshot = AcpConnectionSnapshot {
             connection_id,
             generation,
@@ -118,8 +146,8 @@ impl AcpClientManager {
             agent_info: initialized.agent_info,
             capabilities: Some(initialized.capabilities),
             attachments: Vec::new(),
-            earliest_sequence: 0,
-            latest_sequence: 0,
+            earliest_sequence,
+            latest_sequence,
             settlement: None,
         };
         self.connections.lock().insert(
@@ -127,6 +155,7 @@ impl AcpClientManager {
             ConnectionHandle {
                 snapshot: snapshot.clone(),
                 commands: commands_tx,
+                journal,
                 shutdown: Some(shutdown_tx),
                 supervisor: Some(supervisor),
             },
@@ -208,6 +237,54 @@ impl AcpClientManager {
         .await
     }
 
+    /// Start a turn and get back its id, not its outcome.
+    ///
+    /// The outcome is an event, because a turn outlives the call that started
+    /// it and more than one reader needs to know how it ended.
+    pub async fn prompt(
+        &self,
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+        prompt: Vec<v1::ContentBlock>,
+    ) -> Result<AcpTurnId, AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Prompt {
+            session_id,
+            prompt,
+            reply,
+        })
+        .await
+    }
+
+    /// Ask the running turn to stop. It settles on its own response.
+    pub async fn cancel(
+        &self,
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+    ) -> Result<(), AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Cancel { session_id, reply })
+            .await
+    }
+
+    /// Read what happened on a connection, from `from` onwards.
+    ///
+    /// Works on a settled connection too: what it recorded is still true, and a
+    /// host that reconnects to read the end of a turn should not be told the
+    /// connection is gone before it has seen how the turn ended.
+    pub fn subscribe(
+        &self,
+        connection_id: AcpConnectionId,
+        from: u64,
+    ) -> Result<AcpEventStream, AcpClientError> {
+        let journal = {
+            let connections = self.connections.lock();
+            let connection = connections
+                .get(&connection_id)
+                .ok_or_else(|| AcpClientError::not_found(connection_id))?;
+            Arc::clone(&connection.journal)
+        };
+        journal.subscribe(from)
+    }
+
     /// Hand one command to a connection's actor and wait for its answer.
     ///
     /// A connection this manager never had and one that has settled are
@@ -250,7 +327,17 @@ impl AcpClientManager {
         self.connections
             .lock()
             .get(&connection_id)
-            .map(|connection| connection.snapshot.clone())
+            .map(|connection| {
+                // Read from the journal rather than from a copy kept in step
+                // with it: the bounds move with every event, and a copy would
+                // have to be republished on each one just to stay true.
+                let (earliest, latest) = connection.journal.bounds();
+                AcpConnectionSnapshot {
+                    earliest_sequence: earliest,
+                    latest_sequence: latest,
+                    ..connection.snapshot.clone()
+                }
+            })
             .ok_or_else(|| AcpClientError::not_found(connection_id))
     }
 
@@ -345,7 +432,12 @@ struct SupervisorWiring {
     initialized: oneshot::Sender<Result<InitializedConnection, AcpClientError>>,
     registered: oneshot::Receiver<()>,
     commands: mpsc::Receiver<Command>,
+    /// Both halves of the update channel: the sender belongs to the SDK
+    /// dispatch callback, which is registered here rather than by the caller.
+    inbound: mpsc::Sender<v1::SessionNotification>,
+    updates: mpsc::Receiver<v1::SessionNotification>,
     shutdown: oneshot::Receiver<()>,
+    journal: Arc<AcpEventJournal>,
 }
 
 async fn supervise_connection(
@@ -359,13 +451,30 @@ async fn supervise_connection(
         initialized,
         registered,
         mut commands,
+        inbound,
+        mut updates,
         shutdown,
+        journal,
     } = wiring;
     let ready = Arc::new(AtomicBool::new(false));
     let closure_ready = Arc::clone(&ready);
     let actor_connections = Arc::clone(&connections);
     let outcome = Client
         .builder()
+        // Deliberately short, because it holds the SDK's dispatch loop: the
+        // update is handed to the actor and nothing else happens here.
+        .on_receive_notification(
+            async move |notification: v1::SessionNotification, _connection| {
+                inbound.try_send(notification).map_err(|error| {
+                    // Never a silent drop. A host that renders a turn with a
+                    // hole in it is confidently wrong about what the agent
+                    // said, which is worse than a connection that failed.
+                    agent_client_protocol::Error::internal_error()
+                        .data(format!("ACP update queue: {error}"))
+                })
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .connect_with(agent, move |connection: ConnectionTo<Agent>| async move {
             let response = match connection
                 .send_request(build_initialize_request())
@@ -402,29 +511,49 @@ async fn supervise_connection(
                 return Ok(SupervisorExit::NotReady);
             }
 
-            let mut actor = ConnectionActor::new(connection_id, capabilities);
+            let mut actor = ConnectionActor::new(connection_id, capabilities, journal);
             let mut shutdown = shutdown;
+            let mut in_flight = InFlight::new();
             loop {
-                tokio::select! {
+                // What the select produces is decided here and acted on below,
+                // because acting inside the select would still hold borrows on
+                // everything the other branches are watching.
+                let step = tokio::select! {
                     biased;
                     _ = &mut shutdown => return Ok(SupervisorExit::Disconnected),
                     () = connection.incoming_closed() => return Ok(SupervisorExit::Eof),
+                    // Updates come first, and specifically before the answers
+                    // in flight. The SDK hands us an update before it routes
+                    // the response that follows it on the wire, so an update
+                    // waiting here is one the agent sent *before* whatever is
+                    // now settling. Taking the settlement first would file a
+                    // turn's last words after the record of it ending.
+                    update = updates.recv() => match update {
+                        Some(update) => Step::Accept(Accepted::Update(Box::new(update))),
+                        None => return Ok(SupervisorExit::Disconnected),
+                    },
+                    // An empty `FuturesUnordered` yields `None`, which fails
+                    // this pattern and disables the branch for that pass.
+                    Some(pending) = in_flight.next() => Step::Accept(Accepted::Settled(Box::new(pending))),
                     command = commands.recv() => match command {
+                        Some(command) => Step::Command(command),
                         // The manager holds the only sender, so this is the
                         // manager itself going away, not a caller hanging up.
                         None => return Ok(SupervisorExit::Disconnected),
-                        Some(command) => {
-                            actor
-                                .handle(command, &connection, |attachments| {
-                                    publish_attachments(
-                                        &actor_connections,
-                                        connection_id,
-                                        attachments,
-                                    );
-                                })
-                                .await;
-                        }
                     },
+                };
+
+                match step {
+                    Step::Command(command) => actor.handle(command, &connection, &in_flight),
+                    Step::Accept(accepted) => {
+                        if actor.accept(accepted) {
+                            publish_attachments(
+                                &actor_connections,
+                                connection_id,
+                                actor.attachments(),
+                            );
+                        }
+                    }
                 }
             }
         })

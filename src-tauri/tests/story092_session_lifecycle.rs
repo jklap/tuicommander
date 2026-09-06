@@ -86,10 +86,7 @@ async fn an_unadvertised_operation_is_refused_without_writing_a_byte() {
     let fixture = Fixture::with("no-lifecycle");
     let connection = fixture.connect().await;
     let capabilities = connection.capabilities.as_ref().expect("negotiated");
-    assert_eq!(
-        capabilities.availability(AcpOperation::List).available,
-        false
-    );
+    assert!(!capabilities.availability(AcpOperation::List).available);
 
     let error = fixture
         .manager

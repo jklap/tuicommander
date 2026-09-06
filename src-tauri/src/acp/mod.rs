@@ -19,8 +19,10 @@ const EGO_HOLD_EXTENSION: &str = "hold";
 const EGO_COMPACT_EXTENSION: &str = "compact";
 
 mod connection;
+mod events;
 mod manager;
 
+pub use events::{AcpEventJournal, AcpEventStream};
 pub use manager::AcpClientManager;
 
 /// The three ways a connection attaches to a session ego already owns.
@@ -290,6 +292,45 @@ pub struct AcpUsageSnapshot {
     pub end_turn: Option<v1::Usage>,
 }
 
+/// One thing that happened on a connection, in the order it happened.
+///
+/// Every event carries the generation it belongs to. A late event from a
+/// connection that has since been replaced is not a fresher view of the same
+/// thing; it is news about a process that is already gone, and the generation
+/// is what lets a reader say so rather than apply it to the wrong connection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpEventEnvelope {
+    pub connection_id: AcpConnectionId,
+    pub generation: u64,
+    pub sequence: u64,
+    pub session_id: Option<v1::SessionId>,
+    pub turn_id: Option<AcpTurnId>,
+    pub event: AcpClientEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+#[non_exhaustive]
+pub enum AcpClientEvent {
+    ConnectionState(AcpConnectionState),
+    AttachmentState(AcpAttachmentState),
+    TurnStarted,
+    /// Ego's own update, forwarded whole rather than reduced.
+    ///
+    /// The client has no business deciding which parts of what the agent said
+    /// a host is allowed to render.
+    ///
+    /// Boxed because it dwarfs every other variant, and a journal retains a
+    /// thousand of these per connection: unboxed, a bare `TurnStarted` would
+    /// cost as much to keep as the update it followed.
+    SessionUpdate(Box<v1::SessionUpdate>),
+    TurnSettled {
+        stop_reason: v1::StopReason,
+        usage: Option<v1::Usage>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpTurnSnapshot {
@@ -361,6 +402,14 @@ pub enum AcpClientErrorCode {
     AgentError,
     /// The connection has settled. A new one is the only way forward.
     TransportClosed,
+    /// The events a subscriber asked for are no longer held.
+    ///
+    /// Said out loud rather than papered over: the missing chunks cannot be
+    /// reconstructed from anything this client holds, and a stream that
+    /// silently resumed past a hole would render as a turn that skipped part
+    /// of what the model said. The recovery is a fresh connection and
+    /// `session/load`, which replays from the one place that actually knows.
+    StreamGap,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -454,6 +503,79 @@ impl AcpClientError {
         error
     }
 
+    /// The caller named a session this connection is not attached to.
+    ///
+    /// Distinct from an unknown connection: the connection is fine, and it is
+    /// the session that was never attached here or has since been let go.
+    pub(super) fn not_attached(connection_id: AcpConnectionId, session_id: v1::SessionId) -> Self {
+        Self::new(
+            AcpClientErrorCode::NotFound,
+            format!("ACP connection {connection_id} is not attached to session {session_id}"),
+        )
+        .with_connection_id(connection_id)
+        .with_session_id(session_id)
+    }
+
+    /// A second prompt arrived while the first was still running.
+    ///
+    /// Retryable, because the answer changes on its own: the turn settles and
+    /// the session takes prompts again.
+    pub(super) fn turn_in_progress(
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+    ) -> Self {
+        let mut error = Self::new(
+            AcpClientErrorCode::InvalidInput,
+            format!("ACP session {session_id} already has a turn in progress"),
+        )
+        .with_connection_id(connection_id)
+        .with_session_id(session_id);
+        error.retryable = true;
+        error
+    }
+
+    /// A cancel arrived for a session that has nothing running.
+    pub(super) fn no_active_turn(
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+    ) -> Self {
+        Self::new(
+            AcpClientErrorCode::InvalidInput,
+            format!("ACP session {session_id} has no turn to cancel"),
+        )
+        .with_connection_id(connection_id)
+        .with_session_id(session_id)
+    }
+
+    /// The events asked for fell out of the journal before they were read.
+    ///
+    /// Not retryable: asking again for the same cursor gets the same answer,
+    /// and the events are not coming back. The caller has to either accept the
+    /// gap and resume from `earliest`, or reload the session from ego.
+    pub(super) fn stream_gap(
+        connection_id: AcpConnectionId,
+        requested: u64,
+        earliest: u64,
+    ) -> Self {
+        Self::new(
+            AcpClientErrorCode::StreamGap,
+            format!(
+                "ACP connection {connection_id} no longer holds event {requested}; \
+                 the earliest it still holds is {earliest}"
+            ),
+        )
+        .with_connection_id(connection_id)
+    }
+
+    /// A live subscriber fell far enough behind that it missed events.
+    pub(super) fn stream_lagged(connection_id: AcpConnectionId) -> Self {
+        Self::new(
+            AcpClientErrorCode::StreamGap,
+            format!("ACP connection {connection_id} produced events faster than this subscriber read them"),
+        )
+        .with_connection_id(connection_id)
+    }
+
     pub(super) fn unsupported_protocol(message: impl Into<String>) -> Self {
         Self::new(AcpClientErrorCode::UnsupportedProtocol, message)
     }
@@ -476,6 +598,11 @@ impl AcpClientError {
 
     fn with_operation(mut self, operation: AcpOperation) -> Self {
         self.operation = Some(operation);
+        self
+    }
+
+    fn with_session_id(mut self, session_id: v1::SessionId) -> Self {
+        self.session_id = Some(session_id);
         self
     }
 }
