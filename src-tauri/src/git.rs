@@ -1851,7 +1851,7 @@ pub(crate) fn merged_branch_set(path: &Path) -> std::collections::HashSet<String
     match get_merged_branches_impl(path) {
         Ok(names) => names.into_iter().collect(),
         Err(e) => {
-            eprintln!("[warn] Failed to determine merged branches: {e}");
+            tracing::warn!(source = "git", "Failed to determine merged branches: {e}");
             std::collections::HashSet::new()
         }
     }
@@ -4359,6 +4359,73 @@ mod tests {
             .output()
             .expect("commit");
         (dir, path)
+    }
+
+    /// Capture every `tracing` event emitted on this thread while `f` runs.
+    fn capture_tracing<T>(f: impl FnOnce() -> T) -> (T, String) {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("sink").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Sink(sink.clone()))
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let out = tracing::subscriber::with_default(subscriber, f);
+        let text = String::from_utf8(sink.lock().expect("sink").clone()).expect("utf8");
+        (out, text)
+    }
+
+    /// A failed merge check must reach the app log through `tracing`, not
+    /// stderr: `GET /logs` is where the diagnostic is looked for, and an
+    /// a bare stderr print never lands there.
+    #[test]
+    fn merged_branch_set_reports_failure_through_tracing() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::process::Command::new("git")
+            .current_dir(&path)
+            .args(["branch", "-M", "main"])
+            .output()
+            .expect("rename to main");
+        // Point the default-branch ref at an object that does not exist. The
+        // ref file still exists, so `detect_default_branch` succeeds and
+        // `git branch --merged main` is reached and fails — the only route
+        // into the error arm of `merged_branch_set`.
+        std::fs::write(
+            path.join(".git/refs/heads/main"),
+            "0000000000000000000000000000000000000000\n",
+        )
+        .expect("corrupt ref");
+
+        let (merged, logs) = capture_tracing(|| merged_branch_set(&path));
+
+        assert!(merged.is_empty(), "a failed merge check yields no branches");
+        assert!(
+            logs.contains("Failed to determine merged branches"),
+            "merge-check failure was not logged through tracing; captured: {logs:?}"
+        );
+        assert!(
+            logs.contains("WARN"),
+            "merge-check failure must be logged at warn level; captured: {logs:?}"
+        );
     }
 
     // --- get_repo_info_impl status classification ---

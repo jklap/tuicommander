@@ -7,10 +7,11 @@
 
 use std::collections::VecDeque;
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
 
 /// Maximum execution time for a CLI command (30 seconds).
 const MAX_EXEC_TIMEOUT_SECS: u64 = 30;
@@ -31,6 +32,10 @@ const RATE_LIMIT_PER_MINUTE: usize = 60;
 
 /// Per-plugin sliding-window rate limiter. Tracks timestamps of recent calls
 /// and rejects when the count exceeds RATE_LIMIT_PER_MINUTE within 60 seconds.
+///
+/// `parking_lot::Mutex` has no poison state: a panic taken anywhere near the
+/// critical section leaves the entry usable, where a poisoned `std` mutex would
+/// have disabled exec:cli for that plugin for the rest of the process lifetime.
 fn rate_limiter() -> &'static DashMap<String, Mutex<VecDeque<Instant>>> {
     static LIMITER: OnceLock<DashMap<String, Mutex<VecDeque<Instant>>>> = OnceLock::new();
     LIMITER.get_or_init(DashMap::new)
@@ -42,7 +47,7 @@ fn check_rate_limit(plugin_id: &str) -> Result<(), String> {
     let entry = limiter
         .entry(plugin_id.to_string())
         .or_insert_with(|| Mutex::new(VecDeque::new()));
-    let mut timestamps = entry.lock().unwrap();
+    let mut timestamps = entry.lock();
     let now = Instant::now();
     let window = Duration::from_secs(60);
 
@@ -336,6 +341,33 @@ mod tests {
                 is_in_trusted_dir(p) || trusted_dirs().iter().any(|d| d.join("mdkb").exists());
             assert!(in_trusted, "mdkb must be reachable from a trusted dir");
         }
+    }
+
+    /// A panic taken while a plugin's rate-limit entry is locked must not
+    /// disable that plugin's limiter for the rest of the process lifetime.
+    /// `std::sync::Mutex` poisons on panic and `.lock().unwrap()` then panics
+    /// on every later call; `parking_lot::Mutex` has no poison state.
+    #[test]
+    fn rate_limiter_survives_panic_while_entry_is_locked() {
+        let plugin_id = "poison-probe";
+        assert!(check_rate_limit(plugin_id).is_ok(), "first call must pass");
+
+        // Silence the unwind backtrace: the panic below is the fixture, not noise.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let panicked = std::panic::catch_unwind(|| {
+            let entry = rate_limiter().get(plugin_id).expect("entry registered");
+            let _guard = entry.lock();
+            panic!("panic inside the rate-limit critical section");
+        })
+        .is_err();
+        std::panic::set_hook(hook);
+        assert!(panicked, "the fixture must actually panic under the lock");
+
+        assert!(
+            check_rate_limit(plugin_id).is_ok(),
+            "limiter unusable after a panic under its lock"
+        );
     }
 
     #[test]

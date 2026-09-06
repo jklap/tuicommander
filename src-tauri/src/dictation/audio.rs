@@ -36,6 +36,19 @@ pub fn list_input_devices() -> Vec<AudioDevice> {
         .unwrap_or_default()
 }
 
+/// Reject a device that reports a nonsensical channel count.
+///
+/// The count divides every captured chunk into frames. A zero would reach
+/// `data.chunks(0)` inside the real-time audio callback, which panics — and a
+/// panic on that thread takes the process with it. Refusing the device at
+/// start-up turns it into an error the caller can show instead.
+fn validate_channel_count(channels: usize) -> Result<usize, String> {
+    if channels == 0 {
+        return Err("Input device reported 0 channels".to_string());
+    }
+    Ok(channels)
+}
+
 /// Audio capture manager. Captures microphone input as 16kHz mono f32 PCM.
 ///
 /// Uses `VecDeque` so the streaming thread can drain from the front while
@@ -71,7 +84,7 @@ impl AudioCapture {
             .map_err(|e| format!("Failed to get input config: {e}"))?;
 
         let sample_rate = config.sample_rate();
-        let channels = config.channels() as usize;
+        let channels = validate_channel_count(config.channels() as usize)?;
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
         let buffer_clone = buffer.clone();
         let level = Arc::new(AtomicU32::new(0));
@@ -204,6 +217,14 @@ fn process_audio_chunk(
     mono_buf: &mut Vec<f32>,
     resample_buf: &mut Vec<f32>,
 ) {
+    // `validate_channel_count` rejects a zero-channel device at start-up, so
+    // this is unreachable in practice. It stays because the alternative here
+    // is `chunks(0)` panicking on the real-time audio thread, where an unwind
+    // aborts the process rather than surfacing an error.
+    if channels == 0 {
+        return;
+    }
+
     // Convert to mono by averaging channels — reuse buffer
     mono_buf.clear();
     mono_buf.extend(
@@ -254,6 +275,111 @@ fn process_audio_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scratch state a cpal callback owns, so each chunk test reads as one
+    /// call instead of six lines of setup.
+    struct ChunkFixture {
+        buffer: Arc<Mutex<VecDeque<f32>>>,
+        level: Arc<AtomicU32>,
+        mono: Vec<f32>,
+        resample: Vec<f32>,
+    }
+
+    impl ChunkFixture {
+        fn new() -> Self {
+            Self {
+                buffer: Arc::new(Mutex::new(VecDeque::new())),
+                level: Arc::new(AtomicU32::new(0)),
+                mono: Vec::new(),
+                resample: Vec::new(),
+            }
+        }
+
+        /// Push one callback's worth of samples through the chunk processor.
+        fn process(&mut self, data: &[f32], sample_rate: u32, channels: usize) {
+            process_audio_chunk(
+                data,
+                sample_rate,
+                channels,
+                &self.buffer,
+                &self.level,
+                &mut self.mono,
+                &mut self.resample,
+            );
+        }
+
+        fn captured(&self) -> Vec<f32> {
+            self.buffer.lock().iter().copied().collect()
+        }
+    }
+
+    /// Compare samples on magnitude: the values under test are exact binary
+    /// fractions, but an epsilon keeps the assertion honest about floats.
+    fn assert_samples(got: &[f32], expected: &[f32]) {
+        assert_eq!(got.len(), expected.len(), "sample count: {got:?}");
+        for (i, (g, e)) in got.iter().zip(expected).enumerate() {
+            assert!(
+                (g - e).abs() < 1e-6,
+                "sample {i}: got {g}, expected {e} (all: {got:?})"
+            );
+        }
+    }
+
+    /// A device that reports zero channels must not take the process down.
+    /// `data.chunks(0)` panics, and it would panic on the real-time audio
+    /// thread, where an unwind aborts.
+    #[test]
+    fn process_audio_chunk_survives_zero_channel_device() {
+        let mut fx = ChunkFixture::new();
+
+        fx.process(&[0.1, 0.2, 0.3, 0.4], 16_000, 0);
+
+        assert!(
+            fx.captured().is_empty(),
+            "a zero-channel chunk must contribute no samples"
+        );
+        assert_eq!(
+            fx.level.load(Ordering::Relaxed),
+            0,
+            "the meter must not move for a rejected chunk"
+        );
+    }
+
+    #[test]
+    fn process_audio_chunk_passes_mono_through() {
+        let mut fx = ChunkFixture::new();
+        fx.process(&[0.25, 0.5], 16_000, 1);
+        assert_samples(&fx.captured(), &[0.25, 0.5]);
+    }
+
+    #[test]
+    fn process_audio_chunk_averages_stereo_frames() {
+        let mut fx = ChunkFixture::new();
+        fx.process(&[0.0, 1.0, 0.5, 0.5], 16_000, 2);
+        assert_samples(&fx.captured(), &[0.5, 0.5]);
+    }
+
+    /// A chunk that does not divide evenly into frames must still be processed
+    /// rather than panic or drop samples. The short trailing frame is divided
+    /// by the declared channel count, not by the samples actually present, so
+    /// it comes out attenuated (0.4 / 2 channels = 0.2) — cpal delivers whole
+    /// frames, so this documents the edge rather than endorsing it.
+    #[test]
+    fn process_audio_chunk_handles_partial_trailing_frame() {
+        let mut fx = ChunkFixture::new();
+        fx.process(&[0.0, 1.0, 0.4], 16_000, 2);
+        assert_samples(&fx.captured(), &[0.5, 0.2]);
+    }
+
+    #[test]
+    fn validate_channel_count_rejects_zero_and_accepts_real_devices() {
+        assert!(
+            validate_channel_count(0).is_err(),
+            "a 0-channel device must be reported, not accepted"
+        );
+        assert_eq!(validate_channel_count(1), Ok(1));
+        assert_eq!(validate_channel_count(2), Ok(2));
+    }
 
     #[test]
     fn test_streaming_buffer_drain() {
