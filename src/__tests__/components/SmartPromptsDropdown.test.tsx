@@ -52,8 +52,8 @@ vi.mock("../../stores/terminals", () => ({
 	},
 }));
 
-import { smartPromptsDropdownStore } from "../../stores/smartPromptsDropdown";
 import { SmartPromptsDropdown } from "../../components/SmartPromptsDropdown/SmartPromptsDropdown";
+import { smartPromptsDropdownStore } from "../../stores/smartPromptsDropdown";
 
 describe("SmartPromptsDropdown — missing-provider settings hint (#706-8d98)", () => {
 	beforeEach(() => {
