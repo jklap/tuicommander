@@ -421,24 +421,67 @@ fn is_retryable_spawn_error(e: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use std::net::SocketAddr;
-    use tempfile::TempPath;
+    use std::path::Path;
     use tokio::net::TcpListener;
 
-    fn fake_ssh_script(behavior: &str) -> TempPath {
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        writeln!(f, "#!/bin/sh").unwrap();
-        writeln!(f, "{behavior}").unwrap();
-        f.as_file().sync_all().unwrap();
+    /// Env var that makes a fake ssh script exit before running its behavior.
+    /// Set only by the warm-up exec in [`fake_ssh_script`]; the supervisor
+    /// never sets it, so a supervised spawn always runs the real behavior.
+    const WARMUP_VAR: &str = "TUIC_FAKE_SSH_WARMUP";
+
+    /// Write a fake ssh script to a **stable, reused** path and make sure the OS
+    /// has already vetted it for execution.
+    ///
+    /// The reuse is the point, and it is not a micro-optimisation. On a machine
+    /// with exec-time code scanning (macOS `syspolicyd` plus an endpoint-security
+    /// agent) the *first* exec of a freshly written executable blocks while it is
+    /// scanned — measured here at 6s to 102s, in every directory tried, with no
+    /// relation to test-suite load. Every later exec of the *same* file is ~6ms.
+    /// A per-run temp file therefore paid that scan inside the test's own timing
+    /// window, on every run, and the four supervisor tests failed whenever the
+    /// scan outlasted their poll bound — reproducibly, with the suite otherwise
+    /// idle. Keying the file by test name makes the scan a one-off per machine.
+    ///
+    /// The warm-up exec below pays that one-off *before* the caller starts a
+    /// supervisor, so no assertion ever races the scanner. It only runs when the
+    /// file was actually created or rewritten; an unchanged file is already
+    /// vetted, so the whole helper costs a read and a compare.
+    ///
+    /// `name` must be unique per behavior — it is the cache key. The content is
+    /// compared on every call, so editing a behavior rewrites (and re-warms) the
+    /// script instead of silently reusing the old one.
+    fn fake_ssh_script(name: &str, behavior: &str) -> PathBuf {
+        // Under `target/`, so it is gitignored and survives between runs.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-ssh");
+        std::fs::create_dir_all(&dir).expect("create fake-ssh dir");
+        let path = dir.join(format!("{name}.sh"));
+        let desired = format!("#!/bin/sh\n[ -n \"${WARMUP_VAR}\" ] && exit 0\n{behavior}\n");
+
+        if std::fs::read_to_string(&path).is_ok_and(|found| found == desired) {
+            return path;
+        }
+
+        // Write beside the target and rename over it, so a second run of this
+        // test never execs a half-written script.
+        let staging = dir.join(format!("{name}.sh.{}", std::process::id()));
+        std::fs::write(&staging, &desired).expect("write fake ssh script");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            f.as_file()
-                .set_permissions(std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake ssh script");
         }
-        f.into_temp_path()
+        std::fs::rename(&staging, &path).expect("install fake ssh script");
+
+        let _ = std::process::Command::new(&path)
+            .env(WARMUP_VAR, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        path
     }
 
     fn test_profile() -> TunnelProfile {
@@ -468,6 +511,15 @@ mod tests {
         (cb, statuses)
     }
 
+    /// Poll until the supervisor settles on `Stopped`.
+    ///
+    /// The bound covers the supervisor's own state machine and nothing else:
+    /// the 500ms health check, the child's exit, and at worst the first two
+    /// backoffs (~1s and ~2s). It is not sized for process startup — that cost
+    /// is paid up front by [`fake_ssh_script`], deliberately, because it is the
+    /// one term here that the OS can stretch without limit. Keep it that way:
+    /// if this bound ever needs raising, the cause is a supervisor change or a
+    /// new unwarmed executable, not a busy machine.
     async fn wait_for_stopped(supervisor: &TunnelSupervisor) -> TunnelStatus {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         let mut status = supervisor.status();
@@ -482,17 +534,16 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_clean_exit() {
-        let script = fake_ssh_script("sleep 0.2; exit 0");
+        let script = fake_ssh_script("spawn_clean_exit", "sleep 0.2; exit 0");
         let (cb, statuses) = status_collector();
 
         let mut sup =
             TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
 
-        // Poll for the supervisor to settle on Stopped. The process exits at
-        // ~0.2s, but the Connected→Stopped transition can lag under parallel
-        // test load, so wait for the terminal state rather than reading status
-        // once after a fixed sleep (which flaked as "expected Stopped, got
-        // Connected").
+        // Poll for the terminal state rather than sampling once after a fixed
+        // sleep. The script exits at ~0.2s, but whether that lands inside the
+        // 500ms health check is genuinely racy, so Stopped may arrive directly
+        // or via Connected — both are correct and only the terminal state is.
         let final_status = wait_for_stopped(&sup).await;
 
         let history = statuses.lock().clone();
@@ -512,15 +563,18 @@ mod tests {
 
     #[tokio::test]
     async fn auth_failure_no_retry() {
-        let script = fake_ssh_script(r#"echo "Permission denied (publickey)." >&2; exit 255"#);
+        let script = fake_ssh_script(
+            "auth_failure_no_retry",
+            r#"echo "Permission denied (publickey)." >&2; exit 255"#,
+        );
         let (cb, statuses) = status_collector();
 
         let mut sup =
             TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
 
-        // The process exits immediately, but the stderr reader and status task
-        // can be delayed under parallel test load. Wait for the terminal state
-        // instead of sampling at the edge of a fixed timeout.
+        // The script exits immediately, but the stderr drainer has to deliver
+        // "Permission denied" before classify_exit can call it AuthFailed. Wait
+        // for the terminal state instead of sampling at a fixed offset.
         let final_status = wait_for_stopped(&sup).await;
 
         let history = statuses.lock().clone();
@@ -552,6 +606,7 @@ mod tests {
     async fn network_error_retries() {
         // Script that prints "Connection refused" and exits — supervisor should retry.
         let script = fake_ssh_script(
+            "network_error_retries",
             r#"echo "ssh: connect to host example.com port 22: Connection refused" >&2; exit 255"#,
         );
         let (cb, statuses) = status_collector();
@@ -559,9 +614,9 @@ mod tests {
         let mut sup =
             TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
 
-        // The first two backoffs are roughly one and two seconds. Poll the
-        // observed transitions because the child process can start late under
-        // parallel test load.
+        // The first two backoffs are roughly one and two seconds, and each
+        // retry re-execs the script, so poll the observed transitions rather
+        // than sleeping for a total nobody can predict exactly.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         while statuses
             .lock()
@@ -610,7 +665,7 @@ mod tests {
     #[tokio::test]
     async fn graceful_shutdown() {
         // Script that sleeps forever.
-        let script = fake_ssh_script("sleep 3600");
+        let script = fake_ssh_script("graceful_shutdown", "sleep 3600");
         let (cb, _statuses) = status_collector();
 
         let mut sup =
@@ -625,8 +680,9 @@ mod tests {
         // Request shutdown.
         sup.stop();
 
-        // The implementation has a five-second grace period before kill;
-        // allow scheduler delay around that boundary under parallel test load.
+        // The implementation has a five-second grace period before it escalates
+        // to SIGKILL; poll across that boundary rather than guessing which side
+        // of it the child exits on.
         let final_status = wait_for_stopped(&sup).await;
         match &final_status {
             TunnelStatus::Stopped { reason } => {
@@ -653,7 +709,7 @@ mod tests {
             remote_port: 80,
         }];
 
-        let script = fake_ssh_script("exit 0");
+        let script = fake_ssh_script("port_in_use_error_before_spawn", "exit 0");
         let (cb, _statuses) = status_collector();
 
         let sup = TunnelSupervisor::start_with_binary(profile, script.to_path_buf(), cb).await;
@@ -679,7 +735,10 @@ mod tests {
         // concurrently while the process runs, the OS pipe buffer (64KB on
         // Linux, 16KB on macOS) fills, the child blocks forever on write(),
         // and the tunnel never reaches Stopped — it stalls at Connected.
-        let script = fake_ssh_script("yes x | head -c 100000 1>&2; exit 0");
+        let script = fake_ssh_script(
+            "chatty_stderr_does_not_stall",
+            "yes x | head -c 100000 1>&2; exit 0",
+        );
         let (cb, _statuses) = status_collector();
 
         let mut sup =

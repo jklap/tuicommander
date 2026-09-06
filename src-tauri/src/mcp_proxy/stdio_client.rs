@@ -804,6 +804,18 @@ mod tests {
 
     /// Create a test config that runs a simple echo-style MCP server
     /// implemented as a shell script.
+    ///
+    /// The config launches `sh <script>`, never the script itself, so the exec
+    /// is of `/bin/sh` — a warm system binary — and the script is only *read*.
+    /// That is why a fresh `$TMPDIR` file is safe here: macOS scans a
+    /// never-before-seen executable on its first exec, and this path never
+    /// triggers it. Measured 2026-09-06 at 0.013s against 0.31s for the same
+    /// file exec'd directly — and the direct cost is not a fixed number, it
+    /// runs to minutes under a scanner backlog. See `shared_post_checkout_hook`
+    /// in worktree.rs for the measurements and for what is still unsettled.
+    ///
+    /// The `0o755` below is therefore decorative. Keep `command: "sh"`; making
+    /// the script the executable would import that scan into every test.
     fn make_config_for_echo_server(script: &str) -> StdioConfig {
         // Write the script to a temp file
         let mut tmp = std::env::temp_dir();
@@ -1026,6 +1038,8 @@ done
             "hello-from-env".to_string(),
         );
 
+        // Safe for the same reason as `make_config_for_echo_server`: the config
+        // below runs `sh <script>`, so this fresh file is read, never exec'd.
         let mut tmp = std::env::temp_dir();
         tmp.push(format!("tuic-mcp-env-test-{}.sh", uuid::Uuid::new_v4()));
         std::fs::write(&tmp, script).unwrap();
@@ -1131,8 +1145,24 @@ while IFS= read -r line; do
     esac
 done
 "#;
+        // Three bounds, and only the middle one is what this test is about.
+        //
+        // `handshake` has to *succeed*: it is setup, not subject. It used to share
+        // the 300ms below, and a loaded suite pushed the shell server's
+        // initialize/tools-list past it — so the test died in `expect("handshake")`,
+        // surfaced as "call_tool never returned", and accused the deadline this
+        // test exists to prove works. Give setup room; arm the short deadline only
+        // once the upstream is up.
+        //
+        // `harness` is deliberately larger than the other two combined, so the only
+        // way it fires is a call that really never returns — which is what its
+        // message claims.
+        let handshake = Duration::from_secs(10);
+        let give_up = Duration::from_millis(300);
+        let harness = Duration::from_secs(30);
+
         let mut config = make_config_for_echo_server(script);
-        config.timeout = Duration::from_millis(300);
+        config.timeout = handshake;
 
         // Drive the call off-thread so a client with no deadline fails the test
         // instead of hanging it.
@@ -1140,12 +1170,13 @@ done
         std::thread::spawn(move || {
             let mut client = StdioMcpClient::new(config);
             client.spawn_and_initialize().expect("handshake");
+            client.config.timeout = give_up;
             let result = client.call_tool("hang", serde_json::json!({}));
             let _ = tx.send((result, client.is_alive()));
         });
 
         let (result, still_alive) = rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(harness)
             .expect("call_tool never returned — no read deadline");
         let err = result.expect_err("a mute upstream must not report success");
         assert!(
