@@ -750,6 +750,13 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_over_http_gives_up_on_a_mute_remote() {
+        // Setup gets its own budget, and deliberately not a deadline. Two git
+        // subprocesses and a socket bind must not be able to fail this test on
+        // time — a loaded machine that takes a while to reach the starting line
+        // has not disproved anything about the deadline under test. It is only
+        // measured so a failure below can name it instead of implying the
+        // deadline misfired.
+        let setup_started = Instant::now();
         let port = mute_git_remote();
         let dir = repo_pointing_at(port);
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
@@ -757,18 +764,29 @@ mod tests {
             path: dir.path().to_string_lossy().to_string(),
             args: vec!["fetch".to_string(), "origin".to_string()],
         };
+        let setup = setup_started.elapsed();
 
-        let started = Instant::now();
-        let response = run_git_command_http(axum::extract::State(state), Json(body)).await;
-        let elapsed = started.elapsed();
-
-        // Harness bound, deliberately far above the deadline under test: a
-        // failure here means the request never came back, not that the deadline
-        // was sized too tightly.
-        assert!(
-            elapsed < crate::git_cli::FETCH_TIMEOUT + Duration::from_secs(60),
-            "fetch through run_git_command never returned (waited {elapsed:?})"
-        );
+        // The bound must wrap the await, not follow it. Asserting on an elapsed
+        // measured *after* the call can only fire when the call returned — the
+        // one failure it named, "never came back", makes the assertion itself
+        // unreachable and hands the test to nextest's anonymous 120s kill,
+        // which names nothing. That is how this test once failed as a bare
+        // TIMED OUT and accused the mechanism it exists to prove works.
+        //
+        // 35s is far above the 5s deadline under test and far below the outer
+        // 120s, so setup keeps 85s of headroom it cannot spend on us.
+        let response = tokio::time::timeout(
+            crate::git_cli::FETCH_TIMEOUT + Duration::from_secs(30),
+            run_git_command_http(axum::extract::State(state), Json(body)),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "run_git_command_http never returned: the FETCH_TIMEOUT inside it \
+                 did not fire. Setup had already finished in {setup:?}, so this is \
+                 the deadline, not a slow machine"
+            )
+        });
 
         let json = json_body(response).await;
         assert_eq!(
