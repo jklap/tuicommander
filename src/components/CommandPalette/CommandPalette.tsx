@@ -8,6 +8,7 @@ import { terminalsStore } from "../../stores/terminals";
 import type { TerminalMatch } from "../../types";
 import type { ContentMatch, DirEntry } from "../../types/fs";
 import { buildIndex } from "../../utils/bm25";
+import { contentSearchEmptyMessage } from "../../utils/contentSearch";
 import { openFileAction } from "../../utils/filePreview";
 import { pathBasename } from "../../utils/pathUtils";
 import { FileIcon } from "../FileBrowserPanel/FileIcon";
@@ -425,14 +426,16 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 								}
 							>
 								{/* A cross-repo search can only cover repos whose index is built.
-								    Saying "No results" while N repos are still indexing is a lie —
-								    report the coverage instead. */}
+								    Saying "No results" while N repos went unsearched is a lie, and so
+								    was the old "still indexing, retry shortly" — most pending repos are
+								    queued for nothing. The backend reports which ones are actually
+								    building; `contentSearchEmptyMessage` spends that count. */}
 								<div class={s.empty}>
-									{commandPaletteStore.state.contentReposPending > 0
-										? `No results in ${commandPaletteStore.state.contentReposSearched} repo${
-												commandPaletteStore.state.contentReposSearched === 1 ? "" : "s"
-											} — ${commandPaletteStore.state.contentReposPending} still indexing, retry shortly`
-										: "No results"}
+									{contentSearchEmptyMessage({
+										reposSearched: commandPaletteStore.state.contentReposSearched,
+										reposPending: commandPaletteStore.state.contentReposPending,
+										reposIndexing: commandPaletteStore.state.contentReposIndexing,
+									})}
 								</div>
 							</Show>
 							<Show when={commandPaletteStore.state.contentError}>

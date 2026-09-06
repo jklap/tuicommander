@@ -171,6 +171,35 @@ describe("repositoriesStore", () => {
 				expect(mutation).toEqual({ before: null, after: "/path/to/repo" });
 			});
 		});
+
+		// The "and switch" half of the default `active_and_switch` index strategy.
+		// Without this call the strategy only ever pre-warms the boot repo, and a
+		// cross-repo content search reports every other repo as pending forever.
+		// Rust owns whether the warm actually runs (`content_index::warm_index`
+		// honours `index_strategy`); the store's only job is to say a switch
+		// happened.
+		it("asks the backend to warm the content index of the repo switched to", () => {
+			testInScope(() => {
+				store.add({ path: "/path/to/repo", displayName: "test" });
+				mockInvoke.mockClear();
+				store.setActive("/path/to/repo");
+
+				expect(mockInvoke.mock.calls.filter((call: unknown[]) => call[0] === "warm_content_index")).toEqual([
+					["warm_content_index", { repoPath: "/path/to/repo" }],
+				]);
+			});
+		});
+
+		it("does not warm anything when the active repo is cleared", () => {
+			testInScope(() => {
+				store.add({ path: "/path/to/repo", displayName: "test" });
+				store.setActive("/path/to/repo");
+				mockInvoke.mockClear();
+				store.setActive(null);
+
+				expect(mockInvoke.mock.calls.some((call: unknown[]) => call[0] === "warm_content_index")).toBe(false);
+			});
+		});
 	});
 
 	describe("toggleExpanded()", () => {

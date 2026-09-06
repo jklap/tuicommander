@@ -61,6 +61,7 @@ const CONTENT_RESULT: ContentSearchResult = {
 	files_skipped: 0,
 	truncated: false,
 	repos_pending: 0,
+	repos_indexing: 0,
 	repos_searched: 0,
 };
 
@@ -154,6 +155,65 @@ describe("CommandPalette browser mode", () => {
 		expect(container.textContent).toContain("src/App.tsx");
 	});
 
+	/**
+	 * The empty state used to say "N still indexing, retry shortly" for every
+	 * unsearched repo. Under the default `active_and_switch` strategy nothing
+	 * schedules an unvisited repo, so retrying changed nothing — measured at 40
+	 * pending repos across four polls over 80s. The palette must spend the
+	 * backend's `repos_indexing` count, not assume pending means building.
+	 */
+	it("does not promise a retry for repos that nothing is building", async () => {
+		invokeMock.mockImplementation((command: string) =>
+			command === "search_content"
+				? Promise.resolve({
+						matches: [],
+						files_searched: 3,
+						files_skipped: 0,
+						truncated: false,
+						repos_pending: 40,
+						repos_indexing: 0,
+						repos_searched: 1,
+					})
+				: Promise.resolve(undefined),
+		);
+		const { container } = render(() => <CommandPalette actions={[]} browserMode />);
+		commandPaletteStore.open();
+		const input = container.querySelector<HTMLInputElement>('[aria-label="Command palette search"]')!;
+
+		fireEvent.input(input, { target: { value: "? missingNeedle" } });
+		await vi.advanceTimersByTimeAsync(300);
+		await flushPromises();
+
+		expect(container.textContent).toContain("No results in 1 repo — 40 not indexed");
+		expect(container.textContent).not.toContain("retry shortly");
+	});
+
+	/** The other half: a build really in flight earns the retry sentence. */
+	it("promises a retry only for repos with a build in flight", async () => {
+		invokeMock.mockImplementation((command: string) =>
+			command === "search_content"
+				? Promise.resolve({
+						matches: [],
+						files_searched: 3,
+						files_skipped: 0,
+						truncated: false,
+						repos_pending: 2,
+						repos_indexing: 2,
+						repos_searched: 3,
+					})
+				: Promise.resolve(undefined),
+		);
+		const { container } = render(() => <CommandPalette actions={[]} browserMode />);
+		commandPaletteStore.open();
+		const input = container.querySelector<HTMLInputElement>('[aria-label="Command palette search"]')!;
+
+		fireEvent.input(input, { target: { value: "? missingNeedle" } });
+		await vi.advanceTimersByTimeAsync(300);
+		await flushPromises();
+
+		expect(container.textContent).toContain("No results in 3 repos — 2 still indexing (retry shortly)");
+	});
+
 	it("completes HTTP content search without accepting another window's batch", async () => {
 		let resolveContent!: (result: ContentSearchResult) => void;
 		const response = new Promise<ContentSearchResult>((resolve) => {
@@ -178,6 +238,7 @@ describe("CommandPalette browser mode", () => {
 			files_skipped: 0,
 			truncated: false,
 			repos_pending: 0,
+			repos_indexing: 0,
 			repos_searched: 0,
 		});
 		expect(container.textContent).not.toContain("wrong window result");

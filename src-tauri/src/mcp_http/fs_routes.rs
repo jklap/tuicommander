@@ -292,7 +292,8 @@ pub(super) async fn stat_path_http(Query(q): Query<FsExternalFileQuery>) -> Resp
 }
 
 /// Warm the BM25 content index for a repo (fire-and-forget; build runs in the
-/// background). Mirrors `search_content_http`'s use of `ensure_index`.
+/// background). Mirrors the `warm_content_index` IPC command, gate included —
+/// `warm_index` honours `index_strategy`, `ensure_index` would not.
 pub(super) async fn warm_content_index_http(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
     Json(body): Json<FsWarmIndexRequest>,
@@ -300,7 +301,7 @@ pub(super) async fn warm_content_index_http(
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    crate::content_index::ensure_index(&state, &body.repo_path);
+    crate::content_index::warm_index(&state, &body.repo_path);
     (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
 }
 

@@ -71,11 +71,20 @@ pub struct ContentSearchResult {
     /// `true` when the global match limit was reached.
     pub truncated: bool,
     /// Cross-repo search only: registered repos whose content index was not
-    /// ready yet, so they contributed nothing to this result. A build is kicked
-    /// off for each, so a later search covers them. Zero for single-repo search.
-    /// Non-zero means "not found HERE yet" — never report a clean miss.
+    /// ready yet, so they contributed nothing to this result. Zero for
+    /// single-repo search. Non-zero means "not found HERE yet" — never report a
+    /// clean miss. Search does NOT kick off a build for these: the configured
+    /// warm strategy owns scheduling (see `search_content_all_impl`), so under
+    /// the default `active_and_switch` most of them are waiting for a repo
+    /// switch, not for a builder. Read `repos_indexing` before telling the user
+    /// that waiting helps.
     #[serde(default)]
     pub repos_pending: u32,
+    /// Subset of `repos_pending` with a build actually in flight. This is the
+    /// only count that justifies "still indexing, retry shortly" — the rest are
+    /// pending on a scheduling event that may never come.
+    #[serde(default)]
+    pub repos_indexing: u32,
     /// Cross-repo search only: registered repos actually searched.
     #[serde(default)]
     pub repos_searched: u32,
@@ -96,6 +105,9 @@ pub struct ContentSearchBatch {
     /// Mirrors `ContentSearchResult` — lets the UI distinguish "no match" from
     /// "not searched yet" on a cross-repo search.
     pub repos_pending: u32,
+    /// Mirrors `ContentSearchResult::repos_indexing` — lets the UI distinguish
+    /// "not searched yet, but building" from "not searched yet, and unscheduled".
+    pub repos_indexing: u32,
     pub repos_searched: u32,
 }
 
@@ -520,13 +532,16 @@ pub async fn search_files(
     .await
 }
 
+/// Warm a repo's content index — invoked on repo switch. `warm_index`, not
+/// `ensure_index`: the switch is only allowed to index under a strategy that
+/// asked for it, and that gate must be identical on both transports.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn warm_content_index(
     app_state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
     repo_path: String,
 ) {
-    crate::content_index::ensure_index(&app_state, &repo_path);
+    crate::content_index::warm_index(&app_state, &repo_path);
 }
 
 /// Split a `ContentSearchResult` into `content-search-batch` payloads of 50
@@ -556,6 +571,7 @@ fn dispatch_content_batches(
             files_skipped: result.files_skipped,
             truncated: result.truncated,
             repos_pending: result.repos_pending,
+            repos_indexing: result.repos_indexing,
             repos_searched: result.repos_searched,
         });
     };
@@ -652,7 +668,10 @@ fn search_content_all_impl_with_cancel(
     let mut all_matches = Vec::new();
     let mut files_searched: u32 = 0;
     let mut repos_searched: u32 = 0;
-    let mut repos_pending: u32 = 0;
+    // Collected rather than counted: the caller needs to know how many of these
+    // are actually being built, and that is a question about `index_in_flight`,
+    // not about this loop.
+    let mut pending_repos: Vec<&String> = Vec::new();
 
     for repo_path in &repo_paths {
         if cancel.load(Ordering::Relaxed) {
@@ -663,11 +682,11 @@ fn search_content_all_impl_with_cancel(
             .get(repo_path)
             .map(|entry| Arc::clone(entry.value()))
         else {
-            repos_pending += 1;
+            pending_repos.push(repo_path);
             continue;
         };
         let Some(plan) = prepare_index_search(&index_arc, query, 50) else {
-            repos_pending += 1;
+            pending_repos.push(repo_path);
             continue;
         };
         repos_searched += 1;
@@ -688,6 +707,12 @@ fn search_content_all_impl_with_cancel(
         }
     }
 
+    let repos_pending = pending_repos.len() as u32;
+    let repos_indexing = pending_repos
+        .iter()
+        .filter(|repo| state.index_in_flight.contains(repo.as_str()))
+        .count() as u32;
+
     let truncated = all_matches.len() >= global_limit;
     ContentSearchResult {
         matches: all_matches,
@@ -695,6 +720,7 @@ fn search_content_all_impl_with_cancel(
         files_skipped: 0,
         truncated,
         repos_pending,
+        repos_indexing,
         repos_searched,
     }
 }
@@ -1996,10 +2022,47 @@ mod tests {
             files_skipped: 0,
             truncated: false,
             repos_pending: 0,
+            repos_indexing: 0,
             repos_searched: 0,
         };
         let wire = serde_json::to_value(&batch).unwrap();
         assert_eq!(wire["search_id"], "cs-7");
+    }
+
+    /// IPC and HTTP are two transports for one backend, and the browser store
+    /// reads these counts by literal key off the JSON body. `repos_indexing` is
+    /// the field the empty-state message is built from, so a rename on either
+    /// struct silently turns "40 not indexed" back into a retry that never lands
+    /// — with nothing else to fail.
+    #[test]
+    fn both_result_shapes_carry_repos_indexing_under_that_exact_name() {
+        let result = serde_json::to_value(ContentSearchResult::default()).unwrap();
+        assert_eq!(
+            result["repos_indexing"], 0,
+            "the HTTP body must expose repos_indexing"
+        );
+
+        let batch = serde_json::to_value(ContentSearchBatch {
+            search_id: "cs-7".to_string(),
+            matches: Vec::new(),
+            is_final: true,
+            files_searched: 0,
+            files_skipped: 0,
+            truncated: false,
+            repos_pending: 3,
+            repos_indexing: 1,
+            repos_searched: 2,
+        })
+        .unwrap();
+        assert_eq!(
+            batch["repos_indexing"], 1,
+            "the streamed batch must expose repos_indexing"
+        );
+        // Same name, same casing, same meaning on both transports.
+        assert_eq!(
+            result.as_object().unwrap().contains_key("repos_indexing"),
+            batch.as_object().unwrap().contains_key("repos_indexing"),
+        );
     }
 
     /// A failed search has to be as correlated as a successful one, or the
@@ -2030,6 +2093,7 @@ mod tests {
             files_searched: 12,
             files_skipped: 3,
             truncated: false,
+            repos_indexing: 0,
             repos_pending: 0,
             repos_searched: 1,
         }
@@ -3692,6 +3756,95 @@ mod tests {
         assert!(
             !state.content_indices.contains_key(&unvisited_path),
             "cross-repo search must not enqueue a build for every registered repo"
+        );
+    }
+
+    /// `repos_pending` alone cannot tell the user whether waiting helps. Under the
+    /// default `active_and_switch` strategy a registered repo nobody switched to is
+    /// not queued for anything, so "still indexing, retry shortly" is a promise the
+    /// scheduler never keeps. `repos_indexing` is the subset with a build actually
+    /// running — the only count that earns that sentence.
+    #[test]
+    fn search_content_all_reports_only_in_flight_repos_as_indexing() {
+        let cfg = TempDir::new().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
+
+        let indexed = TempDir::new().unwrap();
+        fs::write(indexed.path().join("a.txt"), "the zebrafish swims here\n").unwrap();
+        let building = TempDir::new().unwrap();
+        fs::write(building.path().join("b.txt"), "zebrafish here too\n").unwrap();
+        let never_visited = TempDir::new().unwrap();
+        fs::write(never_visited.path().join("c.txt"), "zebrafish again\n").unwrap();
+
+        let indexed_path = indexed.path().to_string_lossy().to_string();
+        let building_path = building.path().to_string_lossy().to_string();
+        let unvisited_path = never_visited.path().to_string_lossy().to_string();
+        crate::config::replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                indexed_path.clone(): {},
+                building_path.clone(): {},
+                unvisited_path.clone(): {},
+            }
+        }))
+        .unwrap();
+
+        // The shape `ensure_index` leaves behind mid-build: an unready placeholder
+        // in the map plus the repo key in `index_in_flight`.
+        let state = state_with_indices(vec![
+            (indexed_path.clone(), ready_index(indexed.path())),
+            (
+                building_path.clone(),
+                Arc::new(parking_lot::RwLock::new(
+                    crate::content_index::ContentIndex::empty(building.path().to_path_buf()),
+                )),
+            ),
+        ]);
+        state.index_in_flight.insert(building_path.clone());
+
+        let result = search_content_all_impl(&state, "zebrafish", false, 100);
+
+        assert_eq!(
+            result.repos_searched, 1,
+            "only the ready repo is searchable"
+        );
+        assert_eq!(
+            result.repos_pending, 2,
+            "both the building and the never-visited repo are unavailable"
+        );
+        assert_eq!(
+            result.repos_indexing, 1,
+            "only the repo with a build in flight may be reported as indexing"
+        );
+    }
+
+    /// The counterpart: with nothing in flight, no repo may be described as
+    /// indexing, however many are pending. This is the default steady state and
+    /// the one the UI used to misreport.
+    #[test]
+    fn search_content_all_reports_no_indexing_when_no_build_is_scheduled() {
+        let cfg = TempDir::new().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
+
+        let indexed = TempDir::new().unwrap();
+        fs::write(indexed.path().join("a.txt"), "the zebrafish swims here\n").unwrap();
+        let never_visited = TempDir::new().unwrap();
+        fs::write(never_visited.path().join("b.txt"), "zebrafish here too\n").unwrap();
+
+        let indexed_path = indexed.path().to_string_lossy().to_string();
+        let unvisited_path = never_visited.path().to_string_lossy().to_string();
+        crate::config::replace_repositories_for_test(serde_json::json!({
+            "repos": { indexed_path.clone(): {}, unvisited_path.clone(): {} }
+        }))
+        .unwrap();
+
+        let state = state_with_indices(vec![(indexed_path.clone(), ready_index(indexed.path()))]);
+
+        let result = search_content_all_impl(&state, "zebrafish", false, 100);
+
+        assert_eq!(result.repos_pending, 1);
+        assert_eq!(
+            result.repos_indexing, 0,
+            "a repo nobody scheduled must not be reported as indexing"
         );
     }
 
