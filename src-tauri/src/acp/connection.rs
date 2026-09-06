@@ -25,8 +25,8 @@ use agent_client_protocol::{Agent, ConnectionTo};
 use tokio::sync::oneshot;
 
 use super::{
-    AcpAttachmentSnapshot, AcpAttachmentState, AcpCapabilitySnapshot, AcpClientError,
-    AcpConnectionId, AcpOperation, AcpSessionAuthority,
+    AcpAttachKind, AcpAttachmentSnapshot, AcpAttachmentState, AcpCapabilitySnapshot,
+    AcpClientError, AcpConnectionId, AcpDetachKind, AcpOperation, AcpSessionAuthority,
 };
 
 /// One request from the manager, with the channel its answer goes back on.
@@ -41,6 +41,17 @@ pub(super) enum Command {
     ListSessions {
         request: v1::ListSessionsRequest,
         reply: oneshot::Sender<Result<v1::ListSessionsResponse, AcpClientError>>,
+    },
+    Attach {
+        kind: AcpAttachKind,
+        session_id: v1::SessionId,
+        authority: AcpSessionAuthority,
+        reply: oneshot::Sender<Result<AcpAttachmentSnapshot, AcpClientError>>,
+    },
+    Detach {
+        kind: AcpDetachKind,
+        session_id: v1::SessionId,
+        reply: oneshot::Sender<Result<(), AcpClientError>>,
     },
 }
 
@@ -100,6 +111,29 @@ impl ConnectionActor {
                 let outcome = self.list_sessions(request, connection).await;
                 let _ = reply.send(outcome);
             }
+            Command::Attach {
+                kind,
+                session_id,
+                authority,
+                reply,
+            } => {
+                let outcome = self.attach(kind, session_id, authority, connection).await;
+                if outcome.is_ok() {
+                    publish(self.attachments());
+                }
+                let _ = reply.send(outcome);
+            }
+            Command::Detach {
+                kind,
+                session_id,
+                reply,
+            } => {
+                let outcome = self.detach(kind, session_id, connection).await;
+                if outcome.is_ok() {
+                    publish(self.attachments());
+                }
+                let _ = reply.send(outcome);
+            }
         }
     }
 
@@ -108,13 +142,7 @@ impl ConnectionActor {
         authority: AcpSessionAuthority,
         connection: &ConnectionTo<Agent>,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-        // `session/new` itself is baseline, but the extra roots on it are not.
-        // Sending them to an agent that never advertised them would ask it to
-        // silently ignore an authority the operator explicitly granted, and the
-        // session would then run narrower than the caller was told.
-        if !authority.additional_directories.is_empty() {
-            self.require(AcpOperation::AdditionalDirectories)?;
-        }
+        self.require_authority(&authority)?;
 
         let mut request = v1::NewSessionRequest::new(authority.cwd.clone());
         request
@@ -123,12 +151,97 @@ impl ConnectionActor {
         request.mcp_servers.clone_from(&authority.mcp_servers);
 
         let response = self.send(request, connection, None).await?;
+        Ok(self.record(response.session_id, response.config_options, authority))
+    }
+
+    /// Attach to a session ego already owns.
+    ///
+    /// The three kinds differ in the method they send and in whether the answer
+    /// names a new id; everything else — the gate, the request body, and what
+    /// the attachment ends up being — is shared, so it is written once.
+    async fn attach(
+        &mut self,
+        kind: AcpAttachKind,
+        session_id: v1::SessionId,
+        authority: AcpSessionAuthority,
+        connection: &ConnectionTo<Agent>,
+    ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        let operation = kind.operation();
+        self.require(operation)?;
+        self.require_authority(&authority)?;
+        let operation = Some(operation);
+        let cwd = authority.cwd.clone();
+        let roots = authority.additional_directories.clone();
+        let servers = authority.mcp_servers.clone();
+
+        let (attached, config_options) = match kind {
+            AcpAttachKind::Load => {
+                let mut request = v1::LoadSessionRequest::new(session_id.clone(), cwd);
+                request.additional_directories = roots;
+                request.mcp_servers = servers;
+                let response = self.send(request, connection, operation).await?;
+                (session_id, response.config_options)
+            }
+            AcpAttachKind::Fork => {
+                let mut request = v1::ForkSessionRequest::new(session_id, cwd);
+                request.additional_directories = roots;
+                request.mcp_servers = servers;
+                let response = self.send(request, connection, operation).await?;
+                (response.session_id, response.config_options)
+            }
+            AcpAttachKind::Resume => {
+                let mut request = v1::ResumeSessionRequest::new(session_id.clone(), cwd);
+                request.additional_directories = roots;
+                request.mcp_servers = servers;
+                let response = self.send(request, connection, operation).await?;
+                (session_id, response.config_options)
+            }
+        };
+        Ok(self.record(attached, config_options, authority))
+    }
+
+    /// Let go of a session, and only then forget it here.
+    ///
+    /// The local attachment outlives a refused detach on purpose: an agent that
+    /// answered "no" still has the session, and dropping it here would leave a
+    /// live session no part of this client can reach.
+    async fn detach(
+        &mut self,
+        kind: AcpDetachKind,
+        session_id: v1::SessionId,
+        connection: &ConnectionTo<Agent>,
+    ) -> Result<(), AcpClientError> {
+        let operation = kind.operation();
+        self.require(operation)?;
+        let operation = Some(operation);
+
+        match kind {
+            AcpDetachKind::Close => {
+                let request = v1::CloseSessionRequest::new(session_id.clone());
+                self.send(request, connection, operation).await?;
+            }
+            AcpDetachKind::Delete => {
+                let request = v1::DeleteSessionRequest::new(session_id.clone());
+                self.send(request, connection, operation).await?;
+            }
+        }
+        self.attachments.remove(&session_id);
+        Ok(())
+    }
+
+    /// Remember what this connection is now attached to.
+    fn record(
+        &mut self,
+        session_id: v1::SessionId,
+        config_options: Option<Vec<v1::SessionConfigOption>>,
+        authority: AcpSessionAuthority,
+    ) -> AcpAttachmentSnapshot {
         let attachment = AcpAttachmentSnapshot {
-            session_id: response.session_id.clone(),
+            session_id,
             state: AcpAttachmentState::Idle,
             cwd: authority.cwd,
             additional_directories: authority.additional_directories,
-            config_options: response.config_options.unwrap_or_default(),
+            config_options: config_options.unwrap_or_default(),
             usage: None,
             active_turn: None,
             pending_permission_ids: Vec::new(),
@@ -136,7 +249,20 @@ impl ConnectionActor {
         };
         self.attachments
             .insert(attachment.session_id.clone(), attachment.clone());
-        Ok(attachment)
+        attachment
+    }
+
+    /// Refuse extra roots an agent never said it honours.
+    ///
+    /// The session request carrying them is baseline, which is the danger: an
+    /// agent that does not know the field answers with a session anyway, and
+    /// the caller is left believing it spans directories the agent will never
+    /// touch.
+    fn require_authority(&self, authority: &AcpSessionAuthority) -> Result<(), AcpClientError> {
+        if authority.additional_directories.is_empty() {
+            return Ok(());
+        }
+        self.require(AcpOperation::AdditionalDirectories)
     }
 
     async fn list_sessions(

@@ -23,6 +23,58 @@ mod manager;
 
 pub use manager::AcpClientManager;
 
+/// The three ways a connection attaches to a session ego already owns.
+///
+/// They are one operation with three names because the request is the same —
+/// a durable id plus the authority the session is to run under — and only the
+/// method and what comes back differ. Fork is the one that answers with an id
+/// the caller did not name, because a fork is a second session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcpAttachKind {
+    /// Attach and replay the history, so the host can render what happened.
+    Load,
+    /// Attach a copy that shares the original's history and diverges from it.
+    Fork,
+    /// Attach without replay, for a host that already has the history.
+    Resume,
+}
+
+/// The two ways a connection lets a session go.
+///
+/// Both end the attachment; only one ends the session. Which of the two ego
+/// was asked for is not a detail the client may blur, so they never collapse
+/// into a single "forget it".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcpDetachKind {
+    /// Stop serving the session here. It stays in `session/list`.
+    Close,
+    /// Remove the session from ego for good.
+    Delete,
+}
+
+impl AcpAttachKind {
+    /// The capability that has to be advertised before this is sent.
+    #[must_use]
+    pub fn operation(self) -> AcpOperation {
+        match self {
+            Self::Load => AcpOperation::Load,
+            Self::Fork => AcpOperation::Fork,
+            Self::Resume => AcpOperation::Resume,
+        }
+    }
+}
+
+impl AcpDetachKind {
+    /// The capability that has to be advertised before this is sent.
+    #[must_use]
+    pub fn operation(self) -> AcpOperation {
+        match self {
+            Self::Close => AcpOperation::Close,
+            Self::Delete => AcpOperation::Delete,
+        }
+    }
+}
+
 /// What a session is allowed to reach, resupplied by the caller every time.
 ///
 /// It is never restored from a stored snapshot: an authority that outlived the

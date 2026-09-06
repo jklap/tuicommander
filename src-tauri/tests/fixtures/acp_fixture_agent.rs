@@ -20,7 +20,7 @@
 //! | --- | --- |
 //! | `expect` | Read the next client frame. Assert `method`; subset-match `params` when given; remember its `id` under `capture`. |
 //! | `expect_response` | Read the next client frame. Assert it answers `id`; subset-match `result`, or assert `errorCode`. |
-//! | `respond` | Write a result for a captured request id. |
+//! | `respond` | Write a result for a captured request id. `result_file` reads the result from a file in the root instead, so one recording can serve every scenario that needs it. |
 //! | `error` | Write a JSON-RPC error for a captured request id. |
 //! | `notify` | Write an agent notification. |
 //! | `request` | Write an agent-to-client request under a scenario-chosen `id`. |
@@ -61,7 +61,7 @@ fn main() {
     let scenario = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("scenario {}: {error}", path.display()));
 
-    let mut agent = Agent::new();
+    let mut agent = Agent::new(root);
     for (line, text) in scenario.lines().enumerate() {
         let text = text.trim();
         if text.is_empty() || text.starts_with("//") {
@@ -75,6 +75,9 @@ fn main() {
 }
 
 struct Agent {
+    /// Where `result_file` resolves against — the same root the scenario came
+    /// from, so a scenario names a sibling file and nothing else.
+    root: PathBuf,
     stdin: BufReader<io::Stdin>,
     /// Request ids the client generated, by the name the scenario gave them.
     ///
@@ -85,11 +88,29 @@ struct Agent {
 }
 
 impl Agent {
-    fn new() -> Self {
+    fn new(root: PathBuf) -> Self {
         Self {
+            root,
             stdin: BufReader::new(io::stdin()),
             captured: HashMap::new(),
         }
+    }
+
+    /// The result a `respond` step should write.
+    ///
+    /// `result_file` exists so a long recording — ego's advertised
+    /// capabilities, above all — lives in one file that every scenario needing
+    /// it points at, instead of being pasted into each and drifting apart one
+    /// scenario at a time.
+    fn result(&self, step: &Value, line: usize) -> Value {
+        let Some(name) = step.get("result_file").and_then(Value::as_str) else {
+            return field(step, "result");
+        };
+        let path = self.root.join(name);
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("scenario line {line}: {}: {error}", path.display()));
+        serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("scenario line {line}: {}: {error}", path.display()))
     }
 
     fn run(&mut self, step: &Value, line: usize) {
@@ -98,7 +119,8 @@ impl Agent {
             Some("expect_response") => self.expect_response(step, line),
             Some("respond") => {
                 let id = self.captured_id(step, line);
-                self.write(&json!({"jsonrpc": "2.0", "id": id, "result": field(step, "result")}), step);
+                let result = self.result(step, line);
+                self.write(&json!({"jsonrpc": "2.0", "id": id, "result": result}), step);
             }
             Some("error") => {
                 let id = self.captured_id(step, line);

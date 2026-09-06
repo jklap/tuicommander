@@ -1,6 +1,6 @@
 // A session created and then listed, with the recorded ego capabilities.
 {"step":"expect","method":"initialize","params":{"protocolVersion":1},"capture":"init"}
-{"step":"respond","to":"init","result":{"protocolVersion":1,"agentInfo":{"name":"ego","version":"fixture"},"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true,"audio":false,"embeddedContext":false},"mcpCapabilities":{"http":true,"sse":false},"sessionCapabilities":{"list":{},"delete":{},"fork":{},"resume":{},"close":{}},"auth":{},"_meta":{"ego":{"compact":{"version":1,"method":"_ego/compact"},"hold":{"version":1,"pause":"_ego/pause","resume":"_ego/resume"}}}}}}
+{"step":"respond","to":"init","result_file":"ego-initialize.json"}
 {"step":"expect","method":"session/new","capture":"new"}
 {"step":"respond","to":"new","result":{"sessionId":"01932d5e-0000-7000-8000-00000000abcd","configOptions":[]}}
 {"step":"expect","method":"session/list","capture":"list"}
