@@ -144,6 +144,61 @@ async fn kill_settles_and_retains_a_killed_snapshot_without_session_operations()
     assert!(killed.attachments.is_empty());
 }
 
+/// How many settled connections the manager is expected to keep.
+///
+/// Must match `manager::SETTLED_RETAINED`, which is private because it is a
+/// retention policy rather than part of the vocabulary a host speaks. Pinned
+/// here instead: the number is the contract, and a change to it should have to
+/// be made twice on purpose.
+const SETTLED_RETAINED: usize = 8;
+
+/// A settled connection is kept so it can be read, not kept forever.
+///
+/// Reading one after it ends is the whole reason it stays: the settlement
+/// reason, the final attachments, the tail of the stream. But every one of them
+/// holds a journal of up to a thousand events, and reconnecting is an ordinary
+/// thing to do repeatedly — a `reconnect` loop against an agent that keeps
+/// dying would otherwise grow this map, and the memory behind it, for as long
+/// as the app runs.
+#[tokio::test]
+async fn settled_connections_are_kept_to_be_read_and_then_forgotten() {
+    let fixture = Fixture::with("ready");
+    let mut ended = Vec::new();
+    for _ in 0..SETTLED_RETAINED + 2 {
+        let connection = fixture.connect().await;
+        fixture
+            .manager
+            .disconnect(connection.connection_id)
+            .await
+            .expect("disconnect");
+        ended.push(connection.connection_id);
+        // Checked every time round, not only at the end. Forgetting one too
+        // many leaves the same eight here after ten, and the only place the
+        // difference shows is the settlement that made room it did not need.
+        assert_eq!(
+            fixture.manager.connection_ids().len(),
+            ended.len().min(SETTLED_RETAINED),
+            "after {} settlements",
+            ended.len()
+        );
+    }
+
+    let (forgotten, kept) = ended.split_at(ended.len() - SETTLED_RETAINED);
+    for id in forgotten {
+        assert_eq!(
+            fixture.manager.snapshot(*id).unwrap_err().code,
+            AcpClientErrorCode::NotFound,
+            "the oldest settled connections are the ones let go"
+        );
+    }
+    for id in kept {
+        assert!(
+            fixture.manager.snapshot(*id).unwrap().settlement.is_some(),
+            "a connection that just ended is still there to be asked about"
+        );
+    }
+}
+
 /// An agent that denies a method it advertised.
 ///
 /// Every later decision this client makes is read off the capability snapshot

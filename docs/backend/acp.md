@@ -104,6 +104,11 @@ deliberately does not have:
 - **A failed attempt is never registered and never settles.** It is answered
   with `initialization_failed` as an *error code*; there is no settlement reason
   by that name, because there is nothing there to settle.
+- **A settled connection stays readable, and then is forgotten.** Ending is
+  exactly when a host wants to read one — the reason, the attachments it had,
+  the tail of its stream — so the last eight are kept. Kept forever they would
+  be a leak: each holds a journal of up to a thousand events, and a `reconnect`
+  loop against an agent that keeps dying is an ordinary thing to happen.
 - **`transport_error` covers write failures too.** A child that closes its pipes
   or exits produces a write failure, a stdout EOF and an SDK shutdown at once,
   and which one the supervisor sees first is a scheduling accident. A separate
