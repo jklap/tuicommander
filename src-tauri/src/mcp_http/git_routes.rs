@@ -288,39 +288,15 @@ pub(super) async fn run_git_command_http(
 
     let path = body.path;
     let args = body.args;
-    let state_clone = state.clone();
+    // Shared with the Tauri command so both transports carry the same deadline
+    // and return the same shape: a failure — a killed network command included —
+    // is a `GitCommandResult` with `success: false`, not an HTTP error.
     match tokio::task::spawn_blocking(move || {
-        let repo_path = std::path::PathBuf::from(&path);
-        let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let mut builder = crate::git_cli::git_cmd(&repo_path).args(&args_str);
-        if let Some(ref askpass_path) = crate::git::ensure_askpass_script() {
-            let askpass_str = askpass_path.to_string_lossy();
-            builder = builder
-                .env("SSH_ASKPASS", &askpass_str)
-                .env("SSH_ASKPASS_REQUIRE", "prefer")
-                .env("DISPLAY", ":0");
-        }
-        match builder.run_raw() {
-            Ok(o) => {
-                let success = o.status.success();
-                let result = crate::git::GitCommandResult {
-                    success,
-                    stdout: String::from_utf8_lossy(&o.stdout).to_string(),
-                    stderr: String::from_utf8_lossy(&o.stderr).to_string(),
-                    exit_code: o.status.code().unwrap_or(-1),
-                };
-                if success {
-                    state_clone.invalidate_repo_caches(&path);
-                }
-                Ok(result)
-            }
-            Err(e) => Err(format!("git command failed: {e}")),
-        }
+        crate::git::run_git_command_blocking(&state, &path, &args)
     })
     .await
     {
-        Ok(Ok(result)) => Json(result).into_response(),
-        Ok(Err(e)) => err_500(&e),
+        Ok(result) => Json(result).into_response(),
         Err(e) => err_500(&format!("Task failed: {e}")),
     }
 }
@@ -674,5 +650,139 @@ pub(super) async fn update_from_base_http(
         // Plain-string result: serialized bare so `invoke<string>` receives it directly.
         Ok(r) => json_result(r),
         Err(e) => err_500(&format!("Task failed: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// A remote that completes the TCP handshake and then answers nothing, so a
+    /// `git fetch` aimed at it blocks reading the ref advertisement. It
+    /// reproduces the shape this endpoint has to survive — a host that is
+    /// reachable but mute — without depending on a real network or on how a
+    /// firewall treats an unroutable address.
+    ///
+    /// The accept loop parks for the life of the test binary; there is nothing
+    /// to shut down because a mute remote has nothing to say.
+    fn mute_git_remote() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("local_addr").port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept() {
+                held.push(stream);
+            }
+        });
+        port
+    }
+
+    /// A repo whose `origin` points at `port` and which has never been fetched.
+    fn repo_pointing_at(port: u16) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init"]);
+        run(&[
+            "remote",
+            "add",
+            "origin",
+            &format!("git://127.0.0.1:{port}/mute.git"),
+        ]);
+        dir
+    }
+
+    async fn json_body(response: Response) -> serde_json::Value {
+        let (_, body) = response.into_parts();
+        let bytes = axum::body::to_bytes(body, usize::MAX).await.expect("body");
+        serde_json::from_slice(&bytes).expect("json body")
+    }
+
+    /// Pins the audit in `git::NETWORK_GIT_SUBCOMMANDS` in both directions.
+    ///
+    /// The second assertion alone would be near-tautological: it filters the
+    /// allowlist *through* the network set and then compares against that same
+    /// set, so adding `clone` to the allowlist and forgetting to classify it
+    /// changes nothing — the filter simply drops it, and an unbounded network
+    /// command becomes reachable over HTTP with the test still green. That is
+    /// the exact regression this test exists to catch, so the allowlist is
+    /// pinned verbatim first: any addition fails here and forces a decision.
+    #[test]
+    fn every_allowlisted_subcommand_that_reaches_a_remote_is_bounded() {
+        assert_eq!(
+            ALLOWED_GIT_SUBCOMMANDS,
+            &[
+                "fetch",
+                "pull",
+                "push",
+                "stash",
+                "log",
+                "diff",
+                "show",
+                "branch",
+                "tag",
+                "merge",
+                "rebase",
+                "cherry-pick",
+                "remote",
+                "status",
+                "rev-parse",
+            ],
+            "a new allowlisted subcommand must be classified in \
+             NETWORK_GIT_SUBCOMMANDS before it is added here — an unclassified \
+             one that reaches a remote runs unbounded"
+        );
+        // And nothing may quietly leave the network set: these four must stay
+        // bounded for as long as they are reachable over HTTP.
+        let bounded: Vec<&str> = ALLOWED_GIT_SUBCOMMANDS
+            .iter()
+            .copied()
+            .filter(|sub| crate::git::is_network_git_subcommand(&[(*sub).to_string()]))
+            .collect();
+        assert_eq!(bounded, vec!["fetch", "pull", "push", "remote"]);
+    }
+
+    #[tokio::test]
+    async fn fetch_over_http_gives_up_on_a_mute_remote() {
+        let port = mute_git_remote();
+        let dir = repo_pointing_at(port);
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let body = RunGitCommandRequest {
+            path: dir.path().to_string_lossy().to_string(),
+            args: vec!["fetch".to_string(), "origin".to_string()],
+        };
+
+        let started = Instant::now();
+        let response = run_git_command_http(axum::extract::State(state), Json(body)).await;
+        let elapsed = started.elapsed();
+
+        // Harness bound, deliberately far above the deadline under test: a
+        // failure here means the request never came back, not that the deadline
+        // was sized too tightly.
+        assert!(
+            elapsed < crate::git_cli::FETCH_TIMEOUT + Duration::from_secs(60),
+            "fetch through run_git_command never returned (waited {elapsed:?})"
+        );
+
+        let json = json_body(response).await;
+        assert_eq!(
+            json["success"], false,
+            "a killed fetch must not report success: {json}"
+        );
+        // Names the deadline, so this cannot pass on a fetch that failed for an
+        // unrelated reason and happened to be fast.
+        assert!(
+            json["stderr"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("timed out"),
+            "expected the deadline named in stderr, got {json}"
+        );
     }
 }
