@@ -315,29 +315,108 @@ fn is_index_lock_stale(len: u64, age_secs: u64) -> bool {
     age_secs >= threshold
 }
 
-/// How long the owner probe may take before we give up and let the age rule decide.
+/// How long the owner probe may take before we give up.
+///
+/// Past this we have **no answer**, which is not the same fact as "nobody holds
+/// the lock" — see [`UnknownOwner::DeadlineExceeded`].
 #[cfg(unix)]
 const LOCK_OWNER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// PIDs of the live processes that currently hold `lock` open.
+/// What the owner probe established about an `index.lock`.
 ///
-/// `None` means the question could not be asked (no `lsof`, or a platform with
-/// no probe) — the caller then falls back to the age rule alone, which is what
-/// it did before the owner check existed.
+/// Three outcomes, because two of them used to be one. The probe returned
+/// `Option<Vec<u32>>`, and `None` meant both "nothing holds this lock" and "we
+/// could not find out" — so an `lsof` that merely ran slowly was read downstream
+/// as permission to delete a lock a live `git add` was holding.
+#[derive(Debug, PartialEq, Eq)]
+enum LockOwnership {
+    /// The probe ran and named the live processes holding the lock open.
+    HeldBy(Vec<u32>),
+    /// The probe ran and found no holder. The only outcome that is evidence.
+    Unowned,
+    /// The probe could not answer. Says nothing either way about a holder.
+    Unknown(UnknownOwner),
+}
+
+/// Why the owner probe has no answer. The two cases are not interchangeable:
+/// one is permanent, the other is a bad minute.
+#[derive(Debug, PartialEq, Eq)]
+enum UnknownOwner {
+    /// The probe could not be run at all — no `lsof` on `PATH`, exec refused, or
+    /// a platform with no probe. Nothing can be determined here, ever, so
+    /// retrying costs a fork and buys nothing.
+    Unavailable(String),
+    /// `lsof` was installed, ran, and outlived the deadline. An answer existed
+    /// and we ran out of patience for it, so the next attempt may well get one.
+    /// Measured on this machine at 3.7s against a 2s deadline under several
+    /// concurrent agents, and at 0.8s an hour later — the latency is variable,
+    /// not a constant we can size a deadline against once and forget.
+    DeadlineExceeded(Duration),
+}
+
+impl fmt::Display for UnknownOwner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unavailable(detail) => write!(f, "the owner probe could not run: {detail}"),
+            Self::DeadlineExceeded(after) => {
+                write!(f, "the owner probe outlived its {after:?} deadline")
+            }
+        }
+    }
+}
+
+/// Read an `lsof -t` run into a [`LockOwnership`].
+///
+/// Split from the spawn so both failure shapes are testable without an `lsof`
+/// that misbehaves on cue.
+#[cfg(unix)]
+fn classify_owner_probe(probe: Result<std::process::Output, GitError>) -> LockOwnership {
+    let out = match probe {
+        Ok(out) => out,
+        Err(GitError::TimedOut { after }) => {
+            return LockOwnership::Unknown(UnknownOwner::DeadlineExceeded(after));
+        }
+        // The io error is unwrapped rather than printed through `GitError`'s
+        // Display, which opens with "Failed to spawn git". This is not git.
+        Err(GitError::SpawnFailed(e)) => {
+            return LockOwnership::Unknown(UnknownOwner::Unavailable(e.to_string()));
+        }
+        Err(e) => return LockOwnership::Unknown(UnknownOwner::Unavailable(e.to_string())),
+    };
+
+    // The exit code is not consulted: a file nobody has open exits non-zero with
+    // empty stdout, so stdout carries the whole answer.
+    //
+    // DEFERRED (2026-09-06) — an `lsof` that runs and *fails* (permission
+    // denied, a path that vanished under us) also exits non-zero with empty
+    // stdout, so it still classifies as `Unowned` here rather than `Unknown`.
+    // Under today's fail-open policy that changes no outcome, and `lsof`'s
+    // stderr contract on a clean "not found" could only be verified on macOS
+    // from here, not on every platform we ship. Revisit if the `Unknown` path is
+    // ever made to fail closed, where the difference starts to decide deletions.
+    let pids: Vec<u32> = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .filter_map(|pid| pid.parse::<u32>().ok())
+        .collect();
+    if pids.is_empty() {
+        LockOwnership::Unowned
+    } else {
+        LockOwnership::HeldBy(pids)
+    }
+}
+
+/// Which live processes currently hold `lock` open.
 ///
 /// Only ever consulted for a lock the age rule has already condemned, so the
 /// `lsof` fork happens at most once per reclaim attempt and never on the hot
 /// path of an ordinary git call.
 #[cfg(unix)]
-fn index_lock_owner_pids(lock: &Path) -> Option<Vec<u32>> {
+fn probe_index_lock_owner(lock: &Path) -> LockOwnership {
     // -t: PIDs only, one per line. -w: no warnings on unreadable mounts.
-    // A file nobody has open exits non-zero with empty stdout, which is a
-    // successful answer of "no owner", not a probe failure.
     //
     // Deadlined: this runs inside `git_cmd`, so an `lsof` stuck on a wedged
-    // network mount would wedge every git call in the app. Past the deadline we
-    // have no answer and fall back to the age rule.
-    let out = output_with_deadline(
+    // network mount would wedge every git call in the app.
+    classify_owner_probe(output_with_deadline(
         Command::new("lsof").args([
             OsStr::new("-w"),
             OsStr::new("-t"),
@@ -345,24 +424,26 @@ fn index_lock_owner_pids(lock: &Path) -> Option<Vec<u32>> {
             lock.as_os_str(),
         ]),
         LOCK_OWNER_PROBE_TIMEOUT,
-    )
-    .ok()?;
-    Some(
-        String::from_utf8_lossy(&out.stdout)
-            .split_whitespace()
-            .filter_map(|pid| pid.parse::<u32>().ok())
-            .collect(),
-    )
+    ))
 }
 
 /// No portable owner probe outside unix. Windows refuses to unlink a file another
 /// process holds open, so the OS itself provides the protection `lsof` gives us here.
 #[cfg(not(unix))]
-fn index_lock_owner_pids(_lock: &Path) -> Option<Vec<u32>> {
-    None
+fn probe_index_lock_owner(_lock: &Path) -> LockOwnership {
+    LockOwnership::Unknown(UnknownOwner::Unavailable(
+        "no owner probe on this platform".to_string(),
+    ))
 }
 
 fn remove_stale_index_lock(cwd: &Path) {
+    reclaim_stale_index_lock(cwd, probe_index_lock_owner);
+}
+
+/// [`remove_stale_index_lock`] with the owner probe injected, so each of the
+/// probe's three answers can be driven from a test without an `lsof` that fails
+/// on cue.
+fn reclaim_stale_index_lock(cwd: &Path, probe: impl FnOnce(&Path) -> LockOwnership) {
     let lock = cwd.join(".git/index.lock");
     let Ok(meta) = std::fs::metadata(&lock) else {
         return;
@@ -385,15 +466,33 @@ fn remove_stale_index_lock(cwd: &Path) {
     // Age says "crashed", but age cannot see a git that is merely slow. On a large
     // monorepo an `add`/`stash` index write can outrun the threshold, and deleting
     // the lock under it corrupts the index. Ask who holds it before reclaiming.
-    if let Some(pids) = index_lock_owner_pids(&lock)
-        && !pids.is_empty()
-    {
-        tracing::info!(
-            source = "git_cli",
-            "Keeping index.lock in {} — still held by {pids:?}",
-            cwd.display()
-        );
-        return;
+    match probe(&lock) {
+        LockOwnership::HeldBy(pids) => {
+            tracing::info!(
+                source = "git_cli",
+                "Keeping index.lock in {} — still held by {pids:?}",
+                cwd.display()
+            );
+            return;
+        }
+        LockOwnership::Unowned => {}
+        // FAIL OPEN, deliberately: with no answer we reclaim, exactly as this
+        // code did before the owner probe existed. Failing closed would strand a
+        // repo behind a lock nothing can prove is dead, and on a host with no
+        // `lsof` nothing ever could — the lock would outlive the process that
+        // left it. To fail closed instead, `return` here; that is the whole
+        // change, and `reason` already carries which of the two cases it is.
+        //
+        // The cost is real, so it is never silent: past this point the age rule
+        // decides alone, and the age rule cannot see a git that is merely slow.
+        LockOwnership::Unknown(reason) => {
+            tracing::warn!(
+                source = "git_cli",
+                "index.lock ownership in {} could not be determined ({reason}) — \
+                 reclaiming on age alone, which cannot tell a crashed git from a slow one",
+                cwd.display()
+            );
+        }
     }
 
     match std::fs::remove_file(&lock) {
@@ -701,6 +800,188 @@ DU src/deleted.rs
 
         remove_stale_index_lock(&path);
         assert!(!lock.exists(), "an unowned stale lock must be reclaimed");
+    }
+
+    /// Capture every `tracing` event emitted on this thread while `f` runs.
+    fn capture_tracing<T>(f: impl FnOnce() -> T) -> (T, String) {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("sink").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Sink(sink.clone()))
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let out = tracing::subscriber::with_default(subscriber, f);
+        let text = String::from_utf8(sink.lock().expect("sink").clone()).expect("utf8");
+        (out, text)
+    }
+
+    /// Build the `Output` an `lsof` run would have produced.
+    #[cfg(unix)]
+    fn probe_output(stdout: &[u8], code: i32) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: stdout.to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    /// `lsof -t` exiting non-zero with empty stdout is a real answer — "nobody
+    /// has this file open" — and is the only outcome that licenses a delete.
+    #[cfg(unix)]
+    #[test]
+    fn probe_reads_an_empty_answer_as_unowned_and_pids_as_held() {
+        assert_eq!(
+            classify_owner_probe(Ok(probe_output(b"", 1))),
+            LockOwnership::Unowned
+        );
+        assert_eq!(
+            classify_owner_probe(Ok(probe_output(b"431\n7\n", 0))),
+            LockOwnership::HeldBy(vec![431, 7])
+        );
+    }
+
+    /// No `lsof` on `PATH`: the question cannot be asked, now or ever. That is
+    /// not the same fact as "nobody owns the lock", and the type must not let
+    /// the caller confuse the two.
+    #[cfg(unix)]
+    #[test]
+    fn probe_reports_unavailable_when_the_tool_is_missing() {
+        let mut missing = Command::new("tuic-no-such-owner-probe");
+        match classify_owner_probe(output_with_deadline(&mut missing, LOCK_OWNER_PROBE_TIMEOUT)) {
+            LockOwnership::Unknown(UnknownOwner::Unavailable(detail)) => {
+                assert!(
+                    !detail.is_empty(),
+                    "the spawn error must survive into the log"
+                );
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    /// The measured failure. `lsof` is installed and working and merely slow —
+    /// 3.7s observed on this machine against a 2s deadline. An answer existed
+    /// and we ran out of patience for it; reading that as "nobody owns the
+    /// lock" is how a live `git add` loses its index.
+    #[cfg(unix)]
+    #[test]
+    fn probe_reports_deadline_exceeded_when_the_tool_is_slow() {
+        let slow = Duration::from_millis(50);
+        match classify_owner_probe(output_with_deadline(Command::new("sleep").arg("30"), slow)) {
+            LockOwnership::Unknown(UnknownOwner::DeadlineExceeded(after)) => {
+                assert_eq!(after, slow);
+            }
+            other => panic!("expected DeadlineExceeded, got {other:?}"),
+        }
+    }
+
+    /// Fail-open is the recorded policy: an undetermined owner still reclaims.
+    /// It must not do so silently — with no answer this is the age rule alone,
+    /// and the log is the only place that weakening is visible.
+    #[test]
+    fn an_unavailable_probe_reclaims_and_records_why() {
+        let (_dir, path) = setup_test_repo();
+        let lock = path.join(".git/index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+        age_file(&lock, 120);
+
+        let (_, logs) = capture_tracing(|| {
+            reclaim_stale_index_lock(&path, |_| {
+                LockOwnership::Unknown(UnknownOwner::Unavailable("no lsof on PATH".to_string()))
+            })
+        });
+
+        assert!(
+            !lock.exists(),
+            "fail-open: an undetermined owner still reclaims the lock"
+        );
+        assert!(logs.contains("could not be determined"), "logs: {logs}");
+        assert!(
+            logs.contains("could not run") && logs.contains("no lsof on PATH"),
+            "the log must name the tool problem: {logs}"
+        );
+    }
+
+    /// Same policy, different reason — and the reason is the whole point. A
+    /// probe that timed out means a live owner may well exist; a probe that is
+    /// absent means nothing can ever be known. One is worth chasing, the other
+    /// is not.
+    #[test]
+    fn a_slow_probe_reclaims_and_names_the_deadline() {
+        let (_dir, path) = setup_test_repo();
+        let lock = path.join(".git/index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+        age_file(&lock, 120);
+
+        let (_, logs) = capture_tracing(|| {
+            reclaim_stale_index_lock(&path, |_| {
+                LockOwnership::Unknown(UnknownOwner::DeadlineExceeded(Duration::from_secs(2)))
+            })
+        });
+
+        assert!(
+            !lock.exists(),
+            "fail-open: a probe that timed out still reclaims the lock"
+        );
+        assert!(logs.contains("could not be determined"), "logs: {logs}");
+        assert!(
+            logs.contains("outlived its 2s deadline"),
+            "the log must name the deadline, not just the failure: {logs}"
+        );
+    }
+
+    /// A named owner is kept, and the log says who has it.
+    #[test]
+    fn a_named_owner_keeps_the_lock() {
+        let (_dir, path) = setup_test_repo();
+        let lock = path.join(".git/index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+        age_file(&lock, 120);
+
+        let (_, logs) = capture_tracing(|| {
+            reclaim_stale_index_lock(&path, |_| LockOwnership::HeldBy(vec![4321]))
+        });
+
+        assert!(
+            lock.exists(),
+            "a lock with a live owner must not be reclaimed"
+        );
+        assert!(
+            logs.contains("4321"),
+            "the log must name the holder: {logs}"
+        );
+    }
+
+    /// The probe stays off the hot path: only a lock the age rule has already
+    /// condemned is worth a fork.
+    #[test]
+    fn a_fresh_lock_is_never_probed() {
+        let (_dir, path) = setup_test_repo();
+        let lock = path.join(".git/index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+
+        reclaim_stale_index_lock(&path, |_| panic!("a fresh lock must not be probed"));
+        assert!(lock.exists(), "a fresh lock is kept without asking anyone");
     }
 
     #[test]
