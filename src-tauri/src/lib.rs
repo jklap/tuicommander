@@ -2089,6 +2089,10 @@ pub fn run() {
                         state.tunnel_manager.shutdown_all();
                         crate::ai_agent::knowledge::flush_dirty(state.inner());
                     }
+                    // Flush the last buffered log lines to disk before the
+                    // process exits (story #672-c1a3) — the lines a shutdown
+                    // bug needs most.
+                    app_logger::flush_logs_on_exit();
                 }
                 _ => {}
             }
@@ -2120,13 +2124,11 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     content_index::spawn_content_index_updater(state.clone());
     cpu_watchdog::spawn(state.clone());
     ai_agent::knowledge::spawn_persist_task(state.clone());
-    {
-        let sched_state = state.clone();
-        tokio::spawn(async move {
-            let scheduler = ai_agent::scheduler::Scheduler::new(sched_state);
-            scheduler.run().await;
-        });
-    }
+    // Only spawns the 30s tick loop if ai-cron.json has an enabled job — most
+    // installs never touch scheduling, and previously this ticked (and
+    // re-read the config from disk) forever regardless (#672-c1a3).
+    // save_scheduler_config starts/stops it as jobs are added/removed later.
+    ai_agent::scheduler::ensure_running(state);
     {
         let watcher_state = state.clone();
         let engine = Arc::new(ai_agent::watcher::WatcherEngine::new(watcher_state));
@@ -2307,6 +2309,9 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
         }
     }
 
+    // Flush the last buffered log lines to disk before the process exits
+    // (story #672-c1a3) — the lines a shutdown bug needs most.
+    app_logger::flush_logs_on_exit();
     Ok(())
 }
 
@@ -2428,6 +2433,9 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
         }
     }
 
+    // Flush the last buffered log lines to disk before the process exits
+    // (story #672-c1a3) — the lines a shutdown bug needs most.
+    app_logger::flush_logs_on_exit();
     Ok(())
 }
 

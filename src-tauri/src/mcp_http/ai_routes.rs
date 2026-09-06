@@ -217,9 +217,12 @@ pub(super) async fn scheduler_config_get() -> impl IntoResponse {
 }
 
 pub(super) async fn scheduler_config_put(
+    State(state): State<Arc<AppState>>,
     Json(config): Json<crate::ai_agent::scheduler::SchedulerConfig>,
 ) -> Response {
-    json_result(crate::ai_agent::commands::save_scheduler_config(config))
+    json_result(crate::ai_agent::commands::save_scheduler_config_impl(
+        &state, &config,
+    ))
 }
 
 /// Shared accessor for the watcher config (mirrors the engine-get the Tauri

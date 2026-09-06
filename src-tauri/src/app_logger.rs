@@ -363,12 +363,21 @@ pub(crate) fn init_tracing(buffer: Arc<Mutex<LogRingBuffer>>) {
     let _ = std::fs::create_dir_all(&log_dir);
     cleanup_old_logs(&log_dir);
 
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "tuic.log");
+    let (file_writer, file_guard) = non_blocking_file_writer(&log_dir);
+    // Held in LOG_GUARD, not leaked: `flush_logs_on_exit` takes and drops it
+    // on every graceful shutdown path (desktop `RunEvent::Exit`, or the end
+    // of a headless/remote entry point) so the last buffered log lines — the
+    // ones a shutdown bug needs most — are flushed to disk instead of lost
+    // (story #672-c1a3: the un-wrapped RollingFileAppender did blocking file
+    // I/O on every log call, including from async tokio tasks; wrapping it in
+    // `non_blocking` moved that I/O off the caller, but its buffered writes
+    // are silently dropped unless the guard is flushed before exit).
+    *LOG_GUARD.lock() = Some(file_guard);
     let file_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_thread_ids(true)
         .with_ansi(false)
-        .with_writer(file_appender);
+        .with_writer(file_writer);
 
     let registry = tracing_subscriber::registry()
         .with(env_filter)
@@ -385,6 +394,37 @@ pub(crate) fn init_tracing(buffer: Arc<Mutex<LogRingBuffer>>) {
     {
         registry.init();
     }
+}
+
+/// Holds the file-appender's flush guard for the process lifetime. Populated
+/// once by `init_tracing`, taken and dropped exactly once by
+/// `flush_logs_on_exit` — whichever shutdown path runs first wins; the rest
+/// find `None` and no-op.
+static LOG_GUARD: Mutex<Option<tracing_appender::non_blocking::WorkerGuard>> = Mutex::new(None);
+
+/// Flush and drop the file appender's `WorkerGuard`, forcing
+/// `tracing_appender::non_blocking`'s buffered writes to disk before the
+/// process exits. Idempotent — call from every graceful shutdown path
+/// (desktop `RunEvent::Exit`, the end of `run_headless`, the end of
+/// `run_remote`); a call after the guard was already taken is a no-op
+/// (story #672-c1a3).
+pub(crate) fn flush_logs_on_exit() {
+    LOG_GUARD.lock().take();
+}
+
+/// Build a daily-rotated file writer that never blocks the calling thread.
+/// `tracing_appender::rolling::daily` writes synchronously; wrapping it in
+/// `non_blocking` moves the actual file I/O onto a dedicated worker thread.
+/// The returned `WorkerGuard` must be kept alive for logs to be flushed —
+/// dropping it (or never leaking it) silently drops buffered log lines.
+fn non_blocking_file_writer(
+    log_dir: &std::path::Path,
+) -> (
+    tracing_appender::non_blocking::NonBlocking,
+    tracing_appender::non_blocking::WorkerGuard,
+) {
+    let file_appender = tracing_appender::rolling::daily(log_dir, "tuic.log");
+    tracing_appender::non_blocking(file_appender)
 }
 
 /// Remove log files older than [`LOG_RETENTION_DAYS`].
@@ -518,6 +558,44 @@ mod tests {
         );
         assert!(recent.exists(), "recent rotated log must be retained");
         assert!(unrelated.exists(), "unrelated files must be retained");
+    }
+
+    #[test]
+    fn non_blocking_file_writer_flushes_buffered_writes_on_guard_drop() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().expect("temp log dir");
+        let (mut writer, guard) = non_blocking_file_writer(dir.path());
+        writer
+            .write_all(b"story672-non-blocking-marker\n")
+            .expect("write through non-blocking writer");
+        *LOG_GUARD.lock() = Some(guard);
+
+        // WorkerGuard::drop (triggered by flush_logs_on_exit taking the
+        // Option) sends a Shutdown message and waits (bounded, up to 1.1s)
+        // for the worker thread to drain and flush before returning —
+        // deterministic, not a sleep-and-hope poll.
+        flush_logs_on_exit();
+
+        let found = std::fs::read_dir(dir.path())
+            .expect("read log dir")
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                std::fs::read_to_string(entry.path())
+                    .is_ok_and(|contents| contents.contains("story672-non-blocking-marker"))
+            });
+        assert!(
+            found,
+            "expected the write to reach a rotated log file after flush_logs_on_exit"
+        );
+
+        // A second call must be a no-op: the guard was already taken, so
+        // there is nothing left to flush or drop twice.
+        flush_logs_on_exit();
+        assert!(
+            LOG_GUARD.lock().is_none(),
+            "flush_logs_on_exit must be idempotent — guard stays taken"
+        );
     }
 
     #[test]

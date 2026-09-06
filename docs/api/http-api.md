@@ -1415,7 +1415,13 @@ GET (WS) /ai/conversation/{session_id}/stream
 Agent-loop *control* (cancel/pause/resume/approve), session-knowledge reads, and the
 scheduler config. State-taking commands reuse extracted `*_impl`s
 (`get_session_knowledge_impl`, `toggle_ai_suggestions_impl`,
-`get_knowledge_session_detail_impl`).
+`get_knowledge_session_detail_impl`, `save_scheduler_config_impl`).
+
+`PUT /ai/scheduler/config` also reconciles the cron tick loop: it starts the
+30s-tick background task if the saved config has at least one enabled job and
+it wasn't already running, and stops it if the config has none (#672-c1a3) —
+previously the loop ticked (and re-read `ai-cron.json` from disk) forever from
+boot regardless of whether any job existed.
 
 **Conversation token stream** (event-bridge plan Step 3): the WebSocket
 `/ai/conversation/{session_id}/stream` is the browser parity for the desktop
