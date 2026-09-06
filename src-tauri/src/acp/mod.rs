@@ -832,6 +832,28 @@ impl AcpClientError {
         .with_session_id(session_id)
     }
 
+    /// A load or resume named a session this connection already holds.
+    ///
+    /// Refused rather than merged. The attachment is where the running turn,
+    /// the usage totals and the open interactions live; attaching writes a
+    /// fresh one, so a second attach would blank the turn and leave the
+    /// response that settles it arriving for a turn nothing names any more.
+    ///
+    /// Not retryable, and not a race: it stops being true only when the caller
+    /// itself detaches, which is a different request rather than the same one
+    /// again.
+    pub(super) fn already_attached(
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+    ) -> Self {
+        Self::new(
+            AcpClientErrorCode::InvalidInput,
+            format!("ACP connection {connection_id} is already attached to session {session_id}"),
+        )
+        .with_connection_id(connection_id)
+        .with_session_id(session_id)
+    }
+
     /// A second prompt arrived while the first was still running.
     ///
     /// Retryable, because the answer changes on its own: the turn settles and
@@ -931,6 +953,31 @@ impl AcpClientError {
         Self::new(
             AcpClientErrorCode::InvalidInput,
             format!("the agent did not offer permission option {}", option.0),
+        )
+        .with_connection_id(connection_id)
+        .with_session_id(session_id)
+    }
+
+    /// The answer used an elicitation action the protocol does not define.
+    ///
+    /// The same rule as [`unoffered_option`], on the other seat. ACP defines
+    /// accept, decline and cancel; anything else deserialises into the
+    /// catch-all it keeps for extensions and for versions this client has never
+    /// seen, and forwarding one would mean answering the agent in a vocabulary
+    /// this client cannot know it reads.
+    ///
+    /// Refused before the seat is taken, so the question survives the bad
+    /// answer and a person can still give a real one.
+    ///
+    /// [`unoffered_option`]: Self::unoffered_option
+    pub(super) fn undefined_action(
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+        action: &str,
+    ) -> Self {
+        Self::new(
+            AcpClientErrorCode::InvalidInput,
+            format!("{action} is not an elicitation action this protocol defines"),
         )
         .with_connection_id(connection_id)
         .with_session_id(session_id)

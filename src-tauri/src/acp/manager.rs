@@ -18,7 +18,7 @@ use tokio::{
 use futures_util::StreamExt;
 
 use super::connection::{
-    Accepted, Answer, Command, ConnectionActor, InFlight, Inbound, Interaction,
+    Accepted, Answer, Command, ConnectionActor, InFlight, Inbound, Interaction, Publish,
 };
 use super::events::{AcpEventJournal, AcpEventStream};
 use super::{
@@ -738,7 +738,19 @@ async fn supervise_connection(
                 return Ok(SupervisorExit::NotReady);
             }
 
-            let mut actor = ConnectionActor::new(connection_id, capabilities, journal);
+            // The actor publishes for itself, next to the mutation and before
+            // it answers anyone. Doing it out here — after `handle` or `accept`
+            // returned — would leave the reply already sent and the settlement
+            // already on the stream, so whoever they woke could read a snapshot
+            // that has not caught up. The window is narrow, and narrow is not
+            // the same as closed.
+            let publish: Publish = {
+                let connections = Arc::clone(&actor_connections);
+                Arc::new(move |attachments| {
+                    publish_attachments(&connections, connection_id, attachments);
+                })
+            };
+            let mut actor = ConnectionActor::new(connection_id, capabilities, journal, publish);
             let mut shutdown = shutdown;
             let mut in_flight = InFlight::new();
             loop {
@@ -772,23 +784,15 @@ async fn supervise_connection(
 
                 match step {
                     Step::Command(command) => actor.handle(command, &connection, &in_flight),
-                    Step::Accept(accepted) => {
-                        if actor.accept(accepted) {
-                            publish_attachments(
-                                &actor_connections,
-                                connection_id,
-                                actor.attachments(),
-                            );
-                        }
-                        // Checked here rather than in the select, because the
-                        // caller whose request uncovered the contradiction has
-                        // just been answered and is owed that answer either
-                        // way. Everything still in flight settles as transport
-                        // closed, which is what it now is.
-                        if actor.contradicted() {
-                            return Ok(SupervisorExit::ProtocolViolation);
-                        }
-                    }
+                    Step::Accept(accepted) => actor.accept(accepted),
+                }
+                // Checked here rather than in the select, because the caller
+                // whose request uncovered the contradiction has just been
+                // answered and is owed that answer either way. Everything still
+                // in flight settles as transport closed, which is what it now
+                // is.
+                if actor.contradicted() {
+                    return Ok(SupervisorExit::ProtocolViolation);
                 }
             }
         })
