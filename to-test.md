@@ -779,3 +779,20 @@ None of them is here because nobody looked.
   synchronously on the calling thread (including from async tokio tasks) — confirm the
   daily-rotated log file still receives entries during normal use and on graceful
   shutdown (no lines silently dropped by the leaked `WorkerGuard`).
+- [ ] Rust change, needs a `make dev` restart. Per-tab agent resume (issue #119): with
+  several Claude tabs open in the SAME folder, each tab must now hold its own session.
+  Before this change discovery took "the newest unclaimed transcript in the project
+  dir", so tabs stole each other's session or got none — measured live on 6 Claude
+  tabs: 3 had `agentSessionId: null` and one held a different tab's id, which is why
+  every tab resumed with `claude --continue` into the same conversation. (1) Open three
+  Claude tabs in one repo, give each a distinct conversation, then check
+  `curl -X POST localhost:9876/debug/invoke_js -d '{"script":"return
+  JSON.stringify(window.__TUIC__.terminals())"}'` — every claude tab must show a
+  DISTINCT non-null `agentSessionId`, and each must equal the `sessionId` in that
+  tab's own `$CLAUDE_CONFIG_DIR/sessions/<pid>.json` (pid from
+  `GET /sessions/<id>/leaf-pid`). (2) Quit TUIC (Cmd+Q), relaunch, click each resume
+  banner: each tab must reopen ITS conversation, and `ps -ax -o args=` must show
+  `claude --resume <uuid>` with three different uuids — not `claude --continue`.
+  (3) Same check for a grok tab (binding comes from `~/.grok/active_sessions.json`).
+  (4) No regression for Codex/Gemini, which have no pid registry and keep the old
+  heuristic: a single Codex tab must still resume its own session.
