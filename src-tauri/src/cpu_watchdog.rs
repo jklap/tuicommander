@@ -230,6 +230,9 @@ struct HealthSnapshot {
     event_bus_subscribers: usize,
     git_cache_ttl_fallbacks: u64,
     head_emits_suppressed: u64,
+    /// Events queued on the lossless per-session state lane and not yet applied.
+    /// The lane is unbounded by design, so this is the only warning of a backlog.
+    state_lane_depth: usize,
 }
 
 fn collect_snapshot(state: &Arc<AppState>, cpu_pct: f64) -> HealthSnapshot {
@@ -255,6 +258,7 @@ fn collect_snapshot(state: &Arc<AppState>, cpu_pct: f64) -> HealthSnapshot {
         event_bus_subscribers: state.event_bus.receiver_count(),
         git_cache_ttl_fallbacks: state.git_cache.ttl_fallbacks.load(Ordering::Relaxed),
         head_emits_suppressed: state.repo_head_emits_suppressed.load(Ordering::Relaxed),
+        state_lane_depth: state.session_state_events.depth(),
     }
 }
 
@@ -266,7 +270,8 @@ fn log_spike(state: &Arc<AppState>, cpu_pct: f64) {
         source = "diagnostics",
         "CPU SPIKE {:.1}% | threads={} fds={} sessions={} \
          index_building={:?} sem_permits={} in_flight_stuck={:?} \
-         bus_subs={} git_cache_ttl_fallbacks={} head_emits_suppressed={}\n  children: {}",
+         bus_subs={} git_cache_ttl_fallbacks={} head_emits_suppressed={} \
+         state_lane={}\n  children: {}",
         s.cpu_pct,
         s.threads,
         s.open_fds,
@@ -277,6 +282,7 @@ fn log_spike(state: &Arc<AppState>, cpu_pct: f64) {
         s.event_bus_subscribers,
         s.git_cache_ttl_fallbacks,
         s.head_emits_suppressed,
+        s.state_lane_depth,
         children,
     );
 }
@@ -296,7 +302,8 @@ fn log_periodic(state: &Arc<AppState>, cpu_pct: f64) {
     tracing::info!(
         source = "diagnostics",
         "HEALTH cpu={:.1}% {} threads={} fds={} sessions={} \
-         index={:?} sem={} bus_subs={} git_cache_ttl_fallbacks={} head_emits_suppressed={}{}",
+         index={:?} sem={} bus_subs={} git_cache_ttl_fallbacks={} head_emits_suppressed={} \
+         state_lane={}{}",
         s.cpu_pct,
         children,
         s.threads,
@@ -307,6 +314,7 @@ fn log_periodic(state: &Arc<AppState>, cpu_pct: f64) {
         s.event_bus_subscribers,
         s.git_cache_ttl_fallbacks,
         s.head_emits_suppressed,
+        s.state_lane_depth,
         stuck_note,
     );
 }
@@ -439,5 +447,39 @@ fn run(state: Arc<AppState>) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The state lane is unbounded on purpose — dropping a SET or a CLEAR strands
+    /// clients in a state that never existed or never ended — so a backlog is invisible
+    /// until it is a memory problem. This snapshot is the only place it surfaces.
+    ///
+    /// A bare test `AppState` has no accumulator task, so nothing drains the lane: the
+    /// same shape as the wedged consumer the metric exists to reveal.
+    #[test]
+    fn snapshot_reports_the_state_lane_backlog() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        assert_eq!(
+            collect_snapshot(&state, 0.0).state_lane_depth,
+            0,
+            "an idle lane is empty"
+        );
+
+        for _ in 0..3 {
+            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                session_id: "s1".to_string(),
+                parsed: serde_json::json!({ "type": "choice-cleared" }).into(),
+            });
+        }
+
+        assert_eq!(
+            collect_snapshot(&state, 0.0).state_lane_depth,
+            3,
+            "every queued event must be counted while it waits to be applied"
+        );
     }
 }

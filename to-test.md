@@ -409,6 +409,26 @@ The DOM order is covered by tests; a real pointer drag in the WebView is not.
 - [ ] Close a tab you dragged, then reopen one. No ghost position: the reopened tab
   appears at the end, not at the closed tab's old slot.
 
+## Corrupt `config.json` is preserved, state-lane depth is reported (story `712-e1d2`, Rust — needs `make dev` restart)
+
+An unparseable `config.json` used to be silently replaced by defaults, and startup
+then wrote those defaults straight over it (`lib.rs:1228` fills the empty session
+token and VAPID key, so `config_dirty` is always set on that path). It is now moved
+aside as `config.corrupt-<uuid>` before defaults are returned, matching what every
+other config file already did. Covered by
+`config::tests::corrupt_app_config_survives_the_first_run_save_that_follows_it` and
+`config::tests::two_corrupt_app_config_loads_keep_two_distinct_backups`; the items
+below are the live confirmations only.
+
+- [ ] With the app stopped, truncate `config.json` mid-document, then start it. The
+  app must come up on defaults, and the config dir must hold a
+  `config.corrupt-<uuid>` file with the original bytes. Repeat once more: the second
+  run must add a SECOND backup, not overwrite the first.
+- [ ] `curl -X POST localhost:9876/diagnostics -d '{"enabled":true}' -H 'content-type: application/json'`,
+  wait 30s, then `curl 'localhost:9876/logs?source=diagnostics'` — the `HEALTH` line
+  must carry a `state_lane=<n>` field, normally `0`. It must also appear on a
+  `CPU SPIKE` line if one fires.
+
 ## API-error dedup reopens on user input (story 646-1a9f, Rust — needs `make dev` restart)
 
 The reset lived in `parse_clean_lines` keyed on a `UserInput` event no output

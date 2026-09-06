@@ -192,15 +192,31 @@ fn load_json_config_strict_from_path<T: DeserializeOwned + Default>(
     serde_json::from_str(&content).map_err(|e| {
         // Move the bad file aside: the caller refuses to write until a load succeeds, but a
         // later code path (or a second instance) must not be able to clobber it either.
-        let aside = path.with_extension(format!("corrupt-{}", uuid::Uuid::new_v4()));
-        let preserved = std::fs::rename(path, &aside).is_ok();
+        // Renamed BEFORE the log line, never inside it — `tracing` does not evaluate field
+        // expressions when no subscriber wants the event, so preservation would silently
+        // stop happening whenever logging is filtered out.
+        let preserved = preserve_corrupt_config(path).map_or_else(
+            || "<rename failed>".to_string(),
+            |aside| aside.display().to_string(),
+        );
         tracing::error!(
             path = %path.display(),
-            preserved_as = %if preserved { aside.display().to_string() } else { "<rename failed>".to_string() },
+            preserved_as = %preserved,
             "Corrupt config: {e}"
         );
         format!("Corrupt {}: {e}", path.display())
     })
+}
+
+/// Move a config file that could not be parsed aside, so nothing can overwrite it.
+///
+/// The `corrupt-<uuid>` suffix is fresh on every call. A fixed name would let the
+/// second corrupt load erase the document the first one saved — the same data loss,
+/// one indirection further out. Returns the backup path, or `None` when the rename
+/// itself failed (a read-only config dir, say); callers report that, they cannot fix it.
+fn preserve_corrupt_config(path: &std::path::Path) -> Option<PathBuf> {
+    let aside = path.with_extension(format!("corrupt-{}", uuid::Uuid::new_v4()));
+    std::fs::rename(path, &aside).ok().map(|()| aside)
 }
 
 /// Atomically write `data` to `target` via temp+rename with 0600 perms.
@@ -2066,7 +2082,9 @@ pub(crate) fn rotate_session_token(state: &crate::AppState) -> Result<String, St
 /// possible rewrite. The boolean reports that plaintext credentials were moved
 /// to the vault and the redacted document must be persisted before releasing
 /// that lock.
-fn read_app_config_unlocked(path: &std::path::Path) -> Result<(AppConfig, bool), String> {
+fn read_app_config_unlocked(
+    path: &std::path::Path,
+) -> Result<(AppConfig, bool), AppConfigReadError> {
     if !path.exists() {
         return Ok((AppConfig::default(), false));
     }
@@ -2074,7 +2092,10 @@ fn read_app_config_unlocked(path: &std::path::Path) -> Result<(AppConfig, bool),
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(path = %path.display(), "Could not read config: {e}");
-            return Err(format!("Could not read {}: {e}", path.display()));
+            return Err(AppConfigReadError::Unreadable(format!(
+                "Could not read {}: {e}",
+                path.display()
+            )));
         }
     };
     #[cfg(test)]
@@ -2082,8 +2103,11 @@ fn read_app_config_unlocked(path: &std::path::Path) -> Result<(AppConfig, bool),
     let mut val: serde_json::Value = match serde_json::from_str(&content) {
         Ok(v) => v,
         Err(e) => {
-            tracing::error!(path = %path.display(), "Corrupt config: {e}. Using defaults.");
-            return Err(format!("Corrupt {}: {e}", path.display()));
+            tracing::error!(path = %path.display(), "Corrupt config: {e}");
+            return Err(AppConfigReadError::Corrupt(format!(
+                "Corrupt {}: {e}",
+                path.display()
+            )));
         }
     };
     migrate_flat_services(&mut val);
@@ -2093,11 +2117,33 @@ fn read_app_config_unlocked(path: &std::path::Path) -> Result<(AppConfig, bool),
             Ok((config, migrated_secret))
         }
         Err(e) => {
-            tracing::error!(path = %path.display(), "Config deserialization failed after migration: {e}. Using defaults.");
-            Err(format!(
+            tracing::error!(path = %path.display(), "Config deserialization failed after migration: {e}");
+            Err(AppConfigReadError::Corrupt(format!(
                 "Config deserialization failed for {}: {e}",
                 path.display()
-            ))
+            )))
+        }
+    }
+}
+
+/// Why `read_app_config_unlocked` could not produce a config.
+///
+/// The split is not cosmetic. `Corrupt` means the bytes on disk are not a usable config
+/// document, so the caller that falls back to defaults must move the file aside before
+/// anything writes over it. `Unreadable` means the document may be perfectly intact and
+/// only the I/O failed — moving THAT aside would turn a transient permission error into
+/// exactly the data loss the preservation exists to prevent.
+enum AppConfigReadError {
+    Unreadable(String),
+    Corrupt(String),
+}
+
+impl From<AppConfigReadError> for String {
+    fn from(error: AppConfigReadError) -> Self {
+        match error {
+            AppConfigReadError::Unreadable(message) | AppConfigReadError::Corrupt(message) => {
+                message
+            }
         }
     }
 }
@@ -2129,8 +2175,34 @@ pub(crate) fn load_app_config() -> AppConfig {
     };
 
     let path = config_dir().join(APP_CONFIG_FILE);
-    let (config, migrated_secret) =
-        read_app_config_unlocked(&path).unwrap_or_else(|_| (AppConfig::default(), false));
+    let (config, migrated_secret) = match read_app_config_unlocked(&path) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            // Defaults are the only value that can be returned here, and the very next
+            // thing done with them is a WRITE: lib.rs's first-run branch sees an empty
+            // session token and empty VAPID keys, fills them in and saves the whole
+            // document. Unless the unparseable file is moved aside first, that save
+            // destroys a config the user could still have repaired by hand.
+            //
+            // Only for `Corrupt`. An `Unreadable` file may be intact — renaming on a
+            // transient I/O error would be the data loss this branch exists to avoid.
+            if matches!(error, AppConfigReadError::Corrupt(_)) {
+                match preserve_corrupt_config(&path) {
+                    Some(aside) => tracing::error!(
+                        source = "config",
+                        preserved_as = %aside.display(),
+                        "Unparseable config.json moved aside; starting from defaults"
+                    ),
+                    None => tracing::error!(
+                        source = "config",
+                        path = %path.display(),
+                        "Unparseable config.json could NOT be moved aside; the next save will overwrite it"
+                    ),
+                }
+            }
+            (AppConfig::default(), false)
+        }
+    };
     if migrated_secret {
         // A plaintext secret was just moved into the vault. Rewrite immediately —
         // config_for_disk strips the cleartext — otherwise it stays readable in
@@ -3169,6 +3241,96 @@ mod tests {
             .expect("valid file loads");
         assert_eq!(loaded["notes"][0]["id"], "n1");
         assert!(path.exists(), "a valid file is left where it is");
+    }
+
+    /// Every `<name>.corrupt-<uuid>` file kept aside in `dir`.
+    fn corrupt_backups(dir: &std::path::Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.contains(".corrupt-"))
+            })
+            .collect()
+    }
+
+    /// `config.json` is the one config file whose load does NOT go through
+    /// `load_json_config_strict_from_path`: `load_app_config` turns every
+    /// `read_app_config_unlocked` error into `AppConfig::default()`. The defaults it
+    /// hands back have an empty session token, so `lib.rs`'s first-run branch generates
+    /// one and calls `save_app_config` — a whole-document write with no read. The
+    /// user's broken-but-hand-recoverable file is therefore destroyed on the FIRST
+    /// restart after the corruption, not by some later hypothetical save.
+    #[test]
+    #[serial_test::serial]
+    fn corrupt_app_config_survives_the_first_run_save_that_follows_it() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = dir.path().join(APP_CONFIG_FILE);
+        // Truncated mid-document, the shape a crash or a hand-edit leaves behind.
+        let original = r#"{"font_size": 18, "services": {"server": {"port": 9"#;
+        fs::write(&path, original).unwrap();
+
+        let loaded = load_app_config();
+        assert_eq!(
+            loaded.font_size,
+            AppConfig::default().font_size,
+            "an unparseable file cannot be read, so defaults are the only answer"
+        );
+
+        // Exactly what lib.rs:1228 does on first run.
+        let mut first_run = loaded;
+        first_run.services.auth.session_token = uuid::Uuid::new_v4().to_string();
+        save_app_config(first_run).expect("first-run save");
+
+        let preserved = corrupt_backups(dir.path());
+        assert_eq!(
+            preserved.len(),
+            1,
+            "the corrupt config must be kept aside before defaults are written over it"
+        );
+        assert_eq!(
+            fs::read_to_string(&preserved[0]).unwrap(),
+            original,
+            "the backup must hold the user's bytes, byte for byte"
+        );
+    }
+
+    /// The preservation must not be the loss it replaces: a fixed backup name would let
+    /// the second corrupt load erase the first user's document, which is the same data
+    /// loss one indirection further out.
+    #[test]
+    #[serial_test::serial]
+    fn two_corrupt_app_config_loads_keep_two_distinct_backups() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = dir.path().join(APP_CONFIG_FILE);
+
+        fs::write(&path, "first corrupt document").unwrap();
+        load_app_config();
+        fs::write(&path, "second corrupt document").unwrap();
+        load_app_config();
+
+        let backups = corrupt_backups(dir.path());
+        assert_eq!(backups.len(), 2, "one backup per corrupt load");
+        let mut contents: Vec<String> = backups
+            .iter()
+            .map(|p| fs::read_to_string(p).unwrap())
+            .collect();
+        contents.sort();
+        assert_eq!(
+            contents,
+            vec![
+                "first corrupt document".to_string(),
+                "second corrupt document".to_string(),
+            ],
+            "the second backup overwrote the first"
+        );
     }
 
     #[test]
