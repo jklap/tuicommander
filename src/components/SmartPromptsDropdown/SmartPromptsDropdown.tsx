@@ -21,7 +21,8 @@ const CATEGORY_ORDER: Record<string, { label: string; order: number }> = {
 
 export interface SmartPromptsDropdownProps {
 	repoPath?: string;
-	onOpenSettings?: () => void;
+	/** Matches DeepLinkCallbacks.openSettings — `tab` selects which Settings tab opens. */
+	onOpenSettings?: (tab?: string) => void;
 }
 
 /** Detect WHY prompts are disabled — returns a user-friendly status message or null if all good */
@@ -198,16 +199,32 @@ export const SmartPromptsDropdown: Component<SmartPromptsDropdownProps> = (props
 											{(prompt) => {
 												const check = () => smartPrompts.canExecute(prompt);
 												const enabled = () => check().ok;
+												// A reason routed to Settings (e.g. missing provider) is shown inline
+												// and made clickable instead of hidden inside a hover title= (#706-8d98).
+												const settingsTab = () => check().settingsTab;
 												return (
 													<div
 														class={cx(s.item, !enabled() && s.itemDisabled)}
-														title={!enabled() ? check().reason : (prompt.description ?? "")}
+														title={!enabled() && !settingsTab() ? check().reason : (prompt.description ?? "")}
 														onClick={() => enabled() && handleItemClick(prompt)}
 													>
 														<div class={s.itemContent}>
 															<span class={s.itemName}>{prompt.name}</span>
 															<Show when={prompt.description}>
 																<span class={s.itemDesc}>{prompt.description}</span>
+															</Show>
+															<Show when={!enabled() && settingsTab()}>
+																<button
+																	type="button"
+																	class={s.itemSettingsHint}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		close();
+																		props.onOpenSettings?.(settingsTab());
+																	}}
+																>
+																	{check().reason}
+																</button>
 															</Show>
 														</div>
 														<Show when={prompt.shortcut}>

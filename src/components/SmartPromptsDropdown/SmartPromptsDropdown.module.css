@@ -151,6 +151,28 @@
   margin-top: 1px;
 }
 
+/* Missing-provider (or similar) reason routed to Settings — reason stays
+   readable inline instead of hiding in a hover title=, and it is a real
+   clickable control, not a run affordance (#706-8d98). */
+.itemSettingsHint {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: 1px;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  text-decoration: underline dotted;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.itemSettingsHint:hover {
+  color: var(--accent);
+}
+
 .itemShortcut {
   flex-shrink: 0;
   font-size: var(--font-2xs);
