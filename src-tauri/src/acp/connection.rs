@@ -43,9 +43,10 @@ use tokio::sync::oneshot;
 use super::events::AcpEventJournal;
 use super::{
     AcpAttachKind, AcpAttachmentSnapshot, AcpAttachmentState, AcpCapabilitySnapshot,
-    AcpClientError, AcpClientEvent, AcpConnectionId, AcpDetachKind, AcpHostRequestId,
+    AcpClientError, AcpClientEvent, AcpConnectionId, AcpDetachKind, AcpHoldState, AcpHostRequestId,
     AcpInteractionSettlement, AcpOperation, AcpPendingInteraction, AcpSessionAuthority, AcpTurnId,
-    AcpTurnSnapshot, AcpTurnState, AcpUsageSnapshot,
+    AcpTurnSnapshot, AcpTurnState, AcpUsageSnapshot, EgoCompactRequest, EgoCompactResponse,
+    EgoHoldRequest, EgoHoldResponse, ego_ext,
 };
 
 pub(super) type Reply<T> = oneshot::Sender<Result<T, AcpClientError>>;
@@ -101,6 +102,26 @@ pub(super) enum Command {
     PendingInteractions {
         reply: Reply<Vec<AcpPendingInteraction>>,
     },
+    /// Set one of the options this session published.
+    SetConfigOption {
+        request: v1::SetSessionConfigOptionRequest,
+        reply: Reply<Vec<v1::SessionConfigOption>>,
+    },
+    /// Hold a session at a boundary, or let a held one go.
+    ///
+    /// One command for both because ego serves them as one: same three fields,
+    /// same three answers, and only the method name differs. What a caller
+    /// asked for is `release`, and what actually happened is the state that
+    /// comes back — which is why the answer is not a boolean.
+    Hold {
+        release: bool,
+        request: EgoHoldRequest,
+        reply: Reply<EgoHoldResponse>,
+    },
+    Compact {
+        request: EgoCompactRequest,
+        reply: Reply<EgoCompactResponse>,
+    },
 }
 
 /// What a person decided, in the vocabulary of the seat they decided at.
@@ -132,6 +153,20 @@ pub(super) enum Pending {
         session_id: v1::SessionId,
         turn_id: AcpTurnId,
         outcome: Result<v1::PromptResponse, AcpClientError>,
+    },
+    Config {
+        session_id: v1::SessionId,
+        outcome: Result<v1::SetSessionConfigOptionResponse, AcpClientError>,
+        reply: Reply<Vec<v1::SessionConfigOption>>,
+    },
+    Hold {
+        session_id: v1::SessionId,
+        outcome: Result<EgoHoldResponse, AcpClientError>,
+        reply: Reply<EgoHoldResponse>,
+    },
+    Compact {
+        outcome: Result<EgoCompactResponse, AcpClientError>,
+        reply: Reply<EgoCompactResponse>,
     },
 }
 
@@ -378,7 +413,186 @@ impl ConnectionActor {
             Command::PendingInteractions { reply } => {
                 let _ = reply.send(Ok(self.pending_interactions()));
             }
+            Command::SetConfigOption { request, reply } => {
+                let session_id = request.session_id.clone();
+                match self.start_config(request, connection) {
+                    Ok(sent) => in_flight.push(Box::pin(async move {
+                        Pending::Config {
+                            session_id,
+                            outcome: sent.await,
+                            reply,
+                        }
+                    })),
+                    Err(error) => drop(reply.send(Err(error))),
+                }
+            }
+            Command::Hold {
+                release,
+                request,
+                reply,
+            } => {
+                let session_id = request.session_id.clone();
+                match self.start_hold(release, &request, connection) {
+                    Ok(sent) => in_flight.push(Box::pin(async move {
+                        Pending::Hold {
+                            session_id,
+                            outcome: sent.await,
+                            reply,
+                        }
+                    })),
+                    Err(error) => drop(reply.send(Err(error))),
+                }
+            }
+            Command::Compact { request, reply } => match self.start_compact(&request, connection) {
+                Ok(sent) => in_flight.push(Box::pin(async move {
+                    Pending::Compact {
+                        outcome: sent.await,
+                        reply,
+                    }
+                })),
+                Err(error) => drop(reply.send(Err(error))),
+            },
         }
+    }
+
+    /// Set one config option, against the offer this session published.
+    ///
+    /// Validated here and not only by ego, because the offer is already on the
+    /// attachment: a value this session never listed has no meaning to send,
+    /// and a round trip to be told so is a round trip that could instead have
+    /// been a clear local refusal naming the option.
+    fn start_config(
+        &mut self,
+        request: v1::SetSessionConfigOptionRequest,
+        connection: &ConnectionTo<Agent>,
+    ) -> Result<Sent<v1::SetSessionConfigOptionResponse>, AcpClientError> {
+        let attachment = self.attachment(&request.session_id)?;
+        let offered = attachment
+            .config_options
+            .iter()
+            .find(|option| option.id == request.config_id)
+            .ok_or_else(|| {
+                AcpClientError::not_offered(
+                    self.connection_id,
+                    request.session_id.clone(),
+                    format_args!("a `{}` config option", request.config_id.0),
+                )
+            })?;
+
+        match (&offered.kind, &request.value) {
+            (
+                v1::SessionConfigKind::Select(select),
+                v1::SessionConfigOptionValue::ValueId { value },
+            ) => {
+                if !offers_value(select, value) {
+                    return Err(AcpClientError::not_offered(
+                        self.connection_id,
+                        request.session_id.clone(),
+                        format_args!("`{}` as a value for `{}`", value.0, request.config_id.0),
+                    ));
+                }
+            }
+            // Boolean options are excluded by this client's own contract, not
+            // by the agent's: nothing here renders or answers one, so claiming
+            // to set it would be claiming a seat that does not exist.
+            (v1::SessionConfigKind::Boolean(_), _) => {
+                self.require(AcpOperation::ClientBooleanConfig)?;
+            }
+            (v1::SessionConfigKind::Select(_), v1::SessionConfigOptionValue::Boolean { .. }) => {
+                return Err(AcpClientError::invalid_input(format!(
+                    "the `{}` config option is a select and takes a value id, not a boolean",
+                    request.config_id.0
+                )));
+            }
+            _ => {}
+        }
+
+        Ok(self.send(request, connection, None))
+    }
+
+    /// Ask ego to hold this session at a boundary, or to let it go.
+    fn start_hold(
+        &mut self,
+        release: bool,
+        request: &EgoHoldRequest,
+        connection: &ConnectionTo<Agent>,
+    ) -> Result<Sent<EgoHoldResponse>, AcpClientError> {
+        let operation = if release {
+            AcpOperation::ResumeTurn
+        } else {
+            AcpOperation::Pause
+        };
+        self.require(operation)?;
+        self.attachment(&request.session_id)?;
+        let request_id = self.name_request(request.request_id, operation)?;
+
+        let v = ego_ext::EGO_EXTENSION_VERSION;
+        let session_id = request.session_id.0.to_string();
+        // The const generic is what picks the method name, so the runtime
+        // choice is made once, here, rather than by a string passed downwards.
+        // Both arms answer with the same type, which is the contract itself:
+        // pause and resume differ in what they ask for, not in what they say.
+        Ok(if release {
+            self.send(
+                ego_ext::EgoHoldWire::<true> {
+                    v,
+                    session_id,
+                    request_id,
+                },
+                connection,
+                Some(operation),
+            )
+        } else {
+            self.send(
+                ego_ext::EgoHoldWire::<false> {
+                    v,
+                    session_id,
+                    request_id,
+                },
+                connection,
+                Some(operation),
+            )
+        })
+    }
+
+    /// Ask ego to compact this session into a successor.
+    fn start_compact(
+        &mut self,
+        request: &EgoCompactRequest,
+        connection: &ConnectionTo<Agent>,
+    ) -> Result<Sent<EgoCompactResponse>, AcpClientError> {
+        self.require(AcpOperation::Compact)?;
+        self.attachment(&request.session_id)?;
+        let request_id = self.name_request(request.request_id, AcpOperation::Compact)?;
+
+        Ok(self.send(
+            ego_ext::EgoCompactWire {
+                v: ego_ext::EGO_EXTENSION_VERSION,
+                session_id: request.session_id.0.to_string(),
+                request_id,
+            },
+            connection,
+            Some(AcpOperation::Compact),
+        ))
+    }
+
+    /// The caller's request id, refused here if ego would refuse it.
+    ///
+    /// A nil UUID is the one value ego rejects outright, and it is also the one
+    /// a caller reaches by default-constructing rather than deciding. Catching
+    /// it before the write keeps the failure at the caller instead of arriving
+    /// as an opaque `invalid_params` a round trip later.
+    fn name_request(
+        &self,
+        request_id: uuid::Uuid,
+        operation: AcpOperation,
+    ) -> Result<String, AcpClientError> {
+        if request_id.is_nil() {
+            return Err(AcpClientError::invalid_input(format!(
+                "{operation:?} needs a request id that names one attempt, not a nil UUID"
+            )));
+        }
+        Ok(request_id.to_string())
     }
 
     /// Take in one request the agent is waiting on a person for.
@@ -619,6 +833,38 @@ impl ConnectionActor {
                 turn_id,
                 outcome,
             } => self.settle_turn(&session_id, turn_id, outcome),
+            Pending::Config {
+                session_id,
+                outcome,
+                reply,
+            } => {
+                // The response carries the full set, so the attachment takes
+                // all of it rather than patching the one option that was set.
+                // The agent is the authority on what setting one did to the
+                // others, and a client that merged would be guessing.
+                let outcome = outcome.map(|response| response.config_options);
+                let changed = match (&outcome, self.attachments.get_mut(&session_id)) {
+                    (Ok(options), Some(attachment)) => {
+                        attachment.config_options = options.clone();
+                        true
+                    }
+                    _ => false,
+                };
+                let _ = reply.send(outcome);
+                changed
+            }
+            Pending::Hold {
+                session_id,
+                outcome,
+                reply,
+            } => self.settle_hold(&session_id, outcome, reply),
+            Pending::Compact { outcome, reply } => {
+                // Nothing on this attachment changes. The successor is a
+                // different session that this connection is not attached to,
+                // and attaching to it is a separate decision a caller makes.
+                let _ = reply.send(outcome);
+                false
+            }
         }
     }
 
@@ -861,6 +1107,52 @@ impl ConnectionActor {
         Ok(())
     }
 
+    /// Record what a hold request found, and tell the caller the same thing.
+    ///
+    /// The state ego reports is the whole answer, and it is recorded whichever
+    /// method asked for it: a pause that came back `running` because the turn
+    /// had already ended, and a resume that came back `pending` because the
+    /// hold has not landed yet, are both facts a host has to see.
+    fn settle_hold(
+        &mut self,
+        session_id: &v1::SessionId,
+        outcome: Result<EgoHoldResponse, AcpClientError>,
+        reply: Reply<EgoHoldResponse>,
+    ) -> bool {
+        let Ok(response) = &outcome else {
+            let _ = reply.send(outcome);
+            return false;
+        };
+        let Some(attachment) = self.attachments.get_mut(session_id) else {
+            let _ = reply.send(outcome);
+            return false;
+        };
+
+        let state = match response.state {
+            AcpHoldState::Pending => AcpAttachmentState::PausePending,
+            AcpHoldState::Paused => AcpAttachmentState::Paused,
+            // Not holding says nothing about whether a turn is running; the
+            // turn's own state is what decides, so the attachment goes back to
+            // whichever of the two it was actually in.
+            AcpHoldState::Running => match attachment.active_turn.as_ref() {
+                Some(turn) if turn.state != AcpTurnState::Settled => AcpAttachmentState::Prompting,
+                _ => AcpAttachmentState::Idle,
+            },
+        };
+        let changed = attachment.state != state;
+        attachment.state = state;
+        let turn_id = attachment.active_turn.as_ref().map(|turn| turn.turn_id);
+        if changed {
+            self.journal.append(
+                Some(session_id.clone()),
+                turn_id,
+                AcpClientEvent::AttachmentState(state),
+            );
+        }
+        let _ = reply.send(outcome);
+        changed
+    }
+
     /// Close out a turn on the answer that actually settles it.
     fn settle_turn(
         &mut self,
@@ -1012,5 +1304,24 @@ fn content_operation(block: &v1::ContentBlock) -> Option<AcpOperation> {
         v1::ContentBlock::Audio(_) => Some(AcpOperation::PromptAudio),
         v1::ContentBlock::Resource(_) => Some(AcpOperation::PromptEmbeddedContext),
         _ => None,
+    }
+}
+
+/// Whether a select currently offers this value, grouped or not.
+///
+/// Grouping is presentation: which header a value renders under says nothing
+/// about whether it can be chosen, so both shapes are searched the same way.
+fn offers_value(select: &v1::SessionConfigSelect, value: &v1::SessionConfigValueId) -> bool {
+    match &select.options {
+        v1::SessionConfigSelectOptions::Ungrouped(options) => {
+            options.iter().any(|option| &option.value == value)
+        }
+        v1::SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|group| &group.options)
+            .any(|option| &option.value == value),
+        // An option shape this client does not know is one it cannot check a
+        // value against, so it does not claim to have checked.
+        _ => false,
     }
 }

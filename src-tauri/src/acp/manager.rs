@@ -26,6 +26,7 @@ use super::{
     AcpConnectionId, AcpConnectionSettlement, AcpConnectionSettlementReason, AcpConnectionSnapshot,
     AcpConnectionState, AcpDetachKind, AcpHostRequestId, AcpInteractionSettlement,
     AcpPendingInteraction, AcpReconnectRequest, AcpSessionAuthority, AcpTurnId, EgoAcpConfig,
+    EgoCompactRequest, EgoCompactResponse, EgoHoldRequest, EgoHoldResponse,
     build_initialize_request, capability_snapshot, launch_spec,
 };
 
@@ -265,6 +266,69 @@ impl AcpClientManager {
         session_id: v1::SessionId,
     ) -> Result<(), AcpClientError> {
         self.dispatch(connection_id, |reply| Command::Cancel { session_id, reply })
+            .await
+    }
+
+    /// Set one config option and take the full set back.
+    ///
+    /// The whole set is the answer because it is what the agent sent: setting
+    /// one option can change what the others offer, and a client that returned
+    /// only the one it set would leave a host rendering a stale list.
+    pub async fn set_config_option(
+        &self,
+        connection_id: AcpConnectionId,
+        request: v1::SetSessionConfigOptionRequest,
+    ) -> Result<Vec<v1::SessionConfigOption>, AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::SetConfigOption {
+            request,
+            reply,
+        })
+        .await
+    }
+
+    /// Ask ego to hold this session at the next boundary.
+    ///
+    /// `pending` is not a failure: it means the request is recorded and the
+    /// turn has not reached a boundary yet. Only `paused` says nothing more
+    /// runs.
+    pub async fn pause_turn(
+        &self,
+        connection_id: AcpConnectionId,
+        request: EgoHoldRequest,
+    ) -> Result<EgoHoldResponse, AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Hold {
+            release: false,
+            request,
+            reply,
+        })
+        .await
+    }
+
+    /// Release a hold. Not `session/resume`, which attaches a session.
+    pub async fn resume_turn(
+        &self,
+        connection_id: AcpConnectionId,
+        request: EgoHoldRequest,
+    ) -> Result<EgoHoldResponse, AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Hold {
+            release: true,
+            request,
+            reply,
+        })
+        .await
+    }
+
+    /// Compact a session into a successor.
+    ///
+    /// The receipt's publication is the part that matters: a target that may
+    /// have been published is never retried as a new compaction, because that
+    /// risks a second successor for one source.
+    pub async fn compact(
+        &self,
+        connection_id: AcpConnectionId,
+        request: EgoCompactRequest,
+    ) -> Result<EgoCompactResponse, AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Compact { request, reply })
             .await
     }
 

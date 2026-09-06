@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use agent_client_protocol::JsonRpcResponse;
 use agent_client_protocol::schema::{ProtocolVersion, v1};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,6 +20,7 @@ const EGO_HOLD_EXTENSION: &str = "hold";
 const EGO_COMPACT_EXTENSION: &str = "compact";
 
 mod connection;
+mod ego_ext;
 mod events;
 mod manager;
 
@@ -407,6 +409,94 @@ pub struct AcpInteractionSettlement {
     pub request_id: AcpHostRequestId,
 }
 
+/// What a `_ego/pause` or `_ego/resume` found or established.
+///
+/// The two are not distinguished, because ego does not distinguish them and
+/// the shared vocabulary is the better contract: a session told `paused` may
+/// assume nothing further runs under it, and a session told `pending` may not.
+/// That is the distinction the hold boundary exists to make, and it is the
+/// same distinction whichever of the two methods asked.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcpHoldState {
+    /// Nothing is holding this session.
+    Running,
+    /// A hold is recorded and the turn has not reached a boundary yet.
+    Pending,
+    /// The hold is durable: nothing more runs until it is released.
+    Paused,
+}
+
+/// One `_ego/pause` or `_ego/resume`, named by the caller.
+///
+/// The request id is the caller's, generated once and reused only to retrieve
+/// the same idempotent result. Ego rejects a nil UUID, so this client rejects
+/// one before the write rather than letting a round trip say it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EgoHoldRequest {
+    pub session_id: v1::SessionId,
+    pub request_id: uuid::Uuid,
+}
+
+/// Ego's answer to a hold request, in ego's own field names.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct EgoHoldResponse {
+    pub v: u32,
+    pub session_id: v1::SessionId,
+    pub request_id: uuid::Uuid,
+    pub state: AcpHoldState,
+}
+
+/// One `_ego/compact`, named by the caller.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EgoCompactRequest {
+    pub session_id: v1::SessionId,
+    pub request_id: uuid::Uuid,
+}
+
+/// Whether the successor a compaction produced is durably on record.
+///
+/// The uncertain case is the reason this is three values and not a boolean. A
+/// target that may or may not have been published cannot be retried as a new
+/// compaction — that would risk a second successor for one source — and it
+/// cannot be treated as absent either.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcpTargetPublication {
+    NotPublished { diagnostic: String },
+    PublishedDurably { diagnostic: Option<String> },
+    PublishedDurabilityUncertain { diagnostic: String },
+}
+
+impl AcpTargetPublication {
+    /// Whether asking for this compaction again is safe.
+    ///
+    /// Only a target that was definitely not published may be retried. Both
+    /// other answers mean a successor may exist, and asking again could make
+    /// a second one.
+    #[must_use]
+    pub fn retry_safe(&self) -> bool {
+        matches!(self, Self::NotPublished { .. })
+    }
+}
+
+/// Ego's answer to a compaction, in ego's own field names.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct EgoCompactResponse {
+    pub v: u32,
+    pub source_session_id: v1::SessionId,
+    pub source_seq: u64,
+    pub target_session_id: v1::SessionId,
+    pub publication: AcpTargetPublication,
+    pub successor_start_request_id: uuid::Uuid,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpTurnSnapshot {
@@ -608,6 +698,24 @@ impl AcpClientError {
         .with_session_id(session_id);
         error.retryable = true;
         error
+    }
+
+    /// A config option, or a value for one, that this session never offered.
+    ///
+    /// Refused here rather than forwarded because the offer is the whole
+    /// contract: ego resolves an incoming value by matching it against the list
+    /// it published, so a value it did not publish has no meaning to send.
+    pub(super) fn not_offered(
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+        detail: impl std::fmt::Display,
+    ) -> Self {
+        Self::new(
+            AcpClientErrorCode::CapabilityUnavailable,
+            format!("ACP session {session_id} does not offer {detail}"),
+        )
+        .with_connection_id(connection_id)
+        .with_session_id(session_id)
     }
 
     /// A cancel arrived for a session that has nothing running.
