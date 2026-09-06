@@ -54,6 +54,7 @@ scripts/*
 !scripts/generate-release-notes.sh
 !scripts/report-frontend-bundles.mjs
 !scripts/check-frontend-cycles.mjs
+!scripts/mutants.sh
 !scripts/hooks/
 !scripts/perf/
 scripts/perf/results/

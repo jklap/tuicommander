@@ -65,6 +65,11 @@ sync check, `cargo fmt --check`, `cargo clippy --release -- -D warnings`,
 To run a single gate, copy its command out of the `check` target in the
 [Makefile](Makefile) — that target is the source of truth for what CI enforces.
 
+Mutation testing runs on a change, not on the tree: `make mutants RANGE=<base>`
+(default `HEAD~1`) needs `cargo install --locked cargo-mutants` and reports the
+mutants of the changed Rust lines that no test caught. A surviving mutant is a
+missing test.
+
 The Makefile prefixes each gate with `rtk`, an optional output compactor, when
 it is on your `PATH`. It is not a project dependency: with `rtk` absent every
 gate runs raw and unfiltered. Use `make RTK= check` to bypass it even when it
