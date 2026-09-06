@@ -586,6 +586,22 @@ so these checks are looking for what a test cannot see on a live agent.
   touch only `SilenceState.last_resize_at`, but that machinery has a long
   fix/revert history, which is why it is here and not left to the suite.
 
+## Browser-mode scroll (story `658-3ce1`, **Rust — needs `make dev` restart**)
+
+`pending_scroll` is now created by `spawn_reader_thread` instead of the
+desktop-only `subscribe_terminal_grid`, so a session no desktop terminal ever
+rendered can still be scrolled. Proven live against a headless `tuic-remote`
+built from this tree — the same POST answered `{"ok":true}` and left
+`display_offset` at 0 before the fix, and moved it to the requested offset after
+— so what is left needs a real canvas, which no endpoint renders.
+
+- [ ] Open the web UI (browser, not the desktop app) on a session with
+  scrollback and scroll with the wheel and by dragging the scrollbar: the
+  viewport must move, not just the thumb.
+- [ ] With that browser attached, close the same terminal's tab in the desktop
+  app. The browser must keep scrolling — the unsubscribe no longer drops the
+  session's scroll target.
+
 ## Still needs a human
 
 Every item here failed the ladder for a stated reason — real hardware, a second
