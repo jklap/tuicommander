@@ -100,6 +100,14 @@ cov:
 	@cd src-tauri && $(RTK) cargo llvm-cov report --lcov --output-path lcov.info
 	@echo "HTML report: src-tauri/target/llvm-cov/html/index.html"
 
+# Mutation testing over the Rust changes of a git range (default: last
+# commit). --in-diff only: one incremental build + one test run per mutant, so
+# a full-tree run is not offered. Runs --in-place in a disposable worktree
+# under .tmp/ — see scripts/mutants.sh for why not the default tree copy.
+RANGE?=HEAD~1
+mutants:
+	@scripts/mutants.sh $(RANGE)
+
 # CRAP metric (complexity² × uncovered³ + complexity) over the coverage data
 # from `make cov`. Thresholds and exclusions live in src-tauri/.cargo-crap.toml.
 #
