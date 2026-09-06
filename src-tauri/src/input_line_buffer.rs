@@ -7,6 +7,23 @@
 /// The buffer does NOT attempt to track history navigation (Up/Down arrows,
 /// Ctrl+P/N) — those replace the entire line in the shell, and we can't know
 /// what they replace it with from the write side alone.
+/// Upper bound on the line being assembled.
+///
+/// The buffer is per-session and lives as long as the session does, so input
+/// that never terminates with a newline — a huge paste, or a program echoing
+/// into the PTY — would otherwise grow it for the life of the process. At
+/// 4 bytes per `char` this bounds a session at ~256 KiB, and it sits orders of
+/// magnitude above any command line or pasted prompt a user actually submits,
+/// so no real input is ever truncated.
+const MAX_LINE_CHARS: usize = 65_536;
+
+/// Upper bound on the parameter bytes of a single CSI sequence.
+///
+/// `parse_csi_params` reads at most the first two values and a real sequence is
+/// a handful of bytes ("1;5"). Unbounded, an `ESC [` followed by an unbroken run
+/// of digits never reaches a final byte and accumulates forever.
+const MAX_CSI_PARAM_BYTES: usize = 32;
+
 /// A line-editing buffer that tracks cursor position and content.
 #[derive(Debug)]
 pub(crate) struct InputLineBuffer {
@@ -198,8 +215,7 @@ impl InputLineBuffer {
             c if c < '\x20' => None,
             // Regular printable character — insert at cursor
             c => {
-                self.chars.insert(self.cursor, c);
-                self.cursor += 1;
+                self.insert_at_cursor(c);
                 None
             }
         }
@@ -222,8 +238,7 @@ impl InputLineBuffer {
             '\r' => {
                 self.esc_state = EscState::Normal;
                 // Insert a literal newline into buffer instead of submitting
-                self.chars.insert(self.cursor, '\n');
-                self.cursor += 1;
+                self.insert_at_cursor('\n');
                 None
             }
             // Alt+B — word backward
@@ -260,9 +275,13 @@ impl InputLineBuffer {
 
     fn handle_csi(&mut self, ch: char) -> Option<InputAction> {
         match ch {
-            // Parameter bytes: digits and semicolons
+            // Parameter bytes: digits and semicolons. A sequence that never
+            // sends a final byte must not accumulate forever; the bytes past
+            // the cap cannot affect `parse_csi_params` anyway.
             '0'..='9' | ';' => {
-                self.csi_params.push(ch as u8);
+                if self.csi_params.len() < MAX_CSI_PARAM_BYTES {
+                    self.csi_params.push(ch as u8);
+                }
                 None
             }
             // Final byte — execute CSI command
@@ -361,8 +380,7 @@ impl InputLineBuffer {
                 match codepoint {
                     // Enter (13) with modifier = Shift+Enter → literal newline
                     13 => {
-                        self.chars.insert(self.cursor, '\n');
-                        self.cursor += 1;
+                        self.insert_at_cursor('\n');
                     }
                     // Backspace (127) with any modifier
                     127 if self.cursor > 0 => {
@@ -390,6 +408,20 @@ impl InputLineBuffer {
         s.split(';')
             .filter_map(|part| part.parse::<u32>().ok())
             .collect()
+    }
+
+    /// Insert `ch` at the cursor, unless the line is already at its cap.
+    ///
+    /// Refusing the insert is what keeps the head of the line and the cursor
+    /// intact. Dropping from the front would corrupt exactly the prefix that
+    /// [`Self::starts_with`] and the emitted line are read for, and clearing
+    /// would lose the line outright.
+    fn insert_at_cursor(&mut self, ch: char) {
+        if self.chars.len() >= MAX_LINE_CHARS {
+            return;
+        }
+        self.chars.insert(self.cursor, ch);
+        self.cursor += 1;
     }
 
     /// Move cursor backward to the start of the previous word.
@@ -1741,5 +1773,102 @@ mod tests {
                 "starts_with disagreed on {input:?}"
             );
         }
+    }
+
+    // --- growth bounds ---
+    //
+    // The buffer lives in `state.input_buffers` for the whole life of a
+    // session, so anything it accumulates without a newline it accumulates
+    // forever. The literals below mirror `MAX_LINE_CHARS` / `MAX_CSI_PARAM_BYTES`
+    // on purpose: a silent change to either cap should fail here.
+
+    #[test]
+    fn a_line_that_never_ends_stops_growing_but_is_not_lost() {
+        let mut buf = InputLineBuffer::new();
+        buf.feed("git commit -m ");
+        buf.feed(&"x".repeat(200_000));
+
+        assert_eq!(
+            buf.content().chars().count(),
+            65_536,
+            "an unterminated line must stop at the cap, not grow with the input"
+        );
+        assert!(
+            buf.content().starts_with("git commit -m "),
+            "the cap must drop the overflow, never the head of the line"
+        );
+        assert!(buf.starts_with('g'), "cheap probes must still agree");
+        assert!(!buf.is_empty());
+        assert_eq!(
+            buf.cursor_pos(),
+            65_536,
+            "the cursor must stay inside the capped line"
+        );
+    }
+
+    #[test]
+    fn a_capped_line_still_edits_and_submits() {
+        let mut buf = InputLineBuffer::new();
+        buf.feed("/model ");
+        buf.feed(&"y".repeat(100_000));
+
+        // Backspace frees a slot, and the next keystroke takes it: the buffer
+        // is capped, not frozen.
+        buf.feed("\x7f");
+        assert_eq!(buf.content().chars().count(), 65_535);
+        buf.feed("z");
+        assert_eq!(buf.content().chars().count(), 65_536);
+        assert!(buf.content().ends_with('z'));
+
+        let line = feed_and_get_line(&mut buf, "\r").expect("capped line still submits");
+        assert_eq!(line.chars().count(), 65_536);
+        assert!(line.starts_with("/model "));
+        assert!(buf.is_empty(), "submitting resets the buffer");
+        assert_eq!(buf.cursor_pos(), 0);
+    }
+
+    #[test]
+    fn an_unterminated_csi_sequence_stops_growing() {
+        let mut buf = InputLineBuffer::new();
+        buf.feed("hello");
+        // ESC [ then parameter bytes that never reach a final byte.
+        buf.feed("\x1b[");
+        buf.feed(&"1;".repeat(50_000));
+
+        assert!(
+            buf.csi_params.len() <= 32,
+            "CSI parameters grew to {} bytes on a sequence with no final byte",
+            buf.csi_params.len()
+        );
+
+        // The line under assembly survives the runaway sequence intact. `D`
+        // terminates the sequence; the surviving parameters read as a plain
+        // Left arrow, so the cursor steps back one — a cursor move, not a
+        // content change.
+        buf.feed("D");
+        assert_eq!(
+            buf.content(),
+            "hello",
+            "the line being assembled must survive a runaway CSI sequence"
+        );
+        assert_eq!(buf.cursor_pos(), 4, "terminated as a plain Left arrow");
+
+        // The parser is out of the sequence and the buffer still assembles.
+        buf.feed("\x05"); // Ctrl+E — end of line
+        buf.feed(" world");
+        assert_eq!(
+            feed_and_get_line(&mut buf, "\r"),
+            Some("hello world".into())
+        );
+    }
+
+    #[test]
+    fn capped_csi_parameters_still_parse_a_real_sequence() {
+        let mut buf = InputLineBuffer::new();
+        buf.feed("one two");
+        // Ctrl+Left = word backward. Parameters stay far below the cap.
+        buf.feed("\x1b[1;5D");
+        buf.feed("X");
+        assert_eq!(buf.content(), "one Xtwo");
     }
 }
