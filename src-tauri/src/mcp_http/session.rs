@@ -1981,27 +1981,20 @@ pub(super) async fn terminal_get_lines(
     }
 }
 
-/// Serialize the whole grid for ONE client, without taking the rows the other
-/// clients have not received yet.
+/// Serialize the whole grid for ONE client, without touching what the other
+/// clients are about to receive.
 ///
-/// Damage is tracked per session and `serialize_dirty_rows` consumes it, so a
-/// frame built for a single WS socket would otherwise leave the desktop ticker
-/// with nothing to send — the desktop would never learn about rows that changed
-/// just before the WS client connected or resynced, and nothing would report it.
-/// Marking the grid damaged again and waking the ticker costs one extra full
-/// frame to the other clients and keeps every transport whole.
+/// Damage is tracked per session and `serialize_dirty_rows` CONSUMES it, so this
+/// used to force full damage, serialize, and force it again — handing the damage
+/// back at the cost of pinning the session into full frames for everyone and
+/// re-arming the ticker. One browser that fell behind therefore made the desktop
+/// decode 108 KB frames it had not asked for. `serialize_full_frame` reads the
+/// same rows without consuming damage, without moving the `last_frame_*`
+/// viewport state and without draining the bell, so a resync costs the other
+/// transports nothing at all.
 fn full_frame_for_single_client(state: &Arc<AppState>, session_id: &str) -> Option<Vec<u8>> {
-    let frame = {
-        let vt = state.vt_log_buffers.get(session_id)?;
-        let mut vt = vt.lock();
-        vt.grid_force_full_damage();
-        let frame = vt.serialize_dirty_rows();
-        vt.grid_force_full_damage();
-        frame
-    };
-    if let Some(dirty) = state.grid_frame_dirty.get(session_id) {
-        dirty.store(true, Ordering::Relaxed);
-    }
+    let vt = state.vt_log_buffers.get(session_id)?;
+    let frame = vt.lock().serialize_full_frame();
     if frame.is_empty() { None } else { Some(frame) }
 }
 
@@ -2585,14 +2578,20 @@ mod tests {
         assert!(snapshot_total >= snapshot_indices.len() as u64 * CHUNK_SIZE as u64);
     }
 
-    // --- Single-client full frames (story 601-82ef) ---
+    // --- Single-client full frames (story 601-82ef, 670-b9a2) ---
     //
     // Damage is tracked once per session, not per subscriber, and
     // `serialize_dirty_rows` CONSUMES it. So a full frame built for one WS client
     // silently takes the rows every other client was about to receive: the desktop
     // ticker's next serialize returns nothing and the desktop never learns those
-    // rows changed. That is invisible row-map corruption on the other transport,
-    // which is why this path has to hand the damage back.
+    // rows changed. That is invisible row-map corruption on the other transport.
+    //
+    // This used to be paid for by damaging the whole grid again and re-arming the
+    // ticker, which kept every transport whole at the price of pinning the
+    // session into full frames — one slow browser made the desktop decode 108 KB
+    // frames it never asked for. `serialize_full_frame` reads the rows without
+    // consuming damage at all, so the resync is now invisible rather than merely
+    // survivable, and these tests hold that stronger line.
 
     /// Feed enough output to dirty the grid, then drain the frame the ticker would
     /// have sent, leaving the buffer in the state a live session is in.
@@ -2610,6 +2609,30 @@ mod tests {
         vt.process(text.as_bytes());
     }
 
+    /// The frame the desktop ticker would take on its next tick.
+    fn ticker_frame(state: &Arc<AppState>, session_id: &str) -> Vec<u8> {
+        let vt = state
+            .vt_log_buffers
+            .get(session_id)
+            .expect("session exists");
+        let mut vt = vt.lock();
+        vt.serialize_dirty_rows().bytes
+    }
+
+    /// Feed more output into a session that is already painted.
+    fn feed(state: &Arc<AppState>, session_id: &str, text: &str) {
+        let vt = state
+            .vt_log_buffers
+            .get(session_id)
+            .expect("session exists");
+        vt.lock().process(text.as_bytes());
+    }
+
+    /// Rows a frame carries, off the `row_count` header field.
+    fn frame_rows(frame: &[u8]) -> u16 {
+        u16::from_le_bytes([frame[0], frame[1]])
+    }
+
     #[test]
     fn a_full_frame_for_one_client_does_not_consume_the_others_rows() {
         let state = super::super::tests::test_state();
@@ -2619,27 +2642,56 @@ mod tests {
             .expect("a dirty session must produce a frame");
         assert!(!frame.is_empty());
 
-        // What the desktop ticker does on its next tick.
-        let ticker_frame = {
-            let vt = state
-                .vt_log_buffers
-                .get("shared-damage")
-                .expect("session exists");
-            let mut vt = vt.lock();
-            vt.serialize_dirty_rows()
-        };
         assert!(
-            !ticker_frame.is_empty(),
+            !ticker_frame(&state, "shared-damage").is_empty(),
             "the WS resync ate the rows the desktop channel was about to be sent"
         );
     }
 
-    /// The ticker only serializes when the session is marked dirty, so handing the
-    /// damage back is worthless unless it also wakes the ticker up.
+    /// The strong form of the test above: the resync must be *invisible* to the
+    /// shared stream, not merely survivable. A control session is fed the same
+    /// bytes with nobody resyncing, and the two ticker frames have to match to
+    /// the byte — re-damaging the grid would hand the desktop all 24 rows where
+    /// the control gets the one that changed.
     #[test]
-    fn a_full_frame_for_one_client_wakes_the_ticker() {
+    fn a_full_frame_for_one_client_leaves_the_shared_delta_byte_identical() {
+        let state = super::super::tests::test_state();
+        dirty_session(&state, "resynced", "hello from the pty\r\n");
+        dirty_session(&state, "control", "hello from the pty\r\n");
+        // A fresh grid has no previous viewport to diff against, so its first
+        // frame is full by construction and would say nothing about damage.
+        // Drain it, then change exactly one row: what the desktop is owed now is
+        // a one-row delta, and a re-damaged grid turns that into a whole screen.
+        assert_eq!(frame_rows(&ticker_frame(&state, "resynced")), 24);
+        assert_eq!(frame_rows(&ticker_frame(&state, "control")), 24);
+        feed(&state, "resynced", "and one more line\r\n");
+        feed(&state, "control", "and one more line\r\n");
+
+        full_frame_for_single_client(&state, "resynced").expect("frame");
+
+        let resynced = ticker_frame(&state, "resynced");
+        let control = ticker_frame(&state, "control");
+        assert!(
+            frame_rows(&control) < 24,
+            "the control must be a delta, or this test compares two full frames"
+        );
+        assert_eq!(
+            resynced, control,
+            "one client's resync changed what every other client is sent"
+        );
+    }
+
+    /// The resync used to damage the whole grid on its way out, so it also had to
+    /// wake the ticker or that damage would sit unsent. It damages nothing now,
+    /// and waking the ticker would cost every transport a full frame to deliver a
+    /// screen that has not changed.
+    #[test]
+    fn a_full_frame_for_one_client_does_not_wake_the_ticker() {
         let state = super::super::tests::test_state();
         dirty_session(&state, "wake-ticker", "hello\r\n");
+        // Drain what the ticker owes, so the flag below can only be set by the
+        // resync itself.
+        let _ = ticker_frame(&state, "wake-ticker");
         state
             .grid_frame_dirty
             .get("wake-ticker")
@@ -2649,12 +2701,12 @@ mod tests {
         full_frame_for_single_client(&state, "wake-ticker").expect("frame");
 
         assert!(
-            state
+            !state
                 .grid_frame_dirty
                 .get("wake-ticker")
                 .expect("flag exists")
                 .load(std::sync::atomic::Ordering::Relaxed),
-            "restored damage that no tick will ever pick up is still a lost frame"
+            "a resync that damages nothing must not spend a tick on every transport"
         );
     }
 

@@ -1703,46 +1703,8 @@ impl TerminalGrid {
     pub fn serialize_dirty_rows(&mut self) -> Vec<u8> {
         let num_cols = self.term.grid().columns();
         let num_lines = self.term.grid().screen_lines();
-        let cursor = self.term.grid().cursor.point;
-        let cursor_visible = self.term.mode().contains(TermMode::SHOW_CURSOR);
         let display_offset = self.term.grid().display_offset();
         let history_size = self.term.grid().history_size();
-        // Lines evicted from the history top so far. Monotonic within a resize era,
-        // so `history_base + grid_relative_abs` is an eviction-stable absolute row
-        // coordinate the frontend can key its scroll cache by (see serialize_styled_range).
-        let history_base = self
-            .term
-            .grid()
-            .total_scrolled()
-            .saturating_sub(history_size);
-        let has_selection = self.term.selection.is_some();
-        let mode = *self.term.mode();
-        let mut keyboard_flags: u8 = 0;
-        if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
-            keyboard_flags |= 0x01;
-        }
-        if mode.contains(TermMode::REPORT_EVENT_TYPES) {
-            keyboard_flags |= 0x02;
-        }
-        if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
-            keyboard_flags |= 0x04;
-        }
-        if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
-            keyboard_flags |= 0x08;
-        }
-        if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
-            keyboard_flags |= 0x10;
-        }
-        // bit 5: alternate screen active. Not a keyboard flag — it rides in this
-        // byte because `frame_flags` has no bit left, and adding a header byte
-        // would desync any frontend running against an older backend (Rust does
-        // not hot-reload in dev). An unused bit degrades to 0 instead.
-        // The frontend keys its absolute-row cache off `history_base`, which
-        // restarts from 0 on every alt enter/exit (`reset_history_era`), so it
-        // must drop that cache whenever this bit flips.
-        if mode.contains(TermMode::ALT_SCREEN) {
-            keyboard_flags |= 0x20;
-        }
 
         let viewport_changed = self.last_frame_display_offset != Some(display_offset)
             || self.last_frame_history_size != Some(history_size)
@@ -1784,21 +1746,102 @@ impl TerminalGrid {
             }
         };
 
-        if dirty_lines.is_empty() {
-            self.term.reset_damage();
-            self.last_frame_display_offset = Some(display_offset);
-            self.last_frame_history_size = Some(history_size);
-            self.last_frame_screen_lines = Some(num_lines);
-            self.last_frame_columns = Some(num_cols);
+        // The bell is drained only into a frame that will carry it: an empty
+        // frame is never sent, so swallowing the flag here would lose the ring.
+        let frame = if dirty_lines.is_empty() {
+            Vec::new()
+        } else {
+            let bell = self.drain_bell();
+            self.encode_frame(&dirty_lines, bell)
+        };
+
+        self.term.reset_damage();
+        self.last_frame_display_offset = Some(display_offset);
+        self.last_frame_history_size = Some(history_size);
+        self.last_frame_screen_lines = Some(num_lines);
+        self.last_frame_columns = Some(num_cols);
+        frame
+    }
+
+    /// A whole-screen frame that takes nothing from the shared delta stream.
+    ///
+    /// Damage is tracked once per session and [`Self::serialize_dirty_rows`]
+    /// CONSUMES it, so building a full frame for one subscriber used to mean
+    /// damaging the grid again for every other one: a single browser that fell
+    /// behind pinned the session into full frames the desktop also had to
+    /// decode. This reads the same rows without touching damage, the
+    /// `last_frame_*` viewport state or the bell, so a per-subscriber resync
+    /// costs the other transports nothing.
+    ///
+    /// The bell is deliberately not carried. It is an event owned by the shared
+    /// stream; draining it here would ring on the resyncing client and nowhere
+    /// else.
+    pub fn serialize_full_frame(&self) -> Vec<u8> {
+        let num_cols = self.term.grid().columns();
+        let num_lines = self.term.grid().screen_lines();
+        let last_col = num_cols.saturating_sub(1);
+        let rows: Vec<(usize, usize, usize)> = (0..num_lines).map(|l| (l, 0, last_col)).collect();
+        self.encode_frame(&rows, false)
+    }
+
+    /// Pack `rows` — `(row, left, right)`, `right` inclusive — into the binary
+    /// frame documented on [`Self::serialize_dirty_rows`].
+    ///
+    /// Read-only on purpose: whichever serializer called it owns the damage
+    /// bookkeeping its frame implies, which is what lets a full frame be built
+    /// for one subscriber without disturbing the others.
+    fn encode_frame(&self, rows: &[(usize, usize, usize)], bell: bool) -> Vec<u8> {
+        if rows.is_empty() {
             return Vec::new();
+        }
+        let num_cols = self.term.grid().columns();
+        let num_lines = self.term.grid().screen_lines();
+        let cursor = self.term.grid().cursor.point;
+        let cursor_visible = self.term.mode().contains(TermMode::SHOW_CURSOR);
+        let display_offset = self.term.grid().display_offset();
+        let history_size = self.term.grid().history_size();
+        // Lines evicted from the history top so far. Monotonic within a resize era,
+        // so `history_base + grid_relative_abs` is an eviction-stable absolute row
+        // coordinate the frontend can key its scroll cache by (see serialize_styled_range).
+        let history_base = self
+            .term
+            .grid()
+            .total_scrolled()
+            .saturating_sub(history_size);
+        let has_selection = self.term.selection.is_some();
+        let mode = *self.term.mode();
+        let mut keyboard_flags: u8 = 0;
+        if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
+            keyboard_flags |= 0x01;
+        }
+        if mode.contains(TermMode::REPORT_EVENT_TYPES) {
+            keyboard_flags |= 0x02;
+        }
+        if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
+            keyboard_flags |= 0x04;
+        }
+        if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+            keyboard_flags |= 0x08;
+        }
+        if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
+            keyboard_flags |= 0x10;
+        }
+        // bit 5: alternate screen active. Not a keyboard flag — it rides in this
+        // byte because `frame_flags` has no bit left, and adding a header byte
+        // would desync any frontend running against an older backend (Rust does
+        // not hot-reload in dev). An unused bit degrades to 0 instead.
+        // The frontend keys its absolute-row cache off `history_base`, which
+        // restarts from 0 on every alt enter/exit (`reset_history_era`), so it
+        // must drop that cache whenever this bit flips.
+        if mode.contains(TermMode::ALT_SCREEN) {
+            keyboard_flags |= 0x20;
         }
 
         // Header: 26 bytes
-        let row_count = dirty_lines.len();
+        let row_count = rows.len();
         let estimated = 26 + row_count * (4 + num_cols * 11);
         let mut buf = Vec::with_capacity(estimated);
 
-        let bell = self.drain_bell();
         let cursor_shape = self.term.cursor_style().shape;
         let mut frame_flags: u8 = 0;
         if bell {
@@ -1851,7 +1894,7 @@ impl TerminalGrid {
 
         let grid = self.term.grid();
         let colors = self.term.colors();
-        for &(row_idx, left, right) in &dirty_lines {
+        for &(row_idx, left, right) in rows {
             let line = Line(row_idx as i32 - display_offset as i32);
             // A span shorter than the row saves 11 bytes per column dropped and
             // costs 2 for `start_col`, so any narrowing at all is worth sending
@@ -1874,11 +1917,6 @@ impl TerminalGrid {
             }
         }
 
-        self.term.reset_damage();
-        self.last_frame_display_offset = Some(display_offset);
-        self.last_frame_history_size = Some(history_size);
-        self.last_frame_screen_lines = Some(num_lines);
-        self.last_frame_columns = Some(num_cols);
         buf
     }
 

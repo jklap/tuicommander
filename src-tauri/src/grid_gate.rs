@@ -20,10 +20,59 @@
 //! sent, so an ack for an abandoned frame is a number that is already in the
 //! past and changes nothing.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Hands out a fresh id to every subscription, process-wide.
 static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// Hands out the order a frame was cut from a grid in, process-wide.
+///
+/// Global rather than per session so that a session whose watch channel is
+/// replaced — every spawn path installs a fresh one — cannot start behind the
+/// order that channel already recorded and have every frame rejected as stale.
+static NEXT_FRAME_ORDER: AtomicU64 = AtomicU64::new(1);
+
+/// The bytes of one grid frame plus the order it was cut from the grid in.
+///
+/// Five producers serialize under the vt lock and hand the bytes to
+/// `send_grid_frame` *after* releasing it, so the order frames reach a transport
+/// is not the order they were cut: a resize can serialize a full frame, lose the
+/// race to a delta cut later, and land last — repainting the client with the
+/// older screen, which is the "blank after zoom" the resize flush exists to
+/// prevent. The order is stamped inside the critical section that produced the
+/// bytes, because that is the only place it exists.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GridFrame {
+    pub(crate) order: u64,
+    pub(crate) bytes: Vec<u8>,
+}
+
+impl GridFrame {
+    /// Wrap freshly serialized bytes, claiming the next order for them. Call
+    /// while the vt lock that produced `bytes` is still held.
+    pub(crate) fn cut(bytes: Vec<u8>) -> Self {
+        Self {
+            order: NEXT_FRAME_ORDER.fetch_add(1, Ordering::Relaxed),
+            bytes,
+        }
+    }
+
+    /// Nothing changed, so there is nothing to send.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+/// Where a frame stands against the newest one already handed to a transport.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FrameOrder {
+    /// Nothing newer has been delivered; this frame may go out.
+    Newest,
+    /// A frame cut *after* this one was already delivered. This one carries rows
+    /// that newer frame does not — the damage behind them was consumed when it
+    /// was serialized — so it can neither be sent nor silently dropped.
+    Stale,
+}
 
 /// Frame-delivery gate for one session. Cheap: two relaxed atomics, no lock.
 #[derive(Debug)]
@@ -35,6 +84,10 @@ pub(crate) struct GridGate {
     sent: AtomicU64,
     /// Frames the frontend has reported receiving, clamped to `sent`.
     acked: AtomicU64,
+    /// Set when a frame was withheld from this channel because the gate was
+    /// closed while the WebSocket transport kept receiving. See
+    /// [`Self::note_missed`].
+    missed: AtomicBool,
 }
 
 impl GridGate {
@@ -43,6 +96,7 @@ impl GridGate {
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             sent: AtomicU64::new(0),
             acked: AtomicU64::new(0),
+            missed: AtomicBool::new(false),
         }
     }
 
@@ -89,6 +143,26 @@ impl GridGate {
             .fetch_max(self.sent.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
+    /// A frame was serialized and delivered to the WebSocket subscribers while
+    /// this gate was closed, so it never reached this channel.
+    ///
+    /// The gate used to stop the frame ticker outright, which held the damage on
+    /// the vt until the WebView caught up — lossless for the desktop, and it
+    /// starved every browser subscriber on the other transport. They keep
+    /// receiving now, which means the rows in those frames left the shared damage
+    /// without reaching this channel. A delta on top of a row map missing them
+    /// would leave stale rows with no error, so the debt is recorded here and
+    /// paid with a full frame once the gate reopens.
+    pub(crate) fn note_missed(&self) {
+        self.missed.store(true, Ordering::Relaxed);
+    }
+
+    /// Take the debt [`Self::note_missed`] recorded, if any. True exactly once
+    /// per stall: the caller owes this subscription one full frame.
+    pub(crate) fn take_missed(&self) -> bool {
+        self.missed.swap(false, Ordering::Relaxed)
+    }
+
     /// Frames sent and not yet reported as received — for diagnostics.
     pub(crate) fn outstanding(&self) -> u64 {
         self.sent
@@ -108,6 +182,11 @@ impl GridGate {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GridWatchFrame {
     pub(crate) seq: u64,
+    /// Highest [`GridFrame::order`] handed to any of this session's transports.
+    /// Distinct from `seq`, which counts what this channel published: a frame
+    /// can be delivered to the desktop and to nobody here, and a reader that
+    /// treated the two as one number would see a gap where none exists.
+    pub(crate) order: u64,
     pub(crate) frame: Vec<u8>,
 }
 
@@ -118,12 +197,48 @@ pub(crate) fn new_grid_watch() -> GridWatchTx {
     tokio::sync::watch::channel(GridWatchFrame::default()).0
 }
 
-/// Publish a frame, assigning it the next sequence number.
-pub(crate) fn publish_grid_frame(tx: &GridWatchTx, frame: Vec<u8>) {
-    tx.send_modify(|slot| {
-        slot.seq += 1;
-        slot.frame = frame;
+/// Claim `order` as the newest frame delivered for this session and, when
+/// `frame` is `Some`, publish it to the watchers under the same sequence number.
+///
+/// One critical section on purpose. Claiming the order and publishing the bytes
+/// separately reopens exactly the window this closes: two producers could claim
+/// in the order they serialized and then publish in the other one.
+///
+/// `frame` is `None` when nobody is watching. The order is still claimed,
+/// because the desktop channel and this watch are two transports for one grid
+/// and one damage set, so they share one ordering.
+pub(crate) fn claim_grid_frame(tx: &GridWatchTx, order: u64, frame: Option<Vec<u8>>) -> FrameOrder {
+    let mut verdict = FrameOrder::Stale;
+    tx.send_if_modified(|slot| {
+        if order <= slot.order {
+            return false;
+        }
+        slot.order = order;
+        verdict = FrameOrder::Newest;
+        match frame {
+            Some(bytes) => {
+                slot.seq += 1;
+                slot.frame = bytes;
+                true
+            }
+            // Nothing was published, so nothing changed for a reader: waking one
+            // here would spend a frame's worth of work on the bytes it already has.
+            None => false,
+        }
     });
+    verdict
+}
+
+/// One producer publishing a freshly cut frame: take the next order, then hand
+/// the bytes to the watchers under it.
+///
+/// Test-only. Production code never cuts and publishes in one step — the order
+/// has to be stamped inside the vt lock and the bytes travel out of it, which is
+/// the whole reason [`GridFrame`] exists.
+#[cfg(test)]
+pub(crate) fn publish_grid_frame(tx: &GridWatchTx, bytes: Vec<u8>) -> FrameOrder {
+    let frame = GridFrame::cut(bytes);
+    claim_grid_frame(tx, frame.order, Some(frame.bytes))
 }
 
 /// Free the retained frame after the last grid client leaves.
@@ -376,6 +491,122 @@ mod tests {
         assert!(watch_dropped_frames(last_seq, seq));
         last_seq = seq;
         assert!(!watch_dropped_frames(last_seq, seq));
+    }
+
+    // --- Frame ordering (670-b9a2) ---
+    //
+    // Five producers serialize under the vt lock and publish after releasing it,
+    // so the order frames reach a transport is not the order they were cut. The
+    // resize path is the one that hurts: it serializes a FULL frame, and a full
+    // frame that lands after a delta repaints the client with the older screen —
+    // the "blank after zoom" the resize flush exists to prevent. Nothing about
+    // the arrival order is observable at the transport, which is why the order is
+    // stamped at the only place it exists: inside the critical section that cut
+    // the bytes.
+
+    #[test]
+    fn a_frame_cut_earlier_cannot_overwrite_one_cut_later() {
+        let tx = new_grid_watch();
+        // Two producers, both still holding their own vt critical section.
+        let resize = GridFrame::cut(vec![0xAA; 4]);
+        let delta = GridFrame::cut(vec![0xBB; 2]);
+        assert!(resize.order < delta.order, "cut order must be recorded");
+
+        // Both released the lock; the one cut LAST wins the race to the channel,
+        // then the older one arrives.
+        assert_eq!(
+            claim_grid_frame(&tx, delta.order, Some(delta.bytes.clone())),
+            FrameOrder::Newest
+        );
+        assert_eq!(
+            claim_grid_frame(&tx, resize.order, Some(resize.bytes)),
+            FrameOrder::Stale
+        );
+
+        assert_eq!(
+            tx.borrow().frame,
+            delta.bytes,
+            "a frame cut before the one already published repainted the newer screen"
+        );
+    }
+
+    #[test]
+    fn a_rejected_frame_does_not_move_the_sequence() {
+        let tx = new_grid_watch();
+        let older = GridFrame::cut(vec![1]);
+        let newer = GridFrame::cut(vec![2]);
+        claim_grid_frame(&tx, newer.order, Some(newer.bytes));
+        let seq_after_newer = tx.borrow().seq;
+
+        claim_grid_frame(&tx, older.order, Some(older.bytes));
+
+        // The sequence counts what this channel published. Moving it for a frame
+        // that was never published would show every reader a gap that did not
+        // happen, and cost each of them a full-frame resync to close it.
+        assert_eq!(tx.borrow().seq, seq_after_newer);
+    }
+
+    #[test]
+    fn claiming_without_publishing_still_orders_the_next_frame() {
+        let tx = new_grid_watch();
+        let older = GridFrame::cut(vec![1]);
+        let newer = GridFrame::cut(vec![2]);
+
+        // Nobody was watching when the newer frame went out, so no bytes went
+        // into the slot — but the desktop channel and this watch share one grid
+        // and one damage set, so they share one ordering. A browser that connects
+        // in between must not be handed the older frame as if it were current.
+        assert_eq!(claim_grid_frame(&tx, newer.order, None), FrameOrder::Newest);
+        assert_eq!(tx.borrow().seq, 0, "nothing was published");
+
+        assert_eq!(
+            claim_grid_frame(&tx, older.order, Some(older.bytes)),
+            FrameOrder::Stale,
+            "an order claimed by the other transport must still reject an older frame"
+        );
+        assert!(tx.borrow().frame.is_empty());
+    }
+
+    #[test]
+    fn a_frame_cut_later_is_admitted_after_one_cut_earlier() {
+        let tx = new_grid_watch();
+        let first = GridFrame::cut(vec![1]);
+        let second = GridFrame::cut(vec![2]);
+
+        // The ordinary case, in the ordinary order: nothing is rejected.
+        assert_eq!(
+            claim_grid_frame(&tx, first.order, Some(first.bytes)),
+            FrameOrder::Newest
+        );
+        assert_eq!(
+            claim_grid_frame(&tx, second.order, Some(second.bytes.clone())),
+            FrameOrder::Newest
+        );
+        assert_eq!(tx.borrow().frame, second.bytes);
+        assert_eq!(tx.borrow().seq, 2);
+    }
+
+    // --- Frames withheld from a stalled WebView (670-b9a2) ---
+
+    #[test]
+    fn a_fresh_gate_owes_nothing() {
+        let gate = GridGate::new();
+        assert!(!gate.take_missed());
+    }
+
+    #[test]
+    fn a_missed_frame_is_owed_exactly_once() {
+        let gate = GridGate::new();
+        // Several frames went to the WebSocket subscribers while the WebView was
+        // behind. The debt is one full frame, not one per frame skipped.
+        gate.note_missed();
+        gate.note_missed();
+
+        assert!(gate.take_missed(), "the debt must be reported");
+        assert!(
+            !gate.take_missed(),
+            "paying it twice sends a full frame nobody needs"
+        );
     }
 
     /// A hidden terminal deliberately never acks (see CanvasTerminal.onFrame), so

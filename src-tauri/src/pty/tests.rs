@@ -12819,3 +12819,350 @@ mod normalize_path_tests {
         assert_eq!(p, Path::new("/home/user/plans/bar.md"));
     }
 }
+
+#[cfg(test)]
+mod grid_delivery_tests {
+    use super::*;
+    use crate::grid_gate::{GridGate, new_grid_watch};
+
+    // --- Frame ordering (670-b9a2) ---
+    //
+    // Every producer serializes under the vt lock and calls `send_grid_frame`
+    // after releasing it, so two of them can reach the transport in the opposite
+    // order. The frames are DELTAS whose damage was consumed when they were cut,
+    // so the older one carries rows the newer one does not have: painting it last
+    // reverts those rows and nothing ever sends them again. The resize path makes
+    // it visible — it cuts a FULL frame, and a full frame landing after a delta is
+    // the "blank after zoom" the resize flush exists to prevent.
+    //
+    // These tests inject the reordering directly rather than racing two threads
+    // for it: a race that happens to come out in order proves nothing, and one
+    // that comes out reversed proves it only on the run where it did.
+
+    /// A session as the spawn paths leave it: a vt buffer, a grid watch and the
+    /// ticker's dirty flag. Returns a live watch receiver — without one the watch
+    /// has no subscribers and `send_grid_frame` hands it nothing.
+    fn grid_session(
+        state: &Arc<AppState>,
+        session_id: &str,
+    ) -> tokio::sync::watch::Receiver<crate::grid_gate::GridWatchFrame> {
+        state.vt_log_buffers.insert(
+            session_id.to_string(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+        state
+            .grid_frame_dirty
+            .insert(session_id.to_string(), Arc::new(AtomicBool::new(false)));
+        let tx = new_grid_watch();
+        let rx = tx.subscribe();
+        state.grid_watch.insert(session_id.to_string(), tx);
+        rx
+    }
+
+    /// Feed the grid and cut the frame that carries what just changed, exactly as
+    /// a producer does inside its own vt critical section.
+    fn cut_frame(
+        state: &Arc<AppState>,
+        session_id: &str,
+        text: &str,
+    ) -> crate::grid_gate::GridFrame {
+        let vt = state
+            .vt_log_buffers
+            .get(session_id)
+            .expect("session exists");
+        let mut vt = vt.lock();
+        vt.process(text.as_bytes());
+        vt.serialize_dirty_rows()
+    }
+
+    /// Rows a frame carries, off the `row_count` header field.
+    fn row_count(frame: &[u8]) -> u16 {
+        u16::from_le_bytes([frame[0], frame[1]])
+    }
+
+    #[test]
+    fn a_frame_that_lost_the_ordering_race_does_not_repaint_the_newer_screen() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let rx = grid_session(&state, "reorder");
+
+        // Two producers, cut in this order under the vt lock.
+        let older = cut_frame(&state, "reorder", "first\r\n");
+        let newer = cut_frame(&state, "reorder", "second\r\n");
+        assert!(!older.is_empty() && !newer.is_empty());
+
+        // Both released the lock before sending, and they arrive reversed.
+        send_grid_frame(&state, "reorder", newer.clone());
+        send_grid_frame(&state, "reorder", older);
+
+        assert_eq!(
+            rx.borrow().frame,
+            newer.bytes,
+            "a frame cut earlier painted over the newer screen"
+        );
+    }
+
+    #[test]
+    fn the_rows_a_dropped_frame_carried_come_back_as_a_full_repaint() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let _rx = grid_session(&state, "repaint");
+
+        let older = cut_frame(&state, "repaint", "first\r\n");
+        let newer = cut_frame(&state, "repaint", "second\r\n");
+        send_grid_frame(&state, "repaint", newer);
+        send_grid_frame(&state, "repaint", older);
+
+        // Dropping the loser silently is not an option: both frames consumed the
+        // damage that produced them, so the rows in the dropped one reach nobody
+        // unless the grid is damaged again.
+        assert!(
+            state
+                .grid_frame_dirty
+                .get("repaint")
+                .expect("flag exists")
+                .load(Ordering::Relaxed),
+            "the repair has to be armed or the dropped rows are lost for good"
+        );
+        let repaint = {
+            let vt = state.vt_log_buffers.get("repaint").expect("session exists");
+            let mut vt = vt.lock();
+            vt.serialize_dirty_rows()
+        };
+        assert_eq!(
+            row_count(&repaint.bytes),
+            24,
+            "the repair must be a whole screen — a delta cannot name rows nobody tracked"
+        );
+    }
+
+    #[test]
+    fn frames_arriving_in_the_order_they_were_cut_are_all_delivered() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut rx = grid_session(&state, "in-order");
+
+        let first = cut_frame(&state, "in-order", "first\r\n");
+        send_grid_frame(&state, "in-order", first.clone());
+        assert_eq!(rx.borrow_and_update().frame, first.bytes);
+
+        let second = cut_frame(&state, "in-order", "second\r\n");
+        send_grid_frame(&state, "in-order", second.clone());
+        assert_eq!(rx.borrow_and_update().frame, second.bytes);
+
+        // The ordering check must not cost a repaint on the path every frame
+        // takes: only a genuine reversal may arm one.
+        assert!(
+            !state
+                .grid_frame_dirty
+                .get("in-order")
+                .expect("flag exists")
+                .load(Ordering::Relaxed),
+            "the ordinary path armed a full repaint it does not need"
+        );
+    }
+
+    // --- A stalled WebView must not starve the browser (670-b9a2) ---
+    //
+    // `GridGate` belongs to the desktop IPC channel: it counts frames sent
+    // against frames the WebView reported painting. The ticker used to check it
+    // before serializing anything, so a WebView blocked on its own main thread
+    // stopped the frames going to browser/PWA clients — a different transport,
+    // with its own flow control, that had not fallen behind at all.
+
+    /// A reader that keeps the session alive until the test releases it, then
+    /// reports EOF so the reader and ticker threads shut down normally.
+    struct StopOnFlag(Arc<AtomicBool>);
+
+    impl Read for StopOnFlag {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            while !self.0.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(0)
+        }
+    }
+
+    /// Start the frame ticker for a session that already has a vt buffer and a
+    /// grid watch. Returns the stop flag — set it to tear the threads down.
+    fn start_ticker(state: &Arc<AppState>, session_id: &str) -> Arc<AtomicBool> {
+        let stop = Arc::new(AtomicBool::new(false));
+        spawn_reader_thread(
+            Box::new(StopOnFlag(stop.clone())),
+            Arc::new(AtomicBool::new(false)),
+            session_id.to_string(),
+            state.clone(),
+            None,
+        );
+        stop
+    }
+
+    /// Outer bound only: it answers "did the ticker ever publish", nothing about
+    /// how fast. The ticker runs on a 16 ms interval, so any real delivery is
+    /// three orders of magnitude inside this; a timeout means no frame was ever
+    /// serialized, which is the defect itself.
+    const TICKER_LIVENESS_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Keep the grid changing and the ticker armed, the way a live PTY reader
+    /// does. Returns a handle that stops the feed when the test drops it.
+    fn feed_continuously(state: &Arc<AppState>, session_id: &str) -> Arc<AtomicBool> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let feeder_stop = stop.clone();
+        let feeder_state = state.clone();
+        let feeder_sid = session_id.to_string();
+        std::thread::spawn(move || {
+            let mut n = 0u32;
+            while !feeder_stop.load(Ordering::Relaxed) {
+                if let Some(vt) = feeder_state.vt_log_buffers.get(&feeder_sid) {
+                    vt.lock().process(format!("line {n}\r\n").as_bytes());
+                }
+                if let Some(dirty) = feeder_state.grid_frame_dirty.get(&feeder_sid) {
+                    dirty.store(true, Ordering::Relaxed);
+                }
+                n += 1;
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        stop
+    }
+
+    /// A desktop subscriber that records every frame it is handed and acks none —
+    /// a WebView whose JS thread is blocked.
+    ///
+    /// Real, not a stand-in: registering the channel makes the production path
+    /// mark the gate sent, so the gate closes the way it closes in the app rather
+    /// than being pinned closed by the test, and the recording is what actually
+    /// left Rust for that channel.
+    #[cfg(feature = "desktop")]
+    fn subscribe_a_frozen_webview(
+        state: &Arc<AppState>,
+        session_id: &str,
+    ) -> (Arc<GridGate>, Arc<Mutex<Vec<Vec<u8>>>>) {
+        let gate = Arc::new(GridGate::new());
+        state
+            .grid_gates
+            .insert(session_id.to_string(), gate.clone());
+        let received: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = received.clone();
+        state.grid_channels.insert(
+            session_id.to_string(),
+            tauri::ipc::Channel::new(move |body| {
+                if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
+                    sink.lock().push(bytes);
+                }
+                Ok(())
+            }),
+        );
+        (gate, received)
+    }
+
+    /// How long the browser is watched for while the desktop never acks.
+    ///
+    /// This bound IS the subject: the question is not whether a frame ever
+    /// arrives, it is at what rate. Stopping the ticker on a closed gate does not
+    /// silence the browser forever — the ticker gives the outstanding frame up
+    /// after `MAX_IN_FLIGHT_MS` (500 ms) and the next tick sends one, which the
+    /// frozen WebView immediately closes the gate with again. So the browser was
+    /// throttled from the 16 ms tick to roughly 2 frames a second, and every third
+    /// give-up adds a 1 s pause. Measured over this window: 3 frames on that
+    /// path, 33 at the tick rate.
+    const BROWSER_FEED_WINDOW: std::time::Duration = std::time::Duration::from_millis(1200);
+
+    /// Between the two: twice what the give-up path produced in
+    /// `BROWSER_FEED_WINDOW`, a fifth of what the tick rate produced. Sized for
+    /// the gap, not for the expected value, so a machine five times slower than
+    /// this one still passes.
+    const BROWSER_FRAMES_EXPECTED: u64 = 6;
+
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread", start_paused = false)]
+    async fn a_stalled_desktop_gate_does_not_stop_the_browser_frames() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut rx = grid_session(&state, "stalled-webview");
+        let (gate, _received) = subscribe_a_frozen_webview(&state, "stalled-webview");
+
+        let stop = start_ticker(&state, "stalled-webview");
+        // `spawn_reader_thread` installs the dirty flag the ticker reads, so the
+        // feed can only start once the threads are up.
+        let stop_feed = feed_continuously(&state, "stalled-webview");
+
+        let first_seq = rx.borrow_and_update().seq;
+        tokio::time::sleep(BROWSER_FEED_WINDOW).await;
+        let frames = rx.borrow_and_update().seq - first_seq;
+
+        stop_feed.store(true, Ordering::Relaxed);
+        stop.store(true, Ordering::Relaxed);
+
+        assert!(
+            !gate.is_open(),
+            "the WebView under test has to still be behind, or nothing was throttling"
+        );
+        assert!(
+            frames >= BROWSER_FRAMES_EXPECTED,
+            "the browser got {frames} frames in {BROWSER_FEED_WINDOW:?} while the desktop \
+             gate was closed; a stalled WebView is still throttling a transport that \
+             never fell behind"
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread", start_paused = false)]
+    async fn the_desktop_is_owed_a_full_frame_after_it_catches_up() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut rx = grid_session(&state, "caught-up");
+        let (gate, received) = subscribe_a_frozen_webview(&state, "caught-up");
+
+        // The WebView has caught up, but frames went out to the WebSocket
+        // subscribers while it was behind: those rows left the shared damage
+        // without ever reaching its channel, so a delta now would land on a row
+        // map with holes in it.
+        gate.note_missed();
+        assert!(
+            gate.is_open(),
+            "the debt is only repayable once it catches up"
+        );
+
+        // Drain the first frame a fresh grid always owes — it has no previous
+        // viewport to diff against, so it is full by construction and would say
+        // nothing about the repair below.
+        let _ = cut_frame(&state, "caught-up", "already painted\r\n");
+
+        let stop = start_ticker(&state, "caught-up");
+        {
+            let vt = state
+                .vt_log_buffers
+                .get("caught-up")
+                .expect("session exists");
+            vt.lock().process(b"one more line\r\n");
+        }
+        state
+            .grid_frame_dirty
+            .get("caught-up")
+            .expect("the ticker owns this flag")
+            .store(true, Ordering::Relaxed);
+
+        let delivered = tokio::time::timeout(TICKER_LIVENESS_BOUND, rx.changed()).await;
+        stop.store(true, Ordering::Relaxed);
+        delivered
+            .expect("the frame ticker never took a tick")
+            .expect("the watch sender outlives the test");
+
+        // Assert on the FIRST frame the channel got, not the last: the WebView
+        // stays frozen, so every later tick finds the gate shut again and the
+        // count keeps moving after the assertion is made.
+        let first = received
+            .lock()
+            .first()
+            .cloned()
+            .expect("the desktop channel got nothing at all");
+        assert_eq!(
+            row_count(&first),
+            24,
+            "the desktop's first frame after the gap has to be the whole screen — \
+             a delta would paint onto rows it never received"
+        );
+        // The repair is private to that channel: it consumes no damage, so what
+        // the browser got on the same tick is still the ordinary delta.
+        assert!(
+            row_count(&rx.borrow_and_update().frame) < 24,
+            "repairing the desktop must not cost the browser a full frame"
+        );
+    }
+}
