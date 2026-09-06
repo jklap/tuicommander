@@ -45,6 +45,7 @@ chrome_file='src-tauri/src/chrome.rs'
 scoped_files='
 src-tauri/src/pty.rs
 src-tauri/src/pty/commands.rs
+src-tauri/src/pty/tests.rs
 src-tauri/src/state.rs
 src-tauri/src/output_parser.rs
 src-tauri/src/relay_client.rs
@@ -100,7 +101,7 @@ so the bytes that prove this fix are gone minutes after you stop reading them.
            -H 'content-type: application/json' -d '{"enabled":true}'
     Captures land in <config dir>/captures/<session-id>.tcap — copy it into
     $fixtures_dir/ and add a case to the
-    "Awaiting-signal fixtures" block in src-tauri/src/pty.rs tests.
+    "Awaiting-signal fixtures" block in src-tauri/src/pty/tests.rs.
 
   • Rename, refactor or no behaviour change:
       TUIC_SKIP_FIXTURE_GATE=1 git commit ...   (or git commit --no-verify)

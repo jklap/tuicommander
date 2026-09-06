@@ -216,7 +216,7 @@ Off by default (one relaxed atomic load per chunk when off) — code in
 
 **A reproduced failure becomes a fixture, always.** Drop the `.tcap` in
 `src-tauri/src/fixtures/agent_prompts/` and add a case to the
-`Awaiting-signal fixtures` block in `pty.rs` tests: it replays the capture
+`Awaiting-signal fixtures` block in `pty/tests.rs`: it replays the capture
 through `raw_stream_events` + `parse_clean_lines` + `suppress_heuristic_question`
 — the same composition production runs, shared on purpose so a test can never
 assert against a pipeline that does not exist. Unit tests on the individual
