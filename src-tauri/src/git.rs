@@ -2237,6 +2237,82 @@ exit /b 1
     Some(script_path)
 }
 
+/// Git subcommands that can block on something off this machine, so every one
+/// of them runs under [`crate::git_cli::FETCH_TIMEOUT`].
+///
+/// Audit of the HTTP allowlist (`ALLOWED_GIT_SUBCOMMANDS` in
+/// `mcp_http/git_routes.rs`), which is what a browser or remote client can
+/// reach: `fetch`, `pull` and `push` always contact a remote. `remote` does for
+/// `update` and `prune`, and is bounded whole because its local forms
+/// (`remote -v`, `remote add`) return in milliseconds, so a deadline can only
+/// ever fire on the network ones. The other eleven — `stash`, `log`, `diff`,
+/// `show`, `branch`, `tag`, `merge`, `rebase`, `cherry-pick`, `status`,
+/// `rev-parse` — read and write only the local object store. A slow one is slow
+/// because the repo is big, not because a host stopped answering, and killing
+/// it would abort work that was going to finish.
+const NETWORK_GIT_SUBCOMMANDS: &[&str] = &["fetch", "pull", "push", "remote"];
+
+/// Whether `args` names a subcommand that talks to a remote.
+pub(crate) fn is_network_git_subcommand(args: &[String]) -> bool {
+    args.first()
+        .is_some_and(|sub| NETWORK_GIT_SUBCOMMANDS.contains(&sub.as_str()))
+}
+
+/// Run an arbitrary git command to completion, blocking the calling thread.
+///
+/// Shared by the Tauri command below and the `/repo/run-git` HTTP handler so the
+/// two transports cannot drift: same deadline, same askpass wiring, same result
+/// shape. A git-level failure — including a killed network command — is a
+/// `GitCommandResult` with `success: false`, never an `Err`; callers inspect
+/// `success` and `stderr`.
+pub(crate) fn run_git_command_blocking(
+    state: &Arc<AppState>,
+    path: &str,
+    args: &[String],
+) -> GitCommandResult {
+    let repo_path = PathBuf::from(path);
+    let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let mut builder = git_cmd(&repo_path).args(&args_str);
+
+    // A network subcommand is the only one that can park this thread forever —
+    // a credential helper on a prompt, a half-open connection, a wedged mount.
+    if is_network_git_subcommand(args) {
+        builder = builder.timeout(crate::git_cli::FETCH_TIMEOUT);
+    }
+
+    // Enable GUI-based SSH authentication so passphrase-protected keys work
+    // without a TTY. SSH_ASKPASS_REQUIRE=prefer tells SSH to use the askpass
+    // program even when stdin looks like it could be a terminal.
+    if let Some(ref askpass_path) = ensure_askpass_script() {
+        let askpass_str = askpass_path.to_string_lossy();
+        builder = builder
+            .env("SSH_ASKPASS", &askpass_str)
+            .env("SSH_ASKPASS_REQUIRE", "prefer")
+            .env("DISPLAY", ":0"); // Required on Linux for SSH_ASKPASS
+    }
+
+    match builder.run_raw() {
+        Ok(o) => {
+            let success = o.status.success();
+            if success {
+                state.invalidate_repo_caches(path);
+            }
+            GitCommandResult {
+                success,
+                stdout: String::from_utf8_lossy(&o.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&o.stderr).to_string(),
+                exit_code: o.status.code().unwrap_or(-1),
+            }
+        }
+        Err(e) => GitCommandResult {
+            success: false,
+            stdout: String::new(),
+            stderr: format!("Failed to execute git: {e}"),
+            exit_code: -1,
+        },
+    }
+}
+
 /// Run an arbitrary git command in the background (no PTY, no terminal).
 /// Used by the sidebar Git Quick Actions (pull, push, fetch, stash).
 /// Async so network operations (pull/push/fetch) don't block the IPC thread.
@@ -2249,50 +2325,10 @@ pub(crate) async fn run_git_command(
     args: Vec<String>,
 ) -> Result<GitCommandResult, String> {
     let state_arc = state.inner().clone();
-    let path_clone = path.clone();
-    let askpass = ensure_askpass_script();
 
-    tokio::task::spawn_blocking(move || {
-        let repo_path = PathBuf::from(&path_clone);
-
-        let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let mut builder = git_cmd(&repo_path).args(&args_str);
-
-        // Enable GUI-based SSH authentication so passphrase-protected keys work
-        // without a TTY. SSH_ASKPASS_REQUIRE=prefer tells SSH to use the askpass
-        // program even when stdin looks like it could be a terminal.
-        if let Some(ref askpass_path) = askpass {
-            let askpass_str = askpass_path.to_string_lossy();
-            builder = builder
-                .env("SSH_ASKPASS", &askpass_str)
-                .env("SSH_ASKPASS_REQUIRE", "prefer")
-                .env("DISPLAY", ":0"); // Required on Linux for SSH_ASKPASS
-        }
-
-        match builder.run_raw() {
-            Ok(o) => {
-                let success = o.status.success();
-                let result = GitCommandResult {
-                    success,
-                    stdout: String::from_utf8_lossy(&o.stdout).to_string(),
-                    stderr: String::from_utf8_lossy(&o.stderr).to_string(),
-                    exit_code: o.status.code().unwrap_or(-1),
-                };
-                if success {
-                    state_arc.invalidate_repo_caches(&path_clone);
-                }
-                result
-            }
-            Err(e) => GitCommandResult {
-                success: false,
-                stdout: String::new(),
-                stderr: format!("Failed to execute git: {e}"),
-                exit_code: -1,
-            },
-        }
-    })
-    .await
-    .map_err(|e| format!("Git command task failed: {e}"))
+    tokio::task::spawn_blocking(move || run_git_command_blocking(&state_arc, &path, &args))
+        .await
+        .map_err(|e| format!("Git command task failed: {e}"))
 }
 
 // --- Working tree status (porcelain v2) ---

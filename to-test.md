@@ -520,6 +520,25 @@ shows the same reason as a plain hover tooltip — see the DEFERRED comment at
   terminal) still shows only the old hover tooltip — no clickable text was
   added there.
 
+## HTTP git commands are now bounded (story 697-d6ea, Rust — needs a `make dev` restart)
+
+Rust does not hot-reload, so this needs a restart to load. The HTTP error
+path also changed shape: a git spawn failure used to return HTTP 500 and now
+returns HTTP 200 with `{ success: false, exit_code: -1, stderr: ... }`, the
+same shape the Tauri command has always returned. That is deliberate — the
+frontend documents `run_git_command never throws; inspect success explicitly`
+(`BranchesTab.tsx:18`), so the old 500 made a browser client behave
+differently from the desktop.
+
+- [ ] Desktop, normal path: fetch/pull/push from the Git panel still work and
+  still report failures the way they did before. No visible change expected.
+- [ ] Browser mode (`http://localhost:9876/`): do a fetch on a repo whose
+  remote is reachable. It should behave exactly as on desktop.
+- [ ] Slow/dead remote: point a throwaway repo at an unroutable remote and
+  fetch. It must give up after ~180s with a `git timed out` message, not hang
+  forever. This is the whole point of the story — do it on a throwaway repo,
+  never on a real one.
+
 ## Language picker in Settings → General (story 689-52d8, visual)
 
 The General tab now renders a Language select above Shell, listing every locale
