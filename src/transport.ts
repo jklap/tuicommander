@@ -2345,6 +2345,14 @@ export function rpc<T>(command: string, args: Record<string, unknown> = {}, conn
 			) as Promise<T>;
 		}
 	}
+	// Desktop talks to the backend over Tauri invoke(), never HTTP, so the
+	// GET/POST distinction isIdempotentRpc()/mapCommandToHttp() computes is
+	// meaningless here — but every desktop RPC still paid for a COMMAND_TABLE
+	// lookup (and a thrown+caught Error for every command not in that table,
+	// which is most of them) to work that out. Skip straight to invoke().
+	if (!connectionId && isTauri()) {
+		return rpcImpl<T>(command, args, connectionId);
+	}
 	if (isIdempotentRpc(command, args)) {
 		const key = connectionId
 			? `${connectionId}:${command}:${JSON.stringify(args)}`
@@ -2358,15 +2366,22 @@ export function rpc<T>(command: string, args: Record<string, unknown> = {}, conn
 	return rpcImpl<T>(command, args, connectionId);
 }
 
+/** Cached after the first resolution — `import()` of an already-loaded module
+ *  is cheap, but calling it fresh on every desktop RPC (once per keystroke) still
+ *  pays a module-registry lookup + Promise wrap that a plain reference avoids. */
+let cachedTauriInvoke: typeof import("@tauri-apps/api/core").invoke | undefined;
+
 async function rpcImpl<T>(command: string, args: Record<string, unknown>, connectionId?: string): Promise<T> {
 	// When connectionId is provided, always use HTTP fetch (remote daemon is accessed via HTTP)
 	if (!connectionId && isTauri()) {
-		const { invoke } = await import("@tauri-apps/api/core");
+		if (!cachedTauriInvoke) {
+			({ invoke: cachedTauriInvoke } = await import("@tauri-apps/api/core"));
+		}
 		// Only pass args if non-empty (matches Tauri invoke signature)
 		if (Object.keys(args).length > 0) {
-			return invoke<T>(command, args);
+			return cachedTauriInvoke<T>(command, args);
 		}
-		return invoke<T>(command);
+		return cachedTauriInvoke<T>(command);
 	}
 
 	const mapping = mapCommandToHttp(command, args);
