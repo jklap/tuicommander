@@ -502,6 +502,77 @@ pub(super) async fn close_session(
     }
 }
 
+/// Column floor for a freshly registered VT screen, kept from the shell-session
+/// path: the grid starts at least this wide whatever geometry the caller asked
+/// for, and `VtLogBuffer::resize` only ever widens `max_cols` from there.
+const NEW_SESSION_MIN_VT_COLS: u16 = 220;
+
+/// Wire a freshly spawned PTY into `AppState`: the session handle, its terminal
+/// alias, the spawn metrics, the output ring, the VT screen **at the geometry the
+/// PTY was actually opened with**, the idle clock, the grid-watch channel, and
+/// the `SessionCreated` broadcast.
+///
+/// Three spawn paths need exactly this block — `spawn_pty_session`, the MCP
+/// `agent spawn` handler, and `POST /agents` — and open-coding it three times let
+/// them drift: two built the VT screen at a hardcoded 24x220 while handing the
+/// child the caller's rows/cols, so every screen scrape (agent-state detection,
+/// choice prompts, the chrome cutoff) parsed a grid the child had never drawn
+/// into. Taking `rows`/`cols` here makes that class of mismatch unrepresentable.
+///
+/// A caller that pre-seeds `session_states` or queues injections must do so
+/// **before** calling: this emits `SessionCreated`, and the reader thread the
+/// caller starts afterwards is what consumes them.
+pub(super) fn register_pty_session(
+    state: &AppState,
+    session_id: &str,
+    session: PtySession,
+    rows: u16,
+    cols: u16,
+    agent_type: Option<String>,
+) {
+    let cwd = session.cwd.clone();
+    let display_name = session.display_name.clone();
+
+    state
+        .sessions
+        .insert(session_id.to_string(), Mutex::new(session));
+    state.assign_term_alias(session_id);
+    state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
+    state
+        .metrics
+        .active_sessions
+        .fetch_add(1, Ordering::Relaxed);
+
+    state.output_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
+    );
+    state.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(VtLogBuffer::new(
+            rows,
+            cols.max(NEW_SESSION_MIN_VT_COLS),
+            VT_LOG_BUFFER_CAPACITY,
+        )),
+    );
+    state
+        .last_output_ms
+        .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
+    // Without this `GET /sessions/{id}/stream?format=grid` finds no entry and
+    // silently closes the socket.
+    state
+        .grid_watch
+        .insert(session_id.to_string(), crate::grid_gate::new_grid_watch());
+
+    // Broadcast to SSE/WebSocket consumers before the reader thread starts.
+    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
+        session_id: session_id.to_string(),
+        cwd,
+        agent_type,
+        display_name,
+    });
+}
+
 /// Shared PTY setup: opens a PTY, spawns the shell, registers buffers and reader thread.
 ///
 /// Returns `(session_id, cwd_string)` on success. Both `create_session` and
@@ -565,9 +636,10 @@ pub(super) fn spawn_pty_session(
     })?;
 
     let paused = Arc::new(AtomicBool::new(false));
-    state.sessions.insert(
-        session_id.clone(),
-        Mutex::new(PtySession {
+    register_pty_session(
+        &state,
+        &session_id,
+        PtySession {
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
@@ -578,40 +650,11 @@ pub(super) fn spawn_pty_session(
             display_name_is_custom: false,
             is_remote: true,
             shell: shell.clone(),
-        }),
+        },
+        rows,
+        cols,
+        None,
     );
-    state.assign_term_alias(&session_id);
-    state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
-    state
-        .metrics
-        .active_sessions
-        .fetch_add(1, Ordering::Relaxed);
-
-    state.output_buffers.insert(
-        session_id.clone(),
-        Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
-    );
-    state.vt_log_buffers.insert(
-        session_id.clone(),
-        Mutex::new(VtLogBuffer::new(
-            rows,
-            cols.max(220),
-            VT_LOG_BUFFER_CAPACITY,
-        )),
-    );
-    state
-        .last_output_ms
-        .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
-    let grid_watch_tx = crate::grid_gate::new_grid_watch();
-    state.grid_watch.insert(session_id.clone(), grid_watch_tx);
-
-    // Broadcast to SSE/WebSocket consumers (before state is moved to reader thread)
-    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
-        session_id: session_id.clone(),
-        cwd: cwd.clone(),
-        agent_type: None,
-        display_name: None,
-    });
 
     #[cfg(feature = "desktop")]
     let state_ref = state.clone();

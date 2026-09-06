@@ -1,6 +1,5 @@
 use crate::pty::spawn_reader_thread;
-use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VT_LOG_BUFFER_CAPACITY, VtLogBuffer};
-use crate::{AppState, MAX_CONCURRENT_SESSIONS, OutputRingBuffer, PtySession};
+use crate::{AppState, MAX_CONCURRENT_SESSIONS, PtySession};
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -9,7 +8,7 @@ use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
 use uuid::Uuid;
@@ -394,31 +393,10 @@ pub(super) async fn spawn_agent_session(
     };
 
     let paused = Arc::new(AtomicBool::new(false));
-    state.sessions.insert(
-        session_id.clone(),
-        Mutex::new(PtySession {
-            writer: Arc::new(Mutex::new(writer)),
-            master: pair.master,
-            _child: child,
-            paused: paused.clone(),
-            worktree: None,
-            cwd: body.cwd.clone(),
-            display_name: None,
-            display_name_is_custom: false,
-            is_remote: true,
-            shell: binary_path.clone(),
-        }),
-    );
-    state.assign_term_alias(&session_id);
-    state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
-    state
-        .metrics
-        .active_sessions
-        .fetch_add(1, Ordering::Relaxed);
-
-    // Pre-set the session's agent type (mirrors session.rs spawn_pty_session) so the
-    // PTY reader's agent_active gate turns on immediately and intent/suggest protocol
-    // tokens are parsed from the first line of output.
+    // Pre-set the session's agent type so the PTY reader's agent_active gate turns
+    // on immediately and intent/suggest protocol tokens are parsed from the first
+    // line of output. Seeded before registration because that is what publishes
+    // `session-created`.
     let mut session_state = crate::state::SessionState::default();
     if let Some(ref agent_type) = body.agent_type {
         session_state.hook_instrumented = crate::pty::hook_instrumented_for(
@@ -431,30 +409,28 @@ pub(super) async fn spawn_agent_session(
         .session_states
         .insert(session_id.clone(), session_state);
 
-    state.output_buffers.insert(
-        session_id.clone(),
-        Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
+    // Buffers, alias, metrics, grid watch and the session-created broadcast,
+    // sharing one helper with session::spawn_pty_session so the VT screen can only
+    // ever be built at the geometry the PTY was opened with.
+    super::session::register_pty_session(
+        &state,
+        &session_id,
+        PtySession {
+            writer: Arc::new(Mutex::new(writer)),
+            master: pair.master,
+            _child: child,
+            paused: paused.clone(),
+            worktree: None,
+            cwd: body.cwd.clone(),
+            display_name: None,
+            display_name_is_custom: false,
+            is_remote: true,
+            shell: binary_path.clone(),
+        },
+        rows,
+        cols,
+        body.agent_type.clone(),
     );
-    state.vt_log_buffers.insert(
-        session_id.clone(),
-        Mutex::new(VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY)),
-    );
-    state
-        .last_output_ms
-        .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
-    // Register the grid_watch channel so `GET /sessions/{id}/stream?format=grid`
-    // works for agent sessions — without it handle_ws_grid_session finds no entry
-    // and silently closes the socket. Mirrors session.rs spawn_pty_session.
-    let grid_watch_tx = crate::grid_gate::new_grid_watch();
-    state.grid_watch.insert(session_id.clone(), grid_watch_tx);
-
-    // Broadcast to SSE/WebSocket consumers (before state is moved to reader thread)
-    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
-        session_id: session_id.clone(),
-        cwd: body.cwd.clone(),
-        agent_type: body.agent_type.clone(),
-        display_name: None,
-    });
 
     #[cfg(feature = "desktop")]
     let state_ref = state.clone();
