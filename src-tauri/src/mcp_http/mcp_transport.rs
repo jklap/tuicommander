@@ -2225,10 +2225,26 @@ impl Drop for ActiveAgentWaitGuard {
     }
 }
 
-fn dispatch_waiter_handoff(state: &AppState, recipient: &str, message_ids: &[String]) {
+/// Hand messages a finishing `agent wait` did not carry back to the recipient's
+/// terminal.
+///
+/// Deferred to the injection worker: `finish` is reached from
+/// `ActiveAgentWaitGuard::drop`, so the caller is whatever tokio worker is
+/// dropping the wait future, and each message here sleeps `INJECT_ENTER_GAP`
+/// under the recipient's writer mutex.
+fn dispatch_waiter_handoff(state: &Arc<AppState>, recipient: &str, message_ids: &[String]) {
     if message_ids.is_empty() {
         return;
     }
+    let state = Arc::clone(state);
+    let recipient = recipient.to_string();
+    let message_ids = message_ids.to_vec();
+    crate::pty::spawn_injection_job(move || {
+        dispatch_waiter_handoff_blocking(&state, &recipient, &message_ids)
+    });
+}
+
+fn dispatch_waiter_handoff_blocking(state: &AppState, recipient: &str, message_ids: &[String]) {
     let wanted: std::collections::HashSet<&str> = message_ids.iter().map(String::as_str).collect();
     let messages: Vec<crate::state::AgentMessage> = state
         .agent_inbox
