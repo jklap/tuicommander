@@ -1698,6 +1698,75 @@ Content-Type: application/json
 
 Remove a push subscription by endpoint.
 
+## ACP (ego)
+
+Every `acp_*` Tauri command has a route here, with the same request field
+names, the same response body, and the same error body — an `AcpClientError`
+serialized whole (`code`, `message`, `connectionId`, `sessionId`, `operation`,
+`retryable`). The HTTP status is a translation of `code`, never a second
+opinion about it:
+
+| `code` | Status |
+|--------|--------|
+| `invalid_input` | 400 |
+| `not_found` | 404 |
+| `capability_unavailable` | 501 — the agent never advertised it; the caller did nothing wrong |
+| `transport_closed`, `stream_gap` | 410 — what the URL names is genuinely gone |
+| `unsupported_protocol`, `initialization_failed`, `agent_error` | 502 |
+
+```
+POST   /acp/connections                                          {root}                    -> AcpConnectionSnapshot
+GET    /acp/connections/{connection_id}                                                    -> AcpConnectionSnapshot
+DELETE /acp/connections/{connection_id}                                                    -> AcpConnectionSettlement
+POST   /acp/connections/{connection_id}/kill                                               -> AcpConnectionSettlement
+POST   /acp/connections/{connection_id}/reconnect                {root}                    -> AcpConnectionSnapshot
+GET    /acp/connections/{connection_id}/sessions?cwd=&cursor=                              -> ListSessionsResponse
+POST   /acp/connections/{connection_id}/sessions                 {authority}               -> AcpAttachmentSnapshot
+POST   /acp/connections/{cid}/sessions/{session_id}/load         {authority}               -> AcpAttachmentSnapshot
+POST   /acp/connections/{cid}/sessions/{session_id}/resume       {authority}               -> AcpAttachmentSnapshot
+POST   /acp/connections/{cid}/sessions/{session_id}/fork         {authority}               -> AcpAttachmentSnapshot
+DELETE /acp/connections/{cid}/sessions/{session_id}                                        -> null
+POST   /acp/connections/{cid}/sessions/{session_id}/close                                  -> null
+POST   /acp/connections/{cid}/sessions/{session_id}/prompt       {prompt:[ContentBlock]}   -> AcpTurnId
+POST   /acp/connections/{cid}/sessions/{session_id}/cancel                                 -> null
+POST   /acp/connections/{cid}/sessions/{session_id}/config       {configId, value}         -> [SessionConfigOption]
+POST   /acp/connections/{cid}/sessions/{session_id}/pause        {requestId}               -> EgoHoldResponse
+POST   /acp/connections/{cid}/sessions/{session_id}/resume-turn  {requestId}               -> EgoHoldResponse
+POST   /acp/connections/{cid}/sessions/{session_id}/compact      {requestId}               -> EgoCompactResponse
+GET    /acp/connections/{connection_id}/interactions                                       -> [AcpPendingInteraction]
+POST   /acp/connections/{cid}/permissions/{request_id}/response  {outcome}                 -> AcpInteractionSettlement
+POST   /acp/connections/{cid}/elicitations/{request_id}/response {action}                  -> AcpInteractionSettlement
+```
+
+`POST /acp/connections` and `.../reconnect` are the only two that launch a
+process, and they are the only two that take the loopback-or-authenticated
+guard. The executable is never in the body: it comes from the `ego_executable`
+setting.
+
+### Stream (WebSocket)
+
+```
+GET /acp/connections/{connection_id}/stream?after={sequence}     (WebSocket)
+```
+
+The browser half of `acp_subscribe`. Frames are `{"kind":"event",...}`,
+`{"kind":"gap",...}` or `{"kind":"end"}` — byte-identical to what the desktop
+Channel carries. `after` is the first sequence wanted; `0` means everything the
+journal still holds. A cursor the journal has dropped is refused **before** the
+upgrade, with a 404 and the usual error body, rather than by opening a socket
+and closing it.
+
+A gap is terminal: the missing frames exist nowhere in this client, and a
+stream that silently resumed past them would render a turn with a hole in it.
+Recovery is a fresh connection and `session/load`.
+
+This is deliberately not on `/events`: one turn emits more frames per second
+than the 256-entry SSE broadcast can carry without lagging every other
+subscriber. `/events` carries only the low-frequency `acp-notice` wake signal
+(`ready`, `settled`, `interaction_pending`, `interaction_settled`), whose
+payload names the connection, generation, sequence and — when it has one — the
+session and request it is about.
+
 ## Tauri-Only Commands (No HTTP Route)
 
 The following commands are accessible only via the Tauri `invoke()` bridge in the desktop app. They have no HTTP endpoint.

@@ -2091,3 +2091,34 @@ Secure value generators accessible from the command palette (`open-generators` a
 - All generation happens in the Rust backend (`generators.rs`) via the `ring` crate for cryptographic randomness
 - Frontend is a modal dialog with copy-to-clipboard and regenerate actions
 - Password and Nano ID have configurable options (length, character classes)
+
+## 26. ACP Client for ego
+
+Backend-only so far: TUICommander can drive an [ego](https://github.com/sstraus/ego)
+agent over the Agent Client Protocol (v1). No frontend surface yet.
+
+### 26.1 What it does
+- Launches a supervised ego child per connection and initializes it, refusing
+  anything the agent did not advertise **before** a byte reaches the wire
+- Durable sessions: new, list, load, resume, fork, close, delete
+- Turns: prompt, cancel, per-turn config options, and the ordered stream of what
+  the agent said, replayable from any sequence a bounded journal still holds
+- The agent's questions back — permission and elicitation — parked so a person
+  answers them without freezing the connection, and listed so a client that was
+  not running when they were asked still finds them
+- ego's own extensions: `_ego/pause`, `_ego/resume`, `_ego/compact`, each gated
+  on the version ego advertised
+
+### 26.2 Where it is reachable
+- Desktop: 22 `acp_*` Tauri commands (`docs/api/tauri-commands.md`)
+- Browser/PWA/remote: an identical route per command under `/acp`
+  (`docs/api/http-api.md`), including the same error bodies
+- The turn stream is a dedicated Channel on the desktop and a dedicated
+  WebSocket in the browser; `/events` carries only the low-frequency
+  `acp-notice` wake signal
+
+### 26.3 Process authority
+The one binary this may launch is the `ego_executable` setting, read at each
+connect. It is not an argument of any command or route, so no request — local
+or remote — can choose what the host runs. An empty setting refuses every
+connect rather than failing later inside a spawn.

@@ -131,6 +131,7 @@ needs an app restart is what that costs.
 | `font_size` | `u16` | `14` | Terminal font size |
 | `theme` | `String` | `"vscode-dark"` | Terminal theme |
 | `ide` | `String` | `""` | IDE for "Open in..." |
+| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. Deliberately unreachable over IPC or HTTP: a caller supplies a working directory and nothing else, so no request can choose which binary runs |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |

@@ -333,6 +333,9 @@ Some frontend-only stores persist to localStorage:
 ## Feature Status
 
 ### Completed (P1)
+- [x] ACP client for ego — backend complete (connections, sessions, turns, the
+      agent's questions back, ego's pause/resume/compact), reachable identically
+      from Tauri IPC and HTTP; no frontend surface yet
 - [x] Multi-agent support through the canonical `AgentType` registry
 - [x] Git worktree management per task
 - [x] Agent spawning integration
