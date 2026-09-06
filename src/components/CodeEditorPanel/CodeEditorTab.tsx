@@ -467,7 +467,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		const saved = savedContent();
 		void rev;
 		if (!view) return;
-		if (!repoPath || isExternal() || !saved || largeDoc()) {
+		if (!repoPath || isExternal() || !saved) {
 			view.dispatch({ effects: setChangesEffect([]) });
 			return;
 		}
@@ -507,10 +507,13 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		const enabled = settingsStore.state.inlineBlameEnabled;
 		void rev;
 		if (!view) return;
-		if (!enabled || !repoPath || isExternal() || !saved || largeDoc()) {
+		// Turning the feature off must drop what is on screen; the other paths
+		// clear themselves with the document (see the gutter effect).
+		if (!enabled) {
 			view.dispatch({ effects: setBlameEffect([]) });
 			return;
 		}
+		if (!repoPath || isExternal() || !saved || largeDoc()) return;
 		void (async () => {
 			try {
 				const lines = await invoke<BlameLine[]>("get_file_blame", {
