@@ -1960,6 +1960,12 @@ where
     // again through save_app_config_locked would self-deadlock.
     save_app_config_with(next.clone(), |disk_config| file.write_atomic(disk_config))?;
     *state.config.write() = next;
+    // Long-lived tasks that own a service's lifecycle watch this instead of
+    // being restarted: see `relay_client::supervise`. It goes here, not in each
+    // caller, because `ConfigSaveEffects` is only actioned by the callers that
+    // remember to — and the relay toggle silently needing an app restart is
+    // exactly what that costs.
+    crate::relay_client::notify_config_changed(state);
     Ok(effects)
 }
 

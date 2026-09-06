@@ -116,6 +116,14 @@ through `restart_after_server_settings_change` when `services.server.{enabled,po
 ipv6_enabled}` or `services.auth.{username,password_hash}` move, so the running
 process can never serve a configuration the disk disagrees with.
 
+`commit_config_change` itself bumps `relay.config_revision` after every write.
+`relay_client::supervise` — spawned at boot whether or not the relay is enabled —
+watches that counter and starts, stops or restarts the relay client when
+`services.relay.{enabled,url,token,session_id}` move. The signal is raised at the
+choke point rather than by each writer on purpose: a `ConfigSaveEffects` flag is
+only actioned by the callers that remember it, and a relay toggle that silently
+needs an app restart is what that costs.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `shell` | `Option<String>` | `None` | Shell override (platform default if None) |

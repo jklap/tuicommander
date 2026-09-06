@@ -1246,13 +1246,11 @@ pub fn run() {
     let state = Arc::new(app_state);
     state.wire_event_bus();
 
-    let relay_rx = if config.services.relay.enabled {
-        let (relay_tx, relay_rx) = tokio::sync::oneshot::channel();
-        *state.relay.shutdown.lock() = Some(relay_tx);
-        Some(relay_rx)
-    } else {
-        None
-    };
+    // The relay supervisor runs whether or not the relay is enabled at boot:
+    // "off" is a state it supervises, and spawning it only when the setting was
+    // already on is what made the Settings toggle need an app restart.
+    let (relay_tx, relay_rx) = tokio::sync::oneshot::channel();
+    *state.relay.shutdown.lock() = Some(relay_tx);
 
     // Always start HTTP API server (Unix socket is always on; TCP only if remote access enabled)
     // Tailscale detection + TLS provisioning happens inside the server thread (non-blocking to Tauri setup)
@@ -1265,10 +1263,7 @@ pub fn run() {
             rt.block_on(async move {
                 spawn_background_tasks(&server_state);
 
-                if let Some(relay_rx) = relay_rx {
-                    let relay_state = server_state.clone();
-                    tokio::spawn(relay_client::run(relay_state, relay_rx));
-                }
+                tokio::spawn(relay_client::supervise(server_state.clone(), relay_rx));
 
                 // Detect Tailscale and provision TLS cert (async, doesn't block window render)
                 let tls_config = if remote_enabled {

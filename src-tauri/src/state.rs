@@ -2971,10 +2971,15 @@ fn split_name_segments(name: &str) -> Vec<String> {
 
 /// Cloud relay client state (connection + shutdown handle).
 pub(crate) struct RelayState {
-    /// Shutdown sender — send () to gracefully stop the relay client
+    /// Shutdown sender — send () to gracefully stop the relay supervisor
     pub(crate) shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     /// Whether the relay client is currently connected
     pub(crate) connected: std::sync::atomic::AtomicBool,
+    /// Bumped after every committed config change so the relay supervisor
+    /// re-reads its settings without an app restart. A `watch` rather than a
+    /// broadcast: a burst of saves needs one re-read, not one per save, and a
+    /// subscriber that was busy cannot lag out of a coalescing channel.
+    pub(crate) config_revision: tokio::sync::watch::Sender<u64>,
 }
 
 impl RelayState {
@@ -2982,6 +2987,7 @@ impl RelayState {
         Self {
             shutdown: parking_lot::Mutex::new(None),
             connected: std::sync::atomic::AtomicBool::new(false),
+            config_revision: tokio::sync::watch::Sender::new(0),
         }
     }
 }
