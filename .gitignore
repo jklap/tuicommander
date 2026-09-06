@@ -63,6 +63,9 @@ issues-to-monitor.md
 
 # Rust build artifacts
 src-tauri/target/
+# clippy and test build with different flags, so sharing one directory makes
+# them invalidate each other's work on every alternation
+src-tauri/target-clippy/
 
 # Sidecar binaries (built during cargo tauri build)
 src-tauri/binaries/tuic-bridge-*

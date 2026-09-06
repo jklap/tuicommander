@@ -151,6 +151,18 @@ impl Agent {
                 let mut drained = Vec::new();
                 let _ = self.stdin.read_to_end(&mut drained);
             }
+            // The assertion a scenario cannot otherwise make: that nothing was
+            // sent. Waiting for EOF alone would let a wrongly-sent request sit
+            // in the buffer while the client waits for an answer that is never
+            // coming, and the test would hang instead of naming the frame.
+            Some("expect_no_frame") => {
+                let mut text = String::new();
+                let read = self.stdin.read_line(&mut text).expect("read client frame");
+                assert_eq!(
+                    read, 0,
+                    "scenario line {line}: nothing should have been sent, and the client sent {text:?}"
+                );
+            }
             Some("exit") => {
                 io::stdout().flush().expect("flush before exit");
                 let code = step.get("code").and_then(Value::as_i64).unwrap_or(0);
