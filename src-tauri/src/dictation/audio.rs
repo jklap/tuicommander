@@ -49,6 +49,19 @@ fn validate_channel_count(channels: usize) -> Result<usize, String> {
     Ok(channels)
 }
 
+/// Reject a device that reports a 0 Hz sample rate.
+///
+/// Zero makes the resample ratio infinite, and `(len as f64 * f64::INFINITY)`
+/// saturates to `usize::MAX` on the cast — so `reserve` aborts on capacity
+/// overflow inside the real-time callback. Same failure shape as a zero
+/// channel count, one line further down the same function.
+fn validate_sample_rate(sample_rate: u32) -> Result<u32, String> {
+    if sample_rate == 0 {
+        return Err("Input device reported a 0 Hz sample rate".to_string());
+    }
+    Ok(sample_rate)
+}
+
 /// Audio capture manager. Captures microphone input as 16kHz mono f32 PCM.
 ///
 /// Uses `VecDeque` so the streaming thread can drain from the front while
@@ -83,7 +96,7 @@ impl AudioCapture {
             .default_input_config()
             .map_err(|e| format!("Failed to get input config: {e}"))?;
 
-        let sample_rate = config.sample_rate();
+        let sample_rate = validate_sample_rate(config.sample_rate())?;
         let channels = validate_channel_count(config.channels() as usize)?;
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
         let buffer_clone = buffer.clone();
@@ -222,6 +235,14 @@ fn process_audio_chunk(
     // is `chunks(0)` panicking on the real-time audio thread, where an unwind
     // aborts the process rather than surfacing an error.
     if channels == 0 {
+        return;
+    }
+
+    // Same reasoning for the rate: `validate_sample_rate` rejects a 0 Hz device
+    // at start-up, so this is unreachable in practice. Without it the resample
+    // ratio below is infinite and the cast saturates to `usize::MAX`, which
+    // aborts on `reserve` — on the audio thread, where that is fatal.
+    if sample_rate == 0 {
         return;
     }
 
@@ -369,6 +390,44 @@ mod tests {
         let mut fx = ChunkFixture::new();
         fx.process(&[0.0, 1.0, 0.4], 16_000, 2);
         assert_samples(&fx.captured(), &[0.5, 0.2]);
+    }
+
+    #[test]
+    /// A device reporting 0 Hz makes `ratio` infinite, and
+    /// `(len as f64 * f64::INFINITY) as usize` saturates to `usize::MAX` — so
+    /// `reserve` aborts on capacity overflow, on the real-time audio thread.
+    /// Same class as the zero-channel bug, one line further down the callback.
+    #[test]
+    fn process_audio_chunk_survives_zero_sample_rate_device() {
+        let buffer = Arc::new(Mutex::new(VecDeque::new()));
+        let level = Arc::new(AtomicU32::new(0));
+        let mut mono_buf = Vec::new();
+        let mut resample_buf = Vec::new();
+
+        process_audio_chunk(
+            &[0.1, 0.2, 0.3, 0.4],
+            0,
+            1,
+            &buffer,
+            &level,
+            &mut mono_buf,
+            &mut resample_buf,
+        );
+
+        assert!(
+            buffer.lock().is_empty(),
+            "a 0 Hz device must be dropped, not resampled into a usize::MAX allocation"
+        );
+    }
+
+    #[test]
+    fn validate_sample_rate_rejects_zero_and_accepts_real_devices() {
+        assert!(
+            validate_sample_rate(0).is_err(),
+            "a 0 Hz device must be reported, not accepted"
+        );
+        assert_eq!(validate_sample_rate(16_000).expect("16 kHz"), 16_000);
+        assert_eq!(validate_sample_rate(48_000).expect("48 kHz"), 48_000);
     }
 
     #[test]
