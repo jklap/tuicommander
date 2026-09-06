@@ -63,6 +63,29 @@ it is not a user-session conflict protocol. `config.json` (`AppConfig`) and
 ID-keyed optimistic delta protocol documented below. See
 [`2026-08-08-config-deltas-under-lock.md`](../decisions/2026-08-08-config-deltas-under-lock.md).
 
+### Corrupt Files Are Moved Aside, Never Overwritten
+
+A config file that exists but does not parse is renamed to
+`<name>.corrupt-<uuid>` before anything falls back to defaults
+(`preserve_corrupt_config`). The UUID is fresh per occurrence on purpose: a fixed
+backup name would let a second corrupt load erase the document the first one
+saved, which is the same data loss one step removed. Nothing ever deletes these
+files — recovery is by hand.
+
+Two entry points reach it. `load_json_config_strict` refuses to return `Default`
+for a broken file on the **read** side (`notes.json`, GH #107), and
+`update_with_strict` does the same on the **write** side, so a read-modify-write
+aborts instead of persisting `Default` over real data (`repositories.json`,
+`mcp-upstreams.json`).
+
+`config.json` reaches neither, because `load_app_config` must return an
+`AppConfig` and has no error channel to a caller. It preserves the file directly:
+an unparseable `config.json` is moved aside and defaults are returned, so the
+first-run branch that fills in a missing session token and VAPID key is free to
+write a fresh document without destroying the old one. Only a **parse** failure
+triggers the rename — an I/O error leaves the file alone, since the document may
+be intact and only the read failed.
+
 ## Config Files and Commands
 
 ### Application Config (`config.json`)

@@ -457,6 +457,8 @@ impl SessionState {
 pub(crate) struct SessionStateEventQueue {
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<AppEvent>>>,
+    /// Events sent and not yet applied, counted on both ends. See [`Self::depth`].
+    depth: AtomicUsize,
 }
 
 impl SessionStateEventQueue {
@@ -465,7 +467,43 @@ impl SessionStateEventQueue {
         Self {
             tx,
             rx: Mutex::new(Some(rx)),
+            depth: AtomicUsize::new(0),
         }
+    }
+
+    /// Queue `event`, counting it as outstanding until the accumulator applies it.
+    fn send(&self, event: AppEvent) {
+        // Counted BEFORE the send, never after: the accumulator runs on another task and
+        // can receive and decrement before `send` even returns here. An increment after
+        // that would leave the depth permanently one too high, and a `fetch_sub` reaching
+        // zero first would wrap a `usize` to `usize::MAX`.
+        self.depth
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.tx.send(event).is_err() {
+            // The receiver is gone, so nothing will ever apply this one.
+            self.depth
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Record that the accumulator finished applying one event.
+    fn applied(&self) {
+        self.depth
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Events queued on the lane and not yet applied.
+    ///
+    /// The lane is deliberately unbounded, so a stalled accumulator is invisible until
+    /// it is a memory problem; the Diagnostics snapshot reports this and nothing acts on
+    /// it. Counted on both ends rather than read off the channel for two reasons. Tokio
+    /// puts `len()` on the RECEIVER, not the sender, and the receiver is `take()`n by
+    /// `spawn_session_state_accumulator` so no other caller can reach it. More
+    /// importantly, publishing `rx.len()` from inside that task would only refresh while
+    /// the task still runs — it would report a stale small number exactly when the task
+    /// wedges, which is the failure this metric exists to reveal.
+    pub(crate) fn depth(&self) -> usize {
+        self.depth.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -1794,7 +1832,7 @@ impl AppState {
     pub(crate) fn emit_pty_event(&self, event: AppEvent) {
         // State is authoritative and sticky, so it gets a lossless lane. The
         // broadcast copies remain best-effort transports for live consumers.
-        let _ = self.session_state_events.tx.send(event.clone());
+        self.session_state_events.send(event.clone());
         if let Some(sid) = event.pty_session_id()
             && let Some(tx) = self.pty_event_channels.get(sid)
         {
@@ -3256,7 +3294,13 @@ impl AppState {
             loop {
                 tokio::select! {
                     event = state_rx.recv() => match event {
-                        Some(event) => Self::apply_event_to_session_state(&state, &event),
+                        Some(event) => {
+                            Self::apply_event_to_session_state(&state, &event);
+                            // After the apply, not before: the depth counts events the
+                            // authoritative state has not absorbed yet, and an event
+                            // being applied right now is still one of them.
+                            state.session_state_events.applied();
+                        }
                         None => break,
                     },
                     event = broadcast_rx.recv() => match event {
