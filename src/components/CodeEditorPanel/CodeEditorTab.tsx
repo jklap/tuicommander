@@ -20,7 +20,7 @@ import {
 	scrollPastEnd,
 } from "@codemirror/view";
 import { colorPicker } from "@replit/codemirror-css-color-picker";
-import { createCodeMirror, createEditorControlledValue, createEditorReadonly } from "solid-codemirror";
+import { createCodeMirror, createEditorReadonly } from "solid-codemirror";
 import { type Component, createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { t } from "../../i18n";
@@ -87,6 +87,30 @@ export function isLargeDocument(length: number): boolean {
 export function languageTarget(filePath: string, loading: boolean, length: number): string | null {
 	if (!filePath || loading || isLargeDocument(length)) return null;
 	return filePath;
+}
+
+/**
+ * Install an externally loaded document (disk read, reload, agent edit) into a
+ * live editor.
+ *
+ * NEVER dispatch the replacement as a transaction instead. `mapViewport` carries
+ * the old viewport across the change, so the `{0, 0}` viewport of the empty
+ * document the tab starts with becomes `{0, doc.length}`, and
+ * `viewportIsAppropriate` accepts any viewport while the editor has not measured
+ * as visible — which it has not, because the "Loading..." placeholder hides it
+ * until the read resolves. CodeMirror then renders every line of the document:
+ * 720k line elements and a minute-long main-thread block on a 23 MB file.
+ *
+ * `setState` builds a fresh ViewState whose viewport starts as the first screen
+ * of the document. The new state is derived from the live one, so the extension
+ * configuration — every compartment solid-codemirror appended, the gutter and
+ * blame fields, the undo history — survives the swap.
+ */
+export function installDocument(view: EditorView, value: string): void {
+	const doc = view.state.doc;
+	// Length first: comparing a 23 MB document to itself must not stringify it.
+	if (doc.length === value.length && doc.toString() === value) return;
+	view.setState(view.state.update({ changes: { from: 0, to: doc.length, insert: value } }).state);
 }
 
 /** Past this size the editor still opens, but shows a non-blocking "may be slow"
@@ -438,8 +462,15 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		},
 	});
 
-	// Controlled value — sync external changes into editor
-	createEditorControlledValue(editorView, code);
+	// Controlled value — sync external changes into the editor. Deliberately not
+	// solid-codemirror's createEditorControlledValue: it dispatches the whole-document
+	// replacement into the live view, which is the freeze installDocument avoids.
+	createEffect(
+		on(editorView, (view) => {
+			if (!view) return;
+			createEffect(on(code, (value) => installDocument(view, value)));
+		}),
+	);
 
 	// Read-only mode
 	createEditorReadonly(editorView, isReadOnly);
