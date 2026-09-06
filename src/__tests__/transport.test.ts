@@ -2259,6 +2259,57 @@ describe("transport", () => {
 		});
 	});
 
+	/**
+	 * On desktop, `isTauri()` is true and there is no HTTP transport at all —
+	 * `rpcImpl` always goes to Tauri `invoke()`. Before this fix, every single
+	 * desktop RPC still ran `isIdempotentRpc()` -> `mapCommandToHttp()`: a
+	 * COMMAND_TABLE lookup, and for any command not in that table (most of
+	 * them — desktop-only commands aren't there) a thrown-and-caught Error.
+	 * `vi.spyOn` on `mapCommandToHttp` was tried and does not observe internal
+	 * same-module calls under this project's Vite/Vitest transform (verified:
+	 * the spy reports zero calls even on the HTTP path where the call is
+	 * unconditional), so the control-flow ordering is asserted directly from
+	 * source instead — same rationale as `canvasTerminalMountGuards.test.ts`.
+	 */
+	describe("rpc() desktop short-circuit", () => {
+		const source = readRepoFile("src/transport.ts");
+
+		it("returns to rpcImpl before reaching isIdempotentRpc's HTTP-table lookup", () => {
+			const start = source.indexOf("export function rpc<T>(");
+			expect(start).toBeGreaterThan(-1);
+			const end = source.indexOf("/** Cached after the first resolution", start);
+			expect(end).toBeGreaterThan(start);
+			const body = source.slice(start, end);
+			const shortCircuit = body.indexOf("!connectionId && isTauri()");
+			const idempotentCheck = body.indexOf("isIdempotentRpc(command, args)");
+			expect(shortCircuit).toBeGreaterThan(-1);
+			expect(idempotentCheck).toBeGreaterThan(-1);
+			expect(shortCircuit).toBeLessThan(idempotentCheck);
+		});
+
+		it("caches the @tauri-apps/api/core import instead of re-importing it on every call", () => {
+			const start = source.indexOf("async function rpcImpl<T>(");
+			expect(start).toBeGreaterThan(-1);
+			const end = source.indexOf("const mapping = mapCommandToHttp(command, args);", start);
+			expect(end).toBeGreaterThan(start);
+			const body = source.slice(start, end);
+			expect(body).toMatch(/if \(!cachedTauriInvoke\)/);
+			expect(body).toMatch(/cachedTauriInvoke<T>\(command, args\)/);
+		});
+
+		it("still resolves desktop RPCs via the cached invoke reference (regression)", async () => {
+			const { rpc } = await import("../transport");
+			const { mockInvoke } = await import("./mocks/tauri");
+			mockInvoke.mockClear();
+			mockInvoke.mockResolvedValueOnce({ enabled: true });
+
+			const result = await rpc<{ enabled: boolean }>("get_dictation_status");
+
+			expect(result).toEqual({ enabled: true });
+			expect(mockInvoke).toHaveBeenCalledWith("get_dictation_status");
+		});
+	});
+
 	describe("subscribePty()", () => {
 		const originalTauri = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
 

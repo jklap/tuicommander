@@ -462,8 +462,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			lastResizeCols = cols;
 			lastResizeRows = rows;
 
-			rowMap.clear();
-			clearDetectedLinks();
+			// Do NOT clear rowMap/detectedLinks here. resize_pty is async — the new
+			// geometry's frame is still in flight — and painting from an emptied
+			// rowMap below flashes a blank grid for one frame. The canvas bitmap was
+			// already reset above, so leaving rowMap alone repaints the STALE old
+			// content into the new size instead, which is what actually stays on
+			// screen until the new frame's geomChanged handling clears and
+			// repopulates rowMap for real (see the decideFrameGrid handling below).
 			fullRepaintNeeded = true;
 			lastDisplayOffset = -1;
 			invokeRef("resize_pty", { sessionId: props.sessionId, rows, cols }).catch(ipcErr("resize_pty"));
@@ -1726,24 +1731,50 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		};
 		const spansMultipleRows = (matchIndex: number, matchEnd: number) =>
 			Math.floor(matchIndex / cols) !== Math.floor((matchEnd - 1) / cols);
-		const checkedLogicalStarts = new Set<number>();
+
+		// Candidate rows: full-width rows that might be part of a soft-wrapped
+		// web/file:// URL. Collected up front (no IPC) so every logical-line
+		// lookup below can fire concurrently instead of one row at a time.
+		const wrapCandidateRows: number[] = [];
 		for (let i = 0; i < maxRow; i++) {
-			if (!alive) return;
 			const row = rowMap.get(i);
 			if (!row) continue;
 			const text = rowToText(row);
 			if (text.length < cols) continue; // not full-width, not wrapped
-			const hasFile = text.includes("file://");
-			const hasWeb = /https?:\/\//.test(text);
-			if (!hasFile && !hasWeb) continue;
-			if (checkedLogicalStarts.has(i)) continue;
-			try {
-				const [startRow, logicalText] = (await ref("terminal_get_logical_line", {
-					sessionId: props.sessionId,
-					row: i,
-				})) as [number, string];
-				if (!alive || generation !== screenGeneration) return;
-				if (startRow === i && logicalText === text) continue; // single row
+			if (!text.includes("file://") && !/https?:\/\//.test(text)) continue;
+			wrapCandidateRows.push(i);
+		}
+
+		if (wrapCandidateRows.length > 0) {
+			// One terminal_get_logical_line per candidate row, all in flight at once —
+			// this used to await them one row at a time, so a screen with N wrap
+			// candidates cost N serial round trips before any of it resolved.
+			const logicalLines = await Promise.all(
+				wrapCandidateRows.map(async (i) => {
+					try {
+						const [startRow, logicalText] = (await ref("terminal_get_logical_line", {
+							sessionId: props.sessionId,
+							row: i,
+						})) as [number, string];
+						return { i, startRow, logicalText };
+					} catch {
+						return null; // terminal_get_logical_line not available on this backend
+					}
+				}),
+			);
+			if (!alive || generation !== screenGeneration) return;
+
+			const checkedLogicalStarts = new Set<number>();
+			// file:// candidates across every logical line, resolved in ONE call —
+			// the same batching the single-row pass above already does.
+			const fileCandidates: { startRow: number; index: number; matchEnd: number; raw: string }[] = [];
+
+			for (const result of logicalLines) {
+				if (!result) continue;
+				const { i, startRow, logicalText } = result;
+				const row = rowMap.get(i);
+				if (!row) continue;
+				if (startRow === i && logicalText === rowToText(row)) continue; // single row
 				if (checkedLogicalStarts.has(startRow)) continue;
 				checkedLogicalStarts.add(startRow);
 
@@ -1761,22 +1792,31 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				while ((m = FILE_URL_RE.exec(logicalText)) !== null) {
 					const matchEnd = m.index + m[0].length;
 					if (!spansMultipleRows(m.index, matchEnd)) continue;
-					try {
-						const r = (await ref("resolve_terminal_path", { cwd, candidate: m[1] })) as {
-							absolute_path: string;
-							is_directory: boolean;
-						} | null;
-						if (!alive || generation !== screenGeneration) return;
-						if (!r) continue;
-						recordWrappedSpans(startRow, m.index, matchEnd);
-						anyFound = true;
-					} catch {
-						/* resolve failed */
-					}
+					fileCandidates.push({ startRow, index: m.index, matchEnd, raw: m[1] });
 				}
-			} catch {
-				/* terminal_get_logical_line not available */
-				break;
+			}
+
+			if (fileCandidates.length > 0) {
+				let resolved: (unknown | null)[];
+				try {
+					resolved = (await ref("resolve_terminal_paths", {
+						cwd,
+						candidates: fileCandidates.map((c) => c.raw),
+					})) as (unknown | null)[];
+				} catch (e) {
+					appLogger.debug("terminal", "resolve_terminal_paths failed", {
+						count: fileCandidates.length,
+						error: e,
+					});
+					resolved = [];
+				}
+				if (!alive || generation !== screenGeneration) return;
+				fileCandidates.forEach((c, idx) => {
+					if (resolved[idx]) {
+						recordWrappedSpans(c.startRow, c.index, c.matchEnd);
+						anyFound = true;
+					}
+				});
 			}
 		}
 
@@ -2758,8 +2798,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 			}
 
-			// Link detection (throttled)
-			if (!selection.selecting) {
+			// Link detection (throttled). The listener is on document (see comment
+			// above), so without a rect test every visible pane runs checkLinksAtRow
+			// on every move — up to 3 IPC round trips each — for panes the pointer
+			// never touched.
+			if (!selection.selecting && isPointerInsideRect(e, canvasRef.getBoundingClientRect())) {
 				clearTimeout(linkThrottle);
 				linkThrottle = setTimeout(() => {
 					const pos = canvasToGrid(e);
