@@ -536,6 +536,14 @@ pub(crate) struct AppConfig {
     /// Preferred IDE (e.g. "vscode", "cursor")
     #[serde(default)]
     pub(crate) ide: String,
+    /// Absolute path to the one ego executable this host may launch for ACP.
+    ///
+    /// The only place the ACP process authority comes from. It is deliberately
+    /// not reachable over IPC or HTTP: a caller supplies a working directory
+    /// and nothing else, so no request can choose which binary runs. Empty
+    /// means ACP is not configured here and every connect is refused.
+    #[serde(default)]
+    pub(crate) ego_executable: String,
     /// Default font size for new terminals
     #[serde(default = "default_font_size")]
     pub(crate) default_font_size: u16,
@@ -763,6 +771,7 @@ impl Default for AppConfig {
             mcp_port: default_mcp_port(),
             mcp_config_installed: false,
             ide: String::new(),
+            ego_executable: String::new(),
             default_font_size: 13,
             services: ServicesConfig::default(),
             confirm_before_quit: true,
@@ -3352,6 +3361,7 @@ mod tests {
             mcp_port: 4000,
             mcp_config_installed: false,
             ide: "cursor".to_string(),
+            ego_executable: "/opt/ego/bin/ego".to_string(),
             default_font_size: 18,
             services: ServicesConfig {
                 server: ServerConfig {
@@ -3417,6 +3427,7 @@ mod tests {
         assert_eq!(loaded.shell.as_deref(), Some("/bin/zsh"));
         assert_eq!(loaded.font_size, 16);
         assert_eq!(loaded.ide, "cursor");
+        assert_eq!(loaded.ego_executable, "/opt/ego/bin/ego");
         assert_eq!(loaded.default_font_size, 18);
         assert!(loaded.mcp_server_enabled);
         assert_eq!(loaded.mcp_port, 4000);

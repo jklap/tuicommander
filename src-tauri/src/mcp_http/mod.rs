@@ -1,3 +1,4 @@
+mod acp_routes;
 mod agent_routes;
 mod ai_routes;
 mod ai_stream;
@@ -515,6 +516,7 @@ async fn inject_localhost_connect_info(
 /// entry fails that test instead of quietly serving HTML again.
 #[cfg(feature = "desktop")]
 const API_PREFIXES: &[&str] = &[
+    "acp",
     "agent",
     "agents",
     "ai",
@@ -971,6 +973,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Answer a pending MCP confirmation (the browser/PWA half of the desktop
         // `mcp_confirm_response` command).
         .route("/mcp/confirm-response", post(mcp_confirm_response_http))
+        // ACP (ego). Shared, not desktop-only: driving ego from a phone is the
+        // whole point of the client, and the binary it may launch comes from
+        // this host's configuration rather than from any request.
+        .nest("/acp", acp_routes::acp_routes())
 }
 
 /// Body of `POST /mcp/confirm-response`.
@@ -2256,6 +2262,7 @@ mod tests {
             tailscale_state: parking_lot::RwLock::new(
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
+            acp: crate::acp::AcpClientManager::new(),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
@@ -2361,6 +2368,19 @@ mod tests {
             "/codex/usage",
             "/codex/stats",
             "/system/local-ip",
+            "/acp/connections",
+            "/acp/connections/x",
+            "/acp/connections/x/reconnect",
+            "/acp/connections/x/stream",
+            "/acp/connections/x/sessions",
+            "/acp/connections/x/sessions/y",
+            "/acp/connections/x/sessions/y/prompt",
+            "/acp/connections/x/sessions/y/config",
+            "/acp/connections/x/sessions/y/pause",
+            "/acp/connections/x/sessions/y/compact",
+            "/acp/connections/x/interactions",
+            "/acp/connections/x/permissions/y/response",
+            "/acp/connections/x/elicitations/y/response",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor & /watchers/hot-repos

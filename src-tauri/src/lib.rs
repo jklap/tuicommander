@@ -4,6 +4,7 @@
 )]
 
 pub mod acp;
+pub(crate) mod acp_commands;
 pub(crate) mod agent;
 pub(crate) mod agent_hook;
 pub(crate) mod agent_hook_codex;
@@ -1992,7 +1993,29 @@ pub fn run() {
             tunnels::tauri_commands::get_tunnel_status,
             tunnels::tauri_commands::list_ssh_config_hosts,
             tunnels::tauri_commands::list_ssh_agent_keys,
-            tunnels::tauri_commands::get_tunnel_audit
+            tunnels::tauri_commands::get_tunnel_audit,
+            acp_commands::acp_connect,
+            acp_commands::acp_reconnect,
+            acp_commands::acp_disconnect,
+            acp_commands::acp_kill,
+            acp_commands::acp_connection_snapshot,
+            acp_commands::acp_subscribe,
+            acp_commands::acp_session_new,
+            acp_commands::acp_session_list,
+            acp_commands::acp_session_load,
+            acp_commands::acp_session_resume,
+            acp_commands::acp_session_fork,
+            acp_commands::acp_session_delete,
+            acp_commands::acp_session_close,
+            acp_commands::acp_session_prompt,
+            acp_commands::acp_session_cancel,
+            acp_commands::acp_session_set_config_option,
+            acp_commands::acp_turn_pause,
+            acp_commands::acp_turn_resume,
+            acp_commands::acp_session_compact,
+            acp_commands::acp_pending_interactions,
+            acp_commands::acp_respond_permission,
+            acp_commands::acp_respond_elicitation
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -2073,6 +2096,7 @@ fn build_connect_url(scheme: &str, host: &str, port: u16, token: &str) -> String
 /// Spawn background tasks shared by both desktop and headless modes.
 fn spawn_background_tasks(state: &Arc<AppState>) {
     AppState::spawn_session_state_accumulator(state.clone());
+    AppState::spawn_acp_notice_pump(state.clone());
     drop(
         state
             .oauth_flow_manager
@@ -2326,6 +2350,7 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
     // Only the two tasks required for session management — no scheduler,
     // watcher engine, content index, knowledge persist, or tool search index.
     AppState::spawn_session_state_accumulator(state.clone());
+    AppState::spawn_acp_notice_pump(state.clone());
     pty::spawn_tombstone_sweeper(state.clone());
 
     let tls_config = match &app_config.services.tls {

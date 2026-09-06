@@ -169,6 +169,138 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "DELETE", path: "/mcp/upstreams/credential", body: { name: args.name } }),
 	},
 
+	// --- ACP (ego) ---
+	// One entry per acp_* command, session-scoped like the routes they map to.
+	// The bodies carry exactly the arguments the Tauri command takes, because
+	// the client's refusals are computed in Rust and must be identical on both
+	// transports — a body that dropped a field would move a decision here.
+	acp_connect: {
+		map: (args) => ({ method: "POST", path: "/acp/connections", body: { root: args.root } }),
+	},
+	acp_connection_snapshot: {
+		map: (_args, p) => ({ method: "GET", path: `/acp/connections/${p("connectionId")}` }),
+	},
+	acp_disconnect: {
+		map: (_args, p) => ({ method: "DELETE", path: `/acp/connections/${p("connectionId")}` }),
+	},
+	acp_kill: {
+		map: (_args, p) => ({ method: "POST", path: `/acp/connections/${p("connectionId")}/kill` }),
+	},
+	acp_reconnect: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/reconnect`,
+			body: { root: args.root },
+		}),
+	},
+	acp_session_new: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions`,
+			body: { authority: args.authority },
+		}),
+	},
+	acp_session_list: {
+		map: (args, p) => {
+			const query = new URLSearchParams();
+			if (args.cwd !== undefined && args.cwd !== null) query.set("cwd", String(args.cwd));
+			if (args.cursor !== undefined && args.cursor !== null) query.set("cursor", String(args.cursor));
+			const suffix = query.toString() ? `?${query.toString()}` : "";
+			return { method: "GET", path: `/acp/connections/${p("connectionId")}/sessions${suffix}` };
+		},
+	},
+	acp_session_load: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/load`,
+			body: { authority: args.authority },
+		}),
+	},
+	acp_session_resume: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/resume`,
+			body: { authority: args.authority },
+		}),
+	},
+	acp_session_fork: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/fork`,
+			body: { authority: args.authority },
+		}),
+	},
+	acp_session_delete: {
+		map: (_args, p) => ({
+			method: "DELETE",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}`,
+		}),
+	},
+	acp_session_close: {
+		map: (_args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/close`,
+		}),
+	},
+	acp_session_prompt: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/prompt`,
+			body: { prompt: args.prompt },
+		}),
+	},
+	acp_session_cancel: {
+		map: (_args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/cancel`,
+		}),
+	},
+	acp_session_set_config_option: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/config`,
+			body: { configId: args.configId, value: args.value },
+		}),
+	},
+	acp_turn_pause: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/pause`,
+			body: { requestId: args.requestId },
+		}),
+	},
+	acp_turn_resume: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/resume-turn`,
+			body: { requestId: args.requestId },
+		}),
+	},
+	acp_session_compact: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/compact`,
+			body: { requestId: args.requestId },
+		}),
+	},
+	acp_pending_interactions: {
+		map: (_args, p) => ({ method: "GET", path: `/acp/connections/${p("connectionId")}/interactions` }),
+	},
+	acp_respond_permission: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/permissions/${p("requestId")}/response`,
+			body: { outcome: args.outcome },
+		}),
+	},
+	acp_respond_elicitation: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/acp/connections/${p("connectionId")}/elicitations/${p("requestId")}/response`,
+			body: { action: args.action },
+		}),
+	},
+
 	// --- Session lifecycle ---
 	create_pty: {
 		map: (args) => ({
@@ -331,6 +463,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 
 	// --- Terminal grid commands ---
+	set_terminal_theme_colors: {
+		map: (args) => ({
+			method: "POST",
+			path: "/terminal/theme-colors",
+			body: { foreground: args.foreground, background: args.background, cursor: args.cursor },
+		}),
+	},
 	terminal_scroll: {
 		map: (args) => ({
 			method: "POST",
@@ -2009,12 +2148,46 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"delete_plugin_data",
 ]);
 
+/**
+ * Commands that are available off the host but carry their payload on a
+ * dedicated WebSocket rather than on a request/response route.
+ *
+ * A third class, and a truthful one. These are NOT native/host-only — a
+ * browser can and must use them — so listing them as `INTENTIONALLY_UNMAPPED`
+ * would claim a feature gap that does not exist. They are also not
+ * `COMMAND_TABLE` entries, because there is no single response to return: the
+ * command opens a stream and events arrive for as long as it stays open.
+ *
+ * The value builds the WebSocket path for a given set of command arguments, so
+ * the route lives here next to the HTTP ones instead of being spelled again in
+ * whatever opens the socket.
+ */
+export const DEDICATED_WS_COMMANDS: ReadonlyMap<string, (args: Record<string, unknown>) => string> = new Map<
+	string,
+	(args: Record<string, unknown>) => string
+>([
+	[
+		"acp_subscribe",
+		(args) =>
+			`/acp/connections/${encodeArg("acp_subscribe", args, "connectionId")}/stream?after=${encodeArg(
+				"acp_subscribe",
+				args,
+				"afterSequence",
+			)}`,
+	],
+]);
+
 /** Map a Tauri invoke command + args to an HTTP method/path/body */
 export function mapCommandToHttp(command: string, args: Record<string, unknown>): HttpMapping {
 	const entry = COMMAND_TABLE[command];
 	if (!entry) {
 		if (INTENTIONALLY_UNMAPPED.has(command)) {
 			throw new Error(`Command "${command}" is native/host-only and is not available in browser/remote mode.`);
+		}
+		if (DEDICATED_WS_COMMANDS.has(command)) {
+			throw new Error(
+				`Command "${command}" streams over a dedicated WebSocket and has no request/response route; open ${DEDICATED_WS_COMMANDS.get(command)?.(args)} instead.`,
+			);
 		}
 		throw new Error(`No HTTP mapping for command: ${command}`);
 	}

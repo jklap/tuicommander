@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildHttpUrl, INTENTIONALLY_UNMAPPED, isTauri, mapCommandToHttp } from "../transport";
+import { buildHttpUrl, DEDICATED_WS_COMMANDS, INTENTIONALLY_UNMAPPED, isTauri, mapCommandToHttp } from "../transport";
 import { setTransportLogger } from "../transportRuntime";
 
 function readRepoFile(relativePath: string): string {
@@ -1518,6 +1518,171 @@ describe("transport", () => {
 		});
 	});
 
+	describe("ACP (ego) routes", () => {
+		const CONNECTION = "01932d5e-0000-7000-8000-0000000000e1";
+		const SESSION = "01932d5e-0000-7000-8000-0000000000aa";
+		const REQUEST = "01932d5e-0000-7000-8000-0000000000f1";
+		const authority = { cwd: "/repo", additionalDirectories: [], mcpServers: [] };
+
+		// The routes the architecture contract fixes, spelled out here rather
+		// than derived from the mappers: a test that rebuilt the path the same
+		// way the code does would agree with any typo.
+		it.each([
+			["acp_connect", { root: "/repo" }, "POST", "/acp/connections", { root: "/repo" }],
+			["acp_connection_snapshot", { connectionId: CONNECTION }, "GET", `/acp/connections/${CONNECTION}`, undefined],
+			["acp_disconnect", { connectionId: CONNECTION }, "DELETE", `/acp/connections/${CONNECTION}`, undefined],
+			["acp_kill", { connectionId: CONNECTION }, "POST", `/acp/connections/${CONNECTION}/kill`, undefined],
+			[
+				"acp_reconnect",
+				{ connectionId: CONNECTION, root: "/repo" },
+				"POST",
+				`/acp/connections/${CONNECTION}/reconnect`,
+				{ root: "/repo" },
+			],
+			[
+				"acp_session_new",
+				{ connectionId: CONNECTION, authority },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions`,
+				{ authority },
+			],
+			["acp_session_list", { connectionId: CONNECTION }, "GET", `/acp/connections/${CONNECTION}/sessions`, undefined],
+			[
+				"acp_session_load",
+				{ connectionId: CONNECTION, sessionId: SESSION, authority },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/load`,
+				{ authority },
+			],
+			[
+				"acp_session_resume",
+				{ connectionId: CONNECTION, sessionId: SESSION, authority },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/resume`,
+				{ authority },
+			],
+			[
+				"acp_session_fork",
+				{ connectionId: CONNECTION, sessionId: SESSION, authority },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/fork`,
+				{ authority },
+			],
+			[
+				"acp_session_delete",
+				{ connectionId: CONNECTION, sessionId: SESSION },
+				"DELETE",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}`,
+				undefined,
+			],
+			[
+				"acp_session_close",
+				{ connectionId: CONNECTION, sessionId: SESSION },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/close`,
+				undefined,
+			],
+			[
+				"acp_session_prompt",
+				{ connectionId: CONNECTION, sessionId: SESSION, prompt: [{ type: "text", text: "hi" }] },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/prompt`,
+				{ prompt: [{ type: "text", text: "hi" }] },
+			],
+			[
+				"acp_session_cancel",
+				{ connectionId: CONNECTION, sessionId: SESSION },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/cancel`,
+				undefined,
+			],
+			[
+				"acp_session_set_config_option",
+				{ connectionId: CONNECTION, sessionId: SESSION, configId: "model", value: { value: "opus" } },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/config`,
+				{ configId: "model", value: { value: "opus" } },
+			],
+			[
+				"acp_turn_pause",
+				{ connectionId: CONNECTION, sessionId: SESSION, requestId: REQUEST },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/pause`,
+				{ requestId: REQUEST },
+			],
+			[
+				"acp_turn_resume",
+				{ connectionId: CONNECTION, sessionId: SESSION, requestId: REQUEST },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/resume-turn`,
+				{ requestId: REQUEST },
+			],
+			[
+				"acp_session_compact",
+				{ connectionId: CONNECTION, sessionId: SESSION, requestId: REQUEST },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/compact`,
+				{ requestId: REQUEST },
+			],
+			[
+				"acp_pending_interactions",
+				{ connectionId: CONNECTION },
+				"GET",
+				`/acp/connections/${CONNECTION}/interactions`,
+				undefined,
+			],
+			[
+				"acp_respond_permission",
+				{ connectionId: CONNECTION, requestId: REQUEST, outcome: { outcome: "cancelled" } },
+				"POST",
+				`/acp/connections/${CONNECTION}/permissions/${REQUEST}/response`,
+				{ outcome: { outcome: "cancelled" } },
+			],
+			[
+				"acp_respond_elicitation",
+				{ connectionId: CONNECTION, requestId: REQUEST, action: "cancel" },
+				"POST",
+				`/acp/connections/${CONNECTION}/elicitations/${REQUEST}/response`,
+				{ action: "cancel" },
+			],
+		])("maps %s onto its final route", (command, args, method, path, body) => {
+			const mapping = mapCommandToHttp(command as string, args as Record<string, unknown>);
+			expect(mapping.method).toBe(method);
+			expect(mapping.path).toBe(path);
+			expect(mapping.body).toEqual(body);
+		});
+
+		it("carries the list filters as query parameters when they are given", () => {
+			const mapping = mapCommandToHttp("acp_session_list", {
+				connectionId: CONNECTION,
+				cwd: "/repo",
+				cursor: "page-2",
+			});
+			expect(mapping.path).toBe(`/acp/connections/${CONNECTION}/sessions?cwd=%2Frepo&cursor=page-2`);
+		});
+
+		it("refuses a request that names no connection instead of building a path with undefined in it", () => {
+			expect(() => mapCommandToHttp("acp_connection_snapshot", {})).toThrow(/missing required argument/);
+		});
+
+		// The stream is the one ACP command with no request/response route. It
+		// must not be classified as host-only: a browser needs it, and saying
+		// otherwise would report a feature gap that does not exist.
+		it("classifies the stream as a dedicated WebSocket, not as host-only", () => {
+			expect(DEDICATED_WS_COMMANDS.has("acp_subscribe")).toBe(true);
+			expect(INTENTIONALLY_UNMAPPED.has("acp_subscribe")).toBe(false);
+			expect(DEDICATED_WS_COMMANDS.get("acp_subscribe")?.({ connectionId: CONNECTION, afterSequence: 7 })).toBe(
+				`/acp/connections/${CONNECTION}/stream?after=7`,
+			);
+		});
+
+		it("points a caller at the socket instead of raising a generic missing-mapping error", () => {
+			expect(() => mapCommandToHttp("acp_subscribe", { connectionId: CONNECTION, afterSequence: 0 })).toThrow(
+				new RegExp(`dedicated WebSocket.*/acp/connections/${CONNECTION}/stream\\?after=0`),
+			);
+		});
+	});
+
 	describe("INTENTIONALLY_UNMAPPED (native/host-only commands)", () => {
 		it("classifies renamed async wrappers by their public IPC name", () => {
 			const registeredCommands = extractRegisteredTauriCommands();
@@ -1530,7 +1695,12 @@ describe("transport", () => {
 			const mappedCommands = extractCommandTableCommands();
 			const registeredCommands = extractRegisteredTauriCommands();
 			const uncoveredCommands = Array.from(registeredCommands)
-				.filter((command) => !mappedCommands.has(command) && !INTENTIONALLY_UNMAPPED.has(command))
+				.filter(
+					(command) =>
+						!mappedCommands.has(command) &&
+						!INTENTIONALLY_UNMAPPED.has(command) &&
+						!DEDICATED_WS_COMMANDS.has(command),
+				)
 				.sort();
 
 			expect(uncoveredCommands).toEqual([]);

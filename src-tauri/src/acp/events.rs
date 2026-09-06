@@ -24,7 +24,9 @@ use std::collections::VecDeque;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
-use super::{AcpClientError, AcpClientEvent, AcpConnectionId, AcpEventEnvelope, AcpTurnId};
+use super::{
+    AcpClientError, AcpClientEvent, AcpConnectionId, AcpEventEnvelope, AcpNotice, AcpTurnId,
+};
 use agent_client_protocol::schema::v1;
 
 /// How many events one connection keeps for subscribers that join late.
@@ -47,6 +49,11 @@ pub struct AcpEventJournal {
     connection_id: AcpConnectionId,
     generation: u64,
     live: broadcast::Sender<AcpEventEnvelope>,
+    /// Shared by every connection this client holds, unlike `live`.
+    ///
+    /// A notice is a wake signal for the whole app, so it goes on one bus that
+    /// an SSE consumer subscribes to once instead of one per connection.
+    notices: broadcast::Sender<AcpNotice>,
     state: Mutex<JournalState>,
 }
 
@@ -67,12 +74,17 @@ pub struct AcpEventStream {
 
 impl AcpEventJournal {
     #[must_use]
-    pub fn new(connection_id: AcpConnectionId, generation: u64) -> Self {
+    pub fn new(
+        connection_id: AcpConnectionId,
+        generation: u64,
+        notices: broadcast::Sender<AcpNotice>,
+    ) -> Self {
         let (live, _) = broadcast::channel(LIVE_CAPACITY);
         Self {
             connection_id,
             generation,
             live,
+            notices,
             state: Mutex::new(JournalState {
                 next_sequence: FIRST_SEQUENCE,
                 retained: VecDeque::with_capacity(JOURNAL_CAPACITY),
@@ -109,6 +121,9 @@ impl AcpEventJournal {
         };
         // An error here means nobody is subscribed, which is not a failure.
         let _ = self.live.send(envelope.clone());
+        if let Some(notice) = AcpNotice::from_envelope(&envelope) {
+            let _ = self.notices.send(notice);
+        }
         envelope
     }
 

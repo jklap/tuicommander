@@ -51,9 +51,7 @@ impl Fixture {
         }
         Self {
             root,
-            manager: AcpClientManager::new(EgoAcpConfig {
-                executable: fixture_agent(),
-            }),
+            manager: AcpClientManager::new(),
         }
     }
 
@@ -61,9 +59,18 @@ impl Fixture {
         self.root.path().to_path_buf()
     }
 
+    /// The launch authority every scenario runs under: the fixture agent, and
+    /// nothing a request could name.
+    #[must_use]
+    pub fn config() -> EgoAcpConfig {
+        EgoAcpConfig {
+            executable: fixture_agent(),
+        }
+    }
+
     pub async fn connect(&self) -> AcpConnectionSnapshot {
         self.manager
-            .connect(AcpConnectRequest { root: self.root() })
+            .connect(&Self::config(), AcpConnectRequest { root: self.root() })
             .await
             .expect("connect")
     }
