@@ -4191,21 +4191,70 @@ branch refs/heads/feat
         assert_eq!(base, Some(default_branch));
     }
 
+    /// A `post-checkout` hook script kept in the build directory and rewritten
+    /// only when its content is wrong, so every run execs the *same* inode.
+    ///
+    /// macOS scans each never-before-seen executable inode on its first exec.
+    /// Two independent effects stack, and measuring only one of them misleads
+    /// (both of us did, from opposite directions, before pairing the samples).
+    ///
+    /// 1. A **persistent** penalty on `/var/folders/…/T` — `$TMPDIR`, which is
+    ///    exactly where `TempDir` lands. Paired alternating samples, fresh inode
+    ///    each time, 2026-09-06: `$TMPDIR` 0.685s / 0.359s against `/tmp` 0.250s
+    ///    / 0.233s and `~/Gits/.tmp` 0.263s / 0.238s in the same seconds.
+    /// 2. An **episodic** scanner backlog that lifts the floor everywhere for
+    ///    minutes at a time, and amplifies (1) enormously while it lasts: the
+    ///    same pairing during a backlog gave `$TMPDIR` 191-393s against `/tmp`
+    ///    1.9-4.5s. A 120s+ outlier is what first surfaced this test.
+    ///
+    /// How the two combine is NOT settled: a plain multiplicative model predicts
+    /// ~9s for `$TMPDIR` under the backlog above and 393s was measured, so the
+    /// interaction looks superlinear — which would mean the penalty is worst
+    /// exactly when the suite is busiest. Pinning that down costs 400-second
+    /// samples and changes no remedy, so it is left open on purpose.
+    ///
+    /// So a single timing sample proves nothing, and neither variable is worth
+    /// chasing. What is stable is the caching: a re-exec of an already-scanned
+    /// inode is ~0.01s, and the cache is keyed on the *inode*, so a symlink to a
+    /// warm script is free while a byte-identical copy is not. Minting a hook
+    /// into a fresh `TempDir` per run re-rolls both dice every run; pointing at
+    /// one stable file removes the exec from the lottery under either model.
+    #[cfg(unix)]
+    fn shared_post_checkout_hook() -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        const BODY: &[u8] = b"#!/bin/sh\ntouch .hook-ran\n";
+
+        let dir = Path::new(env!("OUT_DIR")).join("test-hooks");
+        fs::create_dir_all(&dir).expect("create shared hook dir");
+        let hook = dir.join("post-checkout");
+
+        if fs::read(&hook).ok().as_deref() != Some(BODY) {
+            // Stage and rename so a concurrent run can never exec a partial file.
+            let staged = dir.join(format!("post-checkout.{}.tmp", std::process::id()));
+            fs::write(&staged, BODY).expect("write shared hook");
+            fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))
+                .expect("chmod shared hook");
+            fs::rename(&staged, &hook).expect("install shared hook");
+        }
+        hook
+    }
+
     // Verify that post-checkout hooks still run after `git worktree add --quiet`.
     // --quiet only suppresses git's own checkout progress lines, not hooks.
     #[test]
     #[cfg(unix)]
     fn test_create_worktree_runs_post_checkout_hook() {
-        use std::os::unix::fs::PermissionsExt;
-
         let repo = setup_test_repo();
         let worktrees_dir = repo.path().join("worktrees");
 
+        // Symlink rather than copy: git resolves it and execs the shared inode,
+        // so the hook still installs at the canonical path real users use, with
+        // no per-run exec scan. See `shared_post_checkout_hook`.
         let hooks_dir = repo.path().join(".git/hooks");
         fs::create_dir_all(&hooks_dir).unwrap();
-        let hook_path = hooks_dir.join("post-checkout");
-        fs::write(&hook_path, "#!/bin/sh\ntouch .hook-ran\n").unwrap();
-        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(shared_post_checkout_hook(), hooks_dir.join("post-checkout"))
+            .unwrap();
 
         let config = WorktreeConfig {
             task_name: "hook-run-test".to_string(),

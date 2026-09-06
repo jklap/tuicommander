@@ -8,6 +8,7 @@
 //! human-gated action in the UI.
 
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -127,11 +128,22 @@ fn ref_exists(repo: &Path, reference: &str) -> bool {
         .is_ok()
 }
 
-fn resolve_rebase_target(repo: &Path, base_ref: &str) -> Result<ResolvedBase, String> {
+/// Decide what `git rebase` should target for `base_ref`, refreshing it first.
+///
+/// `fetch_timeout` is a parameter rather than a constant because a fetch that runs
+/// out of time is indistinguishable here from a fetch that failed: both fall through
+/// to the remote-tracking ref, and the caller is told `ExistingTracking`. Production
+/// passes `crate::git_cli::FETCH_TIMEOUT`; the tests pass a bound they cannot hit, so
+/// a slow machine cannot quietly turn a fetch that worked into one that "failed".
+fn resolve_rebase_target(
+    repo: &Path,
+    base_ref: &str,
+    fetch_timeout: Duration,
+) -> Result<ResolvedBase, String> {
     let remote_ref = format!("refs/remotes/origin/{base_ref}");
     let refspec = format!("+refs/heads/{base_ref}:{remote_ref}");
     let fetch = crate::git_cli::git_cmd(repo)
-        .timeout(crate::git_cli::FETCH_TIMEOUT)
+        .timeout(fetch_timeout)
         .args(["fetch", "--no-tags", "origin", &refspec])
         .run();
 
@@ -241,8 +253,11 @@ pub(crate) async fn start_conflict_assist_impl(
             let wt_path = wt.path.clone();
 
             // Rebase onto what origin has now, not a possibly-stale local branch.
-            let resolved_base =
-                resolve_rebase_target(Path::new(&repo_path_for_git), &base_ref_for_git)?;
+            let resolved_base = resolve_rebase_target(
+                Path::new(&repo_path_for_git),
+                &base_ref_for_git,
+                crate::git_cli::FETCH_TIMEOUT,
+            )?;
             let (rebase_ok, conflicted, rebase_stderr) =
                 rebase_and_collect_conflicts(&wt_path, &resolved_base.target);
 
@@ -321,6 +336,18 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::process::Command;
+
+    /// Fetch bound for the tests below.
+    ///
+    /// Every fetch these tests trigger is local — a fixture clone reading its own
+    /// origin off the filesystem, never a network. `FETCH_TIMEOUT` is 5s under
+    /// `cfg(test)`, which measures nothing here and can only be lost: when a loaded
+    /// machine stretched one local fetch past 5s, `resolve_rebase_target` reported
+    /// `ExistingTracking`, and a test about which base ref wins failed over how fast
+    /// git had been. The bound below is one no local fetch can plausibly reach, so a
+    /// real hang is caught by nextest's slow-timeout instead — which is the right
+    /// place for it, because a hang is not this module's subject either.
+    const TEST_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
 
     fn git(repo: &Path, args: &[&str]) -> std::process::Output {
         Command::new("git")
@@ -466,7 +493,8 @@ mod tests {
     #[test]
     fn rebase_target_falls_back_to_the_local_branch_without_a_remote() {
         let (_d, repo) = fixture();
-        let resolved = resolve_rebase_target(&repo, "main").expect("local fallback");
+        let resolved =
+            resolve_rebase_target(&repo, "main", TEST_FETCH_TIMEOUT).expect("local fallback");
         assert_eq!(resolved.target, "main");
         assert_eq!(resolved.source, BaseSource::LocalFallback);
     }
@@ -489,7 +517,8 @@ mod tests {
         // origin moves ahead after the clone — the local refs/heads/main is now stale.
         commit_on(&origin, "main", "on_main.txt", "main\n", "main work");
 
-        let resolved = resolve_rebase_target(&clone, "main").expect("fetched remote");
+        let resolved =
+            resolve_rebase_target(&clone, "main", TEST_FETCH_TIMEOUT).expect("fetched remote");
         assert_eq!(resolved.target, "refs/remotes/origin/main");
         assert_eq!(resolved.source, BaseSource::FetchedRemote);
         // And the fetch actually advanced it, so a rebase would see the new commit.
@@ -510,7 +539,8 @@ mod tests {
             &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
         );
 
-        let resolved = resolve_rebase_target(&repo, "main").expect("existing tracking ref");
+        let resolved = resolve_rebase_target(&repo, "main", TEST_FETCH_TIMEOUT)
+            .expect("existing tracking ref");
         assert_eq!(resolved.target, "refs/remotes/origin/main");
         assert_eq!(resolved.source, BaseSource::ExistingTracking);
         assert!(resolved.source.warning("main").is_some());
@@ -519,7 +549,8 @@ mod tests {
     #[test]
     fn rebase_target_rejects_a_missing_remote_and_local_ref() {
         let (_d, repo) = fixture();
-        let error = resolve_rebase_target(&repo, "missing").expect_err("missing base must fail");
+        let error = resolve_rebase_target(&repo, "missing", TEST_FETCH_TIMEOUT)
+            .expect_err("missing base must fail");
         assert!(
             error.contains("Could not resolve PR base missing"),
             "{error}"

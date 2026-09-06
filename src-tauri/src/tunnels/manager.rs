@@ -237,6 +237,20 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    /// This mints a fresh executable inode under `$TMPDIR` on every call, which
+    /// is the shape that made the worktree post-checkout hook test cost 27s:
+    /// macOS scans a never-before-seen executable on its first exec, measured
+    /// 2026-09-06 at 25-192s under `$TMPDIR` against ~0.3s elsewhere.
+    ///
+    /// It is acceptable *here* only because no test in this module ever waits on
+    /// that exec — `start_with` records `Started` once the spawn returns, so the
+    /// scan is paid by the orphaned child and never enters a timing window. All
+    /// 12 tests run in ~0.07s total, repeatedly.
+    ///
+    /// That is incidental, not designed. The moment a test awaits process
+    /// readiness, output, or exit status, this helper must switch to the stable
+    /// pre-warmed script under `target/` that `supervisor.rs` and
+    /// `worktree::tests::shared_post_checkout_hook` already use.
     fn fake_ssh_script(behavior: &str) -> tempfile::NamedTempFile {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, "#!/bin/sh\n{behavior}").unwrap();

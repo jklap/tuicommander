@@ -17,6 +17,50 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
   5. **MCP invoke/JS** — call Tauri commands, inspect store state, trigger actions programmatically
   Only use `[HUMAN]` when the item genuinely requires real hardware (audio, IME, touch), multi-app interaction (drag to Finder, global hotkey from another app), or timing-sensitive observation that none of the above can capture. When code-verifying, change `[HUMAN]` to `[x]` with a `_(verified: file:line explanation)_` annotation. When code reveals the description is wrong, change to `[ ]` with a `_(NOTE: ...)_` correction.
 
+## Which timing assertions are load-bearing
+
+A test that waits on wall-clock time asserts one of three things, and they are not
+interchangeable. Before adding an `Instant` deadline, decide which row you are writing.
+
+| Bound | Belongs to | Rule |
+|---|---|---|
+| the behaviour under test | "a mute upstream gives up" | keep it — and arm it *after* setup succeeds |
+| setup reaching a state | handshake, fetch, process start | it must not be able to fail: size it so it cannot, or delete it |
+| "did this hang forever" | the outer harness bound | strictly larger than every bound inside it, or its message lies |
+
+**Never let one deadline serve two rows.** `call_tool_gives_up_on_a_mute_upstream`
+handed its 300ms give-up deadline to the handshake as well; a loaded machine pushed
+the handshake past it and the test failed as `call_tool never returned` — accusing the
+exact mechanism it exists to prove works. Two named budgets is the fix.
+
+**A freshly written executable is not a cheap thing to run.** With exec-time code
+scanning (macOS `syspolicyd` plus an endpoint-security agent) the first exec of a new
+file blocks while it is scanned, while re-exec'ing the *same* file costs ~6ms. The
+scan cost is **episodic, not a constant**: a quiet scanner charges ~0.25s for a fresh
+inode and a backlog charges tens of seconds — 6s to 102s was measured here, 393s at
+the worst. There is also a smaller persistent penalty (~1.5-2.7x) on `/var/folders/…/T`,
+which is where `tempfile::TempDir` lands. How the two compound is unresolved on
+purpose: a multiplicative model predicts ~9s where 393s was measured. None of that
+changes the remedy, and chasing either variable is wasted time. A
+per-run temp script pays that scan inside the test's own timing window on every run,
+which is why four `tunnels::supervisor` tests failed with the suite idle and passed
+under a full parallel run. `fake_ssh_script` now keys the script by test name under
+`target/fake-ssh/`, compares content, and execs it once with `TUIC_FAKE_SSH_WARMUP` set
+before any supervisor starts: ~44s cold, once per machine, then ~1s a run. Do not
+simplify it back to a `NamedTempFile`. The same reasoning applies to any test that
+writes and runs a script — `sh <script>` is free, `./script` is not.
+
+**A fetch that ran out of time looks exactly like a fetch that failed.** Both fall
+through to the remote-tracking ref, so `FETCH_TIMEOUT`'s 5s `cfg(test)` value turned a
+`conflict_assist` test about *which base ref wins* into a test of how fast git had
+been. Where the deadline is not the subject, pass an explicit bound instead
+(`resolve_rebase_target` takes one) and let nextest's `slow-timeout` catch a real hang.
+
+**The failure mode to fear is a bound you cannot tell apart from a bug.** `#[ignore]`,
+`#[serial]` and `--test-threads=1` all hide it rather than fix it, and cost coverage to
+do so. When a timing assertion does fire, its message must name what actually broke —
+otherwise the next reader spends a day re-diagnosing the wrong subsystem.
+
 ## Test instance vs orchestrator instance — READ BEFORE TESTING
 
 There are TWO running TUICommander instances; do not confuse them:
