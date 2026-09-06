@@ -132,6 +132,31 @@ serving a configuration the disk disagrees with. See
 | `DELETE` | `/worktrees` | Remove worktree |
 | `GET` | `/worktrees/paths?path=` | Get worktree paths for repo |
 
+### ACP (ego)
+
+Shared routes, not desktop-only: driving ego from a phone is the point of the
+client. Full request/response shapes in `docs/api/http-api.md`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/acp/connections` | Launch the configured ego and initialize |
+| `GET` `DELETE` | `/acp/connections/:id` | Snapshot / disconnect |
+| `POST` | `/acp/connections/:id/kill` | Kill the child |
+| `POST` | `/acp/connections/:id/reconnect` | Settle and start a new generation |
+| `GET` | `/acp/connections/:id/stream?after=` | WebSocket: the connection's ordered frames |
+| `GET` `POST` | `/acp/connections/:id/sessions` | List / create |
+| `POST` | `/acp/connections/:cid/sessions/:sid/{load,resume,fork,close}` | Attach / detach |
+| `DELETE` | `/acp/connections/:cid/sessions/:sid` | Delete for good |
+| `POST` | `/acp/connections/:cid/sessions/:sid/{prompt,cancel,config}` | Run a turn, stop it, set an option |
+| `POST` | `/acp/connections/:cid/sessions/:sid/{pause,resume-turn,compact}` | ego's own extensions |
+| `GET` | `/acp/connections/:id/interactions` | Questions waiting on a person |
+| `POST` | `/acp/connections/:cid/{permissions,elicitations}/:rid/response` | Answer one |
+
+Only the two routes that launch a process — `POST /acp/connections` and
+`.../reconnect` — take the loopback-or-authenticated guard. The rest need a
+connection id one of those two handed out. The executable is never in a request
+body; it is the `ego_executable` setting, read per call.
+
 ## Streaming
 
 ### WebSocket (`/sessions/:id/stream`)
@@ -152,6 +177,21 @@ When sessions are created or closed (via HTTP, MCP, or PTY exit), the server bro
 - **`session-closed`** — Emitted when a session exits. Carries `session_id`. Frontend uses this for cleanup.
 
 These events are available on the SSE `/events` stream used by the mobile PWA and any connected WebSocket clients.
+
+### ACP stream (`/acp/connections/:id/stream`)
+
+The browser half of the desktop `acp_subscribe` Channel, carrying identical
+frames. `?after=` resumes from a sequence; a cursor the journal has dropped is
+refused with 404 before the upgrade rather than by opening and closing a
+socket. A `gap` frame is terminal — recovery is a fresh connection and
+`session/load`, because the missing frames exist nowhere in this client.
+
+Turn frames never ride `/events`. What does is one low-frequency
+**`acp-notice`** per connection — `ready`, `settled`, `interaction_pending`,
+`interaction_settled` — naming the connection, generation and sequence, plus
+the session and request id when it has them. It is a wake signal: react to it
+by reading the snapshot, the interactions list, or the stream from the sequence
+it names.
 
 ### Streamable HTTP (`POST /mcp`)
 

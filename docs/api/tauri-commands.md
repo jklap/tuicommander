@@ -622,3 +622,42 @@ Smart Prompts "API" execution mode — direct LLM calls for prompt-based automat
 | `delete_llm_api_key` | -- | `()` | Remove the LLM API key from the OS keyring |
 | `execute_api_prompt` | `system_prompt, content, timeout_ms?` | `String` | Execute a direct LLM call using the configured provider/model. Returns the model's response text. |
 | `test_llm_api` | -- | `String` | Validate connection to the configured LLM endpoint (sends a test prompt) |
+
+## ACP client for ego (`acp_commands.rs`)
+
+Drives an [ego](https://github.com/sstraus/ego) agent over the Agent Client
+Protocol. Every command is a one-line pass-through to `AcpClientManager`; each
+has an identical HTTP route (see `docs/api/http-api.md`) so a browser or the
+PWA gets the same answers, including the same error bodies.
+
+The binary this launches is **not** an argument. It comes from the
+`ego_executable` setting, read at each connect, so no caller over IPC or HTTP
+can choose what the host runs.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `acp_connect` | `root` | `AcpConnectionSnapshot` | Launch the configured ego in `root` and initialize a connection |
+| `acp_reconnect` | `connectionId, root` | `AcpConnectionSnapshot` | Settle the old connection and start a new generation |
+| `acp_disconnect` | `connectionId` | `AcpConnectionSettlement` | Ask the child to exit; the snapshot is retained |
+| `acp_kill` | `connectionId` | `AcpConnectionSettlement` | Kill the child without asking |
+| `acp_connection_snapshot` | `connectionId` | `AcpConnectionSnapshot` | State, capabilities, attachments, and the journal's readable range |
+| `acp_subscribe` | `connectionId, afterSequence, channel` | `()` | Stream `AcpStreamFrame`s over a dedicated Channel. The browser equivalent is a WebSocket, not an HTTP route |
+| `acp_session_new` | `connectionId, authority` | `AcpAttachmentSnapshot` | `session/new` |
+| `acp_session_list` | `connectionId, cwd?, cursor?` | `ListSessionsResponse` | `session/list` |
+| `acp_session_load` | `connectionId, sessionId, authority` | `AcpAttachmentSnapshot` | `session/load` |
+| `acp_session_resume` | `connectionId, sessionId, authority` | `AcpAttachmentSnapshot` | `session/resume` |
+| `acp_session_fork` | `connectionId, sessionId, authority` | `AcpAttachmentSnapshot` | `session/fork` |
+| `acp_session_delete` | `connectionId, sessionId` | `()` | `session/delete` — the session is gone for good |
+| `acp_session_close` | `connectionId, sessionId` | `()` | Detach without deleting |
+| `acp_session_prompt` | `connectionId, sessionId, prompt` | `AcpTurnId` | Start a turn; its updates arrive on the stream |
+| `acp_session_cancel` | `connectionId, sessionId` | `()` | Cancel the running turn |
+| `acp_session_set_config_option` | `connectionId, sessionId, configId, value` | `Vec<SessionConfigOption>` | Set one option; the agent returns the whole resulting set |
+| `acp_turn_pause` | `connectionId, sessionId, requestId` | `EgoHoldResponse` | `_ego/pause`. `state` may be `pending` — the hold has not landed yet |
+| `acp_turn_resume` | `connectionId, sessionId, requestId` | `EgoHoldResponse` | `_ego/resume` |
+| `acp_session_compact` | `connectionId, sessionId, requestId` | `EgoCompactResponse` | `_ego/compact`. A `durability_uncertain` publication is never retry-safe |
+| `acp_pending_interactions` | `connectionId` | `Vec<AcpPendingInteraction>` | Questions the agent is waiting on, for a client that was not listening when they were asked |
+| `acp_respond_permission` | `connectionId, requestId, outcome` | `AcpInteractionSettlement` | Answer a `session/request_permission` |
+| `acp_respond_elicitation` | `connectionId, requestId, action` | `AcpInteractionSettlement` | Answer a `session/create_elicitation` |
+
+Errors are an `AcpClientError` — `code`, `message`, `connectionId`,
+`sessionId`, `operation`, `retryable` — identical on both transports.

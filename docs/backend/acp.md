@@ -1,0 +1,120 @@
+# ACP Client for ego
+
+TUICommander speaks the Agent Client Protocol (v1) as a **client**, to
+[ego](https://github.com/sstraus/ego) as the agent. Two repositories, no shared
+crate: both pin `agent-client-protocol` and agree on the wire, not on types.
+
+Backend only so far. There is no frontend surface; everything below is reachable
+from `acp_*` Tauri commands and, identically, from `/acp` HTTP routes.
+
+## Layout
+
+| File | What lives there |
+|------|------------------|
+| `src-tauri/src/acp/mod.rs` | The vocabulary: ids, snapshots, events, errors, notices, and the capability snapshot taken at `initialize` |
+| `src-tauri/src/acp/manager.rs` | `AcpClientManager` — one supervised child per connection, and every operation a caller can ask for |
+| `src-tauri/src/acp/connection.rs` | The per-connection actor: decides and writes serially, waits concurrently |
+| `src-tauri/src/acp/events.rs` | `AcpEventJournal` — the ordered, bounded record every subscriber reads from |
+| `src-tauri/src/acp/ego_ext.rs` | `_ego/pause`, `_ego/resume`, `_ego/compact` |
+| `src-tauri/src/acp_commands.rs` | The Tauri surface: one command per manager method, nothing else |
+| `src-tauri/src/mcp_http/acp_routes.rs` | The HTTP surface, calling the same cores |
+
+## The actor
+
+One `ConnectionActor` per connection. Deciding and writing is serial — a single
+task owns the decision of whether an operation is allowed and the write that
+follows, so two callers cannot both pass a gate that only one of them should
+have. Waiting is concurrent: replies are awaited in a `FuturesUnordered`, so a
+turn that takes a minute does not hold up a cancel.
+
+Agent→client requests (`session/request_permission`,
+`session/create_elicitation`) arrive on the **same** channel as `session/update`.
+That is deliberate: the question and the updates that explain what is being
+asked about must stay in the order the agent sent them, and two channels would
+reorder them.
+
+The SDK hands a responder to a callback that holds the dispatch loop. Answering
+there would freeze the connection for as long as a person takes to decide — so
+the responder is carried out of the callback and parked. What the tests pin is
+that it is always answered exactly once: by the person, by the cancel that took
+the question away, or immediately when there was no seat to offer.
+
+## The journal
+
+Every accepted callback and every local settlement is stamped with a sequence
+number, appended, and only then fanned out. That gives a host two things a
+snapshot cannot: the order the agent said things in, and the ability to join
+late.
+
+It is bounded (1024 events). A subscriber asking for a cursor that has fallen
+off the end is told `stream_gap` rather than being resumed past the hole: the
+missing chunks exist nowhere in this client, and a stream that silently skipped
+them would render as a turn where part of what the model said never happened.
+Recovery is a fresh connection and `session/load`, which replays from ego — the
+only place that still knows.
+
+Nothing in `append` can block the SDK reader: an uncontended lock and a
+broadcast send that drops the slowest subscriber's view rather than waiting for
+it.
+
+## Capabilities are decided before the wire
+
+The `initialize` response becomes an immutable capability snapshot. Every
+operation is checked against it, and an unadvertised one is refused with
+`capability_unavailable` **without sending a byte**. The same holds for content
+blocks a session never said it accepts, for extra roots, and for ego's own
+extensions — whose advertised version must match the one this client speaks.
+
+This is why `capability_unavailable` is never retryable: the answer comes from a
+snapshot taken once, so the identical request on this connection will refuse
+identically. Reaching an agent that has it is a different action, not a retry.
+
+## Two transports, one set of judgements
+
+`acp_commands.rs` and `acp_routes.rs` are both thin. Neither decides what is
+allowed, validates a permission option, or invents a fallback — those are the
+client's judgements, made once in `crate::acp`, so the desktop and a phone
+cannot disagree.
+
+The error body is the serialized `AcpClientError` on both. Over HTTP the status
+is a translation of its `code`, never a second opinion: 400/404 for the caller,
+501 when the agent never advertised the operation, 410 when the connection or
+the cursor is genuinely gone, 502 when the agent answered with a refusal.
+
+The one asymmetry is the stream, and it is a transport detail: a Tauri Channel
+on the desktop, a WebSocket in the browser, carrying byte-identical frames.
+
+## Process authority
+
+The ego binary is the `ego_executable` setting, read at each `connect`. It is
+not held by the manager — a copy taken once would keep launching the previous
+binary after somebody corrected the setting, without ever saying so — and it is
+not an argument of any command or route, so no request body can name what this
+machine runs. An empty setting refuses every connect, because "not configured"
+and "configured wrongly" are different things to be told.
+
+`POST /acp/connections` and `.../reconnect` are the only routes that launch a
+process, and the only two that take the loopback-or-authenticated guard.
+
+## Notices
+
+`AcpEventJournal::append` is the single place every event is stamped, so it is
+where the wake signal is derived. Four kinds — `ready`, `settled`,
+`interaction_pending`, `interaction_settled` — become an `AppEvent::AcpNotice`
+that `spawn_acp_notice_pump` mirrors to the desktop window and to `/events`.
+
+A turn's chunks never ride that bus: one turn emits more of them per second than
+the 256-entry broadcast can carry without lagging every unrelated subscriber in
+the app. A notice says where to look; the payload stays on the stream, the
+snapshot, or the interactions list.
+
+`settled` covers both a turn finishing and a connection ending. They are told
+apart by whether the notice names a session, not by a fifth kind.
+
+## Tests
+
+`src-tauri/tests/story092_*.rs`, against `tuic-acp-fixture-agent` — a
+non-bundled binary that replays a `tests/fixtures/acp/*.jsonl` scenario through
+the exact production launch path. `tests/fixtures/acp/ego-initialize.json` is a
+recording of what real ego answers, copied from ego's own committed golden;
+editing it to make a test pass would turn the recording into a wish.

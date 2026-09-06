@@ -79,6 +79,7 @@
 - [Git Operations](./backend/git.md)
 - [GitHub Integration](./backend/github.md)
 - [MCP & HTTP Server](./backend/mcp-http.md)
+- [ACP Client for ego](./backend/acp.md)
 - [MCP Proxy Hub](./backend/mcp-proxy.md)
 - [Voice Dictation](./backend/dictation.md)
 - [Alacritty Integration](./backend/alacritty-integration.md)

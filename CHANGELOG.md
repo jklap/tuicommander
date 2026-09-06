@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **TUICommander can now drive ego.** A supervised agent process per
+  connection, durable sessions, turns you can cancel or pause, and the
+  questions the agent asks back — all of it reachable from the desktop app and,
+  identically, from a browser or the PWA. Same request fields, same responses,
+  same errors; the only difference is that the desktop gets its turn frames on
+  a Channel and everyone else on a WebSocket.
+  The binary it launches is a setting, never an argument: no request can choose
+  what your machine runs, and correcting the setting takes effect without a
+  restart.
+
 ## [1.7.6] - 2026-09-02
 
 ### Added
