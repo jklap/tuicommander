@@ -261,12 +261,22 @@ pub struct AcpReconnectRequest {
     pub root: PathBuf,
 }
 
+/// What a registered connection is, and only that.
+///
+/// There is no `starting` or `initializing` here, because launching the child
+/// and negotiating v1 are phases of the `connect` *operation* rather than
+/// states of a connection anyone can hold: the id is minted inside `connect`
+/// and does not escape it until initialization has succeeded, so a connection
+/// that is still coming up cannot be named, listed, subscribed to, or asked
+/// about. An attempt that fails is answered with an `AcpClientError` and
+/// registers nothing. Giving those phases a state would mean returning an id
+/// before there is a connection behind it — a different, asynchronous connect
+/// API, with its own cancellation, retention and ownership rules, and nothing
+/// asks for one.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AcpConnectionState {
-    Starting,
-    Initializing,
     Ready,
     Closing,
     Closed,
@@ -638,6 +648,18 @@ pub struct AcpConnectionSnapshot {
     pub settlement: Option<AcpConnectionSettlement>,
 }
 
+/// Why a connection ended, as this client can actually prove it.
+///
+/// `TransportError` is the umbrella for every non-EOF way the SDK's transport
+/// can end, write-side failures included. Naming the writer separately would
+/// claim an attribution nobody here can make: a child closing its pipes and a
+/// child exiting produce a write failure, a stdout EOF and an SDK shutdown at
+/// once, and which of them the supervisor notices first is a scheduling
+/// accident. A reason a host cannot rely on is worse than a coarser one it can.
+///
+/// There is likewise no `initialization_failed`: a connection that never
+/// initialized was never registered, so there is nothing to settle. That
+/// failure is an `AcpClientErrorCode::InitializationFailed` from `connect`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -645,8 +667,6 @@ pub enum AcpConnectionSettlementReason {
     Disconnected,
     Eof,
     TransportError,
-    WriteError,
-    InitializationFailed,
     ProtocolViolation,
     Killed,
 }

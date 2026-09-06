@@ -27,7 +27,6 @@
 //! | `raw` | Write bytes to stdout verbatim, including ones that are not JSON. |
 //! | `stderr` | Write diagnostic bytes to stderr, which is never protocol. |
 //! | `close_stdout` | Close stdout while staying alive, so the client sees EOF from a live process. |
-//! | `close_stdin` | Close stdin, so the next client write fails. |
 //! | `await_stdin_eof` | Block until the client closes stdin. |
 //! | `exit` | Flush and exit with `code`. |
 //!
@@ -168,7 +167,6 @@ impl Agent {
                 io::stdout().flush().expect("flush before closing stdout");
                 close_descriptor(1);
             }
-            Some("close_stdin") => close_descriptor(0),
             Some("await_stdin_eof") => {
                 let mut drained = Vec::new();
                 let _ = self.stdin.read_to_end(&mut drained);
