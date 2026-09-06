@@ -392,7 +392,6 @@ mod tests {
         assert_samples(&fx.captured(), &[0.5, 0.2]);
     }
 
-    #[test]
     /// A device reporting 0 Hz makes `ratio` infinite, and
     /// `(len as f64 * f64::INFINITY) as usize` saturates to `usize::MAX` — so
     /// `reserve` aborts on capacity overflow, on the real-time audio thread.
