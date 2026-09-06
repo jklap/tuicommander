@@ -4228,9 +4228,21 @@ impl VtLogBuffer {
     }
 
     /// Serialize damaged grid rows into a binary frame for Tauri Channel streaming.
-    /// Delegates to the inner TerminalGrid; returns empty Vec when no rows changed.
-    pub(crate) fn serialize_dirty_rows(&mut self) -> Vec<u8> {
-        self.grid.serialize_dirty_rows()
+    /// Delegates to the inner TerminalGrid; the frame is empty when no rows changed.
+    ///
+    /// The order the frame is cut in is stamped here, inside the vt lock the
+    /// caller holds, because that is the only place the serialize order exists:
+    /// every producer releases the lock before handing the bytes to
+    /// `send_grid_frame`. See [`crate::grid_gate::GridFrame`].
+    pub(crate) fn serialize_dirty_rows(&mut self) -> crate::grid_gate::GridFrame {
+        crate::grid_gate::GridFrame::cut(self.grid.serialize_dirty_rows())
+    }
+
+    /// A whole-screen frame for ONE subscriber that leaves the shared damage,
+    /// the viewport state and the bell untouched. See
+    /// [`crate::terminal_grid::TerminalGrid::serialize_full_frame`].
+    pub(crate) fn serialize_full_frame(&self) -> Vec<u8> {
+        self.grid.serialize_full_frame()
     }
 
     /// Whether a DEC 2026 synchronized update is currently open.

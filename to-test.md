@@ -730,3 +730,15 @@ None of them is here because nobody looked.
   string now, not `{text}`. Last, set a non-default audio output in notification
   settings and trigger a notification from the browser tab: it must play on the chosen
   device, which is what the added `device` field in the HTTP body carries.
+- [ ] Rust change, needs a `make dev` restart (story #670-b9a2). Grid delivery got three
+  changes that only show up in a live WebView. (1) **Frame ordering:** zoom/resize a busy
+  session repeatedly (the resize path cuts a FULL frame off-thread while the ticker cuts
+  deltas) — no blank or half-stale screen may survive the zoom, and any frame that loses
+  the race must come back as a full repaint on the next tick rather than vanishing.
+  (2) **Browser not starved by a stalled desktop:** open the same session in the app and
+  in a browser tab at `:9876`, block the app's JS thread (devtools breakpoint, or a heavy
+  panel), and confirm the browser tab keeps painting at the normal rate instead of
+  freezing with it. (3) **Desktop repair:** release that breakpoint — the app window must
+  repaint the whole screen in one go, with no rows left stale from the frames it missed.
+  Tests cover the Rust side of all three; what they cannot reach is the frame actually
+  crossing `tauri::ipc::Channel` into the WebView.

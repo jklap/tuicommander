@@ -7960,6 +7960,15 @@ pub(crate) fn spawn_reader_thread(
                 .grid_gates
                 .get(&ticker_sid)
                 .map(|g| Arc::clone(g.value()));
+            // The gate belongs to the desktop WebView and to nothing else. It used
+            // to stop this tick outright, which is correct only while the desktop
+            // is the sole consumer: a browser/PWA client rides a different
+            // transport with its own flow control, and a stalled WebView is not
+            // its problem. So the stall accounting below still runs — the gate is
+            // still what decides whether the desktop CHANNEL gets this frame, in
+            // `send_grid_frame` — but it may only stop the tick when there is
+            // nobody else to serve.
+            let watchers = grid_has_watcher(&ticker_state, &ticker_sid);
             if gate.as_ref().is_some_and(|g| !g.is_open()) {
                 let now = std::time::Instant::now();
                 let since = stuck_since.get_or_insert(now);
@@ -7970,6 +7979,7 @@ pub(crate) fn spawn_reader_thread(
                         session_id = %ticker_sid,
                         elapsed_ms = elapsed,
                         stuck_count,
+                        watchers,
                         outstanding = gate.as_ref().map_or(0, |g| g.outstanding()),
                         "grid frame gate stuck, abandoning the outstanding frame"
                     );
@@ -7978,20 +7988,27 @@ pub(crate) fn spawn_reader_thread(
                     }
                     stuck_since = None;
                     if stuck_count >= MAX_STUCK_BEFORE_PAUSE {
+                        stuck_count = 0;
                         // Back off to let JS drain the channel backlog before retrying.
                         // Sleep in short chunks so (a) a recovered frontend resumes
                         // within ~one chunk rather than the full pause, and (b) session
                         // close isn't delayed up to the full pause on shutdown.
-                        stuck_count = 0;
+                        //
+                        // Skipped entirely when a browser is watching: this pause is
+                        // the desktop's recovery time, and spending it on the thread
+                        // that is the only frame source for the other transport
+                        // freezes a client that never fell behind.
                         let mut waited = 0u64;
-                        while waited < STUCK_PAUSE_MS && ticker_running.load(Ordering::Relaxed) {
+                        while !watchers
+                            && waited < STUCK_PAUSE_MS
+                            && ticker_running.load(Ordering::Relaxed)
+                        {
                             std::thread::sleep(std::time::Duration::from_millis(100));
                             waited += 100;
                         }
                     }
-                    ticker_dirty.store(true, Ordering::Relaxed);
-                    continue;
-                } else {
+                }
+                if !watchers {
                     ticker_dirty.store(true, Ordering::Relaxed);
                     continue;
                 }
@@ -8044,13 +8061,30 @@ pub(crate) fn spawn_reader_thread(
                 ticker_dirty.store(true, Ordering::Relaxed); // keep pending for a later tick
                 continue;
             }
+            // The WebView missed frames while its gate was closed and has caught
+            // up: those rows went to the WebSocket subscribers and left the shared
+            // damage, so a delta now would land on a row map with holes in it.
+            // Pay the debt with a full frame private to this channel — it consumes
+            // no damage, so the delta below still reaches everyone else.
+            let desktop_owed_full_frame = gate
+                .as_ref()
+                .is_some_and(|g| g.is_open() && g.take_missed());
             if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
                 let mut g = vt.lock();
                 if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid) {
                     g.grid_scroll_to_offset(target);
                 }
+                // Cut before the delta, from the same locked state, so the rows the
+                // delta carries are already in it.
+                let repair = desktop_owed_full_frame.then(|| g.serialize_full_frame());
                 let frame = g.serialize_dirty_rows();
                 drop(g);
+                #[cfg(feature = "desktop")]
+                if let Some(repair) = repair {
+                    send_desktop_grid_frame(&ticker_state, &ticker_sid, repair);
+                }
+                #[cfg(not(feature = "desktop"))]
+                let _ = repair;
                 send_grid_frame(&ticker_state, &ticker_sid, frame);
                 last_sent = Some(now);
             }
@@ -8616,7 +8650,7 @@ pub(crate) async fn resize_session_off_thread(
     session_id: String,
     rows: u16,
     cols: u16,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<Option<crate::grid_gate::GridFrame>, String> {
     let state = Arc::clone(state);
     tokio::task::spawn_blocking(move || resize_session_core(&state, &session_id, rows, cols))
         .await
@@ -8628,7 +8662,7 @@ pub(crate) fn resize_session_core(
     session_id: &str,
     rows: u16,
     cols: u16,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<Option<crate::grid_gate::GridFrame>, String> {
     if rows == 0 || cols == 0 {
         return Err("Invalid dimensions: rows and cols must be > 0".to_string());
     }
@@ -9615,18 +9649,57 @@ pub(crate) fn grid_has_subscriber(state: &AppState, session_id: &str) -> bool {
     if state.grid_channels.contains_key(session_id) {
         return true;
     }
+    grid_has_watcher(state, session_id)
+}
+
+/// Does this session have a browser/PWA client on the grid WebSocket?
+///
+/// Narrower than [`grid_has_subscriber`] on purpose: the frame ticker uses this
+/// one to decide whether a stalled *desktop* WebView may stop the frames, and a
+/// desktop channel is exactly what must not count towards that answer.
+fn grid_has_watcher(state: &AppState, session_id: &str) -> bool {
     state
         .grid_watch
         .get(session_id)
         .is_some_and(|tx| tx.receiver_count() > 0)
 }
 
+/// Repair after a frame lost the ordering race.
+///
+/// The frame that was dropped carries rows the delivered one does not: the
+/// damage behind them was consumed when it was serialized, so nothing will ever
+/// send them again. Dropping it silently leaves those rows stale on every client
+/// until something else happens to repaint them. Damage the grid again and wake
+/// the ticker instead — the next frame is a full one and every transport is
+/// whole. Unlike a per-subscriber resync (`serialize_full_frame`), re-damaging is
+/// the *right* answer here: the loss is shared, so the repair has to be.
+fn repaint_after_reorder(state: &AppState, session_id: &str) {
+    tracing::debug!(session_id = %session_id, "grid frame arrived out of order, forcing a full repaint");
+    if let Some(vt) = state.vt_log_buffers.get(session_id) {
+        vt.lock().grid_force_full_damage();
+    }
+    if let Some(dirty) = state.grid_frame_dirty.get(session_id) {
+        dirty.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Send a grid frame through the session's channel and close the delivery gate.
 /// Also publishes to the watch channel for WebSocket subscribers.
-pub(crate) fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>) {
+///
+/// Frames are serialized under the vt lock and arrive here after it was
+/// released, so two producers can reach this point in the opposite order. The
+/// `order` the frame carries was stamped inside that critical section and is the
+/// only record of which one is newer; a frame that lost the race is dropped here
+/// and repaired with a full repaint rather than painted over a newer screen.
+pub(crate) fn send_grid_frame(
+    state: &AppState,
+    session_id: &str,
+    frame: crate::grid_gate::GridFrame,
+) {
     if frame.is_empty() {
         return;
     }
+    let crate::grid_gate::GridFrame { order, bytes } = frame;
     // Clone only when both consumers want the frame. A browser-only session has
     // no desktop channel, so the watch can take the original; cloning first and
     // then finding nothing to hand the original to was pure copy.
@@ -9636,39 +9709,92 @@ pub(crate) fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>
     let desktop_wants_it = false;
 
     let frame = match state.grid_watch.get(session_id) {
-        Some(watch_tx) if watch_tx.receiver_count() > 0 => {
-            if desktop_wants_it {
-                crate::grid_gate::publish_grid_frame(&watch_tx, frame.clone());
-                frame
-            } else {
-                crate::grid_gate::publish_grid_frame(&watch_tx, frame);
+        Some(watch_tx) => {
+            let watched = watch_tx.receiver_count() > 0;
+            let (for_watch, for_desktop) = match (watched, desktop_wants_it) {
+                (true, true) => (Some(bytes.clone()), Some(bytes)),
+                (true, false) => (Some(bytes), None),
+                (false, _) => (None, Some(bytes)),
+            };
+            // The claim and the publish share one critical section: claiming
+            // first and publishing after would let two producers claim in the
+            // order they serialized and then publish in the other one.
+            if crate::grid_gate::claim_grid_frame(&watch_tx, order, for_watch)
+                == crate::grid_gate::FrameOrder::Stale
+            {
+                repaint_after_reorder(state, session_id);
                 return;
             }
+            match for_desktop {
+                Some(bytes) => bytes,
+                None => return,
+            }
         }
-        _ => frame,
+        None => bytes,
     };
 
     #[cfg(feature = "desktop")]
-    if let Some(ch) = state.grid_channels.get(session_id) {
-        let gate = state.grid_gates.get(session_id);
-        if let Some(gate) = gate.as_deref() {
-            gate.mark_sent();
-        }
-        // `tauri::ipc::Response` is what keeps this binary. A `Vec<u8>` matches
-        // only the blanket `IpcResponse` impl, i.e. `serde_json::to_string`, so a
-        // 110 KB frame left Rust as a ~280 KB string of decimal numbers, took the
-        // over-threshold path (one extra IPC round trip per frame) and arrived in
-        // JS as a `number[]` to be walked back into bytes. `Response` carries the
-        // bytes as `Raw` and the frontend already accepts an ArrayBuffer.
-        if let Err(error) = ch.send(tauri::ipc::Response::new(frame)) {
-            // A frame that never reached the webview will never be acked, and the
-            // counters are absolute: leaving this one counted would put the gate one
-            // frame behind for the rest of the session, i.e. every later frame would
-            // travel at the ticker's 500 ms give-up rate. Give up on it now instead.
-            tracing::debug!(session_id = %session_id, %error, "grid frame send failed");
-            if let Some(gate) = gate.as_deref() {
-                gate.abandon();
+    {
+        // A closed gate means the WebView has not painted the frame before this
+        // one. The ticker used to stop entirely here, which held the damage on
+        // the vt but starved every browser subscriber; they keep receiving now,
+        // so the rows in this frame have already left the shared damage without
+        // reaching this channel. Record the debt and let the ticker pay it with a
+        // full frame once the gate reopens — sending the delta now would only
+        // deepen the backlog this gate exists to drain.
+        let stalled = desktop_wants_it && {
+            let gate = state.grid_gates.get(session_id);
+            match gate.as_deref() {
+                Some(gate) if !gate.is_open() => {
+                    gate.note_missed();
+                    true
+                }
+                _ => false,
             }
+        };
+        if stalled {
+            // Arm the ticker so the debt is paid even if the session falls silent
+            // the instant the WebView recovers: the repair rides a tick, and an
+            // undirty session never takes one.
+            if let Some(dirty) = state.grid_frame_dirty.get(session_id) {
+                dirty.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
+        send_desktop_grid_frame(state, session_id, frame);
+    }
+}
+
+/// Hand `bytes` to the desktop IPC channel and count the frame against the
+/// delivery gate. No-op when the session has no desktop channel.
+///
+/// Separate from [`send_grid_frame`] because the two callers differ in what the
+/// frame IS: the broadcast path sends the shared delta to every transport, while
+/// the ticker's stall repair sends a full frame to this channel and to nothing
+/// else.
+#[cfg(feature = "desktop")]
+fn send_desktop_grid_frame(state: &AppState, session_id: &str, bytes: Vec<u8>) {
+    let Some(ch) = state.grid_channels.get(session_id) else {
+        return;
+    };
+    let gate = state.grid_gates.get(session_id);
+    if let Some(gate) = gate.as_deref() {
+        gate.mark_sent();
+    }
+    // `tauri::ipc::Response` is what keeps this binary. A `Vec<u8>` matches
+    // only the blanket `IpcResponse` impl, i.e. `serde_json::to_string`, so a
+    // 110 KB frame left Rust as a ~280 KB string of decimal numbers, took the
+    // over-threshold path (one extra IPC round trip per frame) and arrived in
+    // JS as a `number[]` to be walked back into bytes. `Response` carries the
+    // bytes as `Raw` and the frontend already accepts an ArrayBuffer.
+    if let Err(error) = ch.send(tauri::ipc::Response::new(bytes)) {
+        // A frame that never reached the webview will never be acked, and the
+        // counters are absolute: leaving this one counted would put the gate one
+        // frame behind for the rest of the session, i.e. every later frame would
+        // travel at the ticker's 500 ms give-up rate. Give up on it now instead.
+        tracing::debug!(session_id = %session_id, %error, "grid frame send failed");
+        if let Some(gate) = gate.as_deref() {
+            gate.abandon();
         }
     }
 }
