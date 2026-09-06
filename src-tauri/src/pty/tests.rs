@@ -179,6 +179,38 @@ async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
     let _ = std::panic::take_hook();
 }
 
+/// `pending_scroll` is the target `terminal_scroll_to_offset` writes on both
+/// transports and the ticker consumes. It used to be created by
+/// `subscribe_terminal_grid`, a desktop-only Tauri command, so a session nothing
+/// desktop had ever rendered had no entry to write to at all — the wheel and the
+/// scrollbar drag in browser mode wrote nowhere and answered ok. It belongs to
+/// the session, like the `grid_frame_dirty` flag the same handler sets, and the
+/// only funnel every creation path shares is `spawn_reader_thread`.
+#[tokio::test(flavor = "current_thread", start_paused = false)]
+async fn a_session_owns_its_pending_scroll_entry_from_the_start() {
+    struct EofReader;
+    impl Read for EofReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "pending-scroll-owner".to_string();
+    spawn_reader_thread(
+        Box::new(EofReader),
+        Arc::new(AtomicBool::new(false)),
+        sid.clone(),
+        state.clone(),
+        None,
+    );
+
+    assert!(
+        state.pending_scroll.contains_key(&sid),
+        "a session with no desktop grid subscriber has nowhere to record a scroll"
+    );
+}
+
 #[test]
 fn grid_send_min_interval_policy() {
     // Short burst, no typing → no floor: full-speed for low latency.

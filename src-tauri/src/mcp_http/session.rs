@@ -2650,6 +2650,122 @@ mod tests {
         assert!(full_frame_for_single_client(&state, "no-such-session").is_none());
     }
 
+    // --- Browser-mode scroll (story 658-3ce1) ---
+    //
+    // `pending_scroll` used to be inserted by `subscribe_terminal_grid`, a
+    // desktop-only Tauri command. A session driven from a browser over the grid
+    // WebSocket therefore had no entry at all: this handler answered
+    // `{"ok":true}` and recorded the target nowhere, so the wheel and the
+    // scrollbar drag did nothing — and closing the desktop terminal took the
+    // entry away from an already attached browser. The map belongs to the
+    // session, next to the `grid_frame_dirty` the same handler sets.
+
+    /// A reader that keeps the session alive until the test releases it, then
+    /// reports EOF so the reader and ticker threads shut down normally.
+    struct StopOnFlag(Arc<AtomicBool>);
+
+    impl std::io::Read for StopOnFlag {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            while !self.0.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(0)
+        }
+    }
+
+    /// A session as every creation path leaves it: a vt buffer holding
+    /// scrollback plus the reader and ticker threads the session owns. Returns
+    /// the stop flag — set it to tear the session down.
+    fn browser_session(state: &Arc<AppState>, session_id: &str, lines: usize) -> Arc<AtomicBool> {
+        let mut vt = VtLogBuffer::new(24, 80, 1000);
+        for i in 0..lines {
+            vt.process(format!("line {i}\r\n").as_bytes());
+        }
+        state
+            .vt_log_buffers
+            .insert(session_id.to_string(), Mutex::new(vt));
+        let stop = Arc::new(AtomicBool::new(false));
+        spawn_reader_thread(
+            Box::new(StopOnFlag(stop.clone())),
+            Arc::new(AtomicBool::new(false)),
+            session_id.to_string(),
+            state.clone(),
+            None,
+        );
+        stop
+    }
+
+    /// Wait for the frame ticker to apply the requested offset. The ticker owns
+    /// the vt lock on a 16 ms interval, so the wait is real work, not setup; the
+    /// bound is generous because what it has to catch is "never applied".
+    async fn await_display_offset(state: &Arc<AppState>, session_id: &str, expected: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let offset = {
+                let vt = state
+                    .vt_log_buffers
+                    .get(session_id)
+                    .expect("the session outlives the scroll");
+                let offset = vt.lock().grid_display_offset();
+                offset
+            };
+            if offset == expected {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the frame ticker never applied the pending scroll: display offset \
+                 is {offset}, the client asked for {expected} — the scroll answered \
+                 ok and did nothing"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// The bug exactly as a browser hits it: a grid WebSocket client attached, no
+    /// desktop channel anywhere, and the wheel asking for an absolute offset.
+    #[tokio::test]
+    async fn a_browser_scroll_moves_the_grid_with_no_desktop_subscriber() {
+        let state = super::super::tests::test_state();
+        let sid = "browser-wheel".to_string();
+        let stop = browser_session(&state, &sid, 200);
+        // What `handle_ws_grid_session` holds for as long as a browser is attached.
+        let watch = crate::grid_gate::new_grid_watch();
+        let _browser = watch.subscribe();
+        state.grid_watch.insert(sid.clone(), watch);
+
+        terminal_scroll_to_offset(
+            State(state.clone()),
+            Path(sid.clone()),
+            Json(TerminalScrollToOffsetRequest { offset: 40 }),
+        )
+        .await;
+
+        await_display_offset(&state, &sid, 40).await;
+        stop.store(true, Ordering::Relaxed);
+    }
+
+    /// The same scroll from a plain HTTP client with nothing attached at all —
+    /// what a `curl` check does. `/terminal/scroll-info` and the row reads answer
+    /// from the display offset, so a scroll the ticker drops for want of a
+    /// subscriber would silently disagree with every later read of the session.
+    #[tokio::test]
+    async fn an_http_scroll_moves_the_grid_with_nothing_attached() {
+        let state = super::super::tests::test_state();
+        let sid = "http-only-scroll".to_string();
+        let stop = browser_session(&state, &sid, 200);
+
+        terminal_scroll_to_offset(
+            State(state.clone()),
+            Path(sid.clone()),
+            Json(TerminalScrollToOffsetRequest { offset: 25 }),
+        )
+        .await;
+
+        await_display_offset(&state, &sid, 25).await;
+        stop.store(true, Ordering::Relaxed);
+    }
+
     // --- Styled rows over HTTP (story 601-82ef) ---
     //
     // The desktop command hands these bytes over raw (`tauri::ipc::Response`), so

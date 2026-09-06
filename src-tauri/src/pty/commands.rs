@@ -923,9 +923,6 @@ pub(crate) fn subscribe_terminal_grid(
     let gate = Arc::new(crate::grid_gate::GridGate::new());
     let epoch = gate.epoch();
     state.grid_gates.insert(session_id.clone(), gate);
-    state
-        .pending_scroll
-        .insert(session_id.clone(), Arc::new(AtomicI64::new(-1)));
     state.grid_channels.insert(session_id, channel);
     epoch
 }
@@ -976,6 +973,11 @@ pub(crate) fn terminal_request_frame(state: State<'_, Arc<AppState>>, session_id
 /// that remounts subscribes before the outgoing instance unsubscribes, so
 /// honouring a stale call would delete the live channel and leave a mounted
 /// terminal with no frames at all.
+///
+/// `pending_scroll` is deliberately NOT removed here: it is owned by the session
+/// (`spawn_reader_thread` creates it, `remove_live_session_state` drops it), and
+/// taking it away with the desktop channel left an attached browser unable to
+/// scroll the moment the desktop terminal closed.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn unsubscribe_terminal_grid(
@@ -992,7 +994,6 @@ pub(crate) fn unsubscribe_terminal_grid(
     }
     state.grid_channels.remove(&session_id);
     state.grid_gates.remove(&session_id);
-    state.pending_scroll.remove(&session_id);
 }
 
 /// Exit alternate screen via the terminal grid (display side only, never touches PTY stdin).

@@ -202,6 +202,23 @@ than flag:
   on a 400 ms trailing timer, below the ticker's deadline: a background tab drops
   to ~2 frames/s without making the ticker's stuck-frontend warning fire.
 
+**Coalesced scroll (`pending_scroll`).** The wheel and the scrollbar drag do not
+take the vt lock: `terminal_scroll_to_offset` — the Tauri command and the
+`POST /sessions/{id}/terminal/scroll-to-offset` route alike — stores the absolute
+display offset in a per-session `AtomicI64` and marks the grid dirty. The ticker
+consumes it (`take_pending_scroll`) under the lock it already holds, so a burst of
+wheel events costs one grid move, latest wins, and scrolling never contends with
+the PTY output processor.
+
+The entry is created by `spawn_reader_thread` — the one funnel every session
+creation path shares — and dropped by `remove_live_session_state`. It belongs to
+the **session**, not to a subscriber: when `subscribe_terminal_grid` owned it, a
+session only a browser had ever rendered had nowhere to record a scroll, and
+closing the desktop terminal disabled scrolling for an attached browser. For the
+same reason the ticker applies a pending target even when nobody is subscribed —
+`/terminal/scroll-info` and the row reads answer from the display offset, so a
+target dropped there would disagree with every later read of the session.
+
 Frames and styled-row chunks cross the desktop IPC as **raw bytes**
 (`tauri::ipc::Channel<tauri::ipc::Response>`, `tauri::ipc::Response`). A bare
 `Vec<u8>` takes Tauri's blanket `IpcResponse` impl and is serialized as a JSON

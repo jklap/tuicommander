@@ -7808,6 +7808,14 @@ pub(crate) fn spawn_reader_thread(
     state
         .grid_frame_dirty
         .insert(session_id.clone(), frame_dirty.clone());
+    // Scroll target the ticker consumes, created alongside the dirty flag the
+    // same handler sets. It belongs to the session, not to one of its front
+    // ends: when the desktop `subscribe_terminal_grid` owned it, a session only
+    // a browser had ever rendered had nowhere to record a scroll, and closing
+    // the desktop terminal took the entry away from an attached browser.
+    state
+        .pending_scroll
+        .insert(session_id.clone(), Arc::new(AtomicI64::new(-1)));
     let sync_active = Arc::new(AtomicBool::new(false));
     state
         .sync_update_active
@@ -7919,10 +7927,13 @@ pub(crate) fn spawn_reader_thread(
             // (mcp_http/session.rs full_frame_for_single_client) forces it twice
             // and re-arms this ticker.
             //
-            // No pending scroll can be stranded either: pending_scroll is only
-            // ever inserted alongside a desktop channel (subscribe_terminal_grid)
-            // and removed with it (unsubscribe_terminal_grid, cleanup_session), so
-            // no subscriber means no entry for terminal_scroll_to_offset to write.
+            // A pending scroll is the one thing that must NOT be skipped with the
+            // frame: it is session state, not pixels. `/terminal/scroll-info`,
+            // the row reads and the next full frame all answer from the grid's
+            // display offset, so a target dropped here would silently disagree
+            // with every later read — and an HTTP client that scrolls without
+            // holding a grid WebSocket is exactly the browser/PWA case. It costs
+            // the vt lock only when a client actually asked for a scroll.
             //
             // DEFERRED (2026-08-20) — parking the THREAD itself, which is what
             // F28 asked for. What is left after the skip above is timer churn, not
@@ -7933,6 +7944,11 @@ pub(crate) fn spawn_reader_thread(
             // shows up as a terminal that silently stops painting. Small win,
             // worst failure mode of the group.
             if !grid_has_subscriber(&ticker_state, &ticker_sid) {
+                if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid)
+                    && let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid)
+                {
+                    vt.lock().grid_scroll_to_offset(target);
+                }
                 dirty_run = 0;
                 continue;
             }
@@ -8030,11 +8046,8 @@ pub(crate) fn spawn_reader_thread(
             }
             if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
                 let mut g = vt.lock();
-                if let Some(p) = ticker_state.pending_scroll.get(&ticker_sid) {
-                    let target = p.swap(-1, Ordering::Relaxed);
-                    if target >= 0 {
-                        g.grid_scroll_to_offset(target as usize);
-                    }
+                if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid) {
+                    g.grid_scroll_to_offset(target);
                 }
                 let frame = g.serialize_dirty_rows();
                 drop(g);
@@ -9572,6 +9585,20 @@ pub struct VtLogChunk {
     pub screen: Vec<crate::state::LogLine>,
     pub total_lines: usize,
     pub oldest: usize,
+}
+
+/// Consume the coalesced scroll target a client left for this session.
+///
+/// Both transports write it (`terminal_scroll_to_offset` as a Tauri command and
+/// as an HTTP route) without taking the vt lock, and the frame ticker is the only
+/// reader — so the swap here is what makes "latest wins" true: whatever arrived
+/// since the last tick is applied once, and `-1` means nothing is pending.
+fn take_pending_scroll(state: &AppState, session_id: &str) -> Option<usize> {
+    let target = state
+        .pending_scroll
+        .get(session_id)?
+        .swap(-1, Ordering::Relaxed);
+    (target >= 0).then_some(target as usize)
 }
 
 /// Is anyone waiting for this session's grid frames?
