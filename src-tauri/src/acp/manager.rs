@@ -8,7 +8,7 @@ use std::{
 };
 
 use agent_client_protocol::schema::v1;
-use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
+use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo, Responder};
 use parking_lot::Mutex;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -17,13 +17,16 @@ use tokio::{
 
 use futures_util::StreamExt;
 
-use super::connection::{Accepted, Command, ConnectionActor, InFlight};
+use super::connection::{
+    Accepted, Answer, Command, ConnectionActor, InFlight, Inbound, Interaction,
+};
 use super::events::{AcpEventJournal, AcpEventStream};
 use super::{
     AcpAttachKind, AcpAttachmentSnapshot, AcpCapabilitySnapshot, AcpClientError, AcpConnectRequest,
     AcpConnectionId, AcpConnectionSettlement, AcpConnectionSettlementReason, AcpConnectionSnapshot,
-    AcpConnectionState, AcpDetachKind, AcpReconnectRequest, AcpSessionAuthority, AcpTurnId,
-    EgoAcpConfig, build_initialize_request, capability_snapshot, launch_spec,
+    AcpConnectionState, AcpDetachKind, AcpHostRequestId, AcpInteractionSettlement,
+    AcpPendingInteraction, AcpReconnectRequest, AcpSessionAuthority, AcpTurnId, EgoAcpConfig,
+    build_initialize_request, capability_snapshot, launch_spec,
 };
 
 const INITIAL_GENERATION: u64 = 1;
@@ -265,6 +268,48 @@ impl AcpClientManager {
             .await
     }
 
+    /// Give a person's decision to the permission request that is waiting on it.
+    pub async fn respond_permission(
+        &self,
+        connection_id: AcpConnectionId,
+        request_id: AcpHostRequestId,
+        outcome: v1::RequestPermissionOutcome,
+    ) -> Result<AcpInteractionSettlement, AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Respond {
+            request_id,
+            answer: Answer::Permission(outcome),
+            reply,
+        })
+        .await
+    }
+
+    /// Give a person's decision to the elicitation that is waiting on it.
+    pub async fn respond_elicitation(
+        &self,
+        connection_id: AcpConnectionId,
+        request_id: AcpHostRequestId,
+        action: v1::ElicitationAction,
+    ) -> Result<AcpInteractionSettlement, AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Respond {
+            request_id,
+            answer: Answer::Elicitation(action),
+            reply,
+        })
+        .await
+    }
+
+    /// Every request this connection is waiting on a person for, in the order
+    /// the agent asked.
+    pub async fn pending_interactions(
+        &self,
+        connection_id: AcpConnectionId,
+    ) -> Result<Vec<AcpPendingInteraction>, AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::PendingInteractions {
+            reply,
+        })
+        .await
+    }
+
     /// Read what happened on a connection, from `from` onwards.
     ///
     /// Works on a settled connection too: what it recorded is still true, and a
@@ -422,6 +467,25 @@ impl AcpClientManager {
     }
 }
 
+/// Hand one reverse request to the actor, or refuse it here if it cannot be.
+///
+/// A full queue is the one case this cannot do: the request is settled on the
+/// spot with the answer that grants nothing, out of the order the agent asked
+/// in. That is the honest trade — the alternative is an agent waiting forever
+/// on a seat that was never taken.
+fn queue_interaction(
+    inbound: &mpsc::Sender<Inbound>,
+    interaction: Interaction,
+) -> Result<(), agent_client_protocol::Error> {
+    if let Err(error) = inbound.try_send(Inbound::Interaction(Box::new(interaction))) {
+        let Inbound::Interaction(interaction) = error.into_inner() else {
+            unreachable!("the value returned is the one that was just sent");
+        };
+        interaction.refuse();
+    }
+    Ok(())
+}
+
 /// Every channel a supervisor is wired to, in the order it uses them.
 ///
 /// They travel together because they are one handshake: the supervisor reports
@@ -432,10 +496,10 @@ struct SupervisorWiring {
     initialized: oneshot::Sender<Result<InitializedConnection, AcpClientError>>,
     registered: oneshot::Receiver<()>,
     commands: mpsc::Receiver<Command>,
-    /// Both halves of the update channel: the sender belongs to the SDK
-    /// dispatch callback, which is registered here rather than by the caller.
-    inbound: mpsc::Sender<v1::SessionNotification>,
-    updates: mpsc::Receiver<v1::SessionNotification>,
+    /// Both halves of the inbound channel: the sender belongs to the SDK
+    /// dispatch callbacks, which are registered here rather than by the caller.
+    inbound: mpsc::Sender<Inbound>,
+    updates: mpsc::Receiver<Inbound>,
     shutdown: oneshot::Receiver<()>,
     journal: Arc<AcpEventJournal>,
 }
@@ -459,21 +523,63 @@ async fn supervise_connection(
     let ready = Arc::new(AtomicBool::new(false));
     let closure_ready = Arc::clone(&ready);
     let actor_connections = Arc::clone(&connections);
+    // One sender per callback, one channel for all of them: updates and the
+    // requests the agent is waiting on arrive interleaved on the wire, and the
+    // order between them is the record. Two channels would let a permission
+    // request overtake the update that explains why it was asked.
+    let updates_in = inbound.clone();
+    let permissions_in = inbound.clone();
+    let elicitations_in = inbound;
     let outcome = Client
         .builder()
         // Deliberately short, because it holds the SDK's dispatch loop: the
         // update is handed to the actor and nothing else happens here.
         .on_receive_notification(
             async move |notification: v1::SessionNotification, _connection| {
-                inbound.try_send(notification).map_err(|error| {
-                    // Never a silent drop. A host that renders a turn with a
-                    // hole in it is confidently wrong about what the agent
-                    // said, which is worse than a connection that failed.
-                    agent_client_protocol::Error::internal_error()
-                        .data(format!("ACP update queue: {error}"))
-                })
+                updates_in
+                    .try_send(Inbound::Update(Box::new(notification)))
+                    .map_err(|error| {
+                        // Never a silent drop. A host that renders a turn with
+                        // a hole in it is confidently wrong about what the
+                        // agent said, which is worse than a connection that
+                        // failed.
+                        agent_client_protocol::Error::internal_error()
+                            .data(format!("ACP update queue: {error}"))
+                    })
             },
             agent_client_protocol::on_receive_notification!(),
+        )
+        // The responder is handed to the actor rather than answered here: a
+        // person decides this, and holding the dispatch loop until they do
+        // would stop every other message on the connection — including the
+        // updates that say what the agent is asking about.
+        .on_receive_request(
+            async move |request: v1::RequestPermissionRequest,
+                        responder: Responder<v1::RequestPermissionResponse>,
+                        _connection| {
+                queue_interaction(
+                    &permissions_in,
+                    Interaction::Permission {
+                        request: Box::new(request),
+                        responder,
+                    },
+                )
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: v1::CreateElicitationRequest,
+                        responder: Responder<v1::CreateElicitationResponse>,
+                        _connection| {
+                queue_interaction(
+                    &elicitations_in,
+                    Interaction::Elicitation {
+                        request: Box::new(request),
+                        responder,
+                    },
+                )
+            },
+            agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, move |connection: ConnectionTo<Agent>| async move {
             let response = match connection
@@ -528,8 +634,8 @@ async fn supervise_connection(
                     // waiting here is one the agent sent *before* whatever is
                     // now settling. Taking the settlement first would file a
                     // turn's last words after the record of it ending.
-                    update = updates.recv() => match update {
-                        Some(update) => Step::Accept(Accepted::Update(Box::new(update))),
+                    inbound = updates.recv() => match inbound {
+                        Some(inbound) => Step::Accept(Accepted::Inbound(Box::new(inbound))),
                         None => return Ok(SupervisorExit::Disconnected),
                     },
                     // An empty `FuturesUnordered` yields `None`, which fails

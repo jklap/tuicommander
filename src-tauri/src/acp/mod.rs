@@ -124,7 +124,15 @@ pub fn launch_spec(config: &EgoAcpConfig, root: &Path) -> Result<LaunchSpec, Acp
 pub fn build_initialize_request() -> v1::InitializeRequest {
     let client_capabilities = v1::ClientCapabilities::new()
         .fs(v1::FileSystemCapabilities::new())
-        .terminal(false);
+        .terminal(false)
+        // Form elicitation is advertised because this client seats an
+        // `elicitation/create` and lets a person answer it. Ego treats the
+        // absence of this as "no one to ask" and settles its questions
+        // `Unavailable` without ever sending one, so leaving it off would make
+        // the seat unreachable rather than merely unused.
+        .elicitation(
+            v1::ElicitationCapabilities::new().form(v1::ElicitationFormCapabilities::new()),
+        );
 
     v1::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_capabilities)
 }
@@ -329,6 +337,74 @@ pub enum AcpClientEvent {
         stop_reason: v1::StopReason,
         usage: Option<v1::Usage>,
     },
+    /// The agent is waiting on a person, and this is what it asked.
+    ///
+    /// It travels on the stream rather than being handed to whoever called
+    /// last, because the caller that started the turn is not necessarily the
+    /// one at the keyboard, and may not be listening at all by now.
+    PermissionRequested {
+        request_id: AcpHostRequestId,
+        request: Box<v1::RequestPermissionRequest>,
+    },
+    PermissionSettled {
+        request_id: AcpHostRequestId,
+        outcome: v1::RequestPermissionOutcome,
+    },
+    ElicitationRequested {
+        request_id: AcpHostRequestId,
+        request: Box<v1::CreateElicitationRequest>,
+    },
+    ElicitationSettled {
+        request_id: AcpHostRequestId,
+        action: v1::ElicitationAction,
+    },
+}
+
+/// One request the agent is waiting on an answer to.
+///
+/// Carried in snapshots as well as on the stream, so a frontend that was not
+/// running when the agent asked still finds the question when it comes back.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+#[non_exhaustive]
+pub enum AcpPendingInteraction {
+    Permission {
+        request_id: AcpHostRequestId,
+        session_id: v1::SessionId,
+        request: Box<v1::RequestPermissionRequest>,
+    },
+    Elicitation {
+        request_id: AcpHostRequestId,
+        session_id: v1::SessionId,
+        request: Box<v1::CreateElicitationRequest>,
+    },
+}
+
+impl AcpPendingInteraction {
+    #[must_use]
+    pub fn request_id(&self) -> AcpHostRequestId {
+        match self {
+            Self::Permission { request_id, .. } | Self::Elicitation { request_id, .. } => {
+                *request_id
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn session_id(&self) -> &v1::SessionId {
+        match self {
+            Self::Permission { session_id, .. } | Self::Elicitation { session_id, .. } => {
+                session_id
+            }
+        }
+    }
+}
+
+/// The receipt for an interaction this client answered.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpInteractionSettlement {
+    pub request_id: AcpHostRequestId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -567,6 +643,41 @@ impl AcpClientError {
         .with_connection_id(connection_id)
     }
 
+    /// An answer arrived for a request nothing is waiting on.
+    ///
+    /// One code for two histories on purpose: the request was answered already,
+    /// or it was never one this connection held. Both mean the same thing to
+    /// the caller — the seat is not open — and the client does not keep settled
+    /// seats around just so it could tell the two apart.
+    pub(super) fn interaction_settled(
+        connection_id: AcpConnectionId,
+        request_id: AcpHostRequestId,
+    ) -> Self {
+        Self::new(
+            AcpClientErrorCode::NotFound,
+            format!("ACP connection {connection_id} is not waiting on request {request_id}"),
+        )
+        .with_connection_id(connection_id)
+    }
+
+    /// The answer named an option the agent never offered.
+    ///
+    /// Refused here rather than forwarded: the agent decides what a permission
+    /// means, and it can only do that for the options it named. An id it does
+    /// not know is not a decision it can read.
+    pub(super) fn unoffered_option(
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+        option: &v1::PermissionOptionId,
+    ) -> Self {
+        Self::new(
+            AcpClientErrorCode::InvalidInput,
+            format!("the agent did not offer permission option {}", option.0),
+        )
+        .with_connection_id(connection_id)
+        .with_session_id(session_id)
+    }
+
     /// A live subscriber fell far enough behind that it missed events.
     pub(super) fn stream_lagged(connection_id: AcpConnectionId) -> Self {
         Self::new(
@@ -608,6 +719,12 @@ impl AcpClientError {
 }
 
 impl std::fmt::Display for AcpConnectionId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::fmt::Display for AcpHostRequestId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(formatter)
     }
@@ -710,7 +827,11 @@ pub fn capability_snapshot(
         mcp_stdio: false,
         mcp_http: mcp.http,
         mcp_sse: mcp.sse,
-        client_form_elicitation: false,
+        // What this client can do, not what the agent said. It is here rather
+        // than beside the request because a host asking "can a question be
+        // answered on this connection?" reads one snapshot, and an answer that
+        // needs both sides is still one answer.
+        client_form_elicitation: true,
         client_boolean_config: false,
         ego_hold_version: exact_extension_version(hold),
         ego_compact_version: exact_extension_version(compact),

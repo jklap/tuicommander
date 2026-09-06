@@ -33,7 +33,12 @@ fn initialize_is_v1_and_advertises_exact_client_capabilities() {
         serde_json::to_value(&request.client_capabilities).unwrap(),
         json!({
             "fs": {"readTextFile": false, "writeTextFile": false},
-            "terminal": false
+            "terminal": false,
+            // Advertised because this client seats an `elicitation/create` and
+            // lets a person answer it. Ego reads exactly this key and settles
+            // its questions `Unavailable` without it, so the claim here and the
+            // seat in the actor have to be made and unmade together.
+            "elicitation": {"form": {}}
         })
     );
 }
@@ -77,17 +82,19 @@ fn initialize_response_becomes_an_immutable_full_capability_snapshot() {
     assert!(snapshot.delete && snapshot.close && snapshot.prompt_image);
     assert!(snapshot.prompt_embedded_context && snapshot.mcp_http && snapshot.mcp_sse);
     assert!(!snapshot.mcp_stdio);
-    assert!(!snapshot.client_form_elicitation);
     assert!(!snapshot.client_boolean_config);
     assert_eq!(
         snapshot.availability(AcpOperation::McpStdio).reason,
         Some(AcpUnavailableReason::ExcludedByContract)
     );
-    assert_eq!(
+    // Form elicitation reads as available because this client now seats an
+    // `elicitation/create` and lets a person answer it. It is a fact about
+    // this side, so it does not move with the recorded response above.
+    assert!(snapshot.client_form_elicitation);
+    assert!(
         snapshot
             .availability(AcpOperation::ClientFormElicitation)
-            .reason,
-        Some(AcpUnavailableReason::ExcludedByContract)
+            .available
     );
     assert_eq!(
         snapshot
