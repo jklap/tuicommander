@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1;
-use agent_client_protocol::{Agent, ConnectionTo};
+use agent_client_protocol::{Agent, ConnectionTo, Responder};
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use tokio::sync::oneshot;
@@ -43,8 +43,9 @@ use tokio::sync::oneshot;
 use super::events::AcpEventJournal;
 use super::{
     AcpAttachKind, AcpAttachmentSnapshot, AcpAttachmentState, AcpCapabilitySnapshot,
-    AcpClientError, AcpClientEvent, AcpConnectionId, AcpDetachKind, AcpOperation,
-    AcpSessionAuthority, AcpTurnId, AcpTurnSnapshot, AcpTurnState, AcpUsageSnapshot,
+    AcpClientError, AcpClientEvent, AcpConnectionId, AcpDetachKind, AcpHostRequestId,
+    AcpInteractionSettlement, AcpOperation, AcpPendingInteraction, AcpSessionAuthority, AcpTurnId,
+    AcpTurnSnapshot, AcpTurnState, AcpUsageSnapshot,
 };
 
 pub(super) type Reply<T> = oneshot::Sender<Result<T, AcpClientError>>;
@@ -87,6 +88,25 @@ pub(super) enum Command {
         session_id: v1::SessionId,
         reply: Reply<()>,
     },
+    /// Answer a request the agent is waiting on a person for.
+    ///
+    /// One command for both seats because everything about them is the same
+    /// except the shape of the answer: find the open seat, refuse if it is not
+    /// open, write once, and journal the settlement.
+    Respond {
+        request_id: AcpHostRequestId,
+        answer: Answer,
+        reply: Reply<AcpInteractionSettlement>,
+    },
+    PendingInteractions {
+        reply: Reply<Vec<AcpPendingInteraction>>,
+    },
+}
+
+/// What a person decided, in the vocabulary of the seat they decided at.
+pub(super) enum Answer {
+    Permission(v1::RequestPermissionOutcome),
+    Elicitation(v1::ElicitationAction),
 }
 
 /// A request that has been written and is waiting for its answer.
@@ -126,12 +146,113 @@ pub(super) type InFlight = FuturesUnordered<BoxFuture<'static, Pending>>;
 
 type Sent<T> = BoxFuture<'static, Result<T, AcpClientError>>;
 
+/// One request the agent made of this client, and the seat it answers on.
+///
+/// The SDK responder is held rather than answered inside the dispatch callback
+/// that produced it: a person is going to take as long as a person takes, and
+/// the dispatch loop cannot read another frame until the callback returns.
+pub(super) enum Interaction {
+    Permission {
+        request: Box<v1::RequestPermissionRequest>,
+        responder: Responder<v1::RequestPermissionResponse>,
+    },
+    Elicitation {
+        request: Box<v1::CreateElicitationRequest>,
+        responder: Responder<v1::CreateElicitationResponse>,
+    },
+}
+
+impl Interaction {
+    /// The session this request belongs to, as the request itself says.
+    ///
+    /// An elicitation scoped to a request rather than a session names nothing
+    /// this client can seat it against. That scope is for what happens before a
+    /// session exists — authentication and configuration — which this client
+    /// does not do, so there is no case where guessing an owner would be right.
+    fn session_id(&self) -> Option<v1::SessionId> {
+        match self {
+            Self::Permission { request, .. } => Some(request.session_id.clone()),
+            Self::Elicitation { request, .. } => match request.scope() {
+                v1::ElicitationScope::Session(scope) => Some(scope.session_id.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    /// The answer that settles this request without granting anything.
+    fn refusal(&self) -> Answer {
+        match self {
+            Self::Permission { .. } => Answer::Permission(v1::RequestPermissionOutcome::Cancelled),
+            Self::Elicitation { .. } => Answer::Elicitation(v1::ElicitationAction::Cancel),
+        }
+    }
+
+    /// Write an answer on the seat it belongs to.
+    ///
+    /// A write that fails is not reported: the connection is already going, and
+    /// there is no one left to tell.
+    fn answer(self, answer: Answer) {
+        match (self, answer) {
+            (Self::Permission { responder, .. }, Answer::Permission(outcome)) => {
+                let _ = responder.respond(v1::RequestPermissionResponse::new(outcome));
+            }
+            (Self::Elicitation { responder, .. }, Answer::Elicitation(action)) => {
+                let _ = responder.respond(v1::CreateElicitationResponse::new(action));
+            }
+            // Unreachable: `respond` checks the pairing before it takes the
+            // seat, and every other caller builds the answer from the seat.
+            (interaction, _) => interaction.refuse(),
+        }
+    }
+
+    /// Settle this request with the answer that grants nothing.
+    pub(super) fn refuse(self) {
+        let refusal = self.refusal();
+        self.answer(refusal);
+    }
+
+    fn requested(&self, request_id: AcpHostRequestId) -> AcpClientEvent {
+        match self {
+            Self::Permission { request, .. } => AcpClientEvent::PermissionRequested {
+                request_id,
+                request: request.clone(),
+            },
+            Self::Elicitation { request, .. } => AcpClientEvent::ElicitationRequested {
+                request_id,
+                request: request.clone(),
+            },
+        }
+    }
+}
+
+/// Everything the agent sends unbidden, on one channel and in wire order.
+///
+/// Updates and reverse requests share a channel because they share an order.
+/// The SDK hands them to their callbacks one at a time from the same loop, so
+/// two channels would preserve each stream's own order and lose the one that
+/// matters: whether the agent asked before or after it said something.
+pub(super) enum Inbound {
+    Update(Box<v1::SessionNotification>),
+    Interaction(Box<Interaction>),
+}
+
+/// An open seat: what was asked, who it belongs to, and how to answer it.
+struct Seat {
+    request_id: AcpHostRequestId,
+    session_id: v1::SessionId,
+    interaction: Interaction,
+}
+
 /// Everything one connection knows that is not on the wire.
 pub(super) struct ConnectionActor {
     connection_id: AcpConnectionId,
     capabilities: Arc<AcpCapabilitySnapshot>,
     journal: Arc<AcpEventJournal>,
     attachments: HashMap<v1::SessionId, AcpAttachmentSnapshot>,
+    /// Open seats in the order the agent asked, which is the order they are
+    /// shown in and the order a cancel settles them in. A map keyed by id
+    /// would have made that order depend on hashing.
+    seats: Vec<Seat>,
 }
 
 impl ConnectionActor {
@@ -145,6 +266,7 @@ impl ConnectionActor {
             capabilities,
             journal,
             attachments: HashMap::new(),
+            seats: Vec::new(),
         }
     }
 
@@ -246,6 +368,200 @@ impl ConnectionActor {
             Command::Cancel { session_id, reply } => {
                 let _ = reply.send(self.cancel(&session_id, connection));
             }
+            Command::Respond {
+                request_id,
+                answer,
+                reply,
+            } => {
+                let _ = reply.send(self.respond(request_id, answer));
+            }
+            Command::PendingInteractions { reply } => {
+                let _ = reply.send(Ok(self.pending_interactions()));
+            }
+        }
+    }
+
+    /// Take in one request the agent is waiting on a person for.
+    ///
+    /// A request this client has no seat for is answered here and now rather
+    /// than held: every seat it has belongs to an attachment, so an elicitation
+    /// scoped to something else, or a permission for a session it let go, is one
+    /// no person can ever be shown. Holding it would leave the agent waiting on
+    /// a human who does not exist.
+    fn seat(&mut self, interaction: Interaction) -> bool {
+        let request_id = AcpHostRequestId::new();
+        let session_id = match interaction.session_id() {
+            Some(session_id) if self.attachments.contains_key(&session_id) => session_id,
+            unattached => {
+                // Both halves are recorded even though no one could have acted
+                // on them: a host reading the stream is owed the fact that the
+                // agent asked, and that the answer it got was nobody's.
+                self.journal
+                    .append(unattached.clone(), None, interaction.requested(request_id));
+                let refusal = interaction.refusal();
+                let event = Self::settled(request_id, &refusal);
+                interaction.answer(refusal);
+                self.journal.append(unattached, None, event);
+                return false;
+            }
+        };
+
+        self.journal.append(
+            Some(session_id.clone()),
+            self.turn_of(&session_id),
+            interaction.requested(request_id),
+        );
+        self.seats.push(Seat {
+            request_id,
+            session_id: session_id.clone(),
+            interaction,
+        });
+        self.republish(&session_id);
+        true
+    }
+
+    /// Answer one open seat, once.
+    fn respond(
+        &mut self,
+        request_id: AcpHostRequestId,
+        answer: Answer,
+    ) -> Result<AcpInteractionSettlement, AcpClientError> {
+        let index = self
+            .seats
+            .iter()
+            .position(|seat| seat.request_id == request_id)
+            .ok_or_else(|| AcpClientError::interaction_settled(self.connection_id, request_id))?;
+        // Validated before the seat is taken, so a refused answer leaves the
+        // seat open for a valid one instead of stranding the agent.
+        self.validate(&self.seats[index], &answer)?;
+
+        let seat = self.seats.remove(index);
+        let event = Self::settled(request_id, &answer);
+        seat.interaction.answer(answer);
+        self.journal.append(
+            Some(seat.session_id.clone()),
+            self.turn_of(&seat.session_id),
+            event,
+        );
+        self.republish(&seat.session_id);
+        Ok(AcpInteractionSettlement { request_id })
+    }
+
+    /// Settle every seat one session is waiting on, in the order they were
+    /// asked, with the answer that grants nothing.
+    fn sweep(&mut self, session_id: &v1::SessionId) {
+        let mut swept = Vec::new();
+        let mut index = 0;
+        while index < self.seats.len() {
+            if &self.seats[index].session_id == session_id {
+                swept.push(self.seats.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        for seat in swept {
+            let refusal = seat.interaction.refusal();
+            let event = Self::settled(seat.request_id, &refusal);
+            seat.interaction.answer(refusal);
+            self.journal.append(
+                Some(seat.session_id.clone()),
+                self.turn_of(&seat.session_id),
+                event,
+            );
+        }
+        self.republish(session_id);
+    }
+
+    fn pending_interactions(&self) -> Vec<AcpPendingInteraction> {
+        self.seats
+            .iter()
+            .map(|seat| match &seat.interaction {
+                Interaction::Permission { request, .. } => AcpPendingInteraction::Permission {
+                    request_id: seat.request_id,
+                    session_id: seat.session_id.clone(),
+                    request: request.clone(),
+                },
+                Interaction::Elicitation { request, .. } => AcpPendingInteraction::Elicitation {
+                    request_id: seat.request_id,
+                    session_id: seat.session_id.clone(),
+                    request: request.clone(),
+                },
+            })
+            .collect()
+    }
+
+    /// Whether this answer can be given at this seat.
+    fn validate(&self, seat: &Seat, answer: &Answer) -> Result<(), AcpClientError> {
+        match (&seat.interaction, answer) {
+            (Interaction::Permission { request, .. }, Answer::Permission(outcome)) => {
+                let v1::RequestPermissionOutcome::Selected(selected) = outcome else {
+                    return Ok(());
+                };
+                if request
+                    .options
+                    .iter()
+                    .any(|option| option.option_id == selected.option_id)
+                {
+                    return Ok(());
+                }
+                Err(AcpClientError::unoffered_option(
+                    self.connection_id,
+                    seat.session_id.clone(),
+                    &selected.option_id,
+                ))
+            }
+            (Interaction::Elicitation { .. }, Answer::Elicitation(_)) => Ok(()),
+            _ => Err(AcpClientError::invalid_input(
+                "this answer does not belong to the request it names",
+            )),
+        }
+    }
+
+    fn settled(request_id: AcpHostRequestId, answer: &Answer) -> AcpClientEvent {
+        match answer {
+            Answer::Permission(outcome) => AcpClientEvent::PermissionSettled {
+                request_id,
+                outcome: outcome.clone(),
+            },
+            Answer::Elicitation(action) => AcpClientEvent::ElicitationSettled {
+                request_id,
+                action: action.clone(),
+            },
+        }
+    }
+
+    /// The turn a session is running, if it is running one.
+    fn turn_of(&self, session_id: &v1::SessionId) -> Option<AcpTurnId> {
+        self.attachments
+            .get(session_id)?
+            .active_turn
+            .as_ref()
+            .map(|turn| turn.turn_id)
+    }
+
+    /// Copy the open seats back onto the attachment a host reads.
+    fn republish(&mut self, session_id: &v1::SessionId) {
+        let permissions: Vec<_> = self
+            .seats
+            .iter()
+            .filter(|seat| {
+                &seat.session_id == session_id
+                    && matches!(seat.interaction, Interaction::Permission { .. })
+            })
+            .map(|seat| seat.request_id)
+            .collect();
+        let elicitations: Vec<_> = self
+            .seats
+            .iter()
+            .filter(|seat| {
+                &seat.session_id == session_id
+                    && matches!(seat.interaction, Interaction::Elicitation { .. })
+            })
+            .map(|seat| seat.request_id)
+            .collect();
+        if let Some(attachment) = self.attachments.get_mut(session_id) {
+            attachment.pending_permission_ids = permissions;
+            attachment.pending_elicitation_ids = elicitations;
         }
     }
 
@@ -256,7 +572,10 @@ impl ConnectionActor {
     pub(super) fn accept(&mut self, accepted: Accepted) -> bool {
         match accepted {
             Accepted::Settled(pending) => self.settle(*pending),
-            Accepted::Update(notification) => self.project(*notification),
+            Accepted::Inbound(inbound) => match *inbound {
+                Inbound::Update(notification) => self.project(*notification),
+                Inbound::Interaction(interaction) => self.seat(*interaction),
+            },
         }
     }
 
@@ -518,6 +837,13 @@ impl ConnectionActor {
             return Ok(());
         }
 
+        // Before the agent is told to stop, and not after: every seat this
+        // session is waiting on is answered with the outcome that grants
+        // nothing. A person is not going to answer a question belonging to a
+        // turn that is being cancelled, and an unanswered request would keep
+        // the agent waiting on the very turn it was asked to abandon.
+        self.sweep(session_id);
+
         connection
             .send_notification(v1::CancelNotification::new(session_id.clone()))
             .map_err(|error| {
@@ -672,7 +998,7 @@ impl ConnectionActor {
 /// is a pointer rather than the largest thing either arm can carry.
 pub(super) enum Accepted {
     Settled(Box<Pending>),
-    Update(Box<v1::SessionNotification>),
+    Inbound(Box<Inbound>),
 }
 
 /// The capability a content block needs before it may be sent.
