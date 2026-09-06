@@ -929,12 +929,20 @@ requests (`focus=false`) do not change repository context.
    messages, which left a timed-out waiter with `since=0` as its only recoverable value and made it
    reload the whole history on the next call. Wait never consumes the
    authoritative inbox; actual FIFO eviction is still reported by `missed_count` on inbox reads.
-   Both wait actions subscribe before their initial state check and then sleep on inbox or
-   per-session lifecycle events; they do not run an internal polling loop.
-   `session action=wait` validates `session_id` against the live session registry first and
-   returns `{"error": "Unknown session …"}` immediately for an id that is not a real session —
-   subscribing creates the per-session broadcast channel for whatever id it is given, and
-   teardown only reaps ids that were real sessions.
+   Both wait actions sleep on inbox or per-session lifecycle events; they do not run an internal
+   polling loop. `session action=wait` resolves in three steps, in this order:
+
+   1. **Already met?** Answer straight away. `until=exited` reads the exit-code tombstone, which
+      outlives the session: `mark_session_exited` records the exit code and *then* drops the
+      `sessions` entry, so a just-reaped child satisfies the wait while failing the liveness check
+      below. Checking liveness first turned the one outcome `until=exited` exists to report into
+      `Unknown session`. This step subscribes to nothing.
+   2. **Live session?** Otherwise `session_id` is validated against the live session registry and an
+      id that is not a real session gets `{"error": "Unknown session …"}` immediately — subscribing
+      creates the per-session broadcast channel for whatever id it is given, and teardown only reaps
+      ids that were real sessions.
+   3. **Subscribe, then re-read state**, so a transition landing between step 1 and the subscription
+      is still seen and no wake is lost.
 
 Low-risk response compaction also omits an absent peer `project` from `list_peers` and an absent
 `parent_session_id` from standalone spawn responses. Proxied upstream tool payloads are unchanged.

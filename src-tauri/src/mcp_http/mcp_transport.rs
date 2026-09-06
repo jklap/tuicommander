@@ -1,6 +1,5 @@
 use crate::pty::{resolve_shell, spawn_reader_thread};
-use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VT_LOG_BUFFER_CAPACITY, VtLogBuffer};
-use crate::{AppState, MAX_CONCURRENT_SESSIONS, OutputRingBuffer, PtySession};
+use crate::{AppState, MAX_CONCURRENT_SESSIONS, PtySession};
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -1890,6 +1889,15 @@ async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) ->
         return serde_json::json!({"error": "wait 'until' must be 'idle' or 'exited'"});
     }
     let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
+    // Answer an already-satisfied wait first, before the liveness guard below.
+    // `mark_session_exited` records the exit code and THEN drops the `sessions`
+    // entry, so a just-reaped child satisfies `until=exited` from its tombstone
+    // while failing that guard — checking liveness first turned the one outcome
+    // `until=exited` exists to report into `Unknown session`. This path
+    // subscribes to nothing, so it cannot leak a channel either.
+    if session_wait_met(state, &session_id, until) {
+        return session_wait_response(state, &session_id, until, true);
+    }
     // Reject an unknown session BEFORE subscribing. `subscribe_pty_events` uses
     // the DashMap entry API, so it CREATES a 256-slot broadcast channel for
     // whatever id it is handed. Session teardown reaps that entry — but only for
@@ -1901,9 +1909,10 @@ async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) ->
             "error": format!("Unknown session \"{session_id}\"")
         });
     }
-    // Subscribe before checking current state. This closes the lost-wake window
-    // without polling: an earlier transition is visible in state, while a later
-    // one is retained by the per-session event receiver.
+    // Subscribe, then re-read state. This closes the lost-wake window without
+    // polling: a transition landing between the fast path above and this
+    // subscription is still visible in state, while any later one is retained by
+    // the per-session event receiver.
     let mut events = state.subscribe_pty_events(&session_id);
     if session_wait_met(state, &session_id, until) {
         return session_wait_response(state, &session_id, until, true);
@@ -3641,41 +3650,10 @@ fn handle_agent_with_parent_cwd(
             };
 
             let paused = Arc::new(AtomicBool::new(false));
-            state.sessions.insert(
-                session_id.clone(),
-                Mutex::new(PtySession {
-                    writer: Arc::new(Mutex::new(writer)),
-                    master: pair.master,
-                    _child: child,
-                    paused: paused.clone(),
-                    worktree: None,
-                    cwd: effective_cwd.clone(),
-                    display_name: requested_name.clone(),
-                    display_name_is_custom: false,
-                    is_remote: true,
-                    shell: binary_path.clone(),
-                }),
-            );
-            state.assign_term_alias(&session_id);
-            state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
-            state
-                .metrics
-                .active_sessions
-                .fetch_add(1, Ordering::Relaxed);
-            state.output_buffers.insert(
-                session_id.clone(),
-                Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
-            );
-            state.vt_log_buffers.insert(
-                session_id.clone(),
-                Mutex::new(VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY)),
-            );
-            state
-                .last_output_ms
-                .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
-            // Pre-set the session's agent type (mirrors session.rs spawn_pty_session)
-            // so agent_active_for_parse is true from the first output chunk and
-            // intent/suggest tokens are parsed without waiting on foreground polling.
+            // Pre-set the session's agent type so agent_active_for_parse is true
+            // from the first output chunk and intent/suggest tokens are parsed
+            // without waiting on foreground polling. Seeded before registration
+            // because that is what publishes `session-created`.
             let mut session_state = crate::state::SessionState::default();
             if effective_agent_type.is_some() {
                 session_state.hook_instrumented =
@@ -3700,20 +3678,30 @@ fn handle_agent_with_parent_cwd(
                     .or_default()
                     .push_back(crate::state::PendingInjection::peer_message(initial_prompt));
             }
-            // Register grid_watch so format=grid WebSocket streams work for
-            // MCP-spawned agent sessions (mirrors session.rs spawn_pty_session).
-            let grid_watch_tx = crate::grid_gate::new_grid_watch();
-            state.grid_watch.insert(session_id.clone(), grid_watch_tx);
-
-            // Broadcast session-created to SSE/WebSocket consumers
+            // Buffers, alias, metrics, grid watch and the session-created
+            // broadcast, sharing one helper with session::spawn_pty_session so the
+            // VT screen can only ever be built at the geometry the PTY was opened
+            // with.
+            super::session::register_pty_session(
+                state,
+                &session_id,
+                PtySession {
+                    writer: Arc::new(Mutex::new(writer)),
+                    master: pair.master,
+                    _child: child,
+                    paused: paused.clone(),
+                    worktree: None,
+                    cwd: effective_cwd.clone(),
+                    display_name: requested_name.clone(),
+                    display_name_is_custom: false,
+                    is_remote: true,
+                    shell: binary_path.clone(),
+                },
+                rows,
+                cols,
+                effective_agent_type.clone(),
+            );
             let cwd_str = effective_cwd.clone();
-            let agent_type_str = effective_agent_type.clone();
-            state.emit_pty_event(crate::state::AppEvent::SessionCreated {
-                session_id: session_id.clone(),
-                cwd: cwd_str.clone(),
-                agent_type: agent_type_str,
-                display_name: requested_name.clone(),
-            });
 
             #[cfg(feature = "desktop")]
             {
@@ -6481,6 +6469,7 @@ pub(crate) fn test_validate_mcp_repo_path(path: &str) -> Result<(), serde_json::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OutputRingBuffer;
     use base64::Engine;
 
     fn upstream_passthrough_result() -> serde_json::Value {
@@ -9759,6 +9748,205 @@ mod tests {
         assert!(
             started.elapsed() < std::time::Duration::from_secs(1),
             "it must fail fast, not block for the full timeout"
+        );
+    }
+
+    /// Block until `pid` has exited, WITHOUT reaping it.
+    ///
+    /// `WNOWAIT` leaves the zombie intact, so the `try_wait` inside
+    /// `mark_session_exited` still finds the status — a test that reaps the child
+    /// itself consumes it single-shot and makes the production path record
+    /// nothing. This is a real signal, not a poll against a wall clock: there is
+    /// no interval to tune and no deadline that can fire on a loaded machine and
+    /// accuse the wrong subsystem.
+    #[cfg(unix)]
+    fn await_child_exit_without_reaping(pid: u32) {
+        loop {
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let rc = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            };
+            if rc == 0 {
+                return;
+            }
+            let err = std::io::Error::last_os_error();
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::Interrupted,
+                "waitid on test child {pid} failed: {err}"
+            );
+        }
+    }
+
+    /// The state `until=exited` exists to report is the state the unknown-session
+    /// guard rejected. `mark_session_exited` records the exit code and THEN drops
+    /// the `sessions` entry, so from the instant the child dies the wait answered
+    /// `Unknown session "<id>"` — an error naming the very session the caller had
+    /// just been handed, for the one outcome it was waiting on.
+    ///
+    /// The guard itself stays: `subscribe_pty_events` builds a channel for any id
+    /// it is handed. What had to move is the already-met check, which reads
+    /// `exit_codes` and subscribes to nothing.
+    ///
+    /// Both halves are driven for real — `mark_session_exited` builds the
+    /// tombstone, the wait reads it — so a reorder that stopped recording the exit
+    /// code before dropping the session would fail here too. No reader thread is
+    /// started, so nothing races this test for the child's status.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_wait_until_exited_reports_a_just_reaped_session() {
+        let state = test_state();
+        insert_managed_test_session(&state, "reaped", "/tmp");
+        let pid = state
+            .sessions
+            .get("reaped")
+            .and_then(|entry| entry.value().lock()._child.process_id())
+            .expect("test child reports a pid");
+        await_child_exit_without_reaping(pid);
+
+        crate::pty::mark_session_exited("reaped", &state);
+        assert_eq!(
+            state.exit_codes.get("reaped").map(|e| *e.value()),
+            Some(0),
+            "mark_session_exited must record the exit code"
+        );
+        assert!(
+            !state.sessions.contains_key("reaped"),
+            "…and then drop the session entry — that pairing is the whole defect"
+        );
+
+        let channels_before = state.pty_event_channels.len();
+        let r = handle_session_wait(
+            &state,
+            &serde_json::json!({
+                "action": "wait",
+                "session_id": "reaped",
+                "until": "exited",
+                "timeout_ms": 5_000,
+            }),
+        )
+        .await;
+
+        assert!(
+            r.get("error").is_none(),
+            "a reaped session must not read as unknown: {r}"
+        );
+        assert_eq!(r["met"], true, "{r}");
+        assert_eq!(r["timed_out"], false, "{r}");
+        assert_eq!(
+            r["exit_code"], 0,
+            "the recorded exit code must come back, not be omitted: {r}"
+        );
+        assert_eq!(
+            state.pty_event_channels.len(),
+            channels_before,
+            "an already-met wait must not subscribe to anything"
+        );
+    }
+
+    /// A wait on an id that was never a session still fails fast, and still
+    /// without leaving a broadcast channel behind — the tombstone fast path above
+    /// runs first, so it must not weaken that guard.
+    ///
+    /// The elapsed bound IS the subject here: "fails fast" is the claim, and the
+    /// 5 s request it must not honour gives it a 5x margin.
+    #[tokio::test]
+    async fn session_wait_until_exited_still_rejects_an_id_that_never_existed() {
+        let state = test_state();
+        let started = std::time::Instant::now();
+
+        let r = handle_session_wait(
+            &state,
+            &serde_json::json!({
+                "action": "wait",
+                "session_id": "never-existed",
+                "until": "exited",
+                "timeout_ms": 5_000,
+            }),
+        )
+        .await;
+
+        assert!(
+            r["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Unknown session"),
+            "unexpected response: {r}"
+        );
+        assert!(
+            state.pty_event_channels.is_empty(),
+            "an unknown id must not leave a broadcast channel behind"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "it must fail fast, not block for the full timeout"
+        );
+    }
+
+    /// `agent spawn` sized its VT screen at a hardcoded 24x220 while handing the
+    /// PTY the caller's rows/cols. Everything that reads the screen — agent-state
+    /// detection, choice prompts, the chrome cutoff — then parsed a grid the child
+    /// had never drawn into: a 40-row child lost its bottom 16 rows, which is
+    /// exactly where an agent's input box and dialog footer sit.
+    ///
+    /// Nothing here waits on the child. The VT screen is sized at registration, so
+    /// it is already correct or already wrong the moment `spawn` returns, and the
+    /// reader thread only feeds this buffer from a non-empty read — which a silent
+    /// `true` never produces. The probe below clears the screen inside the same
+    /// lock scope, so even a child that did print could not colour the result.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn agent_spawn_sizes_the_vt_screen_to_the_pty() {
+        let state = test_state();
+        let spawned = handle_mcp_tool_call_with_context(
+            &state,
+            "127.0.0.1:0".parse().unwrap(),
+            "agent",
+            &serde_json::json!({
+                "action": "spawn",
+                "name": "geometry-child",
+                "prompt": "verify geometry",
+                "binary_path": "/usr/bin/true",
+                "rows": 40,
+                "cols": 300,
+            }),
+            None,
+            None,
+        )
+        .await;
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let session_id = spawned["session_id"]
+            .as_str()
+            .expect("spawn returns a session id")
+            .to_string();
+
+        // Height reads straight off the grid; width is only observable through
+        // wrapping, so it needs a probe on a known-clean screen.
+        let probe = format!("\x1b[2J\x1b[H{}", "x".repeat(260));
+        let rows = {
+            let vt = state
+                .vt_log_buffers
+                .get(&session_id)
+                .expect("spawn registers a VT screen");
+            let mut buffer = vt.lock();
+            buffer.process(probe.as_bytes());
+            buffer.screen_rows()
+        };
+        assert_eq!(
+            rows.len(),
+            40,
+            "the VT screen must be as tall as the PTY the child was given"
+        );
+        assert_eq!(
+            rows[0].len(),
+            260,
+            "260 columns must fit on one row of a 300-column PTY, not wrap at a \
+             hardcoded 220"
         );
     }
 
