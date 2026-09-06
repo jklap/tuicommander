@@ -5,7 +5,7 @@ import { resolveRepoPathFor } from "../stores/repositories";
 import type { DirEntry } from "../types/fs";
 import { extractPlanMetadata } from "../utils/frontmatter";
 import { isAbsolutePath, joinPath, pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
-import type { PluginHost, TuiPlugin } from "./types";
+import type { Disposable, PluginHost, TuiPlugin } from "./types";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -56,6 +56,7 @@ class PlanPlugin implements TuiPlugin {
 	private plans = new Map<string, PlanEntry>();
 	private unlistenDirChanged: (() => void) | null = null;
 	private watchedPlansDir: string | null = null;
+	private unlistenStateChange: Disposable | null = null;
 
 	onload(host: PluginHost): void {
 		this.plans.clear();
@@ -113,10 +114,33 @@ class PlanPlugin implements TuiPlugin {
 			appLogger.info("plugin", `[plan] openPlanTab result: tabId=${tabId}`);
 		});
 
+		// A plan plugin reads plans/ from the working tree, so it must rescan whenever the
+		// active repo changes (repositoriesStore.getRevision is for reactive Solid panels;
+		// this plugin is a plain class, so it hooks the same active-repo transition via
+		// PluginHost.onStateChange — see storiesTickerPlugin for the same pattern).
+		this.unlistenStateChange = host.onStateChange((event) => {
+			if (event.type !== "repo-changed") return;
+			this.stopWatchingPlansDir();
+			const repoPath = host.getActiveRepoPath();
+			if (!repoPath) return;
+			this.scanPlansDirectory(repoPath);
+			this.watchPlansDir(repoPath);
+		});
+
 		const activeRepo = host.getActiveRepoPath();
 		if (activeRepo) {
 			this.scanPlansDirectory(activeRepo);
 			this.watchPlansDir(activeRepo);
+		}
+	}
+
+	/** Stop the plans/ dir watcher and its dir-changed listener, if active. */
+	private stopWatchingPlansDir(): void {
+		this.unlistenDirChanged?.();
+		this.unlistenDirChanged = null;
+		if (this.watchedPlansDir) {
+			invoke("stop_dir_watcher", { path: this.watchedPlansDir }).catch(() => {});
+			this.watchedPlansDir = null;
 		}
 	}
 
@@ -259,20 +283,10 @@ class PlanPlugin implements TuiPlugin {
 
 	onunload(): void {
 		this.plans.clear();
-		this.unlistenDirChanged?.();
-		this.unlistenDirChanged = null;
-		if (this.watchedPlansDir) {
-			invoke("stop_dir_watcher", { path: this.watchedPlansDir }).catch(() => {});
-			this.watchedPlansDir = null;
-		}
+		this.stopWatchingPlansDir();
+		this.unlistenStateChange?.dispose();
+		this.unlistenStateChange = null;
 	}
 }
 
-const planPluginInstance = new PlanPlugin();
-export const planPlugin: TuiPlugin = planPluginInstance;
-
-/** Scan a repo's plans/ directory and populate the plans panel.
- *  Safe to call multiple times — uses stable IDs for dedup. */
-export function scanPlans(repoPath: string): void {
-	planPluginInstance.scanPlansDirectory(repoPath);
-}
+export const planPlugin: TuiPlugin = new PlanPlugin();

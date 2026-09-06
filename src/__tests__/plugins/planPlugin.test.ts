@@ -298,3 +298,86 @@ describe("plan-file session filtering", () => {
 		repositoriesStore.remove("/other/project");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Repo switch rescanning
+// ---------------------------------------------------------------------------
+
+describe("repo switch rescanning", () => {
+	afterEach(() => {
+		repositoriesStore.setActive(null);
+		for (const path of repositoriesStore.getPaths()) repositoriesStore.remove(path);
+	});
+
+	/** Mock invoke to serve list_directory per-repo plan files, no active-plan marker,
+	 *  and a trivial plugin_read_file body so metadata enrichment doesn't error. */
+	function mockPlansPerRepo(byRepo: Record<string, string[]>): void {
+		mockedInvoke.mockImplementation((cmd: string, args?: unknown) => {
+			if (cmd === "list_directory") {
+				const { repoPath } = args as { repoPath: string };
+				const names = byRepo[repoPath] ?? [];
+				return Promise.resolve(names.map((name) => ({ name, path: name, is_dir: false })));
+			}
+			if (cmd === "read_external_file") return Promise.reject(new Error("not found"));
+			if (cmd === "plugin_read_file") return Promise.resolve("# Plan");
+			return Promise.resolve(undefined);
+		});
+	}
+
+	it("rescans the newly active repo's plans/ directory on repo switch", async () => {
+		repositoriesStore.add({ path: "/repoA", displayName: "A" });
+		repositoriesStore.add({ path: "/repoB", displayName: "B" });
+		pluginRegistry.register(planPlugin);
+		mockPlansPerRepo({ "/repoA": ["a.md"], "/repoB": ["b.md"] });
+
+		repositoriesStore.setActive("/repoA");
+		pluginRegistry.notifyStateChange({ type: "repo-changed", sessionId: null, terminalId: "", detail: "/repoA" });
+		await flushMicrotasks();
+		await flushMicrotasks();
+		expect(getPlans().has("/repoA/a.md")).toBe(true);
+		expect(getPlans().has("/repoB/b.md")).toBe(false);
+
+		repositoriesStore.setActive("/repoB");
+		pluginRegistry.notifyStateChange({ type: "repo-changed", sessionId: null, terminalId: "", detail: "/repoB" });
+		await flushMicrotasks();
+		await flushMicrotasks();
+		expect(getPlans().has("/repoB/b.md")).toBe(true);
+	});
+
+	it("does not reopen a duplicate tab for the active plan when returning to a previously-scanned repo", async () => {
+		repositoriesStore.add({ path: "/repoA", displayName: "A" });
+		pluginRegistry.register(planPlugin);
+		mockedInvoke.mockImplementation((cmd: string, args?: unknown) => {
+			if (cmd === "list_directory") return Promise.resolve([]);
+			if (cmd === "read_external_file") {
+				const { path } = args as { path: string };
+				if (path === "/repoA/.claude/active-plan.json") {
+					return Promise.resolve(JSON.stringify({ path: "/repoA/plans/active.md" }));
+				}
+				return Promise.reject(new Error("not found"));
+			}
+			if (cmd === "plugin_read_file") return Promise.resolve("# Plan");
+			return Promise.resolve(undefined);
+		});
+
+		repositoriesStore.setActive("/repoA");
+		pluginRegistry.notifyStateChange({ type: "repo-changed", sessionId: null, terminalId: "", detail: "/repoA" });
+		await flushMicrotasks();
+		await flushMicrotasks();
+		const firstTabId = mdTabsStore.addFileBackground("/repoA", "plans/active.md");
+		// The tab already exists from the rescan above — a second explicit open must dedupe.
+		expect(firstTabId).toBeNull();
+
+		repositoriesStore.setActive(null);
+		pluginRegistry.notifyStateChange({ type: "repo-changed", sessionId: null, terminalId: "", detail: undefined });
+		await flushMicrotasks();
+
+		repositoriesStore.setActive("/repoA");
+		pluginRegistry.notifyStateChange({ type: "repo-changed", sessionId: null, terminalId: "", detail: "/repoA" });
+		await flushMicrotasks();
+		await flushMicrotasks();
+
+		const secondTabId = mdTabsStore.addFileBackground("/repoA", "plans/active.md");
+		expect(secondTabId).toBeNull();
+	});
+});
