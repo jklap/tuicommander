@@ -215,6 +215,29 @@ impl Interaction {
         }
     }
 
+    /// Whether this is a question this client said it would put to a person.
+    ///
+    /// `initialize` advertises `elicitation.form` and nothing else, so a `url`
+    /// mode — or one from a version this client has never seen — is a question
+    /// the agent was told would not be taken. The protocol says a client that
+    /// does not understand a mode must not render it as one it does, and
+    /// seating is how rendering happens here: the request goes on the
+    /// attachment and a frontend draws the form it knows how to draw. A URL
+    /// elicitation drawn as a form is worse than a refusal, because the one
+    /// thing it is asking — go and look at this address — is what a form has
+    /// nowhere to put.
+    ///
+    /// Permissions have no equivalent: there is one shape of them, and
+    /// advertising the capability at all is advertising the whole of it.
+    fn advertised(&self) -> bool {
+        match self {
+            Self::Permission { .. } => true,
+            Self::Elicitation { request, .. } => {
+                matches!(request.mode, v1::ElicitationMode::Form(_))
+            }
+        }
+    }
+
     /// The answer that settles this request without granting anything.
     fn refusal(&self) -> Answer {
         match self {
@@ -297,13 +320,25 @@ pub(super) struct ConnectionActor {
     /// actor decided to ask. Reading it belongs to the supervisor: the actor
     /// can refuse an operation but cannot end a connection.
     contradicted: Arc<AtomicBool>,
+    /// Where a host reads this connection's attachments from.
+    ///
+    /// A callback rather than the manager's map, because the actor's business
+    /// is what the attachments *are* and not where they are kept. What it buys
+    /// is the ordering: the actor can publish and only then answer, in one
+    /// stretch of its own code, so no caller can be handed a result the
+    /// snapshot has not caught up with yet.
+    publish: Publish,
 }
+
+/// Hand a host the attachments as they now stand.
+pub(super) type Publish = Arc<dyn Fn(Vec<AcpAttachmentSnapshot>) + Send + Sync>;
 
 impl ConnectionActor {
     pub(super) fn new(
         connection_id: AcpConnectionId,
         capabilities: Arc<AcpCapabilitySnapshot>,
         journal: Arc<AcpEventJournal>,
+        publish: Publish,
     ) -> Self {
         Self {
             connection_id,
@@ -312,7 +347,17 @@ impl ConnectionActor {
             attachments: HashMap::new(),
             seats: Vec::new(),
             contradicted: Arc::new(AtomicBool::new(false)),
+            publish,
         }
+    }
+
+    /// Show a host what this connection is attached to, as it now stands.
+    ///
+    /// Called before the answer that made it true is sent, never after: a
+    /// caller that reads the snapshot the instant its request returns must not
+    /// see the connection as it was before it asked.
+    fn publish(&self) {
+        (self.publish)(self.attachments());
     }
 
     /// Whether the agent has denied something it advertised.
@@ -331,7 +376,7 @@ impl ConnectionActor {
     /// about. Sorting by id is enough to stop that; it also happens to be
     /// creation order against ego, whose session ids are UUIDv7, but the
     /// ordering is chosen for stability and does not depend on that.
-    pub(super) fn attachments(&self) -> Vec<AcpAttachmentSnapshot> {
+    fn attachments(&self) -> Vec<AcpAttachmentSnapshot> {
         let mut attachments: Vec<_> = self.attachments.values().cloned().collect();
         attachments.sort_by(|left, right| left.session_id.0.cmp(&right.session_id.0));
         attachments
@@ -342,6 +387,14 @@ impl ConnectionActor {
     /// Nothing here waits for an answer. What is returned goes into
     /// `in_flight`, and the actor is free to read the next command — which is
     /// what lets a cancel reach a prompt that is still running.
+    ///
+    /// Most commands change nothing until their answer comes back, but three
+    /// change something the moment they are decided: a prompt starts a turn, a
+    /// cancel sweeps the seats that turn was waiting on, and an answer takes a
+    /// seat away. Those publish here. Without it the connection snapshot would
+    /// go on saying a session is idle for as long as a turn takes to produce
+    /// its first update — which, for a model thinking, is exactly the stretch
+    /// where a host most needs to know otherwise.
     pub(super) fn handle(
         &mut self,
         command: Command,
@@ -621,36 +674,43 @@ impl ConnectionActor {
     /// scoped to something else, or a permission for a session it let go, is one
     /// no person can ever be shown. Holding it would leave the agent waiting on
     /// a human who does not exist.
-    fn seat(&mut self, interaction: Interaction) -> bool {
+    ///
+    /// A request in a mode this client never advertised gets the same answer,
+    /// for a different reason and with the same honesty: see
+    /// [`Interaction::advertised`]. Either way the agent is told at once, in the
+    /// vocabulary it asked in.
+    fn seat(&mut self, interaction: Interaction) {
         let request_id = AcpHostRequestId::new();
         let session_id = match interaction.session_id() {
-            Some(session_id) if self.attachments.contains_key(&session_id) => session_id,
-            unattached => {
+            Some(session_id)
+                if interaction.advertised() && self.attachments.contains_key(&session_id) =>
+            {
+                session_id
+            }
+            unseatable => {
                 // Both halves are recorded even though no one could have acted
                 // on them: a host reading the stream is owed the fact that the
                 // agent asked, and that the answer it got was nobody's.
                 self.journal
-                    .append(unattached.clone(), None, interaction.requested(request_id));
+                    .append(unseatable.clone(), None, interaction.requested(request_id));
                 let refusal = interaction.refusal();
                 let event = Self::settled(request_id, &refusal);
                 interaction.answer(refusal);
-                self.journal.append(unattached, None, event);
-                return false;
+                self.journal.append(unseatable, None, event);
+                return;
             }
         };
 
-        self.journal.append(
-            Some(session_id.clone()),
-            self.turn_of(&session_id),
-            interaction.requested(request_id),
-        );
+        let turn_id = self.turn_of(&session_id);
+        let asked = interaction.requested(request_id);
         self.seats.push(Seat {
             request_id,
             session_id: session_id.clone(),
             interaction,
         });
         self.republish(&session_id);
-        true
+        self.publish();
+        self.journal.append(Some(session_id), turn_id, asked);
     }
 
     /// Answer one open seat, once.
@@ -670,13 +730,12 @@ impl ConnectionActor {
 
         let seat = self.seats.remove(index);
         let event = Self::settled(request_id, &answer);
+        let turn_id = self.turn_of(&seat.session_id);
         seat.interaction.answer(answer);
-        self.journal.append(
-            Some(seat.session_id.clone()),
-            self.turn_of(&seat.session_id),
-            event,
-        );
         self.republish(&seat.session_id);
+        self.publish();
+        self.journal
+            .append(Some(seat.session_id.clone()), turn_id, event);
         Ok(AcpInteractionSettlement { request_id })
     }
 
@@ -692,17 +751,16 @@ impl ConnectionActor {
                 index += 1;
             }
         }
+        self.republish(session_id);
+        self.publish();
         for seat in swept {
             let refusal = seat.interaction.refusal();
             let event = Self::settled(seat.request_id, &refusal);
+            let turn_id = self.turn_of(&seat.session_id);
             seat.interaction.answer(refusal);
-            self.journal.append(
-                Some(seat.session_id.clone()),
-                self.turn_of(&seat.session_id),
-                event,
-            );
+            self.journal
+                .append(Some(seat.session_id.clone()), turn_id, event);
         }
-        self.republish(session_id);
     }
 
     fn pending_interactions(&self) -> Vec<AcpPendingInteraction> {
@@ -743,7 +801,16 @@ impl ConnectionActor {
                     &selected.option_id,
                 ))
             }
-            (Interaction::Elicitation { .. }, Answer::Elicitation(_)) => Ok(()),
+            (Interaction::Elicitation { .. }, Answer::Elicitation(action)) => {
+                let v1::ElicitationAction::Other(other) = action else {
+                    return Ok(());
+                };
+                Err(AcpClientError::undefined_action(
+                    self.connection_id,
+                    seat.session_id.clone(),
+                    &other.action,
+                ))
+            }
             _ => Err(AcpClientError::invalid_input(
                 "this answer does not belong to the request it names",
             )),
@@ -799,10 +866,7 @@ impl ConnectionActor {
     }
 
     /// Take in one answer we asked for, or one piece of news we did not.
-    ///
-    /// Returns whether the attachment list changed, so the caller republishes
-    /// exactly when there is something new to say.
-    pub(super) fn accept(&mut self, accepted: Accepted) -> bool {
+    pub(super) fn accept(&mut self, accepted: Accepted) {
         match accepted {
             Accepted::Settled(pending) => self.settle(*pending),
             Accepted::Inbound(inbound) => match *inbound {
@@ -812,7 +876,7 @@ impl ConnectionActor {
         }
     }
 
-    fn settle(&mut self, pending: Pending) -> bool {
+    fn settle(&mut self, pending: Pending) {
         match pending {
             Pending::Attach {
                 outcome,
@@ -820,9 +884,7 @@ impl ConnectionActor {
                 reply,
             } => {
                 let outcome = outcome.map(|attached| self.record(attached, authority));
-                let changed = outcome.is_ok();
                 let _ = reply.send(outcome);
-                changed
             }
             Pending::Detach {
                 session_id,
@@ -832,8 +894,8 @@ impl ConnectionActor {
                 // A refused detach keeps the attachment on purpose: the agent
                 // still has the session, and forgetting it here would leave a
                 // live session nothing in this client can reach.
-                let changed = outcome.is_ok() && self.attachments.remove(&session_id).is_some();
-                if changed {
+                if outcome.is_ok() && self.attachments.remove(&session_id).is_some() {
+                    self.publish();
                     self.journal.append(
                         Some(session_id),
                         None,
@@ -841,12 +903,8 @@ impl ConnectionActor {
                     );
                 }
                 let _ = reply.send(outcome);
-                changed
             }
-            Pending::List { outcome, reply } => {
-                let _ = reply.send(outcome);
-                false
-            }
+            Pending::List { outcome, reply } => drop(reply.send(outcome)),
             Pending::Turn {
                 session_id,
                 turn_id,
@@ -862,28 +920,23 @@ impl ConnectionActor {
                 // The agent is the authority on what setting one did to the
                 // others, and a client that merged would be guessing.
                 let outcome = outcome.map(|response| response.config_options);
-                let changed = match (&outcome, self.attachments.get_mut(&session_id)) {
-                    (Ok(options), Some(attachment)) => {
-                        attachment.config_options = options.clone();
-                        true
-                    }
-                    _ => false,
-                };
+                if let (Ok(options), Some(attachment)) =
+                    (&outcome, self.attachments.get_mut(&session_id))
+                {
+                    attachment.config_options = options.clone();
+                    self.publish();
+                }
                 let _ = reply.send(outcome);
-                changed
             }
             Pending::Hold {
                 session_id,
                 outcome,
                 reply,
             } => self.settle_hold(&session_id, outcome, reply),
-            Pending::Compact { outcome, reply } => {
-                // Nothing on this attachment changes. The successor is a
-                // different session that this connection is not attached to,
-                // and attaching to it is a separate decision a caller makes.
-                let _ = reply.send(outcome);
-                false
-            }
+            // Nothing on this attachment changes. The successor is a different
+            // session that this connection is not attached to, and attaching to
+            // it is a separate decision a caller makes.
+            Pending::Compact { outcome, reply } => drop(reply.send(outcome)),
         }
     }
 
@@ -893,9 +946,9 @@ impl ConnectionActor {
     /// rather than attached to whichever session happens to be there: it
     /// belongs to a session that was closed or was never ours, and guessing an
     /// owner would put one turn's output into another turn's transcript.
-    fn project(&mut self, notification: v1::SessionNotification) -> bool {
+    fn project(&mut self, notification: v1::SessionNotification) {
         let Some(attachment) = self.attachments.get_mut(&notification.session_id) else {
-            return false;
+            return;
         };
         let turn_id = attachment.active_turn.as_ref().map(|turn| turn.turn_id);
         let changed = if let v1::SessionUpdate::UsageUpdate(usage) = &notification.update {
@@ -910,12 +963,14 @@ impl ConnectionActor {
         } else {
             false
         };
+        if changed {
+            self.publish();
+        }
         self.journal.append(
             Some(notification.session_id),
             turn_id,
             AcpClientEvent::SessionUpdate(Box::new(notification.update)),
         );
-        changed
     }
 
     fn start_new_session(
@@ -954,6 +1009,18 @@ impl ConnectionActor {
         let operation = kind.operation();
         self.require(operation)?;
         self.require_authority(authority)?;
+        // Load and resume name the session they attach to; a fork names the one
+        // it forks *from* and comes back with an id of its own, so only these
+        // two can land on an attachment this connection already holds. Landing
+        // on one would overwrite the running turn, the usage and the open
+        // interaction ids with the empty state of a fresh attachment — while
+        // the seats themselves survive, so the two would then disagree.
+        if !matches!(kind, AcpAttachKind::Fork) && self.attachments.contains_key(&session_id) {
+            return Err(AcpClientError::already_attached(
+                self.connection_id,
+                session_id,
+            ));
+        }
         let operation = Some(operation);
         let cwd = authority.cwd.clone();
         let roots = authority.additional_directories.clone();
@@ -1071,6 +1138,7 @@ impl ConnectionActor {
             stop_reason: None,
             usage: None,
         });
+        self.publish();
         self.journal.append(
             Some(session_id.clone()),
             Some(turn_id),
@@ -1125,6 +1193,7 @@ impl ConnectionActor {
         if let Some(turn) = attachment.active_turn.as_mut() {
             turn.state = AcpTurnState::Cancelling;
         }
+        self.publish();
         Ok(())
     }
 
@@ -1139,14 +1208,14 @@ impl ConnectionActor {
         session_id: &v1::SessionId,
         outcome: Result<EgoHoldResponse, AcpClientError>,
         reply: Reply<EgoHoldResponse>,
-    ) -> bool {
+    ) {
         let Ok(response) = &outcome else {
             let _ = reply.send(outcome);
-            return false;
+            return;
         };
         let Some(attachment) = self.attachments.get_mut(session_id) else {
             let _ = reply.send(outcome);
-            return false;
+            return;
         };
 
         let state = match response.state {
@@ -1164,6 +1233,7 @@ impl ConnectionActor {
         attachment.state = state;
         let turn_id = attachment.active_turn.as_ref().map(|turn| turn.turn_id);
         if changed {
+            self.publish();
             self.journal.append(
                 Some(session_id.clone()),
                 turn_id,
@@ -1171,7 +1241,6 @@ impl ConnectionActor {
             );
         }
         let _ = reply.send(outcome);
-        changed
     }
 
     /// Close out a turn on the answer that actually settles it.
@@ -1180,15 +1249,15 @@ impl ConnectionActor {
         session_id: &v1::SessionId,
         turn_id: AcpTurnId,
         outcome: Result<v1::PromptResponse, AcpClientError>,
-    ) -> bool {
+    ) {
         let Some(attachment) = self.attachments.get_mut(session_id) else {
-            return false;
+            return;
         };
         // A response for a turn that is no longer the active one belongs to a
         // turn that was already settled; applying it would rewrite the outcome
         // of whatever is running now.
         if attachment.active_turn.as_ref().map(|turn| turn.turn_id) != Some(turn_id) {
-            return false;
+            return;
         }
 
         attachment.state = AcpAttachmentState::Idle;
@@ -1218,9 +1287,9 @@ impl ConnectionActor {
                 AcpClientEvent::AttachmentState(AcpAttachmentState::Idle)
             }
         };
+        self.publish();
         self.journal
             .append(Some(session_id.clone()), Some(turn_id), event);
-        true
     }
 
     /// Remember what this connection is now attached to.
@@ -1240,13 +1309,14 @@ impl ConnectionActor {
             pending_permission_ids: Vec::new(),
             pending_elicitation_ids: Vec::new(),
         };
+        self.attachments
+            .insert(attachment.session_id.clone(), attachment.clone());
+        self.publish();
         self.journal.append(
             Some(attachment.session_id.clone()),
             None,
             AcpClientEvent::AttachmentState(AcpAttachmentState::Idle),
         );
-        self.attachments
-            .insert(attachment.session_id.clone(), attachment.clone());
         attachment
     }
 

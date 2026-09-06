@@ -39,6 +39,21 @@ the responder is carried out of the callback and parked. What the tests pin is
 that it is always answered exactly once: by the person, by the cancel that took
 the question away, or immediately when there was no seat to offer.
 
+**Capabilities are checked on the way in too.** `initialize` advertises
+`elicitation.form` and nothing else, so an `elicitation/create` in `url` mode —
+or in one from a version this client has never seen — is declined on arrival
+rather than seated. Seating is how rendering happens here: the request lands on
+the attachment and a frontend draws the form it knows how to draw, which is
+precisely what the protocol says a client must not do with a mode it does not
+understand. A URL elicitation drawn as a form is worse than a refusal, because
+the address it is actually asking about is what a form has nowhere to put.
+
+**A bad answer never costs the person their question.** An answer is validated
+before the seat is taken, so a permission option the agent never offered, or an
+elicitation action outside the protocol's three, is refused with `invalid_input`
+and the question stays open for a real answer. Forwarding either would spend the
+seat on something the agent cannot read, and nobody could then try again.
+
 ## The journal
 
 Every accepted callback and every local settlement is stamped with a sequence
@@ -129,6 +144,18 @@ deliberately does not have:
   next one starts clean. The exception is a malformed line shaped like a
   *response*, which the SDK drops in silence: answering an answer is not a thing
   JSON-RPC can do, so a request it might have been for waits out the connection.
+
+- **A session is attached to a connection at most once.** A `load` or `resume`
+  naming a session this connection already holds is refused with
+  `invalid_input`, not merged and not re-run. The attachment is where the
+  running turn, the usage totals and the ids of the questions a person has open
+  live, and attaching writes a fresh one — so a second attach would blank the
+  turn, and the response that settles it would arrive for a turn nothing names
+  any more and be dropped as stale, leaving a host watching a turn that never
+  ends. The seats, meanwhile, outlive the overwrite, so the two views would then
+  disagree about what is being asked. A host that wants the history replayed
+  detaches first, which says what it means. A fork is not affected: it names the
+  session it forks *from* and comes back with an id of its own.
 
 Changing the first two means a different, asynchronous connect API — one that
 hands back an id before there is a connection behind it, with its own

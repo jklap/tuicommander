@@ -31,6 +31,13 @@ fn selected(option: &str) -> v1::RequestPermissionOutcome {
     ))
 }
 
+/// A filled-in form, in the one shape the `elicitation-turn` scenario expects.
+fn accepted(branch: &str) -> v1::ElicitationAction {
+    let mut accept = v1::ElicitationAcceptAction::new();
+    accept.content = Some([("branch".to_owned(), branch.into())].into_iter().collect());
+    v1::ElicitationAction::Accept(accept)
+}
+
 /// The id the agent's question was seated under.
 ///
 /// Reading it off the stream rather than off a snapshot is deliberate: the
@@ -151,6 +158,75 @@ async fn a_permission_is_seated_answered_and_the_answer_reaches_the_agent() {
         .unwrap();
 }
 
+/// An answered question leaves the attachment before the agent speaks again.
+///
+/// The sibling test above answers a question mid-turn and the agent keeps
+/// talking, and every update it sends republishes the attachment. That makes it
+/// blind to the bug this one is for: a client that dropped the question from
+/// its own state but never told a host would still look right there, repaired
+/// by the next chunk before anybody could read it.
+///
+/// So here the agent goes silent the moment it has its answer. Nothing else can
+/// publish, and the attachment either shows the question gone because answering
+/// published it or shows it still open. A host polls this to decide what to put
+/// in front of a person, and a question that has already been decided is the
+/// one thing it must not still be asking.
+#[tokio::test]
+async fn an_answered_question_leaves_the_attachment_before_the_agent_speaks_again() {
+    let fixture = Fixture::with("permission-then-silence");
+    let connection = fixture.connect().await;
+    let session = fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .expect("session/new");
+
+    let mut stream = fixture
+        .manager
+        .subscribe(connection.connection_id, 0)
+        .expect("subscribe");
+    fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session.session_id.clone(),
+            vec![text("hello")],
+        )
+        .await
+        .expect("session/prompt");
+
+    let request_id = asked(
+        &until(&mut stream, |event| {
+            matches!(event, AcpClientEvent::PermissionRequested { .. })
+        })
+        .await,
+    );
+    let seated = fixture.manager.snapshot(connection.connection_id).unwrap();
+    assert_eq!(
+        seated.attachments[0].pending_permission_ids,
+        vec![request_id],
+        "the question has to be listed first for its removal to mean anything"
+    );
+
+    fixture
+        .manager
+        .respond_permission(connection.connection_id, request_id, selected("allow"))
+        .await
+        .expect("the answer is accepted");
+
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    assert!(
+        snapshot.attachments[0].pending_permission_ids.is_empty(),
+        "the answered question was still listed, and nothing was coming to fix it: {snapshot:?}"
+    );
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
 /// An option the agent never offered is refused here, and the seat stays open.
 ///
 /// Refusing locally rather than forwarding matters because the agent has to
@@ -230,6 +306,192 @@ async fn an_option_the_agent_never_offered_is_refused_and_the_seat_stays_open() 
         .await
         .expect_err("a settled question cannot be answered again");
     assert_eq!(error.code, AcpClientErrorCode::NotFound);
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+/// An elicitation in a mode this client never advertised is declined, not seated.
+///
+/// `initialize` offers `elicitation.form` and nothing else. A `url` mode asks
+/// the client to send a person to an address instead of drawing a form, and the
+/// protocol says in as many words that a client which does not understand a
+/// mode must not render it as one it does. Seating it is exactly that: the
+/// request lands on the attachment and a frontend draws the form it knows how
+/// to draw, from a request whose only real content — the address — has no place
+/// in one. The person is then asked to decide something they were never shown.
+///
+/// So the answer is the one a question with no seat gets. The agent is told
+/// immediately, in the vocabulary it asked in, and it is told by the client
+/// that declared the capability it just ignored.
+#[tokio::test]
+async fn an_elicitation_in_an_unadvertised_mode_is_declined_rather_than_seated() {
+    let fixture = Fixture::with("elicitation-url-mode");
+    let connection = fixture.connect().await;
+    let session = fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .expect("session/new");
+
+    let mut stream = fixture
+        .manager
+        .subscribe(connection.connection_id, 0)
+        .expect("subscribe");
+    fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session.session_id.clone(),
+            vec![text("hello")],
+        )
+        .await
+        .expect("session/prompt");
+
+    let seen = until(&mut stream, |event| {
+        matches!(event, AcpClientEvent::ElicitationSettled { .. })
+    })
+    .await;
+
+    // On the record even though nobody could act on it: a host is owed the fact
+    // that the agent asked for something this client does not do.
+    let requested = seen
+        .iter()
+        .find_map(|event| match &event.event {
+            AcpClientEvent::ElicitationRequested { request, .. } => {
+                Some((event.session_id.as_ref(), request))
+            }
+            _ => None,
+        })
+        .expect("the unadvertised elicitation was recorded");
+    // Asserted rather than assumed. A scenario whose mode quietly failed to
+    // parse would be declined for having no scope at all, and would prove
+    // nothing about the mode this test is named for.
+    assert!(
+        matches!(requested.1.mode, v1::ElicitationMode::Url(_)),
+        "the scenario has to actually deliver a url mode: {:?}",
+        requested.1.mode
+    );
+    assert_eq!(
+        requested.0.map(|id| id.0.as_ref()),
+        Some(SESSION),
+        "it named a session this connection holds, which is why the mode is the only thing wrong"
+    );
+    let settled = seen
+        .iter()
+        .find_map(|event| match &event.event {
+            AcpClientEvent::ElicitationSettled { action, .. } => Some(action),
+            _ => None,
+        })
+        .expect("and the answer it got is on the record too");
+    assert!(matches!(settled, v1::ElicitationAction::Cancel));
+
+    // Nothing was seated, so no person is being asked and no attachment lists it.
+    assert!(
+        fixture
+            .manager
+            .pending_interactions(connection.connection_id)
+            .await
+            .expect("pending interactions")
+            .is_empty()
+    );
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    assert!(snapshot.attachments[0].pending_elicitation_ids.is_empty());
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+/// An elicitation action outside the protocol's three is refused here.
+///
+/// The same rule as the unoffered option id above, on the other seat. ACP has
+/// exactly three actions — accept, decline, cancel — and anything else
+/// deserialises into the catch-all the schema keeps for extensions and future
+/// versions. A frontend can put one there over HTTP, and forwarding it would
+/// mean answering the agent in a vocabulary this client cannot know it speaks.
+///
+/// It also costs the person their question. Answering consumes the seat, so an
+/// action the agent then rejects leaves nobody able to try again: the form is
+/// gone from this client and the agent is left holding an error instead of a
+/// decision. Refusing before the seat is taken keeps the question answerable,
+/// which is the whole reason the permission path refuses rather than forwards.
+///
+/// Not a guess about the agent, either. The one this client launches maps the
+/// catch-all straight to `unsupported elicitation action` — so refusing here
+/// costs nothing that would otherwise have worked, and saves the seat.
+#[tokio::test]
+async fn an_elicitation_action_outside_the_protocol_is_refused_and_the_seat_stays_open() {
+    let fixture = Fixture::with("elicitation-turn");
+    let connection = fixture.connect().await;
+    let session = fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .expect("session/new");
+
+    let mut stream = fixture
+        .manager
+        .subscribe(connection.connection_id, 0)
+        .expect("subscribe");
+    fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session.session_id.clone(),
+            vec![text("hello")],
+        )
+        .await
+        .expect("session/prompt");
+    let request_id = asked(
+        &until(&mut stream, |event| {
+            matches!(event, AcpClientEvent::ElicitationRequested { .. })
+        })
+        .await,
+    );
+
+    let invented = v1::ElicitationAction::Other(v1::OtherElicitationAction::new(
+        "_tuic/approve",
+        Default::default(),
+    ));
+    let error = fixture
+        .manager
+        .respond_elicitation(connection.connection_id, request_id, invented)
+        .await
+        .expect_err("an action the protocol does not define is not an answer");
+    assert_eq!(error.code, AcpClientErrorCode::InvalidInput);
+    assert!(
+        error.message.contains("_tuic/approve"),
+        "the refusal names the action it refused: {error:?}"
+    );
+
+    // Still open, and still answerable.
+    assert_eq!(
+        fixture
+            .manager
+            .pending_interactions(connection.connection_id)
+            .await
+            .expect("pending interactions")
+            .len(),
+        1
+    );
+    fixture
+        .manager
+        .respond_elicitation(connection.connection_id, request_id, accepted("main"))
+        .await
+        .expect("the seat was still there to answer");
+
+    // The scenario asserts the wire answer; a turn that ends proves the agent
+    // read the accept and not the invention.
+    until(&mut stream, |event| {
+        matches!(event, AcpClientEvent::TurnSettled { .. })
+    })
+    .await;
 
     fixture
         .manager

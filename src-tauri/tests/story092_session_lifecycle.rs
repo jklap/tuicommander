@@ -20,7 +20,7 @@ use tuicommander_lib::acp::{
 
 mod acp_support;
 
-use acp_support::{Fixture, authority};
+use acp_support::{Fixture, authority, text};
 
 /// The session ids the scenarios answer with, spelled once.
 const FIRST: &str = "01932d5e-0000-7000-8000-0000000000aa";
@@ -280,6 +280,80 @@ async fn a_resumed_session_attaches_and_a_deleted_one_detaches() {
         snapshot.attachments.is_empty(),
         "a deleted session stayed attached: {snapshot:?}"
     );
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+/// Attaching to a session this connection already holds is refused.
+///
+/// Not tidiness. The attachment is where the running turn, the usage totals and
+/// the ids of the questions a person has open all live, and attaching writes a
+/// fresh one: a second attach would blank the turn, and the response that
+/// settles it would then arrive for a turn the attachment no longer names and
+/// be dropped as stale. A host would be left watching a turn that never ends.
+/// The seats, meanwhile, outlive the overwrite, so the attachment would go on
+/// reporting no pending questions while the agent waits on two.
+///
+/// Refused rather than merged, because there is nothing a second attach can add:
+/// this connection already has the session. A host that wants the history
+/// replayed detaches first, which says what it means.
+///
+/// Only load and resume can collide. A fork names the session it forks *from*
+/// and comes back with an id of its own, so it is a second session rather than
+/// a second attach to one, and nothing here refuses it.
+#[tokio::test]
+async fn a_session_this_connection_already_holds_is_not_attached_twice() {
+    let fixture = Fixture::with("session-attach-twice");
+    let connection = fixture.connect().await;
+    let root = fixture.root();
+
+    fixture
+        .manager
+        .attach(
+            connection.connection_id,
+            AcpAttachKind::Load,
+            session(FIRST),
+            authority(root.clone()),
+        )
+        .await
+        .expect("session/load");
+    let turn = fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session(FIRST),
+            vec![text("what is going on")],
+        )
+        .await
+        .expect("session/prompt");
+
+    for kind in [AcpAttachKind::Load, AcpAttachKind::Resume] {
+        let error = fixture
+            .manager
+            .attach(
+                connection.connection_id,
+                kind,
+                session(FIRST),
+                authority(root.clone()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, AcpClientErrorCode::InvalidInput, "{kind:?}");
+        assert_eq!(error.session_id, Some(session(FIRST)), "{kind:?}");
+    }
+
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    let attachment = snapshot.attachments.first().expect("still attached");
+    assert_eq!(
+        attachment.active_turn.as_ref().map(|active| active.turn_id),
+        Some(turn),
+        "the running turn survived the refused attach"
+    );
+    assert_eq!(attachment.state, AcpAttachmentState::Prompting);
 
     fixture
         .manager
