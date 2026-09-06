@@ -69,6 +69,13 @@ This is why `capability_unavailable` is never retryable: the answer comes from a
 snapshot taken once, so the identical request on this connection will refuse
 identically. Reaching an agent that has it is a different action, not a retry.
 
+The snapshot is also what makes `method_not_found` fatal. Nothing reaches the
+wire that the snapshot did not allow, so a method-not-found coming back is not
+the agent declining — it is the agent disowning what it published, and the one
+thing this client knows about it is no longer true. The caller is answered with
+`protocol_violation`, and only then does the connection settle as failed: a host
+that asked deserves to be told why, not just that the connection is gone.
+
 ## Two transports, one set of judgements
 
 `acp_commands.rs` and `acp_routes.rs` are both thin. Neither decides what is

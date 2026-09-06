@@ -120,13 +120,21 @@ pub(super) fn acp_routes() -> Router<Arc<AppState>> {
 /// at fault. `CapabilityUnavailable` is 501 because the agent, not the caller,
 /// is the one that cannot do it; a settled connection and a lost stream are
 /// both 410 because the resource named in the URL is genuinely gone.
+///
+/// Exhaustive rather than defaulted: 502 is the right answer for every code
+/// that names the agent as the failing party, but it is the wrong answer to
+/// reach by accident, and a catch-all would hand it to the next code somebody
+/// adds without anyone deciding that is what a browser should see.
 fn status_for(code: AcpClientErrorCode) -> StatusCode {
     match code {
         AcpClientErrorCode::InvalidInput => StatusCode::BAD_REQUEST,
         AcpClientErrorCode::NotFound => StatusCode::NOT_FOUND,
         AcpClientErrorCode::CapabilityUnavailable => StatusCode::NOT_IMPLEMENTED,
         AcpClientErrorCode::TransportClosed | AcpClientErrorCode::StreamGap => StatusCode::GONE,
-        _ => StatusCode::BAD_GATEWAY,
+        AcpClientErrorCode::AgentError
+        | AcpClientErrorCode::ProtocolViolation
+        | AcpClientErrorCode::InitializationFailed
+        | AcpClientErrorCode::UnsupportedProtocol => StatusCode::BAD_GATEWAY,
     }
 }
 
@@ -573,6 +581,30 @@ mod tests {
     const CID: &str = "01932d5e-0000-7000-8000-0000000000aa";
     const SID: &str = "01932d5e-0000-7000-8000-0000000000bb";
     const RID: &str = "01932d5e-0000-7000-8000-0000000000cc";
+
+    /// What a plain HTTP client is told, for every code there is.
+    ///
+    /// Written out rather than read back from `status_for`, which would pass
+    /// for whatever that function happened to answer. The point of pinning all
+    /// nine is the four that share 502: they are the codes that name the agent
+    /// as the failing party, and a caller reading only the status must not be
+    /// able to mistake one of them for something it did wrong.
+    #[test]
+    fn every_error_code_carries_the_status_its_half_of_the_exchange_deserves() {
+        for (code, status) in [
+            (AcpClientErrorCode::InvalidInput, 400),
+            (AcpClientErrorCode::NotFound, 404),
+            (AcpClientErrorCode::TransportClosed, 410),
+            (AcpClientErrorCode::StreamGap, 410),
+            (AcpClientErrorCode::CapabilityUnavailable, 501),
+            (AcpClientErrorCode::AgentError, 502),
+            (AcpClientErrorCode::ProtocolViolation, 502),
+            (AcpClientErrorCode::InitializationFailed, 502),
+            (AcpClientErrorCode::UnsupportedProtocol, 502),
+        ] {
+            assert_eq!(status_for(code).as_u16(), status, "{code:?}");
+        }
+    }
 
     fn authority() -> serde_json::Value {
         serde_json::json!({

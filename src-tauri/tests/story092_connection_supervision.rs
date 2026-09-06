@@ -5,7 +5,7 @@ use tuicommander_lib::acp::{
 
 mod acp_support;
 
-use acp_support::Fixture;
+use acp_support::{Fixture, authority};
 
 async fn settled_snapshot(
     manager: &AcpClientManager,
@@ -132,4 +132,42 @@ async fn kill_settles_and_retains_a_killed_snapshot_without_session_operations()
         AcpConnectionSettlementReason::Killed
     );
     assert!(killed.attachments.is_empty());
+}
+
+/// An agent that denies a method it advertised.
+///
+/// Every later decision this client makes is read off the capability snapshot
+/// taken at `initialize`, and the snapshot is immutable on purpose: a host that
+/// was told an operation exists must not find out otherwise one operation at a
+/// time. So a `method_not_found` for something the agent published is not a
+/// refusal to hand back and carry on from — it is the agent contradicting the
+/// only thing this client knows about it, and the connection has nothing left
+/// to offer. `session/new` is the clearest case, because v1 makes it mandatory:
+/// no negotiated option is involved, only the protocol version the agent itself
+/// answered with.
+#[tokio::test]
+async fn an_advertised_method_denied_on_the_wire_fails_the_whole_connection() {
+    let fixture = Fixture::with("denies-advertised-method");
+    let ready = fixture.connect().await;
+    let error = fixture
+        .manager
+        .new_session(ready.connection_id, authority(fixture.root()))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, AcpClientErrorCode::ProtocolViolation);
+    assert!(
+        !error.retryable,
+        "the same agent will contradict itself the same way"
+    );
+
+    let settled = settled_snapshot(&fixture.manager, ready.connection_id).await;
+    assert_eq!(settled.state, AcpConnectionState::Failed);
+    assert_eq!(
+        settled.settlement.unwrap().reason,
+        AcpConnectionSettlementReason::ProtocolViolation
+    );
+    assert_eq!(
+        settled.capabilities, ready.capabilities,
+        "the snapshot is what was contradicted, so it is left exactly as taken"
+    );
 }

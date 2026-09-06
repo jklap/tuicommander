@@ -1713,6 +1713,7 @@ opinion about it:
 | `capability_unavailable` | 501 — the agent never advertised it; the caller did nothing wrong |
 | `transport_closed`, `stream_gap` | 410 — what the URL names is genuinely gone |
 | `unsupported_protocol`, `initialization_failed`, `agent_error` | 502 |
+| `protocol_violation` | 502 — the agent denied a method it advertised; the connection is now failed |
 
 ```
 POST   /acp/connections                                          {root}                    -> AcpConnectionSnapshot

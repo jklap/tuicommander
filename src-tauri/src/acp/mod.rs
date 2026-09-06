@@ -671,6 +671,12 @@ pub enum AcpClientErrorCode {
     CapabilityUnavailable,
     /// The agent answered, and its answer was a refusal.
     AgentError,
+    /// The agent denied a method it had advertised.
+    ///
+    /// Not a refusal but a contradiction of the snapshot every later decision
+    /// on this connection is read from, so it settles the connection rather
+    /// than being handed back as one operation's bad luck.
+    ProtocolViolation,
     /// The connection has settled. A new one is the only way forward.
     TransportClosed,
     /// The events a subscriber asked for are no longer held.
@@ -759,6 +765,25 @@ impl AcpClientError {
     ) -> Self {
         let mut error =
             Self::new(AcpClientErrorCode::AgentError, message).with_connection_id(connection_id);
+        error.operation = operation;
+        error
+    }
+
+    /// The agent denied a method it advertised.
+    ///
+    /// Never retryable, for the same reason `capability_unavailable` is not:
+    /// the request was sent because a snapshot said it could be, and that
+    /// snapshot does not change. Repeating it invites the same contradiction
+    /// from an agent this client can no longer believe about anything else
+    /// either — which is why the connection settles behind this error rather
+    /// than staying up for the next caller to rediscover.
+    pub(super) fn protocol_violation(
+        connection_id: AcpConnectionId,
+        operation: Option<AcpOperation>,
+        message: impl Into<String>,
+    ) -> Self {
+        let mut error = Self::new(AcpClientErrorCode::ProtocolViolation, message)
+            .with_connection_id(connection_id);
         error.operation = operation;
         error
     }
