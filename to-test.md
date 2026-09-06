@@ -617,6 +617,11 @@ that blocked for over a minute.
 - [ ] After the `make dev` restart: a small **untracked** file opens with an
   empty gutter; a tracked file with an unsaved-vs-HEAD edit still shows its
   markers; the diff viewer still shows the untracked file as all added.
+- [ ] Desktop app (WKWebView), after the fix that installs the document with
+  `EditorView.setState` instead of a whole-document dispatch: the same 23 MB
+  file must scroll smoothly, and a small file must still highlight, show its
+  git gutter and its inline blame, and keep undo working across an external
+  reload (edit the file from a terminal while the tab is open).
 
 ## Still needs a human
 
