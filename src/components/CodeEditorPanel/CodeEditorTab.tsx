@@ -21,7 +21,7 @@ import {
 } from "@codemirror/view";
 import { colorPicker } from "@replit/codemirror-css-color-picker";
 import { createCodeMirror, createEditorControlledValue, createEditorReadonly } from "solid-codemirror";
-import { type Component, createEffect, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -36,6 +36,7 @@ import { uiStore } from "../../stores/ui";
 import { writeClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
 import { isAbsolutePath } from "../../utils/pathUtils";
+import { markPerf } from "../../utils/perfTrace";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility } from "../shared/SearchBar";
@@ -64,8 +65,29 @@ function wordAtCursor(view: EditorView): string | null {
 	return view.state.doc.sliceString(range.from, range.to) || null;
 }
 
-/** Large file threshold — skip syntax highlighting above this size */
+/** Large document threshold: above it the editor shows plain text — no syntax
+ *  highlighting, no git gutter, no inline blame. Each of those is per-line work
+ *  on the main thread (a 23 MB JSON is 409k lines: 409k gutter markers, a Lezer
+ *  parse of the whole document), which is what froze the webview for over a
+ *  minute. Compared against the content's string length as a byte proxy. */
 const LARGE_FILE_BYTES = 500 * 1024;
+
+/** True when a document of `length` characters gets the plain-text treatment. */
+export function isLargeDocument(length: number): boolean {
+	return length > LARGE_FILE_BYTES;
+}
+
+/**
+ * The file whose language support to load, or null when there is nothing to
+ * highlight: no file, content not loaded yet, or a document too large to parse.
+ * Keyed on the loaded content on purpose — deciding from the previous file's
+ * content (what the editor held before the read resolved) let a 23 MB JSON
+ * open with JSON highlighting because the guard saw an empty string.
+ */
+export function languageTarget(filePath: string, loading: boolean, length: number): string | null {
+	if (!filePath || loading || isLargeDocument(length)) return null;
+	return filePath;
+}
 
 /** Past this size the editor still opens, but shows a non-blocking "may be slow"
  *  warning. Mirrors the backend's MAX_EDITOR_LARGE_FILE_SIZE hard cap (250 MB),
@@ -73,16 +95,19 @@ const LARGE_FILE_BYTES = 500 * 1024;
  *  string length as a byte proxy — same approximation as LARGE_FILE_BYTES. */
 const WARN_FILE_BYTES = 100 * 1024 * 1024;
 
+/** On-disk (mtime, size) of an open file, as last seen. */
+export interface DiskStat {
+	modifiedAt: number;
+	size: number;
+}
+
 /**
  * True when a file is unchanged on disk versus the last seen stat. Both mtime
  * AND size must match — size guards against truncate-rewrite saves that can
  * land within the same mtime tick.
  */
-export function diskStatUnchanged(
-	last: { modifiedAt: number; size: number } | null,
-	next: { modified_at: number; size: number },
-): boolean {
-	return last !== null && next.modified_at === last.modifiedAt && next.size === last.size;
+export function diskStatUnchanged(last: DiskStat | null, next: DiskStat): boolean {
+	return last !== null && next.modifiedAt === last.modifiedAt && next.size === last.size;
 }
 
 // --- Cmd+Hover underline (VS Code-style go-to-definition hint) ---
@@ -168,8 +193,10 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	/** Mutable ref tracking live editor value without triggering reactivity on every keystroke */
 	let currentCode = "";
 	/** Last seen on-disk (mtime, size) — lets checkDiskContent skip the full read when unchanged */
-	let lastStat: { modifiedAt: number; size: number } | null = null;
+	let lastStat: DiskStat | null = null;
 	const [savedContent, setSavedContent] = createSignal("");
+	/** Plain-text mode for the loaded document (see LARGE_FILE_BYTES). */
+	const largeDoc = createMemo(() => isLargeDocument(savedContent().length));
 	const [loading, setLoading] = createSignal(true);
 	const [error, setError] = createSignal<string | null>(null);
 	/** True when the read failed because the file isn't valid UTF-8 text (binary/non-text file) */
@@ -220,6 +247,13 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	/** Absolute path on disk — external files are already absolute, internal ones join fsRoot. */
 	const absPath = () => (isExternal() ? props.filePath : `${fsRoot()}/${props.filePath}`);
 
+	/** On-disk (mtime, size) of the open file; null when it cannot be read (TCC-protected
+	 *  path, deleted file, network mount), which makes the next disk check a full read. */
+	const readStat = (): Promise<DiskStat | null> =>
+		invoke<{ exists: boolean; modified_at: number; size: number }>("stat_path", { path: absPath() })
+			.then((stat) => (stat.exists ? { modifiedAt: stat.modified_at, size: stat.size } : null))
+			.catch(() => null);
+
 	/** Guard: scroll to initialLine only once on first file load */
 	let didScrollToInitialLine = false;
 
@@ -248,8 +282,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 			async ([_fsRoot, filePath]) => {
 				if (!filePath) return;
 
-				// New file → drop the previous file's stat baseline so the first
-				// disk check re-establishes it instead of comparing against the old file.
+				// Drop the previous file's baseline until the new one is read below.
 				lastStat = null;
 				setLoading(true);
 				setError(null);
@@ -259,7 +292,13 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				if (isExternal() && !props.externalEditable) setIsReadOnly(true);
 
 				try {
+					// Baseline the disk stat BEFORE the read: a write landing between the
+					// two makes the content newer than the stat, so the next poll re-reads
+					// and finds it equal. The other order would miss that write, and no
+					// baseline at all re-read the whole file on the first 5s poll.
+					lastStat = await readStat();
 					const content = await readContent();
+					markPerf("editor.load", { file: filePath, length: content.length });
 					currentCode = content;
 					setCode(content);
 					setSavedContent(content);
@@ -327,14 +366,12 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		try {
 			// Cheap metadata probe first: if (mtime,size) is unchanged since the last
 			// check there's nothing to do — avoids re-reading the whole file over IPC
-			// on every 5s poll / git-revision bump. A null/missing stat (TCC-protected
-			// path, deleted file, network mount) falls through to a full read.
-			const stat = await invoke<{ exists: boolean; modified_at: number; size: number }>("stat_path", {
-				path: absPath(),
-			}).catch(() => null);
-			if (stat?.exists) {
+			// on every 5s poll / git-revision bump. A null stat falls through to a
+			// full read.
+			const stat = await readStat();
+			if (stat) {
 				if (diskStatUnchanged(lastStat, stat)) return;
-				lastStat = { modifiedAt: stat.modified_at, size: stat.size };
+				lastStat = stat;
 			}
 
 			const diskContent = await readContent();
@@ -430,7 +467,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		const saved = savedContent();
 		void rev;
 		if (!view) return;
-		if (!repoPath || isExternal() || !saved) {
+		if (!repoPath || isExternal() || !saved || largeDoc()) {
 			view.dispatch({ effects: setChangesEffect([]) });
 			return;
 		}
@@ -443,6 +480,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				});
 				// The tab may have been swapped/closed during the await.
 				if (editorView() !== view) return;
+				markPerf("editor.gutter", { file: props.filePath, changes: changes.length });
 				view.dispatch({ effects: setChangesEffect(changes) });
 			} catch (err) {
 				appLogger.debug("editor", "git gutter diff failed", { error: String(err) });
@@ -469,7 +507,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		const enabled = settingsStore.state.inlineBlameEnabled;
 		void rev;
 		if (!view) return;
-		if (!enabled || !repoPath || isExternal() || !saved) {
+		if (!enabled || !repoPath || isExternal() || !saved || largeDoc()) {
 			view.dispatch({ effects: setBlameEffect([]) });
 			return;
 		}
@@ -481,6 +519,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				});
 				// The tab may have been swapped/closed during the await.
 				if (editorView() !== view) return;
+				markPerf("editor.blame", { file: props.filePath, lines: lines.length });
 				view.dispatch({ effects: setBlameEffect(lines) });
 			} catch (err) {
 				appLogger.debug("editor", "inline blame fetch failed", { error: String(err) });
@@ -649,24 +688,22 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		onCleanup(() => ro.disconnect());
 	});
 
-	// Load language support
+	// Load language support once the content is in: while a file loads the
+	// editor is plain text, so the content lands without a parser attached and
+	// the large-document decision is made on the document actually loaded.
+	const langTarget = createMemo(() => languageTarget(props.filePath, loading(), savedContent().length));
 	createEffect(
-		on(
-			() => props.filePath,
-			async (filePath) => {
-				if (!filePath) {
-					setLangSupport(null);
-					return;
-				}
-				// Skip syntax highlighting for large files
-				if (currentCode.length > LARGE_FILE_BYTES) {
-					setLangSupport(null);
-					return;
-				}
-				const lang = await detectLanguage(filePath);
-				setLangSupport(lang);
-			},
-		),
+		on(langTarget, async (target) => {
+			if (!target) {
+				setLangSupport(null);
+				return;
+			}
+			const lang = await detectLanguage(target);
+			// Another file may have started loading during the import.
+			if (target !== props.filePath || loading()) return;
+			markPerf("editor.language", { file: target });
+			setLangSupport(lang);
+		}),
 	);
 
 	// Save handler

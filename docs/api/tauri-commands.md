@@ -71,7 +71,7 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 | `get_diff_stats` | `path` | `DiffStats` | Addition/deletion counts |
 | `get_changed_files` | `path` | `Vec<ChangedFile>` | Changed files with stats |
 | `get_file_diff` | `path, file` | `String` | Single file diff |
-| `get_gutter_changes` | `path, file, scope?` | `Vec<GutterChange>` | Per-line editor gutter/scrollbar change markers (diff parsed in Rust) |
+| `get_gutter_changes` | `path, file, scope?` | `Vec<GutterChange>` | Per-line editor gutter/scrollbar change markers (diff parsed in Rust); empty for an untracked file |
 | `get_git_branches` | `path` | `Vec<JSON>` | All branches (sorted) |
 | `get_recent_commits` | `path` | `Vec<JSON>` | Recent git commits |
 | `rename_branch` | `path, old_name, new_name` | `()` | Rename branch |
