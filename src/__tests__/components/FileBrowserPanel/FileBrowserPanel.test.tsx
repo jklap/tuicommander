@@ -75,6 +75,7 @@ const batch = (matches: ContentMatch[], isFinal: boolean, searchId: string): Con
 	files_skipped: 0,
 	truncated: false,
 	repos_pending: 0,
+	repos_indexing: 0,
 	repos_searched: 0,
 });
 
@@ -255,6 +256,7 @@ describe("FileBrowserPanel streamed content search", () => {
 					files_skipped: 0,
 					truncated: false,
 					repos_pending: 0,
+					repos_indexing: 0,
 					repos_searched: 0,
 				});
 			}

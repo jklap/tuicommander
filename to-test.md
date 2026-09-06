@@ -661,3 +661,14 @@ None of them is here because nobody looked.
 - [ ] [HUMAN] Boss's call: **Trim** the real `src-tauri/target` row in Build Cleaner. It
   is 58 GiB and a Trim forces a full rebuild of the running dev app, so no agent may
   run it. Trim against other repos' `target/` is covered.
+- [ ] Rust change, needs a `make dev` restart (stories #5525 / #8c80). Switch to a repo
+  that has never been indexed this session with `index_strategy` at its default
+  `active_and_switch`, then check `GET :9876/logs` for `content index warm on repo
+  switch` followed by `content index built` for that repo — until now nothing warmed a
+  repo on switch, so the "and switch" half of the strategy did nothing. Then set the
+  strategy to `active_only` in Settings → General and switch again: NO `content index
+  warm`/`content index built` pair may appear for that repo (the skip itself is logged
+  at debug level, so absence of the build is the check). Finally, with several repos registered
+  and unindexed, run a cross-repo content search (`?` in the command palette, all-repos
+  on) for a string that is not in the active repo: the empty state must read
+  "N not indexed" and must NOT promise "retry shortly" for repos nothing is building.

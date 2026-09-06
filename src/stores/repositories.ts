@@ -930,6 +930,14 @@ function createRepositoriesStore() {
 				setState("revisions", path, (n) => (n ?? 0) + 1);
 				invoke("github_poll_repo", { path }).catch(() => {});
 			}
+			// The "and switch" half of the `active_and_switch` index strategy — the
+			// boot half lives in Rust (lib.rs pre-warm). Fire-and-forget, and NOT
+			// conditional on the hot-repo check above: whether the warm runs is a
+			// config policy owned by `content_index::warm_index`, which no-ops for
+			// `disabled`/`active_only` and dedupes an already-built repo.
+			if (path) {
+				invoke("warm_content_index", { repoPath: path }).catch(() => {});
+			}
 		},
 
 		/** Update the display name of a repository */

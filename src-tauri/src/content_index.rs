@@ -575,6 +575,31 @@ pub fn ensure_index(
     index
 }
 
+/// Warm the index for a repo the user just switched to — the "and switch" half
+/// of the `active_and_switch` strategy, whose boot half lives in `lib.rs`.
+///
+/// Gated here rather than at the call site: the decision is a config policy, and
+/// both the IPC command and the HTTP route must make it the same way. `disabled`
+/// and `active_only` are the two strategies that say "nothing beyond the boot
+/// repo"; anything else (including an unrecognised value) gets the documented
+/// default behaviour.
+///
+/// Cheap to call on every switch: `ensure_index` returns the existing entry
+/// without spawning when the repo is already indexed or already building, and a
+/// genuine build still queues behind the single global build semaphore.
+///
+/// Reads the in-memory config, never `load_app_config()` — same reason as the
+/// `RepoChanged` arm below: that takes a cross-process file lock.
+pub fn warm_index(state: &Arc<crate::state::AppState>, repo_path: &str) {
+    let strategy = state.config.read().index_strategy.clone();
+    if matches!(strategy.as_str(), "disabled" | "active_only") {
+        tracing::debug!(repo = %repo_path, %strategy, "content index warm skipped by strategy");
+        return;
+    }
+    tracing::info!(repo = %repo_path, %strategy, "content index warm on repo switch");
+    ensure_index(state, repo_path);
+}
+
 /// Rebuild the content index for a repo (called on RepoChanged events).
 /// Runs in background, does not block. Skips if a build is already in-flight
 /// for this repo (via `state.index_in_flight`) — the next `RepoChanged` will
@@ -1058,6 +1083,62 @@ mod tests {
             !index.read().is_ready(),
             "index_strategy=disabled in the live config must suppress the rebuild"
         );
+    }
+
+    /// `warm_index` is the "and switch" half of `active_and_switch`. It runs on a
+    /// user action (switching repo), so the strategy setting is the only thing
+    /// standing between "index this one repo" and "index on every click even
+    /// though the user asked for active_only".
+    #[tokio::test]
+    async fn warm_index_builds_under_active_and_switch() {
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(cfg_dir.path().to_path_buf());
+
+        let repo = make_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.config.write().index_strategy = "active_and_switch".to_string();
+
+        warm_index(&state, &repo_path);
+
+        let index = state
+            .content_indices
+            .get(&repo_path)
+            .map(|e| Arc::clone(e.value()))
+            .expect("active_and_switch must schedule a build for the switched-to repo");
+        for _ in 0..100 {
+            if index.read().is_ready() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            index.read().is_ready(),
+            "the switched-to repo must actually get indexed, not just registered"
+        );
+    }
+
+    /// `active_only` and `disabled` both mean "do not index anything but the boot
+    /// repo". A switch must stay a no-op for them, or the setting is decorative.
+    #[tokio::test]
+    async fn warm_index_is_a_no_op_for_strategies_that_exclude_switches() {
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(cfg_dir.path().to_path_buf());
+
+        for strategy in ["active_only", "disabled"] {
+            let repo = make_test_repo();
+            let repo_path = repo.path().to_string_lossy().to_string();
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            state.config.write().index_strategy = strategy.to_string();
+
+            warm_index(&state, &repo_path);
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(
+                !state.content_indices.contains_key(&repo_path),
+                "index_strategy={strategy} must not index a repo on switch"
+            );
+        }
     }
 
     #[test]
