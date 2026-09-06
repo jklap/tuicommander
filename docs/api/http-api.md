@@ -1180,6 +1180,7 @@ Returns dynamic server instructions for the MCP bridge binary as `{"instructions
 GET  /fs/list?repoPath=/path/to/repo&subdir=src
 GET  /fs/search?repoPath=/path/to/repo&query=main&limit=50
 GET  /fs/search-content?repoPath=/path/to/repo&query=foo&caseSensitive=false&useRegex=false&wholeWord=false&limit=200
+GET  /fs/search-content-all?query=foo&caseSensitive=false&limit=200   -> cross-repo BM25 over every ready index
 GET  /fs/read?repoPath=/path/to/repo&file=src/main.rs
 GET  /fs/read-external?path=/absolute/path/to/file
 POST /fs/write         { "repoPath": "...", "file": "...", "content": "..." }
@@ -1191,12 +1192,25 @@ POST /fs/gitignore     { "repoPath": "...", "pattern": "..." }
 GET  /fs/resolve-terminal-path?cwd=/repo&candidate=src/x.ts   -> ResolvedFilePath | null
 POST /fs/resolve-terminal-paths { "cwd": "/repo", "candidates": [...] } -> (ResolvedFilePath | null)[]
 GET  /fs/stat?path=/absolute/path                              -> PathStat (exists/is_dir/size/modified_at)
-POST /fs/warm-index    { "repoPath": "..." }                   -> { "ok": true } (fire-and-forget BM25 build)
+POST /fs/warm-index    { "repoPath": "..." }                   -> { "ok": true } (fire-and-forget BM25 build; strategy-gated, see below)
 POST /fs/write-external { "path": "/abs", "content": "..." }   -> { "ok": true }
 POST /fs/copy-abs      { "from": "/abs", "to": "/abs" }        -> { "ok": true }
 POST /fs/move-abs      { "from": "/abs", "to": "/abs" }        -> { "ok": true }
 POST /fs/transfer      { "destDir": "/abs", "paths": [...], "mode": "move"|"copy", "allowRecursive": bool } -> TransferResult
 ```
+
+`/fs/warm-index` returns `{ "ok": true }` whether or not it scheduled anything.
+Under the `disabled` or `active_only` index strategies it deliberately builds
+nothing, so a repo switch cannot index behind a setting that asked it not to.
+The `warm_content_index` IPC command applies the identical gate — the two
+transports share one implementation so they cannot drift.
+
+`/fs/search-content-all` reports why a repo produced nothing, so the UI can tell
+"no match" apart from "not searched yet". Its result and every
+`content-search-batch` carry `repos_searched`, `repos_pending`, and
+`repos_indexing` — the last being the subset of `repos_pending` with a build
+actually in flight. Only that subset justifies telling the user to retry; the
+rest are waiting on a scheduling event that may never come.
 
 Content-search results expose `match_start` and `match_end` as zero-based,
 end-exclusive UTF-16 code-unit offsets within `line_text`. They can be passed

@@ -453,6 +453,14 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `search_files` | `path, query` | `Vec<SearchResult>` | Search files by name in directory |
 | `search_content` | `repoPath, query, searchId, caseSensitive?, useRegex?, wholeWord?, limit?` | `()` | Full-text content search; streams results progressively via `content-search-batch` events, each echoing `searchId`. Binary files and files >1 MB are skipped. Supports cancellation. |
 | `search_content_all` | `query, searchId, caseSensitive?, limit?` | `()` | Cross-repo BM25 content search over every ready index; streams via the same `content-search-batch` events with each match tagged `repo_path` and every batch echoing `searchId`. Only repos whose index is built participate (depends on Content Indexing strategy). Shares the cancellation slot with `search_content`. |
+| `warm_content_index` | `repoPath` | `()` | Build a repo's content index in the background, invoked on repo switch. **Strategy-gated:** under `disabled` or `active_only` it returns without scheduling anything, so a repo switch cannot index behind a setting that asked it not to. The `POST /fs/warm-index` route applies the same gate. |
+
+`search_content_all` reports why a repo produced nothing, so the UI can tell
+"no match" apart from "not searched yet". Every `ContentSearchResult` and every
+`content-search-batch` carries `repos_searched`, `repos_pending`, and
+`repos_indexing` — the last being the subset of `repos_pending` with a build
+actually in flight. Only that subset justifies telling the user to retry; the
+rest are waiting on a scheduling event that may never come.
 
 For both commands, every `ContentMatch.match_start`/`match_end` pair is a
 zero-based, end-exclusive UTF-16 code-unit range within `line_text`, matching
