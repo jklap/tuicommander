@@ -1082,10 +1082,12 @@ async fn recheck_tailscale_status(
     Ok(new_state)
 }
 
-/// Get relay client status (enabled, connected, url, session_id).
+/// Relay client status (enabled, connected, url, session_id).
+///
+/// Shared by the `get_relay_status` command and `GET /system/relay-status`:
+/// one body means the two transports cannot answer different shapes.
 #[cfg(feature = "desktop")]
-#[tauri::command]
-fn get_relay_status(state: State<'_, Arc<AppState>>) -> serde_json::Value {
+pub(crate) fn relay_status_json(state: &AppState) -> serde_json::Value {
     let cfg = state.config.read();
     let connected = state
         .relay
@@ -1097,6 +1099,13 @@ fn get_relay_status(state: State<'_, Arc<AppState>>) -> serde_json::Value {
         "url": cfg.services.relay.url,
         "session_id": cfg.services.relay.session_id,
     })
+}
+
+/// Get relay client status (enabled, connected, url, session_id).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn get_relay_status(state: State<'_, Arc<AppState>>) -> serde_json::Value {
+    relay_status_json(&state)
 }
 
 /// Raise the open-file descriptor soft limit toward the hard limit.

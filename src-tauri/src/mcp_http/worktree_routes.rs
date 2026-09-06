@@ -440,3 +440,26 @@ pub(super) async fn merge_and_archive_worktree_http(
         Err(e) => err_500(&format!("task panic: {e}")),
     }
 }
+
+/// Body of `POST /worktrees/run-script`.
+#[derive(serde::Deserialize)]
+pub(super) struct RunSetupScriptRequest {
+    pub script: String,
+    pub cwd: String,
+}
+
+/// `POST /worktrees/run-script` — mirror of the `run_setup_script` command.
+/// The script runs a real process, so it goes to a blocking pool rather than
+/// stalling the axum worker for its whole duration.
+pub(super) async fn run_setup_script_http(
+    Json(body): Json<RunSetupScriptRequest>,
+) -> impl IntoResponse {
+    let res = tokio::task::spawn_blocking(move || {
+        crate::worktree::run_setup_script(body.script, body.cwd)
+    })
+    .await;
+    match res {
+        Ok(r) => json_result(r),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}

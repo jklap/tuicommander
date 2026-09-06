@@ -650,3 +650,36 @@ mod tests {
         assert!(state.sessions.is_empty());
     }
 }
+
+/// Body of `POST /agents/detect-all`.
+#[derive(serde::Deserialize)]
+pub(super) struct DetectAllBinariesRequest {
+    pub binaries: Vec<String>,
+}
+
+/// `POST /agents/detect-all` — mirror of the `detect_all_agent_binaries`
+/// command. Returns the same binary-name -> detection map.
+pub(super) async fn detect_all_agent_binaries_http(
+    Json(body): Json<DetectAllBinariesRequest>,
+) -> impl IntoResponse {
+    Json(crate::agent::detect_all_agent_binaries(body.binaries).await)
+}
+
+/// Body of `POST /agents/open-in-app`.
+#[derive(serde::Deserialize)]
+pub(super) struct OpenInAppRequest {
+    pub path: String,
+    pub app: String,
+    #[serde(default)]
+    pub line: Option<u32>,
+    #[serde(default)]
+    pub col: Option<u32>,
+}
+
+/// `POST /agents/open-in-app` — mirror of the `open_in_app` command. The
+/// command resolves to nothing, so this answers the `null` IPC returns.
+pub(super) async fn open_in_app_http(Json(body): Json<OpenInAppRequest>) -> Response {
+    super::json_result(crate::agent::open_in_app(
+        body.path, body.app, body.line, body.col,
+    ))
+}

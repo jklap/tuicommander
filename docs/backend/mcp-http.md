@@ -54,6 +54,7 @@ The socket at `<config_dir>/mcp.sock` is managed with two safety layers to survi
 | `POST` | `/sessions/:id/write` | Write data to session |
 | `POST` | `/sessions/:id/resize` | Resize session terminal |
 | `GET` | `/sessions/:id/output` | Read session output (ring buffer) |
+| `GET` | `/sessions/:id/shell-family` | Shell classification (`posix`/`windows-native`/`unknown`, or `null`) so the client picks the right control sequences |
 | `POST` | `/sessions/:id/pause` | Pause session output |
 | `POST` | `/sessions/:id/resume` | Resume session output |
 | `DELETE` | `/sessions/:id` | Close session |
@@ -115,6 +116,8 @@ serving a configuration the disk disagrees with. See
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/agents/detect` | Detect installed agents and IDEs |
+| `POST` | `/agents/detect-all` | Batch-detect the named binaries in parallel, path only (no version lookup) |
+| `POST` | `/agents/open-in-app` | Open a path in an IDE, terminal or file manager (optional `line`/`col`) |
 
 ### Plugins
 
@@ -131,6 +134,32 @@ serving a configuration the disk disagrees with. See
 | `POST` | `/worktrees` | Create worktree |
 | `DELETE` | `/worktrees` | Remove worktree |
 | `GET` | `/worktrees/paths?path=` | Get worktree paths for repo |
+| `POST` | `/worktrees/run-script` | Run a setup script in a directory; returns exit code and captured output |
+
+### Dictation and Desktop Integration
+
+Desktop-only — audio capture, the whisper model, the relay client and the updater
+are all gated on the `desktop` feature, so `build_remote_router` serves none of
+these. Handlers live in `mcp_http/dictation_routes.rs` and
+`mcp_http/system_routes.rs`; each answers exactly what its Tauri twin resolves to,
+so `src/stores/dictation.ts` and `src/notifications.ts` work unchanged on both
+transports. Full request/response shapes: `docs/api/http-api.md`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/dictation/status` | Model + recording status |
+| `GET` | `/dictation/models` | Whisper models with download state |
+| `POST` | `/dictation/models/download` | Download a whisper model |
+| `POST` | `/dictation/models/delete` | Delete a downloaded model |
+| `POST` | `/dictation/start` | Start recording |
+| `POST` | `/dictation/stop` | Stop recording and transcribe |
+| `GET`/`PUT` | `/dictation/corrections` | Read/replace the text-correction map |
+| `GET` | `/dictation/devices` | List audio input devices |
+| `POST` | `/dictation/inject` | Apply corrections and inject text into the active terminal |
+| `GET`/`PUT` | `/dictation/config` | Read/save the dictation config |
+| `GET` | `/system/relay-status` | Cloud relay connection status |
+| `POST` | `/system/notification-sound` | Play a notification sound on a chosen output device |
+| `GET` | `/system/check-update?channel=` | Check a beta/nightly channel for updates (hardcoded URLs) |
 
 ### ACP (ego)
 

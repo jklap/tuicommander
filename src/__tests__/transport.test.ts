@@ -386,6 +386,92 @@ describe("transport", () => {
 			expect(openInApp.path).toBe("/agents/open-in-app");
 		});
 
+		/**
+		 * The 19 paths whose axum routes were missing entirely: `mod dictation_routes`
+		 * was never declared, so its 12 handlers never compiled, and the 7 others had
+		 * a COMMAND_TABLE entry pointing at nothing. `rpc()` reads a 404 as a failed
+		 * call, so every one of these was dead in browser mode.
+		 *
+		 * Method and path are asserted here; that they resolve to a registered route
+		 * is asserted on the Rust side by
+		 * `mcp_http::tests::every_dictation_and_os_integration_path_has_a_route`.
+		 */
+		describe("dictation and OS-integration mappings", () => {
+			it.each([
+				["get_dictation_status", {}, "GET", "/dictation/status"],
+				["get_model_info", {}, "GET", "/dictation/models"],
+				["start_dictation", {}, "POST", "/dictation/start"],
+				["stop_dictation_and_transcribe", {}, "POST", "/dictation/stop"],
+				["get_correction_map", {}, "GET", "/dictation/corrections"],
+				["list_audio_devices", {}, "GET", "/dictation/devices"],
+				["get_dictation_config", {}, "GET", "/dictation/config"],
+				["get_relay_status", {}, "GET", "/system/relay-status"],
+				["check_update_channel", { channel: "nightly" }, "GET", "/system/check-update?channel=nightly"],
+				["get_session_shell_family", { sessionId: "s1" }, "GET", "/sessions/s1/shell-family"],
+			])("maps %s to %s %s", (command, args, method, path) => {
+				const result = mapCommandToHttp(command as string, args as Record<string, unknown>);
+				expect(result.method).toBe(method);
+				expect(result.path).toBe(path);
+			});
+
+			it.each([
+				["download_whisper_model", { model_name: "small" }, "POST", "/dictation/models/download", { model: "small" }],
+				["delete_whisper_model", { model_name: "small" }, "POST", "/dictation/models/delete", { model: "small" }],
+				["set_correction_map", { map: { teh: "the" } }, "PUT", "/dictation/corrections", { map: { teh: "the" } }],
+				["inject_text", { text: "hello" }, "POST", "/dictation/inject", { text: "hello" }],
+				["set_dictation_config", { config: { enabled: true } }, "PUT", "/dictation/config", { enabled: true }],
+				[
+					"open_in_app",
+					{ path: "/tmp/x", app: "vscode", line: 12, col: 3 },
+					"POST",
+					"/agents/open-in-app",
+					{ path: "/tmp/x", app: "vscode", line: 12, col: 3 },
+				],
+				[
+					"detect_all_agent_binaries",
+					{ binaries: ["claude", "codex"] },
+					"POST",
+					"/agents/detect-all",
+					{ binaries: ["claude", "codex"] },
+				],
+				[
+					"run_setup_script",
+					{ script: "pnpm i", cwd: "/repo" },
+					"POST",
+					"/worktrees/run-script",
+					{ script: "pnpm i", cwd: "/repo" },
+				],
+			])("maps %s to %s %s with an IPC-identical body", (command, args, method, path, body) => {
+				const result = mapCommandToHttp(command as string, args as Record<string, unknown>);
+				expect(result.method).toBe(method);
+				expect(result.path).toBe(path);
+				expect(result.body).toEqual(body);
+			});
+
+			// `device` is the audio output the user picked. The Rust command has always
+			// taken it and notifications.ts has always sent it; leaving it out of the
+			// HTTP body sent every browser-mode sound to the default device instead.
+			it("carries the chosen output device on play_notification_sound", () => {
+				const chosen = mapCommandToHttp("play_notification_sound", {
+					sound: "question",
+					volume: 0.5,
+					device: "Studio Display Speakers",
+				});
+				expect(chosen.method).toBe("POST");
+				expect(chosen.path).toBe("/system/notification-sound");
+				expect(chosen.body).toEqual({
+					sound: "question",
+					volume: 0.5,
+					device: "Studio Display Speakers",
+				});
+			});
+
+			it("sends a null device when the user picked none", () => {
+				const dflt = mapCommandToHttp("play_notification_sound", { sound: "completion", volume: 1, device: null });
+				expect(dflt.body).toEqual({ sound: "completion", volume: 1, device: null });
+			});
+		});
+
 		it("maps hash_password to POST /config/hash-password with transform", () => {
 			const result = mapCommandToHttp("hash_password", { password: "secret" });
 			expect(result.method).toBe("POST");

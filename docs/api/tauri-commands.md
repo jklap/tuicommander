@@ -159,7 +159,7 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 | `merge_and_archive_worktree` | `repo_path, branch_name, target_branch, after_merge, force?` | `MergeArchiveResult` | Merge worktree branch into base and archive. A pre-flight counts the commits the target is missing and checks whether the worktree is dirty; both are returned so the caller can say what the merge actually carried. When `after_merge` is `archive` or `delete` and the worktree is **not known to be clean**, it returns `action: "needs_confirmation"` without touching anything — re-call with `force: true` to proceed. The commit count does not enter that decision: both cleanups end in `git worktree remove --force`, which destroys uncommitted work whether or not the branch carries commits. A dirty check that fails also blocks (`worktree_dirty` stays `false` because git never said "dirty"). If conflict cleanup abort fails, the error reports the repo may still be conflicted and includes the manual abort command. |
 | `finalize_merged_worktree` | `repo_path, branch_name, action, force?` | `MergeArchiveResult` | Clean up a merged worktree. Passes the **same** dirty-worktree gate as `merge_and_archive_worktree`: without `force` a worktree that is not known to be clean comes back as `action: "needs_confirmation"` instead of being wiped (`merged: true` — only the cleanup stopped, the merge already landed). Delete action may include `branch_delete_warning` if the worktree was removed but safe branch deletion kept the branch. |
 | `list_base_ref_options` | `repo_path` | `Vec<String>` | List valid base refs for worktree creation |
-| `run_setup_script` | `repo_path, worktree_path` | `()` | Run post-creation setup script in new worktree |
+| `run_setup_script` | `script, cwd` | `JSON` | Run a setup script through `sh -c` / `cmd /C` in `cwd`; returns exit code and captured output |
 | `generate_clone_branch_name_cmd` | `base_name, existing_names` | `String` | Generate hybrid branch name for clone worktree |
 
 ## Configuration (`config.rs`)
@@ -215,10 +215,10 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `detect_agent_binary` | `binary` | `AgentBinaryDetection` | Check binary in PATH |
-| `detect_all_agent_binaries` | -- | `Vec<AgentBinaryDetection>` | Detect all known agents |
+| `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version lookup) |
 | `detect_claude_binary` | -- | `String` | Detect Claude binary |
 | `detect_installed_ides` | -- | `Vec<String>` | Detect installed IDEs |
-| `open_in_app` | `path, app` | `()` | Open path in application |
+| `open_in_app` | `path, app, line?, col?` | `()` | Open path in application; `line`/`col` are used only by editors that support them |
 | `spawn_agent` | `pty_config, agent_config` | `String` (session ID) | Spawn agent in PTY |
 
 ## Agent Session Discovery (`agent_session.rs`)
@@ -605,7 +605,7 @@ empty result.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `play_notification_sound` | `sound` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) |
+| `play_notification_sound` | `sound, volume, device?` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) on `device`, or the system default |
 | `block_sleep` | -- | `()` | Prevent system sleep |
 | `unblock_sleep` | -- | `()` | Allow system sleep |
 

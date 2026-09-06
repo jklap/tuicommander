@@ -136,7 +136,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/system/notification-sound",
-			body: { sound: args.sound, volume: args.volume },
+			// `device` rides along: notifications.ts always sends it, so dropping it
+			// here would play every browser-mode sound on the default output.
+			body: { sound: args.sound, volume: args.volume, device: args.device ?? null },
 		}),
 	},
 	// --- Relay ---
