@@ -92,6 +92,8 @@ enum SupervisorExit {
     NotReady,
     Disconnected,
     Eof,
+    /// The agent denied a method it had advertised.
+    ProtocolViolation,
 }
 
 impl AcpClientManager {
@@ -768,6 +770,14 @@ async fn supervise_connection(
                                 actor.attachments(),
                             );
                         }
+                        // Checked here rather than in the select, because the
+                        // caller whose request uncovered the contradiction has
+                        // just been answered and is owed that answer either
+                        // way. Everything still in flight settles as transport
+                        // closed, which is what it now is.
+                        if actor.contradicted() {
+                            return Ok(SupervisorExit::ProtocolViolation);
+                        }
                     }
                 }
             }
@@ -777,6 +787,7 @@ async fn supervise_connection(
     let reason = match outcome {
         Ok(SupervisorExit::Disconnected) => AcpConnectionSettlementReason::Disconnected,
         Ok(SupervisorExit::Eof) => AcpConnectionSettlementReason::Eof,
+        Ok(SupervisorExit::ProtocolViolation) => AcpConnectionSettlementReason::ProtocolViolation,
         Ok(SupervisorExit::NotReady) => return,
         Err(_) if ready.load(Ordering::Acquire) => AcpConnectionSettlementReason::TransportError,
         _ => return,

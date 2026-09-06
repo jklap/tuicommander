@@ -33,6 +33,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use agent_client_protocol::schema::v1;
 use agent_client_protocol::{Agent, ConnectionTo, Responder};
@@ -288,6 +289,14 @@ pub(super) struct ConnectionActor {
     /// shown in and the order a cancel settles them in. A map keyed by id
     /// would have made that order depend on hashing.
     seats: Vec<Seat>,
+    /// Set once, by whichever request first got a denial of something the
+    /// snapshot advertised.
+    ///
+    /// Shared with the futures [`Self::send`] hands to the supervisor, because
+    /// that is where an answer actually arrives and it arrives long after the
+    /// actor decided to ask. Reading it belongs to the supervisor: the actor
+    /// can refuse an operation but cannot end a connection.
+    contradicted: Arc<AtomicBool>,
 }
 
 impl ConnectionActor {
@@ -302,7 +311,17 @@ impl ConnectionActor {
             journal,
             attachments: HashMap::new(),
             seats: Vec::new(),
+            contradicted: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Whether the agent has denied something it advertised.
+    ///
+    /// True only after the answer that says so has been handed to the caller
+    /// that asked, so a connection ends behind a settled request rather than
+    /// instead of one.
+    pub(super) fn contradicted(&self) -> bool {
+        self.contradicted.load(Ordering::Acquire)
     }
 
     /// The attachments in a stable order, for the connection snapshot.
@@ -1265,6 +1284,12 @@ impl ConnectionActor {
     }
 
     /// Write one request and hand back the future that resolves to its answer.
+    ///
+    /// Every request this client sends passes through here, and so does every
+    /// answer, which is what makes this the one place a denial can be told
+    /// apart from a refusal: nothing reaches the wire that the capability
+    /// snapshot did not allow, so a `method_not_found` coming back is the agent
+    /// disowning what it published rather than declining what it was asked.
     fn send<Request>(
         &self,
         request: Request,
@@ -1277,8 +1302,21 @@ impl ConnectionActor {
     {
         let sent = connection.send_request(request);
         let connection_id = self.connection_id;
+        let contradicted = Arc::clone(&self.contradicted);
         Box::pin(async move {
             sent.block_task().await.map_err(|error| {
+                if error.code == v1::ErrorCode::MethodNotFound {
+                    // Flagged before the error is handed over, so the
+                    // supervisor that reads it after this request settles
+                    // cannot see the answer without also seeing why it is the
+                    // last one this connection will give.
+                    contradicted.store(true, Ordering::Release);
+                    return AcpClientError::protocol_violation(
+                        connection_id,
+                        operation,
+                        error.to_string(),
+                    );
+                }
                 AcpClientError::agent_error(connection_id, operation, error.to_string())
             })
         })

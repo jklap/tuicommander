@@ -2706,8 +2706,7 @@ mod tests {
                     .vt_log_buffers
                     .get(session_id)
                     .expect("the session outlives the scroll");
-                let offset = vt.lock().grid_display_offset();
-                offset
+                vt.lock().grid_display_offset()
             };
             if offset == expected {
                 return;
