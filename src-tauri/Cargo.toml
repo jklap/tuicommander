@@ -129,10 +129,14 @@ crate-type = ["rlib"]
 name = "tuic-remote"
 path = "src/bin/tuic_remote.rs"
 
+# The deterministic ACP agent the client tests drive. It is a test fixture, not
+# a product binary: Tauri bundling lists production binaries and sidecars
+# explicitly, so this target never ships.
 [[bin]]
-name = "story092_acp_fake"
-path = "tests/fixtures/acp/fake.rs"
+name = "tuic-acp-fixture-agent"
+path = "tests/fixtures/acp_fixture_agent.rs"
 test = false
+bench = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }

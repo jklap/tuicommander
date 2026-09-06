@@ -2,10 +2,21 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::{ProtocolVersion, v1};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 const EGO_PAUSE_METHOD: &str = "_ego/pause";
 const EGO_RESUME_METHOD: &str = "_ego/resume";
 const EGO_COMPACT_METHOD: &str = "_ego/compact";
+
+/// The extension metadata ego attaches to its advertised capabilities.
+///
+/// It hangs off `agentCapabilities`, not off the initialize response, because
+/// it *is* a capability. Pause and resume arrive together under `hold` with one
+/// version covering both method names — they are two halves of one extension,
+/// and separate versions could disagree in a way no agent can actually be in.
+const EGO_EXTENSIONS: &str = "ego";
+const EGO_HOLD_EXTENSION: &str = "hold";
+const EGO_COMPACT_EXTENSION: &str = "compact";
 
 mod manager;
 
@@ -365,11 +376,10 @@ pub struct AcpCapabilitySnapshot {
     pub mcp_sse: bool,
     pub client_form_elicitation: bool,
     pub client_boolean_config: bool,
-    pub ego_pause_version: Option<u32>,
-    pub ego_resume_version: Option<u32>,
+    /// One version for `_ego/pause` and `_ego/resume`, which arrive together.
+    pub ego_hold_version: Option<u32>,
     pub ego_compact_version: Option<u32>,
-    pause_availability: ExtensionAvailability,
-    resume_availability: ExtensionAvailability,
+    hold_availability: ExtensionAvailability,
     compact_availability: ExtensionAvailability,
 }
 
@@ -392,8 +402,9 @@ impl AcpCapabilitySnapshot {
             AcpOperation::McpSse => advertised(self.mcp_sse),
             AcpOperation::ClientFormElicitation => included(self.client_form_elicitation),
             AcpOperation::ClientBooleanConfig => included(self.client_boolean_config),
-            AcpOperation::Pause => extension_reason(self.pause_availability),
-            AcpOperation::ResumeTurn => extension_reason(self.resume_availability),
+            AcpOperation::Pause | AcpOperation::ResumeTurn => {
+                extension_reason(self.hold_availability)
+            }
             AcpOperation::Compact => extension_reason(self.compact_availability),
         };
 
@@ -419,9 +430,8 @@ pub fn capability_snapshot(
     let session = &agent.session_capabilities;
     let prompt = &agent.prompt_capabilities;
     let mcp = &agent.mcp_capabilities;
-    let pause = extension_availability(response, "pause", EGO_PAUSE_METHOD);
-    let resume = extension_availability(response, "resume", EGO_RESUME_METHOD);
-    let compact = extension_availability(response, "compact", EGO_COMPACT_METHOD);
+    let hold = hold_availability(agent);
+    let compact = compact_availability(agent);
 
     Ok(AcpCapabilitySnapshot {
         protocol: response.protocol_version,
@@ -440,33 +450,45 @@ pub fn capability_snapshot(
         mcp_sse: mcp.sse,
         client_form_elicitation: false,
         client_boolean_config: false,
-        ego_pause_version: exact_extension_version(pause),
-        ego_resume_version: exact_extension_version(resume),
+        ego_hold_version: exact_extension_version(hold),
         ego_compact_version: exact_extension_version(compact),
-        pause_availability: pause,
-        resume_availability: resume,
+        hold_availability: hold,
         compact_availability: compact,
     })
 }
 
-fn extension_availability(
-    response: &v1::InitializeResponse,
-    name: &str,
-    expected_method: &str,
-) -> ExtensionAvailability {
-    let Some(extension) = response
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.get("ego"))
-        .and_then(serde_json::Value::as_object)
-        .and_then(|ego| ego.get(name))
-    else {
+/// The one `ego` object under the agent's advertised capabilities.
+fn ego_extensions(agent: &v1::AgentCapabilities) -> Option<&serde_json::Map<String, Value>> {
+    agent.meta.as_ref()?.get(EGO_EXTENSIONS)?.as_object()
+}
+
+/// Whether `_ego/pause` and `_ego/resume` may be sent on this connection.
+///
+/// Both method names are checked, not just the one the caller happens to want:
+/// a `hold` that names a pause this client knows and a resume it does not is
+/// not half-available, it is an agent speaking a version of the extension this
+/// client was not written against.
+fn hold_availability(agent: &v1::AgentCapabilities) -> ExtensionAvailability {
+    let Some(hold) = ego_extensions(agent).and_then(|ego| ego.get(EGO_HOLD_EXTENSION)) else {
         return ExtensionAvailability::Absent;
     };
+    let matches = hold.get("version").and_then(Value::as_u64) == Some(1)
+        && hold.get("pause").and_then(Value::as_str) == Some(EGO_PAUSE_METHOD)
+        && hold.get("resume").and_then(Value::as_str) == Some(EGO_RESUME_METHOD);
+    if matches {
+        ExtensionAvailability::Available
+    } else {
+        ExtensionAvailability::Mismatched
+    }
+}
 
-    let version = extension.get("version").and_then(serde_json::Value::as_u64);
-    let method = extension.get("method").and_then(serde_json::Value::as_str);
-    if version == Some(1) && method == Some(expected_method) {
+fn compact_availability(agent: &v1::AgentCapabilities) -> ExtensionAvailability {
+    let Some(compact) = ego_extensions(agent).and_then(|ego| ego.get(EGO_COMPACT_EXTENSION)) else {
+        return ExtensionAvailability::Absent;
+    };
+    let matches = compact.get("version").and_then(Value::as_u64) == Some(1)
+        && compact.get("method").and_then(Value::as_str) == Some(EGO_COMPACT_METHOD);
+    if matches {
         ExtensionAvailability::Available
     } else {
         ExtensionAvailability::Mismatched
