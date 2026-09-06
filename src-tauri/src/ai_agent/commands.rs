@@ -403,11 +403,25 @@ pub(crate) fn load_scheduler_config() -> super::scheduler::SchedulerConfig {
     super::scheduler::load_config()
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
+/// Non-gated core for HTTP parity (browser/PWA). See `save_scheduler_config`.
+pub(crate) fn save_scheduler_config_impl(
+    state: &Arc<AppState>,
+    config: &super::scheduler::SchedulerConfig,
+) -> Result<(), String> {
+    super::scheduler::save_config(config)?;
+    // Start the tick loop if the new config just gained its first enabled
+    // job, or stop it if it just lost its last one (#672-c1a3).
+    super::scheduler::reconcile_after_config_change(state, config);
+    Ok(())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) fn save_scheduler_config(
+    state: State<'_, Arc<AppState>>,
     config: super::scheduler::SchedulerConfig,
 ) -> Result<(), String> {
-    super::scheduler::save_config(&config)
+    save_scheduler_config_impl(&state, &config)
 }
 
 // ── Watcher commands ────────────────────────────────────────────

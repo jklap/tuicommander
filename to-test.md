@@ -742,3 +742,19 @@ None of them is here because nobody looked.
   repaint the whole screen in one go, with no rows left stale from the frames it missed.
   Tests cover the Rust side of all three; what they cannot reach is the frame actually
   crossing `tauri::ipc::Channel` into the WebView.
+- [ ] Rust change, needs a `make dev` restart (story #672-c1a3). Three always-on
+  background costs from the boot audit: (1) the AI cron scheduler's 30s tick loop
+  (`ai_agent::scheduler`) now only spawns when `ai-cron.json` has at least one enabled
+  job, and stops when the last one is disabled/removed via `save_scheduler_config` —
+  with zero jobs configured (the default), confirm no "Scheduler stopped"/tick log lines
+  ever appear; add one enabled job via the Scheduler UI (or `PUT /ai/scheduler/config`)
+  and confirm it fires on schedule; then delete/disable it and confirm the loop actually
+  stops (no further tick activity) rather than continuing to poll. (2) Knowledge persist
+  (`ai_agent::knowledge`) now skips the `spawn_blocking` dispatch on a 2s tick when no
+  session has dirty knowledge — run a normal terminal session (commands recorded via
+  knowledge tracking), confirm history still persists to `ai-sessions/` correctly (no
+  regression from the skip). (3) `app_logger::init_tracing`'s file appender is now
+  wrapped in `tracing_appender::non_blocking` instead of writing to `logs/tuic.log.*`
+  synchronously on the calling thread (including from async tokio tasks) — confirm the
+  daily-rotated log file still receives entries during normal use and on graceful
+  shutdown (no lines silently dropped by the leaked `WorkerGuard`).

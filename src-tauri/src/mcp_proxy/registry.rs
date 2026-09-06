@@ -955,6 +955,14 @@ impl UpstreamRegistry {
     ///
     /// The task runs every `HEALTH_CHECK_INTERVAL` and calls `health_check()`
     /// on every `Ready` upstream. Failures update the circuit breaker.
+    // DEFERRED (2026-09-06) — story #672-c1a3 asked this loop to start/stop
+    // based on need. `run_health_checks` already no-ops when the registry has
+    // zero upstreams (the common case), so the wasted work per tick is a
+    // no-op iteration over an empty map, not real I/O. Building a start/stop
+    // state machine (mirroring the AI scheduler's `ensure_running`/
+    // `reconcile_after_config_change`) for a 60s no-op was judged not worth
+    // the added complexity. Revisit if `HEALTH_CHECK_INTERVAL` is tightened
+    // or the no-op cost stops being negligible.
     pub(crate) fn spawn_health_checker(registry: Arc<UpstreamRegistry>) {
         tokio::spawn(async move {
             loop {

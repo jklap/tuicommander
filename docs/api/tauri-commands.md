@@ -284,7 +284,7 @@ plus a Tauri-side query for the per-session knowledge store.
 | `list_knowledge_sessions` | `filter?: { text?, hasErrors?, since? }, limit?` | `SessionListEntry[]` | Scan persisted `ai-sessions/` and list sessions sorted by most recent activity. Filter by text (matches command/output/intent/error_type), errors-only, or UNIX-seconds `since` lower bound. `limit` clamps at 500 (default 100). |
 | `get_knowledge_session_detail` | `session_id` | `SessionDetail?` | Full command history for one session — reads the in-memory store when active, falls back to disk otherwise. `HistoryCommand` rows include pre-extracted `kind`/`error_type` and the opt-in `semantic_intent`. |
 | `load_scheduler_config` | -- | `SchedulerConfig` | Load cron scheduler config from `ai-cron.json`. Returns `{ jobs: ScheduledJob[] }` where each job has `id`, `cron_expr`, `goal`. |
-| `save_scheduler_config` | `config: SchedulerConfig` | `()` | Validate cron expressions and persist scheduler config. Errors if any expression is invalid. |
+| `save_scheduler_config` | `config: SchedulerConfig` | `()` | Validate cron expressions and persist scheduler config. Errors if any expression is invalid. Also starts the 30s cron tick loop if the new config has an enabled job and it wasn't running, or stops it if it now has none (#672-c1a3) — the loop no longer runs unconditionally from boot. |
 
 ### Agent Tools (`ai_agent/tools.rs`)
 

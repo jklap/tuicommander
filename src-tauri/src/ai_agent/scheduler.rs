@@ -63,11 +63,14 @@ pub(crate) struct Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(state: Arc<AppState>) -> Self {
+    /// `stop` is the AppState-owned handle (`AppState::scheduler_stop`), shared
+    /// across start/stop cycles so `reconcile_after_config_change` can wake a
+    /// running scheduler without holding a reference to this `Scheduler`.
+    pub fn new(state: Arc<AppState>, stop: Arc<Notify>) -> Self {
         Self {
             state,
             last_fire: parking_lot::Mutex::new(HashMap::new()),
-            stop: Arc::new(Notify::new()),
+            stop,
         }
     }
 
@@ -257,11 +260,125 @@ pub(crate) fn save_config(config: &SchedulerConfig) -> Result<(), String> {
     crate::config::ConfigFile::<SchedulerConfig>::new(CONFIG_FILE).save(config)
 }
 
+fn has_enabled_jobs(config: &SchedulerConfig) -> bool {
+    config.jobs.iter().any(|job| job.enabled)
+}
+
+/// Spawn the tick loop if it isn't already running and the config has at
+/// least one enabled job. Idempotent — safe to call at boot and after every
+/// config save. A config with zero enabled jobs (the common case for most
+/// installs, which never touch scheduling) spawns nothing instead of ticking
+/// every 30s and re-reading `ai-cron.json` from disk for the process lifetime.
+pub(crate) fn ensure_running(state: &Arc<AppState>) {
+    if !has_enabled_jobs(&load_config()) {
+        return;
+    }
+    if state
+        .scheduler_running
+        .swap(true, std::sync::atomic::Ordering::AcqRel)
+    {
+        return; // already running
+    }
+    let sched_state = state.clone();
+    let stop = state.scheduler_stop.clone();
+    tokio::spawn(async move {
+        let scheduler = Scheduler::new(sched_state, stop);
+        scheduler.run().await;
+    });
+}
+
+/// Call after every `save_scheduler_config`: starts the loop if the new
+/// config has an enabled job and it wasn't running, or stops it if the new
+/// config has none and it was. No-op otherwise.
+pub(crate) fn reconcile_after_config_change(state: &Arc<AppState>, config: &SchedulerConfig) {
+    if has_enabled_jobs(config) {
+        ensure_running(state);
+    } else if state
+        .scheduler_running
+        .swap(false, std::sync::atomic::Ordering::AcqRel)
+    {
+        state.scheduler_stop.notify_one();
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_job(enabled: bool) -> ScheduledJob {
+        ScheduledJob {
+            id: "job1".into(),
+            cron_expr: "0 0 * * * *".into(),
+            goal: "test".into(),
+            target_session: None,
+            max_duration_secs: 300,
+            enabled,
+            one_shot: false,
+        }
+    }
+
+    #[test]
+    fn has_enabled_jobs_ignores_disabled_ones() {
+        assert!(!has_enabled_jobs(&SchedulerConfig { jobs: vec![] }));
+        assert!(!has_enabled_jobs(&SchedulerConfig {
+            jobs: vec![sample_job(false)]
+        }));
+        assert!(has_enabled_jobs(&SchedulerConfig {
+            jobs: vec![sample_job(false), sample_job(true)]
+        }));
+    }
+
+    /// Serializes tests that mutate the global config-dir override, mirroring
+    /// the lock in `ai_agent::knowledge::persist_tests` — both write
+    /// per-test-isolated files under it, and cargo runs tests in parallel by
+    /// default.
+    static CONFIG_DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[tokio::test]
+    async fn scheduler_starts_only_once_a_job_is_enabled_and_stops_once_none_are() {
+        let _lock = CONFIG_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _g = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let running = || {
+            state
+                .scheduler_running
+                .load(std::sync::atomic::Ordering::Acquire)
+        };
+
+        // No ai-cron.json on disk yet — load_config() defaults to zero jobs.
+        ensure_running(&state);
+        assert!(
+            !running(),
+            "must not spawn the 30s tick loop when there are zero enabled jobs"
+        );
+
+        let with_job = SchedulerConfig {
+            jobs: vec![sample_job(true)],
+        };
+        save_config(&with_job).unwrap();
+        reconcile_after_config_change(&state, &with_job);
+        assert!(
+            running(),
+            "must spawn the tick loop once a config with an enabled job is saved"
+        );
+
+        // Calling again while already running must not double-spawn — the
+        // swap in ensure_running short-circuits, which this exercises via the
+        // idempotent public entry point rather than reaching into internals.
+        reconcile_after_config_change(&state, &with_job);
+        assert!(running(), "must stay running while a job is still enabled");
+
+        let empty = SchedulerConfig::default();
+        save_config(&empty).unwrap();
+        reconcile_after_config_change(&state, &empty);
+        assert!(
+            !running(),
+            "must stop the tick loop once the last enabled job is removed"
+        );
+    }
 
     #[test]
     fn parse_valid_cron() {

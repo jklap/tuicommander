@@ -661,6 +661,15 @@ where
     }
 }
 
+/// Whether any session has dirty knowledge waiting to be persisted. Checking
+/// this before dispatching to the blocking pool means an idle app (no agent
+/// session has produced knowledge since the last flush) skips the
+/// `spawn_blocking` round trip entirely instead of dispatching a guaranteed
+/// no-op every `PERSIST_INTERVAL` for the process lifetime (#672-c1a3).
+fn needs_flush(state: &crate::state::AppState) -> bool {
+    !state.knowledge_dirty.is_empty()
+}
+
 pub fn spawn_persist_task(state: std::sync::Arc<crate::state::AppState>) {
     tokio::spawn(async move {
         {
@@ -671,6 +680,9 @@ pub fn spawn_persist_task(state: std::sync::Arc<crate::state::AppState>) {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             ticker.tick().await;
+            if !needs_flush(&state) {
+                continue;
+            }
             let s = state.clone();
             // A panic here would otherwise silently stop all persistence;
             // log it and keep ticking — the next tick spawns a fresh task.
@@ -760,6 +772,26 @@ mod persist_tests {
             duration_ms: 42,
             id: 0,
         }
+    }
+
+    #[test]
+    fn needs_flush_is_false_when_nothing_is_dirty_and_true_once_something_is() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _g = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = make_test_app_state();
+
+        assert!(
+            !needs_flush(&state),
+            "a freshly created app state has no dirty sessions"
+        );
+
+        state.record_outcome("s1", sample_outcome());
+
+        assert!(
+            needs_flush(&state),
+            "recording an outcome must mark the session dirty and demand a flush"
+        );
     }
 
     #[test]

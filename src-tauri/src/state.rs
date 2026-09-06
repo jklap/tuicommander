@@ -1770,6 +1770,16 @@ pub struct AppState {
     /// Terminal watcher engine handle — initialized once at startup.
     /// Commands access the shared config via `engine.config()`.
     pub(crate) watcher_engine: std::sync::OnceLock<Arc<crate::ai_agent::watcher::WatcherEngine>>,
+    /// Whether the AI cron scheduler's 30s tick loop is currently spawned.
+    /// Lets `save_scheduler_config` start it only when the saved config has
+    /// at least one enabled job, and stop it when the last one is removed,
+    /// instead of ticking (and re-reading `ai-cron.json` from disk) forever
+    /// from boot regardless of whether any job exists (#672-c1a3).
+    pub(crate) scheduler_running: std::sync::atomic::AtomicBool,
+    /// Shared with the running `Scheduler` (if any) so it can be told to stop.
+    /// Reused across start/stop cycles — always exists, whether or not a
+    /// scheduler task is currently spawned.
+    pub(crate) scheduler_stop: Arc<tokio::sync::Notify>,
     /// Evaluates CommandOutcome records and emits suggestions for AI investigation.
     pub(crate) trigger_classifier: crate::ai_agent::triggers::TriggerClassifier,
     /// Per-session opt-in for AI suggestions. Present + true = enabled.
@@ -2730,6 +2740,8 @@ impl AppState {
             term_alias_counters: DashMap::new(),
             session_visibility: DashMap::new(),
             watcher_engine: std::sync::OnceLock::new(),
+            scheduler_running: std::sync::atomic::AtomicBool::new(false),
+            scheduler_stop: Arc::new(tokio::sync::Notify::new()),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: DashMap::new(),
             tunnel_manager,
@@ -6250,6 +6262,8 @@ mod tests {
             term_alias_counters: DashMap::new(),
             session_visibility: DashMap::new(),
             watcher_engine: std::sync::OnceLock::new(),
+            scheduler_running: std::sync::atomic::AtomicBool::new(false),
+            scheduler_stop: Arc::new(tokio::sync::Notify::new()),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: DashMap::new(),
             tunnel_manager: {

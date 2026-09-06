@@ -11,6 +11,15 @@
 /// Tauri events (scoped to the main window) when the Fn/Globe modifier flag toggles.
 ///
 /// Must be called from the main thread (Tauri setup runs on main thread).
+// DEFERRED (2026-09-06) — story #672-c1a3 asked for this monitor to start
+// only when dictation is enabled and stop when disabled, instead of running
+// for the whole app lifetime. `addLocalMonitorForEventsMatchingMask:` is
+// AppKit main-thread-only; today `install()` runs once, at setup, on the main
+// thread by construction. Toggling it dynamically from a settings change
+// (which fires off the main thread) needs a real main-thread dispatch and
+// hardware testing to confirm the monitor can be safely removed/re-added
+// without racing an in-flight event callback — not something to guess at
+// blind. Left as an always-on monitor.
 #[cfg(target_os = "macos")]
 pub fn install(app_handle: tauri::AppHandle) {
     use block2::RcBlock;
