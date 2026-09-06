@@ -1697,9 +1697,7 @@ describe("transport", () => {
 			const uncoveredCommands = Array.from(registeredCommands)
 				.filter(
 					(command) =>
-						!mappedCommands.has(command) &&
-						!INTENTIONALLY_UNMAPPED.has(command) &&
-						!DEDICATED_WS_COMMANDS.has(command),
+						!mappedCommands.has(command) && !INTENTIONALLY_UNMAPPED.has(command) && !DEDICATED_WS_COMMANDS.has(command),
 				)
 				.sort();
 
