@@ -2081,6 +2081,20 @@ pub(super) async fn terminal_request_frame(
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
+/// `GET /sessions/{id}/shell-family` — mirror of the `get_session_shell_family`
+/// command. Answers the bare `ShellFamily` (or `null` for an unknown session),
+/// which is what `src/utils/sendCommand.ts` reads over both transports.
+pub(super) async fn get_session_shell_family(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let family = state
+        .sessions
+        .get(&session_id)
+        .map(|entry| crate::pty::classify_shell(&entry.lock().shell));
+    Json(family)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

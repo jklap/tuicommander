@@ -6,6 +6,8 @@ pub(crate) mod ai_terminal;
 pub(crate) mod auth;
 mod claude_routes;
 mod config_routes;
+#[cfg(feature = "desktop")]
+mod dictation_routes;
 mod fs_routes;
 mod git_routes;
 mod github_routes;
@@ -17,6 +19,8 @@ mod plugin_routes;
 mod session;
 pub(crate) mod sse_routes;
 mod static_files;
+#[cfg(feature = "desktop")]
+mod system_routes;
 mod types;
 mod watcher_routes;
 mod worktree_routes;
@@ -639,6 +643,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::get_foreground_process),
         )
         .route("/sessions/{id}/shell-state", get(session::get_shell_state))
+        .route(
+            "/sessions/{id}/shell-family",
+            get(session::get_session_shell_family),
+        )
         .route("/sessions/{id}/last-prompt", get(session::get_last_prompt))
         .route(
             "/sessions/{id}/input-buffer",
@@ -798,6 +806,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(worktree_routes::finalize_merged_worktree_http),
         )
         .route(
+            "/worktrees/run-script",
+            post(worktree_routes::run_setup_script_http),
+        )
+        .route(
             "/worktrees/{branch}",
             delete(worktree_routes::remove_worktree_http),
         )
@@ -845,6 +857,11 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/agents/ides",
             get(agent_routes::detect_installed_ides_http),
         )
+        .route(
+            "/agents/detect-all",
+            post(agent_routes::detect_all_agent_binaries_http),
+        )
+        .route("/agents/open-in-app", post(agent_routes::open_in_app_http))
         // File system
         .route("/fs/list", get(fs_routes::list_directory_http))
         .route("/fs/search", get(fs_routes::search_files_http))
@@ -1575,6 +1592,70 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         "/repo/create-issue-from-proposal",
         post(ai_routes::create_issue_from_proposal_http),
     );
+
+    // Dictation — desktop-only: `crate::dictation` owns the audio capture and
+    // the whisper model, both gated on the `desktop` feature.
+    #[cfg(feature = "desktop")]
+    let routes = routes
+        .route(
+            "/dictation/status",
+            get(dictation_routes::get_dictation_status_http),
+        )
+        .route(
+            "/dictation/models",
+            get(dictation_routes::get_model_info_http),
+        )
+        .route(
+            "/dictation/models/download",
+            post(dictation_routes::download_whisper_model_http),
+        )
+        .route(
+            "/dictation/models/delete",
+            post(dictation_routes::delete_whisper_model_http),
+        )
+        .route(
+            "/dictation/start",
+            post(dictation_routes::start_dictation_http),
+        )
+        .route(
+            "/dictation/stop",
+            post(dictation_routes::stop_dictation_http),
+        )
+        .route(
+            "/dictation/corrections",
+            get(dictation_routes::get_correction_map_http)
+                .put(dictation_routes::set_correction_map_http),
+        )
+        .route(
+            "/dictation/devices",
+            get(dictation_routes::list_audio_devices_http),
+        )
+        .route(
+            "/dictation/inject",
+            post(dictation_routes::inject_text_http),
+        )
+        .route(
+            "/dictation/config",
+            get(dictation_routes::get_dictation_config_http)
+                .put(dictation_routes::set_dictation_config_http),
+        );
+
+    // OS integration — desktop-only: the relay client, the audio output and the
+    // updater all live behind the `desktop` feature.
+    #[cfg(feature = "desktop")]
+    let routes = routes
+        .route(
+            "/system/relay-status",
+            get(system_routes::relay_status_http),
+        )
+        .route(
+            "/system/notification-sound",
+            post(system_routes::play_notification_sound_http),
+        )
+        .route(
+            "/system/check-update",
+            get(system_routes::check_update_channel_http),
+        );
 
     // Static files — SPA frontend (desktop only; not embedded in the remote binary)
     #[cfg(feature = "desktop")]
@@ -4639,6 +4720,65 @@ mod tests {
                 .unwrap_or("")
                 .to_string();
             assert!(ct.contains("text/html"), "{p} should be HTML, got {ct}");
+        }
+    }
+
+    /// Every `COMMAND_TABLE` path in this story's scope must resolve to a route.
+    ///
+    /// Probing is deliberately side-effect free: a POST/PUT carries syntactically
+    /// invalid JSON, so the extractor rejects it before the handler runs and
+    /// `/worktrees/run-script` never runs a shell nor the sound route a tone.
+    ///
+    /// The assertion is "neither 404 nor 405" because a missing route takes both
+    /// shapes here. A GET falls through to the SPA catch-all, which answers 404
+    /// for an API prefix; any other method hits that same GET-only catch-all and
+    /// answers 405 — and where a same-prefix route with another method absorbs the
+    /// path (`/worktrees/{branch}` is DELETE) the 405 comes from there instead.
+    /// Asserting only `!= 404` would therefore pass on every missing POST route.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn every_dictation_and_os_integration_path_has_a_route() {
+        // (method, path) mirrors src/transport.ts COMMAND_TABLE.
+        const PROBES: &[(&str, &str)] = &[
+            ("GET", "/dictation/status"),
+            ("GET", "/dictation/models"),
+            ("POST", "/dictation/models/download"),
+            ("POST", "/dictation/models/delete"),
+            ("POST", "/dictation/start"),
+            ("POST", "/dictation/stop"),
+            ("GET", "/dictation/corrections"),
+            ("PUT", "/dictation/corrections"),
+            ("GET", "/dictation/devices"),
+            ("POST", "/dictation/inject"),
+            ("GET", "/dictation/config"),
+            ("PUT", "/dictation/config"),
+            ("POST", "/agents/open-in-app"),
+            ("POST", "/agents/detect-all"),
+            ("POST", "/system/notification-sound"),
+            ("GET", "/system/relay-status"),
+            ("GET", "/system/check-update"),
+            ("GET", "/sessions/probe-session/shell-family"),
+            ("POST", "/worktrees/run-script"),
+        ];
+
+        let state = test_state();
+        let app = build_router(state, false, true);
+        for (method, path) in PROBES {
+            let req = if *method == "GET" {
+                Request::get(*path).body(Body::empty()).unwrap()
+            } else {
+                Request::builder()
+                    .method(*method)
+                    .uri(*path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("["))
+                    .unwrap()
+            };
+            let status = app.clone().oneshot(req).await.unwrap().status();
+            assert!(
+                status != StatusCode::NOT_FOUND && status != StatusCode::METHOD_NOT_ALLOWED,
+                "{method} {path} resolves to no route (got {status})"
+            );
         }
     }
 

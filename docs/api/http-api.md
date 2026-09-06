@@ -207,6 +207,7 @@ Returns the foreground process info for a session.
 
 ```
 GET  /sessions/:id/shell-state                         -> { "state": "busy"|"idle"|null }
+GET  /sessions/:id/shell-family                        -> "posix"|"windows-native"|"unknown"|null
 GET  /sessions/:id/last-prompt                         -> { "prompt": string|null }
 GET  /sessions/:id/input-buffer                        -> { "content": string }
 GET  /sessions/:id/leaf-pid                            -> { "pid": number|null }
@@ -226,6 +227,13 @@ bytes it started as. The desktop `terminal_styled_rows` command returns the same
 payload raw (`tauri::ipc::Response`), and `rpcImpl` decides between
 `arrayBuffer()` and `json()` on the content-type alone. An empty body means "no
 such session or range" — a valid empty chunk, not an error.
+
+`shell-family` classifies the session's shell so the client picks the right control
+sequences (Ctrl-U is line-kill under POSIX readline, a literal character on
+`cmd.exe`/PowerShell). It answers the bare value, **not** a `{field}` wrapper,
+because `get_session_shell_family` returns `Option<ShellFamily>` bare over IPC and
+`src/utils/sendCommand.ts` reads both transports with the same code. An unknown
+session is `null`, which is the same "fall back to the host default" answer.
 
 Read-only PTY/terminal state mirroring the desktop Tauri commands (story 062). The
 `{field}`-wrapped responses are unwrapped by the frontend transport to match the
@@ -1459,6 +1467,99 @@ GET /agents/ides
 
 Returns list of installed IDEs.
 
+### Batch Detect Agent Binaries
+
+```
+POST /agents/detect-all
+Content-Type: application/json
+
+{ "binaries": ["claude", "codex"] }
+```
+
+Returns `{ "<binary>": { "path": string|null, "version": string|null }, ... }`.
+Detection runs in parallel and skips version lookup for speed; use
+`GET /agents/detect` when the version matters. Blank names are dropped, so a name
+that was sent may be absent from the map.
+
+### Open Path in Application
+
+```
+POST /agents/open-in-app
+Content-Type: application/json
+
+{ "path": "/repo/src/main.rs", "app": "vscode", "line": 42, "col": 7 }
+```
+
+Opens the path in an IDE, terminal or file manager. `line` and `col` are optional
+and only used by editors that support them. An unknown `app` is rejected before
+anything is spawned. Returns `null` on success, matching the `open_in_app` command.
+
+## Dictation Endpoints
+
+Desktop-only: audio capture and the whisper model live behind the `desktop`
+feature, so the remote daemon serves none of these. Every response is exactly what
+the matching `dictation::commands` Tauri command resolves to — a bare string for
+`inject`, `null` for the commands that return nothing — because
+`src/stores/dictation.ts` reads both transports with the same code. Before the app
+handle is up, every state-touching route answers `503`.
+
+```
+GET  /dictation/status                              -> DictationStatus
+GET  /dictation/models                              -> ModelInfo[]
+POST /dictation/models/download  { "model": "..." } -> "Downloaded to <path>"
+POST /dictation/models/delete    { "model": "..." } -> "<deletion message>"
+POST /dictation/start                               -> null
+POST /dictation/stop                                -> TranscribeResponse
+GET  /dictation/corrections                         -> { "<from>": "<to>", ... }
+PUT  /dictation/corrections      { "map": { ... } } -> null
+GET  /dictation/devices                             -> AudioDevice[]
+POST /dictation/inject           { "text": "..." }  -> "<corrected text>"
+GET  /dictation/config                              -> DictationConfig
+PUT  /dictation/config           DictationConfig    -> null
+```
+
+`POST /dictation/stop` stops the recording and transcribes it, returning
+`{ text, skip_reason?, duration_s }`. `PUT /dictation/config` takes the config
+object as the whole body, not wrapped in a field.
+
+## Desktop Integration Endpoints
+
+Desktop-only, like the three commands they mirror: the relay client, the audio
+output and the updater are all gated on the `desktop` feature.
+
+### Relay Status
+
+```
+GET /system/relay-status
+```
+
+Returns `{ "enabled": bool, "connected": bool, "url": string, "session_id": string }`.
+Shares one body with the `get_relay_status` command, so the two transports cannot
+drift.
+
+### Play Notification Sound
+
+```
+POST /system/notification-sound
+Content-Type: application/json
+
+{ "sound": "question", "volume": 0.5, "device": "Studio Display Speakers" }
+```
+
+`sound` is one of `question`, `completion`, `error`, `warning`, `info`,
+`attention`. `device` is the chosen audio output; `null` or omitted uses the
+system default. Returns `null`, matching the command.
+
+### Check Update Channel
+
+```
+GET /system/check-update?channel=nightly
+```
+
+Returns `{ "available": bool, "version": string|null, "notes": string|null, "release_page": string|null, "not_found": bool }`.
+Channel URLs are hardcoded — no user-supplied URL is accepted. An unpublished
+channel is `not_found: true`, not an error; an unknown channel name is a 500.
+
 ## Prompt Endpoints
 
 ### Process Prompt
@@ -1646,6 +1747,19 @@ Finalizes a merged worktree branch. `action` must be `"archive"` (moves to archi
 For `action: "delete"`, the response includes `branch_delete_warning` when the worktree was removed but safe branch deletion failed, for example because the branch has unmerged commits.
 
 `force` (optional, default `false`) skips the dirty-worktree gate. Both actions end in `git worktree remove --force`, so a worktree that is **not known to be clean** comes back as `{ "action": "needs_confirmation", "merged": true }` without touching anything — ask the user, then re-send with `"force": true`. A dirty check that fails to run blocks the same way (`worktree_dirty` stays `false`, because git never reported "dirty"). This route shares `finalize_merged_worktree_impl` with the Tauri command, so both transports pass the identical gate.
+
+### Run Setup Script
+
+```
+POST /worktrees/run-script
+Content-Type: application/json
+
+{ "script": "pnpm install", "cwd": "/path/to/worktree" }
+```
+
+Runs the script through `sh -c` (Unix) or `cmd /C` (Windows) in `cwd` and returns
+exit code plus captured output. `cwd` accepts `~`. A `cwd` that does not exist is a
+500 with `{ "error": ... }`. Same body as the `run_setup_script` command.
 
 ### Remove Worktree
 
