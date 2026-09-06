@@ -14234,8 +14234,14 @@ mod tests {
             }),
             Some(parent_mcp),
         );
-        if spawned.get("error").is_some() {
-            eprintln!("Skipping: PTY not available in this environment");
+        // THE single PTY-availability decision for this test. Everything past it
+        // runs, or nothing does — see the release before the second spawn for why
+        // that is now a safe thing to promise. Carry the underlying error rather
+        // than a fixed sentence: "PTY not available" reads identically on a machine
+        // with no PTY support and on one that merely ran out of descriptors, and
+        // that ambiguity is what made the original flake so hard to place.
+        if let Some(error) = spawned.get("error") {
+            eprintln!("Skipping: cannot open a PTY here — {error}");
             return;
         }
         let child = spawned["session_id"].as_str().unwrap();
@@ -14295,6 +14301,26 @@ mod tests {
             "lifecycle mail emitted before parent registration must be preserved"
         );
 
+        // Release the first child BEFORE spawning the second. Its master fd, its
+        // cloned reader fd and its writer are three descriptors this test has no
+        // further use for — every assertion about `child` is already above — and
+        // holding them made the second spawn strictly harder than the first.
+        //
+        // That asymmetry was the bug, and it is three descriptors wide. Measured
+        // by bisecting `ulimit -n` against this binary: this test fully passed at
+        // n>=19, HALF-RAN at n=18/17/16 (first spawn fine, second dying on
+        // `Failed to spawn shell: Too many open files (os error 24)`, then
+        // `dup of fd 13 failed`), and skipped cleanly at n<=15. The single-spawn
+        // `spawn_response_includes_enrichment_fields` passed all the way down to
+        // n=16 and skipped at n<=15. Same floor, three fds of daylight — the
+        // pressure was self-inflicted, not ambient, so it is fixed by giving the
+        // descriptors back instead of by tolerating the failure.
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": child}),
+            None,
+        );
+
         let ready_child = handle_agent(
             &state,
             addr,
@@ -14306,6 +14332,10 @@ mod tests {
             }),
             Some(parent_mcp),
         );
+        // Hard assert, deliberately: PTY availability was decided at the top and
+        // the descriptors the first child held are back, so this spawn has the
+        // headroom the first one had. Skipping here instead would silently drop
+        // the three assertions below, which are the subject of the test.
         assert!(
             ready_child.get("error").is_none(),
             "registered external parent spawn failed: {ready_child}"
@@ -14315,13 +14345,11 @@ mod tests {
         let ready_child_id = ready_child["session_id"].as_str().unwrap();
         assert!(state.agent_inbox.contains_key(ready_child_id));
 
-        for session_id in [child, ready_child_id] {
-            handle_session(
-                &state,
-                &serde_json::json!({"action": "kill", "session_id": session_id}),
-                None,
-            );
-        }
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": ready_child_id}),
+            None,
+        );
     }
 
     #[cfg(unix)]
