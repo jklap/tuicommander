@@ -144,6 +144,46 @@ async fn kill_settles_and_retains_a_killed_snapshot_without_session_operations()
     assert!(killed.attachments.is_empty());
 }
 
+/// Bytes that are not a frame, once the connection is up and staying up.
+///
+/// This client never sees them. The SDK owns the framing: an unparseable line
+/// is answered with JSON-RPC's `-32700` to the agent that sent it and the
+/// reader carries on, and nothing about it reaches the application. So the
+/// contract on this side is the one pinned here — the connection survives, the
+/// stream stays in sync, and the next request is answered normally — and the
+/// party that can act on the mistake is the one told about it.
+///
+/// The scenario asserts the `-32700` itself, because that is the whole reason
+/// this is tolerable rather than merely undetected. A malformed line shaped
+/// like a *response* is a different matter: the SDK drops it silently, since
+/// answering an answer is not a thing JSON-RPC can do. That one is invisible to
+/// both ends, and the pending request it might have been for is left to time
+/// out with the connection.
+#[tokio::test]
+async fn a_frame_that_cannot_be_parsed_is_answered_and_the_connection_carries_on() {
+    let fixture = Fixture::with("malformed-after-ready");
+    let ready = fixture.connect().await;
+    let attachment = fixture
+        .manager
+        .new_session(ready.connection_id, authority(fixture.root()))
+        .await
+        .expect("the garbage in flight is not this request's problem");
+    let listed = fixture
+        .manager
+        .list_sessions(ready.connection_id, Default::default())
+        .await
+        .expect("the connection is still usable afterwards");
+    assert_eq!(
+        listed.sessions.first().map(|session| &session.session_id),
+        Some(&attachment.session_id),
+        "the stream stayed in sync: the answer that came back is this request's"
+    );
+
+    let snapshot = fixture.manager.snapshot(ready.connection_id).unwrap();
+    assert_eq!(snapshot.state, AcpConnectionState::Ready);
+    assert!(snapshot.settlement.is_none());
+}
+
 /// How many settled connections the manager is expected to keep.
 ///
 /// Must match `manager::SETTLED_RETAINED`, which is private because it is a
