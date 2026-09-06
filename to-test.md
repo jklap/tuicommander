@@ -672,3 +672,21 @@ None of them is here because nobody looked.
   and unindexed, run a cross-repo content search (`?` in the command palette, all-repos
   on) for a string that is not in the active repo: the empty state must read
   "N not indexed" and must NOT promise "retry shortly" for repos nothing is building.
+- [ ] Rust change, needs a `make dev` restart (story #650-b0a0). With the app started
+  while **Cloud Relay is off**, turn it on in Settings → Services with a valid relay URL
+  and token: the status dot must go green with no app restart, and `GET :9876/logs`
+  must show `relay: connecting to …`. Turn it off: the dot goes grey and the log shows
+  `relay: shutting down` then `relay: stopped`. Turn it on again — the supervisor must
+  still be watching after a stop. Then kill the relay server (or pull the network) while
+  connected: every reconnect log must read `reconnecting in 1s` for the first attempt
+  after each *successful* connection, growing 1→2→4… only across consecutive failures.
+- [ ] Rust change, needs a `make dev` restart (story #656-2b63). Spawn an agent via MCP
+  `agent action=spawn` with explicit `rows`/`cols` (e.g. 50x140), then confirm the tab
+  renders the full screen: before this, the VT screen was built at a hardcoded 24x220
+  while the child was handed the caller's geometry, so anything below row 24 (an agent's
+  input box, a dialog footer) never reached the parsers. Then let that child exit and
+  call `session action=wait session_id=<id> until=exited` **after** it has died: it must
+  answer `{met:true, exit_code:N}` instead of `{"error":"Unknown session …"}`. A wait on
+  an id that never existed must still fail fast with `Unknown session`. The same
+  registration path now also backs `POST /agents` and browser/remote `POST /sessions`,
+  so a browser-created terminal and an HTTP-spawned agent both need a smoke check.

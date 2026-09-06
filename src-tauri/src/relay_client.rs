@@ -175,50 +175,143 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// Initial backoff between reconnection attempts.
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 
-/// Start the relay client. Connects to the relay server and bridges events.
-/// Returns when the shutdown signal is received.
-pub(crate) async fn run(state: Arc<AppState>, mut shutdown_rx: oneshot::Receiver<()>) {
-    let config = state.config.read().clone();
-    if !config.services.relay.enabled
-        || config.services.relay.url.is_empty()
-        || config.services.relay.token.is_empty()
-    {
-        log_via_state(&state, "info", "relay", "disabled or not configured");
-        return;
+/// The settings that decide whether the relay connects, and where to.
+///
+/// A snapshot, not a live read: the supervisor compares the set it started a
+/// client with against the current one to decide whether the running client is
+/// still the right client.
+#[derive(Clone, Debug, PartialEq)]
+struct RelaySettings {
+    url: String,
+    token: String,
+    session_id: String,
+}
+
+impl RelaySettings {
+    /// What a live client would need, or `None` when the relay must not run.
+    /// `enabled` alone is not enough — an empty URL or token cannot connect.
+    fn active(config: &crate::config::AppConfig) -> Option<Self> {
+        let relay = &config.services.relay;
+        (relay.enabled && !relay.url.is_empty() && !relay.token.is_empty()).then(|| Self {
+            url: relay.url.clone(),
+            token: relay.token.clone(),
+            session_id: relay.session_id.clone(),
+        })
+    }
+}
+
+/// Tell the relay supervisor that the config moved.
+///
+/// Called from `config::commit_config_change`, the single choke point every
+/// config write goes through (IPC `save_config`, `PUT /config`, the MCP
+/// `config/save`). Hanging it there rather than on each writer is what keeps
+/// the desktop and HTTP transports from drifting: no writer can forget it.
+pub(crate) fn notify_config_changed(state: &AppState) {
+    state
+        .relay
+        .config_revision
+        .send_modify(|revision| *revision += 1);
+}
+
+/// Own the relay client's lifecycle for the life of the process.
+///
+/// The client only knows how to stay connected; deciding *whether* it should be
+/// connected is this task's job. It is spawned unconditionally at boot — the
+/// relay being off is a state it supervises, not a reason not to run — because
+/// that is what turns the Settings toggle into a start/stop rather than a
+/// "restart the app for this to take effect".
+pub(crate) async fn supervise(state: Arc<AppState>, mut shutdown_rx: oneshot::Receiver<()>) {
+    let mut config_rx = state.relay.config_revision.subscribe();
+    let mut client: Option<Client> = None;
+
+    loop {
+        let wanted = RelaySettings::active(&state.config.read());
+        if wanted.as_ref() != client.as_ref().map(|running| &running.settings) {
+            if let Some(running) = client.take() {
+                running.stop().await;
+                log_via_state(&state, "info", "relay", "stopped");
+            }
+            client = wanted.map(|settings| Client::start(&state, settings));
+        }
+
+        tokio::select! {
+            _ = &mut shutdown_rx => break,
+            // The sender lives in AppState: an error means the app is gone.
+            changed = config_rx.changed() => if changed.is_err() { break },
+        }
     }
 
-    let cipher = derive_cipher(&config.services.relay.token);
-    let ws_url = format!(
-        "{}/ws/{}",
-        config.services.relay.url, config.services.relay.session_id
-    );
+    if let Some(running) = client.take() {
+        running.stop().await;
+    }
+    log_via_state(&state, "info", "relay", "supervisor shutting down");
+}
+
+/// A running relay client and the handle that stops it.
+struct Client {
+    settings: RelaySettings,
+    stop: oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Client {
+    fn start(state: &Arc<AppState>, settings: RelaySettings) -> Self {
+        let (stop, stop_rx) = oneshot::channel();
+        let task = tokio::spawn(run(state.clone(), settings.clone(), stop_rx));
+        Self {
+            settings,
+            stop,
+            task,
+        }
+    }
+
+    /// Close the socket and wait for the client to be gone before the next one
+    /// starts. Bounded without a timeout on purpose: `run` reaches an await that
+    /// watches the stop signal on every path, including the connect attempt, so
+    /// a deadline here could only fire on a machine that was merely slow.
+    async fn stop(self) {
+        let _ = self.stop.send(());
+        let _ = self.task.await;
+    }
+}
+
+/// Keep one relay connection alive: connect, bridge, reconnect on loss.
+/// Returns when the stop signal is received.
+async fn run(
+    state: Arc<AppState>,
+    settings: RelaySettings,
+    mut shutdown_rx: oneshot::Receiver<()>,
+) {
+    let cipher = derive_cipher(&settings.token);
+    let ws_url = format!("{}/ws/{}", settings.url, settings.session_id);
     let mut backoff = INITIAL_BACKOFF;
 
     loop {
         log_via_state(&state, "info", "relay", &format!("connecting to {ws_url}"));
 
-        match connect_and_run(
-            &state,
-            &ws_url,
-            &config.services.relay.token,
-            &cipher,
-            &mut shutdown_rx,
-        )
-        .await
+        let outcome =
+            connect_and_run(&state, &ws_url, &settings.token, &cipher, &mut shutdown_rx).await;
+
+        // `connected` is raised once the handshake is through, so swapping it
+        // here both clears the reported status and answers "did we get in?".
+        // A connection that came up ends the failure streak: whatever dropped
+        // it is a new failure, and it starts from the bottom of the ladder.
+        // Without this the backoff only ever grows, and a client that has been
+        // up for a week waits a full minute to recover from one blip.
+        if state
+            .relay
+            .connected
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
         {
+            backoff = INITIAL_BACKOFF;
+        }
+
+        match outcome {
             Ok(ShutdownReason::Signal) => {
-                state
-                    .relay
-                    .connected
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
                 log_via_state(&state, "info", "relay", "shutting down");
                 return;
             }
             Ok(ShutdownReason::Disconnected) => {
-                state
-                    .relay
-                    .connected
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
                 log_via_state(
                     &state,
                     "warn",
@@ -227,10 +320,6 @@ pub(crate) async fn run(state: Arc<AppState>, mut shutdown_rx: oneshot::Receiver
                 );
             }
             Err(e) => {
-                state
-                    .relay
-                    .connected
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
                 log_via_state(
                     &state,
                     "error",
@@ -270,7 +359,13 @@ async fn connect_and_run(
     cipher: &Aes256Gcm,
     shutdown_rx: &mut oneshot::Receiver<()>,
 ) -> anyhow::Result<ShutdownReason> {
-    let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await?;
+    // Racing the stop signal here is what lets the supervisor swap settings
+    // promptly: a connect to a black-holed address can otherwise sit in the
+    // TCP handshake for a minute with the signal already sent.
+    let (ws_stream, _) = tokio::select! {
+        connected = tokio_tungstenite::connect_async(ws_url) => connected?,
+        _ = &mut *shutdown_rx => return Ok(ShutdownReason::Signal),
+    };
     let (mut ws_sink, mut ws_source) = ws_stream.split();
 
     // Authenticate: send bearer token as first text message.
@@ -292,7 +387,8 @@ async fn connect_and_run(
         .connected
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
-    // Subscribe to event bus — reset backoff on successful connection
+    // The `connected` flag above is also what tells `run` this attempt got in,
+    // so the backoff ladder resets — the reset lives there, not here.
     let mut event_rx = state.event_bus.subscribe();
     let mut awaiting_by_session: HashMap<String, bool> = HashMap::new();
     // The relay tells us when a phone is actually listening. Until it does, the
@@ -700,5 +796,185 @@ mod tests {
         let encrypted = encrypt(&reference_cipher, plaintext).unwrap();
         let decrypted = decrypt(&cipher, &encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    // -----------------------------------------------------------------------
+    // Reconnect lifecycle
+    // -----------------------------------------------------------------------
+
+    /// A relay server that completes the handshake, reads the bearer frame and
+    /// then closes — the "connects fine, drops immediately" shape that drives
+    /// the reconnect path. Every accepted connection is announced on `accepted`.
+    async fn spawn_dropping_relay(accepted: tokio::sync::mpsc::UnboundedSender<()>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test relay");
+        let addr = listener.local_addr().expect("test relay address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                if accepted.send(()).is_err() {
+                    return;
+                }
+                tokio::spawn(async move {
+                    if let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await {
+                        let _ = ws.next().await; // the `Bearer <token>` frame
+                        let _ = ws.close(None).await;
+                    }
+                });
+            }
+        });
+        format!("ws://{addr}")
+    }
+
+    /// Every "reconnecting in Ns" wait the relay logged, in order.
+    fn logged_reconnect_waits(state: &Arc<AppState>) -> Vec<String> {
+        state
+            .log_buffer
+            .lock()
+            .get_entries(0)
+            .into_iter()
+            .filter(|entry| entry.source == "relay")
+            .filter_map(|entry| {
+                entry
+                    .message
+                    .split("reconnecting in ")
+                    .nth(1)
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    /// The clock is paused: the backoff waits are the subject, so they are read
+    /// out of the log rather than measured. Nothing here bounds wall time —
+    /// a genuine hang is nextest's `slow-timeout` to report, and a deadline of
+    /// our own would only be able to fail for the wrong reason.
+    #[tokio::test(start_paused = true)]
+    async fn backoff_resets_after_a_connection_that_came_up() {
+        let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+        let url = spawn_dropping_relay(accepted_tx).await;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        {
+            let mut cfg = state.config.write();
+            cfg.services.relay.enabled = true;
+            cfg.services.relay.url = url;
+            cfg.services.relay.token = "test_relay_token".to_string();
+            cfg.services.relay.session_id = "test-session".to_string();
+        }
+
+        let settings =
+            RelaySettings::active(&state.config.read()).expect("relay settings are complete");
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let client = tokio::spawn(run(state.clone(), settings, stop_rx));
+
+        // Three attempts means two reconnects, each preceded by a backoff wait.
+        for attempt in 1..=3 {
+            accepted_rx
+                .recv()
+                .await
+                .unwrap_or_else(|| panic!("relay client never made attempt {attempt}"));
+        }
+        let _ = stop_tx.send(());
+        let _ = client.await;
+
+        let waits = logged_reconnect_waits(&state);
+        assert!(
+            waits.len() >= 2,
+            "expected two reconnect waits, logged {waits:?}"
+        );
+        assert!(
+            waits.iter().all(|wait| wait == "1s"),
+            "a connection that came up ends the failure streak, so every wait \
+             must stay at the initial backoff; logged {waits:?}"
+        );
+    }
+
+    /// What the relay server saw a client do.
+    #[derive(Debug, PartialEq)]
+    enum PeerEvent {
+        Attached,
+        Detached,
+    }
+
+    /// A relay server that holds every connection open until the client goes
+    /// away, reporting both edges.
+    async fn spawn_holding_relay(events: tokio::sync::mpsc::UnboundedSender<PeerEvent>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test relay");
+        let addr = listener.local_addr().expect("test relay address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let events = events.clone();
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                        return;
+                    };
+                    if events.send(PeerEvent::Attached).is_err() {
+                        return;
+                    }
+                    while let Some(Ok(_)) = ws.next().await {}
+                    let _ = events.send(PeerEvent::Detached);
+                });
+            }
+        });
+        format!("ws://{addr}")
+    }
+
+    fn set_relay_enabled(state: &Arc<AppState>, enabled: bool, url: &str) {
+        {
+            let mut cfg = state.config.write();
+            cfg.services.relay.enabled = enabled;
+            cfg.services.relay.url = url.to_string();
+            cfg.services.relay.token = "test_relay_token".to_string();
+            cfg.services.relay.session_id = "test-session".to_string();
+        }
+        notify_config_changed(state);
+    }
+
+    /// The Settings toggle is a config write and nothing else — the supervisor
+    /// has to notice it. Every wait here is on an event the relay server
+    /// actually observed, so a regression hangs and nextest reports it rather
+    /// than a deadline of ours failing for an unrelated reason.
+    #[tokio::test(start_paused = true)]
+    async fn settings_toggle_starts_and_stops_the_client_without_a_restart() {
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let url = spawn_holding_relay(events_tx).await;
+
+        // Relay off at boot — the supervisor still runs, which is the whole point.
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let supervisor = tokio::spawn(supervise(state.clone(), stop_rx));
+
+        set_relay_enabled(&state, true, &url);
+        assert_eq!(
+            events_rx.recv().await,
+            Some(PeerEvent::Attached),
+            "enabling the relay must connect without an app restart"
+        );
+
+        set_relay_enabled(&state, false, &url);
+        assert_eq!(
+            events_rx.recv().await,
+            Some(PeerEvent::Detached),
+            "disabling the relay must drop the connection without an app restart"
+        );
+
+        // Back on again: a supervisor that stopped supervising after one toggle
+        // is the same bug wearing a different hat.
+        set_relay_enabled(&state, true, &url);
+        assert_eq!(
+            events_rx.recv().await,
+            Some(PeerEvent::Attached),
+            "the supervisor must keep watching after a stop"
+        );
+
+        let _ = stop_tx.send(());
+        let _ = supervisor.await;
+        assert_eq!(
+            events_rx.recv().await,
+            Some(PeerEvent::Detached),
+            "app shutdown must close the relay connection"
+        );
     }
 }
