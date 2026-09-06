@@ -7082,7 +7082,7 @@ fn wsl_path_root_drive() {
 
 #[test]
 fn mark_session_exited_pushes_state_change_to_parent_inbox() {
-    let state = crate::state::tests_support::make_test_app_state();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let child_id = "child-sess";
     let parent_id = "parent-sess";
 
@@ -7948,7 +7948,7 @@ fn declared_completion_does_not_emit_ambiguous_idle_lifecycle() {
 
 #[test]
 fn pending_initial_prompt_timeout_notifies_parent_once() {
-    let state = crate::state::tests_support::make_test_app_state();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let child_id = "child-prompt-timeout";
     let parent_id = "parent-prompt-timeout";
     state
@@ -8748,6 +8748,56 @@ fn agent_submission_writer_lock_prevents_raw_input_splicing() {
     );
 }
 
+/// `INJECT_ENTER_GAP` is 50 ms of REAL time that cannot be shortened, and it is
+/// held under the session writer mutex on purpose — `agent_submission_writer_
+/// lock_prevents_raw_input_splicing` pins that exact byte sequence. So the only
+/// way a caller stops paying it is to stop being the thread that waits.
+/// `flush_pending_injections` runs on the session-state accumulator and on the
+/// silence timer, both tokio workers; it must hand the write to the injection
+/// worker and return, while the queued message still reaches the composer whole.
+#[cfg(unix)]
+#[test]
+fn flush_hands_the_enter_gap_to_the_injection_worker_not_the_caller() {
+    use std::collections::VecDeque;
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    agent_session(&state, "detached-flush", SHELL_IDLE);
+    let bytes = insert_recording_session(&state, "detached-flush");
+    let mut queue = VecDeque::new();
+    queue.push_back(crate::state::PendingInjection::peer_message("wake up"));
+    state
+        .pending_injections
+        .insert("detached-flush".to_string(), queue);
+
+    let started = std::time::Instant::now();
+    flush_pending_injections(&state, "detached-flush");
+    let returned_in = started.elapsed();
+    assert!(
+        returned_in < INJECT_ENTER_GAP / 2,
+        "the caller must not wait out the injection's Enter gap; returned in {returned_in:?}"
+    );
+
+    // Deferred, not dropped: the same framing must still land, payload then Enter.
+    for _ in 0..300 {
+        if bytes.lock().unwrap().ends_with(b"\r") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+        "\u{15}wake up\r",
+        "the deferred injection must be byte-identical to the inline one"
+    );
+    assert_eq!(
+        state
+            .pending_injections
+            .get("detached-flush")
+            .map(|queue| queue.len()),
+        Some(0),
+        "a delivered message must not stay queued"
+    );
+}
+
 #[test]
 fn codex_heuristic_idle_is_not_safe_for_injection_or_standby() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -9529,6 +9579,10 @@ fn deliver_reenqueue_recovers_message_when_idle_races_enqueue() {
         });
         sender.join().unwrap();
         timer.join().unwrap();
+        // The timer's flush is dispatched to the injection worker, so joining the
+        // thread only proves it was enqueued. Drain before counting, or the next
+        // iteration's enqueue lands on top of a flush that never ran.
+        wait_for_injection_queue();
 
         let queued = state
             .pending_injections
@@ -9767,7 +9821,7 @@ fn idle_transition_emits_before_submitting_one_pending_message() {
 #[test]
 fn flush_keeps_pending_while_question_confident() {
     use std::collections::VecDeque;
-    let state = crate::state::tests_support::make_test_app_state();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
     use std::sync::atomic::AtomicU8;
     state
         .shell_states
@@ -9799,6 +9853,7 @@ fn flush_keeps_pending_while_question_confident() {
     try_shell_transition(&state, "sess", SHELL_BUSY, SHELL_IDLE, false);
     emit_shell_state(&state, "sess", "idle");
     flush_pending_injections(&state, "sess");
+    wait_for_injection_queue();
     assert_eq!(
         state.pending_injections.get("sess").map(|q| q.len()),
         Some(1),
@@ -9843,13 +9898,14 @@ fn flush_noop_while_busy() {
     // agent (e.g. the user-input unblock path firing while the agent already
     // went back to work) must leave the queue untouched.
     use std::collections::VecDeque;
-    let state = crate::state::tests_support::make_test_app_state();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
     agent_session(&state, "busy", SHELL_BUSY);
     let mut q = VecDeque::new();
     q.push_back(crate::state::PendingInjection::peer_message("later"));
     state.pending_injections.insert("busy".to_string(), q);
 
     flush_pending_injections(&state, "busy");
+    wait_for_injection_queue();
     assert_eq!(
         state.pending_injections.get("busy").map(|q| q.len()),
         Some(1),
@@ -9896,7 +9952,7 @@ fn state_change_to_parent_without_managed_pty_stays_inbox_only() {
     // Logical agent state alone is not proof of a managed PTY. A child state
     // change must remain available in the inbox without creating a phantom
     // terminal injection for an external peer.
-    let state = crate::state::tests_support::make_test_app_state();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
     agent_session(&state, "parent", SHELL_BUSY);
     state
         .session_parent
@@ -9907,6 +9963,9 @@ fn state_change_to_parent_without_managed_pty_stays_inbox_only() {
         "child",
         serde_json::json!({"type":"state_change","state":"idle","session_id":"child"}),
     );
+    // The wake is dispatched on the injection worker; drain it, or "no terminal
+    // input happened" would pass merely by asserting too early.
+    wait_for_injection_queue();
 
     // Inbox got the JSON payload…
     assert_eq!(
@@ -9934,7 +9993,7 @@ fn mark_session_exited_sends_single_exited_notification() {
     // F1/DATA-1: only one state_change("exited") must reach parent inbox on exit.
     // The BUSY→IDLE transition in the exit path uses notify_parent=false, so the
     // orchestrator must never see a spurious "idle" before "exited".
-    let state = crate::state::tests_support::make_test_app_state();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let child_id = "child-exit-dedup";
     let parent_id = "parent-exit-dedup";
 

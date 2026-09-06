@@ -2,8 +2,8 @@ use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::Serialize;
 use std::io::{Read, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 #[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -1848,9 +1848,11 @@ impl SilenceState {
 /// same shard can deadlock under parking_lot writer-fairness when a concurrent
 /// session create/destroy is queued to write the shard between the two reads.
 /// Load what you need, drop the Ref, then call. Internally the Ref is dropped
-/// BEFORE any post-transition work for the same reason: both
-/// `flush_pending_injections` and `push_state_change_to_parent` (via
-/// `deliver_message_to_pty`) re-read `shell_states` through `should_inject_now`.
+/// BEFORE any post-transition work for the same reason:
+/// `flush_pending_injections_blocking` re-reads `shell_states` through
+/// `should_inject_now` on this very thread. (`push_state_change_to_parent` reaches
+/// the same read via `deliver_message_to_pty`, but hands it to the injection
+/// worker, so it is no longer this thread's re-entrancy to manage.)
 fn try_shell_transition(
     state: &crate::state::AppState,
     session_id: &str,
@@ -3505,7 +3507,9 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         // the stale IDLE emitted by this caller.
         if target == SHELL_IDLE {
             reevaluate_orchestrator_mail_wake(state, session_id);
-            flush_pending_injections(state, session_id);
+            // The session's own reader thread, not a tokio worker: it must not
+            // race ahead of the bytes it is about to publish.
+            flush_pending_injections_blocking(state, session_id);
         }
     }
 }
@@ -6231,19 +6235,28 @@ fn dispatch_parent_lifecycle(state: &AppState, dispatch: ParentLifecycleDispatch
 /// Push a state_change message and wake the parent when no child lifecycle
 /// transaction is active (for example, process exit and direct test helpers).
 pub(crate) fn push_state_change_to_parent(
-    state: &AppState,
+    state: &Arc<AppState>,
     session_id: &str,
     payload: serde_json::Value,
 ) {
     if let Some(dispatch) = enqueue_state_change_to_parent(state, session_id, payload) {
-        dispatch_parent_lifecycle(state, dispatch);
+        // The inbox push above already happened on this thread — that is the
+        // authoritative copy an `agent wait` can observe. Only the terminal wake
+        // is deferred, because it is the part that sleeps `INJECT_ENTER_GAP`, and
+        // both live producers here are tokio workers (the session-state
+        // accumulator and the reader thread's exit path).
+        let state = Arc::clone(state);
+        spawn_injection_job(move || dispatch_parent_lifecycle(&state, dispatch));
     }
 }
 
 /// Emit the single exceptional-path notification for an initial prompt that
 /// never completed PTY submission. Removing the marker first makes the
 /// operation idempotent: a watchdog can fire at most once per spawned child.
-pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session_id: &str) -> bool {
+pub(crate) fn notify_initial_prompt_timeout_if_pending(
+    state: &Arc<AppState>,
+    session_id: &str,
+) -> bool {
     if state.pending_initial_prompts.remove(session_id).is_none() {
         return false;
     }
@@ -6286,15 +6299,16 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
     {
         return true;
     }
-    let outcome = deliver_message_to_managed_pty(
-        state,
-        &parent_id,
-        &format!(
-            "[TUIC] {}",
-            describe_lifecycle_payload(session_id, &payload)
-        ),
+    // Fired from a tokio watchdog task, so the wake goes to the injection worker.
+    let framed = format!(
+        "[TUIC] {}",
+        describe_lifecycle_payload(session_id, &payload)
     );
-    settle_terminal_delivery(state, &parent_id, &message_id, outcome);
+    let state = Arc::clone(state);
+    spawn_injection_job(move || {
+        let outcome = deliver_message_to_managed_pty(&state, &parent_id, &framed);
+        settle_terminal_delivery(&state, &parent_id, &message_id, outcome);
+    });
     true
 }
 
@@ -6574,6 +6588,63 @@ fn injection_payload(text: &str) -> String {
 /// in step — separate flushes never guaranteed separate reads, only time does.
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 
+/// One piece of injection work, handed off by a caller that must not block.
+type InjectionJob = Box<dyn FnOnce() + Send + 'static>;
+
+/// The thread that pays `INJECT_ENTER_GAP` so tokio workers do not.
+///
+/// Three producers reach injection from a tokio worker — the session-state
+/// accumulator, the per-session silence timer, and the `agent wait` guard's
+/// `Drop` — and each would park that worker for 50ms per message. They enqueue
+/// here instead.
+///
+/// ONE thread, not one per job, and that is the whole design: lifecycle
+/// notifications for a parent (`idle` → `completed` → `exited`) must reach its
+/// composer in the order they were produced, and a thread per job would let
+/// `exited` overtake `idle`. A single FIFO consumer preserves the ordering the
+/// callers used to get for free by being synchronous.
+///
+/// The channel is unbounded on purpose: a bounded one could block the very
+/// caller this exists to unblock, and a job may enqueue more work re-entrantly
+/// (a delivery that transitions a session re-runs the flush).
+static INJECTION_QUEUE: LazyLock<std::sync::mpsc::Sender<InjectionJob>> = LazyLock::new(|| {
+    let (tx, rx) = std::sync::mpsc::channel::<InjectionJob>();
+    std::thread::Builder::new()
+        .name("tuic-injection".to_string())
+        .spawn(move || {
+            for job in rx {
+                job();
+            }
+        })
+        .expect("injection worker thread");
+    tx
+});
+
+/// Block until every injection enqueued before this call has run.
+///
+/// The worker is FIFO, so a job that signals us cannot run ahead of the ones
+/// queued before it. Tests asserting on the *result* of a detached injection
+/// need this; polling for the effect instead turns each such assertion into a
+/// timing race that reports a scheduling delay as a delivery bug.
+#[cfg(test)]
+pub(crate) fn wait_for_injection_queue() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    spawn_injection_job(move || {
+        let _ = tx.send(());
+    });
+    rx.recv().expect("injection worker must drain");
+}
+
+/// Run `job` on the injection worker instead of the calling thread.
+pub(crate) fn spawn_injection_job(job: impl FnOnce() + Send + 'static) {
+    // The receiver lives for the process, so this can only fail if the worker
+    // panicked. Running the job inline would reintroduce exactly the block this
+    // exists to remove, so report the loss instead of hiding it in a stall.
+    if INJECTION_QUEUE.send(Box::new(job)).is_err() {
+        tracing::error!("injection worker is gone; a queued injection was dropped");
+    }
+}
+
 /// Write prompt text and a submitting Enter to an agent PTY using the exact
 /// framing and timing required by raw-mode TUIs. The caller owns bookkeeping:
 /// peer delivery records a synthetic submission, while MCP session input feeds
@@ -6660,11 +6731,13 @@ fn write_agent_command_with_boundary(
         );
     }
 
-    // DEFERRED (2026-07-17) — this blocks the calling thread (sometimes a tokio
-    // worker: session-state accumulator / agent-send dispatch) for INJECT_ENTER_GAP.
-    // Acceptable because injection is low-frequency (peer messages, idle-transition
-    // wakes). If a hot path ever calls this, move the sequence onto a detached
-    // thread — that needs Arc<AppState> threaded through deliver/flush (wider refactor).
+    // Blocks the calling thread, under the writer guard, for the whole gap. Both
+    // properties are load-bearing and neither is negotiable here: the child only
+    // reads the CR as a submit when it arrives in a separate `read()`, and
+    // `agent_submission_writer_lock_prevents_raw_input_splicing` pins the byte
+    // sequence this guard protects. A caller that must not block therefore does
+    // not shorten the gap — it stops being the thread that waits, by handing the
+    // whole sequence to `INJECTION_QUEUE`.
     std::thread::sleep(INJECT_ENTER_GAP);
 
     // Exclude payload echo already observable before Enter. The async handler
@@ -7020,7 +7093,8 @@ pub(crate) fn deliver_message_to_pty(
         // by should_inject_now) delivers it ourselves. A double flush is harmless — it
         // drains under a get_mut write lock, so the racing flush that loses just finds
         // an empty queue.
-        flush_pending_injections(state, session_id);
+        // Blocking on purpose: the emptiness check below IS the return value.
+        flush_pending_injections_blocking(state, session_id);
         // That flush drains the whole queue under a write lock, so an empty queue
         // means everything — ours included — reached the composer. A non-empty
         // queue may still hold this message, and reporting Queued in the ambiguous
@@ -7085,13 +7159,29 @@ pub(crate) fn deliver_message_to_managed_pty(
     }
 }
 
+/// `flush_pending_injections_blocking` off the calling thread.
+///
+/// This is the entry point for every caller that runs on a tokio worker — the
+/// session-state accumulator, the silence timer, desktop input bookkeeping.
+/// The flush itself sleeps `INJECT_ENTER_GAP` under the session writer mutex,
+/// so waiting for it here would park a worker for 50ms per queued message.
+///
+/// Callers that must observe the result before returning — `deliver_message_to_pty`
+/// reads the queue to tell `Typed` from `Queued`, and the OSC handler already
+/// runs on the session's own reader thread — call the blocking form directly.
+pub(crate) fn flush_pending_injections(state: &Arc<AppState>, session_id: &str) {
+    let state = Arc::clone(state);
+    let session_id = session_id.to_string();
+    spawn_injection_job(move || flush_pending_injections_blocking(&state, &session_id));
+}
+
 /// Drain and inject any messages queued for a session that can receive them now.
 /// Self-guarded by `should_inject_now`: skips (leaves queued) unless the session
 /// is an idle agent not blocked on a confident question, so a peer message never
 /// answers a user-facing approval prompt and never corrupts a busy TUI. Called
 /// from the BUSY→IDLE transition, the post-enqueue race re-check, and the
 /// unblock path when a confident question clears while the agent is idle.
-pub(crate) fn flush_pending_injections(state: &AppState, session_id: &str) {
+pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &str) {
     if state
         .pending_injections
         .get(session_id)
@@ -7194,7 +7284,7 @@ pub(crate) struct EnqueuedCommand {
 ///
 /// The command is always appended before the flush, never handed straight to
 /// `deliver_message_to_pty`: injecting ahead of any accepted peer message or
-/// Compose command would reorder delivery. `flush_pending_injections` pops one
+/// Compose command would reorder delivery. `flush_pending_injections_blocking` pops one
 /// typed entry and leaves the session BUSY, so the shared queue drains one item
 /// per idle transition and stays FIFO across both producers.
 ///
@@ -7218,7 +7308,8 @@ pub(crate) fn enqueue_user_command(
         .entry(session_id.to_string())
         .or_default()
         .push_back(crate::state::PendingInjection::user_command(text));
-    flush_pending_injections(state, session_id);
+    // Blocking on purpose: `typed` below is read from the post-flush queue.
+    flush_pending_injections_blocking(state, session_id);
     let queued = queued_command_count(state, session_id);
     // An empty queue after the flush means our command was the only one waiting
     // and reached the composer; any remaining entry means it is still parked.
@@ -7286,7 +7377,7 @@ fn finish_session_tasks(state: &AppState, session_id: &str, exit_code: Option<i3
     }
 }
 
-pub(crate) fn mark_session_exited(session_id: &str, state: &AppState) {
+pub(crate) fn mark_session_exited(session_id: &str, state: &Arc<AppState>) {
     // Capture exit code before dropping the session entry.
     // portable_pty::ExitStatus carries both exit_code() and signal().
     // Signal-killed processes get 128+signum (shell convention) so the
