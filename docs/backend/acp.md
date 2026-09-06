@@ -113,6 +113,14 @@ deliberately does not have:
   or exits produces a write failure, a stdout EOF and an SDK shutdown at once,
   and which one the supervisor sees first is a scheduling accident. A separate
   `write_error` would be an attribution no one here can make.
+- **A line that is not a frame does not end the connection.** The SDK owns the
+  framing: an unparseable line is answered with JSON-RPC's `-32700` and the
+  reader carries on, and nothing about it reaches this client. So the mistake is
+  reported to the only party that can do anything about it — the agent that made
+  it — and the stream stays in sync, because a line is a frame boundary and the
+  next one starts clean. The exception is a malformed line shaped like a
+  *response*, which the SDK drops in silence: answering an answer is not a thing
+  JSON-RPC can do, so a request it might have been for waits out the connection.
 
 Changing the first two means a different, asynchronous connect API — one that
 hands back an id before there is a connection behind it, with its own
