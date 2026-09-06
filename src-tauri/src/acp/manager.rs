@@ -39,6 +39,16 @@ const INITIAL_GENERATION: u64 = 1;
 /// pending interactions and know everything the notices would have told it.
 const NOTICE_CAPACITY: usize = 64;
 
+/// How many settled connections stay readable.
+///
+/// A connection is kept after it ends because ending is exactly when a host
+/// wants to read it: the settlement reason, the attachments it had, the tail of
+/// its stream. Kept forever it would be a leak instead — each one holds a
+/// journal of up to a thousand events, and reconnecting is an ordinary thing to
+/// do over and over. Enough to cover any reconnect a person would watch happen,
+/// and small enough that a retry loop cannot grow this map without bound.
+const SETTLED_RETAINED: usize = 8;
+
 /// How many commands may wait for the actor before a caller is made to wait.
 ///
 /// Bounded rather than unbounded on purpose: an unbounded queue turns a stalled
@@ -815,6 +825,28 @@ fn publish_attachments(
     connection.snapshot.attachments = attachments;
 }
 
+/// Forget the connections that settled longest ago, past [`SETTLED_RETAINED`].
+///
+/// Ordered by generation, which is the order they were created in and the only
+/// order this map records. Settlement order would be a better answer to "which
+/// one is stalest" and is not worth a second counter to get: the two differ
+/// only when an old connection outlives a newer one, and either choice then
+/// forgets something nobody asked about in a long time.
+fn forget_stale_settled(connections: &mut HashMap<AcpConnectionId, ConnectionHandle>) {
+    let mut settled: Vec<_> = connections
+        .iter()
+        .filter(|(_, connection)| connection.snapshot.settlement.is_some())
+        .map(|(id, connection)| (connection.snapshot.generation, *id))
+        .collect();
+    if settled.len() <= SETTLED_RETAINED {
+        return;
+    }
+    settled.sort_unstable_by_key(|(generation, _)| *generation);
+    for (_, id) in &settled[..settled.len() - SETTLED_RETAINED] {
+        connections.remove(id);
+    }
+}
+
 fn settle_connection(
     connections: &Mutex<HashMap<AcpConnectionId, ConnectionHandle>>,
     connection_id: AcpConnectionId,
@@ -849,6 +881,9 @@ fn settle_connection(
     // subscribers are never woken while this map is held.
     let state = connection.snapshot.state;
     let journal = Arc::clone(&connection.journal);
+    // After this one has been recorded, never before: the connection that just
+    // settled is the most recent of them and must survive its own settlement.
+    forget_stale_settled(&mut connections);
     drop(connections);
     journal.append(None, None, AcpClientEvent::ConnectionState(state));
 }
