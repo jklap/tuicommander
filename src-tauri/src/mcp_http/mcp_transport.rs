@@ -7167,6 +7167,8 @@ mod tests {
             term_alias_counters: dashmap::DashMap::new(),
             session_visibility: dashmap::DashMap::new(),
             watcher_engine: std::sync::OnceLock::new(),
+            scheduler_running: std::sync::atomic::AtomicBool::new(false),
+            scheduler_stop: Arc::new(tokio::sync::Notify::new()),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: dashmap::DashMap::new(),
             grid_frame_dirty: dashmap::DashMap::new(),
