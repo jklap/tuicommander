@@ -191,6 +191,19 @@ pub enum AppEvent {
     /// request must dismiss it; `confirmed` is the answer that won.
     #[serde(rename = "mcp-confirm-resolved")]
     McpConfirmResolved { request_id: String, confirmed: bool },
+    /// Something happened on an ACP connection that a client may want to look at.
+    ///
+    /// Only the wake signal rides this bus. The ordered frames of a turn stay on
+    /// the per-connection Channel/WebSocket, because a single turn emits more of
+    /// them per second than this 256-entry broadcast can carry without lagging
+    /// every unrelated subscriber in the app.
+    ///
+    /// The payload keeps the ACP surface's camelCase field names rather than the
+    /// snake_case used by the PTY events around it: it is the same object the
+    /// `/acp` routes and the desktop commands return, and renaming it here would
+    /// give a client two spellings for one thing.
+    #[serde(rename = "acp-notice")]
+    AcpNotice(crate::acp::AcpNotice),
     /// `repositories.json` was written by some client.
     ///
     /// Payload-free on purpose. One backend serves the desktop WebView, the
@@ -1701,6 +1714,14 @@ pub struct AppState {
     pub(crate) tailscale_state: parking_lot::RwLock<crate::tailscale::TailscaleState>,
     /// Push notification subscription store
     pub(crate) push_store: crate::push::PushStore,
+    /// Live ACP connections to ego, one supervised child process each.
+    ///
+    /// Not keyed by PTY session and deliberately unrelated to one: an ACP
+    /// connection is a JSON-RPC peer this host drives, and nothing about it
+    /// belongs in terminal state. The executable it may launch is not held
+    /// here — it is read from configuration at each connect, so a changed
+    /// setting takes effect without a restart.
+    pub(crate) acp: crate::acp::AcpClientManager,
     /// When true, the desktop window is currently focused and the user is at
     /// their machine — suppress mobile push notifications to avoid duplicate
     /// alerts. Set to true on focus and at startup; set to false on blur or
@@ -2701,6 +2722,7 @@ impl AppState {
             tailscale_state: parking_lot::RwLock::new(
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
+            acp: crate::acp::AcpClientManager::new(),
             push_store,
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
@@ -3286,6 +3308,39 @@ impl AppState {
         Some(state)
     }
 
+    /// Spawn a background task that turns ACP wake signals into `AppEvent`s.
+    ///
+    /// The ACP client cannot emit them itself: it is a field of this state, so
+    /// it can hold neither the event bus nor the desktop window without a
+    /// cycle. It publishes notices on its own bus instead, and this is the one
+    /// place that mirrors them onto both delivery routes — so a phone on
+    /// `/events` and the desktop window are told the same thing at the same
+    /// time. Call once at startup, after constructing AppState.
+    pub(crate) fn spawn_acp_notice_pump(state: Arc<AppState>) {
+        let mut notices = state.acp.notices();
+        tokio::spawn(async move {
+            loop {
+                match notices.recv().await {
+                    Ok(notice) => {
+                        #[cfg(feature = "desktop")]
+                        if let Some(app) = state.app_handle.read().as_ref() {
+                            use tauri::Emitter;
+                            let _ = app.emit("acp-notice", &notice);
+                        }
+                        let _ = state.event_bus.send(AppEvent::AcpNotice(notice));
+                    }
+                    // A notice carries nothing that cannot be re-read: a client
+                    // that missed one still finds the truth in the connection
+                    // snapshot and the pending interactions.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(source = "acp", lagged = n, "ACP notice bus lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
     /// Spawn a background task that subscribes to the event bus and updates
     /// `session_states`. Call once at startup after constructing AppState.
     pub(crate) fn spawn_session_state_accumulator(state: Arc<AppState>) {
@@ -3715,7 +3770,9 @@ impl AppState {
             | AppEvent::ReviewProgress { .. }
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProposalsReady { .. }
-            | AppEvent::WorktreeCreateFailed { .. } => {}
+            | AppEvent::WorktreeCreateFailed { .. }
+            // An ACP connection is not a PTY session and has no row here.
+            | AppEvent::AcpNotice(_) => {}
         }
     }
 
@@ -6173,6 +6230,7 @@ mod tests {
             tailscale_state: parking_lot::RwLock::new(
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
+            acp: crate::acp::AcpClientManager::new(),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),

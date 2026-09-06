@@ -373,7 +373,8 @@ async fn a_cursor_the_journal_no_longer_holds_is_reported_as_a_gap() {
     use tuicommander_lib::acp::{AcpConnectionId, AcpEventJournal};
 
     let connection_id = AcpConnectionId::new();
-    let journal = AcpEventJournal::new(connection_id, 1);
+    let (notices, _) = tokio::sync::broadcast::channel(16);
+    let journal = AcpEventJournal::new(connection_id, 1, notices);
     // Comfortably past whatever the journal retains, so the earliest event has
     // certainly been dropped without this test knowing the capacity.
     for _ in 0..10_000 {

@@ -33,7 +33,8 @@ pub use manager::AcpClientManager;
 /// a durable id plus the authority the session is to run under — and only the
 /// method and what comes back differ. Fork is the one that answers with an id
 /// the caller did not name, because a fork is a second session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AcpAttachKind {
     /// Attach and replay the history, so the host can render what happened.
     Load,
@@ -48,7 +49,8 @@ pub enum AcpAttachKind {
 /// Both end the attachment; only one ends the session. Which of the two ego
 /// was asked for is not a detail the client may blur, so they never collapse
 /// into a single "forget it".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AcpDetachKind {
     /// Stop serving the session here. It stays in `session/list`.
     Close,
@@ -84,7 +86,8 @@ impl AcpDetachKind {
 /// It is never restored from a stored snapshot: an authority that outlived the
 /// window in which it was granted is a wider authority than anyone gave, and
 /// reconnect is exactly when that would happen unnoticed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpSessionAuthority {
     pub cwd: PathBuf,
     pub additional_directories: Vec<PathBuf>,
@@ -302,6 +305,25 @@ pub struct AcpUsageSnapshot {
     pub end_turn: Option<v1::Usage>,
 }
 
+/// One frame on a subscriber's stream, whichever transport carries it.
+///
+/// A gap is a frame rather than a closed stream, and it is the last one: the
+/// events it stands for cannot be reconstructed from anything this client
+/// holds, so a subscriber that kept reading would render a turn with a hole in
+/// the middle and no way to know. The recovery is a fresh subscription and an
+/// ego `session/load`, which replays from the only place that actually knows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+#[non_exhaustive]
+pub enum AcpStreamFrame {
+    /// One journal entry, byte for byte as every other subscriber saw it.
+    Event(Box<AcpEventEnvelope>),
+    /// The subscriber fell behind and the missing events are gone.
+    Gap(AcpClientError),
+    /// The connection can produce nothing further.
+    End,
+}
+
 /// One thing that happened on a connection, in the order it happened.
 ///
 /// Every event carries the generation it belongs to. A late event from a
@@ -360,6 +382,88 @@ pub enum AcpClientEvent {
         request_id: AcpHostRequestId,
         action: v1::ElicitationAction,
     },
+}
+
+/// Why a host might want to come and look, and where.
+///
+/// Deliberately not the event itself. Every chunk of a turn is an event; only
+/// these four are worth waking a client that is not currently reading the
+/// stream, and only they are cheap enough to put on a broadcast that every
+/// other subscriber in the app shares.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcpNoticeKind {
+    /// The connection finished initializing and can be used.
+    Ready,
+    /// Something that was in flight has finished.
+    ///
+    /// A turn settling and a connection settling are both this: the host was
+    /// waiting on one of them, and the two are told apart by whether the
+    /// notice names a session, not by needing a fifth kind.
+    Settled,
+    /// The agent is waiting on a person.
+    InteractionPending,
+    /// A pending question was answered — possibly by somebody else's client.
+    InteractionSettled,
+}
+
+/// A low-frequency wake signal about one connection.
+///
+/// It says where to look and nothing more: the ordered payload stays on the
+/// per-connection stream, and the current picture stays in the snapshot and
+/// the interactions list. A host that reacts to a notice by fetching one of
+/// those two reads the same truth as a host that never missed a frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpNotice {
+    pub connection_id: AcpConnectionId,
+    pub generation: u64,
+    pub session_id: Option<v1::SessionId>,
+    pub request_id: Option<AcpHostRequestId>,
+    /// The sequence of the event this notice was derived from, so a host can
+    /// resume its stream from exactly here rather than from the beginning.
+    pub sequence: u64,
+    pub kind: AcpNoticeKind,
+}
+
+impl AcpNotice {
+    /// The notice one stamped event deserves, if it deserves one at all.
+    ///
+    /// Derived at the journal rather than at each producer: every event on a
+    /// connection is appended there exactly once, so a notice cannot be
+    /// forgotten by a new call site, and it cannot be sent twice.
+    #[must_use]
+    pub fn from_envelope(envelope: &AcpEventEnvelope) -> Option<Self> {
+        let (kind, request_id) = match &envelope.event {
+            AcpClientEvent::ConnectionState(AcpConnectionState::Ready) => {
+                (AcpNoticeKind::Ready, None)
+            }
+            AcpClientEvent::ConnectionState(
+                AcpConnectionState::Closed
+                | AcpConnectionState::Failed
+                | AcpConnectionState::Killed,
+            )
+            | AcpClientEvent::TurnSettled { .. } => (AcpNoticeKind::Settled, None),
+            AcpClientEvent::PermissionRequested { request_id, .. }
+            | AcpClientEvent::ElicitationRequested { request_id, .. } => {
+                (AcpNoticeKind::InteractionPending, Some(*request_id))
+            }
+            AcpClientEvent::PermissionSettled { request_id, .. }
+            | AcpClientEvent::ElicitationSettled { request_id, .. } => {
+                (AcpNoticeKind::InteractionSettled, Some(*request_id))
+            }
+            _ => return None,
+        };
+        Some(Self {
+            connection_id: envelope.connection_id,
+            generation: envelope.generation,
+            session_id: envelope.session_id.clone(),
+            request_id,
+            sequence: envelope.sequence,
+            kind,
+        })
+    }
 }
 
 /// One request the agent is waiting on an answer to.
@@ -520,7 +624,8 @@ pub struct AcpAttachmentSnapshot {
     pub pending_elicitation_ids: Vec<AcpHostRequestId>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpConnectionSnapshot {
     pub connection_id: AcpConnectionId,
     pub generation: u64,
@@ -838,14 +943,16 @@ impl std::fmt::Display for AcpHostRequestId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 enum ExtensionAvailability {
     Absent,
     Available,
     Mismatched,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpCapabilitySnapshot {
     pub protocol: ProtocolVersion,
     pub load: bool,

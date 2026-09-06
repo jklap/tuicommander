@@ -266,6 +266,7 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::McpToast { .. } => "mcp-toast",
         AppEvent::McpConfirm { .. } => "mcp-confirm",
         AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
+        AppEvent::AcpNotice(_) => "acp-notice",
         AppEvent::RepositoriesChanged => "repositories-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
@@ -405,6 +406,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({ "request_id": request_id, "confirmed": confirmed })
         }
+        // Forwarded whole: the notice IS the payload, in the same camelCase the
+        // `/acp` routes use, so a client needs no per-transport translation.
+        AppEvent::AcpNotice(notice) => serde_json::json!(notice),
         // Payload-free: the receiver re-reads `repositories.json` itself.
         AppEvent::RepositoriesChanged => serde_json::json!({}),
         AppEvent::DirChanged { dir_path } => {
@@ -789,5 +793,34 @@ mod tests {
         assert_eq!(body["phase"], "done");
         assert_eq!(body["done"], true);
         assert!(body.get("payload").is_none());
+    }
+
+    /// An ACP wake signal reaches a browser unchanged.
+    ///
+    /// Field-for-field the object the `/acp` routes and the desktop commands
+    /// return, camelCase included: a client that reacts by fetching the
+    /// connection snapshot has to be able to use the ids it was just handed,
+    /// and a renamed key here would be a second spelling for one thing.
+    #[test]
+    fn an_acp_notice_reaches_the_browser_as_the_object_the_acp_routes_return() {
+        let connection_id = crate::acp::AcpConnectionId::new();
+        let request_id = crate::acp::AcpHostRequestId::new();
+        let event = AppEvent::AcpNotice(crate::acp::AcpNotice {
+            connection_id,
+            generation: 3,
+            session_id: Some(agent_client_protocol::schema::v1::SessionId::new("sess-1")),
+            request_id: Some(request_id),
+            sequence: 42,
+            kind: crate::acp::AcpNoticeKind::InteractionPending,
+        });
+        assert_eq!(event_type_name(&event), "acp-notice");
+        let body = event_payload(&event);
+        assert_eq!(body["connectionId"], serde_json::json!(connection_id));
+        assert_eq!(body["requestId"], serde_json::json!(request_id));
+        assert_eq!(body["sessionId"], "sess-1");
+        assert_eq!(body["generation"], 3);
+        assert_eq!(body["sequence"], 42);
+        assert_eq!(body["kind"], "interaction_pending");
+        assert!(body.get("connection_id").is_none());
     }
 }

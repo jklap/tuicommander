@@ -11,7 +11,7 @@ use agent_client_protocol::schema::v1;
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo, Responder};
 use parking_lot::Mutex;
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -22,15 +22,22 @@ use super::connection::{
 };
 use super::events::{AcpEventJournal, AcpEventStream};
 use super::{
-    AcpAttachKind, AcpAttachmentSnapshot, AcpCapabilitySnapshot, AcpClientError, AcpConnectRequest,
-    AcpConnectionId, AcpConnectionSettlement, AcpConnectionSettlementReason, AcpConnectionSnapshot,
-    AcpConnectionState, AcpDetachKind, AcpHostRequestId, AcpInteractionSettlement,
-    AcpPendingInteraction, AcpReconnectRequest, AcpSessionAuthority, AcpTurnId, EgoAcpConfig,
-    EgoCompactRequest, EgoCompactResponse, EgoHoldRequest, EgoHoldResponse,
-    build_initialize_request, capability_snapshot, launch_spec,
+    AcpAttachKind, AcpAttachmentSnapshot, AcpCapabilitySnapshot, AcpClientError, AcpClientEvent,
+    AcpConnectRequest, AcpConnectionId, AcpConnectionSettlement, AcpConnectionSettlementReason,
+    AcpConnectionSnapshot, AcpConnectionState, AcpDetachKind, AcpHostRequestId,
+    AcpInteractionSettlement, AcpNotice, AcpPendingInteraction, AcpReconnectRequest,
+    AcpSessionAuthority, AcpTurnId, EgoAcpConfig, EgoCompactRequest, EgoCompactResponse,
+    EgoHoldRequest, EgoHoldResponse, build_initialize_request, capability_snapshot, launch_spec,
 };
 
 const INITIAL_GENERATION: u64 = 1;
+
+/// How many wake signals the shared notice bus holds for a slow subscriber.
+///
+/// Small because a notice carries no payload worth catching up on: a
+/// subscriber that fell behind can read the connection snapshot and the
+/// pending interactions and know everything the notices would have told it.
+const NOTICE_CAPACITY: usize = 64;
 
 /// How many commands may wait for the actor before a caller is made to wait.
 ///
@@ -50,9 +57,15 @@ const COMMAND_QUEUE: usize = 32;
 const UPDATE_QUEUE: usize = 4096;
 
 pub struct AcpClientManager {
-    config: EgoAcpConfig,
     connections: Arc<Mutex<HashMap<AcpConnectionId, ConnectionHandle>>>,
     next_generation: AtomicU64,
+    notices: broadcast::Sender<AcpNotice>,
+}
+
+impl Default for AcpClientManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 struct ConnectionHandle {
@@ -83,19 +96,38 @@ enum SupervisorExit {
 
 impl AcpClientManager {
     #[must_use]
-    pub fn new(config: EgoAcpConfig) -> Self {
+    pub fn new() -> Self {
+        let (notices, _) = broadcast::channel(NOTICE_CAPACITY);
         Self {
-            config,
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_generation: AtomicU64::new(INITIAL_GENERATION),
+            notices,
         }
     }
 
+    /// Wake signals for every connection this manager holds.
+    ///
+    /// One bus for all of them on purpose: a notice says where to look, and a
+    /// subscriber that had to enumerate connections to hear about a new one
+    /// would miss exactly the notice announcing it.
+    #[must_use]
+    pub fn notices(&self) -> broadcast::Receiver<AcpNotice> {
+        self.notices.subscribe()
+    }
+
+    /// Launch ego and initialize a connection to it.
+    ///
+    /// The executable arrives per call rather than being remembered here, and
+    /// that is the point: it is a setting a person can change while this
+    /// manager is alive, and a copy taken once would keep launching the
+    /// previous binary for the rest of the process without ever saying so.
+    /// The caller reads it from configuration; no request body can supply it.
     pub async fn connect(
         &self,
+        config: &EgoAcpConfig,
         request: AcpConnectRequest,
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
-        let executable = canonical_executable(&self.config.executable).await?;
+        let executable = canonical_executable(&config.executable).await?;
         let root = canonical_root(&request.root).await?;
         let spec = launch_spec(&EgoAcpConfig { executable }, &root)?;
         let agent = AcpAgent::new(AcpAgentConfig::new(spec.program).args(spec.args));
@@ -106,7 +138,11 @@ impl AcpClientManager {
         let (registered_tx, registered_rx) = oneshot::channel();
         let (commands_tx, commands_rx) = mpsc::channel(COMMAND_QUEUE);
         let (inbound, updates_rx) = mpsc::channel(UPDATE_QUEUE);
-        let journal = Arc::new(AcpEventJournal::new(connection_id, generation));
+        let journal = Arc::new(AcpEventJournal::new(
+            connection_id,
+            generation,
+            self.notices.clone(),
+        ));
 
         let supervisor = tokio::spawn(supervise_connection(
             connection_id,
@@ -139,9 +175,16 @@ impl AcpClientManager {
             }
         };
 
-        // The bounds come from the journal here too, so what this returns and
-        // what a later `snapshot` reports answer to one convention rather than
-        // to a literal that happens to agree with an empty journal.
+        // Filed before the bounds are read, so the snapshot this returns
+        // already covers it: a host that subscribes from `latest_sequence + 1`
+        // has been told the connection is usable, and one that replays from
+        // zero sees the same first event rather than a stream that starts
+        // mid-conversation.
+        journal.append(
+            None,
+            None,
+            AcpClientEvent::ConnectionState(AcpConnectionState::Ready),
+        );
         let (earliest_sequence, latest_sequence) = journal.bounds();
         let snapshot = AcpConnectionSnapshot {
             connection_id,
@@ -171,11 +214,13 @@ impl AcpClientManager {
 
     pub async fn reconnect(
         &self,
+        config: &EgoAcpConfig,
         request: AcpReconnectRequest,
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
         self.snapshot(request.connection_id)?;
         self.disconnect(request.connection_id).await?;
-        self.connect(AcpConnectRequest { root: request.root }).await
+        self.connect(config, AcpConnectRequest { root: request.root })
+            .await
     }
 
     /// Open a durable session on a live connection.
@@ -787,6 +832,16 @@ fn settle_connection(
         generation,
         reason,
     });
+
+    // Said on the stream as well as in the snapshot. A host watching the
+    // stream would otherwise learn that the connection ended only from its
+    // subscription going quiet, which is indistinguishable from an agent that
+    // is simply thinking. Appended after the lock is released so the journal's
+    // subscribers are never woken while this map is held.
+    let state = connection.snapshot.state;
+    let journal = Arc::clone(&connection.journal);
+    drop(connections);
+    journal.append(None, None, AcpClientEvent::ConnectionState(state));
 }
 
 async fn canonical_executable(path: &Path) -> Result<std::path::PathBuf, AcpClientError> {

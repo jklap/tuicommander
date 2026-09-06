@@ -1,12 +1,11 @@
 use tuicommander_lib::acp::{
     AcpClientErrorCode, AcpClientManager, AcpConnectRequest, AcpConnectionId,
     AcpConnectionSettlementReason, AcpConnectionSnapshot, AcpConnectionState, AcpReconnectRequest,
-    EgoAcpConfig,
 };
 
 mod acp_support;
 
-use acp_support::{Fixture, fixture_agent};
+use acp_support::Fixture;
 
 async fn settled_snapshot(
     manager: &AcpClientManager,
@@ -48,9 +47,12 @@ async fn malformed_non_v1_and_early_eof_leave_no_registered_connection() {
         let fixture = Fixture::with(scenario);
         let error = fixture
             .manager
-            .connect(AcpConnectRequest {
-                root: fixture.root(),
-            })
+            .connect(
+                &Fixture::config(),
+                AcpConnectRequest {
+                    root: fixture.root(),
+                },
+            )
             .await
             .unwrap_err();
         assert!(
@@ -66,9 +68,7 @@ async fn malformed_non_v1_and_early_eof_leave_no_registered_connection() {
 
 #[tokio::test]
 async fn unknown_snapshot_is_typed_not_found() {
-    let manager = AcpClientManager::new(EgoAcpConfig {
-        executable: fixture_agent(),
-    });
+    let manager = AcpClientManager::new();
     let error = manager.snapshot(AcpConnectionId::new()).unwrap_err();
     assert_eq!(error.code, AcpClientErrorCode::NotFound);
 }
@@ -91,10 +91,13 @@ async fn reconnect_settles_old_connection_and_starts_a_new_generation() {
     let old = fixture.connect().await;
     let fresh = fixture
         .manager
-        .reconnect(AcpReconnectRequest {
-            connection_id: old.connection_id,
-            root: fixture.root(),
-        })
+        .reconnect(
+            &Fixture::config(),
+            AcpReconnectRequest {
+                connection_id: old.connection_id,
+                root: fixture.root(),
+            },
+        )
         .await
         .unwrap();
     assert_ne!(fresh.connection_id, old.connection_id);
