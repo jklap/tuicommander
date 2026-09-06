@@ -1,15 +1,17 @@
-use std::path::PathBuf;
-
-use tempfile::tempdir;
 use tuicommander_lib::acp::{
     AcpClientErrorCode, AcpClientManager, AcpConnectRequest, AcpConnectionId,
-    AcpConnectionSettlementReason, AcpConnectionState, AcpReconnectRequest, EgoAcpConfig,
+    AcpConnectionSettlementReason, AcpConnectionSnapshot, AcpConnectionState, AcpReconnectRequest,
+    EgoAcpConfig,
 };
+
+mod acp_support;
+
+use acp_support::{Fixture, fixture_agent};
 
 async fn settled_snapshot(
     manager: &AcpClientManager,
     id: AcpConnectionId,
-) -> tuicommander_lib::acp::AcpConnectionSnapshot {
+) -> AcpConnectionSnapshot {
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             let snapshot = manager.snapshot(id).unwrap();
@@ -23,78 +25,59 @@ async fn settled_snapshot(
     .expect("connection did not settle")
 }
 
-fn fake() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_story092_acp_fake"))
-}
-
 #[tokio::test]
 async fn connect_directly_launches_configured_ego_and_stores_ready_snapshot() {
-    let root = tempdir().unwrap();
-    std::fs::copy(
-        "tests/fixtures/acp/ready.json",
-        root.path().join("scenario.json"),
-    )
-    .unwrap();
-    let manager = AcpClientManager::new(EgoAcpConfig { executable: fake() });
-    let snapshot = manager
-        .connect(AcpConnectRequest {
-            root: root.path().to_path_buf(),
-        })
-        .await
-        .unwrap();
+    let fixture = Fixture::with("ready");
+    let snapshot = fixture.connect().await;
     assert_eq!(snapshot.state, AcpConnectionState::Ready);
     assert!(snapshot.capabilities.is_some());
-    assert_eq!(manager.snapshot(snapshot.connection_id).unwrap(), snapshot);
-    manager.disconnect(snapshot.connection_id).await.unwrap();
+    assert_eq!(
+        fixture.manager.snapshot(snapshot.connection_id).unwrap(),
+        snapshot
+    );
+    fixture
+        .manager
+        .disconnect(snapshot.connection_id)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn malformed_non_v1_and_early_eof_leave_no_registered_connection() {
-    for scenario in ["malformed.json", "non-v1.json", "early-eof.json"] {
-        let root = tempdir().unwrap();
-        std::fs::copy(
-            format!("tests/fixtures/acp/{scenario}"),
-            root.path().join("scenario.json"),
-        )
-        .unwrap();
-        let manager = AcpClientManager::new(EgoAcpConfig { executable: fake() });
-        let error = manager
+    for scenario in ["malformed", "non-v1", "early-eof"] {
+        let fixture = Fixture::with(scenario);
+        let error = fixture
+            .manager
             .connect(AcpConnectRequest {
-                root: root.path().to_path_buf(),
+                root: fixture.root(),
             })
             .await
             .unwrap_err();
-        assert!(matches!(
-            error.code,
-            AcpClientErrorCode::InitializationFailed | AcpClientErrorCode::UnsupportedProtocol
-        ));
-        assert!(manager.connection_ids().is_empty());
+        assert!(
+            matches!(
+                error.code,
+                AcpClientErrorCode::InitializationFailed | AcpClientErrorCode::UnsupportedProtocol
+            ),
+            "{scenario}: {error:?}"
+        );
+        assert!(fixture.manager.connection_ids().is_empty(), "{scenario}");
     }
 }
 
 #[tokio::test]
 async fn unknown_snapshot_is_typed_not_found() {
-    let manager = AcpClientManager::new(EgoAcpConfig { executable: fake() });
+    let manager = AcpClientManager::new(EgoAcpConfig {
+        executable: fixture_agent(),
+    });
     let error = manager.snapshot(AcpConnectionId::new()).unwrap_err();
     assert_eq!(error.code, AcpClientErrorCode::NotFound);
 }
 
 #[tokio::test]
 async fn ready_connection_settles_when_child_stdout_reaches_clean_eof() {
-    let root = tempdir().unwrap();
-    std::fs::copy(
-        "tests/fixtures/acp/ready-eof.json",
-        root.path().join("scenario.json"),
-    )
-    .unwrap();
-    let manager = AcpClientManager::new(EgoAcpConfig { executable: fake() });
-    let snapshot = manager
-        .connect(AcpConnectRequest {
-            root: root.path().to_path_buf(),
-        })
-        .await
-        .unwrap();
-    let settled = settled_snapshot(&manager, snapshot.connection_id).await;
+    let fixture = Fixture::with("ready-eof");
+    let snapshot = fixture.connect().await;
+    let settled = settled_snapshot(&fixture.manager, snapshot.connection_id).await;
     assert_eq!(settled.state, AcpConnectionState::Failed);
     assert_eq!(
         settled.settlement.unwrap().reason,
@@ -104,30 +87,20 @@ async fn ready_connection_settles_when_child_stdout_reaches_clean_eof() {
 
 #[tokio::test]
 async fn reconnect_settles_old_connection_and_starts_a_new_generation() {
-    let root = tempdir().unwrap();
-    std::fs::copy(
-        "tests/fixtures/acp/ready.json",
-        root.path().join("scenario.json"),
-    )
-    .unwrap();
-    let manager = AcpClientManager::new(EgoAcpConfig { executable: fake() });
-    let old = manager
-        .connect(AcpConnectRequest {
-            root: root.path().to_path_buf(),
-        })
-        .await
-        .unwrap();
-    let fresh = manager
+    let fixture = Fixture::with("ready");
+    let old = fixture.connect().await;
+    let fresh = fixture
+        .manager
         .reconnect(AcpReconnectRequest {
             connection_id: old.connection_id,
-            root: root.path().to_path_buf(),
+            root: fixture.root(),
         })
         .await
         .unwrap();
     assert_ne!(fresh.connection_id, old.connection_id);
     assert!(fresh.generation > old.generation);
     assert!(fresh.attachments.is_empty());
-    let old_settled = manager.snapshot(old.connection_id).unwrap();
+    let old_settled = fixture.manager.snapshot(old.connection_id).unwrap();
     assert_eq!(old_settled.state, AcpConnectionState::Closed);
     assert_eq!(
         old_settled.settlement.unwrap().reason,
@@ -135,27 +108,20 @@ async fn reconnect_settles_old_connection_and_starts_a_new_generation() {
     );
     assert_eq!(fresh.state, AcpConnectionState::Ready);
     assert!(fresh.settlement.is_none());
-    manager.disconnect(fresh.connection_id).await.unwrap();
+    fixture
+        .manager
+        .disconnect(fresh.connection_id)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn kill_settles_and_retains_a_killed_snapshot_without_session_operations() {
-    let root = tempdir().unwrap();
-    std::fs::copy(
-        "tests/fixtures/acp/ready-alive.json",
-        root.path().join("scenario.json"),
-    )
-    .unwrap();
-    let manager = AcpClientManager::new(EgoAcpConfig { executable: fake() });
-    let ready = manager
-        .connect(AcpConnectRequest {
-            root: root.path().to_path_buf(),
-        })
-        .await
-        .unwrap();
-    let settlement = manager.kill(ready.connection_id).await.unwrap();
+    let fixture = Fixture::with("ready");
+    let ready = fixture.connect().await;
+    let settlement = fixture.manager.kill(ready.connection_id).await.unwrap();
     assert_eq!(settlement.reason, AcpConnectionSettlementReason::Killed);
-    let killed = manager.snapshot(ready.connection_id).unwrap();
+    let killed = fixture.manager.snapshot(ready.connection_id).unwrap();
     assert_eq!(killed.state, AcpConnectionState::Killed);
     assert_eq!(killed.generation, ready.generation);
     assert_eq!(
