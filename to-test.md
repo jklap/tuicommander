@@ -706,3 +706,27 @@ None of them is here because nobody looked.
   an id that never existed must still fail fast with `Unknown session`. The same
   registration path now also backs `POST /agents` and browser/remote `POST /sessions`,
   so a browser-created terminal and an HTTP-spawned agent both need a smoke check.
+- [ ] Rust change, needs a `make dev` restart (story #654-bfc1). Put a stub earlier on
+  the resolved `gh` path (`/opt/homebrew/bin/gh` or `/usr/local/bin/gh`, whichever
+  `resolve_cli` finds first) containing `#!/bin/sh` + `sleep 600`, unset `GH_TOKEN` and
+  `GITHUB_TOKEN`, then launch the app: the window must appear at the usual speed instead
+  of waiting on the stub. `GET :9876/logs?source=github` must then show
+  "`gh auth token` did not answer in time" about 10s later (5s for the `gh_token` crate's
+  own spawn, 5s for ours) and the app must stay usable with no GitHub token. Restore the
+  real `gh`, relaunch, and confirm PRs/issues populate within a second or two without
+  touching Settings — the deferred probe, not boot, is what fills them now, and it has to
+  nudge the poller (`ForceResync`) to re-run the cycle it missed; a sidebar that stays
+  empty for a full minute means that nudge did not land. Same stub check against
+  `tuic-remote` (headless): the HTTP server must bind immediately instead of waiting on
+  `gh`, and `GET /repo/issues` must answer once the probe lands.
+- [ ] Rust change, needs a `make dev` restart (story #642-3741). `mod dictation_routes`
+  was never declared, so 12 handlers never compiled, and 7 more COMMAND_TABLE paths hit
+  no route at all. Against the restarted build: `curl :9876/dictation/status` and
+  `/dictation/models`, `/dictation/devices`, `/dictation/config`, `/system/relay-status`
+  must answer JSON (not a 404 or the SPA shell), and
+  `curl ':9876/system/check-update?channel=nightly'` must return an `UpdateCheckResult`.
+  Then open the app in a browser at `:9876` and use dictation end to end: record, stop,
+  and confirm the transcript is injected — browser mode reads `inject_text` as a bare
+  string now, not `{text}`. Last, set a non-default audio output in notification
+  settings and trigger a notification from the browser tab: it must play on the chosen
+  device, which is what the added `device` field in the HTTP body carries.

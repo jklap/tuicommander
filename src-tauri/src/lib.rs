@@ -1239,13 +1239,12 @@ pub fn run() {
         tracing::error!(source = "app", "Failed to persist config: {e}");
     }
 
-    let (github_token, github_token_source) = crate::github_auth::resolve_token_without_keychain();
-    if github_token.is_none() {
-        tracing::info!(
-            source = "github",
-            "No GitHub token from env/CLI — keychain deferred until first use"
-        );
-    }
+    // Boot reads the environment and nothing else. Every other token source
+    // spawns `gh auth token` or reads the OS credential store, neither of which
+    // is guaranteed to answer, and this runs before the window is built — a
+    // wedged `gh` used to mean no window at all. `setup()` finishes the chain
+    // once the window exists.
+    let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
     let data_dir = config::config_dir();
 
@@ -1551,6 +1550,11 @@ pub fn run() {
                     tracing::warn!(source = "tuic_cli", "CLI auto-update task failed: {error}");
                 }
             });
+
+            // Finish GitHub token resolution now the window exists. Boot only
+            // took the env vars; the keychain/`gh` part of the chain runs here,
+            // off the window path and under its own timeout.
+            crate::github_auth::spawn_deferred_token_resolution(Arc::clone(app_state));
 
             // Pre-warm content indices based on index_strategy setting:
             // - "active_only": only the active repo at boot
@@ -2217,7 +2221,11 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
     let worktrees_dir = data_dir.join("worktrees");
     std::fs::create_dir_all(&worktrees_dir)?;
 
-    let (github_token, github_token_source) = crate::github_auth::resolve_token_without_keychain();
+    // Env only, for the same reason the desktop boot does it: the rest of the
+    // chain spawns `gh` or reads the credential store, and this runs before the
+    // HTTP server binds. No window here, but a wedged `gh` would still keep the
+    // server unreachable.
+    let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     *app_state.github_token.get_mut() = github_token;
@@ -2225,6 +2233,7 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
 
     let state = Arc::new(app_state);
     state.wire_event_bus();
+    crate::github_auth::spawn_deferred_token_resolution(state.clone());
 
     spawn_background_tasks(&state);
 
@@ -2347,7 +2356,11 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
     let worktrees_dir = data_dir.join("worktrees");
     std::fs::create_dir_all(&worktrees_dir)?;
 
-    let (github_token, github_token_source) = crate::github_auth::resolve_token_without_keychain();
+    // Env only, for the same reason the desktop boot does it: the rest of the
+    // chain spawns `gh` or reads the credential store, and this runs before the
+    // HTTP server binds. No window here, but a wedged `gh` would still keep the
+    // server unreachable.
+    let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     *app_state.github_token.get_mut() = github_token;
@@ -2355,6 +2368,7 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
 
     let state = Arc::new(app_state);
     state.wire_event_bus();
+    crate::github_auth::spawn_deferred_token_resolution(state.clone());
 
     // Only the two tasks required for session management — no scheduler,
     // watcher engine, content index, knowledge persist, or tool search index.
@@ -2496,6 +2510,57 @@ mod tests {
             source.contains(&deferred_call),
             "CLI version probes and replacement must not block Tauri setup"
         );
+    }
+
+    /// `gh auth token` reads the OS credential store and can hang there. It ran
+    /// synchronously before the window was built, so a wedged `gh` meant no
+    /// window at all. Boot now takes only the env vars — which cost nothing and
+    /// outrank every other source — and `setup()` finishes the chain.
+    #[test]
+    fn boot_takes_only_the_env_github_token_and_defers_the_rest() {
+        let source = include_str!("lib.rs");
+        let desktop_run = source
+            .split("pub fn run()")
+            .nth(1)
+            .expect("desktop run function")
+            .split("fn build_connect_url")
+            .next()
+            .expect("desktop run body");
+
+        assert!(
+            desktop_run.contains("github_auth::resolve_token_from_env()"),
+            "boot must take only the env token — every other source spawns `gh`"
+        );
+        assert!(
+            !desktop_run.contains("github_auth::resolve_token_without_keychain()"),
+            "that chain still spawns `gh`; it must not run before the window exists"
+        );
+        assert!(
+            desktop_run.contains("github_auth::spawn_deferred_token_resolution("),
+            "the rest of the chain must still run, or GitHub panels silently see no token"
+        );
+
+        // The two headless entry points have no window, but the chain still ran
+        // before their HTTP server bound its socket — a wedged `gh` kept the
+        // server unreachable instead of the window unpainted. Same treatment.
+        for entry in ["pub async fn run_headless(", "pub async fn run_remote("] {
+            let body = source
+                .split(entry)
+                .nth(1)
+                .unwrap_or_else(|| panic!("{entry} must exist"))
+                .split("\n}\n")
+                .next()
+                .expect("entry body");
+            assert!(
+                body.contains("github_auth::resolve_token_from_env()")
+                    && body.contains("github_auth::spawn_deferred_token_resolution("),
+                "{entry} must take the env token and defer the rest, like the desktop boot"
+            );
+            assert!(
+                !body.contains("github_auth::resolve_token_without_keychain()"),
+                "{entry} must not run the `gh`-spawning chain before its server binds"
+            );
+        }
     }
 
     #[test]
