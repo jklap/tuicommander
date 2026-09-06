@@ -1109,11 +1109,13 @@ impl ConnectionActor {
         // the agent waiting on the very turn it was asked to abandon.
         self.sweep(session_id);
 
+        // A notification carries no answer, so the only way this fails is the
+        // outgoing side of the connection being gone — the agent never saw it.
+        // Calling that an agent error would tell a caller its cancel was
+        // considered and refused, when nothing was there to consider it.
         connection
             .send_notification(v1::CancelNotification::new(session_id.clone()))
-            .map_err(|error| {
-                AcpClientError::agent_error(self.connection_id, None, error.to_string())
-            })?;
+            .map_err(|_| AcpClientError::transport_closed(self.connection_id))?;
 
         let attachment = self
             .attachments

@@ -834,8 +834,6 @@ fn settle_connection(
         AcpConnectionSettlementReason::Killed => AcpConnectionState::Killed,
         AcpConnectionSettlementReason::Eof
         | AcpConnectionSettlementReason::TransportError
-        | AcpConnectionSettlementReason::WriteError
-        | AcpConnectionSettlementReason::InitializationFailed
         | AcpConnectionSettlementReason::ProtocolViolation => AcpConnectionState::Failed,
     };
     connection.snapshot.settlement = Some(AcpConnectionSettlement {

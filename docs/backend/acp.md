@@ -91,6 +91,29 @@ the cursor is genuinely gone, 502 when the agent answered with a refusal.
 The one asymmetry is the stream, and it is a transport detail: a Tauri Channel
 on the desktop, a WebSocket in the browser, carrying byte-identical frames.
 
+## Lifecycle invariants
+
+Written down because each of them is a variant the plan named and this client
+deliberately does not have:
+
+- **A connection id is not public until initialization has succeeded.** It is
+  minted inside `connect` and does not escape until v1 is negotiated, so there
+  is no `starting` or `initializing` state — nothing that is still coming up can
+  be named, listed, subscribed to, or asked about. Launch and negotiation are
+  phases of the `connect` operation, not states of a connection.
+- **A failed attempt is never registered and never settles.** It is answered
+  with `initialization_failed` as an *error code*; there is no settlement reason
+  by that name, because there is nothing there to settle.
+- **`transport_error` covers write failures too.** A child that closes its pipes
+  or exits produces a write failure, a stdout EOF and an SDK shutdown at once,
+  and which one the supervisor sees first is a scheduling accident. A separate
+  `write_error` would be an attribution no one here can make.
+
+Changing the first two means a different, asynchronous connect API — one that
+hands back an id before there is a connection behind it, with its own
+cancellation, retention and ownership rules. That is a decision to make when
+something asks for it, not a set of enum variants to leave lying around.
+
 ## Process authority
 
 The ego binary is the `ego_executable` setting, read at each `connect`. It is

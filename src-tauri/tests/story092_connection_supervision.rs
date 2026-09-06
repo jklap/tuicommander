@@ -73,16 +73,26 @@ async fn unknown_snapshot_is_typed_not_found() {
     assert_eq!(error.code, AcpClientErrorCode::NotFound);
 }
 
+/// Clean EOF, whether or not the child is still there to explain it.
+///
+/// Both scenarios end the protocol the same way and must settle the same way,
+/// and that is the point of running them together: `ready-eof` exits, so a
+/// client watching the process would also notice, while `stdout-closed-alive`
+/// closes the pipe and keeps running, so the process is no help at all. The
+/// stream is the only thing either of them agrees on.
 #[tokio::test]
-async fn ready_connection_settles_when_child_stdout_reaches_clean_eof() {
-    let fixture = Fixture::with("ready-eof");
-    let snapshot = fixture.connect().await;
-    let settled = settled_snapshot(&fixture.manager, snapshot.connection_id).await;
-    assert_eq!(settled.state, AcpConnectionState::Failed);
-    assert_eq!(
-        settled.settlement.unwrap().reason,
-        AcpConnectionSettlementReason::Eof
-    );
+async fn a_connection_settles_on_eof_whether_or_not_the_child_outlives_its_stdout() {
+    for scenario in ["ready-eof", "stdout-closed-alive"] {
+        let fixture = Fixture::with(scenario);
+        let snapshot = fixture.connect().await;
+        let settled = settled_snapshot(&fixture.manager, snapshot.connection_id).await;
+        assert_eq!(settled.state, AcpConnectionState::Failed, "{scenario}");
+        assert_eq!(
+            settled.settlement.unwrap().reason,
+            AcpConnectionSettlementReason::Eof,
+            "{scenario}"
+        );
+    }
 }
 
 #[tokio::test]
