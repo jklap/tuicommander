@@ -69,6 +69,14 @@ This is why `capability_unavailable` is never retryable: the answer comes from a
 snapshot taken once, so the identical request on this connection will refuse
 identically. Reaching an agent that has it is a different action, not a retry.
 
+There is no provider surface, and that is the same rule rather than a gap.
+`providers/list|set|disable` are a draft the pinned schema keeps behind an
+unstable feature, so ego does not serve them and never advertises them — and
+`providers/set` would let whatever is connected rewrite the base URL that every
+generation egresses to. Model, effort and mode arrive instead as
+`session/set_config_option` options the session itself publishes, so a host
+picks from what the agent offered rather than from a list this client made up.
+
 The snapshot is also what makes `method_not_found` fatal. Nothing reaches the
 wire that the snapshot did not allow, so a method-not-found coming back is not
 the agent declining — it is the agent disowning what it published, and the one
