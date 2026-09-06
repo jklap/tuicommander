@@ -139,6 +139,7 @@ All business logic in Rust. Frontend only renders and handles interaction — no
 **Every Tauri IPC surface MUST have an HTTP/WS equivalent, and the two MUST stay consistent.** The desktop app talks over Tauri IPC; browser/PWA/remote clients talk over HTTP+SSE+WS. They are two transports for the *same* backend — never let them drift.
 
 - A new `#[tauri::command]` (request/response) → add the matching axum route + a `COMMAND_TABLE` entry in `src/transport.ts`, with a mapping assertion in `src/__tests__/transport.test.ts`. If a command is deliberately desktop-only, add it to `INTENTIONALLY_UNMAPPED` (don't silently leave it unmapped).
+- **A `COMMAND_TABLE` entry with no route is now a test failure, not a runtime 404.** The table is TypeScript and the router is Rust, so the gate is split: the Vitest half executes every mapper and snapshots the paths to `src-tauri/src/mcp_http/command_table_paths.txt`; the Rust half (`command_table_paths_all_hit_a_registered_route`) `PATCH`-probes each one against `build_router`. Adding an entry fails Vitest first — regenerate with `pnpm vitest run src/__tests__/transport.test.ts -u`, then the Rust half tells you whether the route exists. Do not hand-edit the generated file. Full mechanics in `docs/api/http-api.md` → "Route Parity Gate".
 - A new push (`AppHandle.emit`, `Channel<T>`, or per-stream broadcast) → bridge it: low-frequency lifecycle/progress events go on `event_bus` → `/events` SSE (add arms to `sse_routes.rs`); high-frequency token streams get a dedicated per-id WS (mirrors the PTY log-mode WS). Keep the desktop `emit` AND the bus/WS path — there is **no** bus→window forwarder, so producers **dual-emit**.
 - Request/response shapes (field names, casing, payload structure) MUST be identical across IPC and HTTP so the same frontend store code works unchanged on both transports.
 
@@ -150,7 +151,18 @@ NEVER write text + `\r` directly to a PTY. Always use `sendCommand()` from `src/
 
 TUIC tracks each agent's session ID for resume-after-restart. Two strategies coexist:
 
-**Discovery-based (Claude, Gemini, Codex, Grok).** TUIC does NOT inject `--session-id` at launch — the agent creates its own ID. TUIC discovers the active session by scanning the agent's session directory for the newest file, re-checking every 30s poll. This survives agents that start a replacement session because re-discovery picks up the new file. Resume uses `agentSessionId` (disk-discovered), not `tuicSession`. Grok stores each session as a UUIDv7-named directory under `~/.grok/sessions/<percent-encoded-cwd>/`; the newest dir is the active session (`grok --resume <id>`).
+**Discovery-based (Claude, Gemini, Codex, Grok).** TUIC does NOT inject `--session-id` at launch — the agent creates its own ID. TUIC discovers the active session and re-checks it on every idle↔busy transition and every 30s poll, so an agent that starts a replacement session is picked up. Resume uses `agentSessionId` (disk-discovered), not `tuicSession`.
+
+Discovery has two tiers, and the difference is not cosmetic:
+
+| Tier | Agents | Source |
+|---|---|---|
+| **Exact** | Claude, grok | the agent's own pid→session registry: `$CLAUDE_CONFIG_DIR/sessions/<pid>.json`, `~/.grok/active_sessions.json`. `get_session_leaf_pid` returns the agent's pid (verified: it stays the agent even while a tool subprocess runs) |
+| **Heuristic** | Gemini, Codex, and any Claude/grok too old to publish a registry | newest unclaimed session file under the project dir |
+
+**The heuristic is not a binding, and no amount of tuning makes it one.** N agent tabs in one folder all scan the same directory, so whichever tab polls first takes the newest file regardless of whose it is; the rest take another tab's session or nothing. `claimed_ids` only stops two tabs holding the *same* id — it cannot tell whose is whose. That is issue #119: measured on a live instance, 3 of 6 Claude tabs held no id and one held a different tab's, so every tab resumed with `claude --continue` into the same conversation.
+
+So when you add a discovery-based agent, look for a pid registry *first*. Codex 0.153 has none — `session_index.jsonl` carries only id/name/updated_at, the rollout `session_meta` has no pid, and there is no `--session-id` flag — so it stays heuristic on purpose, cwd-scoped by the rollout's recorded `cwd`. Gemini is worse and knowingly so: its scan visits every project's `chats/` dir, so it is not even cwd-scoped (see the `DEFERRED` note on `discover_gemini_session`). Do not close either gap by guessing a path-hashing scheme — verify against a real install.
 
 **Forced injection (Goose).** Shell wrapper injects `--name $TUIC_SESSION` into `goose session/run` commands. The TUIC tab UUID IS the goose session name. Discovery returns `None` (SQLite storage, no filesystem scan). Resume uses `tuicSession`.
 

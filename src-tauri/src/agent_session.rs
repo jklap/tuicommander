@@ -8,7 +8,7 @@
 //!
 //! | Agent  | Path                                        | ID format         |
 //! |--------|---------------------------------------------|-------------------|
-//! | claude | `~/.claude/projects/<cwd-slug>/<UUID>.jsonl`| UUID filename stem|
+//! | claude | `~/.claude/sessions/<pid>.json` (exact), else `~/.claude/projects/<cwd-slug>/<UUID>.jsonl` | `sessionId` field / UUID filename stem |
 //! | gemini | `~/.gemini/tmp/<hash>/chats/session-*.json` | JSON `sessionId` field |
 //! | codex  | `~/.codex/sessions/YYYY/MM/DD/rollout-*-<UUID>.jsonl` | UUID in filename |
 //! | goose  | SQLite `~/Library/Application Support/Block/goose/sessions/sessions.db` | name field (TUIC_SESSION) |
@@ -51,6 +51,7 @@ pub(crate) fn discover_agent_session(
             &cwd,
             &claimed_ids,
             env.get("CLAUDE_CONFIG_DIR").map(|s| s.as_str()),
+            agent_pid,
         ),
         "gemini" => discover_gemini_session(
             &cwd,
@@ -65,7 +66,7 @@ pub(crate) fn discover_agent_session(
         // Goose stores sessions in SQLite — no filesystem discovery.
         // Shell wrapper injects --name $TUIC_SESSION for deterministic binding.
         "goose" => None,
-        "grok" => discover_grok_session(&cwd, &claimed_ids),
+        "grok" => discover_grok_session(&cwd, &claimed_ids, agent_pid),
         _ => None,
     }
 }
@@ -161,13 +162,72 @@ fn path_to_claude_slug(path: &str) -> String {
     trimmed.replace(['/', '.', '_'], "-")
 }
 
-/// Find the most recently created, unclaimed `.jsonl` session file under
-/// `~/.claude/projects/<cwd-slug>/`.
+/// Directory where Claude Code registers one JSON file per *running* process.
+///
+/// Sibling of `projects/`, so it follows `CLAUDE_CONFIG_DIR` the same way.
+fn claude_sessions_dir(config_dir_override: Option<&str>) -> Option<PathBuf> {
+    if let Some(dir) = config_dir_override {
+        Some(PathBuf::from(dir).join("sessions"))
+    } else {
+        dirs::home_dir().map(|h| h.join(".claude").join("sessions"))
+    }
+}
+
+/// Read the session id Claude Code registered for `pid`.
+///
+/// Claude Code (≥2.1.2xx) writes `<config dir>/sessions/<pid>.json` while it runs:
+/// `{"pid":57597,"sessionId":"<uuid>","cwd":"…","version":"…", …}`. That file is the
+/// only *exact* pid→session binding available — the transcript is opened, appended
+/// and closed per write, so it never shows up in the process's open descriptors.
+///
+/// Three checks guard against a stale file left by a dead process whose pid was
+/// recycled: the recorded pid must match, the recorded cwd must be the terminal's,
+/// and the transcript it names must still exist. A file that fails any of them is
+/// ignored, and discovery falls back to the mtime heuristic.
+fn claude_session_for_pid(pid: u32, cwd: &str, config_dir: Option<&str>) -> Option<String> {
+    let path = claude_sessions_dir(config_dir)?.join(format!("{pid}.json"));
+    let contents = std::fs::read_to_string(path).ok()?;
+    let entry: serde_json::Value = serde_json::from_str(&contents).ok()?;
+
+    if entry.get("pid")?.as_u64()? != u64::from(pid) {
+        return None;
+    }
+    if normalize_cwd(entry.get("cwd")?.as_str()?) != normalize_cwd(cwd) {
+        return None;
+    }
+    let session_id = entry.get("sessionId")?.as_str()?.to_string();
+    verify_claude_session(&session_id, cwd, config_dir).then_some(session_id)
+}
+
+/// Resolve the Claude session running in a terminal.
+///
+/// Prefers the exact pid→session binding Claude registers on disk. Only when that
+/// is unavailable (older Claude, or the agent pid could not be read) does it fall
+/// back to "newest unclaimed `.jsonl` under `~/.claude/projects/<cwd-slug>/`".
+///
+/// That fallback is not a binding and cannot be made into one: N Claude tabs in one
+/// folder all scan the same directory, so whichever tab polls first takes the newest
+/// transcript regardless of whose it is, and the rest take another tab's session or
+/// nothing at all. Measured on a live instance with 6 Claude tabs: 3 held no session
+/// id and one held a *different* tab's — which is why every tab resumed with
+/// `--continue` and landed in the same conversation (issue #119). The `claimed_ids`
+/// dedup only stops two tabs holding the *same* id; it cannot tell whose is whose.
+///
+/// A pid hit therefore ignores `claimed_ids`: the pid is ground truth, so a tab that
+/// previously claimed that id by mtime is the one that is wrong, and it re-resolves
+/// to its own session on its next poll.
 fn discover_claude_session(
     cwd: &str,
     claimed_ids: &[String],
     config_dir: Option<&str>,
+    agent_pid: Option<u32>,
 ) -> Option<String> {
+    if let Some(pid) = agent_pid
+        && let Some(id) = claude_session_for_pid(pid, cwd, config_dir)
+    {
+        return Some(id);
+    }
+
     let slug = path_to_claude_slug(cwd);
     let project_dir = claude_projects_dir(config_dir)?.join(&slug);
 
@@ -201,9 +261,19 @@ fn gemini_tmp_dir(cli_home: Option<&str>) -> Option<PathBuf> {
 /// Gemini CLI stores sessions under `~/.gemini/tmp/<project-hash>/chats/`.
 /// The hash is a SHA-256 of the absolute project path. Rather than recomputing
 /// the hash (which would require adding sha2 as a dependency), we scan ALL
-/// project directories under `~/.gemini/tmp/` and look for the newest session
-/// file across all of them. This is correct because Gemini is project-scoped:
-/// a session in a different project dir won't be in a directory we visit.
+/// project directories under `~/.gemini/tmp/` and take the newest session file
+/// across all of them.
+///
+/// DEFERRED (2026-09-06) — that scan is NOT project-scoped, contrary to what this
+/// comment claimed until issue #119: every project's `chats/` dir is visited, so a
+/// gemini tab can bind to a session started in a different project, which Claude
+/// (slug dir) and Codex (recorded cwd) both reject. Nor does gemini publish a
+/// pid→session registry the way Claude and grok do, so the within-a-folder
+/// ambiguity fixed for those two also remains here. Fixing it needs ground truth
+/// on gemini's on-disk format — either the hash input (to scope the scan) or a cwd
+/// field in the session JSON — and gemini is not installed on this machine, so the
+/// alternative was to guess. Do not "fix" this by assuming SHA-256 of the path:
+/// verify against a real install first.
 ///
 /// When `cli_home` is set (from `GEMINI_CLI_HOME` in the agent's process env),
 /// uses `<cli_home>/.gemini/tmp/`. Otherwise defaults to `~/.gemini/tmp/`.
@@ -307,6 +377,14 @@ fn codex_sessions_dir(codex_home: Option<&str>) -> Option<PathBuf> {
 /// - **cwd**: the rollout's own recorded working directory must match this session's.
 ///   Without it a fresh terminal in project A took the globally-newest unclaimed
 ///   session and resumed project B's history.
+///
+/// Both filters together still leave two Codex tabs in the *same* folder telling
+/// only by mtime, which is the ambiguity issue #119 reported for Claude. Claude and
+/// grok were fixed by reading their pid→session registries; Codex 0.153 publishes
+/// no equivalent — checked `session_index.jsonl` (id + name + updated_at only), the
+/// rollout `session_meta` payload (no pid) and `codex --help` (no `--session-id` to
+/// force one at launch). So this stays a heuristic until Codex exposes a binding;
+/// there is nothing on disk to make it exact.
 fn discover_codex_session(
     cwd: &str,
     claimed_ids: &[String],
@@ -605,10 +683,53 @@ fn grok_path_encode(path: &str) -> String {
     out
 }
 
+/// Pick the session `pid` registered for `cwd` out of grok's `active_sessions.json`.
+///
+/// The file is a flat array of `{"session_id","pid","cwd","opened_at"}` — grok's
+/// equivalent of Claude's per-pid registry, and the only exact pid→session binding
+/// it offers. Entries outlive their process (a dead pid from the previous day was
+/// still listed), so the caller must still verify the session exists on disk.
+fn select_grok_session_for_pid(contents: &str, pid: u32, cwd: &str) -> Option<String> {
+    let entries: serde_json::Value = serde_json::from_str(contents).ok()?;
+    let wanted_cwd = normalize_cwd(cwd);
+
+    entries.as_array()?.iter().find_map(|entry| {
+        if entry.get("pid")?.as_u64()? != u64::from(pid) {
+            return None;
+        }
+        if normalize_cwd(entry.get("cwd")?.as_str()?) != wanted_cwd {
+            return None;
+        }
+        Some(entry.get("session_id")?.as_str()?.to_string())
+    })
+}
+
+/// Read the session id grok registered for `pid`, rejecting a stale entry whose
+/// session directory is gone.
+fn grok_session_for_pid(pid: u32, cwd: &str) -> Option<String> {
+    let path = dirs::home_dir()?.join(".grok").join("active_sessions.json");
+    let contents = std::fs::read_to_string(path).ok()?;
+    let session_id = select_grok_session_for_pid(&contents, pid, cwd)?;
+    verify_grok_session(&session_id, cwd).then_some(session_id)
+}
+
 /// grok stores sessions under `~/.grok/sessions/<percent-encoded-cwd>/<UUIDv7>/`.
 /// Each session is a *directory* named with its UUIDv7 id (usable with
 /// `grok --resume <id>`); the newest such directory is the active session.
-fn discover_grok_session(cwd: &str, claimed_ids: &[String]) -> Option<String> {
+///
+/// As for Claude, "newest" is a guess whenever a folder holds more than one grok
+/// tab, so the pid registry is consulted first and the mtime sort is the fallback.
+fn discover_grok_session(
+    cwd: &str,
+    claimed_ids: &[String],
+    agent_pid: Option<u32>,
+) -> Option<String> {
+    if let Some(pid) = agent_pid
+        && let Some(id) = grok_session_for_pid(pid, cwd)
+    {
+        return Some(id);
+    }
+
     let dir = grok_sessions_dir()?.join(grok_path_encode(cwd));
     // DEFERRED (2026-06-13) — extractor accepts any UUID-named entry, not only
     // directories. grok only ever creates session *directories*, and
@@ -788,6 +909,77 @@ mod tests {
         assert!(!verify_grok_session("not-a-uuid", "/tmp/x"));
     }
 
+    /// Shape captured from a live `~/.grok/active_sessions.json`.
+    fn grok_active_sessions(entries: &[(&str, u32, &str)]) -> String {
+        let arr: Vec<_> = entries
+            .iter()
+            .map(|(id, pid, cwd)| {
+                serde_json::json!({
+                    "session_id": id,
+                    "pid": pid,
+                    "cwd": cwd,
+                    "opened_at": "2026-09-05T16:18:29.539752Z",
+                })
+            })
+            .collect();
+        serde_json::Value::Array(arr).to_string()
+    }
+
+    #[test]
+    fn test_select_grok_session_for_pid_picks_the_matching_process() {
+        let mine = "01a0725d-38ec-73b1-9c79-fab368c84702";
+        let other = "01a0725d-38ec-73b1-9c79-fab368c84703";
+        let json =
+            grok_active_sessions(&[(other, 111, "/fake/project"), (mine, 222, "/fake/project")]);
+
+        assert_eq!(
+            select_grok_session_for_pid(&json, 222, "/fake/project"),
+            Some(mine.to_string()),
+            "two grok tabs in one folder must be told apart by pid, not by mtime"
+        );
+    }
+
+    /// grok leaves entries behind when it exits, so a recycled pid can name a
+    /// session from another project.
+    #[test]
+    fn test_select_grok_session_for_pid_rejects_another_cwd() {
+        let stale = "01a0725d-38ec-73b1-9c79-fab368c84702";
+        let json = grok_active_sessions(&[(stale, 222, "/other/project")]);
+
+        assert_eq!(
+            select_grok_session_for_pid(&json, 222, "/fake/project"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_select_grok_session_for_pid_unknown_pid_returns_none() {
+        let json =
+            grok_active_sessions(&[("01a0725d-38ec-73b1-9c79-fab368c84702", 222, "/fake/project")]);
+
+        assert_eq!(
+            select_grok_session_for_pid(&json, 999, "/fake/project"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_select_grok_session_for_pid_tolerates_a_corrupt_file() {
+        assert_eq!(
+            select_grok_session_for_pid("not json", 222, "/fake/project"),
+            None
+        );
+        assert_eq!(
+            select_grok_session_for_pid("{}", 222, "/fake/project"),
+            None
+        );
+        assert_eq!(
+            select_grok_session_for_pid(r#"[{"pid":222}]"#, 222, "/fake/project"),
+            None,
+            "an entry with no cwd/session_id must be skipped, not panic"
+        );
+    }
+
     // ── path_to_claude_slug ──
 
     #[test]
@@ -883,9 +1075,174 @@ mod tests {
         let uuid = "af467730-5e79-49d9-8a17-ebd94c99f262";
         make_file(&session_dir, &format!("{uuid}.jsonl"));
 
-        let result =
-            discover_claude_session("/fake/project", &[], Some(dir.path().to_str().unwrap()));
+        let result = discover_claude_session(
+            "/fake/project",
+            &[],
+            Some(dir.path().to_str().unwrap()),
+            None,
+        );
         assert_eq!(result, Some(uuid.to_string()));
+    }
+
+    // ── claude pid→session registry ──
+
+    /// Build a config dir containing a transcript for `uuid` and, when `registry` is
+    /// set, the `sessions/<pid>.json` entry Claude writes while it runs.
+    fn claude_config_dir(
+        cwd: &str,
+        transcripts: &[&str],
+        registry: Option<(u32, &str, &str)>,
+    ) -> TempDir {
+        let dir = TempDir::new().unwrap();
+        let project_dir = dir.path().join("projects").join(path_to_claude_slug(cwd));
+        fs::create_dir_all(&project_dir).unwrap();
+        for uuid in transcripts {
+            make_file(&project_dir, &format!("{uuid}.jsonl"));
+            // Distinct mtimes so "newest" is deterministic: last listed wins.
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if let Some((pid, session_id, recorded_cwd)) = registry {
+            let sessions = dir.path().join("sessions");
+            fs::create_dir_all(&sessions).unwrap();
+            let entry = serde_json::json!({
+                "pid": pid,
+                "sessionId": session_id,
+                "cwd": recorded_cwd,
+                "version": "2.1.261",
+                "status": "busy",
+            });
+            fs::write(sessions.join(format!("{pid}.json")), entry.to_string()).unwrap();
+        }
+        dir
+    }
+
+    /// The whole point of issue #119: with several Claude tabs in one folder the
+    /// newest transcript belongs to *some* tab, not to this one. The pid registry
+    /// is the only thing that can tell them apart, so it must beat the mtime sort.
+    #[test]
+    fn test_discover_claude_session_prefers_the_pid_registry_over_the_newest_file() {
+        let mine = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let other_tab = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        // `other_tab` is written last, so it wins the mtime sort.
+        let dir = claude_config_dir(
+            "/fake/project",
+            &[mine, other_tab],
+            Some((4242, mine, "/fake/project")),
+        );
+        let config = Some(dir.path().to_str().unwrap());
+
+        assert_eq!(
+            discover_claude_session("/fake/project", &[], config, Some(4242)),
+            Some(mine.to_string()),
+            "the pid's own session must win over the newest transcript"
+        );
+        assert_eq!(
+            discover_claude_session("/fake/project", &[], config, None),
+            Some(other_tab.to_string()),
+            "without a pid there is nothing better than the mtime heuristic"
+        );
+    }
+
+    /// A pid hit is ground truth. If another tab grabbed this id by mtime first, that
+    /// tab is the one that is wrong — honouring its claim here would keep this tab
+    /// permanently bound to someone else's conversation.
+    #[test]
+    fn test_discover_claude_session_pid_hit_ignores_a_wrong_claim() {
+        let mine = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        let dir = claude_config_dir(
+            "/fake/project",
+            &[mine],
+            Some((4242, mine, "/fake/project")),
+        );
+
+        assert_eq!(
+            discover_claude_session(
+                "/fake/project",
+                &[mine.to_string()],
+                Some(dir.path().to_str().unwrap()),
+                Some(4242),
+            ),
+            Some(mine.to_string())
+        );
+    }
+
+    /// Registry files outlive their process, so a recycled pid can point at a session
+    /// from a different project. The recorded cwd rejects it.
+    #[test]
+    fn test_discover_claude_session_rejects_a_registry_entry_from_another_cwd() {
+        let stale = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+        let dir = claude_config_dir("/fake/project", &[], Some((4242, stale, "/other/project")));
+
+        assert_eq!(
+            discover_claude_session(
+                "/fake/project",
+                &[],
+                Some(dir.path().to_str().unwrap()),
+                Some(4242),
+            ),
+            None
+        );
+    }
+
+    /// The registry names a transcript. If that transcript is gone the entry is stale,
+    /// and resuming it would fail — fall through to the heuristic instead.
+    #[test]
+    fn test_discover_claude_session_rejects_a_registry_entry_with_no_transcript() {
+        let ghost = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+        let real = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+        let dir = claude_config_dir(
+            "/fake/project",
+            &[real],
+            Some((4242, ghost, "/fake/project")),
+        );
+
+        assert_eq!(
+            discover_claude_session(
+                "/fake/project",
+                &[],
+                Some(dir.path().to_str().unwrap()),
+                Some(4242),
+            ),
+            Some(real.to_string()),
+            "a registry entry naming a missing transcript must not be used"
+        );
+    }
+
+    /// A pid the registry does not know (older Claude, or the process exited) must
+    /// leave the existing behaviour untouched rather than returning nothing.
+    #[test]
+    fn test_discover_claude_session_falls_back_when_the_pid_is_unregistered() {
+        let uuid = "12345678-1234-1234-1234-123456789abc";
+        let dir = claude_config_dir("/fake/project", &[uuid], None);
+
+        assert_eq!(
+            discover_claude_session(
+                "/fake/project",
+                &[],
+                Some(dir.path().to_str().unwrap()),
+                Some(4242),
+            ),
+            Some(uuid.to_string())
+        );
+    }
+
+    /// Guards against a registry file whose `pid` field disagrees with its filename.
+    #[test]
+    fn test_claude_session_for_pid_rejects_a_mismatched_pid_field() {
+        let uuid = "abcdef01-2345-6789-abcd-ef0123456789";
+        let dir = claude_config_dir(
+            "/fake/project",
+            &[uuid],
+            Some((4242, uuid, "/fake/project")),
+        );
+        // Rename 4242.json to 9999.json: same content, wrong key.
+        let sessions = dir.path().join("sessions");
+        fs::rename(sessions.join("4242.json"), sessions.join("9999.json")).unwrap();
+
+        assert_eq!(
+            claude_session_for_pid(9999, "/fake/project", Some(dir.path().to_str().unwrap())),
+            None
+        );
     }
 
     #[test]
