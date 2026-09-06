@@ -18,9 +18,22 @@ const EGO_EXTENSIONS: &str = "ego";
 const EGO_HOLD_EXTENSION: &str = "hold";
 const EGO_COMPACT_EXTENSION: &str = "compact";
 
+mod connection;
 mod manager;
 
 pub use manager::AcpClientManager;
+
+/// What a session is allowed to reach, resupplied by the caller every time.
+///
+/// It is never restored from a stored snapshot: an authority that outlived the
+/// window in which it was granted is a wider authority than anyone gave, and
+/// reconnect is exactly when that would happen unnoticed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpSessionAuthority {
+    pub cwd: PathBuf,
+    pub additional_directories: Vec<PathBuf>,
+    pub mcp_servers: Vec<v1::McpServer>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgoAcpConfig {
@@ -290,6 +303,12 @@ pub enum AcpClientErrorCode {
     InitializationFailed,
     NotFound,
     UnsupportedProtocol,
+    /// The peer never advertised this operation, so nothing was sent.
+    CapabilityUnavailable,
+    /// The agent answered, and its answer was a refusal.
+    AgentError,
+    /// The connection has settled. A new one is the only way forward.
+    TransportClosed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -324,6 +343,65 @@ impl AcpClientError {
         .with_connection_id(connection_id)
     }
 
+    /// Refused before the wire, naming the operation and why it is not there.
+    ///
+    /// Never retryable: the answer comes from an immutable snapshot taken at
+    /// `initialize`, so the identical request on this connection will refuse
+    /// identically. A host that wants it must reconnect to an agent that has
+    /// it, which is a different action, not a retry.
+    pub(super) fn capability_unavailable(
+        connection_id: AcpConnectionId,
+        operation: AcpOperation,
+        reason: Option<AcpUnavailableReason>,
+    ) -> Self {
+        Self::new(
+            AcpClientErrorCode::CapabilityUnavailable,
+            match reason {
+                Some(AcpUnavailableReason::WrongExtensionVersion) => format!(
+                    "the agent advertises {operation:?} at a version this client does not speak"
+                ),
+                Some(AcpUnavailableReason::NotOfferedBySession) => {
+                    format!("this session does not offer {operation:?}")
+                }
+                Some(AcpUnavailableReason::ExcludedByContract) => {
+                    format!("{operation:?} is not part of this client's contract")
+                }
+                Some(AcpUnavailableReason::NotAdvertised) | None => {
+                    format!("the agent did not advertise {operation:?}")
+                }
+            },
+        )
+        .with_connection_id(connection_id)
+        .with_operation(operation)
+    }
+
+    /// The agent answered and its answer was a refusal.
+    ///
+    /// Not retryable on its own account: the agent decided, and asking again
+    /// with the same bytes invites the same decision. Whether a *different*
+    /// request would work is the caller's judgement, not this one's.
+    pub(super) fn agent_error(
+        connection_id: AcpConnectionId,
+        operation: Option<AcpOperation>,
+        message: impl Into<String>,
+    ) -> Self {
+        let mut error =
+            Self::new(AcpClientErrorCode::AgentError, message).with_connection_id(connection_id);
+        error.operation = operation;
+        error
+    }
+
+    /// The connection is gone. Retryable, because a fresh one may not be.
+    pub(super) fn transport_closed(connection_id: AcpConnectionId) -> Self {
+        let mut error = Self::new(
+            AcpClientErrorCode::TransportClosed,
+            format!("ACP connection {connection_id} has settled"),
+        )
+        .with_connection_id(connection_id);
+        error.retryable = true;
+        error
+    }
+
     pub(super) fn unsupported_protocol(message: impl Into<String>) -> Self {
         Self::new(AcpClientErrorCode::UnsupportedProtocol, message)
     }
@@ -341,6 +419,11 @@ impl AcpClientError {
 
     pub(super) fn with_connection_id(mut self, connection_id: AcpConnectionId) -> Self {
         self.connection_id = Some(connection_id);
+        self
+    }
+
+    fn with_operation(mut self, operation: AcpOperation) -> Self {
+        self.operation = Some(operation);
         self
     }
 }
