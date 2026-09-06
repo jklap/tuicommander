@@ -13023,6 +13023,10 @@ mod grid_delivery_tests {
         stop
     }
 
+    /// Every frame a subscriber was handed, in the order it was handed them.
+    #[cfg(feature = "desktop")]
+    type RecordedFrames = Arc<Mutex<Vec<Vec<u8>>>>;
+
     /// A desktop subscriber that records every frame it is handed and acks none —
     /// a WebView whose JS thread is blocked.
     ///
@@ -13034,7 +13038,7 @@ mod grid_delivery_tests {
     fn subscribe_a_frozen_webview(
         state: &Arc<AppState>,
         session_id: &str,
-    ) -> (Arc<GridGate>, Arc<Mutex<Vec<Vec<u8>>>>) {
+    ) -> (Arc<GridGate>, RecordedFrames) {
         let gate = Arc::new(GridGate::new());
         state
             .grid_gates
