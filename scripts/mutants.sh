@@ -7,16 +7,20 @@
 # diff run (`--in-diff`); a full-tree run is N mutants x one incremental build
 # of the lib crate and is deliberately not offered.
 #
-# Runs `--in-place` in a disposable worktree under .tmp/ instead of the copy
-# cargo-mutants makes by default: `tauri::generate_context!` needs `../dist`
-# next to src-tauri, which a copy of the workspace root does not have, and the
-# copy would land in $TMPDIR where every freshly built test binary is scanned
-# on exec. `--in-place` implies one job, which is also the budget.
+# Runs `--in-place` in a disposable `git archive` export under .tmp/ instead of
+# the copy cargo-mutants makes by default: `tauri::generate_context!` needs
+# `../dist` next to src-tauri, which a copy of the workspace root does not have,
+# and the copy would land in $TMPDIR where every freshly built test binary is
+# scanned on exec. `--in-place` implies one job, which is also the budget.
+#
+# An export, not a worktree: a detached worktree is an "orphan" to a running
+# TUICommander, and its orphan cleanup removes it on the next repo refresh —
+# mid-run, with the mutant applied.
 set -euo pipefail
 
 RANGE="${1:-HEAD~1}"
 ROOT="$(git rev-parse --show-toplevel)"
-WT="$ROOT/.tmp/wt-mutants"
+SRC="$ROOT/.tmp/mutants-src"
 DIFF="$ROOT/.tmp/mutants.diff"
 
 # Every cargo call goes through the mbx shim when it is installed (shared
@@ -36,22 +40,20 @@ if ! grep -q '^+++ b/.*\.rs$' "$DIFF"; then
   echo "no Rust changes in $RANGE..HEAD"; exit 0
 fi
 
-if [ -d "$WT" ]; then
-  git -C "$WT" checkout -q -- . && git -C "$WT" checkout -q --detach "$(git -C "$ROOT" rev-parse HEAD)"
-else
-  git -C "$ROOT" worktree add -q --detach "$WT" HEAD
-fi
+# A fresh export every run: an interrupted run leaves a mutant applied, and
+# there is no git checkout to restore it from.
+rm -rf "$SRC" && mkdir -p "$SRC"
+git -C "$ROOT" archive HEAD | tar -x -C "$SRC"
 # generate_context! embeds ../dist; tauri-build checks the gitignored sidecar.
-mkdir -p "$WT/dist" && cp -R "$ROOT/dist/." "$WT/dist/"
-cp -R "$ROOT/src-tauri/binaries/." "$WT/src-tauri/binaries/"
-# cargo-mutants restores each mutant itself; this covers an interrupted run.
-trap 'git -C "$WT" checkout -q -- . 2>/dev/null || true' EXIT
+mkdir -p "$SRC/dist" "$SRC/src-tauri/binaries"
+cp -R "$ROOT/dist/." "$SRC/dist/"
+cp -R "$ROOT/src-tauri/binaries/." "$SRC/src-tauri/binaries/"
 
-cd "$WT/src-tauri"
+cd "$SRC/src-tauri"
 ulimit -n 10240
 cargo mutants --in-place --in-diff "$DIFF" "${@:2}"
 STATUS=$?
 echo "--- missed (a surviving mutant is a missing test):"
 cat mutants.out/missed.txt 2>/dev/null || true
-echo "logs: $WT/src-tauri/mutants.out"
+echo "logs: $SRC/src-tauri/mutants.out"
 exit $STATUS

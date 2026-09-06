@@ -388,7 +388,7 @@ When changing how `make mutants` selects, builds or runs mutants:
 | File | What to update |
 |------|----------------|
 | `src-tauri/.cargo/mutants.toml` | Test tool, cargo test args, excluded globs |
-| `scripts/mutants.sh` | Worktree + `--in-place` + `--in-diff` mechanics, the `dist` copy `generate_context!` needs |
+| `scripts/mutants.sh` | `git archive` export + `--in-place` + `--in-diff` mechanics, the `dist` copy `generate_context!` needs |
 | `Makefile` | The `mutants` target and its `RANGE` default |
 | `AGENTS.md` | "Tests" section bullet (per-change rule, who runs it, surviving-mutant policy) |
 | `CONTRIBUTING.md` | The install line and the one-paragraph mention |
