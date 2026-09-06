@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use agent_client_protocol::schema::v1;
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
 use parking_lot::Mutex;
 use tokio::{
@@ -16,9 +17,9 @@ use tokio::{
 
 use super::connection::{Command, ConnectionActor};
 use super::{
-    AcpAttachmentSnapshot, AcpCapabilitySnapshot, AcpClientError, AcpConnectRequest,
+    AcpAttachKind, AcpAttachmentSnapshot, AcpCapabilitySnapshot, AcpClientError, AcpConnectRequest,
     AcpConnectionId, AcpConnectionSettlement, AcpConnectionSettlementReason, AcpConnectionSnapshot,
-    AcpConnectionState, AcpReconnectRequest, AcpSessionAuthority, EgoAcpConfig,
+    AcpConnectionState, AcpDetachKind, AcpReconnectRequest, AcpSessionAuthority, EgoAcpConfig,
     build_initialize_request, capability_snapshot, launch_spec,
 };
 
@@ -46,7 +47,7 @@ struct ConnectionHandle {
 }
 
 struct InitializedConnection {
-    agent_info: Option<agent_client_protocol::schema::v1::Implementation>,
+    agent_info: Option<v1::Implementation>,
     capabilities: AcpCapabilitySnapshot,
 }
 
@@ -161,11 +162,45 @@ impl AcpClientManager {
         .await
     }
 
+    /// Attach this connection to a session ego already owns.
+    ///
+    /// The returned attachment names the session that is now attached, which
+    /// for a fork is not the one that was asked for.
+    pub async fn attach(
+        &self,
+        connection_id: AcpConnectionId,
+        kind: AcpAttachKind,
+        session_id: v1::SessionId,
+        authority: AcpSessionAuthority,
+    ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Attach {
+            kind,
+            session_id,
+            authority,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn detach(
+        &self,
+        connection_id: AcpConnectionId,
+        kind: AcpDetachKind,
+        session_id: v1::SessionId,
+    ) -> Result<(), AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Detach {
+            kind,
+            session_id,
+            reply,
+        })
+        .await
+    }
+
     pub async fn list_sessions(
         &self,
         connection_id: AcpConnectionId,
-        request: agent_client_protocol::schema::v1::ListSessionsRequest,
-    ) -> Result<agent_client_protocol::schema::v1::ListSessionsResponse, AcpClientError> {
+        request: v1::ListSessionsRequest,
+    ) -> Result<v1::ListSessionsResponse, AcpClientError> {
         self.dispatch(connection_id, |reply| Command::ListSessions {
             request,
             reply,

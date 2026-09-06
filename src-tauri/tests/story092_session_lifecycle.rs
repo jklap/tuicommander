@@ -12,13 +12,19 @@
 //! agent never advertised is refused before a byte is written, and that a
 //! refusal leaves nothing attached.
 
+use agent_client_protocol::schema::v1;
 use tuicommander_lib::acp::{
-    AcpAttachmentState, AcpClientErrorCode, AcpOperation, AcpSessionAuthority,
+    AcpAttachKind, AcpAttachmentState, AcpClientErrorCode, AcpDetachKind, AcpOperation,
+    AcpSessionAuthority,
 };
 
 mod acp_support;
 
 use acp_support::Fixture;
+
+/// The session ids the scenarios answer with, spelled once.
+const FIRST: &str = "01932d5e-0000-7000-8000-0000000000aa";
+const FORKED: &str = "01932d5e-0000-7000-8000-0000000000bb";
 
 fn authority(cwd: std::path::PathBuf) -> AcpSessionAuthority {
     AcpSessionAuthority {
@@ -26,6 +32,10 @@ fn authority(cwd: std::path::PathBuf) -> AcpSessionAuthority {
         additional_directories: Vec::new(),
         mcp_servers: Vec::new(),
     }
+}
+
+fn session(id: &str) -> v1::SessionId {
+    v1::SessionId::new(id)
 }
 
 #[tokio::test]
@@ -152,6 +162,184 @@ async fn a_refused_new_session_leaves_the_connection_with_no_attachment() {
         snapshot.attachments.is_empty(),
         "a refused session was attached anyway: {snapshot:?}"
     );
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+/// Loading attaches a session ego already owns; closing lets go of it.
+///
+/// The id is not the agent's to choose here — it is the one the caller named,
+/// and a client that took the durable id from anywhere but the caller's request
+/// would attach to a session nobody asked for.
+#[tokio::test]
+async fn a_loaded_session_attaches_under_the_id_that_was_asked_for() {
+    let fixture = Fixture::with("session-attach");
+    let connection = fixture.connect().await;
+
+    let attachment = fixture
+        .manager
+        .attach(
+            connection.connection_id,
+            AcpAttachKind::Load,
+            session(FIRST),
+            authority(fixture.root()),
+        )
+        .await
+        .expect("session/load");
+    assert_eq!(attachment.session_id, session(FIRST));
+    assert_eq!(attachment.state, AcpAttachmentState::Idle);
+
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    assert_eq!(snapshot.attachments, vec![attachment]);
+
+    fixture
+        .manager
+        .detach(
+            connection.connection_id,
+            AcpDetachKind::Close,
+            session(FIRST),
+        )
+        .await
+        .expect("session/close");
+
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    assert!(
+        snapshot.attachments.is_empty(),
+        "a closed session stayed attached: {snapshot:?}"
+    );
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+/// A fork is a second session, and the original keeps its own attachment.
+///
+/// Ego owns the lineage; what the client must not do is treat the fork's new
+/// durable id as a rename of the one it forked from. Losing the original here
+/// would silently detach a session that is still perfectly alive.
+#[tokio::test]
+async fn a_fork_attaches_the_new_id_and_keeps_the_original() {
+    let fixture = Fixture::with("session-fork");
+    let connection = fixture.connect().await;
+    let root = fixture.root();
+
+    let original = fixture
+        .manager
+        .new_session(connection.connection_id, authority(root.clone()))
+        .await
+        .expect("session/new");
+    assert_eq!(original.session_id, session(FIRST));
+
+    let fork = fixture
+        .manager
+        .attach(
+            connection.connection_id,
+            AcpAttachKind::Fork,
+            session(FIRST),
+            authority(root),
+        )
+        .await
+        .expect("session/fork");
+    assert_eq!(fork.session_id, session(FORKED));
+
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    assert_eq!(snapshot.attachments, vec![original, fork]);
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_resumed_session_attaches_and_a_deleted_one_detaches() {
+    let fixture = Fixture::with("session-resume-delete");
+    let connection = fixture.connect().await;
+
+    let attachment = fixture
+        .manager
+        .attach(
+            connection.connection_id,
+            AcpAttachKind::Resume,
+            session(FIRST),
+            authority(fixture.root()),
+        )
+        .await
+        .expect("session/resume");
+    assert_eq!(attachment.session_id, session(FIRST));
+
+    fixture
+        .manager
+        .detach(
+            connection.connection_id,
+            AcpDetachKind::Delete,
+            session(FIRST),
+        )
+        .await
+        .expect("session/delete");
+
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    assert!(
+        snapshot.attachments.is_empty(),
+        "a deleted session stayed attached: {snapshot:?}"
+    );
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+/// Every lifecycle operation is gated on the capability that names it.
+///
+/// One test per operation would prove the same thing five times; what matters
+/// is that no operation was left ungated, which is a statement about the set.
+#[tokio::test]
+async fn no_lifecycle_operation_reaches_an_agent_that_advertised_none() {
+    let fixture = Fixture::with("no-lifecycle");
+    let connection = fixture.connect().await;
+    let root = fixture.root();
+
+    for (kind, operation) in [
+        (AcpAttachKind::Load, AcpOperation::Load),
+        (AcpAttachKind::Fork, AcpOperation::Fork),
+        (AcpAttachKind::Resume, AcpOperation::Resume),
+    ] {
+        let error = fixture
+            .manager
+            .attach(
+                connection.connection_id,
+                kind,
+                session(FIRST),
+                authority(root.clone()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, AcpClientErrorCode::CapabilityUnavailable);
+        assert_eq!(error.operation, Some(operation));
+    }
+
+    for (kind, operation) in [
+        (AcpDetachKind::Close, AcpOperation::Close),
+        (AcpDetachKind::Delete, AcpOperation::Delete),
+    ] {
+        let error = fixture
+            .manager
+            .detach(connection.connection_id, kind, session(FIRST))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, AcpClientErrorCode::CapabilityUnavailable);
+        assert_eq!(error.operation, Some(operation));
+    }
 
     fixture
         .manager
