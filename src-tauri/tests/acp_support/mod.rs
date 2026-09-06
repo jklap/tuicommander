@@ -12,12 +12,20 @@
 //! the root outlives the manager — a `TempDir` dropped early deletes the
 //! directory the child is still running in, which fails as a protocol error
 //! somewhere far from the cause.
+//!
+//! Compiled into every ACP test binary, and no binary uses all of it — a
+//! protocol test has no turns to wait on, a turn test never builds a session
+//! authority by hand. The unused half of this module in any one binary is the
+//! price of having one copy of each helper instead of five.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
+use agent_client_protocol::schema::v1;
 use tempfile::TempDir;
 use tuicommander_lib::acp::{
-    AcpClientManager, AcpConnectRequest, AcpConnectionSnapshot, EgoAcpConfig,
+    AcpClientEvent, AcpClientManager, AcpConnectRequest, AcpConnectionSnapshot, AcpEventEnvelope,
+    AcpEventStream, AcpSessionAuthority, EgoAcpConfig,
 };
 
 pub struct Fixture {
@@ -64,4 +72,76 @@ impl Fixture {
 #[must_use]
 pub fn fixture_agent() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_tuic-acp-fixture-agent"))
+}
+
+/// A session request for one directory and nothing else.
+#[must_use]
+pub fn authority(cwd: PathBuf) -> AcpSessionAuthority {
+    AcpSessionAuthority {
+        cwd,
+        additional_directories: Vec::new(),
+        mcp_servers: Vec::new(),
+    }
+}
+
+#[must_use]
+pub fn text(body: &str) -> v1::ContentBlock {
+    v1::ContentBlock::Text(v1::TextContent::new(body))
+}
+
+/// The text of an agent message chunk, or `None` for anything else.
+#[must_use]
+pub fn chunk(envelope: &AcpEventEnvelope) -> Option<String> {
+    let AcpClientEvent::SessionUpdate(update) = &envelope.event else {
+        return None;
+    };
+    let v1::SessionUpdate::AgentMessageChunk(chunk) = &**update else {
+        return None;
+    };
+    match &chunk.content {
+        v1::ContentBlock::Text(text) => Some(text.text.clone()),
+        _ => None,
+    }
+}
+
+/// How long to wait for an event before calling it a failure.
+///
+/// Bounded on purpose. The failure these tests are built to catch is a request
+/// that is never answered, and an unbounded wait turns that into a hang: the
+/// agent waits for the client, the client waits for the agent, and the test
+/// waits for both with nothing to say about why.
+pub const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Read events until one of them matches, and hand back everything seen.
+pub async fn until(
+    stream: &mut AcpEventStream,
+    wanted: impl Fn(&AcpClientEvent) -> bool,
+) -> Vec<AcpEventEnvelope> {
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(PATIENCE, stream.recv())
+            .await
+            .unwrap_or_else(|_| panic!("no further event within {PATIENCE:?}; saw {seen:?}"));
+        let Some(event) = event else {
+            panic!("the stream ended before the awaited event; saw {seen:?}");
+        };
+        let event = event.expect("no gap on a stream subscribed from the start");
+        let done = wanted(&event.event);
+        seen.push(event);
+        if done {
+            return seen;
+        }
+    }
+}
+
+/// Read events until the turn settles, and hand back everything seen.
+///
+/// Waiting for the settlement rather than for a count is what makes this
+/// deterministic: the scenario decides when the turn ends, and the test reads
+/// exactly that far.
+pub async fn until_settled(stream: &mut AcpEventStream) -> Vec<AcpEventEnvelope> {
+    until(stream, |event| {
+        matches!(event, AcpClientEvent::TurnSettled { .. })
+    })
+    .await
 }

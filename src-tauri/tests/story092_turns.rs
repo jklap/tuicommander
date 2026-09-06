@@ -14,60 +14,14 @@
 use agent_client_protocol::schema::v1;
 use tuicommander_lib::acp::{
     AcpAttachKind, AcpAttachmentState, AcpClientErrorCode, AcpClientEvent, AcpDetachKind,
-    AcpEventEnvelope, AcpOperation, AcpSessionAuthority, AcpTurnState,
+    AcpOperation, AcpTurnState,
 };
 
 mod acp_support;
 
-use acp_support::Fixture;
+use acp_support::{Fixture, authority, chunk, text, until_settled};
 
 const SESSION: &str = "01932d5e-0000-7000-8000-0000000000aa";
-
-fn authority(cwd: std::path::PathBuf) -> AcpSessionAuthority {
-    AcpSessionAuthority {
-        cwd,
-        additional_directories: Vec::new(),
-        mcp_servers: Vec::new(),
-    }
-}
-
-fn text(body: &str) -> v1::ContentBlock {
-    v1::ContentBlock::Text(v1::TextContent::new(body))
-}
-
-/// The text of an agent message chunk, or `None` for anything else.
-fn chunk(envelope: &AcpEventEnvelope) -> Option<String> {
-    let AcpClientEvent::SessionUpdate(update) = &envelope.event else {
-        return None;
-    };
-    let v1::SessionUpdate::AgentMessageChunk(chunk) = &**update else {
-        return None;
-    };
-    match &chunk.content {
-        v1::ContentBlock::Text(text) => Some(text.text.clone()),
-        _ => None,
-    }
-}
-
-/// Read events until the turn settles, and hand back everything seen.
-///
-/// Waiting for the settlement rather than for a count is what makes this
-/// deterministic: the scenario decides when the turn ends, and the test reads
-/// exactly that far.
-async fn until_settled(
-    stream: &mut tuicommander_lib::acp::AcpEventStream,
-) -> Vec<AcpEventEnvelope> {
-    let mut seen = Vec::new();
-    while let Some(event) = stream.recv().await {
-        let event = event.expect("no gap on a stream subscribed from the start");
-        let settled = matches!(event.event, AcpClientEvent::TurnSettled { .. });
-        seen.push(event);
-        if settled {
-            break;
-        }
-    }
-    seen
-}
 
 #[tokio::test]
 async fn a_turn_streams_its_updates_in_wire_order_and_settles_on_its_response() {

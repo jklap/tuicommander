@@ -20,19 +20,11 @@ use tuicommander_lib::acp::{
 
 mod acp_support;
 
-use acp_support::Fixture;
+use acp_support::{Fixture, authority};
 
 /// The session ids the scenarios answer with, spelled once.
 const FIRST: &str = "01932d5e-0000-7000-8000-0000000000aa";
 const FORKED: &str = "01932d5e-0000-7000-8000-0000000000bb";
-
-fn authority(cwd: std::path::PathBuf) -> AcpSessionAuthority {
-    AcpSessionAuthority {
-        cwd,
-        additional_directories: Vec::new(),
-        mcp_servers: Vec::new(),
-    }
-}
 
 fn session(id: &str) -> v1::SessionId {
     v1::SessionId::new(id)

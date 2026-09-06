@@ -15,77 +15,20 @@
 
 use agent_client_protocol::schema::v1;
 use tuicommander_lib::acp::{
-    AcpClientErrorCode, AcpClientEvent, AcpEventEnvelope, AcpEventStream, AcpHostRequestId,
-    AcpPendingInteraction, AcpSessionAuthority,
+    AcpClientErrorCode, AcpClientEvent, AcpEventEnvelope, AcpHostRequestId, AcpPendingInteraction,
 };
 
 mod acp_support;
 
-use acp_support::Fixture;
+use acp_support::{Fixture, authority, chunk, text, until};
 
 const SESSION: &str = "01932d5e-0000-7000-8000-0000000000aa";
 const OTHER_SESSION: &str = "01932d5e-0000-7000-8000-0000000000bb";
-
-fn authority(cwd: std::path::PathBuf) -> AcpSessionAuthority {
-    AcpSessionAuthority {
-        cwd,
-        additional_directories: Vec::new(),
-        mcp_servers: Vec::new(),
-    }
-}
-
-fn text(body: &str) -> v1::ContentBlock {
-    v1::ContentBlock::Text(v1::TextContent::new(body))
-}
 
 fn selected(option: &str) -> v1::RequestPermissionOutcome {
     v1::RequestPermissionOutcome::Selected(v1::SelectedPermissionOutcome::new(
         v1::PermissionOptionId::new(option),
     ))
-}
-
-/// The text of an agent message chunk, or `None` for anything else.
-fn chunk(envelope: &AcpEventEnvelope) -> Option<String> {
-    let AcpClientEvent::SessionUpdate(update) = &envelope.event else {
-        return None;
-    };
-    let v1::SessionUpdate::AgentMessageChunk(chunk) = &**update else {
-        return None;
-    };
-    match &chunk.content {
-        v1::ContentBlock::Text(text) => Some(text.text.clone()),
-        _ => None,
-    }
-}
-
-/// How long to wait for an event before calling it a failure.
-///
-/// Bounded on purpose. The failure these tests are built to catch is a seat
-/// that is never answered, and an unbounded wait turns that into a hang: the
-/// agent waits for the client, the client waits for the agent, and the test
-/// waits for both with nothing to say about why.
-const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Read events until one of them matches, and hand back everything seen.
-async fn until(
-    stream: &mut AcpEventStream,
-    wanted: impl Fn(&AcpClientEvent) -> bool,
-) -> Vec<AcpEventEnvelope> {
-    let mut seen = Vec::new();
-    loop {
-        let event = tokio::time::timeout(PATIENCE, stream.recv())
-            .await
-            .unwrap_or_else(|_| panic!("no further event within {PATIENCE:?}; saw {seen:?}"));
-        let Some(event) = event else {
-            panic!("the stream ended before the awaited event; saw {seen:?}");
-        };
-        let event = event.expect("no gap on a stream subscribed from the start");
-        let done = wanted(&event.event);
-        seen.push(event);
-        if done {
-            return seen;
-        }
-    }
 }
 
 /// The id the agent's question was seated under.
