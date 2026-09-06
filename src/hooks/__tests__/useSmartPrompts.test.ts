@@ -216,6 +216,36 @@ describe("resolveHeadlessAgent — no preferred agent", () => {
 	});
 });
 
+describe("canExecute — missing-provider settingsTab (#706-8d98)", () => {
+	it("executionMode='api': carries a settingsTab route to the Providers tab", () => {
+		mockedResolveSlot.mockReturnValue(null);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ executionMode: "api" }));
+		expect(result.ok).toBe(false);
+		expect(result.reason).toMatch(/Headless provider not configured/);
+		expect(result.settingsTab).toBe("providers");
+	});
+
+	it("headless mode resolving to the api agent carries the same settingsTab route", () => {
+		mockedGetHeadlessAgent.mockReturnValue(null);
+		mockedResolveSlot.mockReturnValue(null);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ preferredAgent: "api" }));
+		expect(result.ok).toBe(false);
+		expect(result.settingsTab).toBe("providers");
+	});
+
+	it("does not attach a settingsTab to an unrelated reason", () => {
+		mockedGetHeadlessTemplate.mockReturnValue(undefined);
+		mockedGetHeadlessAgent.mockReturnValue(null);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ preferredAgent: "claude" }));
+		expect(result.ok).toBe(false);
+		expect(result.reason).toMatch(/No headless agent configured/);
+		expect(result.settingsTab).toBeUndefined();
+	});
+});
+
 describe("canExecuteInject — idle gate by inject target", () => {
 	const ACTIVE = { id: "t1", sessionId: "s1", agentType: "claude" } as unknown as ReturnType<
 		typeof terminalsStore.getActive

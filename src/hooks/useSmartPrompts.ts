@@ -17,6 +17,20 @@ export interface SmartPromptResult {
 	output?: string;
 }
 
+export interface CanExecuteResult {
+	ok: boolean;
+	reason?: string;
+	/** Present when `reason` names a Settings destination — the tab key `openSettings(tab)` expects. */
+	settingsTab?: string;
+}
+
+/** Shared "no headless provider configured" result — carries the Providers tab route (#706-8d98). */
+const MISSING_PROVIDER_RESULT: CanExecuteResult = {
+	ok: false,
+	reason: "Headless provider not configured — add a provider and assign the Headless slot in Settings → Providers",
+	settingsTab: "providers",
+};
+
 /**
  * Minimal shell-word splitter for headless templates.
  * Respects single and double quotes; backslash escapes the next char (outside single quotes).
@@ -115,7 +129,7 @@ export function useSmartPrompts() {
 	const pty = usePty();
 
 	/** Check if a smart prompt can be executed right now */
-	function canExecute(prompt: SavedPrompt): { ok: boolean; reason?: string } {
+	function canExecute(prompt: SavedPrompt): CanExecuteResult {
 		if (prompt.enabled === false) return { ok: false, reason: "Prompt is disabled" };
 
 		if (prompt.executionMode === "shell") {
@@ -123,24 +137,14 @@ export function useSmartPrompts() {
 		}
 
 		if (prompt.executionMode === "api") {
-			if (!providerRegistryStore.resolveSlot("headless"))
-				return {
-					ok: false,
-					reason:
-						"Headless provider not configured — add a provider and assign the Headless slot in Settings → Providers",
-				};
+			if (!providerRegistryStore.resolveSlot("headless")) return MISSING_PROVIDER_RESULT;
 			return { ok: true };
 		}
 
 		if (prompt.executionMode === "headless") {
 			const resolved = resolveHeadlessAgent(prompt);
 			if (resolved.isApi) {
-				if (!providerRegistryStore.resolveSlot("headless"))
-					return {
-						ok: false,
-						reason:
-							"Headless provider not configured — add a provider and assign the Headless slot in Settings → Providers",
-					};
+				if (!providerRegistryStore.resolveSlot("headless")) return MISSING_PROVIDER_RESULT;
 				return { ok: true };
 			}
 			if (!resolved.agent) return { ok: false, reason: "No headless agent configured — set one in Settings → Agents" };
@@ -150,7 +154,7 @@ export function useSmartPrompts() {
 		return canExecuteInject(prompt);
 	}
 
-	function canExecuteInject(prompt: SavedPrompt): { ok: boolean; reason?: string } {
+	function canExecuteInject(prompt: SavedPrompt): CanExecuteResult {
 		const active = terminalsStore.getActive();
 		if (!active?.sessionId) return { ok: false, reason: "No active terminal" };
 		if (!active.agentType) return { ok: false, reason: "No agent detected in terminal" };

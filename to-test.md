@@ -496,6 +496,30 @@ Rust does not hot-reload, so this needs a `make dev` restart to load.
   `cargo test` or a `sh -c 'sleep 30'`), open the process manager and confirm
   each session still lists its child AND its descendants, with non-zero RSS.
 
+## Smart Prompts dropdown: missing-provider hint is now clickable (story 706-8d98, frontend only — Vite HMR, visual)
+
+Only the toolbar "Smart Prompts Library" dropdown (the sparkle icon) got the
+fix. The compact split-button strip (git changes tab, PR popover, etc.) still
+shows the same reason as a plain hover tooltip — see the DEFERRED comment at
+`SmartButtonStrip.tsx` for why that one was left alone.
+
+- [ ] In Settings → Providers, make sure no model is assigned to the "Headless"
+  slot (or temporarily unassign it).
+- [ ] Create or edit a Smart Prompt with Execution Mode = "API (LLM direct)"
+  (or "Headless" with the agent set to "API"), and give it `placement: toolbar`.
+- [ ] Open the toolbar's Smart Prompts dropdown (sparkle icon). The prompt
+  should appear dimmed/disabled, and *underneath its name* (not just as a
+  hover tooltip) you should see the full reason text — "Headless provider not
+  configured — add a provider and assign the Headless slot in Settings →
+  Providers" — rendered as an underlined, clickable control.
+- [ ] Click that reason text. Confirm it opens the Settings panel directly on
+  the **Providers** tab (not the default "Smart Prompts" tab the footer
+  "Manage Smart Prompts..." link opens), and confirm nothing was sent/run in
+  the terminal.
+- [ ] Confirm a prompt disabled for an unrelated reason (e.g. no active
+  terminal) still shows only the old hover tooltip — no clickable text was
+  added there.
+
 ## Language picker in Settings → General (story 689-52d8, visual)
 
 The General tab now renders a Language select above Shell, listing every locale

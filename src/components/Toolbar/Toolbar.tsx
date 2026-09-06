@@ -137,7 +137,8 @@ export interface ToolbarProps {
 	onBranchClick?: () => void;
 	onRun?: (shiftKey: boolean) => void;
 	onReviewPr?: (repoPath: string, branchName: string, command: string) => void;
-	onOpenSettings?: () => void;
+	/** Matches DeepLinkCallbacks.openSettings — `tab` selects which Settings tab opens. */
+	onOpenSettings?: (tab?: string) => void;
 	onShowWhatsNew?: (version: string) => void;
 }
 

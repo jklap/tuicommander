@@ -139,6 +139,14 @@ export const SmartButtonStrip: Component<SmartButtonStripProps> = (props) => {
 								{(prompt) => {
 									const check = () => canExecute(prompt);
 									const isActive = () => prompt.id === activePrompt()?.id;
+									// DEFERRED (2026-09-06) — this hint stays a `title=` tooltip, so its
+									// "Settings → Providers" text is not clickable here. Making it clickable
+									// needs an onOpenSettings prop threaded through all six mount points
+									// (GitHubPanel, PrSection, PrDetailPopover, ChangesTab, BranchesTab, and
+									// each of their parents), because `openSettings` is local App.tsx state
+									// with no store. The real fix is to promote it to a store; until then the
+									// threading costs more than it buys. Clickable version lives in
+									// SmartPromptsDropdown (#706-8d98).
 									return (
 										<button
 											class={cx(s.menuItem, isActive() && s.menuItemActive, !check().ok && s.menuItemDisabled)}
