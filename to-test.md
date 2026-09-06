@@ -602,6 +602,22 @@ built from this tree — the same POST answered `{"ok":true}` and left
   app. The browser must keep scrolling — the unsubscribe no longer drops the
   session's scroll target.
 
+## Opening a 23 MB JSON no longer freezes the editor (2026-09-06, frontend — HMR; one Rust part needs `make dev` restart)
+
+Above 500 KB the editor is plain text: no highlighting, no git gutter, no inline
+blame, and the disk poll no longer re-reads the whole file 5 s after opening.
+`get_gutter_changes` (Rust) returns nothing for an untracked file instead of
+one "added" marker per line. Measured in Chrome only; WKWebView is the one
+that blocked for over a minute.
+
+- [ ] Desktop app: open `~/Gits/personal/ego/mutants.out/mutants.json` (23 MB,
+  gitignored). It must open in a few seconds at most, unhighlighted, with no
+  gutter markers. With `window.__TUIC__.setPerfDebug(true)` first, any
+  remaining `UI freeze` line on `/logs` names an `editor.*` breadcrumb.
+- [ ] After the `make dev` restart: a small **untracked** file opens with an
+  empty gutter; a tracked file with an unsaved-vs-HEAD edit still shows its
+  markers; the diff viewer still shows the untracked file as all added.
+
 ## Still needs a human
 
 Every item here failed the ladder for a stated reason — real hardware, a second

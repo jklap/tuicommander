@@ -1015,20 +1015,10 @@ pub(crate) async fn get_file_diff(
                 return Err("Access denied: file is outside repository".to_string());
             }
 
-            // If the frontend told us it's untracked, skip the subprocess probe.
-            let is_untracked = if untracked == Some(true) {
-                true
-            } else {
-                match git_cmd(&repo_path)
-                    .args(["ls-files", "--error-unmatch", &file])
-                    .run()
-                {
-                    Ok(_) => false,
-                    Err(crate::git_cli::GitError::NonZeroExit { .. }) => true,
-                    Err(e) => {
-                        return Err(format!("Failed to check file tracking status: {e}"));
-                    }
-                }
+            // A caller that already knows the status skips the subprocess probe.
+            let is_untracked = match untracked {
+                Some(known) => known,
+                None => !is_file_tracked(&repo_path, &file)?,
             };
 
             if is_untracked {
@@ -1236,13 +1226,26 @@ pub(crate) fn parse_diff_to_changes(diff: &str) -> Vec<GutterChange> {
 /// Editor gutter / scrollbar-overview change markers for a single file vs a git
 /// scope (default "head"). Returns structured per-line markers — the unified
 /// diff is produced and parsed entirely in Rust; the frontend only renders.
+///
+/// An untracked file has no committed version to mark against: every line
+/// would be "added", which says nothing and costs one marker per line (409k
+/// on a 23 MB JSON, measured 2026-09-06). It gets no markers, like VS Code.
+/// The diff viewer (`get_file_diff`) still shows such a file as all added.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_gutter_changes(
     path: String,
     file: String,
     scope: Option<String>,
 ) -> Result<Vec<GutterChange>, String> {
-    let diff = get_file_diff(path, file, scope, None).await?;
+    let repo_path = PathBuf::from(&path);
+    let probe_file = file.clone();
+    let tracked = tokio::task::spawn_blocking(move || is_file_tracked(&repo_path, &probe_file))
+        .await
+        .map_err(|e| format!("spawn_blocking join error: {e}"))??;
+    if !tracked {
+        return Ok(Vec::new());
+    }
+    let diff = get_file_diff(path, file, scope, Some(false)).await?;
     Ok(parse_diff_to_changes(&diff))
 }
 
@@ -3351,14 +3354,23 @@ pub(crate) fn file_history_has_rename(repo: &Path, file: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether git tracks `file` (`ls-files --error-unmatch`). A non-zero exit is
+/// "untracked"; a git that could not run at all is an error, not an answer.
+pub(crate) fn is_file_tracked(repo: &Path, file: &str) -> Result<bool, String> {
+    match git_cmd(repo)
+        .args(["ls-files", "--error-unmatch", file])
+        .run()
+    {
+        Ok(_) => Ok(true),
+        Err(crate::git_cli::GitError::NonZeroExit { .. }) => Ok(false),
+        Err(e) => Err(format!("Failed to check file tracking status: {e}")),
+    }
+}
+
 /// Verify `file` is tracked, returning a friendly error if not (instead of
 /// git's cryptic "no such path in HEAD"). Shared by both blame adapters.
 pub(crate) fn ensure_file_tracked(repo: &Path, file: &str) -> Result<(), String> {
-    if git_cmd(repo)
-        .args(["ls-files", "--error-unmatch", file])
-        .run()
-        .is_err()
-    {
+    if !is_file_tracked(repo, file)? {
         return Err(format!(
             "File is not tracked by git — blame unavailable: {file}"
         ));
@@ -4395,6 +4407,95 @@ mod tests {
             .output()
             .expect("commit");
         (dir, path)
+    }
+
+    // --- get_gutter_changes vs get_file_diff on an untracked file ---
+
+    #[tokio::test]
+    async fn gutter_changes_skip_an_untracked_file() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("new.json"), "[\n1,\n2\n]\n").expect("write");
+        let changes = get_gutter_changes(
+            path.to_string_lossy().to_string(),
+            "new.json".to_string(),
+            Some("head".to_string()),
+        )
+        .await
+        .expect("gutter changes");
+        assert!(
+            changes.is_empty(),
+            "an untracked file has no HEAD version to mark against: {changes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn gutter_changes_mark_a_modified_tracked_file() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let file = path.join("lines.txt");
+        std::fs::write(&file, "a\nb\nc\n").expect("write");
+        git_cmd(&path)
+            .args(["add", "lines.txt"])
+            .run()
+            .expect("add");
+        git_cmd(&path)
+            .args(["commit", "-m", "lines", "--no-verify"])
+            .run()
+            .expect("commit");
+        std::fs::write(&file, "a\nb\nc\nd\n").expect("append");
+        let changes = get_gutter_changes(
+            path.to_string_lossy().to_string(),
+            "lines.txt".to_string(),
+            Some("head".to_string()),
+        )
+        .await
+        .expect("gutter changes");
+        assert_eq!(
+            changes,
+            vec![GutterChange {
+                line: 4,
+                change_type: GutterChangeType::Added,
+            }],
+            "only the appended line is marked"
+        );
+    }
+
+    #[tokio::test]
+    async fn gutter_changes_stay_empty_for_an_unmodified_tracked_file() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let changes = get_gutter_changes(
+            path.to_string_lossy().to_string(),
+            "initial.txt".to_string(),
+            Some("head".to_string()),
+        )
+        .await
+        .expect("gutter changes");
+        assert_eq!(changes, vec![]);
+    }
+
+    /// The diff viewer keeps the all-added view of a new file; only the gutter
+    /// short-circuits.
+    #[tokio::test]
+    async fn file_diff_still_shows_an_untracked_file_as_all_added() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("new.json"), "[\n1\n]\n").expect("write");
+        let diff = get_file_diff(
+            path.to_string_lossy().to_string(),
+            "new.json".to_string(),
+            Some("head".to_string()),
+            None,
+        )
+        .await
+        .expect("file diff");
+        assert_eq!(parse_diff_to_changes(&diff).len(), 3, "{diff}");
+    }
+
+    #[test]
+    fn is_file_tracked_distinguishes_tracked_from_untracked() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("loose.txt"), "x").expect("write");
+        assert_eq!(is_file_tracked(&path, "initial.txt"), Ok(true));
+        assert_eq!(is_file_tracked(&path, "loose.txt"), Ok(false));
+        assert_eq!(is_file_tracked(&path, "missing.txt"), Ok(false));
     }
 
     /// Capture every `tracing` event emitted on this thread while `f` runs.
