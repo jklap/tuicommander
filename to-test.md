@@ -30,6 +30,34 @@ no items left goes too. What stays open must carry its own stated reason.
 > WebView gets the same change over Vite HMR. If a browser check of a frontend fix
 > shows nothing, check `dist/index.html`'s mtime before blaming the code.
 
+## Gutter-hover "pointer" cursor no longer freezes over a mouse-tracking app's prompt (2026-09-08, frontend only — HMR)
+
+Reported: after the command-block gutter widened and gained a hover cursor
+(10bb1019), clicking in a Claude Code CLI prompt to reposition its own cursor
+looked broken — the mouse pointer showed a hand instead of the text-beam.
+Root cause (reproduced in `canvasTerminalGutterHoverCursor.mount.test.ts`,
+now covered): once an app enables xterm mouse reporting (Claude Code CLI's
+own click-to-reposition feature), `onMouseMove` returns before reaching any
+cursor-updating code at all — so whatever `style.cursor` was at that moment
+(very plausibly "pointer", from having merely drifted over the gutter at
+some earlier point) stayed frozen for the rest of that session. Separately,
+leaving the gutter for plain text (no mouse-reporting app involved) only
+reset the cursor via a 100ms-debounced link-hover check gated on an actual
+detected link — never on a bare gutter hover. Both paths now force the
+cursor back to "text" immediately. What the automated coverage cannot
+exercise is a *real* Claude Code CLI process actually enabling mouse
+reporting and repositioning its own cursor on click — only the CSS cursor
+state was simulated.
+
+- [ ] Start a real `claude` session in a terminal tab. Move the mouse over
+  the command-block gutter of an earlier, closed block (pointer cursor,
+  expected), then move it onto Claude's own prompt text: the cursor must be
+  the text-beam, not a hand, and clicking there must reposition Claude's own
+  input cursor as before.
+- [ ] With no mouse-tracking app running (a plain shell prompt), hover the
+  gutter (pointer cursor) then move onto the prompt line: the cursor must
+  switch back to the text-beam immediately, not after a brief pause.
+
 ## A backend-created worktree offers itself as a toast, not a modal (2026-08-30, frontend only — HMR)
 
 The "Switch to new worktree?" confirm was a blocking modal with a ten-second
