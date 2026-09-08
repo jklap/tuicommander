@@ -3488,6 +3488,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					shiftKey: e.shiftKey,
 				})
 			) {
+				// The app owns click/motion semantics once it has enabled mouse
+				// reporting — our own gutter hover affordance (and its cursor
+				// styling) doesn't apply, and every early return below this
+				// bypasses the gutter code that would otherwise keep the cursor in
+				// sync. Force the plain text-beam back so a gutter "pointer" set
+				// moments earlier doesn't freeze there for the rest of the app's
+				// session — the root cause behind a Claude Code prompt showing a
+				// stuck hand cursor after the mouse had merely drifted over the
+				// gutter. A hovered link is left alone: links stay live under mouse
+				// reporting (the link probe below owns that pointer and clears it).
+				if (!hoveredLink) canvasRef.style.cursor = "text";
 				const rect = canvasRef.getBoundingClientRect();
 				if (!isPointerInsideRect(e, rect)) return;
 				// Keep probing links: the press over one is claimed from the app
@@ -3527,6 +3538,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					canvasRef.style.cursor = "pointer";
 					return;
 				}
+				// Left the gutter (or never entered it this move): reset the
+				// baseline immediately when nothing else is claiming the pointer
+				// cursor, rather than waiting on the throttled link-hover check
+				// below — that check only clears a *hoveredLink*, not a bare
+				// gutter-hover pointer style, and is debounced up to 100ms behind a
+				// fast-moving mouse. Without this, moving out of the gutter onto a
+				// command's prompt row leaves a hand cursor showing until the
+				// mouse happens to settle.
+				if (!hoveredLink) canvasRef.style.cursor = "text";
 			}
 
 			// Selection drag: coalesce into one rAF/frame with the latest position.
