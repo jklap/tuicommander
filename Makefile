@@ -57,7 +57,7 @@ test:
 # Build .app only (default, fast — skips DMG)
 build:
 	@echo "Building TUICommander $(VERSION)..."
-	pnpm tauri build $(TAURI_BUILD_FLAGS)
+	pnpm tauri build --bundles app $(TAURI_BUILD_FLAGS)
 
 # Build .app + DMG (for distribution)
 build-dmg:
