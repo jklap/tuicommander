@@ -4,11 +4,16 @@ import { ErrorBoundary, render } from "solid-js/web";
 import App from "./App";
 import { initDebugGlobals } from "./debugGlobals";
 import { appLogger } from "./stores/appLogger";
+import { startFrontendHeartbeat } from "./utils/frontendHeartbeat";
 import "./global.css";
 import "./styles.css";
 
 // Expose debug globals for MCP eval_js introspection (works in dev and release)
 initDebugGlobals();
+
+// Prove to the backend that this thread runs. Its silence is what tells the
+// diagnostics thread the WebView is blocked — see frontend_liveness.rs.
+startFrontendHeartbeat();
 
 // Global error handlers — capture uncaught errors and unhandled promise rejections
 window.addEventListener("error", (event) => {
