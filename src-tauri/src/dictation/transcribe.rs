@@ -48,10 +48,46 @@ pub struct TranscribeResult {
     pub skip_reason: Option<String>,
 }
 
+/// The two thresholds that decide whether captured audio is speech at all.
+///
+/// They are settings rather than constants because the right value depends on
+/// the room and the microphone: a headset a metre away picks up enough noise to
+/// clear a fixed floor, which is exactly how Whisper ends up transcribing an
+/// empty room. Settings > Dictation exposes both with a live meter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoiceGates {
+    /// Minimum RMS of the captured audio. Below it, the audio never reaches
+    /// Whisper at all.
+    pub rms_threshold: f32,
+    /// Highest `no_speech_probability` a segment may report before its text is
+    /// discarded. `1.0` disables the gate — no probability can exceed it.
+    pub no_speech_threshold: f32,
+}
+
+impl Default for VoiceGates {
+    fn default() -> Self {
+        Self {
+            rms_threshold: DEFAULT_RMS_THRESHOLD,
+            no_speech_threshold: DEFAULT_NO_SPEECH_THRESHOLD,
+        }
+    }
+}
+
+/// Historical hardcoded floor. Low enough that ordinary room noise clears it,
+/// which is why the `no_speech_probability` gate exists alongside it.
+pub const DEFAULT_RMS_THRESHOLD: f32 = 0.001;
+
+/// whisper.cpp's own `no_speech_thold` default.
+pub const DEFAULT_NO_SPEECH_THRESHOLD: f32 = 0.6;
+
 /// Trait for transcription, enabling mock implementations in tests.
 pub trait Transcriber: Send + Sync {
-    fn transcribe(&self, audio: &[f32], language: Option<&str>)
-    -> Result<TranscribeResult, String>;
+    fn transcribe(
+        &self,
+        audio: &[f32],
+        language: Option<&str>,
+        gates: VoiceGates,
+    ) -> Result<TranscribeResult, String>;
 }
 
 /// Whisper model wrapper for transcription.
@@ -102,6 +138,7 @@ impl Transcriber for WhisperTranscriber {
         &self,
         audio: &[f32],
         language: Option<&str>,
+        gates: VoiceGates,
     ) -> Result<TranscribeResult, String> {
         if audio.is_empty() {
             return Ok(TranscribeResult {
@@ -123,10 +160,11 @@ impl Transcriber for WhisperTranscriber {
         // Reject silent/near-silent audio to prevent hallucinations.
         // Whisper hallucinates phrases like "Thank you" on silence.
         let rms = (audio.iter().map(|s| s * s).sum::<f32>() / audio.len() as f32).sqrt();
-        if rms < 0.001 {
+        if rms < gates.rms_threshold {
+            let floor = gates.rms_threshold;
             return Ok(TranscribeResult {
                 text: String::new(),
-                skip_reason: Some(format!("no speech detected (RMS {rms:.6} < 0.001)")),
+                skip_reason: Some(format!("no speech detected (RMS {rms:.6} < {floor:.6})")),
             });
         }
 
@@ -153,16 +191,32 @@ impl Transcriber for WhisperTranscriber {
 
         let n_segments = state.full_n_segments();
         let mut text = String::new();
+        // Whisper's own answer to "was anyone speaking?", read per segment and
+        // kept at its worst. It generalises where a phrase list cannot: it
+        // rejects whatever the model invents on room noise, not only the
+        // wordings someone remembered to add to HALLUCINATION_EXACT.
+        let mut worst_no_speech = 0.0f32;
 
         for i in 0..n_segments {
-            if let Some(segment) = state.get_segment(i)
-                && let Ok(s) = segment.to_str()
-            {
-                text.push_str(s);
+            if let Some(segment) = state.get_segment(i) {
+                worst_no_speech = worst_no_speech.max(segment.no_speech_probability());
+                if let Ok(s) = segment.to_str() {
+                    text.push_str(s);
+                }
             }
         }
 
         let result = text.trim().to_string();
+
+        if worst_no_speech > gates.no_speech_threshold {
+            let thold = gates.no_speech_threshold;
+            return Ok(TranscribeResult {
+                text: String::new(),
+                skip_reason: Some(format!(
+                    "no speech detected (no_speech {worst_no_speech:.2} > {thold:.2})"
+                )),
+            });
+        }
 
         // Filter known hallucination phrases that Whisper produces on near-silence
         if is_hallucination(&result) {
@@ -270,12 +324,38 @@ const HALLUCINATION_SUBSTRING: &[&str] = &[
     "редактор субтитров",
 ];
 
+/// Sentence terminators Whisper emits, ASCII and CJK. Newline included because
+/// a looping decode returns one segment per line.
+const SENTENCE_ENDS: &[char] = &['.', '!', '?', '\n', '…', '。', '！', '？'];
+
 fn is_hallucination(text: &str) -> bool {
     let lower = text.to_lowercase();
-    // Whisper punctuates its hallucinations ("Grazie." / "Thank you!"), so the
-    // exact match compares against the bare words.
-    let bare = lower.trim_matches(|c: char| !c.is_alphanumeric());
-    HALLUCINATION_EXACT.contains(&bare) || HALLUCINATION_SUBSTRING.iter().any(|h| lower.contains(h))
+
+    // Channel boilerplate is not something anyone dictates into a terminal, so
+    // one occurrence anywhere condemns the whole transcript.
+    if HALLUCINATION_SUBSTRING.iter().any(|h| lower.contains(h)) {
+        return true;
+    }
+
+    // The short phrases ARE dictated on purpose ("grazie, ora committa"), so
+    // they only count when they are the WHOLE transcript. On several seconds of
+    // noise Whisper loops instead of emitting one bare word, so "the whole
+    // transcript" has to mean every sentence — comparing the trimmed string as a
+    // single unit let "Grazie. Grazie." through, which is the form the final
+    // full-buffer pass actually produces.
+    let mut saw_sentence = false;
+    for sentence in lower.split(SENTENCE_ENDS) {
+        // Whisper punctuates its hallucinations; compare against the bare words.
+        let bare = sentence.trim_matches(|c: char| !c.is_alphanumeric());
+        if bare.is_empty() {
+            continue;
+        }
+        if !HALLUCINATION_EXACT.contains(&bare) {
+            return false;
+        }
+        saw_sentence = true;
+    }
+    saw_sentence
 }
 
 #[cfg(test)]
@@ -359,6 +439,32 @@ mod tests {
         assert!(!is_hallucination(""));
     }
 
+    /// The short-phrase list was written from what a 1.5–3 s streaming window
+    /// produces: one bare "Grazie.". The final pass runs on the WHOLE recording,
+    /// and on several seconds of room noise Whisper repeats itself instead.
+    /// The repeated form is the one that reaches the terminal.
+    #[test]
+    fn a_repeated_bare_thanks_is_still_a_hallucination() {
+        assert!(is_hallucination("Grazie. Grazie."));
+        assert!(is_hallucination("Grazie. Grazie. Grazie."));
+        assert!(is_hallucination("Thank you. Thank you."));
+        assert!(is_hallucination("Grazie! Grazie..."));
+        // Whisper emits one segment per line when it loops on noise.
+        assert!(is_hallucination("Grazie.\nGrazie."));
+        // `language = "auto"` is decided per window, so a noise-only recording
+        // can come back in two languages at once.
+        assert!(is_hallucination("Grazie. Thank you."));
+    }
+
+    /// The boundary of the repetition rule: filtering needs EVERY sentence to be
+    /// boilerplate. One real instruction in the recording makes the whole
+    /// transcript real — dropping it would eat dictation Boss meant to send.
+    #[test]
+    fn a_thanks_followed_by_a_real_instruction_survives() {
+        assert!(!is_hallucination("Grazie. Ora committa e pusha."));
+        assert!(!is_hallucination("Thank you. Now run the tests."));
+    }
+
     /// Reusing one decoder state across windows is only safe if
     /// `whisper_full_with_state` really resets it per run. Transcribing the same
     /// audio twice must therefore give the same text — greedy sampling is
@@ -382,10 +488,10 @@ mod tests {
             .collect();
 
         let first = transcriber
-            .transcribe(&audio, Some("en"))
+            .transcribe(&audio, Some("en"), VoiceGates::default())
             .expect("first run");
         let second = transcriber
-            .transcribe(&audio, Some("en"))
+            .transcribe(&audio, Some("en"), VoiceGates::default())
             .expect("second run");
 
         assert_eq!(first.text, second.text, "reused state leaked between runs");

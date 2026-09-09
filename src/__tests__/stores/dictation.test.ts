@@ -363,6 +363,91 @@ describe("dictationStore", () => {
 				expect(mockInvoke).not.toHaveBeenCalled();
 			});
 		});
+
+		it("records why a recording produced no text, and clears it on the next success", async () => {
+			// The tuning panel has nothing else to show: a gate that rejected
+			// speech and a dead microphone both produce an empty transcript.
+			mockInvoke
+				.mockResolvedValueOnce(undefined) // start_dictation
+				.mockResolvedValueOnce({
+					text: "",
+					skip_reason: "no speech detected (no_speech 0.91 > 0.60)",
+					duration_s: 3.1,
+					truncated_s: 0,
+				})
+				.mockResolvedValueOnce(undefined) // start_dictation
+				.mockResolvedValueOnce({
+					text: "run the tests",
+					skip_reason: null,
+					duration_s: 1.4,
+					truncated_s: 0,
+				});
+
+			await testInScopeAsync(async () => {
+				await store.startRecording();
+				await store.stopRecording();
+				expect(store.state.lastSkipReason).toBe("no speech detected (no_speech 0.91 > 0.60)");
+
+				await store.startRecording();
+				await store.stopRecording();
+				expect(store.state.lastSkipReason).toBeNull();
+			});
+		});
+	});
+
+	describe("voice gates", () => {
+		it("defaults to the thresholds the Rust side uses", () => {
+			testInScope(() => {
+				expect(store.state.rmsThreshold).toBe(0.001);
+				expect(store.state.noSpeechThreshold).toBe(0.6);
+			});
+		});
+
+		it("loads tuned thresholds from the backend config", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				enabled: true,
+				hotkey: "F5",
+				language: "auto",
+				rms_threshold: 0.004,
+				no_speech_threshold: 0.35,
+			});
+
+			await testInScopeAsync(async () => {
+				await store.refreshConfig();
+				expect(store.state.rmsThreshold).toBe(0.004);
+				expect(store.state.noSpeechThreshold).toBe(0.35);
+			});
+		});
+
+		it("falls back to the defaults when the stored config predates the gates", async () => {
+			// A `no_speech_threshold` read as undefined would reach the slider as
+			// 0 and reject every transcription.
+			mockInvoke.mockResolvedValueOnce({
+				enabled: true,
+				hotkey: "F5",
+				language: "auto",
+			});
+
+			await testInScopeAsync(async () => {
+				await store.refreshConfig();
+				expect(store.state.rmsThreshold).toBe(0.001);
+				expect(store.state.noSpeechThreshold).toBe(0.6);
+			});
+		});
+
+		it("persists a tuned threshold without dropping the other one", async () => {
+			await testInScopeAsync(async () => {
+				await store.saveConfig({ no_speech_threshold: 0.4 });
+
+				expect(mockInvoke).toHaveBeenCalledWith("set_dictation_config", {
+					config: expect.objectContaining({
+						no_speech_threshold: 0.4,
+						rms_threshold: 0.001,
+					}),
+				});
+				expect(store.state.noSpeechThreshold).toBe(0.4);
+			});
+		});
 	});
 
 	describe("injectText()", () => {

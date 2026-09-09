@@ -28,6 +28,13 @@ const mockStore = vi.hoisted(() => ({
 		downloadPercent: 0,
 		corrections: {},
 		devices: [] as { name: string; is_default: boolean }[],
+		longPressMs: 400,
+		autoSend: false,
+		rmsThreshold: 0.001,
+		noSpeechThreshold: 0.6,
+		audioLevel: 0,
+		partialText: "",
+		lastSkipReason: null as string | null,
 	},
 	refreshConfig: vi.fn(),
 	refreshStatus: vi.fn(),
@@ -47,6 +54,10 @@ const mockStore = vi.hoisted(() => ({
 	stopRecording: vi.fn(),
 	injectText: vi.fn(),
 	setCapturingHotkey: vi.fn(),
+	setLongPressMs: vi.fn(),
+	setAutoSend: vi.fn(),
+	setRmsThreshold: vi.fn(),
+	setNoSpeechThreshold: vi.fn(),
 }));
 
 vi.mock("../../stores/dictation", () => ({
@@ -290,5 +301,79 @@ describe("DictationSettings – Microphone Selector", () => {
 		expect(micWarning).toBeDefined();
 		expect(mockStore.refreshDevices).not.toHaveBeenCalled();
 		consoleSpy.mockRestore();
+	});
+});
+
+describe("DictationSettings – Voice Tuning", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockInvoke.mockResolvedValue("not_determined");
+		mockStore.state.rmsThreshold = 0.001;
+		mockStore.state.noSpeechThreshold = 0.6;
+		mockStore.state.audioLevel = 0;
+		mockStore.state.partialText = "";
+		mockStore.state.lastSkipReason = null;
+		mockStore.state.recording = false;
+		mockStore.state.processing = false;
+	});
+
+	/** The level gate slider and the marker both read in meter units. */
+	const gateReadout = (container: HTMLElement) =>
+		Array.from(container.querySelectorAll("span")).find((el) => el.textContent?.startsWith("Gate:"));
+
+	it("shows the level gate on the meter's own scale, not as a raw RMS", () => {
+		// meter = sqrt(rms * 20): 0.001 lands at 14%, a number the user can
+		// compare against the bar. "0.001" on a 0–100% meter cannot be.
+		const { container } = render(() => <DictationSettings />);
+		expect(gateReadout(container)?.textContent).toBe("Gate: 14%");
+	});
+
+	it("converts a slider move back to a raw RMS before saving", () => {
+		const { container } = render(() => <DictationSettings />);
+		const slider = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="range"]')).find(
+			(el) => el.max === "50",
+		);
+		expect(slider).toBeDefined();
+
+		fireEvent.input(slider as HTMLInputElement, { target: { value: "30" } });
+
+		// 0.30^2 / 20 = 0.0045
+		expect(mockStore.setRmsThreshold).toHaveBeenCalledWith(0.0045);
+	});
+
+	it("reports why the last recording was rejected", () => {
+		mockStore.state.lastSkipReason = "no speech detected (no_speech 0.91 > 0.60)";
+		const { container } = render(() => <DictationSettings />);
+		expect(container.textContent).toContain("no speech detected (no_speech 0.91 > 0.60)");
+	});
+
+	it("starts a test recording from the panel", async () => {
+		mockStore.startRecording.mockResolvedValue(undefined);
+
+		const { getByText } = render(() => <DictationSettings />);
+		fireEvent.click(getByText("Start test recording"));
+		await Promise.resolve();
+
+		expect(mockStore.startRecording).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the test transcript in the panel instead of sending it anywhere", async () => {
+		// The point of the harness: tuning must not fire text at whatever
+		// terminal happens to be focused behind the settings panel.
+		mockStore.state.recording = true;
+		mockStore.stopRecording.mockResolvedValue({
+			text: "run the tests",
+			skip_reason: null,
+			duration_s: 1.2,
+			truncated_s: 0,
+		});
+
+		const { container, getByText } = render(() => <DictationSettings />);
+		fireEvent.click(getByText("Stop test"));
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(mockStore.stopRecording).toHaveBeenCalledOnce();
+		expect(mockStore.injectText).not.toHaveBeenCalled();
+		expect(container.textContent).toContain("run the tests");
 	});
 });

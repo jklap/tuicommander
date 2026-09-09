@@ -12,7 +12,15 @@ interface DictationConfig {
 	device: string | null;
 	long_press_ms: number;
 	auto_send: boolean;
+	rms_threshold: number;
+	no_speech_threshold: number;
 }
+
+/** Whisper's own no_speech_thold default, mirrored from `transcribe.rs`. */
+export const DEFAULT_NO_SPEECH_THRESHOLD = 0.6;
+
+/** The historical hardcoded RMS floor, mirrored from `transcribe.rs`. */
+export const DEFAULT_RMS_THRESHOLD = 0.001;
 
 /** GPU/CPU backend reported by whisper after model load. */
 export type DictationBackend = "cpu" | "gpu";
@@ -101,11 +109,21 @@ interface DictationStoreState {
 	devices: AudioDevice[];
 	longPressMs: number;
 	autoSend: boolean;
+	rmsThreshold: number;
+	noSpeechThreshold: number;
 	capturingHotkey: boolean;
 	partialText: string;
 	/** Normalized live microphone level used by the dictation preview meter. */
 	audioLevel: number;
 	backendInfo: DictationBackend | null;
+	/**
+	 * Why the last recording produced no text, or null when it produced some.
+	 *
+	 * Tuning the two thresholds is guesswork without it: a gate that rejects
+	 * speech and a microphone that captured nothing look identical from the
+	 * outside. Settings > Dictation renders this verbatim.
+	 */
+	lastSkipReason: string | null;
 }
 
 function createDictationStore() {
@@ -128,10 +146,13 @@ function createDictationStore() {
 		devices: [],
 		longPressMs: 400,
 		autoSend: false,
+		rmsThreshold: DEFAULT_RMS_THRESHOLD,
+		noSpeechThreshold: DEFAULT_NO_SPEECH_THRESHOLD,
 		capturingHotkey: false,
 		partialText: "",
 		audioLevel: 0,
 		backendInfo: null,
+		lastSkipReason: null,
 	});
 
 	// Listen for download progress events from Rust
@@ -177,6 +198,8 @@ function createDictationStore() {
 					selectedDevice: config.device ?? null,
 					longPressMs: config.long_press_ms ?? 400,
 					autoSend: config.auto_send ?? false,
+					rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
+					noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
 				});
 			} catch (err) {
 				appLogger.error("dictation", "Failed to get dictation config", err);
@@ -193,6 +216,8 @@ function createDictationStore() {
 				device: partial.device !== undefined ? partial.device : state.selectedDevice,
 				long_press_ms: partial.long_press_ms ?? state.longPressMs,
 				auto_send: partial.auto_send ?? state.autoSend,
+				rms_threshold: partial.rms_threshold ?? state.rmsThreshold,
+				no_speech_threshold: partial.no_speech_threshold ?? state.noSpeechThreshold,
 			};
 			try {
 				await invoke("set_dictation_config", { config });
@@ -205,6 +230,8 @@ function createDictationStore() {
 				if (partial.device !== undefined) storeUpdate.selectedDevice = partial.device;
 				if (partial.long_press_ms !== undefined) storeUpdate.longPressMs = partial.long_press_ms;
 				if (partial.auto_send !== undefined) storeUpdate.autoSend = partial.auto_send;
+				if (partial.rms_threshold !== undefined) storeUpdate.rmsThreshold = partial.rms_threshold;
+				if (partial.no_speech_threshold !== undefined) storeUpdate.noSpeechThreshold = partial.no_speech_threshold;
 				setState(storeUpdate);
 			} catch (err) {
 				appLogger.error("dictation", "Failed to save dictation config", err);
@@ -229,6 +256,14 @@ function createDictationStore() {
 
 		setAutoSend(value: boolean): void {
 			actions.saveConfig({ auto_send: value });
+		},
+
+		setRmsThreshold(value: number): void {
+			actions.saveConfig({ rms_threshold: value });
+		},
+
+		setNoSpeechThreshold(value: number): void {
+			actions.saveConfig({ no_speech_threshold: value });
 		},
 
 		setLanguage(value: string): void {
@@ -368,12 +403,14 @@ function createDictationStore() {
 				setState("processing", false);
 				setState("partialText", "");
 				setState("audioLevel", 0);
+				setState("lastSkipReason", response.skip_reason);
 				return response;
 			} catch (err) {
 				appLogger.error("dictation", "Failed to stop recording", err);
 				setState("processing", false);
 				setState("partialText", "");
 				setState("audioLevel", 0);
+				setState("lastSkipReason", "transcription failed");
 				return null;
 			}
 		},

@@ -273,3 +273,67 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Voice tuning: a linear meter the level gate can be read against. The toast's
+   spectrum meter answers "is the mic live?"; this one answers "where does my
+   voice sit relative to the threshold?", so it is linear and carries a marker. */
+.tuningMeter {
+  position: relative;
+  height: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.tuningLevel {
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 0.075s linear;
+}
+
+.tuningThreshold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--warning);
+}
+
+.tuningReadout {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+}
+
+.tuningPartial,
+.tuningResult,
+.tuningSkip {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  word-break: break-word;
+}
+
+.tuningPartial {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+.tuningResult {
+  color: var(--fg-primary);
+  border-color: var(--success);
+}
+
+.tuningSkip {
+  color: var(--warning);
+  border-color: var(--warning);
+}

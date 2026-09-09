@@ -10,6 +10,23 @@ import d from "./DictationSettings.module.css";
 import { SettingSlider } from "./SettingFields";
 import s from "./Settings.module.css";
 
+/**
+ * Mirrors `audio.rs`: `meter_level = sqrt(rms * 20)`.
+ *
+ * The gate is a raw RMS and the meter is that curve, so a threshold shown in raw
+ * units cannot be compared against the bar the user is watching. Both are drawn
+ * on the meter's scale instead, and only converted back on save.
+ */
+const RMS_METER_SCALE = 20;
+
+function rmsToMeter(rms: number): number {
+	return Math.min(1, Math.sqrt(Math.max(0, rms) * RMS_METER_SCALE));
+}
+
+function meterToRms(meter: number): number {
+	return (meter * meter) / RMS_METER_SCALE;
+}
+
 /** Single model row in the model selector list */
 const ModelRow: Component<{ model: ModelInfo }> = (props) => {
 	const isSelected = () => dictationStore.state.selectedModel === props.model.name;
@@ -277,6 +294,9 @@ export const DictationSettings: Component = () => {
 				</Show>
 			</div>
 
+			{/* Voice tuning */}
+			<VoiceTuning />
+
 			{/* Correction map */}
 			<div class={s.group}>
 				<label>{t("dictation.correctionsLabel", "Auto-Corrections")}</label>
@@ -342,6 +362,118 @@ export const DictationSettings: Component = () => {
 					<button onClick={handleExportCorrections}>{t("dictation.export", "Export")}</button>
 				</div>
 			</div>
+		</div>
+	);
+};
+
+/**
+ * Live harness for the two speech gates.
+ *
+ * Defined BELOW the panel that renders it, which is why it reads out of order.
+ * `extractSettings` builds the settings search index from source order and
+ * assigns each label to the nearest preceding `<h3>`; it does not follow the
+ * render tree. Defined above the panel, this component's three labels sat
+ * before any heading, so they counted as orphans and "Level gate" and "Speech
+ * confidence gate" were unreachable from settings search. Keep it here.
+ *
+ * Recording here reports the transcript back into the panel instead of typing it
+ * into a terminal: tuning a gate means seeing what it rejected, and a threshold
+ * that swallows speech is indistinguishable from a dead microphone until the
+ * skip reason is on screen.
+ */
+const VoiceTuning: Component = () => {
+	const [testText, setTestText] = createSignal<string | null>(null);
+
+	const recording = () => dictationStore.state.recording;
+	const thresholdPercent = () => rmsToMeter(dictationStore.state.rmsThreshold) * 100;
+	const levelPercent = () => dictationStore.state.audioLevel * 100;
+
+	const toggleTest = async () => {
+		if (recording()) {
+			const result = await dictationStore.stopRecording();
+			setTestText(result?.text.trim() || null);
+			return;
+		}
+		setTestText(null);
+		try {
+			await dictationStore.startRecording();
+		} catch {
+			// startRecording logs the failure; lastSkipReason covers the rest.
+		}
+	};
+
+	return (
+		<div class={s.group}>
+			<label>{t("dictation.tuningLabel", "Voice tuning")}</label>
+			<p class={s.hint} style={{ "margin-bottom": "8px" }}>
+				{t(
+					"dictation.tuningHint",
+					"Record a test phrase and watch where your voice sits against the gates. Text stays in this panel — nothing is sent to a terminal.",
+				)}
+			</p>
+
+			<div class={d.tuningMeter}>
+				<div class={d.tuningLevel} style={{ transform: `scaleX(${dictationStore.state.audioLevel})` }} />
+				<div
+					class={d.tuningThreshold}
+					style={{ left: `${thresholdPercent()}%` }}
+					title={t("dictation.tuningThresholdMarker", "Level gate")}
+				/>
+			</div>
+			<div class={d.tuningReadout}>
+				<span>
+					{t("dictation.tuningLevelReadout", "Level")}: {Math.round(levelPercent())}%
+				</span>
+				<span>
+					{t("dictation.tuningGateReadout", "Gate")}: {Math.round(thresholdPercent())}%
+				</span>
+			</div>
+
+			<div class={s.actions} style={{ "margin-top": "8px" }}>
+				<button onClick={toggleTest} disabled={dictationStore.state.processing}>
+					{recording() ? t("dictation.tuningStop", "Stop test") : t("dictation.tuningStart", "Start test recording")}
+				</button>
+			</div>
+
+			<Show when={dictationStore.state.partialText}>
+				<p class={d.tuningPartial}>{dictationStore.state.partialText}</p>
+			</Show>
+			<Show when={testText()}>
+				<p class={d.tuningResult}>{testText()}</p>
+			</Show>
+			<Show when={dictationStore.state.lastSkipReason}>
+				<p class={d.tuningSkip}>
+					{t("dictation.tuningSkipped", "Rejected")}: {dictationStore.state.lastSkipReason}
+				</p>
+			</Show>
+
+			<SettingSlider
+				label={t("dictation.rmsLabel", "Level gate")}
+				value={Math.round(thresholdPercent())}
+				onChange={(v) => dictationStore.setRmsThreshold(meterToRms(v / 100))}
+				min={0}
+				max={50}
+				step={1}
+				formatValue={(v) => `${v}%`}
+				hint={t(
+					"dictation.rmsHint",
+					"Audio quieter than this never reaches Whisper. Raise it until room noise stays below the marker; lower it if quiet speech is rejected.",
+				)}
+			/>
+
+			<SettingSlider
+				label={t("dictation.noSpeechLabel", "Speech confidence gate")}
+				value={Math.round(dictationStore.state.noSpeechThreshold * 100)}
+				onChange={(v) => dictationStore.setNoSpeechThreshold(v / 100)}
+				min={10}
+				max={100}
+				step={5}
+				formatValue={(v) => (v === 100 ? t("dictation.off", "Off") : `${v}%`)}
+				hint={t(
+					"dictation.noSpeechHint",
+					"Discards a transcript when Whisper itself reports it probably heard no speech. Lower is stricter; 100% turns the gate off.",
+				)}
+			/>
 		</div>
 	);
 };
