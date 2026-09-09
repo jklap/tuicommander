@@ -7,7 +7,7 @@
 /// Follows the `stream.cpp` pattern from whisper.cpp:
 /// - Overlapping windows with `keep_ms` of previous context
 /// - `set_single_segment(true)` + `set_no_timestamps(true)` for short windows
-use crate::dictation::transcribe::Transcriber;
+use crate::dictation::transcribe::{Transcriber, VoiceGates};
 use crate::dictation::vad;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -121,13 +121,16 @@ impl StreamingSession {
         audio_buffer: Arc<Mutex<VecDeque<f32>>>,
         tx: mpsc::Sender<String>,
         language: Option<String>,
+        gates: VoiceGates,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = stop.clone();
 
         let handle = std::thread::Builder::new()
             .name("streaming-dictation".into())
-            .spawn(move || streaming_loop(transcriber, audio_buffer, tx, stop_clone, language))
+            .spawn(move || {
+                streaming_loop(transcriber, audio_buffer, tx, stop_clone, language, gates)
+            })
             .expect("Failed to spawn streaming thread");
 
         Self {
@@ -193,6 +196,7 @@ fn streaming_loop(
     tx: mpsc::Sender<String>,
     stop: Arc<AtomicBool>,
     language: Option<String>,
+    gates: VoiceGates,
 ) -> StreamingAudio {
     let mut all_audio: Vec<f32> = Vec::new(); // complete recording for final pass
     let mut step_buf: Vec<f32> = Vec::new();
@@ -264,7 +268,7 @@ fn streaming_loop(
 
                 // Transcribe the window
                 if let Some(text) =
-                    transcribe_window(&*transcriber, &window_buf, language.as_deref())
+                    transcribe_window(&*transcriber, &window_buf, language.as_deref(), gates)
                     && !text.is_empty()
                     && tx.send(text).is_err()
                 {
@@ -309,10 +313,11 @@ fn transcribe_window(
     transcriber: &dyn Transcriber,
     window: &[f32],
     language: Option<&str>,
+    gates: VoiceGates,
 ) -> Option<String> {
     // Use the existing transcribe method which already sets
     // single_segment, no_timestamps, suppress_nst
-    match transcriber.transcribe(window, language) {
+    match transcriber.transcribe(window, language, gates) {
         Ok(result) => {
             if result.skip_reason.is_some() {
                 None
@@ -351,6 +356,7 @@ mod tests {
             &self,
             audio: &[f32],
             _language: Option<&str>,
+            _gates: VoiceGates,
         ) -> Result<TranscribeResult, String> {
             self.call_count.fetch_add(1, Ordering::Relaxed);
             Ok(TranscribeResult {
@@ -368,6 +374,7 @@ mod tests {
             &self,
             _audio: &[f32],
             _language: Option<&str>,
+            _gates: VoiceGates,
         ) -> Result<TranscribeResult, String> {
             Ok(TranscribeResult {
                 text: String::new(),
@@ -384,6 +391,7 @@ mod tests {
             &self,
             _audio: &[f32],
             _language: Option<&str>,
+            _gates: VoiceGates,
         ) -> Result<TranscribeResult, String> {
             panic!("transcriber blew up mid-window");
         }
@@ -481,7 +489,14 @@ mod tests {
         let stop_clone = stop.clone();
 
         let handle = std::thread::spawn(move || {
-            streaming_loop(transcriber, buf_clone, tx, stop_clone, None)
+            streaming_loop(
+                transcriber,
+                buf_clone,
+                tx,
+                stop_clone,
+                None,
+                VoiceGates::default(),
+            )
         });
 
         // Let it poll a few times with no data
@@ -514,7 +529,14 @@ mod tests {
         let stop_clone = stop.clone();
 
         let handle = std::thread::spawn(move || {
-            streaming_loop(transcriber, buf_clone, tx, stop_clone, None)
+            streaming_loop(
+                transcriber,
+                buf_clone,
+                tx,
+                stop_clone,
+                None,
+                VoiceGates::default(),
+            )
         });
 
         // Wait for the loop to process the speech window
@@ -548,7 +570,14 @@ mod tests {
         let stop_clone = stop.clone();
 
         let handle = std::thread::spawn(move || {
-            streaming_loop(transcriber, buf_clone, tx, stop_clone, None)
+            streaming_loop(
+                transcriber,
+                buf_clone,
+                tx,
+                stop_clone,
+                None,
+                VoiceGates::default(),
+            )
         });
 
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -580,7 +609,14 @@ mod tests {
         let stop_clone = stop.clone();
 
         let handle = std::thread::spawn(move || {
-            streaming_loop(transcriber, buf_clone, tx, stop_clone, None)
+            streaming_loop(
+                transcriber,
+                buf_clone,
+                tx,
+                stop_clone,
+                None,
+                VoiceGates::default(),
+            )
         });
 
         // Loop should terminate on its own due to channel disconnect
@@ -609,7 +645,7 @@ mod tests {
     fn test_transcribe_window_with_skip() {
         let transcriber = SkipTranscriber;
         let window = speech_samples(2000);
-        let result = transcribe_window(&transcriber, &window, None);
+        let result = transcribe_window(&transcriber, &window, None, VoiceGates::default());
         assert!(result.is_none(), "SkipTranscriber should return None");
     }
 
@@ -617,7 +653,7 @@ mod tests {
     fn test_transcribe_window_with_echo() {
         let transcriber = EchoTranscriber::new();
         let window = speech_samples(2000);
-        let result = transcribe_window(&transcriber, &window, None);
+        let result = transcribe_window(&transcriber, &window, None, VoiceGates::default());
         assert!(result.is_some());
         let text = result.unwrap();
         assert!(text.contains("samples"));
@@ -643,7 +679,14 @@ mod tests {
         let buf_clone = buffer.clone();
         let stop_clone = stop.clone();
         let handle = std::thread::spawn(move || {
-            streaming_loop(transcriber, buf_clone, tx, stop_clone, None)
+            streaming_loop(
+                transcriber,
+                buf_clone,
+                tx,
+                stop_clone,
+                None,
+                VoiceGates::default(),
+            )
         });
 
         wait_until_drained(&buffer);
@@ -690,7 +733,14 @@ mod tests {
         let buf_clone = buffer.clone();
         let stop_clone = stop.clone();
         let handle = std::thread::spawn(move || {
-            streaming_loop(transcriber, buf_clone, tx, stop_clone, None)
+            streaming_loop(
+                transcriber,
+                buf_clone,
+                tx,
+                stop_clone,
+                None,
+                VoiceGates::default(),
+            )
         });
 
         wait_until_drained(&buffer);
@@ -746,7 +796,8 @@ mod tests {
         // Enough speech to reach the first window, which is where it panics.
         buffer.lock().extend(speech_samples(2000));
 
-        let session = StreamingSession::start(transcriber, buffer.clone(), tx, None);
+        let session =
+            StreamingSession::start(transcriber, buffer.clone(), tx, None, VoiceGates::default());
         wait_until_drained(&buffer);
         let result = session.stop();
 
@@ -789,7 +840,14 @@ mod tests {
         let stop_clone = stop.clone();
 
         let handle = std::thread::spawn(move || {
-            streaming_loop(transcriber, buf_clone, tx, stop_clone, None)
+            streaming_loop(
+                transcriber,
+                buf_clone,
+                tx,
+                stop_clone,
+                None,
+                VoiceGates::default(),
+            )
         });
 
         // Let the loop drain the buffer

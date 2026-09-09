@@ -363,6 +363,7 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
         audio_buffer,
         tx,
         lang,
+        config.gates(),
     );
     *dictation.streaming.lock() = Some(session);
 
@@ -445,6 +446,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
             session,
             audio_buffer,
             lang_owned,
+            config.gates(),
             transcriber,
             accumulated_partials,
             corrections,
@@ -456,6 +458,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
         session,
         audio_buffer,
         lang_owned,
+        gates,
         transcriber,
         accumulated_partials,
         corrections,
@@ -529,7 +532,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
 
         if let Some(ref transcriber) = transcriber {
             let lang_ref = lang_owned.as_deref();
-            match transcriber.transcribe(&all_audio, lang_ref) {
+            match transcriber.transcribe(&all_audio, lang_ref, gates) {
                 Ok(result) if result.skip_reason.is_none() => {
                     final_text = result.text;
                 }
@@ -684,6 +687,12 @@ pub struct DictationConfig {
     /// Automatically send (press Enter) after injecting transcribed text.
     #[serde(default)]
     pub auto_send: bool,
+    /// Minimum RMS before audio is sent to Whisper. See [`VoiceGates`].
+    #[serde(default = "default_rms_threshold")]
+    pub rms_threshold: f32,
+    /// Maximum `no_speech_probability` accepted for a segment. See [`VoiceGates`].
+    #[serde(default = "default_no_speech_threshold")]
+    pub no_speech_threshold: f32,
 }
 
 fn default_model() -> String {
@@ -692,6 +701,24 @@ fn default_model() -> String {
 
 fn default_long_press_ms() -> u32 {
     400
+}
+
+fn default_rms_threshold() -> f32 {
+    transcribe::DEFAULT_RMS_THRESHOLD
+}
+
+fn default_no_speech_threshold() -> f32 {
+    transcribe::DEFAULT_NO_SPEECH_THRESHOLD
+}
+
+impl DictationConfig {
+    /// The speech gates this configuration asks for.
+    pub fn gates(&self) -> transcribe::VoiceGates {
+        transcribe::VoiceGates {
+            rms_threshold: self.rms_threshold,
+            no_speech_threshold: self.no_speech_threshold,
+        }
+    }
 }
 
 impl Default for DictationConfig {
@@ -704,6 +731,8 @@ impl Default for DictationConfig {
             device: None,
             long_press_ms: default_long_press_ms(),
             auto_send: false,
+            rms_threshold: default_rms_threshold(),
+            no_speech_threshold: default_no_speech_threshold(),
         }
     }
 }
@@ -748,6 +777,48 @@ mod tests {
             ..Default::default()
         })
         .expect("config save");
+    }
+
+    /// The gates are read from the config on every start, so a config written
+    /// before they existed must not silently disable them: a missing
+    /// `no_speech_threshold` deserializing to `0.0` would reject every
+    /// transcription, and a missing `rms_threshold` would accept every one.
+    // Exact equality on purpose: each assertion says the number is carried
+    // through unchanged, not that it lands close to a computed value.
+    #[allow(clippy::float_cmp)]
+    #[test]
+    fn a_config_written_before_the_gates_existed_keeps_the_defaults() {
+        let stored = serde_json::json!({
+            "enabled": true,
+            "hotkey": "F5",
+            "language": "auto",
+        });
+        let config: DictationConfig = serde_json::from_value(stored).expect("deserialize");
+
+        assert_eq!(config.rms_threshold, transcribe::DEFAULT_RMS_THRESHOLD);
+        assert_eq!(
+            config.no_speech_threshold,
+            transcribe::DEFAULT_NO_SPEECH_THRESHOLD
+        );
+        assert_eq!(config.gates(), transcribe::VoiceGates::default());
+    }
+
+    /// Settings > Dictation moves these two numbers and nothing else carries
+    /// them to the transcriber.
+    // Exact equality on purpose: each assertion says the number is carried
+    // through unchanged, not that it lands close to a computed value.
+    #[allow(clippy::float_cmp)]
+    #[test]
+    fn tuned_thresholds_reach_the_gates() {
+        let config = DictationConfig {
+            rms_threshold: 0.004,
+            no_speech_threshold: 0.35,
+            ..Default::default()
+        };
+
+        let gates = config.gates();
+        assert_eq!(gates.rms_threshold, 0.004);
+        assert_eq!(gates.no_speech_threshold, 0.35);
     }
 
     #[test]

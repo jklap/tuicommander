@@ -88,6 +88,25 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "general", section: "Terminal", label: "Show agent context bar" },
 	{
 		tab: "general",
+		section: "Terminal",
+		label: "Show block timestamps",
+		labelKey: "general.toggle.showBlockTimestamps",
+	},
+	{ tab: "general", section: "Terminal", label: "Block folding", labelKey: "general.toggle.blockFolding" },
+	{
+		tab: "general",
+		section: "Terminal",
+		label: "Show scrollbar marks",
+		labelKey: "general.toggle.showScrollbarMarks",
+	},
+	{
+		tab: "general",
+		section: "Terminal",
+		label: "Reflow scrollback on resize",
+		labelKey: "general.toggle.scrollbackReflow",
+	},
+	{
+		tab: "general",
 		section: "Power Management",
 		label: "Prevent sleep when busy",
 		labelKey: "general.toggle.preventSleepWhenBusy",
@@ -179,6 +198,18 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Dictation Settings",
 		label: "Auto-Corrections",
 		labelKey: "dictation.correctionsLabel",
+	},
+	// `VoiceTuning` renders between Microphone and Auto-Corrections, but it is a
+	// sub-component, so `extractSettings` — which reads source order, not the
+	// render tree — sees it wherever it is DEFINED. It is defined at the end of
+	// the file for exactly that reason, and these entries follow it.
+	{ tab: "dictation", section: "Dictation Settings", label: "Voice tuning", labelKey: "dictation.tuningLabel" },
+	{ tab: "dictation", section: "Dictation Settings", label: "Level gate", labelKey: "dictation.rmsLabel" },
+	{
+		tab: "dictation",
+		section: "Dictation Settings",
+		label: "Speech confidence gate",
+		labelKey: "dictation.noSpeechLabel",
 	},
 	// tabs/GitHubTab.tsx
 	{ tab: "github", section: "GitHub Authentication" },

@@ -47,7 +47,7 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | Command | Description |
 |---------|-------------|
 | `get_dictation_status()` | Model status, recording/processing state, and normalized `audio_level` (0–1). The preview polls this shared IPC/HTTP response while recording. |
-| `get_dictation_config()` | Load dictation configuration |
+| `get_dictation_config()` | Load dictation configuration (includes `rms_threshold` and `no_speech_threshold` — see "Speech gates") |
 | `set_dictation_config(config)` | Save dictation configuration |
 | `get_correction_map()` | Load text correction dictionary |
 | `set_correction_map(map)` | Save text correction dictionary |
@@ -135,6 +135,40 @@ Ported from whisper.cpp `common.cpp` `vad_simple()`:
 - **High-pass filter:** First-order RC at 100Hz removes ambient noise (HVAC, fans)
 - **Threshold:** `vad_thold = 0.6` — if `energy_last / energy_all < 0.6`, silence detected
 - **Relative:** Microphone gain doesn't affect detection (ratio-based)
+
+## Speech gates
+
+Whisper transcribes whatever it is given. On room noise it invents subtitle
+boilerplate, so three gates in `transcribe()` decide whether audio is speech at
+all. They run in order and each returns a `skip_reason` the UI shows verbatim.
+
+| Gate | Rejects | Tunable |
+|---|---|---|
+| RMS floor | audio quieter than `rms_threshold` — never reaches Whisper | yes |
+| `no_speech_probability` | a segment Whisper itself scores above `no_speech_threshold` | yes |
+| `is_hallucination` | known subtitle boilerplate and bare thanks | no |
+
+**The two thresholds are settings, not constants** (`VoiceGates`, read from
+`DictationConfig` on every start). The right RMS floor depends on the room and
+the microphone: a headset a metre away picks up enough noise to clear a fixed
+floor, which is how an empty room ends up transcribed. Settings > Dictation
+exposes both against a live meter — see the user guide.
+
+`no_speech_probability()` is read per segment and kept at its worst. It
+generalises where a phrase list cannot, because it rejects whatever the model
+invented rather than only the wordings someone remembered to add to a list.
+Note that whisper.cpp does not implement the `no_speech_thold` *parameter*, so
+the value must be compared after the run, not set on `FullParams`.
+
+**`is_hallucination` matches per sentence, not on the whole trimmed string.**
+The short-phrase list (`HALLUCINATION_EXACT`) holds words a user genuinely
+dictates, so it only fires when *every* sentence is boilerplate — `"Grazie."`
+is filtered, `"Grazie. Ora committa e pusha."` is not. Matching the trimmed
+string as one unit missed the repeated form: streaming windows are 1.5–3 s and
+produce one bare `"Grazie."`, but the final pass runs on the whole buffer, where
+Whisper loops into `"Grazie. Grazie."` — the form that actually reached the
+terminal. `HALLUCINATION_SUBSTRING` holds channel boilerplate nobody dictates,
+so one occurrence anywhere condemns the transcript.
 
 ## Recording cap
 

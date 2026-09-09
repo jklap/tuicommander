@@ -53,6 +53,29 @@ Add custom corrections in Settings → Dictation → Corrections.
 
 Select which microphone to use from the dropdown in dictation settings. Lists all available input devices.
 
+## Voice Tuning
+
+Settings > Dictation > Voice tuning records a test phrase and shows the result in
+the panel — nothing is sent to a terminal. Use it to set two gates that decide
+whether captured audio counts as speech.
+
+| Control | What it does |
+|---------|--------------|
+| Level gate | Audio quieter than this never reaches Whisper. The marker on the meter is the gate; the bar is your live level. |
+| Speech confidence gate | Discards a transcript when Whisper itself reports it probably heard no speech. Lower is stricter; 100% turns it off. |
+
+When a recording produces no text, the panel says why ("Rejected: ..."). Without
+that line a gate that swallowed your speech and a microphone that captured
+nothing look identical.
+
+**Symptom → fix:**
+
+- Random "Grazie" / "Thank you" appear when you are not speaking — usually a
+  distant microphone that keeps picking up room noise. Raise the level gate until
+  room noise sits below the marker, then lower the speech confidence gate.
+- Quiet speech is dropped — lower the level gate, or raise the speech confidence
+  gate toward 100%.
+
 ## Platform Notes
 
 - **macOS:** GPU-accelerated transcription via Metal
