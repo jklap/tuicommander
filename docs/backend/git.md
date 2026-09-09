@@ -94,19 +94,59 @@ independent checks — age **and** ownership:
 1. **Age** (`is_index_lock_stale`): a 0-byte lock is stale after 5s (git crashed
    before writing the new index); a non-empty one after 30s (index written, rename
    never happened).
-2. **Ownership** (`index_lock_owner_pids`): `lsof -w -t -- <lock>`. If any live
+2. **Ownership** (`probe_index_lock_owner`): `lsof -w -t -- <lock>`. If any live
    process still holds the lock open, it is kept whatever its age. Age alone cannot
    tell a crashed git from a merely slow one, and on a large monorepo an `add`/`stash`
    index write can outrun the threshold — deleting the lock under it corrupts the
    index.
 
+The lock is located through `resolve_git_dir()`, not by joining `.git` to the cwd. In
+a linked worktree `.git` is a **file** holding `gitdir: <path>`, so the naive join
+traverses a file and the sweep returned before looking at anything — inert in every
+worktree, which is where most of TUIC's work happens.
+
 The `lsof` fork happens only for a lock the age rule has already condemned, never on
 the hot path of an ordinary git call, and it carries a 2s deadline of its own — it
 runs inside `git_cmd`, so an `lsof` stuck on a wedged network mount would otherwise
-wedge every git call in the app. When the probe cannot run or does not answer in
-time it returns `None` and the age rule decides alone, as it did before the ownership
-check existed; on Windows the OS refuses to unlink a file another process holds open,
-which provides the same protection.
+wedge every git call in the app.
+
+The probe answers with a `LockOwnership`: `HeldBy(pids)` keeps the lock, `Unowned` is
+the only outcome that licenses a delete, and `Unknown` carries **why** it has no
+answer — `Unavailable` (no `lsof`, exec refused, an `lsof` that ran and failed,
+non-unix) or `DeadlineExceeded` (installed, working, slower than the deadline).
+
+`classify_owner_probe` reads that answer from **stdout and stderr, never the exit
+code**. Measured on macOS lsof 4.91, "nobody has this file open" and "lsof could not
+stat the path" both exit 1 with empty stdout; only stderr separates them, and `-w`
+does not hide it (it silences warnings, not status errors). So: PIDs win outright — a
+complaint never outranks an answer, and `HeldBy` is the safe direction; otherwise a
+non-empty stderr is a probe that ran and *failed*, which is `Unknown`; silence with no
+PIDs is the real "no match". Letting a failed probe land in `Unowned` would be a
+fail-open with no log and no name, which is the failure this whole enum exists to
+prevent.
+
+Both `Unknown` arms **fail closed** (Boss's decision, 2026-09-07, #694-4fcc): with no
+answer the lock is **kept**, logged at `warn`. The two costs are not symmetric — a
+stranded repo is recoverable by hand, a corrupted index is not — and the age rule
+alone cannot tell a crashed git from a merely slow one. Measured `lsof` latency on
+this hardware ranges 0.32s–3.7s against a 2s deadline, so `DeadlineExceeded` is a
+routine outcome, not an exotic one; treating it as permission to delete was the
+sharpest edge of the old policy.
+
+"Kept" is not "kept forever". The escape hatch is a second, much stronger rule for a
+lock **no probe can adjudicate**: age at `UNADJUDICATED_LOCK_STALE_SECS` (1 hour),
+far above the 30s ordinary threshold. The hazard fail-closed guards against is a git
+that is merely *slow*, and the slowest legitimate index write is seconds — a process
+holding `index.lock` for an hour is dead, not slow. This matters most exactly where
+the probe can never work: on a host with no `lsof`, `Unavailable` is permanent, and
+without the hatch a crash-orphaned lock would outlive the process that left it and
+nothing could ever clear it. Evidence still outranks age at every age — `HeldBy`
+returns before the hatch is considered.
+
+On Windows there is no probe at all (`Unavailable` always), so an `index.lock` is now
+reclaimed only via the hatch. That is safe rather than merely tolerable: Windows
+refuses to unlink a file another process holds open, so the OS enforces the same rule
+the probe does on unix.
 
 ## Tauri Commands
 

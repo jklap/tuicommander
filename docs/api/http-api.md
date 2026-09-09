@@ -12,6 +12,21 @@ REST API served by the Axum HTTP server when MCP server is enabled. All Tauri co
 - **MCP mode (localhost):** No authentication
 - **Remote access mode:** HTTP Basic Auth with configured username/password
 
+## Server Limits
+
+Every route on both the desktop and remote routers is subject to two bounds
+(`with_server_limits` in `mcp_http/mod.rs`):
+
+- **`408 Request Timeout`** — a handler that has not produced a response within
+  120 s is cut off. This bounds time-to-response only: SSE (`/events`) and
+  WebSocket endpoints return their headers immediately and then stream for as
+  long as they like, unaffected.
+- **`413 Payload Too Large`** — a request body over 2 MB is refused rather than
+  buffered.
+
+See [`docs/backend/mcp-http.md`](../backend/mcp-http.md) → "Server Limits" for
+the rationale and the tests that pin both.
+
 ## Unknown Paths
 
 The desktop server also serves the frontend, so any path that matches no route
@@ -28,6 +43,11 @@ falls through to a catch-all. That catch-all splits on the first path segment:
   `/mobile`), so client-side routing takes over.
 
 A registered path called with the wrong method still returns `405`, not `404`.
+The catch-all is the router's fallback, so it answers on **every** method: an
+unregistered path returns `404` whether it was reached with `GET`, `POST` or
+anything else. It used to be a `GET`-only route, which made any non-`GET` call
+to a path that does not exist answer `405` — a reply that claims the path is
+real. The parity gate below depends on telling those two apart.
 
 Without this split an unregistered API path answered `200` with HTML, which the
 client read as success and then failed to parse as a command result — every
@@ -37,6 +57,34 @@ drop back to the HTML answer.
 
 The `tuic-remote` daemon embeds no frontend and has no catch-all: unknown paths
 there return a bare `404`.
+
+## Route Parity Gate
+
+Every `COMMAND_TABLE` entry in `src/transport.ts` must resolve to a registered
+route. Two tests enforce it, one per language:
+
+1. `src/__tests__/transport.test.ts` executes every mapper and snapshots the
+   resulting paths to `src-tauri/src/mcp_http/command_table_paths.txt`.
+2. `mcp_http::tests::command_table_paths_all_hit_a_registered_route` reads that
+   file and `PATCH`-probes each path against `build_router`. `PATCH` is used
+   because no route accepts it, so a registered path answers `405` without
+   running its handler, while an unregistered one falls through to the
+   catch-all. A `404` or an HTML body fails the test.
+
+Adding a command therefore fails the Vitest half first (stale snapshot).
+Regenerate with:
+
+```bash
+pnpm vitest run src/__tests__/transport.test.ts -u
+```
+
+If the route was never registered, the Rust half then fails. Both run in
+`make check`. The gate proves the **path** exists, not that it accepts the
+method the table declares — probing the declared method would execute the
+handler, which is what the technique avoids.
+
+`INTENTIONALLY_UNMAPPED` commands never enter the snapshot: they are not
+`COMMAND_TABLE` entries, and the Vitest half asserts the two sets stay disjoint.
 
 ## Session Endpoints
 
@@ -393,7 +441,8 @@ the server is back to the filter the connection was opened with.
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
 | `mcp-toast` | `{title, message, level, sound, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast |
 | `triage-progress` | `{repo_path, summary, files, phase, done, llm_used, llm_model}` | Diff-triage classification progress (browser parity for the desktop window event) |
-| `lagged` | `{missed}` | Client fell behind; N events were dropped |
+| `session-state-changed` | `{session_id, state}` — `state` is the same object `GET /sessions` returns per session (`shell_state`, `agent_state`, `awaiting_input`, `question_confident`, `background_work`, `queued_commands`, …), snake_case, with the fields serde skips at their zero value omitted | A session's derived lifecycle state moved. Published by the session-state accumulator (`state.rs publish_session_state_change`) once per real transition, deduped by `SessionState`'s `PartialEq` — a repaint that changes only `last_activity_ms` publishes nothing. Dual-emitted on the Tauri window under the same name and with the same payload, so `useAgentPolling.ts` consumes both transports with one handler instead of polling `list_active_sessions`. Absence of a field means its zero value, not "unknown" |
+| `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It also fires with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
 
 ### MCP Streamable HTTP
 
@@ -968,6 +1017,57 @@ the MCP `debug action=invoke_js` tool — both share `log_routes::eval_debug_scr
 HTTP route is what makes the `tauri dev` build (which has no MCP stdio transport)
 scriptable for diagnostics.
 
+### Reload the WebView (debug)
+
+```
+POST /debug/reload_webview
+```
+
+Sends the main WebView back to the last URL it was healthy at, from the **native**
+side (`WebviewWindow::navigate`), so it works precisely when the JavaScript side
+does not. **Loopback-only**, local router only. Returns
+`{"ok":true,"action":"navigate","url":…}`, or `{"error":…}` when the window is not
+available.
+
+**Navigate, not reload.** It used to call `WebviewWindow::reload`, and on
+2026-09-08 that answered `{"ok":true}` while the window stayed white for an hour:
+the main frame was on `about:srcdoc`, and there is no URL behind a blank document
+to reload. Changing this back to a reload re-breaks the one case the endpoint
+exists for.
+
+This is the recovery path for a white UI: a WebView whose main thread is blocked
+(or whose document is gone) cannot run `/debug/invoke_js`, because that route
+needs the very thread that is stuck. Before this endpoint existed the only remedy
+was restarting the app, which takes every PTY session with it — sessions live in
+the backend, so this costs nothing but a repaint.
+
+The backend names both conditions on its own and recovers the second by itself:
+the diagnostics thread logs `Frontend unresponsive: no heartbeat for Ns` when the
+main thread is blocked, and the `webview-recovery` thread logs
+`Main WebView lost its document` and re-navigates when the frame is on `about:`
+(see AGENTS.md → Diagnostics). Note that `grid frame gate stuck` is **not** either
+signal — hidden terminals never ack, so it fires in normal operation.
+
+### Memory report (diagnostics)
+
+```
+GET /diagnostics/memory
+```
+
+Names which structure holds the process's memory. Returns `phys_footprint_bytes`
+(resident **plus compressed** — `ps` RSS read 0.52 GB while the process held
+40 GB), `accounted_bytes`, and `maps`: every `AppState` structure that grows with
+sessions, clients or repos, with entry counts, measured bytes for the four that
+hold payloads, sorted biggest first.
+
+```json
+{"phys_footprint_bytes":123456789,"accounted_bytes":98765432,
+ "maps":[{"name":"grid.vt_log_buffers","entries":15,"bytes":94371840}, …]}
+```
+
+`accounted_bytes` far below the footprint is itself the finding: the growth is
+outside `AppState`. Available on every instance, `tuic-remote` included.
+
 ## Configuration Endpoints
 
 ### App Config
@@ -1010,7 +1110,7 @@ GET  /config/themes                          -> ThemeEntry[]
 POST /config/project-mcp-upstreams { repoPath, upstreamNames? } -> { ok }
 POST /exec/shell-script        { scriptContent, timeoutMs, repoPath } -> string  [guarded]
 GET  /audio/output-devices                   -> AudioOutputDevice[] (empty on remote)
-POST /agent/discover-session   { agentType, cwd, claimedIds, agentPid?, envOverrides } -> string|null
+POST /agent/discover-session   { agentType, cwd, claimedIds, agentPid?, envOverrides } -> { sessionId, launchCommand }|null
 POST /agent/claude-project-dir { cwd, claudeConfigDir? }   -> string
 POST /agent/open-in-custom     { executable, args, ctx }   -> { ok }   [guarded]
 POST /generators/generate      { request }                 -> GeneratorResult  [guarded]
@@ -1034,8 +1134,14 @@ GET    /config/provider-key/exists?providerId=<id>   -> bool
 POST   /config/provider-key    { providerId, key }   -> { ok }    [guarded]
 DELETE /config/provider-key    { providerId }        -> { ok }    [guarded]
 POST   /config/slot-test       { slot }              -> string    (connection test result)
-POST   /config/ollama-models   { providerId }        -> string[]  (discovered model ids)
+POST   /config/ollama-models   { providerId }        -> OllamaStatus
 ```
+
+`OllamaStatus` is `{ available: bool, models: [{ name, size }], detail: string|null }`.
+`detail` carries the backend's reason the endpoint is unusable — connection refused,
+no answer within the 4s probe timeout, or the HTTP status it answered with — and is
+`null` when the provider is reachable. Clients render it; they never compose their own
+wording, so a new failure mode is a change in `detect_ollama` and nowhere else.
 
 The OAuth upstream flow (`start_mcp_upstream_oauth` / `cancel_mcp_upstream_oauth`) is
 **not** mapped: `start` binds a loopback callback server and opens the OS browser, so
@@ -1238,6 +1344,24 @@ GET /codex/usage                               -> CodexUsageApiResponse (rate-li
 GET /codex/stats                               -> CodexStatsResponse (token history + lifetime stats)
 ```
 
+### Terminal theme
+
+```
+POST /terminal/theme-colors   {foreground:[r,g,b], background:[r,g,b], cursor:[r,g,b]}
+```
+
+Publishes the resolved terminal theme so the emulator can answer OSC 10 / 11 /
+12 colour queries. Not session-scoped: one window, one palette.
+
+This is not cosmetic. An app asks for the background with `OSC 11 ; ? ST`
+followed by `ESC[c` as a fence — DA is universally supported, so a DA reply
+arriving with no colour reply before it is meant to mean "this terminal cannot
+answer". A terminal that stays silent therefore never reads as "no", and the
+probe simply retries: Claude Code re-sent the pair every ~1.2 s for the whole
+life of a session, and every DA reply it triggered was written into the PTY as
+if typed. Until the frontend posts here, the emulator answers from a dark
+default — a plausible wrong colour ends the probe, silence does not.
+
 Powers the Claude Usage dashboard in browser/PWA/remote. `scope` is `"all"`,
 `"current"`, or a project slug. `timeline`/`session-stats` are desktop-only Tauri
 commands; the handlers call non-gated `*_impl` siblings so they also serve the
@@ -1341,7 +1465,7 @@ PUT /watchers/hot-repos
 
 Body: `{"paths": ["/path/to/repo", ...]}`
 
-Updates the set of "hot" repository paths (repos with active terminals). Cold repos (not in this set) get throttled watcher debounce (15s vs 1.5s) and reduced GitHub polling frequency (~10min vs ~1min). Browser-only mode equivalent of the `set_hot_repos` Tauri command.
+Updates the set of "hot" repository paths (repos with active terminals). Cold repos (not in this set) get throttled watcher debounce (15s vs 1.5s) and reduced GitHub polling frequency (~10min vs ~1min). HTTP equivalent of the `set_hot_repos` Tauri command, served by both the desktop server and `tuic-remote` — a browser client of the desktop app needs it just as much as a remote one.
 
 ### AI Watchers (agent rules — story 070)
 

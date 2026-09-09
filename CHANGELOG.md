@@ -6,7 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **An AI agent run now survives a reload taken in the middle of it.** The saved
+  conversation held the prose and nothing else, so coming back mid-iteration lost
+  the tool cards, the loop state and the iteration counter — the reply was there,
+  the work that produced it was not. The run is now written on every step of the
+  loop, not only when a turn ends, and comes back as it was. Conversations saved
+  by an older build load unchanged and are upgraded in place on the first read.
+  Tool output kept in that log is redacted and capped exactly like the tool
+  results already stored on messages.
+
 ### Added
+
+- **Spreadsheets open as tables instead of binary noise.** The registry gains
+  `xlsx-preview`, which reads `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`,
+  `.ods` and `.fods` through SheetJS and shows one sortable table per worksheet —
+  the counterpart of `csv-preview` for the formats the code editor could only
+  render as a zip. Cells carry the value the spreadsheet displays, so dates keep
+  the workbook's own format. Large sheets are capped at 2000 rows and 200 columns
+  and the panel says what it hid.
 
 - **TUICommander can now drive ego.** A supervised agent process per
   connection, durable sessions, turns you can cancel or pause, and the

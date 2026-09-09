@@ -67,6 +67,8 @@ When adding or changing Tauri commands:
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/lib.rs` | `invoke_handler!` macro registration |
+| `src/transport.ts` | `COMMAND_TABLE` entry, or `INTENTIONALLY_UNMAPPED` if host-only |
+| `src-tauri/src/mcp_http/command_table_paths.txt` | **Generated** — regenerate with `pnpm vitest run src/__tests__/transport.test.ts -u`. The Rust route probe reads it; never hand-edit |
 | `docs/api/tauri-commands.md` | Command signature + description |
 | `docs/api/http-api.md` | HTTP endpoint mapping (if browser/remote mode) |
 | Domain backend doc | e.g. `docs/backend/pty.md`, `docs/backend/git.md` |
@@ -96,6 +98,7 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `pty-osc133-{session_id}` | `{ marker: string, line: number, exit_code: number \| null }` | `pty.rs` OSC 133 handler — serialised from `terminal_grid.rs Osc133Event`, so the field name is `exit_code`, NOT `exitCode`. Dual-emitted on `event_bus` as `PtyOsc133` (`osc133` frame on the `?format=grid` WS via `grid_ws_frame()`, plus `pty-osc133` SSE); the grid WS is the right lane because `CanvasTerminal` is the only consumer and it already holds that socket. Ignored by `apply_event_to_session_state` | `CanvasTerminal.tsx` → `transport.onEvent("osc133", …)` → `terminalsStore.handleOsc133()` → command blocks, gutter marks, Cmd+Up/Down. **Not** in `useAppInit.ts` — per-session |
 | `pty-cwd-{session_id}` | `{ cwd: string }` | `pty.rs` OSC 7 handler. The desktop payload is the `{ cwd }` object, not a bare string — both transports carry the same shape so the handler needs no branch. Dual-emitted on `event_bus` as `PtyCwd` (`cwd` frame on the `?format=grid` WS, plus `pty-cwd` SSE). Ignored by `apply_event_to_session_state` | `CanvasTerminal.tsx` → `transport.onEvent("cwd", …)` → `terminalsStore.update({ cwd })` + `onCwdChange`. **Not** in `useAppInit.ts` — per-session |
 | `pty-watcher-lines-{session_id}` | `{ session_id: string, lines: [{ text: string, matched_ids: string[] }] }` | `pty.rs emit_watcher_lines()` — one emit per 100 ms batch of assembled lines; `text` is the CLEANED text Rust matched on, `matched_ids` are qualified `client_id/watcher_id`. Rust ships every line only while a registered pattern could not be compiled, otherwise the matched ones alone. Dual-emitted on `event_bus` as `PluginWatcherLines` (`watcher-lines` WS frame on `/sessions/:id/stream` in both `?format=grid` and raw mode — **not** `?format=log|text`, which returns before the event loop — plus `plugin-watcher-lines` SSE) | `CanvasTerminal.tsx` → `transport.onEvent("watcher-lines", …)` → `pluginRegistry.handleWatcherLines()`, which re-runs the JS `RegExp` on each line. The listener is installed BEFORE the grid subscription — a line that lands while it is being attached is lost. **Not** in `useAppInit.ts` — the listener is per-session |
+| `session-state-changed` | `{ session_id: string, state: SessionState }` — `state` is exactly the object `list_active_sessions` returns per session, snake_case, with serde skipping the zero-valued fields. Both transports build it from `state.rs session_state_payload()`, one function on purpose | `state.rs publish_session_state_change()`, called only from the session-state accumulator — the sole writer of `session_states` and therefore the only place that can see a transition. Deduped by `SessionState`'s `PartialEq` (which excludes `last_activity_ms`), so a repaint that changes nothing a client renders emits nothing. Dual-emitted on `event_bus` as `SessionStateChanged` (`session-state-changed` SSE on `/events`). Ignored by `apply_event_to_session_state` — it is the accumulator's output, never its input | `useAgentPolling.ts` → `subscribeEvents({"session-state-changed"})` → `applySessionState()` → tab awaiting/busy badges + Activity Dashboard. Replaced a 1 Hz `list_active_sessions` poll; the only remaining reads are a single mount-time catch-up, for sessions already idle and silent, and the same catch-up re-run from `subscribeEvents`' `onResync` when the SSE stream reconnects or reports `lagged` (browser only — Tauri `listen()` cannot drop) |
 | `acp-notice` | `{ connectionId, generation, sessionId?, requestId?, sequence, kind }` — `kind` is `ready` \| `settled` \| `interaction_pending` \| `interaction_settled`. camelCase, unlike the PTY rows above: it is the same object the `/acp` routes and the `acp_*` commands return, and a second spelling would be a second thing to keep in sync | `state.rs spawn_acp_notice_pump()`, fed by `acp/events.rs` `AcpEventJournal::append` — the one place every ACP event is stamped, so a notice cannot be forgotten by a new producer. Dual-emitted on `event_bus` as `AcpNotice` (`acp-notice` SSE on `/events`) | TBD — no ACP frontend yet. It is a wake signal: react by reading `acp_connection_snapshot`, `acp_pending_interactions`, or the stream from the `sequence` it names. The ordered turn frames stay on `acp_subscribe` / the `/acp/connections/:id/stream` WebSocket and never ride this bus |
 
 ### HTTP & MCP Server
@@ -165,7 +168,8 @@ When modifying provider types, slot names, credential storage, or the ProvidersT
 | `src-tauri/src/provider_registry.rs` | `ProviderType`, `SlotName`, `ProviderRegistry` structs + Tauri commands |
 | `src-tauri/src/credentials.rs` | `Credential::Provider` variant for per-provider key storage |
 | `src/stores/providerRegistry.ts` | Frontend store: hydrate, save, slot resolution, CRUD |
-| `src/components/SettingsPanel/tabs/ProvidersTab.tsx` | Settings UI: provider cards, model CRUD, slot assignments |
+| `src/components/SettingsPanel/tabs/ProvidersTab.tsx` | Settings UI: provider cards, model CRUD, slot assignments, availability badge (renders `OllamaStatus.detail` verbatim) |
+| `src-tauri/src/ai_chat.rs` | `detect_ollama` + `OllamaStatus` — the availability verdict AND its user-facing reason are authored here, never in the UI |
 | `src/hooks/useSmartPrompts.ts` | `resolveSlot("headless")` check for headless execution |
 | `docs/backend/config.md` | `providers.json` schema documentation |
 
@@ -186,11 +190,12 @@ When modifying AI Chat panel, settings, context menu actions, or streaming backe
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/ai_chat.rs` | Backend: config, streaming, context assembly, Ollama detection |
+| `src-tauri/src/ai_chat.rs` | Backend: config, streaming, context assembly, Ollama detection, conversation CRUD (`save_conversation` stamps the schema version; `load_conversation` migrates) |
+| `src-tauri/src/ai_agent/conversation.rs` | Persisted conversation types: `Conversation`, `ChatMessage`, `AgentSnapshot`, `CURRENT_SCHEMA_VERSION` + `migrate()`. Bump the version and extend `migrate()` on any shape change |
 | `src-tauri/src/ai_chat_registry.rs` | Chat Registry: cross-window state sync, Channel fan-out, subscribe/unsubscribe |
 | `src/stores/conversationStore.ts` | Frontend store: messages, streaming state, registry subscription (sessionId passed per-call, derived from focused terminal) |
 | `src/components/AIChatPanel/AIChatPanel.tsx` | Chat panel component + detach button + registry lifecycle + the optional `terminal` binding a detached window is handed |
-| `src/panelAdapters/aiChat.tsx` | Detached-window adapter: params handed over at detach, terminal + chat id adoption on mount, re-read on reattach |
+| `src/panelAdapters/aiChat.tsx` | Detached-window adapter: params handed over at detach, docked panel hidden on detach, terminal + chat id adoption on mount, re-read on reattach unless a stream is live |
 | `src/components/AIChatPanel/contextMenuActions.ts` | Terminal context menu integration |
 | `src/components/PanelOrchestrator.tsx` | Switches between AIChatPanel and DetachedPlaceholder |
 | `src/components/DetachedPlaceholder.tsx` | Placeholder shown in main window when panel is detached |
@@ -198,6 +203,7 @@ When modifying AI Chat panel, settings, context menu actions, or streaming backe
 | `src/stores/ui.ts` | `aiChatPanelVisible` + `detachedPanels` map |
 | `src/panelRouter.tsx` | Panel adapter registry + routing for detached panel windows |
 | `src/utils/panelSync.ts` | PanelSyncProvider + PanelSyncReceiver for main↔detached communication |
+| `src/utils/aiChatSnapshot.ts` | Live-stream projection to the detached window: snapshot shape, `projectAiChat` ownership rules (overlay-only, `mirroring` flag, chat-id guard), push interval |
 | `src/hooks/initPanelWindow.ts` | Bootstrap for detached panel windows (theme, font, settings) |
 | `src/keybindingDefaults.ts` | `toggle-ai-chat` + `detach-activity-dashboard` hotkeys |
 | `docs/FEATURES.md` | AI Chat feature section |

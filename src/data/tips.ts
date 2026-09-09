@@ -65,7 +65,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Plugin File Previews",
 		description:
-			"Install preview plugins from Settings > Plugins > Browse to open formats like DOCX directly from the File Browser.",
+			"Install preview plugins from Settings > Plugins > Browse to open formats like DOCX and XLSX directly from the File Browser.",
 		shortcut: null,
 	},
 	{
