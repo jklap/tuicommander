@@ -1,5 +1,22 @@
-// Global test setup: signal to transport.ts/invoke.ts that we're in Tauri mode
-(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+// Global test setup: signal to transport.ts/invoke.ts that we're in Tauri mode.
+//
+// `invoke` is stubbed rather than left absent. `isTauri()` only checks that the
+// global exists, so an empty object routes every unmocked `rpc()` into
+// @tauri-apps/api, which threw `__TAURI_INTERNALS__.invoke is not a function`
+// as an UNHANDLED rejection: a component that fetches on mount (a
+// `createResource` in a tab the test happens to open) poisoned the whole run
+// with an error Vitest attributes to whichever file was executing, not to the
+// component. Rejecting with a named error keeps the failure attached to the
+// call that made it, and a resource fetcher stores it instead of escaping.
+//
+// A test that means to exercise a command mocks it — `src/__tests__/mocks/tauri`
+// replaces the module. Reaching this stub means nothing was mocked, so it must
+// never look like success: resolving would silently feed `undefined` to code
+// expecting data.
+(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {
+	invoke: (cmd: string) =>
+		Promise.reject(new Error(`unmocked Tauri command "${cmd}" — mock it via src/__tests__/mocks/tauri`)),
+};
 
 // happy-dom may ship a Proxy-based localStorage missing .clear(),
 // or Node may not provide localStorage at all (no --localstorage-file).
