@@ -427,7 +427,7 @@ function createSettingsStore() {
 		aiChatEnabled: false,
 		aiTriageEnabled: false,
 		aiWatchersEnabled: false,
-		scrollbackReflow: false,
+		scrollbackReflow: true,
 		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
 		terminalRenderer: "webgl",
 		showBlockTimestamps: true,
@@ -599,7 +599,7 @@ function createSettingsStore() {
 				setState("aiChatEnabled", config.ai_chat_enabled ?? false);
 				setState("aiTriageEnabled", config.ai_triage_enabled ?? false);
 				setState("aiWatchersEnabled", config.ai_watchers_enabled ?? false);
-				setState("scrollbackReflow", config.scrollback_reflow ?? false);
+				setState("scrollbackReflow", config.scrollback_reflow ?? true);
 				const cs = config.cursor_style;
 				setState("cursorStyle", cs === "block" || cs === "underline" ? cs : "bar");
 				setState("terminalRenderer", validateTerminalRenderer(config.terminal_renderer || null));
@@ -845,6 +845,24 @@ function createSettingsStore() {
 
 		setScrollbackReflow(enabled: boolean): void {
 			setState("scrollbackReflow", enabled);
+			save();
+		},
+
+		/** Show each command block's elapsed time while Ctrl+Cmd is held */
+		setShowBlockTimestamps(enabled: boolean): void {
+			setState("showBlockTimestamps", enabled);
+			save();
+		},
+
+		/** Allow collapsing a command block's output with the fold shortcut */
+		setBlockFoldingEnabled(enabled: boolean): void {
+			setState("blockFoldingEnabled", enabled);
+			save();
+		},
+
+		/** Mark each command's position on the terminal scrollbar */
+		setShowScrollbarMarks(enabled: boolean): void {
+			setState("showScrollbarMarks", enabled);
 			save();
 		},
 

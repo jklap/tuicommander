@@ -282,6 +282,8 @@ function navigateCommandBlock(direction: "previous" | "next"): void {
 }
 
 function toggleNearestCommandBlock(): void {
+	// No `blockFoldingEnabled` check here on purpose: `toggleBlockFold` enforces
+	// it for every caller, so this path cannot drift from CanvasTerminal's.
 	const terminal = terminalsStore.getActive();
 	if (!terminal?.ref || terminal.commandBlocks.length === 0) return;
 	const sessionId = terminal.ref.getSessionId();
