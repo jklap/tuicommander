@@ -1,4 +1,7 @@
 use super::*;
+// Production builds a grid through `AppState::new_vt_log_buffer` so it picks up
+// the config; tests that only exercise the grid construct it directly.
+use crate::state::VtLogBuffer;
 
 fn fixture_rows(fixture: &str) -> Vec<String> {
     fixture
@@ -144,12 +147,14 @@ async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
     // Take the handle BEFORE the panic: teardown removes the map entry, so
     // afterwards the only clones left are this one and the timer's.
     let silence = state
+        .session_maps
         .silence_states
         .get(&sid)
         .map(|e| Arc::clone(e.value()))
         .expect("silence state is registered before the threads start");
     assert!(
-        state.grid_frame_dirty.contains_key(&sid) && state.sync_update_active.contains_key(&sid),
+        state.grid.frame_dirty.contains_key(&sid)
+            && state.grid.sync_update_active.contains_key(&sid),
         "precondition: the ticker owns both per-session entries"
     );
 
@@ -157,8 +162,8 @@ async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        let ticker_alive = state.grid_frame_dirty.contains_key(&sid)
-            || state.sync_update_active.contains_key(&sid);
+        let ticker_alive = state.grid.frame_dirty.contains_key(&sid)
+            || state.grid.sync_update_active.contains_key(&sid);
         let timer_alive = Arc::strong_count(&silence) > 1;
         if !ticker_alive && !timer_alive {
             break;
@@ -206,7 +211,7 @@ async fn a_session_owns_its_pending_scroll_entry_from_the_start() {
     );
 
     assert!(
-        state.pending_scroll.contains_key(&sid),
+        state.grid.pending_scroll.contains_key(&sid),
         "a session with no desktop grid subscriber has nowhere to record a scroll"
     );
 }
@@ -2399,14 +2404,14 @@ fn test_fresh_hook_busy_blocks_ready_after_prior_recovery() {
 fn test_working_row_cannot_relatch_a_declared_completed_turn() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "completed-working-row";
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         session_id.into(),
         crate::state::SessionState {
             agent_type: Some("codex".into()),
             ..Default::default()
         },
     );
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.into(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
@@ -2425,6 +2430,7 @@ fn test_working_row_cannot_relatch_a_declared_completed_turn() {
 
     assert_eq!(
         state
+            .session_maps
             .shell_states
             .get(session_id)
             .unwrap()
@@ -2440,7 +2446,7 @@ fn test_codex_moving_working_row_reopens_completed_internal_continuation() {
 
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "codex-completed-internal-continuation";
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         session_id.into(),
         crate::state::SessionState {
             agent_type: Some("codex".into()),
@@ -2449,9 +2455,11 @@ fn test_codex_moving_working_row_reopens_completed_internal_continuation() {
         },
     );
     state
+        .session_maps
         .shell_states
         .insert(session_id.into(), AtomicU8::new(SHELL_IDLE));
     state
+        .session_maps
         .last_output_ms
         .insert(session_id.into(), AtomicU64::new(1));
     let mut lifecycle = SilenceState::new();
@@ -2469,6 +2477,7 @@ fn test_codex_moving_working_row_reopens_completed_internal_continuation() {
 
     assert_eq!(
         state
+            .session_maps
             .shell_states
             .get(session_id)
             .unwrap()
@@ -2477,6 +2486,7 @@ fn test_codex_moving_working_row_reopens_completed_internal_continuation() {
     );
     assert!(
         state
+            .session_maps
             .session_states
             .get(session_id)
             .unwrap()
@@ -2494,7 +2504,7 @@ fn test_claude_active_marker_reopens_premature_stop_hook_completion() {
 
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "claude-blocking-stop-hook";
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         session_id.into(),
         crate::state::SessionState {
             agent_type: Some("claude".into()),
@@ -2503,9 +2513,11 @@ fn test_claude_active_marker_reopens_premature_stop_hook_completion() {
         },
     );
     state
+        .session_maps
         .shell_states
         .insert(session_id.into(), AtomicU8::new(SHELL_IDLE));
     state
+        .session_maps
         .last_output_ms
         .insert(session_id.into(), AtomicU64::new(1));
     let mut lifecycle = SilenceState::new();
@@ -2513,6 +2525,7 @@ fn test_claude_active_marker_reopens_premature_stop_hook_completion() {
     lifecycle.note_explicit_state(SHELL_IDLE, true);
     let lifecycle = Arc::new(Mutex::new(lifecycle));
     state
+        .session_maps
         .silence_states
         .insert(session_id.into(), lifecycle.clone());
 
@@ -2538,6 +2551,7 @@ fn test_claude_active_marker_reopens_premature_stop_hook_completion() {
 
     assert_eq!(
         state
+            .session_maps
             .shell_states
             .get(session_id)
             .unwrap()
@@ -2546,6 +2560,7 @@ fn test_claude_active_marker_reopens_premature_stop_hook_completion() {
     );
     assert!(
         state
+            .session_maps
             .session_states
             .get(session_id)
             .unwrap()
@@ -2564,11 +2579,20 @@ fn test_declared_completion_turns_stale_working_screen_into_ready_evidence() {
     let session_id = "completed-working-timer";
     agent_session(&state, session_id, SHELL_BUSY);
     {
-        let mut session = state.session_states.get_mut(session_id).unwrap();
+        let mut session = state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap();
         session.agent_type = Some("codex".into());
         session.background_probe_satisfied_turn_epoch = Some(session.turn_epoch);
     }
-    let lifecycle = state.silence_states.get(session_id).unwrap().clone();
+    let lifecycle = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     {
         let mut lifecycle = lifecycle.lock();
         lifecycle.mark_suggest_candidate(vec!["Review diff".into()], 0);
@@ -2594,6 +2618,7 @@ fn test_declared_completion_turns_stale_working_screen_into_ready_evidence() {
     assert!(transition.transitioned);
     assert_eq!(
         state
+            .session_maps
             .shell_states
             .get(session_id)
             .unwrap()
@@ -2627,16 +2652,28 @@ fn test_working_screen_recovers_idle_to_busy() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "codex-false-idle";
     state
+        .session_maps
         .shell_states
         .insert(sid.into(), AtomicU8::new(SHELL_IDLE));
-    state.last_output_ms.insert(sid.into(), AtomicU64::new(1));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.into(), AtomicU64::new(1));
     let silence = Arc::new(Mutex::new(SilenceState::new()));
-    state.silence_states.insert(sid.into(), silence.clone());
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.into(), silence.clone());
 
     apply_working_evidence(&state, &silence, sid, now_epoch_ms(), "working-screen");
 
     assert_eq!(
-        state.shell_states.get(sid).unwrap().load(Ordering::Acquire),
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Acquire),
         SHELL_BUSY
     );
     assert!(!silence.lock().idle_confirmed);
@@ -2648,18 +2685,30 @@ fn test_explicit_idle_outvotes_stale_working_screen() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "codex-stale-working";
     state
+        .session_maps
         .shell_states
         .insert(sid.into(), AtomicU8::new(SHELL_IDLE));
-    state.last_output_ms.insert(sid.into(), AtomicU64::new(1));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.into(), AtomicU64::new(1));
     let mut sl = SilenceState::new();
     sl.note_explicit_state(SHELL_IDLE, true);
     let silence = Arc::new(Mutex::new(sl));
-    state.silence_states.insert(sid.into(), silence.clone());
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.into(), silence.clone());
 
     apply_working_evidence(&state, &silence, sid, now_epoch_ms(), "working-screen");
 
     assert_eq!(
-        state.shell_states.get(sid).unwrap().load(Ordering::Acquire),
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Acquire),
         SHELL_IDLE
     );
     assert!(silence.lock().idle_confirmed);
@@ -2776,7 +2825,7 @@ fn active_screen_matrix_is_stable_and_repairs_false_idle_repeatedly() {
     ];
 
     for (sid, agent, rows) in cases {
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             sid.into(),
             crate::state::SessionState {
                 agent_type: Some(agent.into()),
@@ -2784,14 +2833,22 @@ fn active_screen_matrix_is_stable_and_repairs_false_idle_repeatedly() {
             },
         );
         state
+            .session_maps
             .shell_states
             .insert(sid.into(), AtomicU8::new(SHELL_IDLE));
-        state.last_output_ms.insert(sid.into(), AtomicU64::new(1));
+        state
+            .session_maps
+            .last_output_ms
+            .insert(sid.into(), AtomicU64::new(1));
         let lifecycle = Arc::new(Mutex::new(SilenceState::new()));
-        state.silence_states.insert(sid.into(), lifecycle.clone());
+        state
+            .session_maps
+            .silence_states
+            .insert(sid.into(), lifecycle.clone());
 
         for iteration in 0..256 {
             state
+                .session_maps
                 .shell_states
                 .get(sid)
                 .unwrap()
@@ -2806,7 +2863,12 @@ fn active_screen_matrix_is_stable_and_repairs_false_idle_repeatedly() {
             );
             apply_working_evidence(&state, &lifecycle, sid, now_epoch_ms(), "working-screen");
             assert_eq!(
-                state.shell_states.get(sid).unwrap().load(Ordering::Acquire),
+                state
+                    .session_maps
+                    .shell_states
+                    .get(sid)
+                    .unwrap()
+                    .load(Ordering::Acquire),
                 SHELL_BUSY,
                 "{sid} failed to repair false idle at iteration {iteration}"
             );
@@ -3056,12 +3118,14 @@ fn busy_plain_shell(sid: &str, silent_for_ms: u64) -> AppState {
     use std::sync::atomic::{AtomicU8, AtomicU64};
     let state = crate::state::tests_support::make_test_app_state();
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
     state
+        .session_maps
         .session_states
         .insert(sid.to_string(), crate::state::SessionState::default());
-    state.last_output_ms.insert(
+    state.session_maps.last_output_ms.insert(
         sid.to_string(),
         AtomicU64::new(now_epoch_ms() - silent_for_ms),
     );
@@ -3085,7 +3149,7 @@ fn prompt_probe_waits_for_real_silence() {
 fn prompt_probe_leaves_agents_alone() {
     let sid = "s";
     let state = busy_plain_shell(sid, SHELL_PROMPT_PROBE_SILENCE_MS + 500);
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         sid.to_string(),
         crate::state::SessionState {
             agent_type: Some("claude".to_string()),
@@ -3104,6 +3168,7 @@ fn prompt_probe_ignores_an_idle_session() {
     let sid = "s";
     let state = busy_plain_shell(sid, SHELL_PROMPT_PROBE_SILENCE_MS + 500);
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_IDLE));
     assert!(!prompt_probe_applies(&state, sid));
@@ -3114,6 +3179,7 @@ fn prompt_probe_demands_the_process_snapshot() {
     let sid = "s";
     let state = busy_plain_shell(sid, SHELL_PROMPT_PROBE_SILENCE_MS + 500);
     state
+        .session_maps
         .silence_states
         .insert(sid.to_string(), Arc::new(Mutex::new(SilenceState::new())));
     assert!(
@@ -3181,7 +3247,7 @@ fn sanitized_background_command_keeps_agent_working_across_adapters() {
 
         let state = crate::state::tests_support::make_test_app_state();
         let sid = format!("background-{agent}");
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             sid.clone(),
             crate::state::SessionState {
                 agent_type: Some(agent.to_string()),
@@ -3190,9 +3256,11 @@ fn sanitized_background_command_keeps_agent_working_across_adapters() {
             },
         );
         state
+            .session_maps
             .shell_states
             .insert(sid.clone(), std::sync::atomic::AtomicU8::new(SHELL_IDLE));
         state
+            .session_maps
             .silence_states
             .insert(sid.clone(), Arc::new(Mutex::new(silence)));
 
@@ -3479,8 +3547,14 @@ fn background_snapshot_ready_waits_for_newer_generation_and_repairs_working() {
     let child_id = "background-ready-generation";
     let parent_id = "background-ready-parent";
     agent_session(&state, child_id, SHELL_BUSY);
-    state.session_states.get_mut(child_id).unwrap().agent_type = Some("codex".into());
     state
+        .session_maps
+        .session_states
+        .get_mut(child_id)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
@@ -3488,6 +3562,7 @@ fn background_snapshot_ready_waits_for_newer_generation_and_repairs_working() {
         .process_snapshot_cache
         .store(Some(vec![process(10, 1, "codex", "codex")]));
     state
+        .session_maps
         .silence_states
         .get(child_id)
         .unwrap()
@@ -3496,7 +3571,12 @@ fn background_snapshot_ready_waits_for_newer_generation_and_repairs_working() {
 
     let first_ready = try_timer_idle_transition(
         &state,
-        &state.silence_states.get(child_id).unwrap().clone(),
+        &state
+            .session_maps
+            .silence_states
+            .get(child_id)
+            .unwrap()
+            .clone(),
         child_id,
         AgentScreenActivity::Ready,
         Some("codex"),
@@ -3524,7 +3604,12 @@ fn background_snapshot_ready_waits_for_newer_generation_and_repairs_working() {
 
     let reconciled_ready = try_timer_idle_transition(
         &state,
-        &state.silence_states.get(child_id).unwrap().clone(),
+        &state
+            .session_maps
+            .silence_states
+            .get(child_id)
+            .unwrap()
+            .clone(),
         child_id,
         AgentScreenActivity::Ready,
         Some("codex"),
@@ -3555,12 +3640,23 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
     let child_id = "background-same-epoch-ready";
     let parent_id = "background-same-epoch-parent";
     agent_session(&state, child_id, SHELL_BUSY);
-    state.session_states.get_mut(child_id).unwrap().agent_type = Some("codex".into());
     state
+        .session_maps
+        .session_states
+        .get_mut(child_id)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
-    let silence = state.silence_states.get(child_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
 
     state
         .process_snapshot_cache
@@ -3603,6 +3699,7 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
     assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 1);
     assert_eq!(
         state
+            .session_maps
             .session_states
             .get(child_id)
             .unwrap()
@@ -3612,7 +3709,7 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
 
     apply_working_evidence(&state, &silence, child_id, now_epoch_ms(), "working-screen");
     {
-        let session = state.session_states.get(child_id).unwrap();
+        let session = state.session_maps.session_states.get(child_id).unwrap();
         assert_eq!(session.background_probe_satisfied_turn_epoch, None);
         assert_eq!(session.background_probe_turn_epoch, None);
         assert_eq!(session.background_probe_after_generation, None);
@@ -3633,7 +3730,7 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         .transitioned
     );
     {
-        let session = state.session_states.get(child_id).unwrap();
+        let session = state.session_maps.session_states.get(child_id).unwrap();
         assert_eq!(session.background_probe_turn_epoch, Some(0));
         assert_eq!(session.background_probe_after_generation, Some(2));
         assert_eq!(session.background_probe_satisfied_turn_epoch, None);
@@ -3714,7 +3811,7 @@ fn already_busy_working_evidence_invalidates_only_probe_boundaries() {
     let child_id = "background-already-busy";
     agent_session(&state, child_id, SHELL_BUSY);
     {
-        let mut session = state.session_states.get_mut(child_id).unwrap();
+        let mut session = state.session_maps.session_states.get_mut(child_id).unwrap();
         session.agent_type = Some("codex".into());
         session.background_work = true;
         session.background_snapshot_generation = 9;
@@ -3722,11 +3819,16 @@ fn already_busy_working_evidence_invalidates_only_probe_boundaries() {
         session.background_probe_after_generation = Some(8);
         session.background_probe_satisfied_turn_epoch = Some(0);
     }
-    let silence = state.silence_states.get(child_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
 
     apply_working_evidence(&state, &silence, child_id, now_epoch_ms(), "working-screen");
     {
-        let session = state.session_states.get(child_id).unwrap();
+        let session = state.session_maps.session_states.get(child_id).unwrap();
         assert_eq!(session.background_probe_turn_epoch, None);
         assert_eq!(session.background_probe_after_generation, None);
         assert_eq!(session.background_probe_satisfied_turn_epoch, None);
@@ -3735,13 +3837,13 @@ fn already_busy_working_evidence_invalidates_only_probe_boundaries() {
     }
 
     {
-        let mut session = state.session_states.get_mut(child_id).unwrap();
+        let mut session = state.session_maps.session_states.get_mut(child_id).unwrap();
         session.background_probe_turn_epoch = Some(0);
         session.background_probe_after_generation = Some(9);
         session.background_probe_satisfied_turn_epoch = Some(0);
     }
     transition_explicit_shell_state_with_hook(&state, child_id, SHELL_BUSY, "busy", true, || {});
-    let session = state.session_states.get(child_id).unwrap();
+    let session = state.session_maps.session_states.get(child_id).unwrap();
     assert_eq!(session.background_probe_turn_epoch, None);
     assert_eq!(session.background_probe_after_generation, None);
     assert_eq!(session.background_probe_satisfied_turn_epoch, None);
@@ -3749,6 +3851,7 @@ fn already_busy_working_evidence_invalidates_only_probe_boundaries() {
     assert_eq!(session.background_snapshot_generation, 9);
     assert_eq!(
         state
+            .session_maps
             .shell_states
             .get(child_id)
             .unwrap()
@@ -3763,12 +3866,19 @@ fn background_snapshot_child_absent_releases_declared_completion() {
     let child_id = "background-ready-completed";
     let parent_id = "background-ready-completed-parent";
     agent_session(&state, child_id, SHELL_BUSY);
-    state.session_states.get_mut(child_id).unwrap().agent_type = Some("codex".into());
     state
+        .session_maps
+        .session_states
+        .get_mut(child_id)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
     state
+        .session_maps
         .silence_states
         .get(child_id)
         .unwrap()
@@ -3778,6 +3888,7 @@ fn background_snapshot_child_absent_releases_declared_completion() {
         .process_snapshot_cache
         .store(Some(vec![process(10, 1, "codex", "codex")]));
     state
+        .session_maps
         .silence_states
         .get(child_id)
         .unwrap()
@@ -3787,7 +3898,12 @@ fn background_snapshot_child_absent_releases_declared_completion() {
     assert!(
         !try_timer_idle_transition(
             &state,
-            &state.silence_states.get(child_id).unwrap().clone(),
+            &state
+                .session_maps
+                .silence_states
+                .get(child_id)
+                .unwrap()
+                .clone(),
             child_id,
             AgentScreenActivity::Ready,
             Some("codex"),
@@ -3811,7 +3927,12 @@ fn background_snapshot_child_absent_releases_declared_completion() {
     assert!(
         try_timer_idle_transition(
             &state,
-            &state.silence_states.get(child_id).unwrap().clone(),
+            &state
+                .session_maps
+                .silence_states
+                .get(child_id)
+                .unwrap()
+                .clone(),
             child_id,
             AgentScreenActivity::Ready,
             Some("codex"),
@@ -3820,7 +3941,12 @@ fn background_snapshot_child_absent_releases_declared_completion() {
         .transitioned
     );
     assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
-    let silence = state.silence_states.get(child_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
     assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
@@ -3834,12 +3960,19 @@ fn claude_timed_caffeinate_does_not_delay_declared_completion() {
     let child_id = "background-claude-caffeinate-completed";
     let parent_id = "background-claude-caffeinate-completed-parent";
     agent_session(&state, child_id, SHELL_BUSY);
-    state.session_states.get_mut(child_id).unwrap().agent_type = Some("claude".into());
     state
+        .session_maps
+        .session_states
+        .get_mut(child_id)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
     state
+        .session_maps
         .silence_states
         .get(child_id)
         .unwrap()
@@ -3886,8 +4019,14 @@ fn explicit_agent_idle_waits_for_newer_snapshot_and_repairs_working() {
         let state = crate::state::tests_support::make_test_app_state();
         let parent_id = format!("{session_id}-parent");
         agent_session(&state, session_id, SHELL_BUSY);
-        state.session_states.get_mut(session_id).unwrap().agent_type = Some("codex".into());
         state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .agent_type = Some("codex".into());
+        state
+            .session_maps
             .session_parent
             .insert(session_id.to_string(), parent_id.clone());
         state.agent_inbox.entry(parent_id.clone()).or_default();
@@ -3906,6 +4045,7 @@ fn explicit_agent_idle_waits_for_newer_snapshot_and_repairs_working() {
 
         assert_eq!(
             state
+                .session_maps
                 .shell_states
                 .get(session_id)
                 .unwrap()
@@ -3952,13 +4092,20 @@ fn explicit_agent_idle_child_absent_restores_api_state_and_notifies_once() {
         let state = crate::state::tests_support::make_test_app_state();
         let parent_id = format!("{session_id}-parent");
         agent_session(&state, session_id, SHELL_BUSY);
-        state.session_states.get_mut(session_id).unwrap().agent_type = Some("codex".into());
         state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .agent_type = Some("codex".into());
+        state
+            .session_maps
             .session_parent
             .insert(session_id.to_string(), parent_id.clone());
         state.agent_inbox.entry(parent_id.clone()).or_default();
         if declare_completion {
             state
+                .session_maps
                 .silence_states
                 .get(session_id)
                 .unwrap()
@@ -4023,15 +4170,15 @@ fn explicit_agent_idle_child_absent_restores_api_state_and_notifies_once() {
 fn explicit_non_agent_idle_keeps_immediate_shell_semantics() {
     for (session_id, hook_state) in [("plain-hook-idle", true), ("plain-osc133-idle", false)] {
         let state = crate::state::tests_support::make_test_app_state();
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState::default(),
         );
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             session_id.to_string(),
             std::sync::atomic::AtomicU8::new(SHELL_BUSY),
         );
-        state.silence_states.insert(
+        state.session_maps.silence_states.insert(
             session_id.to_string(),
             Arc::new(Mutex::new(SilenceState::new())),
         );
@@ -4047,13 +4194,14 @@ fn explicit_non_agent_idle_keeps_immediate_shell_semantics() {
 
         assert_eq!(
             state
+                .session_maps
                 .shell_states
                 .get(session_id)
                 .unwrap()
                 .load(Ordering::Acquire),
             SHELL_IDLE
         );
-        let session = state.session_states.get(session_id).unwrap();
+        let session = state.session_maps.session_states.get(session_id).unwrap();
         assert_eq!(session.background_probe_turn_epoch, None);
         assert_eq!(session.background_probe_after_generation, None);
     }
@@ -4071,13 +4219,20 @@ fn background_snapshot_refresher_is_demand_gated_without_sleeping() {
 
     let session_id = "background-demand";
     agent_session(&state, session_id, SHELL_BUSY);
-    state.session_states.get_mut(session_id).unwrap().agent_type = Some("codex".into());
     state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .session_maps
         .session_states
         .get_mut(session_id)
         .unwrap()
         .background_probe_turn_epoch = Some(0);
     state
+        .session_maps
         .session_states
         .get_mut(session_id)
         .unwrap()
@@ -4852,21 +5007,25 @@ fn resize_grace_re_arms_only_on_a_repaint_never_on_agent_output() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let silence = Arc::new(Mutex::new(SilenceState::new()));
         state
+            .session_maps
             .silence_states
             .insert(sid.to_string(), silence.clone());
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             sid.to_string(),
             std::sync::atomic::AtomicU8::new(SHELL_NULL),
         );
         // Six rows: a screenful plus one line is enough to scroll and grow
         // the durable log, which is what "real output" means in primary.
         state
+            .grid
             .vt_log_buffers
             .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(6, 40, 1000)));
         state
+            .session_maps
             .output_buffers
             .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
         state
+            .session_maps
             .last_output_ms
             .insert(sid.to_string(), AtomicU64::new(0));
 
@@ -5423,9 +5582,10 @@ fn test_shell_state_busy_on_real_output() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_NULL));
-    state.last_output_ms.insert(
+    state.session_maps.last_output_ms.insert(
         sid.to_string(),
         std::sync::atomic::AtomicU64::new(
             std::time::SystemTime::now()
@@ -5441,7 +5601,12 @@ fn test_shell_state_busy_on_real_output() {
         "should transition null → busy"
     );
     assert_eq!(
-        state.shell_states.get(sid).unwrap().load(Ordering::Relaxed),
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Relaxed),
         SHELL_BUSY
     );
 
@@ -5458,9 +5623,11 @@ fn test_shell_state_idle_after_500ms() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
     state
+        .session_maps
         .session_states
         .insert(sid.to_string(), crate::state::SessionState::default());
 
@@ -5470,6 +5637,7 @@ fn test_shell_state_idle_after_500ms() {
         .unwrap()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(now - 600));
 
@@ -5482,7 +5650,12 @@ fn test_shell_state_idle_after_500ms() {
         "should transition busy → idle"
     );
     assert_eq!(
-        state.shell_states.get(sid).unwrap().load(Ordering::Relaxed),
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Relaxed),
         SHELL_IDLE
     );
 }
@@ -5493,10 +5666,11 @@ fn test_shell_state_no_idle_with_subtasks() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
 
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         sid.to_string(),
         crate::state::SessionState {
             active_sub_tasks: 2,
@@ -5509,6 +5683,7 @@ fn test_shell_state_no_idle_with_subtasks() {
         .unwrap()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(now - 600));
 
@@ -5524,10 +5699,11 @@ fn test_shell_state_idle_stale_subtasks_force_cleared() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
 
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         sid.to_string(),
         crate::state::SessionState {
             active_sub_tasks: 2,
@@ -5541,6 +5717,7 @@ fn test_shell_state_idle_stale_subtasks_force_cleared() {
         .unwrap()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(now - 31_000));
 
@@ -5550,6 +5727,7 @@ fn test_shell_state_idle_stale_subtasks_force_cleared() {
     );
     // Verify the stale counter was force-cleared
     let sub = state
+        .session_maps
         .session_states
         .get(sid)
         .map(|s| s.active_sub_tasks)
@@ -5652,9 +5830,10 @@ fn test_force_cleared_subtasks_signal_propagates() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         sid.to_string(),
         crate::state::SessionState {
             active_sub_tasks: 3,
@@ -5666,6 +5845,7 @@ fn test_force_cleared_subtasks_signal_propagates() {
         .unwrap()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(now - 31_000));
 
@@ -5705,9 +5885,11 @@ fn test_normal_idle_does_not_signal_force_clear() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
     state
+        .session_maps
         .session_states
         .insert(sid.to_string(), crate::state::SessionState::default());
     let now = std::time::SystemTime::now()
@@ -5715,6 +5897,7 @@ fn test_normal_idle_does_not_signal_force_clear() {
         .unwrap()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(now - 600));
 
@@ -5732,11 +5915,12 @@ fn test_shell_state_no_idle_agent_session_under_agent_threshold() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
 
     // Agent session: agent_type is set
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         sid.to_string(),
         crate::state::SessionState {
             agent_type: Some("claude".to_string()),
@@ -5750,6 +5934,7 @@ fn test_shell_state_no_idle_agent_session_under_agent_threshold() {
         .unwrap()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(now - 600));
 
@@ -5765,11 +5950,12 @@ fn test_shell_state_idle_agent_session_over_agent_threshold() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
 
     // Agent session: agent_type is set
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         sid.to_string(),
         crate::state::SessionState {
             agent_type: Some("claude".to_string()),
@@ -5783,6 +5969,7 @@ fn test_shell_state_idle_agent_session_over_agent_threshold() {
         .unwrap()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(now - 3000));
 
@@ -5798,9 +5985,11 @@ fn test_shell_state_no_idle_before_500ms() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
     state
+        .session_maps
         .session_states
         .insert(sid.to_string(), crate::state::SessionState::default());
 
@@ -5809,6 +5998,7 @@ fn test_shell_state_no_idle_before_500ms() {
         .unwrap()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(now - 200));
 
@@ -5824,6 +6014,7 @@ fn test_shell_state_cas_prevents_duplicate_idle() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
 
@@ -5837,7 +6028,12 @@ fn test_shell_state_cas_prevents_duplicate_idle() {
         "second idle transition must fail — already idle"
     );
     assert_eq!(
-        state.shell_states.get(sid).unwrap().load(Ordering::Relaxed),
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Relaxed),
         SHELL_IDLE
     );
 }
@@ -5848,6 +6044,7 @@ fn test_shell_state_idle_to_busy_on_real_output() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_IDLE));
 
@@ -5856,7 +6053,12 @@ fn test_shell_state_idle_to_busy_on_real_output() {
         "should transition idle → busy on real output"
     );
     assert_eq!(
-        state.shell_states.get(sid).unwrap().load(Ordering::Relaxed),
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Relaxed),
         SHELL_BUSY
     );
 }
@@ -5902,9 +6104,11 @@ fn test_backup_idle_blocked_when_chunks_arriving() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "test-session";
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_BUSY));
     state
+        .session_maps
         .session_states
         .insert(sid.to_string(), crate::state::SessionState::default());
 
@@ -5914,6 +6118,7 @@ fn test_backup_idle_blocked_when_chunks_arriving() {
         .unwrap()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(now - 600));
 
@@ -5988,19 +6193,23 @@ fn test_chunk_processor_dedup_status_task() {
     let sid = "test-cp-dedup";
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     state
+        .session_maps
         .silence_states
         .insert(sid.to_string(), silence.clone());
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         sid.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_NULL),
     );
     state
+        .grid
         .vt_log_buffers
         .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
     state
+        .session_maps
         .output_buffers
         .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(0));
 
@@ -6071,19 +6280,23 @@ fn user_submission_rearms_the_api_error_dedup() {
     // The startup grace drops ApiError outright; this test is about dedup.
     silence.lock().startup_settled = true;
     state
+        .session_maps
         .silence_states
         .insert(sid.to_string(), silence.clone());
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         sid.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_NULL),
     );
     state
+        .grid
         .vt_log_buffers
         .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
     state
+        .session_maps
         .output_buffers
         .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(0));
 
@@ -6130,22 +6343,26 @@ fn test_chunk_processor_status_dedup_is_scoped_to_turn() {
     let sid = "test-cp-dedup-turn";
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     state
+        .session_maps
         .silence_states
         .insert(sid.to_string(), silence.clone());
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         sid.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_NULL),
     );
     state
+        .grid
         .vt_log_buffers
         .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
     state
+        .session_maps
         .output_buffers
         .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(0));
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         sid.to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -6197,6 +6414,7 @@ fn test_chunk_processor_status_dedup_is_scoped_to_turn() {
 
     // The user submits again: a new turn begins.
     state
+        .session_maps
         .session_states
         .get_mut(sid)
         .expect("session state")
@@ -6223,19 +6441,23 @@ fn test_chunk_processor_dedup_choice_prompt() {
     let sid = "test-cp-choice-dedup";
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     state
+        .session_maps
         .silence_states
         .insert(sid.to_string(), silence.clone());
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         sid.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_NULL),
     );
     state
+        .grid
         .vt_log_buffers
         .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
     state
+        .session_maps
         .output_buffers
         .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(0));
 
@@ -6294,19 +6516,23 @@ fn test_chunk_processor_question_dedup_retires_when_prompt_leaves_screen() {
     let sid = "test-cp-question-dedup";
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     state
+        .session_maps
         .silence_states
         .insert(sid.to_string(), silence.clone());
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         sid.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_NULL),
     );
     state
+        .grid
         .vt_log_buffers
         .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
     state
+        .session_maps
         .output_buffers
         .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(0));
 
@@ -6374,19 +6600,23 @@ fn test_chunk_processor_choice_prompt_dedup_retires_when_dialog_leaves_screen() 
     let sid = "test-cp-choice-retire";
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     state
+        .session_maps
         .silence_states
         .insert(sid.to_string(), silence.clone());
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         sid.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_NULL),
     );
     state
+        .grid
         .vt_log_buffers
         .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
     state
+        .session_maps
         .output_buffers
         .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(0));
 
@@ -7120,6 +7350,7 @@ fn mark_session_exited_pushes_state_change_to_parent_inbox() {
 
     // Register parent-child relationship
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     // Pre-init parent inbox
@@ -7340,6 +7571,7 @@ fn try_shell_transition_busy_to_idle_pushes_state_change_to_parent_inbox() {
     let parent_id = "parent-idle-sess";
 
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
@@ -7348,12 +7580,15 @@ fn try_shell_transition_busy_to_idle_pushes_state_change_to_parent_inbox() {
         agent_type: Some("claude".to_string()),
         ..Default::default()
     };
-    state.session_states.insert(child_id.to_string(), ss);
-    state.shell_states.insert(
+    state
+        .session_maps
+        .session_states
+        .insert(child_id.to_string(), ss);
+    state.session_maps.shell_states.insert(
         child_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
-    state.silence_states.insert(
+    state.session_maps.silence_states.insert(
         child_id.to_string(),
         Arc::new(Mutex::new(SilenceState::new())),
     );
@@ -7382,10 +7617,11 @@ fn background_work_defers_parent_idle_until_descendants_finish() {
     let child_id = "child-background-sess";
     let parent_id = "parent-background-sess";
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         child_id.to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -7393,11 +7629,11 @@ fn background_work_defers_parent_idle_until_descendants_finish() {
             ..Default::default()
         },
     );
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         child_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
-    state.silence_states.insert(
+    state.session_maps.silence_states.insert(
         child_id.to_string(),
         Arc::new(Mutex::new(SilenceState::new())),
     );
@@ -7423,10 +7659,11 @@ fn background_work_defers_declared_completion_without_generic_idle() {
     let child_id = "child-background-completed";
     let parent_id = "parent-background-completed";
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         child_id.to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -7434,7 +7671,7 @@ fn background_work_defers_declared_completion_without_generic_idle() {
             ..Default::default()
         },
     );
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         child_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
@@ -7442,6 +7679,7 @@ fn background_work_defers_declared_completion_without_generic_idle() {
     silence.mark_suggest_candidate(vec!["Review result".to_string()], 0);
     let silence = Arc::new(Mutex::new(silence));
     state
+        .session_maps
         .silence_states
         .insert(child_id.to_string(), silence.clone());
 
@@ -7460,15 +7698,21 @@ fn cursor_prefix_completion_preserves_background_epoch_release() {
     let child_id = "child-background-cursor-completed";
     agent_session(&state, child_id, SHELL_IDLE);
     state
+        .session_maps
         .session_states
         .get_mut(child_id)
         .unwrap()
         .background_work = true;
-    state.vt_log_buffers.insert(
+    state.grid.vt_log_buffers.insert(
         child_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.silence_states.get(child_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk("........................| C ]", &silence, child_id, &state);
@@ -7505,11 +7749,16 @@ fn physical_cursor_suggest_completes_after_wrapped_background_probe_clears() {
         let state = crate::state::tests_support::make_test_app_state();
         let child_id = format!("wrapped-background-physical-suggest-{wrap_count}");
         agent_session(&state, &child_id, SHELL_IDLE);
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             child_id.clone(),
             Mutex::new(crate::state::VtLogBuffer::new(10, 80, 1000)),
         );
-        let silence = state.silence_states.get(&child_id).unwrap().clone();
+        let silence = state
+            .session_maps
+            .silence_states
+            .get(&child_id)
+            .unwrap()
+            .clone();
         let mut processor = ChunkProcessor::new(None, None);
 
         note_submitted_input(&state, &child_id);
@@ -7520,12 +7769,23 @@ fn physical_cursor_suggest_completes_after_wrapped_background_probe_clears() {
             &state,
         );
         {
-            let mut session = state.session_states.get_mut(&child_id).unwrap();
+            let mut session = state
+                .session_maps
+                .session_states
+                .get_mut(&child_id)
+                .unwrap();
             session.background_probe_turn_epoch = Some(1);
             session.background_probe_after_generation = Some(0);
         }
         assert!(set_background_work_for_epoch(&state, &child_id, 1, 1, true));
-        assert!(state.session_states.get(&child_id).unwrap().background_work);
+        assert!(
+            state
+                .session_maps
+                .session_states
+                .get(&child_id)
+                .unwrap()
+                .background_work
+        );
 
         assert!(try_shell_transition(
             &state, &child_id, SHELL_BUSY, SHELL_IDLE, false,
@@ -7569,11 +7829,16 @@ fn identical_suggest_reopens_only_after_fresh_work_in_a_new_turn() {
     let state = crate::state::tests_support::make_test_app_state();
     let child_id = "suggest-multiple-turns";
     agent_session(&state, child_id, SHELL_IDLE);
-    state.vt_log_buffers.insert(
+    state.grid.vt_log_buffers.insert(
         child_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.silence_states.get(child_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
     let marker = "suggest: [ lifecycle fixed | close smoke | continue parity ]";
 
@@ -7589,7 +7854,15 @@ fn identical_suggest_reopens_only_after_fresh_work_in_a_new_turn() {
     );
 
     note_submitted_input(&state, child_id);
-    assert_eq!(state.session_states.get(child_id).unwrap().turn_epoch, 1);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(child_id)
+            .unwrap()
+            .turn_epoch,
+        1
+    );
 
     // A previous-turn row can repaint as the input scrolls. Submission by
     // itself must not reopen the content deduplication boundary.
@@ -7622,11 +7895,16 @@ fn cursor_prefix_rejects_stale_suffix_then_emits_real_completion_once() {
         let state = crate::state::tests_support::make_test_app_state();
         let child_id = format!("cursor-stale-suffix-{index}");
         agent_session(&state, &child_id, SHELL_IDLE);
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             child_id.clone(),
             Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
         );
-        let silence = state.silence_states.get(&child_id).unwrap().clone();
+        let silence = state
+            .session_maps
+            .silence_states
+            .get(&child_id)
+            .unwrap()
+            .clone();
         let mut processor = ChunkProcessor::new(None, None);
 
         processor.process_chunk(
@@ -7673,11 +7951,16 @@ fn wrapped_suggest_reconstructs_unchanged_anchor_across_chunks() {
         let state = crate::state::tests_support::make_test_app_state();
         let child_id = format!("wrapped-suggest-across-chunks-{index}");
         agent_session(&state, &child_id, SHELL_IDLE);
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             child_id.clone(),
             Mutex::new(crate::state::VtLogBuffer::new(24, 14, 1000)),
         );
-        let silence = state.silence_states.get(&child_id).unwrap().clone();
+        let silence = state
+            .session_maps
+            .silence_states
+            .get(&child_id)
+            .unwrap()
+            .clone();
         let mut processor = ChunkProcessor::new(None, None);
 
         processor.process_chunk(
@@ -7719,11 +8002,16 @@ fn bounded_cursor_prefix_refusal_suppresses_structured_completion() {
     ] {
         let state = crate::state::tests_support::make_test_app_state();
         agent_session(&state, child_id, SHELL_IDLE);
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             child_id.to_string(),
             Mutex::new(crate::state::VtLogBuffer::new(24, columns, 1000)),
         );
-        let silence = state.silence_states.get(child_id).unwrap().clone();
+        let silence = state
+            .session_maps
+            .silence_states
+            .get(child_id)
+            .unwrap()
+            .clone();
         let mut processor = ChunkProcessor::new(None, None);
 
         processor.process_chunk(&token, &silence, child_id, &state);
@@ -7737,11 +8025,16 @@ fn wrapped_suggest_requires_complete_non_nested_prefix() {
     let state = crate::state::tests_support::make_test_app_state();
     let child_id = "wrapped-suggest-incomplete";
     agent_session(&state, child_id, SHELL_IDLE);
-    state.vt_log_buffers.insert(
+    state.grid.vt_log_buffers.insert(
         child_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 10, 1000)),
     );
-    let silence = state.silence_states.get(child_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk("suggest: [", &silence, child_id, &state);
@@ -7760,10 +8053,11 @@ fn stale_background_clear_cannot_emit_after_new_turn() {
     let child_id = "child-background-race";
     let parent_id = "parent-background-race";
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         child_id.to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -7772,11 +8066,11 @@ fn stale_background_clear_cannot_emit_after_new_turn() {
             ..Default::default()
         },
     );
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         child_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
-    state.silence_states.insert(
+    state.session_maps.silence_states.insert(
         child_id.to_string(),
         Arc::new(Mutex::new(SilenceState::new())),
     );
@@ -7785,7 +8079,14 @@ fn stale_background_clear_cannot_emit_after_new_turn() {
     assert!(!set_background_work_for_epoch(
         &state, child_id, 7, 1, false
     ));
-    assert!(state.session_states.get(child_id).unwrap().background_work);
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(child_id)
+            .unwrap()
+            .background_work
+    );
     assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
 }
 
@@ -7796,11 +8097,13 @@ fn background_snapshot_teardown_does_not_recreate_lifecycle_or_notify() {
     let parent_id = "background-teardown-parent";
     agent_session(&state, child_id, SHELL_IDLE);
     state
+        .session_maps
         .session_states
         .get_mut(child_id)
         .unwrap()
         .background_work = true;
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
@@ -7812,12 +8115,12 @@ fn background_snapshot_teardown_does_not_recreate_lifecycle_or_notify() {
         1,
         false,
         || {
-            state.silence_states.remove(child_id);
-            state.shell_states.remove(child_id);
-            state.session_states.remove(child_id);
+            state.session_maps.silence_states.remove(child_id);
+            state.session_maps.shell_states.remove(child_id);
+            state.session_maps.session_states.remove(child_id);
         },
     ));
-    assert!(!state.silence_states.contains_key(child_id));
+    assert!(!state.session_maps.silence_states.contains_key(child_id));
     assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
 }
 
@@ -7825,7 +8128,7 @@ fn background_snapshot_teardown_does_not_recreate_lifecycle_or_notify() {
 fn failed_or_invalid_cached_snapshot_preserves_background_work() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "background-snapshot-failure";
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         session_id.to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -7849,6 +8152,7 @@ fn failed_or_invalid_cached_snapshot_preserves_background_work() {
     ));
     assert!(
         state
+            .session_maps
             .session_states
             .get(session_id)
             .unwrap()
@@ -7862,10 +8166,11 @@ fn cached_snapshot_detects_background_process_exit() {
     let child_id = "child-background-exit";
     let parent_id = "parent-background-exit";
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         child_id.to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -7874,11 +8179,11 @@ fn cached_snapshot_detects_background_process_exit() {
             ..Default::default()
         },
     );
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         child_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
-    state.silence_states.insert(
+    state.session_maps.silence_states.insert(
         child_id.to_string(),
         Arc::new(Mutex::new(SilenceState::new())),
     );
@@ -7892,7 +8197,14 @@ fn cached_snapshot_detects_background_process_exit() {
         4,
         Some((2, exited)),
     ));
-    assert!(!state.session_states.get(child_id).unwrap().background_work);
+    assert!(
+        !state
+            .session_maps
+            .session_states
+            .get(child_id)
+            .unwrap()
+            .background_work
+    );
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
     assert_eq!(content["state"], "idle");
@@ -7903,7 +8215,7 @@ fn cached_snapshot_detects_background_process_exit() {
 fn standby_refuses_session_with_background_work() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "background-standby";
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         session_id.to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -7912,7 +8224,7 @@ fn standby_refuses_session_with_background_work() {
         },
     );
     assert_eq!(standby_session(&state, session_id), Ok(false));
-    assert!(!state.standby_sessions.contains_key(session_id));
+    assert!(!state.session_maps.standby_sessions.contains_key(session_id));
 }
 
 #[cfg(unix)]
@@ -7920,7 +8232,7 @@ fn standby_refuses_session_with_background_work() {
 fn standby_refuses_session_with_pending_background_probe() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "background-probe-standby";
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         session_id.to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -7932,7 +8244,7 @@ fn standby_refuses_session_with_pending_background_probe() {
 
     assert!(background_activity_blocks_standby(&state, session_id));
     assert_eq!(standby_session(&state, session_id), Ok(false));
-    assert!(!state.standby_sessions.contains_key(session_id));
+    assert!(!state.session_maps.standby_sessions.contains_key(session_id));
 }
 
 #[test]
@@ -7942,23 +8254,25 @@ fn declared_completion_does_not_emit_ambiguous_idle_lifecycle() {
     let parent_id = "parent-completed-sess";
 
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         child_id.to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
             ..Default::default()
         },
     );
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         child_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
     let mut silence = SilenceState::new();
     silence.mark_suggest_candidate(vec!["Review result".to_string()], 0);
     state
+        .session_maps
         .silence_states
         .insert(child_id.to_string(), Arc::new(Mutex::new(silence)));
 
@@ -7970,7 +8284,12 @@ fn declared_completion_does_not_emit_ambiguous_idle_lifecycle() {
         state.agent_inbox.get(parent_id).unwrap().is_empty(),
         "the suggest drain must publish completed instead of an earlier idle"
     );
-    let silence = state.silence_states.get(child_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
     assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     assert_eq!(inbox.len(), 1);
@@ -7984,6 +8303,7 @@ fn pending_initial_prompt_timeout_notifies_parent_once() {
     let child_id = "child-prompt-timeout";
     let parent_id = "parent-prompt-timeout";
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
@@ -8010,14 +8330,16 @@ fn try_shell_transition_non_agent_session_does_not_push_idle_notification() {
     let parent_id = "parent-non-agent-sess";
 
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
     // No agent_type set — plain shell session
     state
+        .session_maps
         .session_states
         .insert(child_id.to_string(), crate::state::SessionState::default());
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         child_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
@@ -8040,6 +8362,7 @@ fn try_shell_transition_exit_path_does_not_push_idle_to_parent() {
     let parent_id = "parent-exit-path";
 
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
@@ -8047,8 +8370,11 @@ fn try_shell_transition_exit_path_does_not_push_idle_to_parent() {
         agent_type: Some("claude".to_string()),
         ..Default::default()
     };
-    state.session_states.insert(child_id.to_string(), ss);
-    state.shell_states.insert(
+    state
+        .session_maps
+        .session_states
+        .insert(child_id.to_string(), ss);
+    state.session_maps.shell_states.insert(
         child_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
@@ -8071,15 +8397,19 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
     let mcp_sid = "mcp-sess-cleanup";
 
     state
+        .session_maps
         .session_parent
         .insert(sid.to_string(), "parent-sess".to_string());
     state
+        .session_maps
         .shell_state_since_ms
         .insert(sid.to_string(), std::sync::atomic::AtomicU64::new(42));
     state
-        .mcp_to_session
+        .mcp
+        .to_session
         .insert(mcp_sid.to_string(), sid.to_string());
     state
+        .mcp
         .session_to_mcp
         .insert(sid.to_string(), vec![mcp_sid.to_string()]);
     state.peer_agents.insert(
@@ -8098,19 +8428,19 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
     tombstone_transient_cleanup(sid, &state);
 
     assert!(
-        !state.session_parent.contains_key(sid),
+        !state.session_maps.session_parent.contains_key(sid),
         "session_parent must be removed"
     );
     assert!(
-        !state.shell_state_since_ms.contains_key(sid),
+        !state.session_maps.shell_state_since_ms.contains_key(sid),
         "shell_state_since_ms must be removed"
     );
     assert!(
-        !state.mcp_to_session.contains_key(mcp_sid),
+        !state.mcp.to_session.contains_key(mcp_sid),
         "mcp_to_session entry must be removed"
     );
     assert!(
-        !state.session_to_mcp.contains_key(sid),
+        !state.mcp.session_to_mcp.contains_key(sid),
         "session_to_mcp entry must be removed"
     );
     assert!(!state.peer_agents.contains_key(sid));
@@ -8123,9 +8453,10 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
 fn agent_session(state: &crate::state::AppState, sid: &str, shell: u8) {
     use std::sync::atomic::AtomicU8;
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(shell));
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         sid.to_string(),
         crate::state::SessionState {
             agent_type: Some("claude".to_string()),
@@ -8135,6 +8466,7 @@ fn agent_session(state: &crate::state::AppState, sid: &str, shell: u8) {
     let mut silence = SilenceState::new();
     silence.idle_confirmed = shell == SHELL_IDLE;
     state
+        .session_maps
         .silence_states
         .insert(sid.to_string(), Arc::new(Mutex::new(silence)));
 }
@@ -8158,9 +8490,14 @@ fn flush_one_pending_as_submitted(state: &crate::state::AppState, sid: &str) {
 
 fn completed_agent_session(state: &crate::state::AppState, sid: &str) {
     agent_session(state, sid, SHELL_IDLE);
-    state.session_states.get_mut(sid).unwrap().suggested_actions =
-        Some(vec!["Review result".to_string()]);
     state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .suggested_actions = Some(vec!["Review result".to_string()]);
+    state
+        .session_maps
         .silence_states
         .get(sid)
         .unwrap()
@@ -8201,6 +8538,7 @@ fn submitted_input_lifecycle_peer_injection_starts_new_turn_and_clears_completio
     assert!(snapshot.suggested_actions.is_none());
     assert!(
         !state
+            .session_maps
             .silence_states
             .get("completed")
             .unwrap()
@@ -8223,6 +8561,7 @@ fn submitted_epoch_and_busy_transition_are_one_critical_section() {
     let observer = std::thread::spawn(move || {
         start_rx.recv().unwrap();
         let silence = observer_state
+            .session_maps
             .silence_states
             .get(session_id)
             .unwrap()
@@ -8234,7 +8573,15 @@ fn submitted_epoch_and_busy_transition_are_one_critical_section() {
     });
 
     note_submitted_input_with_hook(&state, session_id, || {
-        assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 1);
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .turn_epoch,
+            1
+        );
         start_tx.send(()).unwrap();
         assert!(
             lock_held_rx.recv().unwrap(),
@@ -8249,6 +8596,7 @@ fn submitted_epoch_and_busy_transition_are_one_critical_section() {
     observer.join().unwrap();
     assert_eq!(
         state
+            .session_maps
             .shell_states
             .get(session_id)
             .unwrap()
@@ -8266,6 +8614,7 @@ fn idle_parent_notification_finishes_before_new_turn_reservation() {
     let parent_id = "idle-race-parent";
     agent_session(&state, child_id, SHELL_BUSY);
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
@@ -8277,6 +8626,7 @@ fn idle_parent_notification_finishes_before_new_turn_reservation() {
     let submitter = std::thread::spawn(move || {
         start_rx.recv().unwrap();
         let silence = submitter_state
+            .session_maps
             .silence_states
             .get(child_id)
             .unwrap()
@@ -8305,13 +8655,22 @@ fn idle_parent_notification_finishes_before_new_turn_reservation() {
 
     assert_eq!(
         state
+            .session_maps
             .shell_states
             .get(child_id)
             .unwrap()
             .load(Ordering::Acquire),
         SHELL_BUSY
     );
-    assert_eq!(state.session_states.get(child_id).unwrap().turn_epoch, 1);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(child_id)
+            .unwrap()
+            .turn_epoch,
+        1
+    );
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     assert_eq!(inbox.len(), 1);
     let payload: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
@@ -8327,6 +8686,7 @@ fn new_turn_wins_before_queued_old_idle_transition() {
     let parent_id = "inverse-idle-parent";
     agent_session(&state, child_id, SHELL_BUSY);
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
@@ -8336,6 +8696,7 @@ fn new_turn_wins_before_queued_old_idle_transition() {
     let old_transition_state = Arc::clone(&state);
     let old_transition = std::thread::spawn(move || {
         let observed_turn_epoch = old_transition_state
+            .session_maps
             .session_states
             .get(child_id)
             .map(|session| session.turn_epoch);
@@ -8367,9 +8728,18 @@ fn new_turn_wins_before_queued_old_idle_transition() {
         !old_transition.join().unwrap(),
         "an idle transition from the prior epoch must not publish"
     );
-    assert_eq!(state.session_states.get(child_id).unwrap().turn_epoch, 1);
     assert_eq!(
         state
+            .session_maps
+            .session_states
+            .get(child_id)
+            .unwrap()
+            .turn_epoch,
+        1
+    );
+    assert_eq!(
+        state
+            .session_maps
             .shell_states
             .get(child_id)
             .unwrap()
@@ -8391,10 +8761,26 @@ fn explicit_idle_evidence_from_prior_turn_cannot_idle_new_submission() {
         note_submitted_input(&state, session_id)
     });
 
-    assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 1);
-    assert_new_turn_silence_evidence(&state.silence_states.get(session_id).unwrap().lock());
     assert_eq!(
         state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .turn_epoch,
+        1
+    );
+    assert_new_turn_silence_evidence(
+        &state
+            .session_maps
+            .silence_states
+            .get(session_id)
+            .unwrap()
+            .lock(),
+    );
+    assert_eq!(
+        state
+            .session_maps
             .shell_states
             .get(session_id)
             .unwrap()
@@ -8420,7 +8806,12 @@ fn timer_idle_evidence_from_prior_turn_cannot_mutate_new_submission() {
 
         let transition = try_timer_idle_transition(
             &state,
-            &state.silence_states.get(session_id).unwrap().clone(),
+            &state
+                .session_maps
+                .silence_states
+                .get(session_id)
+                .unwrap()
+                .clone(),
             session_id,
             activity,
             Some("claude"),
@@ -8428,9 +8819,17 @@ fn timer_idle_evidence_from_prior_turn_cannot_mutate_new_submission() {
         );
 
         assert!(!transition.transitioned);
-        assert_new_turn_silence_evidence(&state.silence_states.get(session_id).unwrap().lock());
+        assert_new_turn_silence_evidence(
+            &state
+                .session_maps
+                .silence_states
+                .get(session_id)
+                .unwrap()
+                .lock(),
+        );
         assert_eq!(
             state
+                .session_maps
                 .shell_states
                 .get(session_id)
                 .unwrap()
@@ -8447,7 +8846,7 @@ fn silence_idle_decision_from_prior_turn_cannot_idle_new_submission() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "silence-idle-epoch";
     agent_session(&state, session_id, SHELL_BUSY);
-    state.last_output_ms.insert(
+    state.session_maps.last_output_ms.insert(
         session_id.to_string(),
         AtomicU64::new(now_epoch_ms().saturating_sub(AGENT_IDLE_MS + 1)),
     );
@@ -8466,10 +8865,26 @@ fn silence_idle_decision_from_prior_turn_cannot_idle_new_submission() {
         true,
         decision.turn_epoch,
     ));
-    assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 1);
-    assert_new_turn_silence_evidence(&state.silence_states.get(session_id).unwrap().lock());
     assert_eq!(
         state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .turn_epoch,
+        1
+    );
+    assert_new_turn_silence_evidence(
+        &state
+            .session_maps
+            .silence_states
+            .get(session_id)
+            .unwrap()
+            .lock(),
+    );
+    assert_eq!(
+        state
+            .session_maps
             .shell_states
             .get(session_id)
             .unwrap()
@@ -8486,9 +8901,11 @@ fn parent_dispatch_runs_after_child_lifecycle_lock_release() {
     agent_session(&state, child_id, SHELL_BUSY);
     agent_session(&state, parent_id, SHELL_IDLE);
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     let observed_turn_epoch = state
+        .session_maps
         .session_states
         .get(child_id)
         .map(|session| session.turn_epoch);
@@ -8506,7 +8923,12 @@ fn parent_dispatch_runs_after_child_lifecycle_lock_release() {
             after_epoch_snapshot: || {},
             after_cas: || {},
             before_parent_dispatch: || {
-                let silence = state.silence_states.get(child_id).unwrap().clone();
+                let silence = state
+                    .session_maps
+                    .silence_states
+                    .get(child_id)
+                    .unwrap()
+                    .clone();
                 assert!(
                     silence.try_lock().is_some(),
                     "child lifecycle lock must be released before parent PTY dispatch"
@@ -8530,6 +8952,7 @@ fn submitted_input_lifecycle_ready_before_status_line_is_not_stale_completed() {
     flush_one_pending_as_submitted(&state, "quick-turn");
 
     state
+        .session_maps
         .silence_states
         .get("quick-turn")
         .unwrap()
@@ -8563,6 +8986,7 @@ fn submitted_input_lifecycle_no_new_input_retains_completion() {
     );
     assert!(
         state
+            .session_maps
             .silence_states
             .get("unchanged")
             .unwrap()
@@ -8624,6 +9048,7 @@ fn injection_claim_is_refused_while_the_user_is_typing() {
     let mut buffer = InputLineBuffer::new();
     buffer.feed("half typed prompt");
     state
+        .session_maps
         .input_buffers
         .insert("typing-agent".to_string(), parking_lot::Mutex::new(buffer));
 
@@ -8635,6 +9060,7 @@ fn injection_claim_is_refused_while_the_user_is_typing() {
     );
     assert_eq!(
         state
+            .session_maps
             .shell_states
             .get("typing-agent")
             .map(|a| a.load(std::sync::atomic::Ordering::Relaxed)),
@@ -8651,7 +9077,7 @@ fn agent_submission_rejects_partial_composer_without_writing() {
     let bytes = insert_recording_session(&state, "submit-partial");
     let mut buffer = InputLineBuffer::new();
     buffer.feed("Boss draft");
-    state.input_buffers.insert(
+    state.session_maps.input_buffers.insert(
         "submit-partial".to_string(),
         parking_lot::Mutex::new(buffer),
     );
@@ -8666,6 +9092,7 @@ fn agent_submission_rejects_partial_composer_without_writing() {
     assert!(bytes.lock().unwrap().is_empty());
     assert_eq!(
         state
+            .session_maps
             .input_buffers
             .get("submit-partial")
             .unwrap()
@@ -8835,11 +9262,13 @@ fn codex_heuristic_idle_is_not_safe_for_injection_or_standby() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "codex-heuristic", SHELL_IDLE);
     state
+        .session_maps
         .session_states
         .get_mut("codex-heuristic")
         .unwrap()
         .agent_type = Some("codex".to_string());
     state
+        .session_maps
         .silence_states
         .get("codex-heuristic")
         .unwrap()
@@ -8850,6 +9279,7 @@ fn codex_heuristic_idle_is_not_safe_for_injection_or_standby() {
     assert!(!should_inject_now(&state, "codex-heuristic"));
 
     state
+        .session_maps
         .silence_states
         .get("codex-heuristic")
         .unwrap()
@@ -8865,9 +9295,11 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     let state = crate::state::tests_support::make_test_app_state();
     // Plain shell (no agent_type) — must never be injected into.
     state
+        .session_maps
         .shell_states
         .insert("shell".to_string(), AtomicU8::new(SHELL_IDLE));
     state
+        .session_maps
         .session_states
         .insert("shell".to_string(), crate::state::SessionState::default());
     assert!(!should_inject_now(&state, "shell"), "shell → never inject");
@@ -8875,9 +9307,10 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     // Agent idle but blocked on a CONFIDENT user-facing question (Ink menu,
     // cliclack prompt, "Action Required" title) — never answer it.
     state
+        .session_maps
         .shell_states
         .insert("q".to_string(), AtomicU8::new(SHELL_IDLE));
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         "q".to_string(),
         crate::state::SessionState {
             agent_type: Some("claude".to_string()),
@@ -8889,6 +9322,7 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     let mut ready_silence = SilenceState::new();
     ready_silence.idle_confirmed = true;
     state
+        .session_maps
         .silence_states
         .insert("ready".to_string(), Arc::new(Mutex::new(ready_silence)));
     assert!(
@@ -8900,9 +9334,10 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     // sets awaiting_input WITHOUT question_confident (codex parks here
     // permanently — story 091). Injection must proceed or delivery starves.
     state
+        .session_maps
         .shell_states
         .insert("ready".to_string(), AtomicU8::new(SHELL_IDLE));
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         "ready".to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -8946,6 +9381,7 @@ fn insert_recording_session(state: &AppState, session_id: &str) -> Arc<std::sync
         Box::new(RecordingWriter {
             bytes: Arc::clone(&bytes),
         }),
+        TtyMode::Raw,
     );
     bytes
 }
@@ -8991,9 +9427,11 @@ fn enqueue_refuses_shells_and_dead_sessions() {
     use std::sync::atomic::AtomicU8;
     let state = crate::state::tests_support::make_test_app_state();
     state
+        .session_maps
         .shell_states
         .insert("shell".to_string(), AtomicU8::new(SHELL_IDLE));
     state
+        .session_maps
         .session_states
         .insert("shell".to_string(), crate::state::SessionState::default());
     insert_recording_session(&state, "shell");
@@ -9149,7 +9587,7 @@ fn enqueue_never_overtakes_a_command_already_waiting() {
 }
 
 /// The defect this pair pins: `deliver_message_to_managed_pty` used to return
-/// `state.sessions.contains_key(session_id)` — "the session exists", not "the
+/// `state.session_maps.sessions.contains_key(session_id)` — "the session exists", not "the
 /// message was typed". Every call site read that as delivery and marked the
 /// message `TerminalDispatched`, and the waiter filter hides Terminal-owned
 /// messages, so a queued-but-never-typed message became invisible to
@@ -9261,6 +9699,7 @@ fn deliver_queues_for_idle_agent_with_partial_user_input() {
     let mut input = crate::input_line_buffer::InputLineBuffer::new();
     input.feed("draft in progress");
     state
+        .session_maps
         .input_buffers
         .insert("typing".to_string(), Mutex::new(input));
 
@@ -9339,6 +9778,7 @@ fn failed_not_started_injection_rolls_back_claim_and_requeues() {
     deliver_message_to_pty(&state, "idle", "now");
     assert!(
         state
+            .session_maps
             .shell_states
             .get("idle")
             .is_some_and(|state| state.load(Ordering::Acquire) == SHELL_IDLE),
@@ -9360,6 +9800,7 @@ fn real_activity_invalidates_injection_rollback_ownership() {
     agent_session(&state, "active", SHELL_IDLE);
     let claim = claim_idle_for_injection(&state, "active").expect("claim");
     state
+        .session_maps
         .silence_states
         .get("active")
         .unwrap()
@@ -9369,6 +9810,7 @@ fn real_activity_invalidates_injection_rollback_ownership() {
     assert!(!rollback_injection_claim(&state, "active", claim));
     assert!(
         state
+            .session_maps
             .shell_states
             .get("active")
             .is_some_and(|value| value.load(Ordering::Acquire) == SHELL_BUSY),
@@ -9434,10 +9876,27 @@ impl std::io::Write for FailingWriter {
 }
 
 #[cfg(unix)]
+/// The three line-discipline states `write_terminal_reply` must tell apart.
+/// `Cbreak` is not a curiosity: it is the one where `ICANON` and `ECHO`
+/// disagree, so it is the only case that can prove the gate keys on the right
+/// flag. A fresh `openpty` is `Cooked`.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum TtyMode {
+    /// `ICANON` + `ECHO` — a reply is painted on screen and never delivered.
+    Cooked,
+    /// `ICANON` off, `ECHO` on — ugly, but the reply IS read immediately.
+    Cbreak,
+    /// Both off — what an agent sets before it queries.
+    Raw,
+}
+
+#[cfg(unix)]
 fn insert_session_with_writer(
     state: &AppState,
     session_id: &str,
     writer: Box<dyn std::io::Write + Send>,
+    mode: TtyMode,
 ) {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -9447,10 +9906,25 @@ fn insert_session_with_writer(
             pixel_height: 0,
         })
         .expect("openpty");
+    if !matches!(mode, TtyMode::Cooked) {
+        let fd = pair.master.as_raw_fd().expect("master fd");
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        assert_eq!(unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) }, 0);
+        let mut termios = unsafe { termios.assume_init() };
+        termios.c_lflag &= !libc::ICANON;
+        if matches!(mode, TtyMode::Raw) {
+            termios.c_lflag &= !libc::ECHO;
+        }
+        assert_eq!(
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) },
+            0,
+            "setting the line discipline must succeed"
+        );
+    }
     let mut command = CommandBuilder::new("/bin/sh");
     command.args(["-c", "sleep 30"]);
     let child = pair.slave.spawn_command(command).expect("spawn shell");
-    state.sessions.insert(
+    state.session_maps.sessions.insert(
         session_id.to_string(),
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(writer)),
@@ -9478,6 +9952,7 @@ fn concurrent_user_input_and_terminal_reply_are_both_serialized() {
         Box::new(RecordingWriter {
             bytes: Arc::clone(&bytes),
         }),
+        TtyMode::Raw,
     );
 
     let writer = state.pty_writer("serialized-writes").unwrap();
@@ -9514,6 +9989,7 @@ fn multiple_terminal_replies_keep_reader_order() {
         Box::new(RecordingWriter {
             bytes: Arc::clone(&bytes),
         }),
+        TtyMode::Raw,
     );
 
     write_terminal_reply(&state, "reply-order", b"first", "test");
@@ -9521,18 +9997,75 @@ fn multiple_terminal_replies_keep_reader_order() {
     assert_eq!(*bytes.lock().unwrap(), b"firstsecond");
 }
 
+/// Claude Code emits `ESC[c` before it leaves cooked mode. Answering it there
+/// does not reach Claude — a canonical read blocks for a newline the reply
+/// never contains, and `ECHO` paints `ESC[?6c` as the literal `^[[?6c`, which
+/// is the garbage Boss saw above the startup banner (capture `f2bddfb0`,
+/// 2026-09-07). The querier re-asks from raw mode, so nothing is lost.
+#[cfg(unix)]
+#[test]
+fn terminal_reply_is_withheld_while_the_tty_is_canonical() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    insert_session_with_writer(
+        &state,
+        "echoing-tty",
+        Box::new(RecordingWriter {
+            bytes: Arc::clone(&bytes),
+        }),
+        TtyMode::Cooked,
+    );
+
+    write_terminal_reply(&state, "echoing-tty", b"\x1b[?6c", "DA1");
+    assert!(
+        bytes.lock().unwrap().is_empty(),
+        "a reply the querier cannot read must not be painted on its screen"
+    );
+}
+
+/// The case that decides which flag the gate reads. In cbreak the tty still
+/// echoes, so keying on `ECHO` would withhold here — but `ICANON` is off, so
+/// the querier reads the reply immediately and nothing will ever resend it.
+/// Withholding would trade Boss's cosmetic `^[[?6c` for a hung agent.
+#[cfg(unix)]
+#[test]
+fn terminal_reply_is_delivered_in_cbreak_even_though_the_tty_echoes() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    insert_session_with_writer(
+        &state,
+        "cbreak-tty",
+        Box::new(RecordingWriter {
+            bytes: Arc::clone(&bytes),
+        }),
+        TtyMode::Cbreak,
+    );
+
+    write_terminal_reply(&state, "cbreak-tty", b"\x1b[?6c", "DA1");
+    assert_eq!(
+        *bytes.lock().unwrap(),
+        b"\x1b[?6c",
+        "cbreak delivers the reply; withholding it would hang the querier"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn shared_pty_write_reports_writer_failure_and_teardown() {
     let state = crate::state::tests_support::make_test_app_state();
-    insert_session_with_writer(&state, "failed-writer", Box::new(FailingWriter));
+    insert_session_with_writer(
+        &state,
+        "failed-writer",
+        Box::new(FailingWriter),
+        TtyMode::Raw,
+    );
 
     let error = state
         .write_pty_parts("failed-writer", &[b"reply"])
         .expect_err("writer error must be observable");
     assert!(error.contains("injected PTY failure"), "{error}");
 
-    state.sessions.remove("failed-writer");
+    state.session_maps.sessions.remove("failed-writer");
     let error = state
         .write_pty_parts("failed-writer", &[b"late reply"])
         .expect_err("removed session must reject writes");
@@ -9549,12 +10082,14 @@ fn uncertain_injection_preserves_busy_and_surfaces_status_flag() {
 
     assert!(
         state
+            .session_maps
             .shell_states
             .get("uncertain")
             .is_some_and(|value| value.load(Ordering::Acquire) == SHELL_BUSY)
     );
     assert!(
         state
+            .session_maps
             .silence_states
             .get("uncertain")
             .unwrap()
@@ -9604,7 +10139,12 @@ fn deliver_reenqueue_recovers_message_when_idle_races_enqueue() {
         let timer = std::thread::spawn(move || {
             b2.wait();
             // Silence timer: BUSY→IDLE also runs flush_pending_injections on idle.
-            s2.silence_states.get("race").unwrap().lock().idle_confirmed = true;
+            s2.session_maps
+                .silence_states
+                .get("race")
+                .unwrap()
+                .lock()
+                .idle_confirmed = true;
             try_shell_transition(&s2, "race", SHELL_BUSY, SHELL_IDLE, false);
             emit_shell_state(&s2, "race", "idle");
             flush_pending_injections(&s2, "race");
@@ -9635,7 +10175,7 @@ fn deliver_reenqueue_recovers_message_when_idle_races_enqueue() {
 /// Insert a live VtLogBuffer at the given dims so the grid path in
 /// resize_session_core runs against a real grid.
 fn seed_vt_grid(state: &crate::state::AppState, sid: &str, rows: u16, cols: u16) {
-    state.vt_log_buffers.insert(
+    state.grid.vt_log_buffers.insert(
         sid.to_string(),
         Mutex::new(VtLogBuffer::new(rows, cols, 1000)),
     );
@@ -9671,7 +10211,7 @@ fn resize_rejects_zero_dims() {
     assert!(resize_session_core(&state, "s", 0, 80).is_err());
     assert!(resize_session_core(&state, "s", 24, 0).is_err());
     // A rejected resize must not even create a resize_locks entry.
-    assert!(!state.resize_locks.contains_key("s"));
+    assert!(!state.session_maps.resize_locks.contains_key("s"));
 }
 
 #[test]
@@ -9679,6 +10219,7 @@ fn resize_noop_guard_returns_none_on_matching_dims() {
     let state = crate::state::tests_support::make_test_app_state();
     // Pre-seed the last-applied dims, as if a prior resize reached the PTY.
     state
+        .session_maps
         .resize_locks
         .insert("s".to_string(), Arc::new(Mutex::new((24, 80))));
     // Same dims → no-op returning None WITHOUT touching the (absent) session.
@@ -9698,7 +10239,7 @@ fn resize_seeds_applied_from_grid_and_noops_at_startup_dims() {
     assert_eq!(resize_session_core(&state, "s", 24, 80), Ok(None));
     // The seed must have populated resize_locks with the live grid dims.
     assert_eq!(
-        *state.resize_locks.get("s").unwrap().lock(),
+        *state.session_maps.resize_locks.get("s").unwrap().lock(),
         (24, 80),
         "first resize must seed the last-applied dims from the live grid"
     );
@@ -9722,7 +10263,7 @@ fn spawn_real_pty_session(state: &crate::state::AppState, sid: &str, rows: u16, 
     let child = pair.slave.spawn_command(cmd).expect("spawn shell");
     let master = pair.master;
     let writer = master.take_writer().expect("writer");
-    state.sessions.insert(
+    state.session_maps.sessions.insert(
         sid.to_string(),
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(writer)),
@@ -9772,13 +10313,14 @@ fn concurrent_differing_resizes_leave_grid_and_pty_consistent() {
 
         // The recorded applied dims, the live grid dims, and the real PTY size
         // must all agree, and agree on one of the two racing targets.
-        let applied = *state.resize_locks.get(sid).unwrap().lock();
+        let applied = *state.session_maps.resize_locks.get(sid).unwrap().lock();
         let (grid_rows, grid_cols) = {
-            let vt = state.vt_log_buffers.get(sid).unwrap();
+            let vt = state.grid.vt_log_buffers.get(sid).unwrap();
             let vt = vt.lock();
             (vt.grid_screen_lines() as u16, vt.grid_columns() as u16)
         };
         let pty_size = state
+            .session_maps
             .sessions
             .get(sid)
             .unwrap()
@@ -9816,6 +10358,7 @@ fn idle_transition_emits_before_submitting_one_pending_message() {
     // The transition is driven by verified ready-screen/Stop evidence in
     // production. Model that evidence before testing its delivery side effect.
     state
+        .session_maps
         .silence_states
         .get("sess")
         .unwrap()
@@ -9856,9 +10399,10 @@ fn flush_keeps_pending_while_question_confident() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     use std::sync::atomic::AtomicU8;
     state
+        .session_maps
         .shell_states
         .insert("sess".to_string(), AtomicU8::new(SHELL_BUSY));
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         "sess".to_string(),
         crate::state::SessionState {
             agent_type: Some("claude".to_string()),
@@ -9871,11 +10415,12 @@ fn flush_keeps_pending_while_question_confident() {
     q.push_back(crate::state::PendingInjection::peer_message("later"));
     state.pending_injections.insert("sess".to_string(), q);
 
-    state.silence_states.insert(
+    state.session_maps.silence_states.insert(
         "sess".to_string(),
         Arc::new(Mutex::new(SilenceState::new())),
     );
     state
+        .session_maps
         .silence_states
         .get("sess")
         .unwrap()
@@ -9895,6 +10440,7 @@ fn flush_keeps_pending_while_question_confident() {
     // The question clears (user answered) while the session is already idle:
     // the unblock flush must drain the queue with no further transition.
     state
+        .session_maps
         .session_states
         .get_mut("sess")
         .unwrap()
@@ -9952,9 +10498,10 @@ fn ready_prompt_delivery_attempts_and_requeues_when_pty_is_missing() {
     use std::sync::atomic::AtomicU8;
     let state = crate::state::tests_support::make_test_app_state();
     state
+        .session_maps
         .shell_states
         .insert("codex".to_string(), AtomicU8::new(SHELL_IDLE));
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         "codex".to_string(),
         crate::state::SessionState {
             agent_type: Some("codex".to_string()),
@@ -9966,6 +10513,7 @@ fn ready_prompt_delivery_attempts_and_requeues_when_pty_is_missing() {
     let mut silence = SilenceState::new();
     silence.confirm_idle();
     state
+        .session_maps
         .silence_states
         .insert("codex".to_string(), Arc::new(Mutex::new(silence)));
     deliver_message_to_pty(&state, "codex", "[TUIC message from lead] go");
@@ -9987,6 +10535,7 @@ fn state_change_to_parent_without_managed_pty_stays_inbox_only() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     agent_session(&state, "parent", SHELL_BUSY);
     state
+        .session_maps
         .session_parent
         .insert("child".to_string(), "parent".to_string());
 
@@ -10030,6 +10579,7 @@ fn mark_session_exited_sends_single_exited_notification() {
     let parent_id = "parent-exit-dedup";
 
     state
+        .session_maps
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
@@ -10037,8 +10587,11 @@ fn mark_session_exited_sends_single_exited_notification() {
         agent_type: Some("claude".to_string()),
         ..Default::default()
     };
-    state.session_states.insert(child_id.to_string(), ss);
-    state.shell_states.insert(
+    state
+        .session_maps
+        .session_states
+        .insert(child_id.to_string(), ss);
+    state.session_maps.shell_states.insert(
         child_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
@@ -10162,11 +10715,12 @@ fn tuic_osc_block_invalid_action_ignored() {
 fn tuic_osc_state_transitions_shell_state() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-tuic-state";
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
     state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
 
@@ -10174,6 +10728,7 @@ fn tuic_osc_state_transitions_shell_state() {
     proc.handle_tuic_state("busy", session_id, &state);
 
     let current = state
+        .session_maps
         .shell_states
         .get(session_id)
         .unwrap()
@@ -10182,6 +10737,7 @@ fn tuic_osc_state_transitions_shell_state() {
 
     proc.handle_tuic_state("idle", session_id, &state);
     let current = state
+        .session_maps
         .shell_states
         .get(session_id)
         .unwrap()
@@ -10193,11 +10749,12 @@ fn tuic_osc_state_transitions_shell_state() {
 fn tuic_osc_state_emits_shell_state_event() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-tuic-emit";
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
     state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
 
@@ -10228,7 +10785,7 @@ fn tuic_osc_state_emits_shell_state_event() {
 fn tuic_osc_state_unknown_verb_ignored() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-tuic-unknown";
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
@@ -10237,6 +10794,7 @@ fn tuic_osc_state_unknown_verb_ignored() {
     proc.handle_tuic_state("thinking", session_id, &state);
 
     let current = state
+        .session_maps
         .shell_states
         .get(session_id)
         .unwrap()
@@ -10434,6 +10992,82 @@ fn historical_scenario_matrix_is_well_formed_and_fixture_backed() {
             );
         }
     }
+}
+
+/// The screen a capture leaves behind, rendered through the same VT the PTY hot
+/// path uses. A screen-activity adapter is a function of the rendered grid, not
+/// of the byte stream, so replaying to the grid is the only way a fixture can
+/// prove one: goose repaints its footer in place with `\r\x1b[2K`, and asserting
+/// on raw bytes would pass on output no terminal would ever display.
+fn replay_final_screen(bytes: &[u8]) -> Vec<String> {
+    let mut vt_log = crate::state::VtLogBuffer::new(41, 128, 2000);
+    for record in crate::pty_capture::decode(bytes).expect("valid capture") {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            vt_log.process(&record.data);
+        }
+    }
+    vt_log.screen_rows()
+}
+
+/// goose 1.49.0, captured live (#699-c6e0): the composer footer is on screen and
+/// nothing is running, so the session must read Ready. Without this the OSC 133
+/// busy bit set once by the long-lived `goose session` command survives for the
+/// whole process and the tab never leaves "working".
+#[test]
+fn goose_idle_capture_reads_ready() {
+    let screen = replay_final_screen(&agent_prompt_fixture("goose-1.49.0-idle.tcap"));
+    assert_eq!(
+        detect_agent_screen_activity(Some("goose"), &screen),
+        AgentScreenActivity::Ready,
+        "screen: {screen:#?}"
+    );
+}
+
+/// The same session mid-turn. The spinner glyph cycles `◐◓◒` and the message
+/// beside it is whimsical, so the assertion rests on the interrupt hint — the
+/// one part of that row goose is not free to reword without changing what it
+/// offers the user.
+#[test]
+fn goose_mid_turn_capture_reads_working() {
+    let screen = replay_final_screen(&agent_prompt_fixture("goose-1.49.0-mid-turn.tcap"));
+    assert_eq!(
+        detect_agent_screen_activity(Some("goose"), &screen),
+        AgentScreenActivity::Working,
+        "screen: {screen:#?}"
+    );
+}
+
+/// A goose screen whose footer has not been painted yet must read Unknown, not
+/// Ready. Ready is the expensive direction to get wrong: it is what lets
+/// auto-standby SIGSTOP a live turn.
+#[test]
+fn goose_screen_without_a_footer_is_unknown() {
+    let rows: Vec<String> = [
+        "  __( O)>  ● new session · ollama gemma4:12b-mlx",
+        "   \\____)",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    assert_eq!(
+        detect_agent_screen_activity(Some("goose"), &rows),
+        AgentScreenActivity::Unknown
+    );
+}
+
+/// The whole point of the adapter: goose can now recover to idle from the
+/// screen, exactly as opencode does.
+#[test]
+fn goose_ready_screen_recovers_long_lived_shell_busy() {
+    assert!(has_ready_screen_adapter(Some("goose")));
+
+    let mut silence = SilenceState::new();
+    silence.note_explicit_state(SHELL_BUSY, false);
+    silence.note_real_activity();
+    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    assert!(silence.note_ready_screen());
+    assert!(!silence.explicit_busy);
+    assert!(silence.idle_confirmed);
 }
 
 /// What a replay saw on the way through, beyond the events it produced.
@@ -10841,6 +11475,7 @@ async fn await_session<F: Fn(&crate::state::SessionState) -> bool>(
 ) -> bool {
     for _ in 0..200 {
         if state
+            .session_maps
             .session_states
             .get(session_id)
             .is_some_and(|s| pred(&s))
@@ -10854,7 +11489,7 @@ async fn await_session<F: Fn(&crate::state::SessionState) -> bool>(
 
 fn accumulating_state(session_id: &str) -> Arc<AppState> {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         session_id.to_string(),
         crate::state::SessionState::default(),
     );
@@ -11001,7 +11636,10 @@ fn retraction_skips_a_session_with_a_live_choice_prompt() {
         dismiss_key: None,
         amend_key: None,
     });
-    state.session_states.insert("s1".to_string(), session);
+    state
+        .session_maps
+        .session_states
+        .insert("s1".to_string(), session);
 
     let mut rx = state.event_bus.subscribe();
     emit_question_cleared_if_stale(&state, "s1");
@@ -11017,7 +11655,7 @@ fn retraction_skips_a_session_with_a_live_choice_prompt() {
 #[test]
 fn retraction_is_emitted_as_question_cleared() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
-    state.session_states.insert(
+    state.session_maps.session_states.insert(
         "s1".to_string(),
         crate::state::SessionState {
             awaiting_input: true,
@@ -11045,6 +11683,7 @@ fn retraction_is_emitted_as_question_cleared() {
 fn retraction_is_silent_when_the_session_is_not_awaiting() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     state
+        .session_maps
         .session_states
         .insert("s1".to_string(), crate::state::SessionState::default());
 
@@ -11230,14 +11869,16 @@ fn question_suppress_resolves_from_agent_config() {
 fn osc133_a_transitions_to_idle_immediately() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-osc133-idle";
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
     state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
     state
+        .session_maps
         .has_osc133_integration
         .insert(session_id.to_string(), ());
 
@@ -11245,6 +11886,7 @@ fn osc133_a_transitions_to_idle_immediately() {
     proc.handle_osc133_event('A', "", session_id, &state);
 
     let current = state
+        .session_maps
         .shell_states
         .get(session_id)
         .unwrap()
@@ -11259,14 +11901,16 @@ fn osc133_a_transitions_to_idle_immediately() {
 fn osc133_c_transitions_to_busy_immediately() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-osc133-busy";
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
     state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
     state
+        .session_maps
         .has_osc133_integration
         .insert(session_id.to_string(), ());
 
@@ -11274,6 +11918,7 @@ fn osc133_c_transitions_to_busy_immediately() {
     proc.handle_osc133_event('C', "", session_id, &state);
 
     let current = state
+        .session_maps
         .shell_states
         .get(session_id)
         .unwrap()
@@ -11288,11 +11933,12 @@ fn osc133_c_transitions_to_busy_immediately() {
 fn osc133_a_emits_shell_state_event() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-osc133-emit";
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
     state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
 
@@ -11326,14 +11972,16 @@ fn osc133_d_does_not_transition_alone() {
     // D means "command finished" but idle only happens when A arrives (prompt shown)
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-osc133-d";
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
     state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
     state
+        .session_maps
         .has_osc133_integration
         .insert(session_id.to_string(), ());
 
@@ -11341,6 +11989,7 @@ fn osc133_d_does_not_transition_alone() {
     proc.handle_osc133_event('D', "0", session_id, &state);
 
     let current = state
+        .session_maps
         .shell_states
         .get(session_id)
         .unwrap()
@@ -11360,6 +12009,7 @@ fn osc133_d_without_c_records_no_outcome() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-osc133-d-no-c";
     state
+        .session_maps
         .has_osc133_integration
         .insert(session_id.to_string(), ());
 
@@ -11367,6 +12017,7 @@ fn osc133_d_without_c_records_no_outcome() {
     proc.handle_osc133_event('D', "1", session_id, &state);
 
     let recorded = state
+        .ai
         .session_knowledge
         .get(session_id)
         .map(|k| k.lock().commands.len())
@@ -11380,14 +12031,16 @@ fn osc133_c_then_d_records_outcome() {
     // command start, D finalizes the outcome.
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-osc133-c-then-d";
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
     state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
     state
+        .session_maps
         .has_osc133_integration
         .insert(session_id.to_string(), ());
 
@@ -11396,6 +12049,7 @@ fn osc133_c_then_d_records_outcome() {
     proc.handle_osc133_event('D', "0", session_id, &state);
 
     let recorded = state
+        .ai
         .session_knowledge
         .get(session_id)
         .map(|k| k.lock().commands.len())
@@ -11514,7 +12168,7 @@ fn close_pty_core_kills_agent_grandchild() {
         .metrics
         .active_sessions
         .fetch_add(1, Ordering::Relaxed);
-    state.sessions.insert(
+    state.session_maps.sessions.insert(
         sid.to_string(),
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(writer)),
@@ -11580,7 +12234,7 @@ fn process_kitty_actions_empty_is_noop() {
     let sid = "kitty-empty";
     process_kitty_actions(&[], sid, &state);
     assert!(
-        !state.kitty_states.contains_key(sid),
+        !state.session_maps.kitty_states.contains_key(sid),
         "empty action list must not allocate per-session kitty state"
     );
 }
@@ -11593,14 +12247,26 @@ fn process_kitty_actions_push_pop_query_tracks_flag_stack() {
     // Two pushes: current flags follow the top of the stack.
     process_kitty_actions(&[KittyAction::Push(1), KittyAction::Push(5)], sid, &state);
     assert_eq!(
-        state.kitty_states.get(sid).unwrap().lock().current_flags(),
+        state
+            .session_maps
+            .kitty_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .current_flags(),
         5
     );
 
     // Pop returns to the first pushed value.
     process_kitty_actions(&[KittyAction::Pop], sid, &state);
     assert_eq!(
-        state.kitty_states.get(sid).unwrap().lock().current_flags(),
+        state
+            .session_maps
+            .kitty_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .current_flags(),
         1
     );
 
@@ -11608,7 +12274,13 @@ fn process_kitty_actions_push_pop_query_tracks_flag_stack() {
     // and must leave the flag stack untouched.
     process_kitty_actions(&[KittyAction::Query], sid, &state);
     assert_eq!(
-        state.kitty_states.get(sid).unwrap().lock().current_flags(),
+        state
+            .session_maps
+            .kitty_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .current_flags(),
         1
     );
 }
@@ -11621,35 +12293,40 @@ fn cleanup_session_clears_transient_session_maps() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "cleanup-maps";
     state
+        .session_maps
         .output_buffers
         .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
-    state.vt_log_buffers.insert(
+    state.grid.vt_log_buffers.insert(
         sid.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
     state
+        .session_maps
         .kitty_states
         .insert(sid.to_string(), Mutex::new(KittyKeyboardState::new()));
     state
+        .session_maps
         .shell_states
         .insert(sid.to_string(), AtomicU8::new(SHELL_IDLE));
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(0));
     state
+        .session_maps
         .term_aliases
         .insert(sid.to_string(), "alias".to_string());
-    state.exit_codes.insert(sid.to_string(), 0);
+    state.session_maps.exit_codes.insert(sid.to_string(), 0);
 
     cleanup_session(sid, &state);
 
-    assert!(!state.output_buffers.contains_key(sid));
-    assert!(!state.vt_log_buffers.contains_key(sid));
-    assert!(!state.kitty_states.contains_key(sid));
-    assert!(!state.shell_states.contains_key(sid));
-    assert!(!state.last_output_ms.contains_key(sid));
-    assert!(!state.term_aliases.contains_key(sid));
-    assert!(!state.exit_codes.contains_key(sid));
+    assert!(!state.session_maps.output_buffers.contains_key(sid));
+    assert!(!state.grid.vt_log_buffers.contains_key(sid));
+    assert!(!state.session_maps.kitty_states.contains_key(sid));
+    assert!(!state.session_maps.shell_states.contains_key(sid));
+    assert!(!state.session_maps.last_output_ms.contains_key(sid));
+    assert!(!state.session_maps.term_aliases.contains_key(sid));
+    assert!(!state.session_maps.exit_codes.contains_key(sid));
 }
 
 /// Populate the per-session maps that no teardown phase used to own, plus the
@@ -11658,28 +12335,41 @@ fn cleanup_session_clears_transient_session_maps() {
 fn populate_unowned_session_maps(state: &crate::state::AppState, sid: &str) {
     use std::sync::atomic::{AtomicBool, AtomicU64};
     state
+        .session_maps
         .slash_mode
         .insert(sid.to_string(), AtomicBool::new(true));
     state
+        .session_maps
         .last_input_ms
         .insert(sid.to_string(), AtomicU64::new(7));
-    state.has_osc133_integration.insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_osc133_integration
+        .insert(sid.to_string(), ());
     state.agent_read_cursor.insert(sid.to_string(), 3);
     state
+        .session_maps
         .marker_stats
         .insert(sid.to_string(), crate::state::MarkerStats::default());
-    state.session_knowledge.insert(
+    state.ai.session_knowledge.insert(
         sid.to_string(),
         Mutex::new(crate::ai_agent::knowledge::SessionKnowledge::new()),
     );
-    state.session_visibility.insert(sid.to_string(), true);
-    state.ai_suggestions_enabled.insert(sid.to_string(), true);
-    state.file_sandboxes.insert(
+    state
+        .session_maps
+        .session_visibility
+        .insert(sid.to_string(), true);
+    state
+        .ai
+        .ai_suggestions_enabled
+        .insert(sid.to_string(), true);
+    state.ai.file_sandboxes.insert(
         sid.to_string(),
         crate::ai_agent::sandbox::FileSandbox::new(std::env::temp_dir()).expect("sandbox"),
     );
-    state.unrestricted_sessions.insert(sid.to_string(), ());
+    state.ai.unrestricted_sessions.insert(sid.to_string(), ());
     state
+        .session_maps
         .term_aliases
         .insert(sid.to_string(), "tc-9".to_string());
 }
@@ -11688,15 +12378,19 @@ fn populate_unowned_session_maps(state: &crate::state::AppState, sid: &str) {
 /// these; `cleanup_session` never did, which is the divergence F8 removes.
 fn populate_swarm_session_maps(state: &crate::state::AppState, sid: &str, mcp_sid: &str) {
     state
+        .session_maps
         .session_parent
         .insert(sid.to_string(), "parent-sess".to_string());
     state
+        .session_maps
         .shell_state_since_ms
         .insert(sid.to_string(), std::sync::atomic::AtomicU64::new(42));
     state
-        .mcp_to_session
+        .mcp
+        .to_session
         .insert(mcp_sid.to_string(), sid.to_string());
     state
+        .mcp
         .session_to_mcp
         .insert(sid.to_string(), vec![mcp_sid.to_string()]);
     state.peer_agents.insert(
@@ -11725,10 +12419,10 @@ fn closing_a_session_reaps_the_swarm_maps_too() {
 
     cleanup_session(sid, &state);
 
-    assert!(!state.session_parent.contains_key(sid));
-    assert!(!state.shell_state_since_ms.contains_key(sid));
-    assert!(!state.mcp_to_session.contains_key(mcp_sid));
-    assert!(!state.session_to_mcp.contains_key(sid));
+    assert!(!state.session_maps.session_parent.contains_key(sid));
+    assert!(!state.session_maps.shell_state_since_ms.contains_key(sid));
+    assert!(!state.mcp.to_session.contains_key(mcp_sid));
+    assert!(!state.mcp.session_to_mcp.contains_key(sid));
     assert!(!state.peer_agents.contains_key(sid));
     assert!(!state.agent_inbox.contains_key(sid));
     assert!(!state.agent_inbox_evictions.contains_key(sid));
@@ -11742,21 +12436,21 @@ fn closing_a_session_reaps_the_maps_no_phase_owned() {
 
     cleanup_session(sid, &state);
 
-    assert!(!state.slash_mode.contains_key(sid));
-    assert!(!state.last_input_ms.contains_key(sid));
-    assert!(!state.has_osc133_integration.contains_key(sid));
+    assert!(!state.session_maps.slash_mode.contains_key(sid));
+    assert!(!state.session_maps.last_input_ms.contains_key(sid));
+    assert!(!state.session_maps.has_osc133_integration.contains_key(sid));
     assert!(!state.agent_read_cursor.contains_key(sid));
-    assert!(!state.marker_stats.contains_key(sid));
-    assert!(!state.session_visibility.contains_key(sid));
-    assert!(!state.ai_suggestions_enabled.contains_key(sid));
-    assert!(!state.term_aliases.contains_key(sid));
+    assert!(!state.session_maps.marker_stats.contains_key(sid));
+    assert!(!state.session_maps.session_visibility.contains_key(sid));
+    assert!(!state.ai.ai_suggestions_enabled.contains_key(sid));
+    assert!(!state.session_maps.term_aliases.contains_key(sid));
 
     // Owned elsewhere, deliberately untouched — see the DEFERRED note on
     // remove_post_mortem_session_state. A sandbox belongs to a conversation
     // that outlives the PTY; knowledge is what the next session inherits.
-    assert!(state.file_sandboxes.contains_key(sid));
-    assert!(state.unrestricted_sessions.contains_key(sid));
-    assert!(state.session_knowledge.contains_key(sid));
+    assert!(state.ai.file_sandboxes.contains_key(sid));
+    assert!(state.ai.unrestricted_sessions.contains_key(sid));
+    assert!(state.ai.session_knowledge.contains_key(sid));
 }
 
 #[test]
@@ -11771,27 +12465,30 @@ fn a_tombstone_drops_live_process_state_and_keeps_the_post_mortem_maps() {
     tombstone_transient_cleanup(sid, &state);
 
     assert!(
-        !state.slash_mode.contains_key(sid),
+        !state.session_maps.slash_mode.contains_key(sid),
         "input mode belongs to the dead process"
     );
-    assert!(!state.last_input_ms.contains_key(sid));
+    assert!(!state.session_maps.last_input_ms.contains_key(sid));
     assert!(
-        !state.has_osc133_integration.contains_key(sid),
+        !state.session_maps.has_osc133_integration.contains_key(sid),
         "shell integration belongs to the dead shell"
     );
     assert!(!state.agent_read_cursor.contains_key(sid));
 
     assert!(
-        state.marker_stats.contains_key(sid),
+        state.session_maps.marker_stats.contains_key(sid),
         "marker tallies are exactly what a post-mortem question asks for"
     );
     assert!(
-        state.session_knowledge.contains_key(sid),
+        state.ai.session_knowledge.contains_key(sid),
         "knowledge is flushed to disk by a 2s task — reaping it here loses it"
     );
-    assert!(state.term_aliases.contains_key(sid), "the tab still shows");
-    assert!(state.session_visibility.contains_key(sid));
-    assert!(state.ai_suggestions_enabled.contains_key(sid));
+    assert!(
+        state.session_maps.term_aliases.contains_key(sid),
+        "the tab still shows"
+    );
+    assert!(state.session_maps.session_visibility.contains_key(sid));
+    assert!(state.ai.ai_suggestions_enabled.contains_key(sid));
 }
 
 #[test]
@@ -11808,18 +12505,18 @@ fn reaping_a_tombstone_leaves_no_session_state_behind() {
     tombstone_transient_cleanup(sid, &state);
     remove_post_mortem_session_state(sid, &state);
 
-    assert!(!state.term_aliases.contains_key(sid));
-    assert!(!state.marker_stats.contains_key(sid));
-    assert!(!state.session_visibility.contains_key(sid));
-    assert!(!state.ai_suggestions_enabled.contains_key(sid));
-    assert!(!state.last_output_ms.contains_key(sid));
-    assert!(!state.slash_mode.contains_key(sid));
+    assert!(!state.session_maps.term_aliases.contains_key(sid));
+    assert!(!state.session_maps.marker_stats.contains_key(sid));
+    assert!(!state.session_maps.session_visibility.contains_key(sid));
+    assert!(!state.ai.ai_suggestions_enabled.contains_key(sid));
+    assert!(!state.session_maps.last_output_ms.contains_key(sid));
+    assert!(!state.session_maps.slash_mode.contains_key(sid));
     assert!(!state.peer_agents.contains_key(sid));
 }
 
 /// Stamp a tombstone that is already older than the TTL.
 fn stamp_aged_tombstone(state: &crate::state::AppState, sid: &str, now_ms: u64) {
-    state.last_output_ms.insert(
+    state.session_maps.last_output_ms.insert(
         sid.to_string(),
         AtomicU64::new(now_ms - TOMBSTONE_TTL_MS - 1),
     );
@@ -11853,6 +12550,7 @@ fn a_session_id_reused_before_the_sweep_is_not_reaped() {
     let sid = "reused-id";
     stamp_aged_tombstone(&state, sid, now_ms);
     state
+        .session_maps
         .term_aliases
         .insert(sid.to_string(), "tc-1".to_string());
     let candidates = aged_out_tombstones(&state, now_ms);
@@ -11863,7 +12561,7 @@ fn a_session_id_reused_before_the_sweep_is_not_reaped() {
     reap_tombstones(&state, &candidates);
 
     assert!(
-        state.term_aliases.contains_key(sid),
+        state.session_maps.term_aliases.contains_key(sid),
         "the live session that reclaimed this id must keep its state"
     );
 }
@@ -11875,12 +12573,12 @@ fn cleanup_session_removes_session_and_decrements_metrics() {
     let sid = "cleanup-real";
     spawn_short_session(&state, sid);
     let before = state.metrics.active_sessions.load(Ordering::Relaxed);
-    assert!(state.sessions.contains_key(sid));
+    assert!(state.session_maps.sessions.contains_key(sid));
 
     cleanup_session(sid, &state);
 
     assert!(
-        !state.sessions.contains_key(sid),
+        !state.session_maps.sessions.contains_key(sid),
         "the live session entry must be removed"
     );
     assert_eq!(
@@ -11912,7 +12610,7 @@ fn spawn_short_session(state: &crate::state::AppState, sid: &str) {
         .metrics
         .active_sessions
         .fetch_add(1, Ordering::Relaxed);
-    state.sessions.insert(
+    state.session_maps.sessions.insert(
         sid.to_string(),
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(writer)),
@@ -12038,7 +12736,10 @@ fn wake_session_returns_false_when_not_in_standby() {
 fn wake_session_errors_and_consumes_entry_when_session_missing() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "parked-but-gone";
-    state.standby_sessions.insert(sid.to_string(), 0);
+    state
+        .session_maps
+        .standby_sessions
+        .insert(sid.to_string(), 0);
 
     let res = wake_session(&state, sid);
 
@@ -12048,7 +12749,7 @@ fn wake_session_errors_and_consumes_entry_when_session_missing() {
     );
     assert!(res.unwrap_err().contains("Session not found"));
     assert!(
-        !state.standby_sessions.contains_key(sid),
+        !state.session_maps.standby_sessions.contains_key(sid),
         "the standby entry is consumed even on the error path"
     );
 }
@@ -12186,23 +12887,27 @@ fn chunk_trace_state(sid: &str) -> (Arc<AppState>, Arc<Mutex<SilenceState>>) {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     state
+        .session_maps
         .silence_states
         .insert(sid.to_string(), silence.clone());
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         sid.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_NULL),
     );
     state
+        .grid
         .vt_log_buffers
         .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(41, 128, 2000)));
-    state.output_buffers.insert(
+    state.session_maps.output_buffers.insert(
         sid.to_string(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
     state
+        .session_maps
         .last_output_ms
         .insert(sid.to_string(), AtomicU64::new(0));
     state
+        .session_maps
         .session_states
         .insert(sid.to_string(), crate::state::SessionState::default());
     (state, silence)
@@ -12226,7 +12931,7 @@ fn trace_capture_through_process_chunk(bytes: &[u8], agent_type: Option<&str>) -
     let sid = "chunk-trace";
     let (state, silence) = chunk_trace_state(sid);
     if let Some(agent) = agent_type
-        && let Some(mut entry) = state.session_states.get_mut(sid)
+        && let Some(mut entry) = state.session_maps.session_states.get_mut(sid)
     {
         entry.agent_type = Some(agent.to_string());
     }
@@ -12258,6 +12963,7 @@ fn trace_capture_through_process_chunk(bytes: &[u8], agent_type: Option<&str>) -
     ChunkTrace {
         per_chunk_events,
         shell_state: state
+            .session_maps
             .shell_states
             .get(sid)
             .map(|a| a.load(std::sync::atomic::Ordering::Acquire)),
@@ -12265,6 +12971,7 @@ fn trace_capture_through_process_chunk(bytes: &[u8], agent_type: Option<&str>) -
         last_choice_prompt_sig: cp.last_choice_prompt_sig.clone(),
         terminal_mode_fullscreen: cp.terminal_mode.is_fullscreen(),
         ring_len: state
+            .session_maps
             .output_buffers
             .get(sid)
             .map(|r| r.lock().len())
@@ -12427,6 +13134,7 @@ fn chunk_path_scenarios_emit_the_same_events() {
         let (state, silence) = chunk_trace_state(sid);
         if *slash_on {
             state
+                .session_maps
                 .slash_mode
                 .insert(sid.to_string(), std::sync::atomic::AtomicBool::new(true));
         }
@@ -12530,7 +13238,7 @@ fn bench_chunk_path_replay() {
 
         let sid = "chunk-bench";
         let (state, silence) = chunk_trace_state(sid);
-        if let Some(mut entry) = state.session_states.get_mut(sid) {
+        if let Some(mut entry) = state.session_maps.session_states.get_mut(sid) {
             entry.agent_type = Some(agent.to_string());
         }
         let mut rx = state.event_bus.subscribe();
@@ -12616,7 +13324,8 @@ mod grid_subscriber_tests {
         // entry behind. Counting the entry rather than its receivers would keep
         // every such session serializing forever.
         state
-            .grid_watch
+            .grid
+            .watch
             .insert("s1".to_string(), crate::grid_gate::new_grid_watch());
         assert!(!grid_has_subscriber(&state, "s1"));
     }
@@ -12626,7 +13335,7 @@ mod grid_subscriber_tests {
         let state = crate::state::tests_support::make_test_app_state();
         let tx = crate::grid_gate::new_grid_watch();
         let rx = tx.subscribe();
-        state.grid_watch.insert("s1".to_string(), tx);
+        state.grid.watch.insert("s1".to_string(), tx);
 
         assert!(grid_has_subscriber(&state, "s1"));
 
@@ -12642,7 +13351,7 @@ mod grid_subscriber_tests {
         let state = crate::state::tests_support::make_test_app_state();
         let tx = crate::grid_gate::new_grid_watch();
         let _rx = tx.subscribe();
-        state.grid_watch.insert("watched".to_string(), tx);
+        state.grid.watch.insert("watched".to_string(), tx);
 
         assert!(grid_has_subscriber(&state, "watched"));
         assert!(!grid_has_subscriber(&state, "unwatched"));
@@ -12661,7 +13370,7 @@ mod vt_read_tests {
     #[tokio::test]
     async fn a_read_against_a_live_session_returns_the_buffers_answer() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             "s1".to_string(),
             parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
         );
@@ -12693,7 +13402,7 @@ mod vt_read_tests {
     #[tokio::test]
     async fn two_reads_on_the_same_session_do_not_deadlock() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             "s1".to_string(),
             parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
         );
@@ -12713,7 +13422,7 @@ mod vt_read_tests {
     #[tokio::test]
     async fn the_read_does_not_run_on_the_calling_thread() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             "s1".to_string(),
             parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
         );
@@ -12751,15 +13460,24 @@ mod standby_tests {
     #[test]
     fn wake_all_standby_clears_every_parked_session() {
         let state = crate::state::tests_support::make_test_app_state();
-        state.standby_sessions.insert("gone-1".to_string(), 111);
-        state.standby_sessions.insert("gone-2".to_string(), 222);
-        state.standby_sessions.insert("gone-3".to_string(), 333);
+        state
+            .session_maps
+            .standby_sessions
+            .insert("gone-1".to_string(), 111);
+        state
+            .session_maps
+            .standby_sessions
+            .insert("gone-2".to_string(), 222);
+        state
+            .session_maps
+            .standby_sessions
+            .insert("gone-3".to_string(), 333);
 
         let attempted = wake_all_standby(&state);
 
         assert_eq!(attempted, 3, "wake attempted for every parked session");
         assert!(
-            state.standby_sessions.is_empty(),
+            state.session_maps.standby_sessions.is_empty(),
             "standby map must be empty after wake-all even when the sessions are gone"
         );
     }
@@ -12769,7 +13487,7 @@ mod standby_tests {
     fn wake_all_standby_empty_is_noop() {
         let state = crate::state::tests_support::make_test_app_state();
         assert_eq!(wake_all_standby(&state), 0);
-        assert!(state.standby_sessions.is_empty());
+        assert!(state.session_maps.standby_sessions.is_empty());
     }
 
     /// After a timeout=0 wake-all, standby can re-arm normally when the user
@@ -12778,13 +13496,19 @@ mod standby_tests {
     #[test]
     fn wake_all_standby_leaves_map_ready_to_rearm() {
         let state = crate::state::tests_support::make_test_app_state();
-        state.standby_sessions.insert("gone-1".to_string(), 111);
+        state
+            .session_maps
+            .standby_sessions
+            .insert("gone-1".to_string(), 111);
         wake_all_standby(&state);
-        assert!(state.standby_sessions.is_empty());
+        assert!(state.session_maps.standby_sessions.is_empty());
 
         // Re-arming (as the checker would on the next tick with timeout>0) works.
-        state.standby_sessions.insert("re-armed".to_string(), 444);
-        assert_eq!(state.standby_sessions.len(), 1);
+        state
+            .session_maps
+            .standby_sessions
+            .insert("re-armed".to_string(), 444);
+        assert_eq!(state.session_maps.standby_sessions.len(), 1);
     }
 }
 
@@ -12846,16 +13570,17 @@ mod grid_delivery_tests {
         state: &Arc<AppState>,
         session_id: &str,
     ) -> tokio::sync::watch::Receiver<crate::grid_gate::GridWatchFrame> {
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             session_id.to_string(),
             Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
         );
         state
-            .grid_frame_dirty
+            .grid
+            .frame_dirty
             .insert(session_id.to_string(), Arc::new(AtomicBool::new(false)));
         let tx = new_grid_watch();
         let rx = tx.subscribe();
-        state.grid_watch.insert(session_id.to_string(), tx);
+        state.grid.watch.insert(session_id.to_string(), tx);
         rx
     }
 
@@ -12867,6 +13592,7 @@ mod grid_delivery_tests {
         text: &str,
     ) -> crate::grid_gate::GridFrame {
         let vt = state
+            .grid
             .vt_log_buffers
             .get(session_id)
             .expect("session exists");
@@ -12916,14 +13642,19 @@ mod grid_delivery_tests {
         // unless the grid is damaged again.
         assert!(
             state
-                .grid_frame_dirty
+                .grid
+                .frame_dirty
                 .get("repaint")
                 .expect("flag exists")
                 .load(Ordering::Relaxed),
             "the repair has to be armed or the dropped rows are lost for good"
         );
         let repaint = {
-            let vt = state.vt_log_buffers.get("repaint").expect("session exists");
+            let vt = state
+                .grid
+                .vt_log_buffers
+                .get("repaint")
+                .expect("session exists");
             let mut vt = vt.lock();
             vt.serialize_dirty_rows()
         };
@@ -12951,7 +13682,8 @@ mod grid_delivery_tests {
         // takes: only a genuine reversal may arm one.
         assert!(
             !state
-                .grid_frame_dirty
+                .grid
+                .frame_dirty
                 .get("in-order")
                 .expect("flag exists")
                 .load(Ordering::Relaxed),
@@ -13010,10 +13742,10 @@ mod grid_delivery_tests {
         std::thread::spawn(move || {
             let mut n = 0u32;
             while !feeder_stop.load(Ordering::Relaxed) {
-                if let Some(vt) = feeder_state.vt_log_buffers.get(&feeder_sid) {
+                if let Some(vt) = feeder_state.grid.vt_log_buffers.get(&feeder_sid) {
                     vt.lock().process(format!("line {n}\r\n").as_bytes());
                 }
-                if let Some(dirty) = feeder_state.grid_frame_dirty.get(&feeder_sid) {
+                if let Some(dirty) = feeder_state.grid.frame_dirty.get(&feeder_sid) {
                     dirty.store(true, Ordering::Relaxed);
                 }
                 n += 1;
@@ -13041,11 +13773,12 @@ mod grid_delivery_tests {
     ) -> (Arc<GridGate>, RecordedFrames) {
         let gate = Arc::new(GridGate::new());
         state
-            .grid_gates
+            .grid
+            .gates
             .insert(session_id.to_string(), gate.clone());
         let received: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = received.clone();
-        state.grid_channels.insert(
+        state.grid.channels.insert(
             session_id.to_string(),
             tauri::ipc::Channel::new(move |body| {
                 if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
@@ -13131,13 +13864,15 @@ mod grid_delivery_tests {
         let stop = start_ticker(&state, "caught-up");
         {
             let vt = state
+                .grid
                 .vt_log_buffers
                 .get("caught-up")
                 .expect("session exists");
             vt.lock().process(b"one more line\r\n");
         }
         state
-            .grid_frame_dirty
+            .grid
+            .frame_dirty
             .get("caught-up")
             .expect("the ticker owns this flag")
             .store(true, Ordering::Relaxed);

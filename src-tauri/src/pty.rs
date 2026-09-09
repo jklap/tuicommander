@@ -13,8 +13,7 @@ use crate::output_parser::{OutputParser, ParsedEvent};
 use crate::state::{
     AppState, ChangedRow, EscapeAwareBuffer, KittyAction, KittyKeyboardState,
     MAX_CONCURRENT_SESSIONS, OUTPUT_RING_BUFFER_CAPACITY, OrchestratorStats, OutputRingBuffer,
-    PtyConfig, PtySession, Utf8ReadBuffer, VT_LOG_BUFFER_CAPACITY, VtLogBuffer,
-    strip_kitty_sequences,
+    PtyConfig, PtySession, Utf8ReadBuffer, VT_LOG_BUFFER_CAPACITY, strip_kitty_sequences,
 };
 use crate::worktree::{
     WorktreeConfig, WorktreeResult, create_worktree_with_stale_recovery, remove_worktree_internal,
@@ -1861,6 +1860,7 @@ fn try_shell_transition(
     notify_parent: bool,
 ) -> bool {
     let observed_turn_epoch = state
+        .session_maps
         .session_states
         .get(session_id)
         .map(|session| session.turn_epoch);
@@ -1909,6 +1909,7 @@ fn try_shell_transition_with_hook<F: FnOnce()>(
     after_cas: F,
 ) -> bool {
     let observed_turn_epoch = state
+        .session_maps
         .session_states
         .get(session_id)
         .map(|session| session.turn_epoch);
@@ -1955,6 +1956,7 @@ fn try_shell_transition_with_hooks<B: FnOnce(), A: FnOnce(), D: FnOnce()>(
     (hooks.after_epoch_snapshot)();
     let silence = transition
         .state
+        .session_maps
         .silence_states
         .get(transition.session_id)
         .map(|entry| Arc::clone(entry.value()));
@@ -1990,6 +1992,7 @@ fn try_shell_transition_locked<F: FnOnce()>(
         && new == SHELL_IDLE
         && observed_turn_epoch.is_some_and(|observed| {
             state
+                .session_maps
                 .session_states
                 .get(session_id)
                 .is_some_and(|session| session.turn_epoch != observed)
@@ -1997,7 +2000,7 @@ fn try_shell_transition_locked<F: FnOnce()>(
     {
         return (false, None);
     }
-    let ok = match state.shell_states.get(session_id) {
+    let ok = match state.session_maps.shell_states.get(session_id) {
         Some(atom) => atom
             .compare_exchange(
                 expected,
@@ -2027,6 +2030,7 @@ fn try_shell_transition_locked<F: FnOnce()>(
         // Insert with the correct timestamp immediately so concurrent
         // readers never observe a transient 0 between or_insert and store.
         state
+            .session_maps
             .shell_state_since_ms
             .entry(session_id.to_string())
             .and_modify(|a| a.store(now_ms, std::sync::atomic::Ordering::Relaxed))
@@ -2035,6 +2039,7 @@ fn try_shell_transition_locked<F: FnOnce()>(
         // Plain shell sessions are excluded — only registered agent sessions qualify.
         if notify_parent && expected == SHELL_BUSY && new == SHELL_IDLE {
             let session_lifecycle = state
+                .session_maps
                 .session_states
                 .get(session_id)
                 .map(|s| (s.agent_type.is_some(), s.turn_epoch));
@@ -2045,10 +2050,12 @@ fn try_shell_transition_locked<F: FnOnce()>(
             });
             let is_agent = session_lifecycle.is_some_and(|(is_agent, _)| is_agent);
             let has_background_work = state
+                .session_maps
                 .session_states
                 .get(session_id)
                 .is_some_and(|session| session.background_work);
             let background_probe_pending = state
+                .session_maps
                 .session_states
                 .get(session_id)
                 .is_some_and(|session| session.has_pending_background_probe());
@@ -2128,7 +2135,7 @@ fn should_transition_idle_with_hook<F: FnOnce()>(
     // released before we take a write-lock below — same shard would otherwise
     // deadlock the runtime in the force-clear branch.
     let (is_agent, sub_tasks, turn_epoch) = {
-        let session = state.session_states.get(session_id);
+        let session = state.session_maps.session_states.get(session_id);
         (
             session
                 .as_ref()
@@ -2139,6 +2146,7 @@ fn should_transition_idle_with_hook<F: FnOnce()>(
         )
     };
     let last_ms = state
+        .session_maps
         .last_output_ms
         .get(session_id)
         .map(|ts| ts.load(std::sync::atomic::Ordering::Relaxed))
@@ -2167,7 +2175,7 @@ fn should_transition_idle_with_hook<F: FnOnce()>(
     // disappeared without emitting count=0 (agent exited, user cleared, etc.).
     // Force-clear the stale counter so we don't stay busy forever.
     if elapsed >= SUBTASK_STALE_MS {
-        if let Some(mut entry) = state.session_states.get_mut(session_id) {
+        if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id) {
             entry.active_sub_tasks = 0;
         }
         return IdleDecision {
@@ -2479,7 +2487,7 @@ fn foreground_group_at_prompt(root_pid: u32, processes: &[ProcessTreeEntry]) -> 
 
 /// The pid whose process tree represents this session's foreground work.
 fn session_foreground_pid(state: &AppState, session_id: &str) -> Option<u32> {
-    let entry = state.sessions.get(session_id)?;
+    let entry = state.session_maps.sessions.get(session_id)?;
     let session = entry.value().lock();
     #[cfg(not(windows))]
     {
@@ -2497,6 +2505,7 @@ fn session_foreground_pid(state: &AppState, session_id: &str) -> Option<u32> {
 /// snapshot is only enumerated while a session could actually use it.
 fn prompt_probe_applies(state: &AppState, session_id: &str) -> bool {
     if state
+        .session_maps
         .session_states
         .get(session_id)
         .is_none_or(|session| session.agent_type.is_some())
@@ -2504,6 +2513,7 @@ fn prompt_probe_applies(state: &AppState, session_id: &str) -> bool {
         return false;
     }
     if state
+        .session_maps
         .shell_states
         .get(session_id)
         .is_none_or(|shell| shell.load(std::sync::atomic::Ordering::Acquire) != SHELL_BUSY)
@@ -2511,6 +2521,7 @@ fn prompt_probe_applies(state: &AppState, session_id: &str) -> bool {
         return false;
     }
     let last_ms = state
+        .session_maps
         .last_output_ms
         .get(session_id)
         .map(|ts| ts.load(std::sync::atomic::Ordering::Relaxed))
@@ -2692,6 +2703,7 @@ fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
     after_lifecycle_snapshot: F,
 ) -> bool {
     let Some(silence) = state
+        .session_maps
         .silence_states
         .get(session_id)
         .map(|entry| Arc::clone(entry.value()))
@@ -2701,13 +2713,14 @@ fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
     after_lifecycle_snapshot();
     let mut silence_state = silence.lock();
     let still_owns_lifecycle = state
+        .session_maps
         .silence_states
         .get(session_id)
         .is_some_and(|current| Arc::ptr_eq(current.value(), &silence));
-    if !still_owns_lifecycle || !state.shell_states.contains_key(session_id) {
+    if !still_owns_lifecycle || !state.session_maps.shell_states.contains_key(session_id) {
         return false;
     }
-    let Some(mut session) = state.session_states.get_mut(session_id) else {
+    let Some(mut session) = state.session_maps.session_states.get_mut(session_id) else {
         return false;
     };
     if session.turn_epoch != observed_turn_epoch
@@ -2744,6 +2757,7 @@ fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
     let mut parent_dispatch = None;
     if !active
         && state
+            .session_maps
             .shell_states
             .get(session_id)
             .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_IDLE)
@@ -2794,13 +2808,14 @@ fn ready_probe_satisfied_or_requested(
     silence: &Arc<Mutex<SilenceState>>,
 ) -> bool {
     let still_owns_lifecycle = state
+        .session_maps
         .silence_states
         .get(session_id)
         .is_some_and(|current| Arc::ptr_eq(current.value(), silence));
-    if !still_owns_lifecycle || !state.shell_states.contains_key(session_id) {
+    if !still_owns_lifecycle || !state.session_maps.shell_states.contains_key(session_id) {
         return false;
     }
-    let Some(mut session) = state.session_states.get_mut(session_id) else {
+    let Some(mut session) = state.session_maps.session_states.get_mut(session_id) else {
         return false;
     };
     if session.agent_type.is_none() {
@@ -2820,7 +2835,7 @@ fn ready_probe_satisfied_or_requested(
 /// Invalidate only the process-snapshot boundary for the current working
 /// episode. The caller must hold this session's SilenceState lifecycle lock.
 fn invalidate_background_probe_boundary_locked(state: &AppState, session_id: &str) {
-    let Some(mut session) = state.session_states.get_mut(session_id) else {
+    let Some(mut session) = state.session_maps.session_states.get_mut(session_id) else {
         return;
     };
     session.background_probe_turn_epoch = None;
@@ -2829,7 +2844,7 @@ fn invalidate_background_probe_boundary_locked(state: &AppState, session_id: &st
 }
 
 fn arm_explicit_idle_background_probe(state: &AppState, session_id: &str, turn_epoch: u64) {
-    let Some(mut session) = state.session_states.get_mut(session_id) else {
+    let Some(mut session) = state.session_maps.session_states.get_mut(session_id) else {
         return;
     };
     if session.agent_type.is_none() || session.turn_epoch != turn_epoch {
@@ -2842,10 +2857,12 @@ fn arm_explicit_idle_background_probe(state: &AppState, session_id: &str, turn_e
 
 fn refresh_background_work(state: &AppState, session_id: &str) {
     let agent_type = state
+        .session_maps
         .session_states
         .get(session_id)
         .and_then(|session| session.agent_type.clone());
     let observed_turn_epoch = state
+        .session_maps
         .session_states
         .get(session_id)
         .map(|session| session.turn_epoch);
@@ -2883,25 +2900,32 @@ fn refresh_background_work_from_cached_snapshot(
 }
 
 fn process_snapshot_is_demanded(state: &AppState) -> bool {
-    state.session_states.iter().any(|session| {
+    state.session_maps.session_states.iter().any(|session| {
         (if session.agent_type.is_some() {
             session.has_pending_background_probe() || session.background_work
         } else {
             prompt_probe_applies(state, session.key())
-        }) && state.silence_states.contains_key(session.key())
-            && state.shell_states.contains_key(session.key())
+        }) && state
+            .session_maps
+            .silence_states
+            .contains_key(session.key())
+            && state.session_maps.shell_states.contains_key(session.key())
     })
 }
 
 fn reconcile_process_snapshot_demand(state: &AppState) {
     let sessions: Vec<String> = state
+        .session_maps
         .session_states
         .iter()
         .filter(|session| {
             session.agent_type.is_some()
                 && (session.has_pending_background_probe() || session.background_work)
-                && state.silence_states.contains_key(session.key())
-                && state.shell_states.contains_key(session.key())
+                && state
+                    .session_maps
+                    .silence_states
+                    .contains_key(session.key())
+                && state.session_maps.shell_states.contains_key(session.key())
         })
         .map(|session| session.key().clone())
         .collect();
@@ -3198,6 +3222,48 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
     }
 }
 
+/// goose keeps a one-line composer footer at the bottom of the screen and swaps
+/// it for a spinner row while a turn runs. Captured live on goose 1.49.0 at 120
+/// columns (#699-c6e0), the two states are:
+///
+/// ```text
+/// ready:    > Enter to send · Ctrl+J newline
+/// working:  ◓  Merging memory matrices...  (Ctrl+C to interrupt)
+/// ```
+///
+/// Neither generic signal works here. The spinner glyph cycles `◐◓◒`, which
+/// `is_spinner_row` does not recognise, and the message beside it is whimsical
+/// and changes between turns — "Merging memory matrices…" is one of a set, so
+/// matching it would pin the adapter to a string goose is free to reword. What
+/// does not move is the **hint** at each end: `Ctrl+C to interrupt` appears only
+/// while a turn can be interrupted, and `Enter to send` only when the composer
+/// is accepting input.
+///
+/// The interrupt hint is tested first so a working screen is never downgraded,
+/// and Ready demands the composer footer rather than merely the absence of a
+/// spinner — a half-painted screen must read Unknown, not idle. A false Ready is
+/// the expensive direction: it is what lets auto-standby SIGSTOP a live turn.
+fn detect_goose_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    const INTERRUPT_HINT: &str = "Ctrl+C to interrupt";
+    const COMPOSER_HINT: &str = "Enter to send";
+
+    let content_end = rows
+        .iter()
+        .rposition(|row| !row.trim().is_empty())
+        .map_or(0, |idx| idx + 1);
+    let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
+    let footer = &rows[chrome_start..content_end];
+
+    if footer.iter().any(|row| row.contains(INTERRUPT_HINT)) {
+        return AgentScreenActivity::Working;
+    }
+    if footer.iter().any(|row| row.contains(COMPOSER_HINT)) {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
 fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
     match agent_type {
         Some("claude") => detect_claude_screen_activity(rows),
@@ -3207,6 +3273,7 @@ fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> Ag
         Some("grok") => detect_grok_screen_activity(rows),
         Some("pi") => detect_pi_screen_activity(rows),
         Some("opencode") => detect_opencode_screen_activity(rows),
+        Some("goose") => detect_goose_screen_activity(rows),
         _ => AgentScreenActivity::Unknown,
     }
 }
@@ -3216,10 +3283,12 @@ fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> Ag
 /// the child moved but its agent adapter has no stronger current-state label.
 pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &'static str {
     let agent_type = state
+        .session_maps
         .session_states
         .get(session_id)
         .and_then(|session| session.agent_type.clone());
     let activity = state
+        .grid
         .vt_log_buffers
         .get(session_id)
         .map(|vt| detect_agent_screen_activity(agent_type.as_deref(), &vt.lock().screen_rows()))
@@ -3237,20 +3306,34 @@ pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &
 /// marks that command busy once and nothing else ever clears it (#523-1df4, #534-e30c,
 /// #535-d4f5).
 ///
-/// DEFERRED (2026-08-02) — amp, cursor, goose and droid were audited for the same failure
-/// while fixing opencode and could NOT be verified: none of the four binaries is installed
-/// on this machine, and an adapter written from documentation instead of a live capture is
-/// how grok first shipped green tests over a UI that stayed stuck BUSY. They are tracked in
-/// `to-test.md`; give each one an adapter only after capturing its real screens.
+/// DEFERRED (2026-08-02, narrowed 2026-09-07) — amp, cursor and droid were audited for
+/// the same failure while fixing opencode and could NOT be verified: none of those three
+/// binaries is installed on this machine, and an adapter written from documentation
+/// instead of a live capture is how grok first shipped green tests over a UI that stayed
+/// stuck BUSY. They are tracked in `to-test.md`; give each one an adapter only after
+/// capturing its real screens. **goose left this list on 2026-09-07** — it was installed,
+/// captured live at 1.49.0, and now has `detect_goose_screen_activity`.
+///
+/// **The remaining three cannot be excused instead of adapted, and that is proved rather
+/// than assumed.** An agent needs no entry here only if something else returns it to idle:
+/// either a protocol signal, or a foreground command short-lived enough that OSC 133
+/// clears on its own. Checked 2026-09-07, both routes are shut for all three:
+/// `HOOK_SUPPORT` in `src/agents.ts` is `false` for amp, cursor and droid, so no explicit
+/// Stop ever sets `idle_confirmed`; and each launches as a long-lived interactive process
+/// (`amp "{prompt}"`, `cursor-agent`, `droid`), which is exactly the shape the paragraph
+/// above describes as latching busy forever. `pi` is the contrast that proves the rule —
+/// also `HOOK_SUPPORT: false`, and it is in the list precisely because a screen adapter is
+/// the only thing that can idle it. So the three need captures from installed binaries; no
+/// amount of static analysis substitutes for that.
 pub(crate) fn has_ready_screen_adapter(agent_type: Option<&str>) -> bool {
     matches!(
         agent_type,
-        Some("claude" | "codex" | "gemini" | "aider" | "grok" | "pi" | "opencode")
+        Some("claude" | "codex" | "gemini" | "aider" | "grok" | "pi" | "opencode" | "goose")
     )
 }
 
 fn stamp_last_output_now(state: &crate::state::AppState, session_id: &str, now_ms: u64) {
-    if let Some(ts) = state.last_output_ms.get(session_id) {
+    if let Some(ts) = state.session_maps.last_output_ms.get(session_id) {
         ts.store(now_ms, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -3276,6 +3359,7 @@ fn apply_working_evidence(
     source: &'static str,
 ) {
     let agent_type = state
+        .session_maps
         .session_states
         .get(session_id)
         .and_then(|session| session.agent_type.clone());
@@ -3284,6 +3368,7 @@ fn apply_working_evidence(
     let reopened_completion = {
         let mut sl = silence.lock();
         let turn_completed = state
+            .session_maps
             .session_states
             .get(session_id)
             .is_some_and(|session| sl.completion_declared_for_epoch(session.turn_epoch));
@@ -3304,11 +3389,14 @@ fn apply_working_evidence(
         invalidate_background_probe_boundary_locked(state, session_id);
         reopen
     };
-    if reopened_completion && let Some(mut session) = state.session_states.get_mut(session_id) {
+    if reopened_completion
+        && let Some(mut session) = state.session_maps.session_states.get_mut(session_id)
+    {
         session.suggested_actions = None;
     }
     stamp_last_output_now(state, session_id, now_ms);
     let prev = state
+        .session_maps
         .shell_states
         .get(session_id)
         .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
@@ -3330,11 +3418,12 @@ pub(crate) fn note_submitted_input(state: &AppState, session_id: &str) {
 
 fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &str, after_epoch: F) {
     let agent_type = state
+        .session_maps
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
     let Some(agent_type) = agent_type else {
-        if let Some(sl) = state.silence_states.get(session_id) {
+        if let Some(sl) = state.session_maps.silence_states.get(session_id) {
             let mut silence = sl.lock();
             silence.note_user_submission(false);
             silence.reset_suggest_memory();
@@ -3343,6 +3432,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
     };
 
     let silence = state
+        .session_maps
         .silence_states
         .entry(session_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
@@ -3351,7 +3441,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         // Lock order for submitted turns is SilenceState → SessionState → shell
         // atomics. Completion drains and Suggest parsing use the same order.
         let mut silence = silence.lock();
-        if let Some(mut session) = state.session_states.get_mut(session_id) {
+        if let Some(mut session) = state.session_maps.session_states.get_mut(session_id) {
             session.turn_epoch = session.turn_epoch.wrapping_add(1);
             session.suggested_actions = None;
             // The denominator for marker compliance (#4421): one submitted turn
@@ -3363,6 +3453,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         silence.reset_suggest_memory();
         stamp_last_output_now(state, session_id, now_epoch_ms());
         let prev = state
+            .session_maps
             .shell_states
             .get(session_id)
             .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
@@ -3399,6 +3490,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
 /// Emit a ShellState parsed event via both event bus and Tauri IPC.
 fn emit_shell_state(state: &crate::state::AppState, session_id: &str, shell_state: &str) {
     let agent_type = state
+        .session_maps
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
@@ -3442,11 +3534,13 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
     before_transaction: F,
 ) {
     let evidence_turn_epoch = state
+        .session_maps
         .session_states
         .get(session_id)
         .map(|session| session.turn_epoch);
     before_transaction();
     let silence = state
+        .session_maps
         .silence_states
         .get(session_id)
         .map(|entry| Arc::clone(entry.value()));
@@ -3455,6 +3549,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         if target == SHELL_IDLE
             && evidence_turn_epoch.is_some_and(|observed| {
                 state
+                    .session_maps
                     .session_states
                     .get(session_id)
                     .is_some_and(|session| session.turn_epoch != observed)
@@ -3471,7 +3566,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         if target == SHELL_BUSY {
             stamp_last_output_now(state, session_id, now_epoch_ms());
         }
-        let prev = match state.shell_states.get(session_id) {
+        let prev = match state.session_maps.shell_states.get(session_id) {
             Some(atom) => atom.load(std::sync::atomic::Ordering::Acquire),
             None => return,
         };
@@ -3644,18 +3739,24 @@ fn is_cc_tool_call_header(text: &str) -> bool {
 fn record_inferred_outcome_if_no_osc133(state: &AppState, session_id: &str) {
     use crate::ai_agent::knowledge::{CommandOutcome, OutcomeClass};
 
-    if state.has_osc133_integration.contains_key(session_id) {
+    if state
+        .session_maps
+        .has_osc133_integration
+        .contains_key(session_id)
+    {
         return;
     }
     // try_lock to avoid blocking the timer thread if write_pty holds
     // the session lock. Inferred outcomes are best-effort — missing cwd
     // for one record is acceptable vs risking contention.
     let cwd = state
+        .session_maps
         .sessions
         .get(session_id)
         .and_then(|s| s.try_lock().and_then(|s| s.cwd.clone()))
         .unwrap_or_default();
     let output_snippet = state
+        .grid
         .vt_log_buffers
         .get(session_id)
         .map(|b| {
@@ -3714,6 +3815,7 @@ fn try_timer_idle_transition(
         let mut silence = silence.lock();
         if evidence_turn_epoch.is_some_and(|observed| {
             state
+                .session_maps
                 .session_states
                 .get(session_id)
                 .is_some_and(|session| session.turn_epoch != observed)
@@ -3735,6 +3837,7 @@ fn try_timer_idle_transition(
             AgentScreenActivity::Working => false,
         };
         let is_busy = state
+            .session_maps
             .shell_states
             .get(session_id)
             .is_some_and(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY);
@@ -3816,6 +3919,7 @@ fn completion_adjusted_screen_activity(
     // reopens the same turn in `apply_working_evidence`; only adapters whose
     // completed screen can retain a stale Working row need this downgrade.
     if state
+        .session_maps
         .session_states
         .get(session_id)
         .is_some_and(|session| session.agent_type.as_deref() == Some("claude"))
@@ -3824,6 +3928,7 @@ fn completion_adjusted_screen_activity(
     }
     let silence = silence.lock();
     if state
+        .session_maps
         .session_states
         .get(session_id)
         .is_some_and(|session| silence.completion_declared_for_epoch(session.turn_epoch))
@@ -3877,7 +3982,7 @@ fn spawn_silence_timer(
                     gap_secs = tick_gap.as_secs(),
                     "Sleep-wake detected — resetting timestamps"
                 );
-                if let Some(ts) = state.last_output_ms.get(&session_id) {
+                if let Some(ts) = state.session_maps.last_output_ms.get(&session_id) {
                     ts.store(epoch_now, std::sync::atomic::Ordering::Release);
                 }
                 {
@@ -3903,14 +4008,17 @@ fn spawn_silence_timer(
             // idle session instead of merely keeping a pre-existing BUSY alive.
             // Claude/Gemini/Aider BUSY is movement-driven in the reader.
             let idle_evidence_turn_epoch = state
+                .session_maps
                 .session_states
                 .get(&session_id)
                 .map(|session| session.turn_epoch);
             let agent_type = state
+                .session_maps
                 .session_states
                 .get(&session_id)
                 .and_then(|s| s.agent_type.clone());
             let screen_activity = state
+                .grid
                 .vt_log_buffers
                 .get(&session_id)
                 .map(|vt| {
@@ -3920,10 +4028,12 @@ fn spawn_silence_timer(
             let screen_activity =
                 completion_adjusted_screen_activity(&state, &silence, &session_id, screen_activity);
             let tracked_background_work = state
+                .session_maps
                 .session_states
                 .get(&session_id)
                 .is_some_and(|session| session.background_work);
             let shell_is_busy = state
+                .session_maps
                 .shell_states
                 .get(&session_id)
                 .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_BUSY);
@@ -3955,7 +4065,7 @@ fn spawn_silence_timer(
                     if transition.force_cleared_subtasks {
                         emit_active_subtasks(&state, &session_id, 0, "");
                     }
-                    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+                    if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
                         vt.lock().process(b"\x1b[?25h");
                     }
                     tracing::debug!(
@@ -4013,21 +4123,31 @@ fn spawn_silence_timer(
             // `is_silent()` made the documented backstop unreachable forever.
             let quiet_for_retraction = silence.lock().is_quiet_for_question_retraction();
             if quiet_for_retraction {
-                let active_question = state.session_states.get(&session_id).and_then(|s| {
-                    (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
-                        .then(|| s.question_text.clone())
-                        .flatten()
-                });
+                let active_question =
+                    state
+                        .session_maps
+                        .session_states
+                        .get(&session_id)
+                        .and_then(|s| {
+                            (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
+                                .then(|| s.question_text.clone())
+                                .flatten()
+                        });
                 if let Some(active_question) = active_question {
-                    let still_current = state.vt_log_buffers.get(&session_id).is_some_and(|vt| {
-                        match current_chat_question(&vt.lock().screen_rows()) {
-                            CurrentChatQuestion::PromptAnchored(Some(current)) => {
-                                current.trim() == active_question.trim()
-                            }
-                            CurrentChatQuestion::PromptAnchored(None) => false,
-                            CurrentChatQuestion::NoPromptAnchor => false,
-                        }
-                    });
+                    let still_current =
+                        state
+                            .grid
+                            .vt_log_buffers
+                            .get(&session_id)
+                            .is_some_and(|vt| {
+                                match current_chat_question(&vt.lock().screen_rows()) {
+                                    CurrentChatQuestion::PromptAnchored(Some(current)) => {
+                                        current.trim() == active_question.trim()
+                                    }
+                                    CurrentChatQuestion::PromptAnchored(None) => false,
+                                    CurrentChatQuestion::NoPromptAnchor => false,
+                                }
+                            });
                     if !still_current {
                         emit_question_cleared_if_stale(&state, &session_id);
                     }
@@ -4042,6 +4162,7 @@ fn spawn_silence_timer(
             let (is_silent, question_turn_epoch) = {
                 let sl = silence.lock();
                 let epoch = state
+                    .session_maps
                     .session_states
                     .get(&session_id)
                     .map(|session| session.turn_epoch)
@@ -4056,7 +4177,7 @@ fn spawn_silence_timer(
             // for the most recent plausible question within a bounded window.
             // This is robust to trailing non-question text between the question
             // and the prompt box (e.g. "(stopping here — waiting for your answer)").
-            let current_question = state.vt_log_buffers.get(&session_id).map(|vt| {
+            let current_question = state.grid.vt_log_buffers.get(&session_id).map(|vt| {
                 let rows = vt.lock().screen_rows();
                 let question = current_chat_question(&rows);
                 tracing::trace!(
@@ -4083,6 +4204,7 @@ fn spawn_silence_timer(
                     match question {
                         Some(ref text) => {
                             let on_screen = state
+                                .grid
                                 .vt_log_buffers
                                 .get(&session_id)
                                 .map(|vt| {
@@ -4122,6 +4244,7 @@ fn spawn_silence_timer(
             // runtime. A persisted config flag alone can be stale after a failed
             // install or an agent-version change.
             let hook_configured = state
+                .session_maps
                 .session_states
                 .get(&session_id)
                 .map(|s| s.hook_instrumented)
@@ -4169,10 +4292,14 @@ fn spawn_silence_timer(
 /// "not on screen right now" is not proof that it was answered. A live
 /// `choice_prompt` owns its own resolution and is left alone.
 fn emit_question_cleared_if_stale(state: &Arc<AppState>, session_id: &str) {
-    let turn_epoch = state.session_states.get(session_id).and_then(|s| {
-        (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
-            .then_some(s.turn_epoch)
-    });
+    let turn_epoch = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|s| {
+            (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
+                .then_some(s.turn_epoch)
+        });
     let Some(turn_epoch) = turn_epoch else {
         return;
     };
@@ -4205,6 +4332,7 @@ fn emit_pending_suggest_if_idle(
     session_id: &str,
 ) -> bool {
     let shell_is_idle = state
+        .session_maps
         .shell_states
         .get(session_id)
         .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_IDLE)
@@ -4217,6 +4345,7 @@ fn emit_pending_suggest_if_idle(
     // old turn. Whichever owns the lock first defines the lifecycle order.
     let mut silence_state = silence.lock();
     let Some((current_turn_epoch, background_work)) = state
+        .session_maps
         .session_states
         .get(session_id)
         .map(|session| (session.turn_epoch, session.background_work))
@@ -4576,6 +4705,7 @@ impl ChunkProcessor {
             'C' => {
                 transition_explicit_shell_state(state, session_id, SHELL_BUSY, "busy", false);
                 let cmd = state
+                    .session_maps
                     .input_buffers
                     .get(session_id)
                     .map(|b| b.lock().content())
@@ -4604,6 +4734,7 @@ impl ChunkProcessor {
                     .unwrap_or(0);
                 let cwd = self.session_cwd.clone().unwrap_or_default();
                 let output_snippet = state
+                    .grid
                     .vt_log_buffers
                     .get(session_id)
                     .map(|b| {
@@ -4854,6 +4985,7 @@ impl ChunkProcessor {
         // that lock, and taking a session_states shard while holding the vt_log
         // mutex would introduce a lock order this file does not otherwise have.
         let agent_type = state
+            .session_maps
             .session_states
             .get(session_id)
             .and_then(|s| s.agent_type.clone());
@@ -4877,13 +5009,13 @@ impl ChunkProcessor {
             logical_prefix,
             physical_prefix,
             history_size,
-        ): VtProcessResult = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
+        ): VtProcessResult = if let Some(vt_log) = state.grid.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
             let mut changed = vt.process(data.as_bytes());
             // Publish the real sync state (a nested BSU keeps it open) so the
             // frame ticker knows whether this session can have a stalled
             // synchronized update worth taking the lock for.
-            if let Some(flag) = state.sync_update_active.get(session_id) {
+            if let Some(flag) = state.grid.sync_update_active.get(session_id) {
                 flag.store(vt.is_sync_update_active(), Ordering::Relaxed);
             }
             let total = vt.total_lines();
@@ -5090,6 +5222,7 @@ impl ChunkProcessor {
                     } => {
                         explicit_idle_in_chunk |= command == 'A';
                         state
+                            .session_maps
                             .has_osc133_integration
                             .insert(session_id.to_string(), ());
                         self.handle_osc133_event(command, &params, session_id, state);
@@ -5120,7 +5253,7 @@ impl ChunkProcessor {
                     TermEvent::Osc7(url) => {
                         #[allow(clippy::collapsible_if)]
                         if let Ok(cwd) = parse_osc7_cwd(&url) {
-                            if let Some(entry) = state.sessions.get(session_id) {
+                            if let Some(entry) = state.session_maps.sessions.get(session_id) {
                                 entry.lock().cwd = Some(cwd.clone());
                             }
                             // `{ cwd }` rather than a bare string so this payload
@@ -5214,7 +5347,7 @@ impl ChunkProcessor {
         // is in the ring but also still queued for live delivery, which
         // would cause the catch-up and the live stream to replay the same
         // bytes to the client.
-        if let Some(ring) = state.output_buffers.get(session_id) {
+        if let Some(ring) = state.session_maps.output_buffers.get(session_id) {
             let mut ring_guard = ring.lock();
             ring_guard.write(data.as_bytes());
             crate::state::broadcast_to_ws_clients(&state.ws_clients, session_id, data);
@@ -5244,6 +5377,7 @@ impl ChunkProcessor {
         // Hook-instrumented sessions get awaiting from OSC 7770; drop heuristic
         // (regex) Question events from the parser so they don't double-fire.
         let hook_instrumented = state
+            .session_maps
             .session_states
             .get(session_id)
             .map(|s| s.hook_instrumented)
@@ -5257,6 +5391,7 @@ impl ChunkProcessor {
 
         raw_stream_events(&mut self.raw_carry, data, &mut events);
         let agent_active_for_parse = state
+            .session_maps
             .session_states
             .get(session_id)
             .map(|s| s.agent_type.is_some())
@@ -5368,6 +5503,7 @@ impl ChunkProcessor {
         // scans bottom-up, skips empty rows, and stops at the first non-matching
         // row (separator/chrome), so it safely finds items regardless of position.
         let slash_on = state
+            .session_maps
             .slash_mode
             .get(session_id)
             .is_some_and(|v| v.load(std::sync::atomic::Ordering::Relaxed));
@@ -5443,6 +5579,7 @@ impl ChunkProcessor {
         // before widening this to them.
         if let Some(screen) = screen_cache {
             let (awaiting, has_choice) = state
+                .session_maps
                 .session_states
                 .get(session_id)
                 .map(|s| (s.awaiting_input, s.choice_prompt.is_some()))
@@ -5474,6 +5611,7 @@ impl ChunkProcessor {
         // Read the turn epoch once so every event in this chunk is attributed to
         // the same turn, and per-turn dedup cannot straddle a boundary mid-chunk.
         let turn_epoch = state
+            .session_maps
             .session_states
             .get(session_id)
             .map(|session| session.turn_epoch)
@@ -5806,6 +5944,7 @@ impl ChunkProcessor {
         if !explicit_idle_in_chunk
             && (screen_activity == AgentScreenActivity::Working || !chrome_only || has_spinner)
             && let Some(turn_epoch) = state
+                .session_maps
                 .session_states
                 .get(session_id)
                 .map(|session| session.turn_epoch)
@@ -5821,6 +5960,7 @@ impl ChunkProcessor {
         // re-entrant-read deadlock (story 099-6526).
         let prev = if real_activity && !in_resize_grace_after {
             state
+                .session_maps
                 .shell_states
                 .get(session_id)
                 .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire))
@@ -5842,7 +5982,7 @@ impl ChunkProcessor {
                 self.terminal_mode = self.terminal_mode.with_app_hint(app.to_string());
             }
         }
-        if let Some(mut entry) = state.session_states.get_mut(session_id) {
+        if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id) {
             let new_mode = if self.terminal_mode.is_fullscreen() {
                 Some(self.terminal_mode.clone())
             } else {
@@ -5864,6 +6004,7 @@ fn process_kitty_actions(kitty_actions: &[KittyAction], session_id: &str, state:
         return;
     }
     let entry = state
+        .session_maps
         .kitty_states
         .entry(session_id.to_string())
         .or_insert_with(|| Mutex::new(KittyKeyboardState::new()));
@@ -5887,13 +6028,58 @@ fn process_kitty_actions(kitty_actions: &[KittyAction], session_id: &str, state:
     }
 }
 
+/// Whether the session's line discipline would swallow a reply written now.
+///
+/// **Measured 2026-09-07** (capture `f2bddfb0`, frames 25-35): Claude Code
+/// emits `ESC[c` *before* it switches the tty out of cooked mode, so our
+/// `ESC[?6c` was painted as the literal text `^[[?6c` at the top of the startup
+/// banner and never delivered. Claude, having received nothing, re-queried
+/// 100ms later from raw mode and got a clean answer. Withholding the premature
+/// reply therefore costs no information: the querier retries once it can read.
+///
+/// **The predicate is `ICANON`, not `ECHO`, and the difference is load-bearing.**
+/// `ECHO` decides whether the bytes are *also* painted on screen; `ICANON`
+/// decides whether they are *delivered at all*, because a canonical-mode read
+/// blocks until a newline that a terminal reply never contains. In cbreak
+/// (`ICANON` off, `ECHO` on) the reply reaches the querier immediately — ugly,
+/// but read. Gating on `ECHO` there would withhold a reply nothing else will
+/// resend and hang the querier, trading a cosmetic defect for a hang.
+///
+/// A failure to look the tty up answers "no": the old behaviour was to always
+/// write, and a reply we cannot prove is undeliverable is better sent than lost.
+#[cfg(not(windows))]
+fn tty_would_swallow_reply(state: &AppState, session_id: &str) -> bool {
+    let Some(entry) = state.session_maps.sessions.get(session_id) else {
+        return false;
+    };
+    let Some(fd) = entry.value().lock().master.as_raw_fd() else {
+        return false;
+    };
+    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+    // SAFETY: `fd` is the live PTY master owned by the session we just locked,
+    // and `tcgetattr` only writes through the pointer when it returns 0.
+    if unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    unsafe { termios.assume_init() }.c_lflag & libc::ICANON != 0
+}
+
 /// Serialize a terminal-generated protocol reply with every other PTY write.
 ///
 /// The writer has its own mutex, separate from the session metadata. Waiting
 /// here is safe: the reader remains able to drain PTY output even when another
 /// thread is blocked in a kernel write, so the old session-lock deadlock cannot
 /// occur and mandatory replies are never discarded merely due to contention.
+///
+/// Replies are withheld while the tty is canonical — see
+/// [`tty_would_swallow_reply`].
 fn write_terminal_reply(state: &AppState, session_id: &str, response: &[u8], kind: &str) {
+    #[cfg(not(windows))]
+    if tty_would_swallow_reply(state, session_id) {
+        tracing::debug!(source = "terminal", session_id = %session_id, %kind,
+            "Terminal reply withheld: tty is canonical, the querier cannot read it yet");
+        return;
+    }
     if let Err(error) = state.write_pty_parts(session_id, &[response]) {
         tracing::warn!(source = "terminal", session_id = %session_id, %kind, %error,
             "Terminal reply failed");
@@ -5917,7 +6103,7 @@ fn flush_eof(
         flushed
     };
     if !esc_remaining.is_empty()
-        && let Some(ring) = state.output_buffers.get(session_id)
+        && let Some(ring) = state.session_maps.output_buffers.get(session_id)
     {
         let mut ring_guard = ring.lock();
         ring_guard.write(esc_remaining.as_bytes());
@@ -5966,26 +6152,26 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // Drop the per-session PTY event channel alongside ws_clients. Any final
     // SessionClosed already emitted stays buffered for live subscribers (broadcast
     // drains buffered messages before signalling Closed), so no close frame is lost.
-    state.pty_event_channels.remove(session_id);
+    state.session_maps.pty_event_channels.remove(session_id);
     #[cfg(feature = "desktop")]
-    state.grid_channels.remove(session_id);
-    state.grid_watch.remove(session_id);
-    state.grid_gates.remove(session_id);
-    state.pending_scroll.remove(session_id);
-    state.kitty_states.remove(session_id);
-    state.input_buffers.remove(session_id);
-    state.silence_states.remove(session_id);
-    state.shell_states.remove(session_id);
-    state.last_prompts.remove(session_id);
-    state.pty_descriptions.remove(session_id);
-    state.terminal_rows.remove(session_id);
-    state.resize_locks.remove(session_id);
+    state.grid.channels.remove(session_id);
+    state.grid.watch.remove(session_id);
+    state.grid.gates.remove(session_id);
+    state.grid.pending_scroll.remove(session_id);
+    state.session_maps.kitty_states.remove(session_id);
+    state.session_maps.input_buffers.remove(session_id);
+    state.session_maps.silence_states.remove(session_id);
+    state.session_maps.shell_states.remove(session_id);
+    state.session_maps.last_prompts.remove(session_id);
+    state.session_maps.pty_descriptions.remove(session_id);
+    state.session_maps.terminal_rows.remove(session_id);
+    state.session_maps.resize_locks.remove(session_id);
     // Input mode and shell integration describe the process that just died.
-    state.slash_mode.remove(session_id);
-    state.last_input_ms.remove(session_id);
-    state.has_osc133_integration.remove(session_id);
+    state.session_maps.slash_mode.remove(session_id);
+    state.session_maps.last_input_ms.remove(session_id);
+    state.session_maps.has_osc133_integration.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
-    state.shell_state_since_ms.remove(session_id);
+    state.session_maps.shell_state_since_ms.remove(session_id);
     // A peer that announced its own `$TUIC_SESSION` is filed under that identity,
     // not under the PTY key — so the `peer_agents.remove(session_id)` below has
     // never matched it, and its registration outlived the terminal for the whole
@@ -6003,7 +6189,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // The inbox read position is meaningless once the inbox is gone.
     state.agent_read_cursor.remove(session_id);
     #[cfg(unix)]
-    state.standby_sessions.remove(session_id);
+    state.session_maps.standby_sessions.remove(session_id);
     // DEFERRED (2026-08-25) — a parent identity retained ONLY because this child
     // named it (`peer_identity_is_reapable`) is never re-examined once the child
     // goes: the reaper walks the peers of the MCP session it is collecting, and the
@@ -6018,13 +6204,13 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // live MCP session, no child" too weak a test for deletion. The real fix is a
     // periodic sweep over ALL peers with a mail-retention rule, which is a policy
     // decision, not a cleanup tweak.
-    state.session_parent.remove(session_id);
+    state.session_maps.session_parent.remove(session_id);
     // mcp_to_session maps mcp_session_id → tuic_session. The reverse index
     // session_to_mcp lets us drop O(k) entries (k = mcp sessions for this
     // tuic_session, typically 1) instead of scanning every entry.
-    if let Some((_, mcp_sids)) = state.session_to_mcp.remove(session_id) {
+    if let Some((_, mcp_sids)) = state.mcp.session_to_mcp.remove(session_id) {
         for sid in &mcp_sids {
-            state.mcp_to_session.remove(sid);
+            state.mcp.to_session.remove(sid);
         }
     }
 }
@@ -6036,15 +6222,15 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
 ///
 /// See [`remove_live_session_state`] for why these are the only two lists.
 fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
-    state.output_buffers.remove(session_id);
-    state.vt_log_buffers.remove(session_id);
-    state.pty_raw_rings.remove(session_id);
-    state.last_output_ms.remove(session_id);
-    state.exit_codes.remove(session_id);
-    state.term_aliases.remove(session_id);
-    state.marker_stats.remove(session_id);
-    state.session_visibility.remove(session_id);
-    state.ai_suggestions_enabled.remove(session_id);
+    state.session_maps.output_buffers.remove(session_id);
+    state.grid.vt_log_buffers.remove(session_id);
+    state.grid.pty_raw_rings.remove(session_id);
+    state.session_maps.last_output_ms.remove(session_id);
+    state.session_maps.exit_codes.remove(session_id);
+    state.session_maps.term_aliases.remove(session_id);
+    state.session_maps.marker_stats.remove(session_id);
+    state.session_maps.session_visibility.remove(session_id);
+    state.ai.ai_suggestions_enabled.remove(session_id);
 }
 
 // NOT A DEFERRAL — four session-keyed maps are deliberately NOT reaped by
@@ -6065,7 +6251,7 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
-    if state.sessions.remove(session_id).is_some() {
+    if state.session_maps.sessions.remove(session_id).is_some() {
         state
             .metrics
             .active_sessions
@@ -6084,6 +6270,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
         .unwrap_or_default()
         .as_millis() as u64;
     state
+        .session_maps
         .last_output_ms
         .entry(session_id.to_string())
         .or_insert_with(|| AtomicU64::new(0))
@@ -6163,6 +6350,7 @@ fn enqueue_state_change_to_parent(
     payload: serde_json::Value,
 ) -> Option<ParentLifecycleDispatch> {
     let parent_id = state
+        .session_maps
         .session_parent
         .get(session_id)
         .map(|e| e.value().clone())?;
@@ -6261,6 +6449,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(
         return false;
     }
     let Some(parent_id) = state
+        .session_maps
         .session_parent
         .get(session_id)
         .map(|entry| entry.value().clone())
@@ -6294,7 +6483,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(
     if state.assign_agent_delivery(
         &parent_id,
         &message_id,
-        state.sessions.contains_key(&parent_id),
+        state.session_maps.sessions.contains_key(&parent_id),
     ) != crate::state::AgentDeliveryAssignment::Terminal
     {
         return true;
@@ -6331,6 +6520,7 @@ fn short_session(session_id: &str) -> &str {
 /// real approval prompt.
 fn idle_is_confirmed(state: &AppState, session_id: &str) -> bool {
     let confirmed = state
+        .session_maps
         .silence_states
         .get(session_id)
         .map(|sl| sl.lock().idle_confirmed)
@@ -6339,6 +6529,7 @@ fn idle_is_confirmed(state: &AppState, session_id: &str) -> bool {
         return true;
     }
     let agent_type = state
+        .session_maps
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
@@ -6353,6 +6544,7 @@ fn idle_is_confirmed(state: &AppState, session_id: &str) -> bool {
 /// would reach whatever program is running rather than the shell.
 fn session_is_agent(state: &AppState, session_id: &str) -> bool {
     state
+        .session_maps
         .session_states
         .get(session_id)
         .map(|s| s.agent_type.is_some())
@@ -6364,11 +6556,13 @@ pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
         return false;
     }
     let idle = state
+        .session_maps
         .shell_states
         .get(session_id)
         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed) == SHELL_IDLE)
         .unwrap_or(false);
     let blocked_on_question = state
+        .session_maps
         .session_states
         .get(session_id)
         .map(|s| s.question_confident)
@@ -6382,6 +6576,7 @@ pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
 /// would splice our text into what they are typing.
 fn has_partial_user_input(state: &AppState, session_id: &str) -> bool {
     state
+        .session_maps
         .input_buffers
         .get(session_id)
         .is_some_and(|buffer| !buffer.lock().content().is_empty())
@@ -6403,6 +6598,7 @@ fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<Inject
         return None;
     }
     let prior_idle_confirmed = state
+        .session_maps
         .silence_states
         .get(session_id)
         .map(|silence| silence.lock().idle_confirmed)
@@ -6418,6 +6614,7 @@ fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<Inject
         return None;
     }
     let token = state
+        .session_maps
         .silence_states
         .get(session_id)
         .map(|silence| silence.lock().begin_injection_claim(prior_idle_confirmed))
@@ -6428,6 +6625,7 @@ fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<Inject
 
 fn rollback_injection_claim(state: &AppState, session_id: &str, claim: InjectionClaim) -> bool {
     let owns_claim = state
+        .session_maps
         .silence_states
         .get(session_id)
         .and_then(|silence| silence.lock().rollback_injection_claim(claim.token))
@@ -6444,13 +6642,13 @@ fn rollback_injection_claim(state: &AppState, session_id: &str, claim: Injection
 }
 
 fn mark_injection_uncertain(state: &AppState, session_id: &str, claim: InjectionClaim) {
-    if let Some(silence) = state.silence_states.get(session_id) {
+    if let Some(silence) = state.session_maps.silence_states.get(session_id) {
         silence.lock().mark_injection_uncertain(claim.token);
     }
 }
 
 fn mark_orchestrator_notice_uncertain(state: &AppState, session_id: &str, claim: InjectionClaim) {
-    if let Some(silence) = state.silence_states.get(session_id) {
+    if let Some(silence) = state.session_maps.silence_states.get(session_id) {
         silence
             .lock()
             .mark_orchestrator_notice_uncertain(claim.token);
@@ -6474,7 +6672,7 @@ fn agent_submission_rejection(
     state: &AppState,
     session_id: &str,
 ) -> Option<(&'static str, &'static str)> {
-    if !state.sessions.contains_key(session_id) {
+    if !state.session_maps.sessions.contains_key(session_id) {
         return Some(("session_not_found", "unknown"));
     }
     if !session_is_agent(state, session_id) {
@@ -6491,6 +6689,7 @@ fn agent_submission_rejection(
         return Some(("queued_commands_pending", "empty"));
     }
     if state
+        .session_maps
         .session_states
         .get(session_id)
         .is_some_and(|session| session.question_confident)
@@ -6537,7 +6736,7 @@ pub(crate) fn write_agent_submission_to_pty(
             // that is independent evidence, not a reason to discard a completed
             // write. Clear the token when it is still ours. The MCP caller advances
             // the turn through InputLineBuffer exactly once.
-            if let Some(silence) = state.silence_states.get(session_id) {
+            if let Some(silence) = state.session_maps.silence_states.get(session_id) {
                 silence.lock().commit_injection_claim(claim.token);
             }
             AgentSubmissionWrite::Complete {
@@ -6744,6 +6943,7 @@ fn write_agent_command_with_boundary(
     // checks this boundary only after the complete Enter write returns; movement
     // beyond it is child PTY output, never TUICommander's own turn bookkeeping.
     let acknowledgement_offset = state
+        .session_maps
         .output_buffers
         .get(session_id)
         .map(|buffer| buffer.lock().total_written)
@@ -6767,6 +6967,7 @@ fn write_claimed_agent_command(state: &AppState, session_id: &str, text: &str) -
 
 fn commit_injection_claim(state: &AppState, session_id: &str, claim: InjectionClaim) {
     let committed = state
+        .session_maps
         .silence_states
         .get(session_id)
         .map(|silence| silence.lock().commit_injection_claim(claim.token))
@@ -7142,8 +7343,9 @@ pub(crate) fn deliver_message_to_managed_pty(
     session_id: &str,
     framed: &str,
 ) -> PtyDelivery {
-    let available = state.sessions.contains_key(session_id)
+    let available = state.session_maps.sessions.contains_key(session_id)
         && state
+            .session_maps
             .session_states
             .get(session_id)
             .is_some_and(|session| session.agent_type.is_some());
@@ -7152,7 +7354,7 @@ pub(crate) fn deliver_message_to_managed_pty(
     }
     let outcome = deliver_message_to_pty(state, session_id, framed);
     // Teardown can still win between the check above and the write.
-    if state.sessions.contains_key(session_id) {
+    if state.session_maps.sessions.contains_key(session_id) {
         outcome
     } else {
         PtyDelivery::Unavailable
@@ -7297,7 +7499,7 @@ pub(crate) fn enqueue_user_command(
     if text.trim().is_empty() {
         return Err("Command text is empty".to_string());
     }
-    if !state.sessions.contains_key(session_id) {
+    if !state.session_maps.sessions.contains_key(session_id) {
         return Err("Session not found".to_string());
     }
     if !session_is_agent(state, session_id) {
@@ -7382,7 +7584,7 @@ pub(crate) fn mark_session_exited(session_id: &str, state: &Arc<AppState>) {
     // portable_pty::ExitStatus carries both exit_code() and signal().
     // Signal-killed processes get 128+signum (shell convention) so the
     // caller can distinguish SIGKILL (137) from normal exit(1).
-    if let Some(entry) = state.sessions.get(session_id)
+    if let Some(entry) = state.session_maps.sessions.get(session_id)
         && let Ok(Some(status)) = entry.value().lock()._child.try_wait()
     {
         let code = if let Some(sig) = status.signal() {
@@ -7391,9 +7593,12 @@ pub(crate) fn mark_session_exited(session_id: &str, state: &Arc<AppState>) {
         } else {
             status.exit_code() as i32
         };
-        state.exit_codes.insert(session_id.to_string(), code);
+        state
+            .session_maps
+            .exit_codes
+            .insert(session_id.to_string(), code);
     }
-    if state.sessions.remove(session_id).is_some() {
+    if state.session_maps.sessions.remove(session_id).is_some() {
         state
             .metrics
             .active_sessions
@@ -7401,7 +7606,11 @@ pub(crate) fn mark_session_exited(session_id: &str, state: &Arc<AppState>) {
     }
 
     // Notify orchestrator (if any) that this agent has exited.
-    let exit_code = state.exit_codes.get(session_id).map(|e| *e.value());
+    let exit_code = state
+        .session_maps
+        .exit_codes
+        .get(session_id)
+        .map(|e| *e.value());
     finish_session_tasks(state, session_id, exit_code);
     push_state_change_to_parent(
         state,
@@ -7435,11 +7644,12 @@ pub(crate) const TOMBSTONE_TTL_MS: u64 = 5 * 60 * 1000; // 5 minutes
 fn aged_out_tombstones(state: &AppState, now_ms: u64) -> Vec<String> {
     // A tombstone is: a stamp present, session entry absent, aged past TTL.
     state
+        .session_maps
         .last_output_ms
         .iter()
         .filter_map(|entry| {
             let id = entry.key();
-            if state.sessions.contains_key(id) {
+            if state.session_maps.sessions.contains_key(id) {
                 return None;
             }
             let last_ms = entry.value().load(Ordering::Relaxed);
@@ -7463,7 +7673,7 @@ fn aged_out_tombstones(state: &AppState, now_ms: u64) -> Vec<String> {
 /// a `sessions` API change; not worth it while ids are random UUIDs in practice.
 fn reap_tombstones(state: &AppState, candidates: &[String]) {
     for id in candidates {
-        if state.sessions.contains_key(id) {
+        if state.session_maps.sessions.contains_key(id) {
             continue;
         }
         remove_post_mortem_session_state(id, state);
@@ -7734,6 +7944,7 @@ pub(crate) fn stamp_input_ms(state: &AppState, session_id: &str) {
         .unwrap_or_default()
         .as_millis() as u64;
     state
+        .session_maps
         .last_input_ms
         .entry(session_id.to_string())
         .or_insert_with(|| std::sync::atomic::AtomicU64::new(0))
@@ -7753,6 +7964,7 @@ pub(crate) fn record_submitted_line(
     note_submitted_input(state, session_id);
     if content.split_whitespace().count() >= 10 {
         state
+            .session_maps
             .last_prompts
             .insert(session_id.to_string(), content.clone());
     }
@@ -7767,7 +7979,7 @@ pub(crate) fn record_submitted_line(
             let _ = app.emit(&format!("pty-parsed-{session_id}"), &*json);
         }
     }
-    if let Some(ss) = state.silence_states.get(session_id) {
+    if let Some(ss) = state.session_maps.silence_states.get(session_id) {
         let mut sl = ss.lock();
         sl.suppress_user_input();
         // The parser's api-error / session-conflict dedup lives in the reader
@@ -7787,9 +7999,10 @@ pub(crate) fn spawn_reader_thread(
     let running = Arc::new(AtomicBool::new(true));
 
     state
+        .session_maps
         .silence_states
         .insert(session_id.clone(), silence.clone());
-    state.shell_states.insert(
+    state.session_maps.shell_states.insert(
         session_id.clone(),
         std::sync::atomic::AtomicU8::new(SHELL_NULL),
     );
@@ -7806,7 +8019,8 @@ pub(crate) fn spawn_reader_thread(
     // Coalesces rapid writes (spinner erase+rewrite) into a single frame.
     let frame_dirty = Arc::new(AtomicBool::new(false));
     state
-        .grid_frame_dirty
+        .grid
+        .frame_dirty
         .insert(session_id.clone(), frame_dirty.clone());
     // Scroll target the ticker consumes, created alongside the dirty flag the
     // same handler sets. It belongs to the session, not to one of its front
@@ -7814,10 +8028,12 @@ pub(crate) fn spawn_reader_thread(
     // a browser had ever rendered had nowhere to record a scroll, and closing
     // the desktop terminal took the entry away from an attached browser.
     state
+        .grid
         .pending_scroll
         .insert(session_id.clone(), Arc::new(AtomicI64::new(-1)));
     let sync_active = Arc::new(AtomicBool::new(false));
     state
+        .grid
         .sync_update_active
         .insert(session_id.clone(), sync_active.clone());
     // Shared by the PTY reader (which batches lines) and the frame ticker (which
@@ -7896,7 +8112,7 @@ pub(crate) fn spawn_reader_thread(
             if ticker_sync_active
                 .as_ref()
                 .is_some_and(|f| f.load(Ordering::Relaxed))
-                && let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid)
+                && let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid)
             {
                 let mut g = vt.lock();
                 if g.flush_sync_timeout_if_needed() {
@@ -7945,7 +8161,7 @@ pub(crate) fn spawn_reader_thread(
             // worst failure mode of the group.
             if !grid_has_subscriber(&ticker_state, &ticker_sid) {
                 if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid)
-                    && let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid)
+                    && let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid)
                 {
                     vt.lock().grid_scroll_to_offset(target);
                 }
@@ -7957,7 +8173,8 @@ pub(crate) fn spawn_reader_thread(
             // shard read lock across the stuck back-off sleep, blocking every
             // writer on that shard for up to a second.
             let gate = ticker_state
-                .grid_gates
+                .grid
+                .gates
                 .get(&ticker_sid)
                 .map(|g| Arc::clone(g.value()));
             // The gate belongs to the desktop WebView and to nothing else. It used
@@ -8038,6 +8255,7 @@ pub(crate) fn spawn_reader_thread(
                     .unwrap_or_default()
                     .as_millis() as u64;
                 ticker_state
+                    .session_maps
                     .last_input_ms
                     .get(&ticker_sid)
                     .map(|ts| {
@@ -8069,7 +8287,7 @@ pub(crate) fn spawn_reader_thread(
             let desktop_owed_full_frame = gate
                 .as_ref()
                 .is_some_and(|g| g.is_open() && g.take_missed());
-            if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
+            if let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid) {
                 let mut g = vt.lock();
                 if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid) {
                     g.grid_scroll_to_offset(target);
@@ -8096,15 +8314,15 @@ pub(crate) fn spawn_reader_thread(
         // the reader's EOF path, which assembles the flush_eof remainder and
         // drains whatever is still batched, in order. A second drain racing from
         // this thread could deliver the older tail after it.
-        if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
+        if let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid) {
             let mut g = vt.lock();
             g.force_stop_sync_if_buffered();
             let frame = g.serialize_dirty_rows();
             drop(g);
             send_grid_frame(&ticker_state, &ticker_sid, frame);
         }
-        ticker_state.grid_frame_dirty.remove(&ticker_sid);
-        ticker_state.sync_update_active.remove(&ticker_sid);
+        ticker_state.grid.frame_dirty.remove(&ticker_sid);
+        ticker_state.grid.sync_update_active.remove(&ticker_sid);
     });
 
     std::thread::spawn(move || {
@@ -8117,6 +8335,7 @@ pub(crate) fn spawn_reader_thread(
             let mut utf8_buf = Utf8ReadBuffer::new();
             let mut esc_buf = EscapeAwareBuffer::new();
             let session_cwd: Option<String> = state
+                .session_maps
                 .sessions
                 .get(&session_id)
                 .and_then(|s| s.lock().cwd.clone());
@@ -8138,7 +8357,11 @@ pub(crate) fn spawn_reader_thread(
                         // (pre-transform) so a wild rendering corruption can be
                         // dumped and replayed offline (story 056-7545).
                         {
-                            let ring = state.pty_raw_rings.entry(session_id.clone()).or_default();
+                            let ring = state
+                                .grid
+                                .pty_raw_rings
+                                .entry(session_id.clone())
+                                .or_default();
                             let mut ring = ring.lock();
                             ring.extend(&buf[..n]);
                             if ring.len() > PTY_RAW_RING_CAP {
@@ -8175,6 +8398,7 @@ pub(crate) fn spawn_reader_thread(
                             let clamped_data = xterm_data;
 
                             let agent_active = state
+                                .session_maps
                                 .session_states
                                 .get(&session_id)
                                 .map(|s| s.agent_type.is_some())
@@ -8237,6 +8461,7 @@ pub(crate) fn spawn_reader_thread(
                 // active_sub_tasks to avoid leaving the frontend notification gate
                 // in an inconsistent state after process crash/exit.
                 let needs_clear = state
+                    .session_maps
                     .session_states
                     .get_mut(&session_id)
                     .filter(|e| e.active_sub_tasks > 0)
@@ -8290,6 +8515,7 @@ pub(crate) fn spawn_reader_thread(
             #[cfg(feature = "desktop")]
             if let Some(app) = state.app_handle.read().as_ref() {
                 let agent_type = state
+                    .session_maps
                     .session_states
                     .get(&session_id)
                     .and_then(|s| s.agent_type.clone());
@@ -8380,7 +8606,7 @@ pub(crate) async fn spawn_session_for_agent(
         .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
 
     let paused = Arc::new(AtomicBool::new(false));
-    state.sessions.insert(
+    state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(writer)),
@@ -8402,32 +8628,34 @@ pub(crate) async fn spawn_session_for_agent(
         .active_sessions
         .fetch_add(1, Ordering::Relaxed);
 
-    state.output_buffers.insert(
+    state.session_maps.output_buffers.insert(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let mut vt_log = VtLogBuffer::new(rows, cols, VT_LOG_BUFFER_CAPACITY);
-    if let Some(colors) = state.ansi_colors.read().as_ref() {
-        vt_log.set_ansi_colors(colors);
-    }
+    let vt_log = state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY);
     state
+        .grid
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
     let grid_watch_tx = crate::grid_gate::new_grid_watch();
-    state.grid_watch.insert(session_id.clone(), grid_watch_tx);
+    state.grid.watch.insert(session_id.clone(), grid_watch_tx);
     state
+        .session_maps
         .last_output_ms
         .insert(session_id.clone(), AtomicU64::new(0));
     state
+        .session_maps
         .terminal_rows
         .insert(session_id.clone(), std::sync::atomic::AtomicU16::new(rows));
     state
+        .session_maps
         .session_states
         .insert(session_id.clone(), crate::state::SessionState::default());
 
     state.emit_pty_event(crate::state::AppEvent::SessionCreated {
         session_id: session_id.clone(),
         cwd: state
+            .session_maps
             .sessions
             .get(&session_id)
             .and_then(|s| s.lock().cwd.clone()),
@@ -8480,7 +8708,7 @@ fn write_pty_parts_blocking(
     // (serialize_dirty_rows) and reader thrash this same vt lock; a blocking lock
     // here would starve input. If contended, skip — the next frame restores the
     // cursor anyway.
-    if let Some(vt) = state.vt_log_buffers.get(session_id)
+    if let Some(vt) = state.grid.vt_log_buffers.get(session_id)
         && let Some(mut vt) = vt.try_lock()
         && !vt.is_cursor_visible()
     {
@@ -8533,6 +8761,7 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
     // this shard and can park the entire IPC Tokio runtime under load.
     let (actions, buffer_empty, buffer_is_slash) = {
         let input_entry = state
+            .session_maps
             .input_buffers
             .entry(session_id.to_string())
             .or_insert_with(|| parking_lot::Mutex::new(InputLineBuffer::new()));
@@ -8554,7 +8783,7 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
             }
             InputAction::Interrupt => {
                 line_submitted = true;
-                if let Some(ss) = state.silence_states.get(session_id) {
+                if let Some(ss) = state.session_maps.silence_states.get(session_id) {
                     ss.lock().note_interrupt_requested();
                 }
             }
@@ -8564,7 +8793,7 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
     // only intent evidence; it never flips idle until the agent redraws an
     // interrupted/ready prompt. CSI-prefixed navigation keys are excluded.
     if data == "\x1b"
-        && let Some(ss) = state.silence_states.get(session_id)
+        && let Some(ss) = state.session_maps.silence_states.get(session_id)
     {
         ss.lock().note_interrupt_requested();
     }
@@ -8573,7 +8802,7 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
     // memory: the user is explicitly engaging again, so a recurrence of
     // the same failure in a later turn must be allowed to notify.
     // Mirrors `OutputParser`'s reset of `last_api_error_match` on UserInput.
-    if line_submitted && let Some(ss) = state.silence_states.get(session_id) {
+    if line_submitted && let Some(ss) = state.session_maps.silence_states.get(session_id) {
         let mut sl = ss.lock();
         sl.reset_tool_error_memory();
         sl.reset_suggest_memory();
@@ -8590,10 +8819,11 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
     };
     // Look up before inserting: `entry` needs an owned key, so the allocation is
     // paid only when the map entry does not already exist.
-    match state.slash_mode.get(session_id) {
+    match state.session_maps.slash_mode.get(session_id) {
         Some(flag) => flag.store(in_slash, std::sync::atomic::Ordering::Relaxed),
         None => {
             state
+                .session_maps
                 .slash_mode
                 .entry(session_id.to_string())
                 .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
@@ -8676,6 +8906,7 @@ pub(crate) fn resize_session_core(
     // (CONC-B, story 100-e303). Clone the Arc and drop the DashMap Ref before locking
     // so we never hold a `resize_locks` shard guard across the resize.
     let resize_lock = state
+        .session_maps
         .resize_locks
         .entry(session_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new((0, 0))))
@@ -8686,7 +8917,7 @@ pub(crate) fn resize_session_core(
     // matches the startup dims no-ops instead of firing a gratuitous SIGWINCH. `(0, 0)`
     // is the never-applied sentinel (real dims are guarded > 0 above).
     if *applied == (0, 0)
-        && let Some(vt_log) = state.vt_log_buffers.get(session_id)
+        && let Some(vt_log) = state.grid.vt_log_buffers.get(session_id)
     {
         let vt = vt_log.lock();
         *applied = (vt.grid_screen_lines() as u16, vt.grid_columns() as u16);
@@ -8705,7 +8936,7 @@ pub(crate) fn resize_session_core(
     // otherwise leave the viewport blank until a scroll forces
     // `terminal_request_frame`. If the grid already matches (PTY-only retry after a
     // prior `master.resize` failure) skip the grid work but still re-apply the PTY.
-    let resize_frame = match state.vt_log_buffers.get(session_id) {
+    let resize_frame = match state.grid.vt_log_buffers.get(session_id) {
         Some(vt_log) => {
             let mut vt = vt_log.lock();
             if vt.grid_screen_lines() == rows as usize && vt.grid_columns() == cols as usize {
@@ -8718,17 +8949,18 @@ pub(crate) fn resize_session_core(
         None => None,
     };
     // Update terminal rows for cursor-up clamping in the reader thread.
-    if let Some(r) = state.terminal_rows.get(session_id) {
+    if let Some(r) = state.session_maps.terminal_rows.get(session_id) {
         r.store(rows, Ordering::Relaxed);
     }
     // Mark resize in silence state so the reader thread suppresses re-parsed events
     // from the shell's prompt redraw triggered by SIGWINCH.
-    if let Some(ss) = state.silence_states.get(session_id) {
+    if let Some(ss) = state.session_maps.silence_states.get(session_id) {
         ss.lock().on_resize();
     }
     // Only now signal the child (TIOCSWINSZ → SIGWINCH): everything it repaints
     // from here on meets a grid that already wraps at the new width.
     let entry = state
+        .session_maps
         .sessions
         .get(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
@@ -8761,6 +8993,7 @@ pub(crate) fn resize_session_core(
 #[cfg(unix)]
 fn background_activity_blocks_standby(state: &AppState, session_id: &str) -> bool {
     state
+        .session_maps
         .session_states
         .get(session_id)
         .is_some_and(|session| session.background_work || session.has_pending_background_probe())
@@ -8788,8 +9021,8 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 .unwrap_or_default()
                 .as_millis() as u64;
 
-            let vis_count = state.session_visibility.len();
-            let sessions_count = state.sessions.len();
+            let vis_count = state.session_maps.session_visibility.len();
+            let sessions_count = state.session_maps.sessions.len();
             tracing::trace!(
                 vis_count,
                 sessions_count,
@@ -8797,17 +9030,22 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 "Standby checker tick"
             );
 
-            for entry in state.session_visibility.iter() {
+            for entry in state.session_maps.session_visibility.iter() {
                 let session_id = entry.key();
                 let visible = *entry.value();
                 if visible {
                     continue;
                 }
-                if state.standby_sessions.contains_key(session_id.as_str()) {
+                if state
+                    .session_maps
+                    .standby_sessions
+                    .contains_key(session_id.as_str())
+                {
                     continue;
                 }
 
                 let shell_raw = state
+                    .session_maps
                     .shell_states
                     .get(session_id.as_str())
                     .map(|a| a.load(Ordering::Acquire));
@@ -8821,6 +9059,7 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 // explicit Stop/OSC or a stable ready screen. Legacy agents that
                 // lack an adapter retain their prior timeout behavior.
                 let is_agent = state
+                    .session_maps
                     .session_states
                     .get(session_id.as_str())
                     .map(|s| s.agent_type.is_some())
@@ -8841,6 +9080,7 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 }
 
                 let idle_since = state
+                    .session_maps
                     .shell_state_since_ms
                     .get(session_id.as_str())
                     .map(|a| a.load(Ordering::Acquire))
@@ -8851,6 +9091,7 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 }
 
                 let settled = state
+                    .session_maps
                     .silence_states
                     .get(session_id.as_str())
                     .map(|e| e.lock().startup_settled)
@@ -8876,12 +9117,13 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
 /// Returns Ok(true) if stopped, Ok(false) if already in standby or session gone.
 #[cfg(unix)]
 pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool, String> {
-    if state.standby_sessions.contains_key(session_id) {
+    if state.session_maps.standby_sessions.contains_key(session_id) {
         return Ok(false);
     }
     // Serialize the final eligibility check with background-work updates. This
     // closes the gap between the periodic check above and the actual SIGSTOP.
     let silence = state
+        .session_maps
         .silence_states
         .entry(session_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
@@ -8892,6 +9134,7 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
     }
     let pgid = {
         let entry = state
+            .session_maps
             .sessions
             .get(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
@@ -8915,7 +9158,10 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    state.standby_sessions.insert(session_id.to_string(), now);
+    state
+        .session_maps
+        .standby_sessions
+        .insert(session_id.to_string(), now);
     tracing::info!(session_id, pgid, "Session entered standby (SIGSTOP)");
     emit_standby_event(state, session_id, true);
     Ok(true)
@@ -8924,11 +9170,17 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
 /// SIGCONT a session in standby. Returns Ok(true) if woken, Ok(false) if not in standby.
 #[cfg(unix)]
 pub(crate) fn wake_session(state: &AppState, session_id: &str) -> Result<bool, String> {
-    if state.standby_sessions.remove(session_id).is_none() {
+    if state
+        .session_maps
+        .standby_sessions
+        .remove(session_id)
+        .is_none()
+    {
         return Ok(false);
     }
     let pgid = {
         let entry = state
+            .session_maps
             .sessions
             .get(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
@@ -8962,6 +9214,7 @@ pub(crate) fn wake_session(state: &AppState, session_id: &str) -> Result<bool, S
 #[cfg(unix)]
 pub(crate) fn wake_all_standby(state: &AppState) -> usize {
     let parked: Vec<String> = state
+        .session_maps
         .standby_sessions
         .iter()
         .map(|e| e.key().clone())
@@ -9030,7 +9283,7 @@ pub(crate) fn close_pty_core(
     session_id: &str,
     cleanup_worktree: bool,
 ) -> Option<crate::state::WorktreeInfo> {
-    let (_, session_mutex) = state.sessions.remove(session_id)?;
+    let (_, session_mutex) = state.session_maps.sessions.remove(session_id)?;
     state
         .metrics
         .active_sessions
@@ -9081,6 +9334,7 @@ pub(crate) fn close_pty_core(
     // Capture exit code for the tombstone before dropping the child handle.
     if let Ok(Some(status)) = session._child.try_wait() {
         state
+            .session_maps
             .exit_codes
             .insert(session_id.to_string(), status.exit_code() as i32);
     }
@@ -9106,7 +9360,7 @@ pub(crate) fn close_pty_core(
 /// immediately. The child exits near-instantly so `try_wait` captures the
 /// exit code before the tombstone is stamped.
 pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
-    let Some((_, session_mutex)) = state.sessions.remove(session_id) else {
+    let Some((_, session_mutex)) = state.session_maps.sessions.remove(session_id) else {
         return false;
     };
     state
@@ -9137,6 +9391,7 @@ pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
 
     if let Ok(Some(status)) = session._child.try_wait() {
         state
+            .session_maps
             .exit_codes
             .insert(session_id.to_string(), status.exit_code() as i32);
     }
@@ -9401,7 +9656,7 @@ pub(crate) fn collect_process_stats(state: &AppState) -> Vec<ProcessStats> {
     let parent_map = process_parent_map();
 
     // Collect child PIDs from all PTY sessions
-    for entry in state.sessions.iter() {
+    for entry in state.session_maps.sessions.iter() {
         let session_id = entry.key().clone();
         let session = entry.value().lock();
         let display = session
@@ -9629,6 +9884,7 @@ pub struct VtLogChunk {
 /// since the last tick is applied once, and `-1` means nothing is pending.
 fn take_pending_scroll(state: &AppState, session_id: &str) -> Option<usize> {
     let target = state
+        .grid
         .pending_scroll
         .get(session_id)?
         .swap(-1, Ordering::Relaxed);
@@ -9646,7 +9902,7 @@ fn take_pending_scroll(state: &AppState, session_id: &str) -> Option<usize> {
 /// a consumer this misses is a client that stops repainting.
 pub(crate) fn grid_has_subscriber(state: &AppState, session_id: &str) -> bool {
     #[cfg(feature = "desktop")]
-    if state.grid_channels.contains_key(session_id) {
+    if state.grid.channels.contains_key(session_id) {
         return true;
     }
     grid_has_watcher(state, session_id)
@@ -9659,7 +9915,8 @@ pub(crate) fn grid_has_subscriber(state: &AppState, session_id: &str) -> bool {
 /// desktop channel is exactly what must not count towards that answer.
 fn grid_has_watcher(state: &AppState, session_id: &str) -> bool {
     state
-        .grid_watch
+        .grid
+        .watch
         .get(session_id)
         .is_some_and(|tx| tx.receiver_count() > 0)
 }
@@ -9675,10 +9932,10 @@ fn grid_has_watcher(state: &AppState, session_id: &str) -> bool {
 /// the *right* answer here: the loss is shared, so the repair has to be.
 fn repaint_after_reorder(state: &AppState, session_id: &str) {
     tracing::debug!(session_id = %session_id, "grid frame arrived out of order, forcing a full repaint");
-    if let Some(vt) = state.vt_log_buffers.get(session_id) {
+    if let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
         vt.lock().grid_force_full_damage();
     }
-    if let Some(dirty) = state.grid_frame_dirty.get(session_id) {
+    if let Some(dirty) = state.grid.frame_dirty.get(session_id) {
         dirty.store(true, Ordering::Relaxed);
     }
 }
@@ -9704,11 +9961,11 @@ pub(crate) fn send_grid_frame(
     // no desktop channel, so the watch can take the original; cloning first and
     // then finding nothing to hand the original to was pure copy.
     #[cfg(feature = "desktop")]
-    let desktop_wants_it = state.grid_channels.contains_key(session_id);
+    let desktop_wants_it = state.grid.channels.contains_key(session_id);
     #[cfg(not(feature = "desktop"))]
     let desktop_wants_it = false;
 
-    let frame = match state.grid_watch.get(session_id) {
+    let frame = match state.grid.watch.get(session_id) {
         Some(watch_tx) => {
             let watched = watch_tx.receiver_count() > 0;
             let (for_watch, for_desktop) = match (watched, desktop_wants_it) {
@@ -9743,7 +10000,7 @@ pub(crate) fn send_grid_frame(
         // full frame once the gate reopens — sending the delta now would only
         // deepen the backlog this gate exists to drain.
         let stalled = desktop_wants_it && {
-            let gate = state.grid_gates.get(session_id);
+            let gate = state.grid.gates.get(session_id);
             match gate.as_deref() {
                 Some(gate) if !gate.is_open() => {
                     gate.note_missed();
@@ -9756,7 +10013,7 @@ pub(crate) fn send_grid_frame(
             // Arm the ticker so the debt is paid even if the session falls silent
             // the instant the WebView recovers: the repair rides a tick, and an
             // undirty session never takes one.
-            if let Some(dirty) = state.grid_frame_dirty.get(session_id) {
+            if let Some(dirty) = state.grid.frame_dirty.get(session_id) {
                 dirty.store(true, Ordering::Relaxed);
             }
             return;
@@ -9774,10 +10031,10 @@ pub(crate) fn send_grid_frame(
 /// else.
 #[cfg(feature = "desktop")]
 fn send_desktop_grid_frame(state: &AppState, session_id: &str, bytes: Vec<u8>) {
-    let Some(ch) = state.grid_channels.get(session_id) else {
+    let Some(ch) = state.grid.channels.get(session_id) else {
         return;
     };
-    let gate = state.grid_gates.get(session_id);
+    let gate = state.grid.gates.get(session_id);
     if let Some(gate) = gate.as_deref() {
         gate.mark_sent();
     }
@@ -9852,6 +10109,7 @@ where
     let state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         state
+            .grid
             .vt_log_buffers
             .get(&session_id)
             .map(|vt| f(&mut vt.lock()))
