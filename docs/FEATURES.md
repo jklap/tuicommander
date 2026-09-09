@@ -187,7 +187,7 @@
 
 Terminal output is segmented into command blocks — one per prompt+output cycle. Blocks are detected via OSC 133 shell integration markers (A/C/D sequences) or OSC 7770;block= agent-emitted markers. For Claude Code, heuristic detection synthesizes blocks from tool call headers (`⏺ ToolName(args)`).
 
-- **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary. Provides a visual map of command history at a glance
+- **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary. Provides a visual map of command history at a glance. Toggled by **Show scrollbar marks** in Settings > General > Terminal (`show_scrollbar_marks`, on by default). The flag covers the history markers — these ticks and the user-prompt ticks below — and deliberately **not** the search-match ticks, which stay visible so a search never silently draws nothing
 - **User-prompt scrollbar markers** — A distinct green tick on the scrollbar marks each line where the user submitted a prompt to the agent (recorded from the OSC 7770 `state=busy` transition via `userPromptLines`). These are separate from command-block boundary marks and help you quickly locate your own prompts in long sessions
 - **Timestamp overlay** — Hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
 - **Gutter click** — Click the gutter area to select the entire block output for easy copying
@@ -775,8 +775,10 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Detachable panel** — click the detach icon in the header to pop the panel into a separate window (500×700). The main window shows a placeholder with "Bring back". Closing the detached window automatically restores the panel. **The two windows hand the conversation over through disk, they do not share it live.**
   - **Hand-over out.** The window is opened with the chat id *and* the terminal it was detached from (key, PTY session, name), and adopts both before rendering — the terminal first, since conversations are stored per terminal. It then reads that conversation off disk. An id with nothing saved under it simply opens empty
   - **It is a full chat, not a viewer.** It sends, runs the agent, and pauses/stops it against the terminal it was handed, and stays pinned to that terminal for its whole life even if the main window moves on. Detaching with no terminal focused hands over no session, and the window is read-only, exactly as the docked panel is. *Run in terminal* on a code block is the one thing that does not work there: it needs the terminal's live xterm handle, which cannot cross a window boundary
-  - **Hand-over back.** On close or reattach the main window re-reads that conversation, so whatever was sent from the detached copy is there. If the user switched terminals meanwhile, the detached terminal's cached conversation is invalidated instead, and re-read when they switch back to it
-  - The two are never live-linked: while both are open, neither sees the other's messages until the next hand-over. A Rust-side `ChatRegistry` and its `chat_subscribe` / `/ai/chat/{id}/stream` surfaces exist but have **no producer** — nothing ever published to them, and the frontend subscription that consumed them wiped loaded history with an empty snapshot, so it was removed (see story `624-a6c3`)
+  - **Hand-over back.** On close or reattach the main window re-reads that conversation, so whatever was sent from the detached copy is there. If the user switched terminals meanwhile, the detached terminal's cached conversation is invalidated instead, and re-read when they switch back to it. A conversation the main window is *still streaming* is also invalidated rather than re-read: a watcher rule, an automation goal or a terminal context action can start one while the panel is away, and that reply exists only in memory — reading disk over it blanks `streamingText` and `isStreaming` while the backend keeps writing into them, so the panel would come home dead until the stream ended
+  - Detaching hides the docked panel (`onDetach`), because the homecoming path toggles it back on. Left visible, that toggle turned it *off* and the panel never reappeared
+  - **One live link, in one direction: the stream.** The main window projects its live stream for the handed-over terminal every 250ms (`src/utils/aiChatSnapshot.ts`, over the generic `panelSync` channel), because `PanelOrchestrator` unmounts the docked panel while detached and `watcherFire`, `useAutomationEventBridges` and the terminal context menu all keep starting conversations on the main window's store — those replies previously rendered nowhere at all. The projection is an **overlay, never a replacement**: it carries the stream and no message history, so the worst a stale snapshot can say is "nothing is streaming", which writes nothing. `projectAiChat` drops a snapshot whose chat id is not this window's, and drops every snapshot while the detached window is running a stream of ITS own — ownership is decided by a `mirroring` flag, not by `isStreaming`, which the act of mirroring sets locally. A mirrored reply is appended with the raw setter and **never persisted**: this window never saw the prompt that produced it, so writing its shorter list back under the same chat id would delete that prompt from disk
+  - Everything else is still hand-over, not link: messages typed in either window are invisible to the other until the next hand-over. A Rust-side `ChatRegistry` and its `chat_subscribe` / `/ai/chat/{id}/stream` surfaces exist but have **no producer** — nothing ever published to them, and the frontend subscription that consumed them wiped loaded history with an empty snapshot, so it was removed (see story `624-a6c3`)
 - Full user guide: [`docs/user-guide/ai-chat.md`](user-guide/ai-chat.md)
 
 ### 6.15 AI Agent Loop (ReAct)
@@ -808,6 +810,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Slot resolver** — logical slots (`headless`, `chat`, `triage`) map to concrete provider+model pairs with a configurable fallback chain
 - **Legacy migration** — existing `ai-chat-config.json` provider/model/API key settings auto-migrated to `providers.json` on first load
 - **Settings > Providers tab** — full CRUD UI: add/edit/remove providers, manage model lists, assign slots, test connections
+- **Availability indicator** — a provider whose reachability can be probed (Ollama) shows **Reachable** or **Not detected** in its row, as an inline SVG plus label; when it is not detected, the backend's reason (refused, no answer within the 4s probe, or the HTTP status it answered with) is shown underneath. The wording is authored in `detect_ollama`, never composed in the UI
 - All Rust consumers (`ai_chat`, `ai_agent`, `headless`, `triage`) resolve models via the registry instead of reading config directly
 - Config file: `<config_dir>/providers.json`
 
@@ -1209,7 +1212,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Power management: prevent sleep when busy
 - Updates: auto-check, check now
 - Git integration: auto-show PR popover
-- Terminal: copy-on-select toggle (auto-copy selection to clipboard)
+- Terminal: copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, agent context bar, block timestamps (elapsed-time label per command block while Ctrl+Cmd is held), block folding (gates the Toggle Block Fold shortcut and its palette entry)
 - Experimental Features: master toggle + per-feature sub-flags (AI Chat, AI Triage, AI Watchers, Scrollback Reflow)
 - Repository defaults: base branch, file handling, setup/run scripts, worktree defaults (storage strategy, prompt on create, etc.)
 
@@ -1597,6 +1600,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - Version comparison for "Update available" detection
 - Install/update via download URL
 - `docx-preview` plugin: previews Word `.docx`/`.dotx` files as clean HTML using Mammoth.js
+- `xlsx-preview` plugin: previews Excel `.xlsx`/`.xlsm`/`.xlsb`/`.xls` and OpenDocument `.ods` spreadsheets as sortable per-sheet tables using SheetJS
 
 ### 17.4 Deep Links (`tuic://`)
 - `tuic://install-plugin?url=https://...` — Download and install plugin (HTTPS only, confirmation dialog)
@@ -1907,8 +1911,9 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - **Always-on CPU watchdog** (zero overhead when idle): polls `getrusage(RUSAGE_SELF)` every 5s and logs a full snapshot when TUIC's own CPU stays above 80% for 10+ consecutive seconds. PTY children (cargo, rustc, …) are separate OS processes and don't count toward the measurement
 - **Sleep/wake aware**: inter-tick gaps over 30s are treated as the machine having been asleep (lid closed) and skipped, so stale tokio-timer ticks after wake don't trigger false spikes or idle cascades
 - **Diagnostic mode** (toggleable at runtime, off by default): emits a health snapshot every 30s and alerts on FD/thread growth trends. Each snapshot includes: `cpu_pct` (TUIC self only, via `RUSAGE_SELF`), `children_cpu` (aggregate %cpu of all PTY child process trees + the hottest individual child — note the CPU watchdog spike trigger intentionally ignores children, so a hot `cargo`/agent only surfaces here), thread count, FD count, PTY session count, content-index build state, semaphore permits, sessions with grid frames outstanding (`session×count`, from the `GridGate` counters), event-bus subscriber count, and `head_emits_suppressed` (repo-watcher `head-changed` emits skipped by the resolved-HEAD-target guard — a climbing value signals a filesystem-event storm)
+- **Frontend liveness** (always on, desktop only): the WebView beats every 5s from its main thread; six missed beats log `Frontend unresponsive: no heartbeat for Ns` exactly once, and the return beat logs a matching recovery line. Sleep/wake re-baselines the clock so a lid-close is never charged to the frontend. Recover with `POST /debug/reload_webview` — a native-side reload that works while the JS thread does not, and keeps every PTY session (they live in the backend). Frontend: `src/utils/frontendHeartbeat.ts`; backend: `src-tauri/src/frontend_liveness.rs`
 - Control via HTTP: `POST /diagnostics {"enabled":true}` to toggle, `GET /diagnostics` for status, `GET /logs?source=diagnostics` to read the snapshots
-- Catches known failure patterns: IPC flush loops, content-index CPU saturation, blocked WebView JS thread (grid frames outstanding), FD/thread leaks, and sleep/wake false-idle cascades
+- Catches known failure patterns: IPC flush loops, content-index CPU saturation, a blocked or dead WebView main thread (missed heartbeats — *not* grid frames outstanding, which a hidden terminal produces on purpose by never acking), FD/thread leaks, and sleep/wake false-idle cascades
 - Backend: `src-tauri/src/cpu_watchdog.rs`
 
 ## 21. CLI Companion (`tuic`)

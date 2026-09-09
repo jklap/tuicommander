@@ -33,10 +33,22 @@ you focus a different terminal in the main window, the detached chat does not
 follow. Detach with no terminal focused and the window is read-only, exactly as
 the docked panel is.
 
-The two windows hand the conversation over through disk; they are not linked
-live. While both are open, neither sees what the other adds. When the detached
-window closes or reattaches, the main window re-reads the conversation, so the
-messages you sent from it are there.
+The two windows hand the conversation over through disk. Messages you type in one
+are invisible to the other until the next hand-over: when the detached window
+closes or reattaches, the main window re-reads the conversation, so what you sent
+from it is there.
+
+One thing does travel live, in one direction. A reply the *main* window is
+running — a file watcher rule firing, an automation goal, or *Explain this error*
+from a terminal — appears in the detached window as it streams. Those replies had
+nowhere to go before: detaching hides the docked panel, so they streamed into a
+window with nothing on screen. A reply you asked for in the detached window is
+never overwritten by this, and a reply belonging to a different terminal is not
+shown.
+
+If such a reply is still arriving when you close the detached window, the
+hand-over back leaves it alone: the panel comes back showing the answer as it
+streams, instead of blanking it and waiting for the end.
 
 One action does not work in the detached window: *Run* on a code block. It needs
 the terminal's live view, which cannot cross a window boundary.
@@ -47,7 +59,7 @@ AI Chat speaks to four provider families plus a custom endpoint. Switch in `Sett
 
 | Provider | Default base URL | Notes |
 |----------|------------------|-------|
-| **Ollama** (local) | `http://localhost:11434/v1/` | Auto-detected — the settings tab shows live status and the model list pulled from `GET /api/tags`. No API key required. |
+| **Ollama** (local) | `http://localhost:11434/v1/` | Auto-detected — the provider row in `Settings > Providers` shows **Reachable** or **Not detected**, plus the reason it failed (refused, no answer within 4s, or the HTTP status it answered with), and the model list pulled from `GET /api/tags`. No API key required. |
 | **Anthropic** | `https://api.anthropic.com` | Direct Messages API. API key from Anthropic console. |
 | **OpenAI** | `https://api.openai.com/v1` | Chat Completions. |
 | **OpenRouter** | `https://openrouter.ai/api/v1` | Single key, many models. |
@@ -141,6 +153,7 @@ The panel follows the focused terminal automatically — the header shows the ac
 - **Per-terminal state** — each terminal tab maintains its own independent chat history, streaming state, and conversation ID (keyed by `tuicSession`). Switching tabs switches the conversation. Messages sent from a tab always target that tab's PTY session.
 - **Desktop and browser/PWA persistence** — conversations autosave to the same backend store on every transport, and closing a terminal flushes pending messages immediately. Reloading the page restores the latest conversation for that terminal. The history panel lists, opens, and deletes the same saved conversations in desktop and browser/PWA mode.
 - Hard cap: **100 messages** per conversation in memory; older messages are evicted FIFO. Saved conversations keep the full history on disk.
+- **An agent run is saved with the conversation** — the tool-call log, the loop state (running / paused / completed / …) and the iteration counter are written on every step of the loop, not only when a turn ends. Reload in the middle of an iteration and the panel comes back with the tool cards and the banner it had, instead of prose alone. Tool output in that log is redacted and capped the same way message tool results are, and the log as a whole is bounded — at 500 entries and 512 KB, whichever bites first. A run that produces megabytes of tool output therefore keeps its most recent activity and loses its oldest entries; a run with ordinary output keeps everything. A run restored as *running* after the app itself restarted is only a record of where it stopped — nothing is driving it; press Stop to clear the banner.
 - Streaming uses a Tauri `Channel<ChatStreamEvent>` on desktop and a dedicated WebSocket in browser/PWA mode — you see tokens as they arrive. Cancel mid-stream with the stop button or `cancel_ai_chat`.
 - **Conversation history panel** — click the clock/history icon in the header to open a slide-in list of all saved conversations. Each row shows the title, terminal session name, message count, and date. Click a row to load that conversation into the current terminal's chat.
 

@@ -173,6 +173,10 @@ cleartext copy does not survive on disk.
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
+| `show_block_timestamps` | `bool` | `true` | Label each command block with its elapsed time while Ctrl+Cmd is held. Frontend-gated (painted by the renderer); stored here for persistence |
+| `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > General > Terminal |
+| `block_folding_enabled` | `bool` | `true` | Let the `block-fold-toggle` shortcut collapse a command block's output. Frontend-gated. Blocks already folded stay folded when this is off |
+| `scrollback_reflow` | `bool` | `true` | Re-wrap scrollback history on a column resize instead of truncating it. Backend-gated: `AppState::new_vt_log_buffer` applies it to a new grid and `commit_config_change` pushes a change to grids already open. Defaults `true` — including for a config.json written before the key existed — because the grid reflowed unconditionally before the flag had a consumer |
 
 **Commands:** `load_app_config()`, `save_app_config(config)`
 
@@ -660,6 +664,8 @@ struct AgentsConfig {
 **Commands:** `load_ai_chat_config()`, `save_ai_chat_config(config)`
 
 API keys are stored in the OS keyring — service `tuicommander-ai-chat`, user `api-key` — via `save_ai_chat_api_key` / `delete_ai_chat_api_key`. Saved conversations live in `<config_dir>/ai-chat-conversations/<id>.json`.
+
+Each file carries a `schema_version` stamped by `save_conversation` — 1 = chat text only, 2 = tool-call fields on messages, 3 = the `agent` block (`state`, `currentIteration`, `toolCalls`) that restores an interrupted agent run. Older files load unchanged: every field added since v1 has a serde default, and `load_conversation` re-stamps and rewrites anything below the current version. Types in `src-tauri/src/ai_agent/conversation.rs`.
 
 ### Dictation Config (`dictation-config.json`)
 

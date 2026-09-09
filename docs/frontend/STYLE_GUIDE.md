@@ -489,7 +489,9 @@ All badges: `font-size: --font-xs`, `font-family: --font-mono`, `font-weight: 60
 
 ## Icons
 
-**No icon library.** Text symbols and Unicode only. Emoji sparingly, always with `filter: grayscale(1) brightness(1.5)` to match the monochrome UI.
+**No icon library dependency.** Icons are monochrome inline SVGs with `fill="currentColor"`, so they inherit the surrounding text colour and recolour with the theme for free. **Never emoji** — AGENTS.md → "Visual".
+
+Text symbols and Unicode are still correct where the glyph *is* the content rather than an icon: the branch and state markers in the table below, and single characters inside a dense row. Reach for an inline SVG for anything that reads as an icon.
 
 | Symbol | Meaning | Where |
 |--------|---------|-------|

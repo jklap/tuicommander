@@ -115,9 +115,10 @@ Primary and alternate grids can reuse identical numeric row coordinates while re
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| ResizeObserver | OK | |
+| ResizeObserver | OK | Installed only after `onMount` awaits the session subscriptions and the font load, so it cannot be the sole re-measure path |
 | Debounce (100ms) | OK | `clearTimeout` + `setTimeout(remeasure, 100)` |
-| Minimum size guard | OK | Guards both `resize_pty` IPC and `remeasure()` |
+| Minimum size guard | OK | Guards both `resize_pty` IPC and `measureNow()` |
+| Unsized pane | OK | `measureNow()` reports it measured nothing; `remeasure()` then waits for the first real box (`retryUntilMeasured`, bounded at `SIZE_RETRY_MAX_FRAMES`). A page reload mounts every terminal before layout, and dropping that measurement left the canvas in a corner of the pane |
 | resize_pty IPC | OK | |
 
 ### Input / Keyboard

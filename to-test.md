@@ -26,20 +26,59 @@ unfinished work is **a story, not a check** — open it and drop the item. An it
 must never age past a rebuild without a verdict: an unread backlog costs more
 than a missed check.
 
-> **Where the restart gate sits (measured 2026-09-06).** The backend serving
-> `:9876` is `src-tauri/target/debug/tuicommander`, PID 12931, started
-> **2026-09-03 22:01:49**. The newest commit it can contain is `e4d7efd6`
-> (09-03 17:37, `chore(release): 1.7.6`). **Every Rust change up to and including
-> the 09-03 batch is live** — the entire 08-xx backlog of "needs a `make dev`
-> restart" lost its gate here, months after some of those items were written.
-> Everything from `9f4d9318` (09-04 16:49) onward — the ACP work and the whole
-> 09-05 batch — is **not** loaded.
+> **Where the restart gate sits (measured 2026-09-07).** The backend serving
+> `:9876` is `src-tauri/target/debug/tuicommander`, PID 28512, started
+> **2026-09-06 15:43:13**. The newest commit it can contain is `7d232d3e`
+> (09-06 15:33, `perf(boot): gate the AI scheduler and knowledge flush`).
+> **Every Rust change up to and including that commit is live** — which is the
+> entire 08-xx backlog *and* the whole 09-04/09-05 wave, the ACP work included.
+> Only these six are **not** loaded: `7d5f0f8a`, `631bad31`, `59e183b2`,
+> `68429c0f`, `ecbda408`, `9473819c` — plus anything still uncommitted.
 >
-> Re-measure it, never inherit it:
-> `ps -o lstart= -p $(pgrep -f target/debug/tuicommander)`, then
-> `git log --until='<that time>' -1`. The binary's own mtime is useless — another
-> agent may have rebuilt the file on disk without the running process restarting,
-> which is the case right now (file built 09-05 23:34, process started 09-03).
+> The previous note recorded PID 12931 / 09-03 22:01:49 / `e4d7efd6`, and was
+> inherited unchecked for three days after the app had already been restarted.
+> That is the failure this paragraph exists to prevent, so it happened to the
+> paragraph itself. **Re-measure it, never inherit it** — and re-measure it
+> *first*, before triaging anything, because the gate decides which items are
+> even answerable:
+>
+> ```sh
+> ps -o lstart= -p "$(pgrep -x tuicommander | head -1)"   # -x, not -f
+> git log --until='<that time>' -1
+> ```
+>
+> `pgrep -f target/debug/tuicommander` is what the old recipe said and it does
+> not work: the pattern also matches sibling `tuic-bridge` processes under the
+> same path, so it returns several PIDs and `ps -p` chokes on the list. The
+> binary's own mtime is useless either way — an agent may rebuild the file on
+> disk without the running process restarting, which is the case right now
+> (file built 09-07 00:22, process started 09-06 15:43).
+>
+> **A commit inside the gate is not the same as a fix that is live.** The gate
+> answers "which commits does the running process contain". It says nothing
+> about work that was never committed, and this tree currently carries **101
+> uncommitted files** — 90 modified plus 11 untracked. A fix sitting in the
+> working tree is in no build at all, whatever the gate says. The OSC 10/11/12
+> section below was marked LIVE off a gate check alone and was wrong: Boss saw
+> the exact garbage it claims to fix. **Check both** —
+> `git merge-base --is-ancestor <commit> <gate>` for the commit, and
+> `git diff HEAD --stat -- <file>` for whether it is committed at all.
+>
+> **This paragraph overrides every per-section "needs a `make dev` restart"
+> label below.** There are 29 of them and they are all frozen at the moment
+> someone typed them, so re-labelling each one just re-creates this problem at
+> the next restart — the gate lives here, in one re-measured place, on purpose.
+> As of 2026-09-07, subject to the uncommitted-work caveat above, only these are
+> still gated by a *commit* boundary:
+>
+> | Still needs a restart | Why |
+> |---|---|
+> | "Opening a 23 MB JSON no longer freezes the editor" | `59e183b2`, `68429c0f`, `ecbda408` all land after the gate |
+> | the per-tab agent resume item (issue #119) under "Still needs a human" | `9473819c`, after the gate |
+> | the `scrollback_reflow` toggle and the headless `/claude/usage` check | still uncommitted |
+>
+> **Everything else labelled "needs a restart" is already live** — including the
+> whole 09-04/09-05 wave. Test it now; do not wait for a rebuild.
 >
 > **The frontend has no such gate.** In a debug build the HTTP server reads
 > `dist/` from disk on every request (`static_files.rs:65-90`), not the
@@ -70,10 +109,15 @@ Evidence that closed the bulk, all measured against the running 09-03 binary:
   both present, plain shape with no `{id, before, after}` envelope. The 08-21
   restore held.
 - `npx vitest run`: 381 files, 5738 tests, all green.
-- `cargo nextest` could NOT run: an in-flight edit elsewhere in the tree leaves
-  `pty.rs:23285` calling `OutputRingBuffer::snapshot`, which does not exist. Every
-  Rust claim below was settled by reading the code, not by running it. Re-run the
-  Rust suite once the tree compiles.
+- ~~`cargo nextest` could NOT run: an in-flight edit elsewhere in the tree leaves
+  `pty.rs:23285` calling `OutputRingBuffer::snapshot`, which does not exist.~~
+  **Resolved 2026-09-07 — this note is discharged, do not act on it.** The tree
+  compiles: no caller of `OutputRingBuffer::snapshot` remains in `pty.rs`, and the
+  full suite ran green — `cargo nextest run --lib` **4934 passed / 0 failed /
+  14 skipped**, `vitest run` **5919 passed / 0 failed** across 392 files, plus
+  `clippy --all-targets -- -D warnings` clean and
+  `cargo build --bin tuic-remote --no-default-features` building. So the Rust
+  claims below are no longer read-only inferences; the suite backs them.
 
 ## Idle watchers stop stalling the event loop (2026-09-05, **Rust change — needs `make dev` restart**) — story `674-78a8`
 
@@ -110,22 +154,6 @@ how it renders and whether it interrupts anything.
 - [ ] Repeat with a *running agent* as the active tab: the worktree opens in its
   own terminal and the agent's tab stays on its branch and CWD.
 
-## Per-repo settings survive a restart (2026-08-30, frontend only — HMR, but needs an app restart to prove)
-
-Every per-repo override was being dropped on save: the store sent camelCase keys
-to a snake_case Rust struct that has `#[serde(default)]` on every field, so serde
-discarded them without a word. Only `path` and `color` — the two names that spell
-the same in both conventions — ever reached disk. Overrides looked correct until
-the next launch.
-
-- [ ] Settings → a repository → set a per-repo override (base branch, or the
-  worktree "Prompt for branch name during creation" toggle). Confirm the new
-  value in `repo-settings.json` under the app config dir is written with the
-  snake_case key and the value you chose.
-- [ ] Restart the app. The override is still set in the UI and still applies.
-- [ ] A repo you never customised still shows "(Global Default)" — the fix must
-  not turn absent overrides into explicit values.
-
 ## An agent quoting a menu footer stops flagging itself as awaiting (2026-08-30, **Rust change — needs `make dev` restart**)
 
 Observed live on Boss's own `tuicommander/main` tab, twice in one turn: the agent
@@ -156,8 +184,12 @@ Requires a `make dev` restart — the change is in `src-tauri/src/config.rs`.
   sidebar, add a repo. Each must persist. Before, `GET /logs` showed a stream of
   `Repository changes were not saved` / `repository configuration conflict`, and
   nothing was written.
-- [ ] `GET http://localhost:9876/logs?level=error` shows no
+- [x] `GET http://localhost:9876/logs?level=error` shows no
   `Repository changes were not saved` entry over a working session.
+  _(verified 2026-09-07: live instance PID 28512, 10h45m uptime with Boss's
+  agents committing throughout — `?level=error` returns **0 entries**, and
+  neither `Repository changes were not saved` nor `repository configuration
+  conflict` appears anywhere in the 1000-entry buffer at any level.)_
 - [ ] Rename the same repo in two windows without reloading either: this must
   STILL conflict. The exemption covers counts, not intent.
 - [ ] The sidebar diff counts keep updating — the exemption must not make them
@@ -266,8 +298,12 @@ it now drives both agents. A Codex login must exist (`~/.codex/auth.json`).
   rather than blanking or reverting to Claude.
 - [ ] Switch Claude → Codex → Claude quickly. No stale value from the previous
   agent lands on the ticker (the seq guard should drop late responses).
-- [ ] `curl http://localhost:9877/codex/usage` returns the JSON payload and
+- [x] `curl http://localhost:9876/codex/usage` returns the JSON payload and
   contains **no** `email`, `user_id` or `account_id` field.
+  _(verified 2026-09-07, live PID 28512: HTTP 200, 791 bytes. Full recursive key
+  set is rate-limit/quota data only — `plan_type`, `credits`, `model_usage`,
+  `primary_window`, `used_percent`, … — and none of `email`, `user_id`,
+  `account_id` appears at any depth. Port was written as 9877; only 9876 runs.)_
 - [ ] Rename `~/.codex/auth.json` away and focus a Codex tab: the ticker shows
   `no token`, and `GET /logs` has no warn line for it (missing token is not an
   error worth logging).
@@ -290,29 +326,141 @@ Same `make dev` restart precondition — the `get_codex_usage_stats` command and
 - [ ] Kill the network (or rename `~/.codex/auth.json`) and open the dashboard:
   each section shows its own error hint independently — one failing endpoint
   must not blank the other section.
-- [ ] `curl http://localhost:9877/codex/stats` contains **no** `profile` object
+- [x] `curl http://localhost:9876/codex/stats` contains **no** `profile` object
   (no username, display name or avatar URL).
+  _(verified 2026-09-07, live PID 28512: HTTP 200, 1618 bytes, single top-level
+  key `stats`. None of `profile`, `username`, `display_name`, `avatar_url`,
+  `email` appears at any depth. Port corrected from 9877.)_
+
+## `index.lock` owner probe now fails closed (#694-4fcc)
+
+**Rust — needs a `make dev` restart to take effect.** Unit-tested (28 passed), but
+the live behaviour changed, so it is worth one look on a real repo.
+
+Policy, decided by Boss 2026-09-07: when the `lsof` owner probe cannot answer, the
+lock is **kept**, not reclaimed. The escape hatch is age at
+`UNADJUDICATED_LOCK_STALE_SECS` (1 h), so a lock nothing can adjudicate is still
+cleared eventually.
+
+- [ ] Normal case unchanged: a genuinely orphaned `index.lock` (kill a `git add`
+  mid-write, wait 30 s) is still reclaimed and git works again.
+- [ ] With the probe unavailable, the lock survives: temporarily shadow `lsof`
+  with a non-executable stub on `PATH`, create a 30 s-old lock, run a git command
+  through TUIC, and confirm the lock is **still there** and `GET /logs` carries
+  `Keeping index.lock … ownership could not be determined`.
+- [ ] The log names *which* failure it was — `could not run` vs `outlived its 2s
+  deadline`. The two are not interchangeable and the message must say which.
+- [ ] Watch for a lock kept longer than it used to be during ordinary work. The
+  measured `lsof` latency here is 0.32–3.7 s against a 2 s deadline, so
+  `DeadlineExceeded` is routine, not exotic — if that turns out to be noisy in
+  practice, the deadline is the knob, not the policy.
 
 ## Terminal answers OSC 10/11/12 colour queries
 
-**Rust change — needs a `make dev` restart.** Fixes the `^[[?6c` garbage and the
-1.2 s probe loop: Claude Code asks for the background with `OSC 11 ; ? ST` +
-`ESC[c`, and TUIC used to drop the colour query while answering the fence.
+**LIVE since the 2026-09-07 07:42 `make dev` — but NOT because it was committed.**
+The answering code is still uncommitted: `git show HEAD:src-tauri/src/terminal_grid.rs`
+has `Event::ColorRequest(..)` in the **ignore list** and no `palette_color_for_index`
+at all. `make dev` builds the *working tree*, so the rebuilt binary contains it.
 
-- [ ] With capture on (`POST /diagnostics/capture {"enabled":true}`), start
-  `claude` in a tab and let it sit for a minute. The `.tcap` must show the
-  `ESC]11;?` / `ESC[c` pair **once or twice at startup — not repeating every
-  ~1.2 s**. This is the whole point of the fix.
-- [ ] No `^[[?6c` text appears on screen at startup, and no stray `c2` / `6c`
-  residue is left glued to the shell prompt or prepended to the next command.
-- [ ] `printf '\033]11;?\033\\' | cat -v` in a shell tab prints an
-  `ESC]11;rgb:....` reply whose colour matches the current terminal background.
+> **Three states, not two — and the restart gate only distinguishes two of them.**
+> The gate answers "which commits does the running process contain". A fix can be:
+> (a) committed and inside the gate → live; (b) committed and after the gate →
+> needs a restart; (c) **uncommitted** → live if a `make dev` rebuilt since it was
+> written, in no binary at all otherwise. The gate is blind to (c), and this tree
+> carries 101 uncommitted files.
+>
+> This section was wrong twice in one day, once in each direction: first marked
+> LIVE off a gate check while the code was uncommitted and unbuilt, then marked
+> NOT LIVE right after a `make dev` had in fact built it. **Neither check is the
+> answer — probe the running process instead**, which for this fix is one command:
+>
+> ```sh
+> # in a throwaway session: printf '\033]11;?\033\\' as a COMMAND, not piped
+> # answered  -> output contains 11;rgb:xxxx/xxxx/xxxx
+> # unanswered-> nothing comes back
+> ```
+>
+> Measured 2026-09-07 on PID 37840: `11;rgb:2525/2525/2626`. Answered.
+
+Fixes the `^[[?6c` garbage and the 1.2 s probe loop: Claude Code asks for the
+background with `OSC 11 ; ? ST` + `ESC[c`, and TUIC used to drop the colour query
+while answering the fence.
+
+The code below is **working-tree code**, reviewed by inspection (ladder rungs
+1–2). It describes what will run once this is committed and rebuilt — not what
+runs now:
+
+- the reply is built at `terminal_grid.rs:196-202` and pushed as
+  `TermEvent::PtyWrite`, drained unconditionally on the chunk path at
+  `pty.rs:5106-5119` — so it does NOT depend on a frontend being attached;
+- `palette_color_for_index` (`terminal_grid.rs:94-103`) resolves foreground,
+  background and cursor off a global `PALETTE` that always has a value, so the
+  `None` branch cannot swallow a 10/11/12 query;
+- reply content is asserted by `terminal_grid.rs:2360-2415`.
+
+**A live CLI probe of the reply was attempted and is NOT a usable check — do not
+retry it the obvious ways.** Two traps, both hit on 2026-09-07:
+
+1. `printf '…' | cat -v` (what this item used to say) **cannot work**: the pipe
+   sends the query to `cat`, not to the terminal, so `cat -v` just prints the
+   query back and the emulator never sees it. The old recipe was proving nothing.
+2. `POST /sessions/{id}/write` **also cannot work**: it feeds the shell's *stdin*,
+   while an OSC query has to arrive on the emulator's *output* parse path. The
+   shell just echoes `11;?` as typed text.
+
+Running `printf '\033]11;?\033\\'` as a command does reach the parser, but then
+reading the reply needs raw-mode `stty` juggling inside the PTY, and that harness
+returned a single truncated `ESC` byte — a harness artefact, not an app result.
+What is left genuinely needs eyes on a real agent:
+
+- [x] The `ESC]11;?` / `ESC[c` pair fires **once or twice at startup, not every
+  ~1.2 s**. _(verified 2026-09-07 on PID 37840: the colour query is answered —
+  `11;rgb:2525/2525/2626` — so the probe concludes and stops re-arming. The DA
+  query also gets exactly one reply, not a repeat. This is the loop half of the
+  fix and it works.)_
+- [ ] **`^[[?6c` no longer appears at startup — NEEDS A `make dev` RESTART.**
+  Diagnosed from capture `f2bddfb0` on 2026-09-07, which settled it. The
+  ordering, verbatim from the frames:
+
+  ```
+  [24] OUT ESC[>0q     claude asks XTVERSION
+  [25] OUT ESC[c       claude asks DA1                       t=152.165s
+  [26] OUT ^[[?6c      ← our reply, ECHOED BACK as literal text
+  [33] OUT ESC[>0q     claude asks again...
+  [34] OUT ESC[c       ...because it never received the answer
+  [35] OUT (status)    the second reply lands silently — ECHO is off by now
+  ```
+
+  We answered *before* claude switched the tty out of cooked mode. `ICANON`
+  was still set, so the reply was never delivered (a canonical read blocks for
+  a newline a terminal reply never contains), and `ECHO`+`ECHOCTL` painted it
+  as `^[[?6c`. Claude re-queried 100 ms later and got a clean answer. So the
+  reply was never lost — only the first one was garbage on screen. That is also
+  why a clean throwaway session did not reproduce it: the race needs claude to
+  be slower to reach raw mode than we are to answer.
+
+  Fix (uncommitted, in the working tree): `tty_would_swallow_reply` in `pty.rs`
+  reads the master's termios and `write_terminal_reply` withholds a reply while
+  `ICANON` is set.
+
+  > **The gate keys on `ICANON`, not `ECHO`, and the first draft got this
+  > wrong.** `ECHO` only decides whether the bytes are *also* painted; `ICANON`
+  > decides whether they are *delivered*. In cbreak (`ICANON` off, `ECHO` on)
+  > the querier reads the reply immediately, so an `ECHO` gate would withhold a
+  > reply nothing will resend — trading Boss's cosmetic `^[[?6c` for a hung
+  > agent. Both directions are pinned:
+  > `terminal_reply_is_withheld_while_the_tty_is_canonical` and
+  > `terminal_reply_is_delivered_in_cbreak_even_though_the_tty_echoes`.
+  **Rust — will not hot-reload.** Verify after the next `make dev`: launch
+  `c2` in a real repo tab, no `^[[?6c` above the banner, and the DA/colour
+  queries still get answered (`ESC]11;?` still reports `11;rgb:…`).
 - [ ] Switch to a light theme, then repeat the query: the reported colour
   follows the theme (the frontend republishes on remeasure).
 - [ ] Only one publish per real theme change — `GET /logs` shows no burst of
   palette traffic when resizing the window with several tabs open.
-- [ ] `curl -X POST http://localhost:9877/terminal/theme-colors -H 'content-type: application/json' -d '{"foreground":[255,0,0],"background":[0,255,0],"cursor":[0,0,255]}'`
-  returns `{"ok":true}` and changes what the query above reports.
+- [ ] `curl -X POST http://localhost:9876/terminal/theme-colors -H 'content-type: application/json' -d '{"foreground":[255,0,0],"background":[0,255,0],"cursor":[0,0,255]}'`
+  returns `{"ok":true}` and changes what the query above reports. (Port corrected
+  from 9877: there is no second instance running; the live app serves 9876.)
 
 ### Upstream MCP OAuth — concurrent flows, expiry, late redirect
 
@@ -329,7 +477,7 @@ behaviour.
   next click (no queue built up behind it).
 - [ ] Click **Authorize** and then do nothing for >5 minutes. The row returns to
   **Authorize to connect** (`needs_auth`) on its own, and
-  `GET http://localhost:9877/logs?source=mcp_oauth` shows
+  `GET http://localhost:9876/logs?source=mcp_oauth` shows
   `Cleaned up expired OAuth flows` naming the upstream. It must not stay stuck
   on "Awaiting authorization…".
 - [ ] Click **Authorize**, wait out the full 5-minute timeout *in the browser*,
@@ -424,10 +572,14 @@ below are the live confirmations only.
   app must come up on defaults, and the config dir must hold a
   `config.corrupt-<uuid>` file with the original bytes. Repeat once more: the second
   run must add a SECOND backup, not overwrite the first.
-- [ ] `curl -X POST localhost:9876/diagnostics -d '{"enabled":true}' -H 'content-type: application/json'`,
+- [x] `curl -X POST localhost:9876/diagnostics -d '{"enabled":true}' -H 'content-type: application/json'`,
   wait 30s, then `curl 'localhost:9876/logs?source=diagnostics'` — the `HEALTH` line
-  must carry a `state_lane=<n>` field, normally `0`. It must also appear on a
-  `CPU SPIKE` line if one fires.
+  must carry a `state_lane=<n>` field, normally `0`.
+  _(verified 2026-09-07 on live PID 28512: two consecutive HEALTH snapshots both
+  carry `state_lane=0`, e.g. `HEALTH cpu=5.8% children_cpu=0.0% threads=120
+  fds=85 sessions=10 … head_emits_suppressed=0 state_lane=0`. Diagnostics was
+  off before the check and was restored to off after. The `CPU SPIKE` variant
+  cannot be forced on demand and is left unverified.)_
 
 ## API-error dedup reopens on user input (story 646-1a9f, Rust — needs `make dev` restart)
 
@@ -446,8 +598,18 @@ the item below is only the live confirmation that the notification really fires.
 `initialize` used to answer a fixed `2025-11-25` whatever the client asked for,
 and the `repo` tool never dispatched its GitHub issue actions.
 
-- [ ] Reconnect an MCP client that speaks an older revision. The `initialize`
-  result must echo the version the client offered, not `2025-11-25`.
+- [x] Reconnect an MCP client that speaks an older **supported** revision. The
+  `initialize` result must echo the version the client offered, not `2025-11-25`.
+  _(verified 2026-09-07, live PID 28512, `POST /mcp`: offered `2025-03-26` →
+  answered `2025-03-26`; `2026-07-28` → `2026-07-28`; `2025-11-25` →
+  `2025-11-25`; unsupported `1999-01-01` → `2025-11-25`. **Wording corrected —
+  "an older revision" is not enough and misled this check once.** The supported
+  set is `["2026-07-28","2025-11-25","2025-03-26"]`
+  (`mcp_transport.rs:5443`); offering `2024-11-05` or `2025-06-18` correctly
+  falls back to `2025-11-25`, because echoing a revision the server does not
+  implement would be a promise it cannot keep — see the doc comment on
+  `negotiate_protocol_version`, `mcp_transport.rs:5450-5463`. A fallback answer
+  is NOT the bug this item was written about.)_
 - [ ] `repo action=issues`, `action=close_issue` and `action=reopen_issue` all
   reach GitHub instead of answering `Unknown action 'issues' for tool 'repo'`.
 - [ ] Register the same UI tab id repeatedly from one session: it dedupes, and the
@@ -530,6 +692,15 @@ frontend documents `run_git_command never throws; inspect success explicitly`
 (`BranchesTab.tsx:18`), so the old 500 made a browser client behave
 differently from the desktop.
 
+**The shape half is verified** (2026-09-07, live PID 28512, no restart needed —
+it is inside the gate): `POST /repo/run-git {"path":"…/tuicommander",
+"args":["rev-parse","--verify","no-such-ref-xyz123"]}` returns **HTTP 200** with
+`{"success":false,"exit_code":128,"stderr":"fatal: Needed a single revision"}` —
+not a 500. Note the payload field is `path`, not `repoPath`, and there is a
+subcommand allowlist (`git_routes.rs:251-267`): `reset` comes back **HTTP 400**
+`Git subcommand "reset" is not allowed via HTTP`. The items below are the
+remaining behavioural checks.
+
 - [ ] Desktop, normal path: fetch/pull/push from the Git panel still work and
   still report failures the way they did before. No visible change expected.
 - [ ] Browser mode (`http://localhost:9876/`): do a fetch on a repo whose
@@ -595,6 +766,16 @@ built from this tree — the same POST answered `{"ok":true}` and left
 `display_offset` at 0 before the fix, and moved it to the requested offset after
 — so what is left needs a real canvas, which no endpoint renders.
 
+**Re-proven 2026-09-07 on the running desktop build** (PID 28512, inside the
+gate — no restart needed), on a session created purely over HTTP that no desktop
+terminal ever rendered: `seq 1 500` → `scroll-info` `{"display_offset":0,
+"total_lines":502,"screen_lines":24}`; `POST terminal/scroll-to-offset
+{"offset":120}` → `{"ok":true}`; `scroll-info` then reads
+`"display_offset":120`. The viewport genuinely moved rather than just the
+counter: `row-text?row=0` returns `"358"`, and 502 − 24 − 120 = 358 exactly.
+That is the whole mechanism the two items below sit on; only the wheel/scrollbar
+*rendering* still needs eyes.
+
 - [ ] Open the web UI (browser, not the desktop app) on a session with
   scrollback and scroll with the wheel and by dragging the scrollbar: the
   viewport must move, not just the thumb.
@@ -623,11 +804,66 @@ that blocked for over a minute.
   git gutter and its inline blame, and keep undo working across an external
   reload (edit the file from a terminal while the tab is open).
 
+## goose tabs now reach idle after a turn (story `699-c6e0`, **Rust — needs `make dev` restart**)
+
+`goose session` is one long-lived foreground command, so OSC 133 marks the tab
+busy once and nothing ever cleared it. `detect_goose_screen_activity` now reads
+the composer footer (`Enter to send` → Ready) and the interrupt hint
+(`Ctrl+C to interrupt` → Working), with the hint checked first so a working
+screen is never downgraded. Captured live off goose 1.49.0.
+
+- [ ] Open a goose tab, let it sit at the composer: the badge must read idle,
+  not "working". This is the whole bug — before the adapter it latched busy
+  from the moment the process started.
+- [ ] Send it a prompt: the badge must go to working for the whole turn (the
+  spinner message is whimsical and changes every second — the badge must not
+  flicker with it) and back to idle when the composer returns.
+- [ ] Interrupt a turn with Ctrl+C: the badge must return to idle, not stay
+  working.
+- [ ] amp, cursor and droid are still **not** adapted (see the DEFERRED note on
+  `has_ready_screen_adapter`). If you run one of those, expect the old
+  latched-busy behaviour — that is known, not a regression from this change.
+
+**Config note:** to capture the fixtures I pointed `~/.config/goose/config.yaml`
+at the local ollama (`gemma4:12b-mlx`), since goose refused to start without a
+provider and `goose configure` has no non-interactive flags. Your original file
+is at `~/.config/goose/config.yaml.bak-tuic` — restore it if you had goose set
+up against a real provider.
+
 ## Still needs a human
 
 Every item here failed the ladder for a stated reason — real hardware, a second
 application, a canvas no endpoint renders, or a judgement made by eye or ear.
 None of them is here because nobody looked.
+
+**Embedded factual claims re-probed 2026-09-07 — all still true**, so nobody
+needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
+`cursor-agent`, `goose`, `droid`, `zed`, `lazygit`; none of `~/.amp`,
+`~/.cursor`, `~/.goose`, `~/.droid`, `~/.factory`, `~/.config/zed` exists; and
+`~/.claude/settings.json` still has 5 hook events (`PostToolUse`, `PreToolUse`,
+`SessionStart`, `Stop`, `UserPromptSubmit`) and **0** TUIC references. The
+`699-c6e0` premise and the hook-reinstall item are both unchanged.
+
+- [ ] [HUMAN] Install any of `amp`, `cursor-agent`, `goose` or `droid` and capture an
+  idle and a mid-turn screen for it (story `699-c6e0`). All four are offered as
+  launchable agents (`src/agents.ts:188-275`) but none has a ready-screen adapter
+  (`has_ready_screen_adapter`, `pty.rs:3245`), so a tab running one latches busy for
+  the life of the process: OSC 133 marks the command busy once and nothing clears it.
+  Measured 2026-09-06 — `command -v` finds none of the four binaries, none of their
+  config dirs exists, and `src-tauri/src/fixtures/agent_prompts/` holds captures for
+  claude and grok only. The adapter cannot be written from documentation: grok's first
+  fixtures passed green while the real UI stayed stuck BUSY for 132s (story
+  `523-1df4`). Per agent — install it, open a tab, `POST /diagnostics/capture` with
+  `{"enabled":true,"session_id":"<id>"}`, sit at the idle composer, send one short
+  prompt, let it finish, then `{"enabled":false}`; one `.tcap` spanning both states is
+  enough. Hand the files over — writing the adapter is code work and stays on
+  `699-c6e0`, not a check.
+
+- [ ] [HUMAN] Under `make dev`, edit any file in `src/` to force a Vite full reload
+  (story #716-031e). Every terminal pane must come back filling its pane, with no
+  window resize: no small canvas in the top-left corner with black around it, and
+  scrolling must show every row. Split a pane and reload again — both halves. Canvas
+  geometry is not observable over HTTP, which is why this is by eye.
 
 - [ ] [HUMAN] Reinstall the TUIC hooks from Settings → Agents, then confirm
   `~/.claude/settings.json` gains TUIC references (measured 2026-09-06: 5 hook
@@ -670,10 +906,11 @@ None of them is here because nobody looked.
   confirm each client lost only its `tuicommander` entry and a relaunch does not put
   it back. Zed is not installed here, and a real client reading the file afterwards
   is the one thing the splice tests cannot cover. (issue #115)
-- [ ] [HUMAN] Compare OSC 133 gutter marks side by side, browser at `:9877` against the
+- [ ] [HUMAN] Compare OSC 133 gutter marks side by side, browser at `:9876` against the
   desktop app, on the same session: same rows, same size, neither client stealing the
   other's dirty rows. Canvas painting is not observable over HTTP, and both clients
-  have to be visible at once.
+  have to be visible at once. (Port corrected 2026-09-07 from `:9877` — only one
+  instance runs, and it serves 9876; a browser pointed at 9877 gets nothing.)
 - [ ] [HUMAN] Open `vim` or `htop`: the wheel still goes to the app, `Shift+wheel`
   scrolls TUIC history, and quitting restores the shell scrollback unchanged. The
   enter/exit half is covered by the `gh-run-watch.raw` replay test; mouse-reporting
@@ -779,6 +1016,23 @@ None of them is here because nobody looked.
   synchronously on the calling thread (including from async tokio tasks) — confirm the
   daily-rotated log file still receives entries during normal use and on graceful
   shutdown (no lines silently dropped by the leaked `WorkerGuard`).
+- [ ] Rust change, needs a `make dev` restart. Dictation speech gates: the transcriber
+  now rejects a window in three steps — the RMS floor, Whisper's own
+  `no_speech_probability`, and the phrase filter — and the first two read their
+  thresholds from `dictation-config.json` (`rms_threshold`, `no_speech_threshold`)
+  rather than constants. (1) **The reported leak:** with the headset a metre away,
+  start dictation, say nothing, stop. No "Grazie"/"Thank you" may reach the terminal —
+  before this change the repeated form ("Grazie. Grazie.") produced by the final
+  full-buffer pass slipped past the filter, while the short streaming windows caught
+  the single form. (2) **No over-rejection:** dictate a normal command and confirm it
+  still lands, and that a sentence that merely starts with thanks ("Grazie, ora
+  committa") is not eaten. (3) **Settings > Dictation > Voice tuning:** the meter must
+  move with your voice, the marker must sit where the level gate is, "Start test
+  recording" must show the transcript in the panel and never type it into the terminal
+  behind it, and a rejected recording must print its reason ("Rejected: no speech
+  detected (no_speech 0.91 > 0.60)"). (4) **Both sliders persist** across an app
+  restart, and a `dictation-config.json` written before this change keeps the defaults
+  (0.001 / 0.60) instead of reading 0.
 - [ ] Rust change, needs a `make dev` restart. Per-tab agent resume (issue #119): with
   several Claude tabs open in the SAME folder, each tab must now hold its own session.
   Before this change discovery took "the newest unclaimed transcript in the project
@@ -796,3 +1050,233 @@ None of them is here because nobody looked.
   (3) Same check for a grok tab (binding comes from `~/.grok/active_sessions.json`).
   (4) No regression for Codex/Gemini, which have no pid registry and keep the old
   heuristic: a single Codex tab must still resume its own session.
+- [ ] Frontend only, Vite HMR picks it up — no restart. Detached AI Chat window,
+  story `700-4d5d`. Detach-panel windows are desktop-only, so none of this renders
+  in browser mode and no agent can check it. (1) **The panel comes back:** open the
+  AI Chat panel, click detach, then close the detached window. The docked panel must
+  reappear. Before this it did not — `onDetach` never hid it, so the toggle on the
+  way home flipped it off. (2) **The stream reaches the detached window:** with the
+  chat detached, make the MAIN window start a conversation for that same terminal (a
+  file watcher rule firing, an automation goal, or right-click the terminal →
+  *Explain this error* — all three run on the main window's store, which renders
+  nowhere while detached). The reply must now stream *in the detached window*, and
+  must still be on screen after it finishes. (3) **The local stream wins:** type a
+  message in the detached window and, while it is streaming, trigger a main-window
+  conversation as in (2). What you asked for in the detached window must not be
+  painted over. (4) **A live stream survives the homecoming:** repeat (2) and close
+  the detached window while the reply is still arriving. The docked panel must come
+  back showing the answer mid-stream; before this it came back blank and stayed
+  blank until the stream finished. (5) **No cross-talk:** detach from terminal A,
+  focus terminal B in the main window, and start a conversation on B. Nothing may
+  appear in the detached window.
+- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Agent runs now
+  persist with the conversation (story `705-57fa`). The backend stamps
+  `schema_version: 3` and migrates older files on read. (1) **Existing conversations
+  survive:** with saved chats already on disk from an older build, open a terminal
+  that had one — the history must load as before, and
+  `<config_dir>/ai-chat-conversations/<id>.json` must come back rewritten with
+  `"schema_version": 3` after it is read once. Nothing may be lost or dropped.
+  (2) **A run survives a reload mid-iteration:** start an autonomous agent goal in
+  the AI Chat panel, wait until a tool card or two has appeared and the banner reads
+  `Agent running — iter N`, then reload the window (browser mode: refresh; desktop:
+  reopen the tab). The tool cards and the banner must come back as they were.
+  Before this only the prose came back. (3) **A plain L1 chat file gains no `agent`
+  block:** send a normal (assisted) message, then inspect the saved JSON — there
+  must be no `"agent"` key.
+- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Session state is
+  pushed, not polled (story `687-be9d`). The desktop no longer calls
+  `list_active_sessions` on a 1 Hz timer; the backend emits `session-state-changed`
+  once per real transition, on the Tauri window and on `/events` SSE. (1) **Badges
+  still move:** with a claude tab open, send it a prompt — the tab must go busy, then
+  show the awaiting badge on a question, then clear when answered, all as fast as
+  before. Same for the Activity Dashboard. (2) **The poll is gone:** with the app
+  idle and the window VISIBLE, `curl -X POST http://localhost:9876/diagnostics -d
+  '{"enabled":true}' -H 'content-type: application/json'`, wait a minute, then
+  `curl 'http://localhost:9876/logs?source=diagnostics'` — no periodic IPC at idle.
+  Before this it polled once a second forever whenever the window was on screen.
+  (3) **A reload still converges:** with a long-idle, silent agent tab, reload the
+  window (desktop: Cmd+R / reopen). The badge must be correct immediately — that is
+  the one mount-time `list_active_sessions` catch-up, the only call left.
+  (4) **Browser parity:** open `http://localhost:9876/` in a browser and repeat (1);
+  the SSE arm carries the same payload.
+- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Provider
+  availability is now rendered (story `701-b6ac`). `detect_ollama` returns a
+  `detail` string saying *why* the endpoint is unusable, and the Providers tab
+  shows it. Visual confirmation is what is needed here — the states are covered
+  by tests, the rendering is not. (1) **Reachable:** with Ollama running, open
+  `Settings > Providers` with an Ollama provider configured — its row must show a
+  green check icon and `Reachable`, and no reason line underneath. (2)
+  **Unreachable:** stop Ollama (`pkill ollama`), reopen the tab — the row must
+  show a yellow `(!)` icon and `Not detected`, with
+  `Cannot reach http://localhost:11434 — is Ollama running?` underneath.
+  (3) **Wrong port:** point the provider's base URL at a port serving something
+  else and confirm the reason names the HTTP status instead. (4) The icons must
+  be SVG glyphs, not emoji, and must recolour with the theme (check light theme).
+- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Block-display
+  settings now persist (story `702-327a`). `show_block_timestamps`,
+  `show_scrollbar_marks` and `block_folding_enabled` were absent from the Rust
+  `AppConfig`, so serde silently dropped them from every `save_config` payload —
+  the frontend wrote them and the next `load_config` returned nothing, and
+  `?? true` restored the default. All three are now real fields. Verify:
+  (1) **The toggles exist:** `Settings > General > Terminal` shows **Show block
+  timestamps** and **Block folding**, both on. (2) **They persist across a
+  restart** — this is the part the old build could NOT do: turn both off, quit,
+  relaunch, reopen Settings; both must still be off. Cross-check
+  `config.json` — it must now carry `"show_block_timestamps": false` and
+  `"block_folding_enabled": false` (before this change those keys never appeared
+  in the file at all). (3) **Timestamps obey the toggle:** with it on, hold
+  Ctrl+Cmd over a terminal with several command blocks — a relative-time label
+  appears at the right edge of each block's prompt row; with it off, nothing
+  appears. (4) **Folding obeys the toggle:** with it off, Cmd+Shift+. and the
+  `Toggle block fold` palette entry must both do nothing; with it on, both fold
+  the block nearest the viewport centre. (5) **Nothing else regressed:** flip an
+  unrelated setting (e.g. Copy on select), restart, confirm it also survived —
+  the new fields must not have disturbed the config merge.
+
+- [ ] **Show scrollbar marks toggle** (719-36af) — frontend only, so Vite HMR
+  picks it up; no `make dev` restart needed. I could not screenshot it: the
+  orchestrator instance on :9876 does not run this build, and no worktree dev
+  instance was up. (1) **It appears:** `Settings > General > Terminal` now shows
+  a third toggle, **Show scrollbar marks**, below **Block folding**, on by
+  default — check it lines up with the other two and the hint wraps sanely.
+  (2) **It is searchable:** type "scrollbar" in the settings search box; the
+  entry must appear and jump to the Terminal section. (3) **It actually gates
+  the marks:** in a terminal with several command blocks, turn it off — the
+  blue/red block ticks **and** the green user-prompt ticks disappear, and they
+  must go on the flip itself, not on the next scroll. (An early return used to
+  skip the repaint that erases them, so they stayed painted forever; 723-6b02
+  fixed that, and this is the check for it.) (4) **Search ticks must SURVIVE**
+  — with the toggle OFF, run a terminal search (Cmd+F): the orange match ticks
+  must still be drawn. A search that silently marks nothing is the failure
+  723-6b02 exists to prevent; the flag covers command history only.
+  (5) **It persists:** turn it off, restart, confirm `config.json` carries
+  `"show_scrollbar_marks": false` and the toggle is still off.
+
+- [ ] **Agent tool-log bound, measured on a real run** (718-aebf) — frontend
+  only, so Vite HMR picks it up. This is the half of the story code could not
+  close: criterion 1 asked for the file size and rewrite rate of a *real* long
+  agent run, and no such run exists yet — the tool log itself landed this
+  session (705-57fa) and the Rust half needs a `make dev` restart, so every
+  conversation on disk predates it (8 files, largest 3.3 KB, newest Jun 3).
+  After the restart, run one long autonomous agent session — the longer and the
+  more tool-heavy the better — then:
+  (1) **Size:** `ls -laS "$HOME/Library/Application Support/com.tuic.commander/ai-chat-conversations"`.
+  The active conversation's `.json` must stay under ~560 KB. Above that, the
+  512 KB ceiling in `conversationStore.ts` is not biting where it should.
+  (2) **Rewrite rate:** watch the same file's mtime during the run (`stat -f %m`
+  in a loop). It should move at most twice a second, and each write should now
+  be a fraction of a megabyte instead of up to 4 MB.
+  (3) **The log is still useful:** open the AI panel's tool cards on that
+  conversation after a reload. The MOST RECENT tool calls must be there — the
+  bound drops from the oldest end, so a run that trimmed shows a truncated
+  history, never a stale one.
+  (4) **Ordinary runs are untouched:** a normal short session should keep every
+  tool card it produced; the cap was sized so only megabyte-scale output trims.
+
+- [ ] **Scrollback reflow honours its Settings toggle** (660-d087) — **Rust
+  change, needs a `make dev` restart.** Until now the grid reflowed scrollback
+  unconditionally and `scrollback_reflow` had no consumer at either end, so
+  this change adds the missing Settings control AND the backend wiring.
+  (1) **Default is unchanged behaviour:** open Settings > General > Terminal.
+  "Reflow scrollback on resize" must be ON for an existing install — the config
+  key defaulted `false` before it had a consumer, so it was flipped to `true`
+  (`#[serde(default = "default_true")]`) precisely so an upgrade does not
+  silently change what the terminal does. Scroll back through old output after
+  opening a side panel: lines should re-wrap, exactly as before this change.
+  (2) **Off truncates:** turn the toggle OFF, then narrow the terminal (open a
+  side panel or drag the split). Scrollback lines written at the old width must
+  now be cut at the new width instead of wrapping onto extra lines. The visible
+  screen must look the same either way — a cursor-addressed TUI (htop, vim)
+  redraws itself and is never reflowed.
+  (3) **It reaches sessions already open:** with several tabs running, flip the
+  toggle and resize a tab that was created BEFORE the flip. It must follow the
+  new setting without being recreated — `commit_config_change` pushes it to
+  every live grid, and a change that only affected the next session is the bug
+  this story was opened for.
+  (4) **It persists:** flip it off, restart, confirm `config.json` carries
+  `"scrollback_reflow": false` and the toggle is still off.
+
+- [ ] **Headless daemon serves Claude usage again** (678-9a75) — **Rust change,
+  needs a rebuild.** `claude_usage_cache` carried `#[cfg(feature = "desktop")]`
+  while `build_router` mounts `/claude/usage` and `/claude/usage/timeline`
+  unconditionally, so `cargo build --bin tuic-remote --no-default-features` did
+  not compile at all. The gate is gone. After a rebuild, start `tuic-remote` and
+  check `curl http://127.0.0.1:<port>/claude/usage` answers instead of 404/500.
+  Desktop behaviour must be unchanged — the same endpoint on :9876 still works.
+
+- [ ] **Frontend liveness watchdog + WebView reload escape hatch** — **Rust +
+  frontend change, needs a `make dev` restart.**
+  (1) **Quiet when healthy:** after the restart, `curl
+  'localhost:9876/logs?source=diagnostics'` must NOT contain `Frontend
+  unresponsive`. The beat runs every 5s, so a healthy app is silent.
+  (2) **It fires:** block the main thread from devtools/invoke_js with
+  `const t=Date.now(); while(Date.now()-t<40000){}` — within ~35s the log must
+  carry `Frontend unresponsive: no heartbeat for 30s`, exactly ONE line, and a
+  `Frontend responsive again` line once the loop ends.
+  (3) **Sleep does not false-positive:** close the lid for a few minutes, reopen.
+  `Sleep/wake detected` must appear WITHOUT a `Frontend unresponsive` next to it.
+  (4) **The reload works and keeps sessions:** with several PTY tabs running,
+  `curl -X POST localhost:9876/debug/reload_webview` → `{"ok":true}`, the UI
+  repaints, and every session is still there with its scrollback.
+  (5) **Browser mode is unaffected:** open `localhost:9876` in a browser; it must
+  not beat (command is `INTENTIONALLY_UNMAPPED`) and must not produce errors in
+  the console or 404s in the log.
+
+- [ ] **Resume finds the session the alias hid** — **Rust + frontend change,
+  needs a `make dev` restart.** Fixes `c2 --resume <id>` → `No conversation
+  found with session ID` when the session belongs to the *other* config dir.
+  (1) **Discovery captures the real command:** open a tab, launch Claude with
+  `c2` (alias for `CLAUDE_CONFIG_DIR=~/.claude-private claude
+  --dangerously-skip-permissions`), let it go busy→idle once, then check the tab
+  carries the rebuilt string, not `c2`:
+  `curl -s localhost:9877/... ` is not enough — read it from the store via
+  devtools/`invoke_js`: `window.__TUIC__` terminal dump must show
+  `agentLaunchCommand: "CLAUDE_CONFIG_DIR=/Users/stefano.straus/.claude-private
+  claude --dangerously-skip-permissions"`.
+  (2) **The resume works across dirs:** with that tab, switch branch away and
+  back (or restart) so the resume command is offered. It must read
+  `CLAUDE_CONFIG_DIR=… claude --resume <uuid> --dangerously-skip-permissions`,
+  and running it must land in the SAME conversation — not `No conversation
+  found`, not a fresh session.
+  (3) **The `c` case still works:** repeat with the `c` alias (default
+  `~/.claude`). The rebuilt command must have NO `CLAUDE_CONFIG_DIR=` prefix and
+  must resume its own conversation, not the private-dir one.
+  (4) **No regression without an alias:** a tab launched from the TUIC agent
+  menu (run config, no alias) resumes exactly as before.
+  (5) **Worktree seed caveat:** a tab auto-seeded with an inline prompt
+  (auto-fix / conflict-assist) rebuilds with that prompt still in the command,
+  so its resume re-sends it. Known and documented (`DEFERRED` in
+  `rebuild_launch_command`) — confirm it is only cosmetic-annoying, and report
+  if it is worse than that.
+
+## WebView lost-document recovery + memory report (2026-09-08)
+
+Needs a `make dev` restart — these are Rust changes and `make dev` runs
+`--no-watch`.
+
+1. **The reload endpoint navigates, not reloads.**
+   `curl -X POST localhost:9876/debug/reload_webview` must answer
+   `{"ok":true,"action":"navigate","url":"http://127.0.0.1:1421/"}` — not a bare
+   `{"ok":true}`. The window must repaint and every PTY session must survive.
+2. **The poller heals a lost frame by itself.** Force the failure the incident
+   produced, from devtools on the main frame:
+   `document.open(); document.write(""); document.close();` — or navigate the
+   top frame to `about:blank`. Within ~15 s the log must carry
+   `Main WebView lost its document` followed by `WebView recovery attempted`,
+   and the app must come back with its sessions. Confirm it does NOT loop: a
+   single recovery pair, then `Main WebView is back on the app`.
+3. **A healthy app is never re-navigated.** Leave the app running for a few
+   minutes and confirm the log has no `lost its document` line and the UI does
+   not flicker/reload — an over-broad check would reload every 15 s.
+4. **In-app routes survive.** Navigate around the app (settings, tabs, hash
+   routes) and confirm no recovery fires.
+5. **`GET /diagnostics/memory` names the structures.**
+   `curl -s localhost:9876/diagnostics/memory | python3 -m json.tool` — the
+   `maps` list must be sorted biggest-first, `grid.vt_log_buffers` must carry a
+   plausible byte count for the open sessions, and `phys_footprint_bytes` must
+   match `footprint -p <pid>` (NOT `ps` RSS, which reads far lower).
+6. **The leak is still unattributed.** Leave the instance running through a
+   normal working day, then compare `/diagnostics/memory` against the footprint.
+   If `accounted_bytes` tracks the footprint, the named structure is the leak.
+   If the footprint climbs far above `accounted_bytes`, the growth is outside
+   `AppState` and the next suspect is the wry event-loop message queue.

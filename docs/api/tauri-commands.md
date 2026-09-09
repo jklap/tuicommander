@@ -225,7 +225,7 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<String>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart |
+| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable |
 | `verify_agent_session` | `agent_type, session_id, cwd` | `bool` | Verify if a specific agent session file exists on disk (for TUIC_SESSION resume) |
 
 ## AI Chat (`ai_chat.rs`)
@@ -239,11 +239,11 @@ Conversational AI companion with terminal context injection. See [`docs/user-gui
 | `has_ai_chat_api_key` | -- | `bool` | Whether an API key is stored in the OS keyring for the current provider |
 | `save_ai_chat_api_key` | `key: String` | `()` | Store API key in OS keyring (service `tuicommander-ai-chat`, user `api-key`) |
 | `delete_ai_chat_api_key` | -- | `()` | Remove stored API key |
-| `check_ollama_status` | -- | `OllamaStatus` | Probe `GET /api/tags` on the configured base URL (default `http://localhost:11434/v1/`); returns reachable + model list |
+| `check_ollama_models` | `providerId: String` | `OllamaStatus` | Probe `GET /api/tags` on the provider's base URL (default `http://localhost:11434/v1/`). Returns `{ available, models[], detail }` — `detail` is the backend-authored reason the endpoint is unusable (refused / timed out / HTTP status) and is `null` when reachable. The settings UI renders it verbatim |
 | `test_ai_chat_connection` | -- | `String` | Validate API key + base URL with a minimal completion request |
 | `list_conversations` | -- | `Vec<ConversationMeta>` | List persisted conversations (id, title, updated_at, message count) |
-| `load_conversation` | `id: String` | `Conversation` | Load a saved conversation body |
-| `save_conversation` | `conversation: Conversation` | `()` | Persist a conversation to `ai-chat-conversations/<id>.json` |
+| `load_conversation` | `id: String` | `Conversation` | Load a saved conversation body. A document below the current schema version is migrated on read and written back — never discarded |
+| `save_conversation` | `conversation: Conversation` | `()` | Persist a conversation to `ai-chat-conversations/<id>.json`. The backend stamps `schema_version` (callers never send one), redacts secrets and caps captured tool output. `conversation.agent` carries the agent run — `{ state, currentIteration, toolCalls[] }` — so a reload taken mid-iteration restores the loop, not just the prose |
 | `delete_conversation` | `id: String` | `()` | Remove a saved conversation (idempotent) |
 | `new_conversation_id` | -- | `String` | Mint a fresh conversation UUID |
 | `stream_ai_chat` | `session_id, messages, chat_id, on_event: Channel<ChatStreamEvent>` | `()` | Stream a turn. Events: `chunk { text }`, `end`, `error { message }`, `tool_call` / `tool_result` (agent mode). Context assembly pulls `VtLogBuffer` (capped at `context_lines`), `SessionState`, recent `ParsedEvent`s, git context |
@@ -409,6 +409,7 @@ The live registry exposes status via SSE events (`upstream_status_changed`). Val
 | `get_claude_project_list` | -- | `Vec<ProjectEntry>` | List project slugs with session counts |
 | `get_codex_usage_api` | -- | `CodexUsageApiResponse` | Fetch rate-limit usage from the Codex CLI's usage endpoint |
 | `get_codex_usage_stats` | -- | `CodexStatsResponse` | Daily token history + lifetime stats for the Codex dashboard |
+| `set_terminal_theme_colors` | `foreground: [u8;3]`, `background: [u8;3]`, `cursor: [u8;3]` | `()` | Publish the resolved terminal theme so the emulator can answer OSC 10/11/12 colour queries |
 
 `scope` values: `"all"` (all projects) or a specific project slug. `days` defaults to 7.
 

@@ -43,6 +43,29 @@ The socket at `<config_dir>/mcp.sock` is managed with two safety layers to survi
 
 **Why this matters for AI tool integrations:** The `tuic-bridge` sidecar connects via the Unix socket to expose TUICommander tools to Claude Code. If the socket is stale (app crashed, Tauri force-quit), the bridge cannot connect and returns `tools: []`, silently disabling all MCP tools in the agent session. The retry bind ensures the socket is always valid on restart; the real liveness check ensures the UI accurately reports the server state.
 
+## Server Limits
+
+Both `build_router` and `build_remote_router` pass their assembled routes through
+`with_server_limits` (`mcp_http/mod.rs`), which applies two bounds:
+
+| Limit | Value | Response | Why |
+|-------|-------|----------|-----|
+| `TimeoutLayer` | `REQUEST_TIMEOUT` = 120 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 120 s sits above the slowest legitimate request (a cold git operation on a large repo) and far below "never" |
+| `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB | `413 Payload Too Large` | Bounds how much any route will buffer |
+
+**The timeout does not apply to streaming.** `tower_http`'s `ResponseFuture` races
+its sleep only against the future that produces the `Response`; once headers are
+returned the timeout is dropped and the body streams unwatched. `Sse` and
+`WebSocketUpgrade` both return immediately, so neither `/events` nor a PTY socket
+can be cut off mid-stream. `server_limits_do_not_cut_off_a_long_lived_stream`
+pins this — if anyone swaps in a layer that wraps the response body, it fails.
+
+`MAX_BODY_BYTES` is deliberately equal to axum's own `DefaultBodyLimit` default,
+so stating it explicitly changes no behaviour. The value is that the bound is now
+asserted: a `DefaultBodyLimit::disable()` added outside this layer, or an axum
+release that drifts its default upward, fails a test instead of silently
+uncapping the server.
+
 ## REST API Endpoints
 
 ### Session Management

@@ -13,7 +13,7 @@ TUICommander has an Obsidian-style plugin system. Plugins can watch terminal out
 
 An "Update available" badge appears when a newer version exists in the registry.
 
-Registry plugins include file viewers such as **DOCX Preview**, which opens Word `.docx`/`.dotx` files from the File Browser as an HTML preview tab.
+Registry plugins include file viewers such as **DOCX Preview**, which opens Word `.docx`/`.dotx` files from the File Browser as an HTML preview tab, and **XLSX Preview**, which opens Excel `.xlsx`/`.xlsm`/`.xlsb`/`.xls` and OpenDocument `.ods` spreadsheets as a sortable table per sheet.
 
 ### From a ZIP File
 

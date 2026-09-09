@@ -1685,6 +1685,7 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | `rtk-dashboard` | 3 | `exec:cli`, `ui:panel`, `ui:context-menu` | RTK token savings dashboard (`binaries: ["rtk"]`) |
 | `csv-preview` | 3 | `ui:file-preview`, `ui:panel`, `fs:read` | Preview CSV/TSV files as sortable HTML tables |
 | `docx-preview` | 3 | `ui:file-preview`, `ui:panel`, `fs:read` | Preview Word `.docx`/`.dotx` files as HTML with Mammoth.js |
+| `xlsx-preview` | 3 | `ui:file-preview`, `ui:panel`, `fs:read` | Preview Excel `.xlsx`/`.xlsm`/`.xlsb`/`.xls` and `.ods` spreadsheets as sortable tables with SheetJS |
 
 ## Troubleshooting
 
