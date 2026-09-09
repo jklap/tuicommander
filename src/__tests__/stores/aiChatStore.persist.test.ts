@@ -59,7 +59,8 @@ describe("conversationStore persistence (1385-87c6)", () => {
 		const conv = saves[0]?.[1]?.conversation;
 		expect(conv.messages.length).toBe(1);
 		expect(conv.messages[0].role).toBe("assistant");
-		expect(conv.schema_version).toBe(1);
+		// The schema version is stamped by the backend (705-57fa), not the store.
+		expect(conv.schema_version).toBeUndefined();
 	});
 
 	it("clearHistory resets streaming state and deletes from disk", async () => {
@@ -515,6 +516,169 @@ describe("conversationStore detached hand-over (624-a6c3)", () => {
 		expect(store.messages()).toHaveLength(1);
 		expect(store.messages()[0]?.content).toBe("an older turn");
 		expect(store.chatId()).toBe("conv-on-disk");
+	});
+});
+
+// An agent run adds no message until it is over, so everything a reload taken
+// mid-iteration has to restore — the tool-call log, the loop state, the
+// iteration counter — lives in signals that used to reach no payload at all.
+// A reload between turns never showed it: prose is the one thing that WAS saved.
+describe("conversationStore agent run persistence (705-57fa)", () => {
+	let store: typeof import("../../stores/conversationStore").conversationStore;
+	const channels: Map<string, { onmessage: ((msg: unknown) => void) | null }> = new Map();
+
+	function mockBackend(saved?: Record<string, unknown>) {
+		mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+			if (cmd === "start_conversation") {
+				const ch = args?.["onEvent"] as { onmessage: ((msg: unknown) => void) | null };
+				if (ch && args?.["sessionId"]) channels.set(args["sessionId"] as string, ch);
+				return Promise.resolve();
+			}
+			if (cmd === "new_conversation_id") return Promise.resolve("new-id");
+			if (cmd === "list_conversations") {
+				return Promise.resolve(
+					saved ? [(saved as { meta: Record<string, unknown> }).meta] : [],
+				);
+			}
+			if (cmd === "load_conversation") return Promise.resolve(saved);
+			return Promise.resolve();
+		});
+	}
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		vi.resetModules();
+		mockInvoke.mockReset();
+		channels.clear();
+		globalThis.localStorage?.clear();
+		mockBackend();
+		store = (await import("../../stores/conversationStore")).conversationStore;
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** Run an agent up to the middle of iteration 3, one tool call still open. */
+	async function runToMidIteration(): Promise<void> {
+		store.setActiveTerminal("termAgent");
+		await store.startAgent("sess-agent", "fix the build");
+		const ch = channels.get("sess-agent");
+		expect(ch).toBeDefined();
+		ch!.onmessage?.({ type: "thinking", iteration: 3 });
+		ch!.onmessage?.({ type: "tool_call", tool_name: "ai_terminal_send_input", args: { text: "ls\n" } });
+		ch!.onmessage?.({
+			type: "tool_result",
+			tool_name: "ai_terminal_send_input",
+			success: true,
+			output: "Cargo.toml",
+		});
+		ch!.onmessage?.({ type: "tool_call", tool_name: "ai_terminal_read", args: {} });
+	}
+
+	it("persists the tool-call log, loop state and iteration mid-iteration", async () => {
+		await runToMidIteration();
+		await vi.advanceTimersByTimeAsync(600);
+
+		const saves = mockInvoke.mock.calls.filter((c) => c[0] === "save_conversation");
+		expect(saves.length).toBeGreaterThan(0);
+		const conv = saves[saves.length - 1]?.[1]?.conversation;
+		expect(conv.agent.state).toBe("running");
+		expect(conv.agent.currentIteration).toBe(3);
+		expect(conv.agent.toolCalls).toHaveLength(2);
+		expect(conv.agent.toolCalls[0].status).toBe("done");
+		expect(conv.agent.toolCalls[0].toolName).toBe("ai_terminal_send_input");
+		expect(conv.agent.toolCalls[0].result).toEqual({ success: true, output: "Cargo.toml" });
+		expect(conv.agent.toolCalls[1].status).toBe("pending");
+		expect(conv.agent.toolCalls[1].toolName).toBe("ai_terminal_read");
+	});
+
+	it("restores that run after a reload", async () => {
+		await runToMidIteration();
+		await vi.advanceTimersByTimeAsync(600);
+		const saves = mockInvoke.mock.calls.filter((c) => c[0] === "save_conversation");
+		const saved = saves[saves.length - 1]?.[1]?.conversation as Record<string, unknown>;
+		(saved as { meta: { session_id: string } }).meta.session_id = "sess-agent";
+
+		// Reload: a fresh module holds none of the signals the run just moved.
+		vi.resetModules();
+		mockInvoke.mockReset();
+		channels.clear();
+		mockBackend(saved);
+		store = (await import("../../stores/conversationStore")).conversationStore;
+
+		store.setActiveTerminal("termAgent");
+		await store.initFromDisk("sess-agent");
+
+		expect(store.agentState()).toBe("running");
+		expect(store.currentIteration()).toBe(3);
+		const restored = store.toolCalls();
+		expect(restored).toHaveLength(2);
+		expect(restored[0]?.toolName).toBe("ai_terminal_send_input");
+		expect(restored[0]?.status).toBe("done");
+		expect(restored[0]?.status === "done" && restored[0].result.output).toBe("Cargo.toml");
+		expect(restored[1]?.status).toBe("pending");
+	});
+
+	// The version belongs to the backend now, so the store stops asserting one.
+	it("leaves schema_version to the backend", async () => {
+		store.addAssistantMessage("hello");
+		await vi.advanceTimersByTimeAsync(600);
+		const saves = mockInvoke.mock.calls.filter((c) => c[0] === "save_conversation");
+		expect(saves[0]?.[1]?.conversation?.schema_version).toBeUndefined();
+	});
+
+	// A v1 document has no agent block at all. It must load as a plain chat with
+	// an idle agent, not throw and not wedge the panel on a half-restored run.
+	it("loads a v1 document with no agent block as an idle agent", async () => {
+		mockBackend({
+			meta: { id: "v1-conv", title: "Old", session_id: "sess-v1", created: 1, updated: 2, message_count: 1 },
+			messages: [{ role: "user", content: "hi", timestamp: 1 }],
+			schema_version: 1,
+		});
+		store.setActiveTerminal("termV1");
+		await store.initFromDisk("sess-v1");
+
+		expect(store.messages()).toHaveLength(1);
+		expect(store.agentState()).toBe("idle");
+		expect(store.currentIteration()).toBe(0);
+		expect(store.toolCalls()).toEqual([]);
+	});
+
+	// The engine emits `thinking` for an assisted turn too — it is the same loop.
+	// Marking the agent "running" there put the agent banner on a plain chat and
+	// left it there (nothing in the assisted path clears it). Persisting that
+	// would carry the false banner across every reload, for good.
+	it("leaves the agent idle through an assisted turn", async () => {
+		store.setActiveTerminal("termChat");
+		await store.sendMessage("what is this error?", "sess-chat");
+		const ch = channels.get("sess-chat");
+		ch!.onmessage?.({ type: "thinking", iteration: 1 });
+		expect(store.agentState()).toBe("idle");
+		expect(store.currentIteration()).toBe(0);
+
+		ch!.onmessage?.({ type: "text_chunk", text: "because" });
+		ch!.onmessage?.({ type: "completed", reason: "end_turn", usage: null });
+		await vi.advanceTimersByTimeAsync(600);
+
+		const saves = mockInvoke.mock.calls.filter((c) => c[0] === "save_conversation");
+		const conv = saves[saves.length - 1]?.[1]?.conversation;
+		expect(conv.agent).toEqual({ state: "idle", currentIteration: 0, toolCalls: [] });
+	});
+
+	// An agent run that finished still has to reach disk: the completion is the
+	// only record that the loop ever ran, and it adds no message either.
+	it("persists a completed run that produced no message", async () => {
+		store.setActiveTerminal("termDone");
+		await store.startAgent("sess-done", "tidy up");
+		const ch = channels.get("sess-done");
+		ch!.onmessage?.({ type: "thinking", iteration: 1 });
+		ch!.onmessage?.({ type: "completed", reason: "end_turn", usage: null });
+		await vi.advanceTimersByTimeAsync(600);
+
+		const saves = mockInvoke.mock.calls.filter((c) => c[0] === "save_conversation");
+		expect(saves.length).toBeGreaterThan(0);
+		expect(saves[saves.length - 1]?.[1]?.conversation?.agent?.state).toBe("completed");
 	});
 });
 
