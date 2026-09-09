@@ -100,6 +100,17 @@ pub(crate) async fn diagnostics_get() -> Json<serde_json::Value> {
     }))
 }
 
+/// GET /diagnostics/memory — where the process's memory is.
+///
+/// The 2026-09-08 40 GB growth could not be attributed to any structure while it
+/// was happening: a 40 GB process is not debuggable, so every candidate had to be
+/// excluded by reading code. This answers the question in one request instead.
+pub(crate) async fn memory_report_get(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    Json(crate::memory_report::report(&state))
+}
+
 /// GET /diagnostics/markers — per-session protocol-marker compliance.
 ///
 /// Exists because the only way to ask "are the agents still emitting `intent:`
@@ -114,6 +125,7 @@ pub(crate) async fn marker_compliance_get(
     State(state): State<std::sync::Arc<crate::state::AppState>>,
 ) -> Json<serde_json::Value> {
     let sessions: Vec<serde_json::Value> = state
+        .session_maps
         .session_states
         .iter()
         .map(|entry| {
@@ -252,6 +264,36 @@ pub(crate) fn eval_debug_script(state: &Arc<AppState>, script: &str) -> serde_js
         }),
         Err(e) => serde_json::json!({"error": format!("eval failed: {e}")}),
     }
+}
+
+/// POST /debug/reload_webview — reload the main WebView from the native side.
+///
+/// The escape hatch for a WebView whose main JS thread is blocked or whose web
+/// content process is gone: the UI is white, `/debug/invoke_js` is useless
+/// because it needs that thread to run the script, and the only remedy left was
+/// restarting the app — which kills every PTY session with it.
+///
+/// It runs entirely on the native side, so it works precisely when the JS side
+/// does not. Sessions live in the backend, so this costs nothing but a repaint.
+/// Loopback-only, like its neighbour.
+pub(crate) async fn reload_webview_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    if let Err(resp) = super::guards::localhost_only(&addr) {
+        return resp.into_response();
+    }
+    Json(reload_main_webview(&state)).into_response()
+}
+
+/// Put the `main` webview back on the app.
+///
+/// Deliberately a `navigate`, not a `reload`. On 2026-09-08 this endpoint
+/// answered `{"ok":true}` and left the window white for an hour: the frame was
+/// on `about:srcdoc`, and reloading a blank document reloads the blank document.
+/// The same recovery serves the automatic poller — see `webview_recovery`.
+pub(crate) fn reload_main_webview(state: &Arc<AppState>) -> serde_json::Value {
+    crate::webview_recovery::navigate_home(state)
 }
 
 #[cfg(not(feature = "desktop"))]

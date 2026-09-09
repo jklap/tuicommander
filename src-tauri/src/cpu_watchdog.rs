@@ -42,6 +42,17 @@ const CONSECUTIVE_THRESHOLD: u32 = 2;
 const STARTUP_DELAY: Duration = Duration::from_secs(30);
 const COOLDOWN_BETWEEN_REPORTS: Duration = Duration::from_secs(60);
 
+/// Footprint at which the memory report is logged for the first time.
+///
+/// A healthy backend sits at a few hundred MB. 4 GB is an order of magnitude
+/// above anything legitimate and still an order of magnitude below the ~30 GB
+/// that got the process jetsammed on 2026-09-08 — so the report lands with
+/// hours of headroom instead of after the app is already gone. That incident
+/// left no evidence at all: by the time the footprint was visible, macOS marked
+/// the process as not-debuggable and nothing could say which structure held the
+/// memory. This is the line that makes the next one self-diagnosing.
+const MEMORY_REPORT_FLOOR: u64 = 4 * 1024 * 1024 * 1024;
+
 /// Global toggle — checked by the polling loop.
 static DIAGNOSTIC_MODE: AtomicBool = AtomicBool::new(false);
 
@@ -239,7 +250,8 @@ fn collect_snapshot(state: &Arc<AppState>, cpu_pct: f64) -> HealthSnapshot {
     // A session appears here with the number of frames it was sent and has not
     // reported back: anything above zero means the WebView is behind.
     let in_flight_stuck: Vec<String> = state
-        .grid_gates
+        .grid
+        .gates
         .iter()
         .filter_map(|entry| {
             let outstanding = entry.value().outstanding();
@@ -251,14 +263,14 @@ fn collect_snapshot(state: &Arc<AppState>, cpu_pct: f64) -> HealthSnapshot {
         cpu_pct,
         threads: thread_count(),
         open_fds: count_open_fds(),
-        pty_sessions: state.sessions.len(),
+        pty_sessions: state.session_maps.sessions.len(),
         index_building: state.index_in_flight.iter().map(|r| r.clone()).collect(),
         index_sem_permits: state.index_build_sem.available_permits(),
         in_flight_stuck,
         event_bus_subscribers: state.event_bus.receiver_count(),
         git_cache_ttl_fallbacks: state.git_cache.ttl_fallbacks.load(Ordering::Relaxed),
         head_emits_suppressed: state.repo_head_emits_suppressed.load(Ordering::Relaxed),
-        state_lane_depth: state.session_state_events.depth(),
+        state_lane_depth: state.session_maps.session_state_events.depth(),
     }
 }
 
@@ -319,6 +331,78 @@ fn log_periodic(state: &Arc<AppState>, cpu_pct: f64) {
     );
 }
 
+/// Say once when the desktop WebView's main thread stops running, and once when
+/// it comes back.
+///
+/// This is the line that was missing on 2026-09-08: the UI was white for five
+/// hours and nothing in the logs named the frontend. Diagnosis had to be
+/// reconstructed by hand from the *absence* of frontend log lines.
+fn report_frontend_liveness(state: &Arc<AppState>) {
+    use crate::frontend_liveness::{FREEZE_AFTER, Verdict};
+
+    match state.frontend_liveness.poll(FREEZE_AFTER) {
+        Verdict::Quiet => {}
+        Verdict::Frozen { gap } => tracing::warn!(
+            source = "diagnostics",
+            silent_secs = gap.as_secs(),
+            "Frontend unresponsive: no heartbeat for {}s — the WebView main thread is blocked or gone. \
+             The backend and every PTY session are unaffected; recover with \
+             POST /debug/reload_webview, or open the UI in a browser on this port.",
+            gap.as_secs(),
+        ),
+        Verdict::Recovered => tracing::info!(
+            source = "diagnostics",
+            "Frontend responsive again — heartbeat resumed"
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Memory tripwire
+// ---------------------------------------------------------------------------
+
+/// The threshold to arm next, or `None` while `footprint` is still under
+/// `armed`.
+///
+/// Thresholds only ever double, so a process that keeps growing is reported at
+/// 4, 8, 16 GB — each report a fresh reading of which structure grew between
+/// them — while a process that sits just under one is never reported twice.
+/// A footprint that jumps several thresholds at once arms above where it
+/// landed, so the next report means real further growth.
+///
+/// The arming is monotonic: memory that falls back below the line does not
+/// re-arm it. Re-arming would flap around the threshold, and the first report
+/// already names the structure.
+fn next_memory_threshold(footprint: u64, armed: u64) -> Option<u64> {
+    if footprint < armed {
+        return None;
+    }
+    let mut next = armed;
+    while next <= footprint {
+        let doubled = next.saturating_mul(2);
+        if doubled == next {
+            break;
+        }
+        next = doubled;
+    }
+    Some(next)
+}
+
+/// Log where the memory is, at a level that survives log filtering.
+fn log_memory_report(state: &Arc<AppState>, footprint: u64) {
+    const GB: f64 = (1024 * 1024 * 1024) as f64;
+    let report = crate::memory_report::report(state);
+    tracing::error!(
+        source = "diagnostics",
+        report = %report,
+        "Memory footprint {:.2} GB — this is far above a healthy backend and is what \
+         gets the app killed by macOS under memory pressure. The report lists every \
+         structure that grows, biggest first; `accounted_bytes` well below the \
+         footprint means the memory belongs to something outside AppState.",
+        footprint as f64 / GB,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
@@ -354,6 +438,10 @@ fn run(state: Arc<AppState>) {
     let mut baseline_fds: Option<usize> = None;
     let mut baseline_threads: Option<usize> = None;
 
+    // Memory tripwire — always on, not gated behind diagnostic mode. The
+    // incident it exists for took 13 hours to build up with nobody watching.
+    let mut armed_memory = MEMORY_REPORT_FLOOR;
+
     loop {
         let interval = if diagnostic_mode() {
             DIAGNOSTIC_POLL_INTERVAL
@@ -383,10 +471,15 @@ fn run(state: Arc<AppState>) {
                     let _ = app.emit("system-wake", wall_gap.as_secs());
                 }
             }
+            // The JS thread not having run while the machine was off is not a
+            // freeze. Without this every wake reports one.
+            state.frontend_liveness.rebaseline();
             prev = CpuSample::now().unwrap_or(prev);
             consecutive_high = 0;
             continue;
         }
+
+        report_frontend_liveness(&state);
 
         let current = match CpuSample::now() {
             Some(s) => s,
@@ -415,6 +508,16 @@ fn run(state: Arc<AppState>) {
                 );
             }
             consecutive_high = 0;
+        }
+
+        // --- Memory tripwire (always on) ---
+        // One `proc_pid_rusage` call per tick; the report itself is only built
+        // when a threshold trips.
+        if let Some(footprint) = crate::memory_report::phys_footprint_bytes()
+            && let Some(next) = next_memory_threshold(footprint, armed_memory)
+        {
+            log_memory_report(&state, footprint);
+            armed_memory = next;
         }
 
         // --- Diagnostic mode: periodic health snapshots ---
@@ -453,6 +556,51 @@ fn run(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn a_healthy_footprint_never_trips() {
+        // A few hundred MB is normal and must stay silent forever, or the one
+        // line that matters drowns in daily noise.
+        assert_eq!(
+            next_memory_threshold(400 * 1024 * 1024, MEMORY_REPORT_FLOOR),
+            None
+        );
+    }
+
+    #[test]
+    fn crossing_the_floor_arms_the_next_doubling() {
+        assert_eq!(
+            next_memory_threshold(5 * GB, MEMORY_REPORT_FLOOR),
+            Some(8 * GB),
+            "reporting again at 8 GB means real further growth, not the same 5 GB twice"
+        );
+    }
+
+    #[test]
+    fn a_footprint_that_jumps_several_thresholds_is_reported_once() {
+        // The 2026-09-08 shape: nobody was watching while it grew, and the
+        // first reading was already deep past the floor. It must report there
+        // and then arm above it, not walk every threshold it skipped.
+        let armed = next_memory_threshold(40 * GB, MEMORY_REPORT_FLOOR);
+        assert_eq!(armed, Some(64 * GB));
+        assert_eq!(
+            next_memory_threshold(41 * GB, armed.unwrap()),
+            None,
+            "still growing slowly at 41 GB is the same incident, not a new one"
+        );
+    }
+
+    #[test]
+    fn memory_falling_back_does_not_re_arm() {
+        let armed = next_memory_threshold(5 * GB, MEMORY_REPORT_FLOOR).unwrap();
+        assert_eq!(
+            next_memory_threshold(1 * GB, armed),
+            None,
+            "a footprint below the armed line is silent — re-arming would flap"
+        );
+    }
 
     /// The state lane is unbounded on purpose — dropping a SET or a CLEAR strands
     /// clients in a state that never existed or never ended — so a backlog is invisible

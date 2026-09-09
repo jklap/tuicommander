@@ -32,6 +32,7 @@ mod dictation;
 pub(crate) mod diff_triage;
 pub(crate) mod dir_watcher;
 pub(crate) mod error_classification;
+pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
 pub(crate) mod generators;
 pub(crate) mod git;
@@ -63,6 +64,7 @@ pub(crate) mod mdkb_client;
 #[cfg(feature = "desktop")]
 pub(crate) mod mdkb_commands;
 pub(crate) mod mdkb_daemon;
+pub(crate) mod memory_report;
 #[cfg(feature = "desktop")]
 mod menu;
 #[cfg(feature = "desktop")]
@@ -111,6 +113,7 @@ mod tuic_cli;
 pub(crate) mod tunnels;
 #[cfg(feature = "desktop")]
 mod updater;
+pub(crate) mod webview_recovery;
 pub(crate) mod worktree;
 
 use std::path::{Path, PathBuf};
@@ -120,8 +123,6 @@ use tauri::{Emitter, Manager, State, WebviewWindow};
 
 // Re-export shared types from state module
 pub(crate) use state::MAX_CONCURRENT_SESSIONS;
-#[cfg(test)]
-pub(crate) use state::SessionMetrics;
 pub(crate) use state::{AppState, OutputRingBuffer, PtySession};
 
 #[cfg(feature = "desktop")]
@@ -334,7 +335,7 @@ fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Re
     let effects = config::commit_config_change(state.inner(), move |_current| Ok(config))?;
 
     if effects.tools_changed {
-        let _ = state.mcp_tools_changed.send(());
+        let _ = state.mcp.tools_changed.send(());
     }
 
     if effects.server_changed {
@@ -828,8 +829,8 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
         let cfg = state.config.read();
         (
             cfg.services.server.enabled,
-            state.sessions.len(),
-            state.mcp_sessions.len(),
+            state.session_maps.sessions.len(),
+            state.mcp.sessions.len(),
         )
     };
 
@@ -1249,8 +1250,8 @@ pub fn run() {
     let data_dir = config::config_dir();
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, config.clone(), log_buffer);
-    *app_state.github_token.get_mut() = github_token;
-    *app_state.github_token_source.get_mut() = github_token_source;
+    *app_state.github.token.get_mut() = github_token;
+    *app_state.github.token_source.get_mut() = github_token_source;
 
     let state = Arc::new(app_state);
     state.wire_event_bus();
@@ -1319,7 +1320,8 @@ pub fn run() {
                             "auto_connect_saved_upstreams task failed: {e}"
                         );
                         settle_guard
-                            .mcp_upstream_registry
+                            .mcp
+                            .upstream_registry
                             .mark_initial_connect_complete();
                     }
                 });
@@ -1382,24 +1384,28 @@ pub fn run() {
                     true
                 })
                 .on_page_load(|webview, payload| {
-                    // WebKit WebContent process crashes leave the WebView on about:blank.
-                    // Detect this and force-reload the embedded app page.
+                    // A WebContent crash leaves the WebView on about:blank; the
+                    // 2026-09-08 standby incident left it on about:srcdoc. Both
+                    // are blank top documents with no URL behind them, so both
+                    // are recovered the same way — see `webview_recovery`.
                     if payload.event() == tauri::webview::PageLoadEvent::Finished
-                        && payload.url().as_str() == "about:blank"
+                        && webview_recovery::is_lost(payload.url().as_str())
                     {
                         tracing::error!(
                             source = "webview",
                             label = webview.label(),
-                            "WebView landed on about:blank — WebContent likely crashed, reloading app"
+                            url = %payload.url(),
+                            "WebView landed on a blank document — navigating back to the app"
                         );
-                        let label = webview.label().to_string();
                         let handle = webview.app_handle().clone();
                         tauri::async_runtime::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                            if let Some(wv) = handle.get_webview_window(&label) {
-                                let target: url::Url = "tauri://localhost/".parse().unwrap();
-                                let _ = wv.navigate(target);
-                            }
+                            // The last healthy URL, not a hardcoded one: the
+                            // previous `tauri://localhost/` was never the dev
+                            // server's address, so this hook could not recover
+                            // a `make dev` window at all.
+                            let state: tauri::State<'_, Arc<AppState>> = handle.state();
+                            let _ = webview_recovery::navigate_home(state.inner());
                         });
                     }
                 })
@@ -1421,8 +1427,7 @@ pub fn run() {
         .manage(state)
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
-;
+        .plugin(tauri_plugin_clipboard_manager::init());
 
     #[cfg(feature = "desktop")]
     let builder = builder
@@ -1666,6 +1671,7 @@ pub fn run() {
             pty::unsubscribe_terminal_grid,
             pty::terminal_request_frame,
             pty::ack_terminal_frame,
+            frontend_liveness::frontend_heartbeat,
             pty::terminal_exit_alt_screen,
             pty::terminal_scroll,
             pty::terminal_scroll_to_offset,
@@ -1983,6 +1989,7 @@ pub fn run() {
             claude_usage::get_claude_project_list,
             codex_usage::get_codex_usage_api,
             codex_usage::get_codex_usage_stats,
+            terminal_grid::set_terminal_theme_colors,
             screenshot_response,
             mcp_confirm_response,
             app_logger::push_log,
@@ -2116,13 +2123,18 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     AppState::spawn_acp_notice_pump(state.clone());
     drop(
         state
+            .mcp
             .oauth_flow_manager
-            .spawn_cleanup_task(state.mcp_upstream_registry.clone()),
+            .spawn_cleanup_task(state.mcp.upstream_registry.clone()),
     );
     mcp_http::mcp_transport::spawn_tool_search_index_updater(state.clone());
     pty::spawn_tombstone_sweeper(state.clone());
     content_index::spawn_content_index_updater(state.clone());
     cpu_watchdog::spawn(state.clone());
+    // Its own thread on purpose: probing the webview URL blocks on the event
+    // loop, and the CPU watchdog must not be able to hang behind it.
+    #[cfg(feature = "desktop")]
+    webview_recovery::spawn(state.clone());
     ai_agent::knowledge::spawn_persist_task(state.clone());
     // Only spawns the 30s tick loop if ai-cron.json has an enabled job — most
     // installs never touch scheduling, and previously this ticked (and
@@ -2132,7 +2144,7 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     {
         let watcher_state = state.clone();
         let engine = Arc::new(ai_agent::watcher::WatcherEngine::new(watcher_state));
-        if state.watcher_engine.set(Arc::clone(&engine)).is_err() {
+        if state.ai.watcher_engine.set(Arc::clone(&engine)).is_err() {
             tracing::error!(
                 "WatcherEngine already initialized — duplicate spawn_background_tasks call"
             );
@@ -2230,8 +2242,8 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
-    *app_state.github_token.get_mut() = github_token;
-    *app_state.github_token_source.get_mut() = github_token_source;
+    *app_state.github.token.get_mut() = github_token;
+    *app_state.github.token_source.get_mut() = github_token_source;
 
     let state = Arc::new(app_state);
     state.wire_event_bus();
@@ -2289,7 +2301,8 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
                 "auto_connect_saved_upstreams task failed: {e}"
             );
             settle_guard
-                .mcp_upstream_registry
+                .mcp
+                .upstream_registry
                 .mark_initial_connect_complete();
         }
     });
@@ -2368,8 +2381,8 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
-    *app_state.github_token.get_mut() = github_token;
-    *app_state.github_token_source.get_mut() = github_token_source;
+    *app_state.github.token.get_mut() = github_token;
+    *app_state.github.token_source.get_mut() = github_token_source;
 
     let state = Arc::new(app_state);
     state.wire_event_bus();
