@@ -1,10 +1,27 @@
-import { type Component, onMount } from "solid-js";
+import { batch, type Component, createEffect, onMount, untrack } from "solid-js";
 import { AIChatPanel, type AIChatTerminalBinding } from "../components/AIChatPanel/AIChatPanel";
 import { initPanelWindow } from "../hooks/initPanelWindow";
 import type { PanelAdapter } from "../panelRouter";
 import { conversationStore } from "../stores/conversationStore";
 import { terminalsStore } from "../stores/terminals";
 import { uiStore } from "../stores/ui";
+import {
+	AI_CHAT_SYNC_INTERVAL_MS,
+	type AiChatSnapshot,
+	buildAiChatSnapshot,
+	projectAiChat,
+} from "../utils/aiChatSnapshot";
+import { createPanelSyncReceiver } from "../utils/panelSync";
+
+/**
+ * Cap on the mirrored list, mirroring `MAX_MESSAGES` in conversationStore. A
+ * finished reply is appended with the raw setter rather than `addAssistantMessage`
+ * on purpose — that one schedules a persist, and this window never saw the prompt
+ * that produced the reply (the projection carries the stream, not the history), so
+ * writing its shorter list back under the same chat id would delete that prompt
+ * from disk. The raw setter skips the store's own cap, hence this one.
+ */
+const MIRRORED_MESSAGE_CAP = 100;
 
 const DetachedAIChatPanel: Component<{ params: URLSearchParams }> = (props) => {
 	const chatId = props.params.get("chatId");
@@ -36,6 +53,56 @@ const DetachedAIChatPanel: Component<{ params: URLSearchParams }> = (props) => {
 		attached: sessionId !== null,
 	});
 
+	// Streams the MAIN window runs for this terminal — a watcher rule, an
+	// automation goal, a terminal context action — render nowhere while the panel
+	// is detached, because `PanelOrchestrator` unmounts the docked copy. Mirror
+	// them here. `projectAiChat` decides what a snapshot is allowed to touch; this
+	// only carries out the verdict.
+	const { state: projection } = createPanelSyncReceiver<AiChatSnapshot | null>("ai-chat");
+	let mirroring = false;
+	let mirroredFromAt: number | null = null;
+	createEffect(() => {
+		const snapshot = projection();
+		// Track the snapshot and nothing else: the local reads below are this
+		// effect's own writes on the previous tick, so tracking them would make it
+		// re-run itself forever.
+		untrack(() => {
+			const s = conversationStore.activeConversation();
+			const {
+				overlay,
+				finalize,
+				mirroring: next,
+				mirroredFromAt: nextFrom,
+			} = projectAiChat(snapshot ?? null, {
+				chatId: s.chatId(),
+				isStreaming: s.isStreaming(),
+				agentState: s.agentState(),
+				mirroring,
+				mirroredFromAt,
+			});
+			mirroring = next;
+			mirroredFromAt = nextFrom;
+			if (!overlay && !finalize) return;
+			batch(() => {
+				if (overlay) {
+					s.setIsStreaming(overlay.isStreaming);
+					s.setStreamingText(overlay.streamingText);
+					s.setIsThinking(overlay.isThinking);
+					s.setError(overlay.error);
+					s.setAgentState(overlay.agentState);
+					s.setTextChunks(overlay.textChunks);
+					s.setToolCalls(overlay.toolCalls);
+				}
+				if (finalize) {
+					s.setMessages((prev) => {
+						const next = [...prev, { role: "assistant" as const, content: finalize, timestamp: Date.now() }];
+						return next.length > MIRRORED_MESSAGE_CAP ? next.slice(next.length - MIRRORED_MESSAGE_CAP) : next;
+					});
+				}
+			});
+		});
+	});
+
 	onMount(() => {
 		void initPanelWindow();
 		// Best effort: a missing conversation is swallowed inside the store, so
@@ -65,6 +132,10 @@ export const aiChatPanelAdapter: PanelAdapter = {
 	title: "AI Chat",
 	defaultSize: { width: 500, height: 700 },
 	toggle: () => uiStore.toggleAiChatPanel(),
+	// `bringPanelHome` toggles the panel back on, so detaching has to turn it off
+	// — the same contract the activity adapter follows. Left visible, the toggle
+	// on the way home flipped it off instead and the panel never came back.
+	onDetach: () => uiStore.setAiChatPanelVisible(false),
 	detachParams: () => {
 		const activeId = terminalsStore.state.activeId;
 		const terminal = activeId ? terminalsStore.get(activeId) : undefined;
@@ -78,6 +149,12 @@ export const aiChatPanelAdapter: PanelAdapter = {
 			terminalName: terminal?.name ?? "",
 		};
 	},
+	// Scoped to the terminal this window was handed, not to whatever the main
+	// window has focused now — the detached chat stays pinned to its terminal, so
+	// a stream belonging to another one belongs on another screen. `projectAiChat`
+	// re-checks that by chat id at the receiving end.
+	syncIntervalMs: AI_CHAT_SYNC_INTERVAL_MS,
+	serialize: () => (handedOverKey ? buildAiChatSnapshot(conversationStore.getOrCreate(handedOverKey)) : null),
 	// Everything typed in the detached window was persisted by ITS store, not
 	// this one — the main window's copy of that conversation is frozen at the
 	// moment it detached, so coming home has to re-read it.
@@ -99,6 +176,15 @@ export const aiChatPanelAdapter: PanelAdapter = {
 		handedOverKey = null;
 		if (key && key !== activeTerminalKey()) {
 			conversationStore.invalidateTerminal(key);
+			return;
+		}
+		// A reply still arriving lives only in memory. `loadConversation` replaces
+		// the whole state, so re-reading disk on top of it blanks `streamingText`
+		// and `isStreaming` while the backend keeps writing into them — the panel
+		// then shows nothing until the stream ends. Mark it stale instead: the next
+		// switch back to this terminal re-reads it, same as the branch above.
+		if (conversationStore.isStreaming()) {
+			if (key) conversationStore.invalidateTerminal(key);
 			return;
 		}
 		void conversationStore.loadConversation(conversationStore.chatId());
