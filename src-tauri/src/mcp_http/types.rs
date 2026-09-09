@@ -765,6 +765,14 @@ pub(super) struct TerminalScrollRequest {
     pub delta: i32,
 }
 
+/// The resolved terminal theme, for answering OSC 10/11/12 colour queries.
+#[derive(Deserialize)]
+pub(super) struct TerminalThemeColorsRequest {
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
+    pub cursor: [u8; 3],
+}
+
 #[derive(Deserialize)]
 pub(super) struct TerminalScrollToRequest {
     pub line: usize,

@@ -8,8 +8,99 @@ use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode, TermParseDamage};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
-use std::sync::Mutex;
+// `parking_lot::Mutex` has no poison state. A panic taken anywhere near this
+// queue used to poison a `std::sync::Mutex` permanently: `send_event` then
+// panicked on `.lock().unwrap()` for the rest of the terminal's life, and
+// `drain_events` returned an empty `Vec` forever — silently dropping every
+// title change, OSC 133 mark, OSC 7 cwd and TUIC event while the grid kept
+// rendering. Pinned by `events_are_still_delivered_after_a_panic_under_their_lock`.
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// The colours TUIC reports when an app asks the terminal what it is painted
+/// with (OSC 10 foreground / 11 background / 12 cursor).
+///
+/// Process-wide rather than per-session because the theme is: every terminal in
+/// the window paints from the same palette, and the event listener that answers
+/// the query has no `AppState` to reach into.
+///
+/// The defaults are a placeholder for the window between startup and the
+/// frontend's first [`set_terminal_palette`]. They are deliberately dark: an app
+/// that gets a wrong-but-plausible answer picks a bad contrast, while an app that
+/// gets NO answer never concludes at all. See the doc on the `ColorRequest` arm
+/// below for why silence is the expensive failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TerminalPalette {
+    pub(crate) foreground: (u8, u8, u8),
+    pub(crate) background: (u8, u8, u8),
+    pub(crate) cursor: (u8, u8, u8),
+}
+
+impl Default for TerminalPalette {
+    fn default() -> Self {
+        Self {
+            foreground: (0xcc, 0xcc, 0xcc),
+            background: (0x1e, 0x1e, 0x1e),
+            cursor: (0xcc, 0xcc, 0xcc),
+        }
+    }
+}
+
+static PALETTE: parking_lot::RwLock<TerminalPalette> = parking_lot::RwLock::new(TerminalPalette {
+    foreground: (0xcc, 0xcc, 0xcc),
+    background: (0x1e, 0x1e, 0x1e),
+    cursor: (0xcc, 0xcc, 0xcc),
+});
+
+/// Tell the emulator what the terminal is actually painted with. Called by the
+/// frontend whenever the resolved theme changes.
+pub(crate) fn set_terminal_palette(palette: TerminalPalette) {
+    *PALETTE.write() = palette;
+}
+
+/// What the emulator will report for OSC 10/11/12 right now. Test-only: the
+/// palette is write-then-answer in production, and the colour-query tests use
+/// this to save and restore the shared value around a case.
+#[cfg(test)]
+pub(crate) fn terminal_palette() -> TerminalPalette {
+    *PALETTE.read()
+}
+
+/// Publish the resolved terminal theme so colour queries can be answered.
+///
+/// Channels are taken as `[u8; 3]` rather than a CSS string on purpose: the
+/// frontend already has to resolve `getComputedStyle` to numbers, and a parser
+/// here would be a second place for a colour to be interpreted differently.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn set_terminal_theme_colors(
+    foreground: [u8; 3],
+    background: [u8; 3],
+    cursor: [u8; 3],
+) -> Result<(), String> {
+    set_terminal_palette(TerminalPalette {
+        foreground: (foreground[0], foreground[1], foreground[2]),
+        background: (background[0], background[1], background[2]),
+        cursor: (cursor[0], cursor[1], cursor[2]),
+    });
+    Ok(())
+}
+
+/// The palette colour an OSC 10/11/12 query is asking about.
+///
+/// `index` arrives as `NamedColor::Foreground + (code - 10)`, so 256/257/258.
+/// Anything else is an `OSC 4;n;?` indexed-palette query, which TUIC does not
+/// track — answering those with a guess would be worse than not answering, since
+/// an indexed query has no fence idiom waiting on it.
+fn palette_color_for_index(index: usize) -> Option<Rgb> {
+    let palette = *PALETTE.read();
+    let (r, g, b) = match index {
+        i if i == NamedColor::Foreground as usize => palette.foreground,
+        i if i == NamedColor::Background as usize => palette.background,
+        i if i == NamedColor::Cursor as usize => palette.cursor,
+        _ => return None,
+    };
+    Some(Rgb { r, g, b })
+}
 
 /// Terminal event captured from alacritty for forwarding to PTY/frontend.
 #[derive(Debug, Clone)]
@@ -46,59 +137,70 @@ impl EventListener for TermEventCollector {
                 self.bell.store(true, Ordering::Relaxed);
             }
             Event::Title(t) => {
-                self.events.lock().unwrap().push(TermEvent::Title(t));
+                self.events.lock().push(TermEvent::Title(t));
             }
             Event::ResetTitle => {
-                self.events.lock().unwrap().push(TermEvent::ResetTitle);
+                self.events.lock().push(TermEvent::ResetTitle);
             }
             Event::ClipboardStore(_, text) => {
-                self.events
-                    .lock()
-                    .unwrap()
-                    .push(TermEvent::ClipboardStore(text));
+                self.events.lock().push(TermEvent::ClipboardStore(text));
             }
             Event::PtyWrite(s) => {
-                self.events.lock().unwrap().push(TermEvent::PtyWrite(s));
+                self.events.lock().push(TermEvent::PtyWrite(s));
             }
             Event::MouseCursorDirty => {
-                self.events
-                    .lock()
-                    .unwrap()
-                    .push(TermEvent::MouseCursorDirty);
+                self.events.lock().push(TermEvent::MouseCursorDirty);
             }
             Event::CursorBlinkingChange => {
-                self.events
-                    .lock()
-                    .unwrap()
-                    .push(TermEvent::CursorBlinkingChange);
+                self.events.lock().push(TermEvent::CursorBlinkingChange);
             }
             Event::Osc133 {
                 command,
                 params,
                 line,
             } => {
-                self.events.lock().unwrap().push(TermEvent::Osc133 {
+                self.events.lock().push(TermEvent::Osc133 {
                     command,
                     params,
                     line,
                 });
             }
             Event::Osc7(url) => {
-                self.events.lock().unwrap().push(TermEvent::Osc7(url));
+                self.events.lock().push(TermEvent::Osc7(url));
             }
             Event::Tuic {
                 verb,
                 payload,
                 line,
             } => {
-                self.events.lock().unwrap().push(TermEvent::Tuic {
+                self.events.lock().push(TermEvent::Tuic {
                     verb,
                     payload,
                     line,
                 });
             }
+            // An unanswered colour query is NOT a no-op, which is why this arm
+            // exists instead of falling into the ignore list below.
+            //
+            // The standard probe is `OSC 11 ; ? ST` followed by `ESC[c` as a
+            // fence: DA is universally supported, so a DA reply arriving with no
+            // colour reply before it is supposed to mean "this terminal cannot
+            // answer". TUIC answered the fence and dropped the query, so the
+            // probe never concluded — Claude Code re-sent the pair every ~1.2 s
+            // for the life of the session, and every DA reply it triggered went
+            // into the PTY as if typed, echoing `^[[?6c` onto the screen whenever
+            // the process was not reading in raw mode.
+            //
+            // Answering is what ends it. Alacritty already built the reply; only
+            // the host has to say what colour it painted with.
+            Event::ColorRequest(index, format_reply) => {
+                if let Some(color) = palette_color_for_index(index) {
+                    self.events
+                        .lock()
+                        .push(TermEvent::PtyWrite(format_reply(color)));
+                }
+            }
             Event::ClipboardLoad(..)
-            | Event::ColorRequest(..)
             | Event::TextAreaSizeRequest(..)
             | Event::Wakeup
             | Event::Exit
@@ -739,6 +841,19 @@ impl TerminalGrid {
         self.term.primary_history_size()
     }
 
+    /// Roughly how much heap this grid holds, for `memory_report`.
+    ///
+    /// Cells are the whole of it: `Cell` is fixed-size, and the per-row `Vec`
+    /// headers are noise beside `rows × cols` of them. Approximate on purpose —
+    /// the report exists to say *which* structure grew, and a number that is
+    /// right to within a row is already enough to answer that.
+    pub fn approx_bytes(&self) -> usize {
+        let grid = self.term.grid();
+        (grid.history_size() + grid.screen_lines())
+            .saturating_mul(grid.columns())
+            .saturating_mul(std::mem::size_of::<Cell>())
+    }
+
     /// Read a range of scrollback lines as plain text.
     /// `offset` is counted from the top of scrollback (0 = oldest visible).
     /// Returns up to `limit` lines.
@@ -1156,13 +1271,7 @@ impl TerminalGrid {
 
     /// Drain queued terminal events (title changes, clipboard, PTY writes, etc.)
     pub fn drain_events(&self) -> Vec<TermEvent> {
-        match self.events.lock() {
-            Ok(mut guard) => std::mem::take(&mut *guard),
-            Err(e) => {
-                tracing::error!("terminal_grid: events mutex poisoned: {e}");
-                Vec::new()
-            }
-        }
+        std::mem::take(&mut *self.events.lock())
     }
 
     /// Get the OSC 8 hyperlink URI at a given viewport position, if any.
@@ -2224,6 +2333,103 @@ mod tests {
 
     fn screen_contains(grid: &TerminalGrid, needle: &str) -> bool {
         grid.screen_text_rows().iter().any(|r| r.contains(needle))
+    }
+
+    // --- OSC 10/11/12 colour queries ---
+    //
+    // These share one process-wide palette, so they run under a mutex rather
+    // than racing each other through `set_terminal_palette`.
+    mod color_query {
+        use super::*;
+
+        static SERIAL: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+        fn replies_to(query: &[u8], palette: TerminalPalette) -> Vec<String> {
+            let _guard = SERIAL.lock();
+            let restore = terminal_palette();
+            set_terminal_palette(palette);
+            let mut grid = TerminalGrid::new(24, 80, 100);
+            grid.process(query);
+            let replies = grid
+                .drain_events()
+                .into_iter()
+                .filter_map(|e| match e {
+                    TermEvent::PtyWrite(s) => Some(s),
+                    _ => None,
+                })
+                .collect();
+            set_terminal_palette(restore);
+            replies
+        }
+
+        fn palette() -> TerminalPalette {
+            TerminalPalette {
+                foreground: (0xd4, 0xd4, 0xd4),
+                background: (0x1e, 0x1e, 0x1e),
+                cursor: (0xff, 0x00, 0x80),
+            }
+        }
+
+        /// The regression this whole feature exists for: an unanswered OSC 11
+        /// makes a probing agent retry forever, because the `ESC[c` fence it
+        /// sends alongside only means "unsupported" once a reply could have
+        /// arrived first.
+        #[test]
+        fn answers_a_background_color_query() {
+            let replies = replies_to(b"\x1b]11;?\x1b\\", palette());
+            assert_eq!(replies.len(), 1, "expected exactly one reply: {replies:?}");
+            assert!(
+                replies[0].contains("11;rgb:1e1e/1e1e/1e1e"),
+                "reply did not carry the background: {:?}",
+                replies[0]
+            );
+        }
+
+        #[test]
+        fn answers_foreground_and_cursor_queries_with_their_own_colors() {
+            let fg = replies_to(b"\x1b]10;?\x1b\\", palette());
+            assert!(fg[0].contains("10;rgb:d4d4/d4d4/d4d4"), "{:?}", fg[0]);
+
+            let cursor = replies_to(b"\x1b]12;?\x1b\\", palette());
+            assert!(
+                cursor[0].contains("12;rgb:ffff/0000/8080"),
+                "{:?}",
+                cursor[0]
+            );
+        }
+
+        /// The probe sends `OSC 11 ; ? ST` then `ESC[c`. Both must be answered,
+        /// and the colour must come FIRST — the fence is only meaningful because
+        /// a supporting terminal replies before it.
+        #[test]
+        fn answers_the_color_before_the_device_attributes_fence() {
+            let replies = replies_to(b"\x1b]11;?\x1b\\\x1b[c", palette());
+            assert_eq!(replies.len(), 2, "expected colour + DA: {replies:?}");
+            assert!(replies[0].contains("11;rgb:"), "{:?}", replies[0]);
+            assert_eq!(replies[1], "\x1b[?6c");
+        }
+
+        /// An indexed-palette query has no fence waiting on it, and TUIC does not
+        /// track those colours — a guess would be worse than silence here.
+        #[test]
+        fn stays_silent_for_indexed_palette_queries() {
+            assert!(replies_to(b"\x1b]4;3;?\x1b\\", palette()).is_empty());
+        }
+
+        #[test]
+        fn reports_whatever_the_frontend_last_published() {
+            let light = TerminalPalette {
+                foreground: (0x00, 0x00, 0x00),
+                background: (0xff, 0xff, 0xff),
+                cursor: (0x00, 0x00, 0x00),
+            };
+            let replies = replies_to(b"\x1b]11;?\x1b\\", light);
+            assert!(
+                replies[0].contains("11;rgb:ffff/ffff/ffff"),
+                "{:?}",
+                replies[0]
+            );
+        }
     }
 
     // --- F23: how much does the whole-row wire format overship? ---
@@ -5335,5 +5541,43 @@ mod tests {
         // Wheel back down: the viewport returns to the live tail.
         grid.scroll(-(history as i32 + 10));
         assert_eq!(grid.display_offset(), 0, "must snap back to the live tail");
+    }
+
+    /// A panic taken while the event queue is locked must not stop event
+    /// delivery for the rest of the terminal's life.
+    ///
+    /// This is the whole argument for `parking_lot` here, and it is worse than
+    /// "a lock type changed". A poisoned `std::sync::Mutex` never un-poisons, so
+    /// `drain_events` took its `Err` arm on *every* later call and returned an
+    /// empty `Vec` — silently dropping every title change, OSC 133 prompt mark,
+    /// OSC 7 cwd and TUIC event for that terminal, while the grid kept rendering
+    /// and looked perfectly healthy. `parking_lot` has no poison state, so one
+    /// panic costs one lost event instead of all future ones.
+    #[test]
+    fn events_are_still_delivered_after_a_panic_under_their_lock() {
+        let mut grid = TerminalGrid::new(24, 80, 100);
+        let events = grid.events.clone();
+
+        // Silence the unwind backtrace: the panic below is the fixture, not noise.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = events.lock();
+            panic!("panic inside the terminal event critical section");
+        }))
+        .is_err();
+        std::panic::set_hook(hook);
+        assert!(panicked, "the fixture must actually panic under the lock");
+
+        // OSC 0 — set window title. One of the events send_event queues.
+        grid.process(b"\x1b]0;after-the-panic\x07");
+
+        let drained = grid.drain_events();
+        assert!(
+            drained
+                .iter()
+                .any(|e| matches!(e, TermEvent::Title(t) if t == "after-the-panic")),
+            "event delivery stopped after a panic under the lock; drained: {drained:?}"
+        );
     }
 }
