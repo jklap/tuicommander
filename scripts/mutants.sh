@@ -51,8 +51,12 @@ cp -R "$ROOT/src-tauri/binaries/." "$SRC/src-tauri/binaries/"
 
 cd "$SRC/src-tauri"
 ulimit -n 10240
-cargo mutants --in-place --in-diff "$DIFF" "${@:2}"
-STATUS=$?
+# `|| STATUS=$?` rather than a bare call: cargo-mutants exits non-zero exactly
+# when mutants SURVIVED, and under `set -e` that aborted the script here — so
+# the missed.txt dump below only ever printed on a clean run, which is the one
+# case where it has nothing to say.
+STATUS=0
+cargo mutants --in-place --in-diff "$DIFF" "${@:2}" || STATUS=$?
 echo "--- missed (a surviving mutant is a missing test):"
 cat mutants.out/missed.txt 2>/dev/null || true
 echo "logs: $SRC/src-tauri/mutants.out"
