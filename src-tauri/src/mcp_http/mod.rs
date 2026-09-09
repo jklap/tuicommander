@@ -306,7 +306,7 @@ async fn reconnect_mcp_upstream_http(
                 .into_response();
         }
     };
-    let registry = &state.mcp_upstream_registry;
+    let registry = &state.mcp.upstream_registry;
     registry.emit_status_change(&name, "connecting");
     if let Err(e) = registry.disconnect_upstream(&name) {
         tracing::warn!(source = "mcp_http", upstream = %name, error = %e, "Failed to disconnect upstream before reconnect");
@@ -347,7 +347,7 @@ async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>
 
 /// GET /mcp/upstream-status — returns status + metrics for all upstream MCP servers.
 async fn upstream_status_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(state.mcp_upstream_registry.status_snapshot())
+    Json(state.mcp.upstream_registry.status_snapshot())
 }
 
 /// Serve plugin data files over HTTP.
@@ -559,9 +559,18 @@ const API_PREFIXES: &[&str] = &[
 ///
 /// Under an API prefix that means a missing route, so answer 404 with a JSON
 /// error; anything else is an SPA deep link and gets the frontend shell.
+///
+/// Registered with `Router::fallback`, not `.route("/{*path}", get(..))`, so it
+/// answers on EVERY method. As a GET-only route it replied 405 to a PATCH/POST
+/// on a path that does not exist at all — a lie, and one that made
+/// `command_table_paths_all_hit_a_registered_route` unable to fail, since its
+/// PATCH probe read that 405 as "route present". A fallback fires only when no
+/// route matched the path; a real route with the wrong method still returns its
+/// own 405, which is precisely the distinction the probe needs.
 #[cfg(feature = "desktop")]
-async fn spa_or_api_404(path: AxumPath<String>) -> Response {
-    // `{*path}` captures without the leading slash.
+async fn spa_or_api_404(uri: axum::http::Uri) -> Response {
+    // Compare against the path without its leading slash, as `{*path}` did.
+    let path = AxumPath(uri.path().trim_start_matches('/').to_string());
     let head = path.0.split('/').next().unwrap_or("");
     if API_PREFIXES.contains(&head) {
         return (
@@ -601,9 +610,8 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 /// both. Returned WITHOUT `.with_state`/layers so each caller merges it before
 /// applying its own state and middleware.
 ///
-/// Router-specific routes stay in their own builder: desktop-only surfaces, the
-/// per-router `/fs/read-editor*` handler down-scope (SECURITY), and the
-/// remote-only `/watchers/hot-repos`.
+/// Router-specific routes stay in their own builder: desktop-only surfaces and
+/// the per-router `/fs/read-editor*` handler down-scope (SECURITY).
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Version (authenticated)
@@ -664,6 +672,11 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/sessions/{id}", delete(session::close_session))
         // WebSocket streaming
         .route("/sessions/{id}/stream", get(session::ws_stream))
+        // Terminal theme, so OSC 10/11/12 colour queries can be answered.
+        .route(
+            "/terminal/theme-colors",
+            post(session::terminal_theme_colors),
+        )
         // Terminal grid commands
         .route(
             "/sessions/{id}/terminal/scroll",
@@ -764,6 +777,14 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(watcher_routes::start_dir_watcher_http)
                 .delete(watcher_routes::stop_dir_watcher_http),
         )
+        // Shared, not remote-only: `set_hot_repos` is a COMMAND_TABLE entry, so
+        // a browser/PWA client of the DESKTOP app calls it too and used to get a
+        // 404 — the repo watcher then never learned which repos were hot. Found
+        // by `command_table_paths_all_hit_a_registered_route`.
+        .route(
+            "/watchers/hot-repos",
+            put(watcher_routes::set_hot_repos_http),
+        )
         // Logs
         .route(
             "/logs",
@@ -784,6 +805,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/diagnostics/capture",
             get(log_routes::capture_get).post(log_routes::capture_set),
         )
+        .route("/diagnostics/memory", get(log_routes::memory_report_get))
         // Worktrees
         .route(
             "/worktrees",
@@ -1035,6 +1057,42 @@ pub(crate) fn resolve_mcp_confirm(state: &Arc<AppState>, request_id: &str, confi
             serde_json::json!({ "request_id": request_id, "confirmed": confirmed }),
         );
     }
+}
+
+/// Wall-clock bound on producing a response. A handler that wedges holds its
+/// connection forever without this; 120 s is above the slowest legitimate
+/// request (a cold git operation on a large repo) and far below "never".
+pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Largest request body any route will buffer.
+///
+/// axum already applies a 2 MB `DefaultBodyLimit` to `Json`/`String`/`Bytes`,
+/// so this is not a new restriction — it makes an invisible framework default
+/// into an asserted one. A future axum release cannot loosen it silently, and
+/// `server_limits_reject_a_body_over_the_cap` fails if anyone raises it without
+/// meaning to.
+pub(crate) const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+
+/// Apply the server's two resource bounds to an assembled router.
+///
+/// `timeout` is a parameter rather than a read of `REQUEST_TIMEOUT` because the
+/// deadline IS the subject here: the test needs a bound it can exceed in
+/// milliseconds, and a `cfg(test)` constant would leave production and test
+/// exercising different code (AGENTS.md, "Which timing assertions are
+/// load-bearing").
+///
+/// Both layers are safe over SSE and WebSocket. `tower_http`'s `ResponseFuture`
+/// races its sleep only against the future that produces the `Response`; once
+/// headers are returned the timeout is dropped and the body streams
+/// unwatched. `Sse` and `WebSocketUpgrade` both return immediately, so neither
+/// `/events` nor a PTY socket can be cut off mid-stream.
+pub(crate) fn with_server_limits(routes: Router, timeout: std::time::Duration) -> Router {
+    routes
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            timeout,
+        ))
 }
 
 pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
@@ -1396,6 +1454,12 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))
+        // Debug: reload the main WebView natively (loopback-only, enforced in
+        // handler). Local router only — the remote client reloads its own tab.
+        .route(
+            "/debug/reload_webview",
+            post(log_routes::reload_webview_http),
+        )
         // Branch operations (desktop-only)
         .route(
             "/repo/merge-pr",
@@ -1661,7 +1725,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     #[cfg(feature = "desktop")]
     let routes = routes
         .route("/", get(static_files::serve_index))
-        .route("/{*path}", get(spa_or_api_404));
+        .fallback(spa_or_api_404);
 
     let routes = routes
         .with_state(state.clone())
@@ -1671,6 +1735,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .layer(
             CompressionLayer::new().compress_when(DefaultPredicate::new().and(SizeAbove::new(860))),
         );
+
+    let routes = with_server_limits(routes, REQUEST_TIMEOUT);
 
     if remote_auth {
         routes.layer(axum::middleware::from_fn_with_state(
@@ -1718,11 +1784,6 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
             "/fs/read-editor-external",
             get(fs_routes::read_external_file_http),
         )
-        // Watchers — remote-only hot-repos toggle
-        .route(
-            "/watchers/hot-repos",
-            put(watcher_routes::set_hot_repos_http),
-        )
         // SSH tunnel management
         .nest("/tunnels", tunnel_routes())
         .with_state(state.clone())
@@ -1731,10 +1792,9 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
             CompressionLayer::new().compress_when(DefaultPredicate::new().and(SizeAbove::new(860))),
         );
 
-    let authed = routes.layer(axum::middleware::from_fn_with_state(
-        state,
-        auth::basic_auth_middleware,
-    ));
+    let authed = with_server_limits(routes, REQUEST_TIMEOUT).layer(
+        axum::middleware::from_fn_with_state(state, auth::basic_auth_middleware),
+    );
 
     public_routes.merge(authed)
 }
@@ -1840,14 +1900,15 @@ pub async fn start_server(
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 let now = std::time::Instant::now();
                 let reaped: Vec<String> = reaper_state
-                    .mcp_sessions
+                    .mcp
+                    .sessions
                     .iter()
                     .filter(|e| now.duration_since(e.value().last_activity) >= MCP_SESSION_TTL)
                     .map(|e| e.key().clone())
                     .collect();
                 for sid in &reaped {
                     tracing::warn!("MCP session reaped (idle ≥1h): {sid}");
-                    reaper_state.mcp_sessions.remove(sid);
+                    reaper_state.mcp.sessions.remove(sid);
                     // Clean up peer agents whose MCP session was reaped. An
                     // identity that is still addressable outlives the transport
                     // that carried it.
@@ -1909,7 +1970,7 @@ pub async fn start_server(
 
         // Spawn upstream health checker: pings Ready upstreams every 60s
         crate::mcp_proxy::registry::UpstreamRegistry::spawn_health_checker(Arc::clone(
-            &state.mcp_upstream_registry,
+            &state.mcp.upstream_registry,
         ));
 
         // Spawn standby checker: SIGSTOP idle+unfocused sessions after timeout
@@ -2190,7 +2251,6 @@ mod tests {
     use axum::body::Body;
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::{Request, StatusCode};
-    use dashmap::{DashMap, DashSet};
     use tower::ServiceExt;
 
     /// Build a POST request with ConnectInfo from the given address.
@@ -2236,150 +2296,11 @@ mod tests {
     }
 
     pub(super) fn test_state() -> Arc<AppState> {
-        let state = Arc::new(AppState {
-            sessions: DashMap::new(),
-            data_dir: std::env::temp_dir().join("test-tuic-data"),
-            worktrees_dir: std::env::temp_dir().join("test-worktrees"),
-            metrics: crate::SessionMetrics::new(),
-            output_buffers: DashMap::new(),
-            mcp_sessions: DashMap::new(),
-            ws_clients: DashMap::new(),
-            config: parking_lot::RwLock::new(crate::config::AppConfig::default()),
-            git_cache: crate::state::GitCacheState::new(),
-            repo_watchers: DashMap::new(),
-            repo_git_fingerprints: DashMap::new(),
-            repo_head_targets: DashMap::new(),
-            repo_head_emits_suppressed: std::sync::atomic::AtomicU64::new(0),
-            dir_watchers: DashMap::new(),
-            theme_watcher: parking_lot::Mutex::new(None),
-            mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
-            http_client: reqwest::Client::new(),
-            github_token: parking_lot::RwLock::new(None),
-            github_token_source: parking_lot::RwLock::new(Default::default()),
-            github_circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
-            github_poller: parking_lot::Mutex::new(None),
-            github_viewer_login: parking_lot::RwLock::new(None),
-            github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
-            ghe_state: dashmap::DashMap::new(),
-            server_shutdown: parking_lot::Mutex::new(None),
-            ipc_started: std::sync::atomic::AtomicBool::new(false),
-            session_token: parking_lot::RwLock::new(uuid::Uuid::new_v4().to_string()),
-            auth_rate_limits: DashMap::new(),
-            #[cfg(feature = "desktop")]
-            app_handle: parking_lot::RwLock::new(None),
-            plugin_watchers: DashMap::new(),
-            ansi_colors: parking_lot::RwLock::new(None),
-            vt_log_buffers: DashMap::new(),
-            pty_raw_rings: DashMap::new(),
-            #[cfg(feature = "desktop")]
-            grid_channels: DashMap::new(),
-            grid_watch: DashMap::new(),
-            grid_gates: DashMap::new(),
-            pending_scroll: DashMap::new(),
-            kitty_states: DashMap::new(),
-            input_buffers: DashMap::new(),
-            last_prompts: DashMap::new(),
-            pty_descriptions: DashMap::new(),
-            silence_states: DashMap::new(),
-            claude_usage_cache: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            log_buffer: std::sync::Arc::new(parking_lot::Mutex::new(
-                crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
-            )),
-            event_bus: tokio::sync::broadcast::channel(256).0,
-            event_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            sse_filters: Default::default(),
-            session_states: dashmap::DashMap::new(),
-            session_state_events: crate::state::SessionStateEventQueue::new(),
-            mcp_upstream_registry: std::sync::Arc::new(
-                crate::mcp_proxy::registry::UpstreamRegistry::new(),
-            ),
-            oauth_flow_manager: std::sync::Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
-            mcp_tools_changed: tokio::sync::broadcast::channel(16).0,
-            tool_search_index: std::sync::Arc::new(parking_lot::RwLock::new(
-                crate::tool_search::ToolSearchIndex::build(&[]),
-            )),
-            content_indices: DashMap::new(),
-            index_in_flight: std::sync::Arc::new(dashmap::DashSet::new()),
-            worktree_recreate_in_flight: std::sync::Arc::new(dashmap::DashSet::new()),
-            index_build_sem: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
-            monitoring_git_sem: std::sync::Arc::new(tokio::sync::Semaphore::new(
-                crate::state::MONITORING_GIT_CONCURRENCY,
-            )),
-            indexer_throttle: std::sync::Arc::new(crate::content_index::IndexerThrottle::default()),
-            slash_mode: DashMap::new(),
-            last_output_ms: DashMap::new(),
-            last_input_ms: DashMap::new(),
-            shell_states: DashMap::new(),
-            terminal_rows: DashMap::new(),
-            resize_locks: DashMap::new(),
-            exit_codes: DashMap::new(),
-            shell_state_since_ms: DashMap::new(),
-            loaded_plugins: DashMap::new(),
-            plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
-            relay: crate::state::RelayState::new(),
-            peer_agents: DashMap::new(),
-            agent_inbox: DashMap::new(),
-            agent_inbox_evictions: DashMap::new(),
-            agent_read_cursor: DashMap::new(),
-            marker_stats: DashMap::new(),
-            pending_injections: DashMap::new(),
-            pending_initial_prompts: DashMap::new(),
-            active_agent_waiters: DashMap::new(),
-            orchestrator_peers: DashSet::new(),
-            session_html_tabs: DashMap::new(),
-            mcp_to_session: DashMap::new(),
-            session_to_mcp: DashMap::new(),
-            live_pty_by_tuic_session: DashMap::new(),
-            session_parent: DashMap::new(),
-            messaging_channels: DashMap::new(),
-            pty_event_channels: DashMap::new(),
-            session_knowledge: DashMap::new(),
-            knowledge_dirty: DashMap::new(),
-            has_osc133_integration: DashMap::new(),
-            file_sandboxes: DashMap::new(),
-            unrestricted_sessions: DashMap::new(),
-            #[cfg(unix)]
-            bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
-            tailscale_state: parking_lot::RwLock::new(
-                crate::tailscale::TailscaleState::NotInstalled,
-            ),
-            acp: crate::acp::AcpClientManager::new(),
-            push_store: crate::push::PushStore::load(&std::env::temp_dir()),
-            desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
-            server_start_time: std::time::Instant::now(),
-            term_aliases: dashmap::DashMap::new(),
-            term_alias_counters: dashmap::DashMap::new(),
-            session_visibility: dashmap::DashMap::new(),
-            watcher_engine: std::sync::OnceLock::new(),
-            scheduler_running: std::sync::atomic::AtomicBool::new(false),
-            scheduler_stop: Arc::new(tokio::sync::Notify::new()),
-            trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
-            ai_suggestions_enabled: dashmap::DashMap::new(),
-            grid_frame_dirty: dashmap::DashMap::new(),
-            sync_update_active: dashmap::DashMap::new(),
-            tunnel_manager: {
-                let audit = std::sync::Arc::new(parking_lot::Mutex::new(
-                    crate::tunnels::audit::AuditLog::open(
-                        &std::env::temp_dir().join("test-tunnel-audit.db"),
-                    )
-                    .unwrap(),
-                ));
-                std::sync::Arc::new(crate::tunnels::manager::TunnelManager::new(audit))
-            },
-            tunnel_audit: std::sync::Arc::new(parking_lot::Mutex::new(
-                crate::tunnels::audit::AuditLog::open(
-                    &std::env::temp_dir().join("test-tunnel-audit2.db"),
-                )
-                .unwrap(),
-            )),
-            tasks: std::sync::Arc::new(crate::tasks::TaskRegistry::new()),
-            connections_lock: tokio::sync::Mutex::new(()),
-            screenshot_responses: DashMap::new(),
-            confirm_responses: DashMap::new(),
-            standby_sessions: DashMap::new(),
-            process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
-            hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
-        });
+        // Was a hand-copied 116-field `AppState` literal, kept in sync with
+        // `AppState::new` by hand and sharing one `test-tuic-data` dir across
+        // every test — the SQLITE_BUSY collision `make_test_app_state`
+        // documents and avoids (#678-9a75).
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
         // Override default disabled_native_tools so all 8 tools are visible in tests
         state.config.write().disabled_native_tools = Vec::new();
         mcp_transport::rebuild_tool_search_index(&state);
@@ -2436,6 +2357,7 @@ mod tests {
             "/repo/create-branch",
             "/watchers/repo",
             "/watchers/dir",
+            "/watchers/hot-repos",
             "/logs",
             "/diagnostics",
             "/worktrees",
@@ -2450,6 +2372,7 @@ mod tests {
             "/claude/projects",
             "/codex/usage",
             "/codex/stats",
+            "/terminal/theme-colors",
             "/system/local-ip",
             "/acp/connections",
             "/acp/connections/x",
@@ -2466,12 +2389,11 @@ mod tests {
             "/acp/connections/x/elicitations/y/response",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
-        // /health (public_routes only), /fs/read-editor & /watchers/hot-repos
-        // (router-specific handlers), and every desktop-only family.
+        // /health (public_routes only), /fs/read-editor (router-specific
+        // handler down-scope), and every desktop-only family.
         let must_not_exist = [
             "/health",
             "/fs/read-editor",
-            "/watchers/hot-repos",
             "/github/accounts",
             "/github/resolve-repo",
             "/repo/github",
@@ -2485,6 +2407,7 @@ mod tests {
             "/api/push/test",
             "/prompt/process",
             "/debug/invoke_js",
+            "/debug/reload_webview",
             "/exec/shell-script",
         ];
         let state = test_state();
@@ -2525,6 +2448,88 @@ mod tests {
                 "desktop-only/router-specific path leaked into shared_routes(): {p}"
             );
         }
+    }
+
+    /// Half two of the COMMAND_TABLE → router gate (story 643).
+    ///
+    /// The parity tests in `src/__tests__/transport.test.ts` assert the TABLE;
+    /// nothing asserted that the paths it produces exist on the ROUTER, so a
+    /// COMMAND_TABLE entry pointing at an unregistered path shipped green.
+    ///
+    /// The table is TypeScript and the router is Rust, so the two halves are
+    /// bridged by `command_table_paths.txt`, which the Vitest half regenerates
+    /// by EXECUTING every mapper. Reading that file here (rather than
+    /// regex-scanning `transport.ts`, whose mappers use template literals,
+    /// ternaries and query builders) is what lets this test actually fail:
+    /// a new table entry makes the Vitest snapshot stale, and once regenerated
+    /// its path lands here and must resolve.
+    ///
+    /// `INTENTIONALLY_UNMAPPED` commands never reach the file — they are not
+    /// COMMAND_TABLE entries at all, which the Vitest half asserts explicitly.
+    ///
+    /// We probe `build_router`, not `shared_routes()`: COMMAND_TABLE is the
+    /// desktop frontend's mapping and includes desktop-only families (`/config`,
+    /// `/plugins`, `/github`, `/ai/watchers`) that only `build_router`
+    /// registers, so probing the shared subset alone would false-fail on every
+    /// one of them. The remote router's narrower surface is already pinned by
+    /// `shared_routes_surface_is_locked_and_desktop_only_excluded`.
+    ///
+    /// PATCH is the probe method because no route uses it, so a registered path
+    /// answers 405 at the router level without ever running a handler — a GET
+    /// probe would execute real handlers (`/repo/ci` shells out to `gh`,
+    /// `/system/check-update` hits the network). An unregistered path falls
+    /// through to the catch-all, which answers 404 under an API prefix and
+    /// index.html otherwise; both are failures here, hence the HTML check.
+    ///
+    /// Limitation, stated rather than hidden: this proves the PATH is
+    /// registered, not that it accepts the method the table declares. Probing
+    /// the declared method would run the handler, which is what the technique
+    /// exists to avoid.
+    #[tokio::test]
+    async fn command_table_paths_all_hit_a_registered_route() {
+        const PATHS: &str = include_str!("command_table_paths.txt");
+        let paths: Vec<&str> = PATHS
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('/'))
+            .collect();
+        // A truncated or emptied file would make every assertion below vacuous.
+        assert!(
+            paths.len() > 200,
+            "command_table_paths.txt yielded only {} paths — regenerate it with \
+             `pnpm vitest run src/__tests__/transport.test.ts -u`",
+            paths.len()
+        );
+
+        let state = test_state();
+        let app = build_router(state, false, true);
+        let mut unrouted: Vec<String> = Vec::new();
+        for path in paths {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PATCH")
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let html = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|ct| ct.contains("text/html"));
+            if resp.status() == StatusCode::NOT_FOUND || html {
+                unrouted.push(format!("{path} -> {}", resp.status()));
+            }
+        }
+        assert!(
+            unrouted.is_empty(),
+            "COMMAND_TABLE paths with no registered route: {unrouted:#?}\n\
+             Every entry needs an axum route (AGENTS.md → IPC/HTTP Parity)."
+        );
     }
 
     #[tokio::test]
@@ -3099,7 +3104,8 @@ mod tests {
             .unwrap()
             .to_string();
         let meta = state
-            .mcp_sessions
+            .mcp
+            .sessions
             .get(&sid)
             .expect("session should be stored");
         assert!(meta.is_claude_code, "Claude Code client should be detected");
@@ -3126,7 +3132,8 @@ mod tests {
             .unwrap()
             .to_string();
         let meta = state
-            .mcp_sessions
+            .mcp
+            .sessions
             .get(&sid)
             .expect("session should be stored");
         assert!(!meta.is_claude_code, "Non-CC client should not be flagged");
@@ -3168,7 +3175,8 @@ mod tests {
         );
         assert!(
             state
-                .mcp_sessions
+                .mcp
+                .sessions
                 .get(&sid)
                 .is_some_and(|meta| meta.requires_meta_tools)
         );
@@ -3217,7 +3225,8 @@ mod tests {
             .unwrap()
             .to_string();
         let meta = state
-            .mcp_sessions
+            .mcp
+            .sessions
             .get(&sid)
             .expect("session should be stored");
         assert_eq!(
@@ -3248,7 +3257,8 @@ mod tests {
             .unwrap()
             .to_string();
         let meta = state
-            .mcp_sessions
+            .mcp
+            .sessions
             .get(&sid)
             .expect("session should be stored");
         assert_eq!(
@@ -3282,10 +3292,12 @@ mod tests {
 
         // Register two upstream servers with tools
         state
-            .mcp_upstream_registry
+            .mcp
+            .upstream_registry
             .inject_ready_upstream("allowed-server", &["my_tool"]);
         state
-            .mcp_upstream_registry
+            .mcp
+            .upstream_registry
             .inject_ready_upstream("blocked-server", &["my_tool"]);
 
         // Initialize session with roots pointing to /test/repo
@@ -3358,7 +3370,8 @@ mod tests {
 
         let state = test_state();
         state
-            .mcp_upstream_registry
+            .mcp
+            .upstream_registry
             .inject_ready_upstream("blocked-server", &["some_tool"]);
 
         // Initialize session with roots pointing to /test/repo
@@ -3450,7 +3463,7 @@ mod tests {
     async fn test_mcp_delete_session() {
         let state = test_state();
         let now = std::time::Instant::now();
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "test-sid".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: now,
@@ -3471,7 +3484,7 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(
-            state.mcp_sessions.get("test-sid").is_none(),
+            state.mcp.sessions.get("test-sid").is_none(),
             "Session should be removed after DELETE"
         );
     }
@@ -3511,7 +3524,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_regression_ping_is_lightweight_and_refreshes_session() {
         let state = test_state();
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "ping-session".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now() - std::time::Duration::from_secs(60),
@@ -3537,7 +3550,8 @@ mod tests {
         assert_eq!(json["result"], serde_json::json!({}));
         assert!(
             state
-                .mcp_sessions
+                .mcp
+                .sessions
                 .get("ping-session")
                 .unwrap()
                 .last_activity
@@ -5243,7 +5257,7 @@ mod tests {
         let state = test_state();
         // Inject a session so the session_valid check passes
         let now = std::time::Instant::now();
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "test-sid-proxy".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: now,
@@ -5282,7 +5296,7 @@ mod tests {
     async fn test_native_tool_call_still_works_after_wiring() {
         let state = test_state();
         let now = std::time::Instant::now();
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "test-sid-native".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: now,
@@ -5324,7 +5338,7 @@ mod tests {
         let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
 
         let state = test_state();
-        let mut rx = state.mcp_tools_changed.subscribe();
+        let mut rx = state.mcp.tools_changed.subscribe();
 
         // Save config with a disabled tool
         let mut config = state.config.read().clone();
@@ -5358,7 +5372,7 @@ mod tests {
         let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
 
         let state = test_state();
-        let mut rx = state.mcp_tools_changed.subscribe();
+        let mut rx = state.mcp.tools_changed.subscribe();
 
         // Enable collapse_tools
         let mut config = state.config.read().clone();
@@ -5447,7 +5461,7 @@ mod tests {
         );
 
         // Signal tools changed after a small delay so SSE stream is ready
-        let tools_tx = state.mcp_tools_changed.clone();
+        let tools_tx = state.mcp.tools_changed.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let _ = tools_tx.send(());
@@ -5728,6 +5742,7 @@ mod tests {
         let expected_total = vt_log.total_lines();
         assert!(expected_total > 0, "should have captured some lines");
         state
+            .grid
             .vt_log_buffers
             .insert(sid.to_string(), parking_lot::Mutex::new(vt_log));
 
@@ -5779,6 +5794,7 @@ mod tests {
         }
         let total = vt_log.total_lines();
         state
+            .grid
             .vt_log_buffers
             .insert(sid.to_string(), parking_lot::Mutex::new(vt_log));
 
@@ -5815,6 +5831,7 @@ mod tests {
         vt_log.resize(33, 80);
         let canonical_total = vt_log.grid_total_lines();
         state
+            .grid
             .vt_log_buffers
             .insert(sid.to_string(), parking_lot::Mutex::new(vt_log));
 
@@ -6050,6 +6067,7 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         register_reaper_peer(&state, "orchestrator", "mcp-2");
         state
+            .session_maps
             .session_parent
             .insert("child-session".to_string(), "orchestrator".to_string());
 
@@ -6067,6 +6085,7 @@ mod tests {
         state.orchestrator_peers.insert("ghost".to_string());
         // A different session's parent must not keep this one alive.
         state
+            .session_maps
             .session_parent
             .insert("child-session".to_string(), "somebody-else".to_string());
 
@@ -6087,5 +6106,113 @@ mod tests {
         let (removed, _) = evict_peers_for_reaped_mcp_session(&state, "mcp-4");
         assert_eq!(removed, vec!["ghost".to_string()]);
         assert!(state.peer_agents.contains_key("bystander"));
+    }
+
+    /// The three routes below stand in for the shapes the real router serves: a
+    /// handler that wedges, a handler that buffers a body, and a handler that
+    /// answers at once and then streams for a long time (SSE, a PTY socket).
+    /// They are synthetic on purpose — the layers under test are applied by the
+    /// same `with_server_limits` that `build_router` calls, so a test that
+    /// passes here cannot be passing against a stack production does not run.
+    fn limits_test_router(timeout: std::time::Duration) -> Router {
+        use axum::response::sse::{Event, Sse};
+
+        let routes = Router::new()
+            .route(
+                "/wedged",
+                get(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    "unreachable"
+                }),
+            )
+            .route(
+                "/echo",
+                post(|body: String| async move { body.len().to_string() }),
+            )
+            .route(
+                "/stream",
+                get(move || async move {
+                    // Headers are returned now; items arrive long after the
+                    // deadline. This is the SSE/WS shape.
+                    let items = futures_util::stream::once(async {
+                        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                        Ok::<_, std::convert::Infallible>(Event::default().data("late"))
+                    });
+                    Sse::new(items)
+                }),
+            );
+        with_server_limits(routes, timeout)
+    }
+
+    /// A wedged handler must not hold its connection forever.
+    #[tokio::test]
+    async fn server_limits_time_out_a_wedged_handler() {
+        let resp = limits_test_router(std::time::Duration::from_millis(50))
+            .oneshot(Request::get("/wedged").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::REQUEST_TIMEOUT,
+            "a handler that never returns must be cut off with 408, not held open"
+        );
+    }
+
+    /// Both edges of the cap, because only the pair pins the constant.
+    ///
+    /// Honest limitation: this test passed before `with_server_limits` applied
+    /// any layer, because axum's built-in `DefaultBodyLimit` is also 2 MB and
+    /// already refuses the oversized body. `MAX_BODY_BYTES` is deliberately set
+    /// equal to that default so making it explicit changes no behaviour. What
+    /// the assertion buys is that the bound is now *stated*: a `DefaultBodyLimit
+    /// ::disable()` added anywhere outside this layer, or an axum release that
+    /// drifts its default upward, fails here instead of silently uncapping the
+    /// server.
+    #[tokio::test]
+    async fn server_limits_reject_a_body_over_the_cap() {
+        async fn post_bytes(n: usize) -> StatusCode {
+            limits_test_router(std::time::Duration::from_secs(30))
+                .oneshot(
+                    Request::post("/echo")
+                        .header(CONTENT_TYPE, "text/plain")
+                        .body(Body::from(vec![b'x'; n]))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+
+        assert_eq!(
+            post_bytes(MAX_BODY_BYTES + 1).await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "a body over the cap must be refused, not buffered"
+        );
+        assert_eq!(
+            post_bytes(MAX_BODY_BYTES - 1).await,
+            StatusCode::OK,
+            "the cap must not reject a body that fits under it"
+        );
+    }
+
+    /// The failure this guards against is a timeout that looks correct on every
+    /// request/response route and silently severs `/events` and every PTY
+    /// WebSocket. `tower_http`'s timeout stops at the response, so a stream that
+    /// answers immediately survives a deadline far shorter than its own life.
+    /// If anyone swaps in a layer that wraps the response body, this fails.
+    #[tokio::test]
+    async fn server_limits_do_not_cut_off_a_long_lived_stream() {
+        let resp = limits_test_router(std::time::Duration::from_millis(50))
+            .oneshot(Request::get("/stream").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "SSE and WebSocket responses return headers at once; the deadline \
+             must not apply to how long they then stream"
+        );
     }
 }

@@ -201,7 +201,7 @@ bcrypt = "0.19"
 base64 = "0.22"
 include_dir = { version = "0.7.4", features = ["glob"] }
 mime_guess = "2.0.5"
-tower-http = { version = "0.7", features = ["cors", "compression-gzip", "compression-br"] }
+tower-http = { version = "0.7", features = ["cors", "compression-gzip", "compression-br", "timeout"] }
 rand = "0.10"
 libc = "0.2"
 notify = "8"
