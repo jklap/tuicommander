@@ -2,6 +2,18 @@ import { render } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 
+// Deep-linking to `settings-upstream-mcp` opens the Services tab, and
+// `LocalServicesPanel` fetches `get_local_ips` from a `createResource` on mount.
+// The test disposes before that settles, so nobody ever reads the resource's
+// error and the rejection escapes as an unhandled one — attributed by Vitest to
+// whichever file was running, not to this tab. Stub the transport instead of the
+// resource: the fetch is incidental to what these cases assert (scroll position),
+// and every other member has to keep working for the panel to render at all.
+vi.mock("../../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../transport")>()),
+	rpc: vi.fn(async () => []),
+}));
+
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
 		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12 },
