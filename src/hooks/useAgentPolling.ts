@@ -4,25 +4,24 @@ import { invoke } from "../invoke";
 import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
 import { type AgentLifecycleState, type ShellState, terminalsStore } from "../stores/terminals";
-import { isTauri, rpc } from "../transport";
+import { isTauri, rpc, subscribeEvents, type Unsubscribe } from "../transport";
 
 /** Fallback polling interval — only catches cold starts and edge cases (ms) */
 const POLL_INTERVAL_MS = 30_000;
-/** Lifecycle is sampled separately from foreground-process detection. The
- * backend refreshes meaningful descendant state at most once per second. */
-const LIFECYCLE_POLL_INTERVAL_MS = 1_000;
 const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
+
+type BackendSessionState = {
+	shell_state?: string;
+	agent_state?: string;
+	awaiting_input?: boolean;
+	question_confident?: boolean;
+	background_work?: boolean;
+	queued_commands?: number;
+};
 
 type SessionLifecycleResponse = {
 	session_id: string;
-	state?: {
-		shell_state?: string;
-		agent_state?: string;
-		awaiting_input?: boolean;
-		question_confident?: boolean;
-		background_work?: boolean;
-		queued_commands?: number;
-	} | null;
+	state?: BackendSessionState | null;
 };
 
 let nextLifecycleRequest = 0;
@@ -60,6 +59,51 @@ function listNativeSessionsWithTimeout(): Promise<SessionLifecycleResponse[]> {
 			},
 		);
 	});
+}
+
+/**
+ * Write one authoritative backend snapshot onto the terminal that owns the
+ * session. Shared by the `session-state-changed` push and the mount-time
+ * catch-up below so the two can never disagree about which fields a snapshot
+ * owns — the push exists precisely to make the snapshot path rare, and a field
+ * only one of them applied would then look like an intermittent bug.
+ */
+function applySessionState(termId: string, sessionId: string, state: BackendSessionState | null | undefined): void {
+	const shellState = toShellState(state?.shell_state);
+	const wasAwaiting = terminalsStore.get(termId)?.awaitingInput === "question";
+	const isAwaiting = state?.awaiting_input === true;
+	terminalsStore.update(termId, {
+		agentState: toAgentLifecycleState(state?.agent_state),
+		awaitingInput: isAwaiting ? "question" : null,
+		awaitingInputConfident: state?.question_confident === true,
+		backgroundWork: state?.background_work === true,
+		// Omitted by the backend when zero (serde skips it), so absence is an
+		// empty queue — not "unknown".
+		queuedCommands: state?.queued_commands ?? 0,
+		...(shellState !== undefined ? { shellState } : {}),
+	});
+	if (wasAwaiting !== isAwaiting) {
+		pluginRegistry.dispatchStructuredEvent(
+			"awaiting",
+			{ awaiting: isAwaiting, confident: state?.question_confident === true },
+			sessionId,
+		);
+	}
+}
+
+/**
+ * Handle one `session-state-changed` push. The backend emits it once per real
+ * state transition on both transports (Tauri window event + `/events` SSE), so
+ * a visible-but-idle window costs zero IPC — this replaced a 1 Hz
+ * `list_active_sessions` poll that ran for as long as any terminal existed.
+ */
+function applySessionStateEvent(payload: unknown): void {
+	const event = payload as SessionLifecycleResponse | null;
+	const sessionId = event?.session_id;
+	if (typeof sessionId !== "string") return;
+	const termId = terminalsStore.getTerminalForSession(sessionId);
+	if (!termId) return;
+	applySessionState(termId, sessionId, event?.state);
 }
 
 /** Apply the backend's task lifecycle snapshot to its local terminal. The
@@ -111,31 +155,12 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 	for (const session of sessions) {
 		const termId = terminalsStore.getTerminalForSession(session.session_id);
 		if (!termId) continue;
-		const shellState = toShellState(session.state?.shell_state);
-		const wasAwaiting = terminalsStore.get(termId)?.awaitingInput === "question";
-		const isAwaiting = session.state?.awaiting_input === true;
 		const requested = requestedSessions.get(termId);
 		const snapshotIsFresh =
 			requested?.sessionId === session.session_id &&
 			requested.shellStateRevision === terminalsStore.getShellStateRevision(termId);
 		if (!snapshotIsFresh) continue;
-		terminalsStore.update(termId, {
-			agentState: toAgentLifecycleState(session.state?.agent_state),
-			awaitingInput: session.state?.awaiting_input === true ? "question" : null,
-			awaitingInputConfident: session.state?.question_confident === true,
-			backgroundWork: session.state?.background_work === true,
-			// Omitted by the backend when zero (serde skips it), so absence is an
-			// empty queue — not "unknown".
-			queuedCommands: session.state?.queued_commands ?? 0,
-			...(shellState !== undefined ? { shellState } : {}),
-		});
-		if (wasAwaiting !== isAwaiting) {
-			pluginRegistry.dispatchStructuredEvent(
-				"awaiting",
-				{ awaiting: isAwaiting, confident: session.state?.question_confident === true },
-				session.session_id,
-			);
-		}
+		applySessionState(termId, session.session_id, session.state);
 	}
 }
 
@@ -257,19 +282,29 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 			}
 
 			try {
-				const found = await invoke<string | null>("discover_agent_session", {
-					agentType,
-					cwd,
-					claimedIds,
-					agentPid,
-					envOverrides: {},
-				});
-				if (found && found !== current.agentSessionId) {
+				const found = await invoke<{ sessionId: string; launchCommand: string | null } | null>(
+					"discover_agent_session",
+					{
+						agentType,
+						cwd,
+						claimedIds,
+						agentPid,
+						envOverrides: {},
+					},
+				);
+				if (found && found.sessionId !== current.agentSessionId) {
 					appLogger.debug(
 						"app",
-						`[AgentDetect] ${termId} discovered agentSessionId "${found}" (was "${current.agentSessionId}")`,
+						`[AgentDetect] ${termId} discovered agentSessionId "${found.sessionId}" (was "${current.agentSessionId}")`,
 					);
-					terminalsStore.update(termId, { agentSessionId: found });
+					terminalsStore.update(termId, { agentSessionId: found.sessionId });
+				}
+				// The rebuilt command is ground truth read from the live process: it names
+				// the real binary and the env (CLAUDE_CONFIG_DIR) that decides which store
+				// holds the session. The run config cannot — a shell alias is expanded
+				// before exec, so TUIC only ever sees "c2".
+				if (found?.launchCommand && found.launchCommand !== current.agentLaunchCommand) {
+					terminalsStore.update(termId, { agentLaunchCommand: found.launchCommand });
 				}
 			} catch (err) {
 				appLogger.debug("app", `[AgentDetect] ${termId} discover_agent_session failed`, err);
@@ -309,49 +344,66 @@ export function useAgentPolling(): void {
 			}
 		};
 
+		// The only timer left in this hook, and it is NOT the lifecycle poll:
+		// 30s agent *discovery* (which agent owns each terminal, and its session
+		// id), which has no push to replace it. The 1 Hz `list_active_sessions`
+		// lifecycle sample that used to sit beside it is gone — see the
+		// subscription below (#687-be9d).
 		const timer = setInterval(() => {
 			pollAll().catch((err) => appLogger.debug("app", "[AgentPoll] poll failed", err));
 		}, POLL_INTERVAL_MS);
 
-		// Lifecycle must converge quickly enough for the Activity Dashboard (and
-		// tab awaiting/busy badges) to avoid presenting stale state — but a
-		// hidden/backgrounded document has nothing to converge for. No backend
-		// event pushes SessionState on desktop today (Terminal.tsx's
-		// onStateChange is a browser-mode-only WS frame; Tauri's subscribePty
-		// listens only for activity/exit), so this snapshot poll is the sole
-		// source — gate it on visibility instead, matching the same
-		// `visibilitychange` pattern already used for the GitHub poller
-		// (stores/github.ts). Catches up with one immediate sync on regain.
-		let lifecycleTimer: ReturnType<typeof setInterval> | null = null;
-		const startLifecyclePolling = () => {
-			if (lifecycleTimer !== null) return;
-			// untrack: syncAgentLifecycleStates() synchronously reads
-			// terminalsStore.getIds() before its first await (list_active_sessions
-			// invoke). Called un-tracked, that raw read would subscribe THIS
-			// effect directly to the id-list signal — bypassing the `hasTerminals`
-			// memo above and reintroducing the exact restart-on-churn bug this
-			// effect exists to avoid (proven via a failing test without this).
-			untrack(() => void syncAgentLifecycleStates());
-			lifecycleTimer = setInterval(() => {
-				void syncAgentLifecycleStates();
-			}, LIFECYCLE_POLL_INTERVAL_MS);
-		};
-		const stopLifecyclePolling = () => {
-			if (lifecycleTimer === null) return;
-			clearInterval(lifecycleTimer);
-			lifecycleTimer = null;
-		};
-		const onVisibilityChange = () => {
-			if (document.visibilityState === "hidden") stopLifecyclePolling();
-			else startLifecyclePolling();
-		};
-		if (document.visibilityState !== "hidden") startLifecyclePolling();
-		document.addEventListener("visibilitychange", onVisibilityChange);
+		// Lifecycle arrives as a push, not a sample. The backend publishes
+		// `session-state-changed` once per real transition — dual-emitted on the
+		// Tauri window and on `/events` SSE, so `subscribeEvents` covers desktop
+		// and browser with one handler. The 1 Hz `list_active_sessions` poll it
+		// replaces ran for as long as any terminal existed, awake or idle, and
+		// gating it on visibility only silenced the hidden case (#652-0114).
+		//
+		let unsubscribeState: Unsubscribe | null = null;
+		let subscriptionDisposed = false;
+		void subscribeEvents(
+			{ "session-state-changed": applySessionStateEvent },
+			{
+				// A transition that lands while the SSE stream is down, or that the
+				// backend's bounded broadcast dropped, is never redelivered — so the
+				// badge would read stale until the session NEXT really transitions,
+				// which for a quiet session is never. Re-running the same catch-up
+				// used at mount closes the gap for both causes; it reads the truth
+				// rather than replaying what was missed, so it needs no knowledge of
+				// which events were lost, and running it twice is harmless.
+				//
+				// Desktop never gets here: `subscribeEvents` only wires this on the
+				// SSE transport (#721-7dd5).
+				onResync: (reason) => {
+					if (subscriptionDisposed) return;
+					appLogger.debug("app", `[AgentLifecycle] resync after ${reason}`);
+					void syncAgentLifecycleStates();
+				},
+			},
+		)
+			.then((unsubscribe) => {
+				if (subscriptionDisposed) unsubscribe();
+				else unsubscribeState = unsubscribe;
+			})
+			.catch((err) => appLogger.debug("app", "[AgentLifecycle] state subscription failed", err));
+
+		// One catch-up, never repeated. A session that is already idle and quiet
+		// emits no transition, so a fresh mount (reload, HMR) would otherwise
+		// render whatever the store was last told — indefinitely.
+		//
+		// untrack: syncAgentLifecycleStates() synchronously reads
+		// terminalsStore.getIds() before its first await (list_active_sessions
+		// invoke). Called un-tracked, that raw read would subscribe THIS
+		// effect directly to the id-list signal — bypassing the `hasTerminals`
+		// memo above and reintroducing the exact restart-on-churn bug this
+		// effect exists to avoid (proven via a failing test without this).
+		untrack(() => void syncAgentLifecycleStates());
 
 		onCleanup(() => {
 			clearInterval(timer);
-			stopLifecyclePolling();
-			document.removeEventListener("visibilitychange", onVisibilityChange);
+			subscriptionDisposed = true;
+			unsubscribeState?.();
 		});
 	});
 }

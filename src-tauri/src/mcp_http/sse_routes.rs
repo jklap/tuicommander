@@ -284,6 +284,7 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::ConflictAssistStatus { .. } => "conflict-assist-status",
         AppEvent::ProposalsReady { .. } => "proposals-ready",
         AppEvent::WorktreeCreateFailed { .. } => "worktree-create-failed",
+        AppEvent::SessionStateChanged { .. } => "session-state-changed",
     }
 }
 
@@ -503,6 +504,11 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             // event so the same frontend `handleWorktreeCreateFailed` consumes
             // both transports unchanged.
             serde_json::json!({ "repoPath": repo_path, "branch": branch, "reason": reason })
+        }
+        AppEvent::SessionStateChanged { session_id, state } => {
+            // Built by the same function the desktop window emit uses, so the
+            // two transports cannot drift into two shapes for one thing.
+            crate::state::session_state_payload(session_id, state)
         }
     }
 }
@@ -772,6 +778,37 @@ mod tests {
         assert_eq!(body["reason"], "recreation failed: boom");
         // No snake_case leakage that a browser handler wouldn't read.
         assert!(body.get("repo_path").is_none());
+    }
+
+    /// A browser learns a session's lifecycle from this arm; the desktop learns
+    /// it from the window event of the same name. Both must hand the frontend
+    /// the shape `list_active_sessions` returns per session — `{session_id,
+    /// state}` with `state` in snake_case — because one applier consumes all
+    /// three and a renamed key silently stops updating a badge.
+    #[test]
+    fn session_state_changed_carries_a_list_active_sessions_entry() {
+        let event = AppEvent::SessionStateChanged {
+            session_id: "sess-1".into(),
+            state: Box::new(crate::state::SessionState {
+                awaiting_input: true,
+                question_confident: true,
+                shell_state: Some("idle".into()),
+                agent_state: Some("awaiting_input".into()),
+                queued_commands: 2,
+                ..Default::default()
+            }),
+        };
+        assert_eq!(event_type_name(&event), "session-state-changed");
+        let body = event_payload(&event);
+        assert_eq!(body["session_id"], "sess-1");
+        assert_eq!(body["state"]["awaiting_input"], true);
+        assert_eq!(body["state"]["question_confident"], true);
+        assert_eq!(body["state"]["shell_state"], "idle");
+        assert_eq!(body["state"]["agent_state"], "awaiting_input");
+        assert_eq!(body["state"]["queued_commands"], 2);
+        // Not flattened: the frontend reads `payload.state.*`, exactly as it
+        // reads `session.state.*` from the polled snapshot it replaces.
+        assert!(body.get("awaiting_input").is_none());
     }
 
     #[test]

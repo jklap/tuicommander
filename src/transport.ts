@@ -2098,6 +2098,10 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"terminal_exit_alt_screen",
 	"read_vt_log",
 	"terminal_get_block_rows",
+	// WebView liveness beat. Deliberately host-only: it watches the embedded
+	// WebView's main thread, and a browser client beating on the same channel
+	// would mask a dead desktop one.
+	"frontend_heartbeat",
 	// Desktop-only terminal/session diagnostics or local visual state with no
 	// faithful HTTP contract yet.
 	"debug_agent_detection",
@@ -2863,6 +2867,26 @@ export async function subscribePty(
 	});
 }
 
+/** Why `onResync` fired: events were missed, and this says how. */
+export type ResyncReason = "reconnect" | "lagged";
+
+export interface SubscribeEventsOptions {
+	/** Base URL of a remote instance. Omit to talk to this one. */
+	baseUrl?: string;
+	/**
+	 * Called when a gap opened in the stream and the consumer should re-read
+	 * whatever state it derives from these events. NOT called for a normal
+	 * event, and NOT called on the first connection — a consumer that has just
+	 * subscribed does its own initial read.
+	 *
+	 * Only the SSE transport can fire it. Tauri `listen()` is in-process: there
+	 * is no connection to drop and no bounded channel to fall behind, so a
+	 * desktop resync path would be a second path for a transition that already
+	 * has one, which is the defect the AGENTS.md fix-quality rule names.
+	 */
+	onResync?: (reason: ResyncReason) => void;
+}
+
 /**
  * Subscribe to application-level events (head-changed, repo-changed, etc.)
  *
@@ -2870,12 +2894,14 @@ export async function subscribePty(
  * In browser: creates a single EventSource to /events SSE endpoint.
  *
  * @param handlers - Map of event type → callback
+ * @param options - Remote base URL and the missed-events callback
  * @returns Promise resolving to an unsubscribe function
  */
 export async function subscribeEvents(
 	handlers: Record<string, (payload: unknown) => void>,
-	baseUrl?: string,
+	options: SubscribeEventsOptions = {},
 ): Promise<Unsubscribe> {
+	const { baseUrl, onResync } = options;
 	if (!baseUrl && isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
 		const unsubscribers: Array<() => void> = [];
@@ -2906,7 +2932,20 @@ export async function subscribeEvents(
 
 	es.addEventListener("lagged", ((event: MessageEvent) => {
 		transportLogger().warn("network", "SSE lagged", { eventData: previewLogPayload(event.data) });
+		// The backend's broadcast channel dropped events for this subscriber. They
+		// are gone; only the consumer knows how to re-derive what they carried.
+		onResync?.("lagged");
 	}) as EventListener);
+
+	// `onopen` fires on every successful connection, so the FIRST one is the
+	// initial connect and every later one is a reconnect. Only the later ones are
+	// a gap: EventSource reconnects itself, silently, and whatever the backend
+	// published while it was down was never queued for us.
+	let everOpened = false;
+	es.onopen = () => {
+		if (everOpened) onResync?.("reconnect");
+		everOpened = true;
+	};
 
 	es.onerror = () => {
 		transportLogger().debug("network", "SSE connection error — will auto-reconnect");
