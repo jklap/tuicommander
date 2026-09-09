@@ -3,6 +3,7 @@ import {
 	needsGridResubscribe,
 	REATTACH_PHASE_INITIAL,
 	type ReattachPhase,
+	retryUntilMeasured,
 	retryUntilSized,
 	SIZE_RETRY_MAX_FRAMES,
 	stepReattachPhase,
@@ -52,24 +53,27 @@ function fakeRaf() {
 	return { request, cancel, step, drain, pending, cancelled, requestCount: () => request.mock.calls.length };
 }
 
+// File scope, so both frame-driven suites below drive the same fake without a
+// second copy of this scaffolding. `stepReattachPhase` asks for no frames, so
+// the stub is inert there.
+let raf: ReturnType<typeof fakeRaf>;
+let originalRequest: typeof globalThis.requestAnimationFrame;
+let originalCancel: typeof globalThis.cancelAnimationFrame;
+
+beforeEach(() => {
+	raf = fakeRaf();
+	originalRequest = globalThis.requestAnimationFrame;
+	originalCancel = globalThis.cancelAnimationFrame;
+	globalThis.requestAnimationFrame = raf.request as unknown as typeof globalThis.requestAnimationFrame;
+	globalThis.cancelAnimationFrame = raf.cancel as unknown as typeof globalThis.cancelAnimationFrame;
+});
+
+afterEach(() => {
+	globalThis.requestAnimationFrame = originalRequest;
+	globalThis.cancelAnimationFrame = originalCancel;
+});
+
 describe("retryUntilSized", () => {
-	let raf: ReturnType<typeof fakeRaf>;
-	let originalRequest: typeof globalThis.requestAnimationFrame;
-	let originalCancel: typeof globalThis.cancelAnimationFrame;
-
-	beforeEach(() => {
-		raf = fakeRaf();
-		originalRequest = globalThis.requestAnimationFrame;
-		originalCancel = globalThis.cancelAnimationFrame;
-		globalThis.requestAnimationFrame = raf.request as unknown as typeof globalThis.requestAnimationFrame;
-		globalThis.cancelAnimationFrame = raf.cancel as unknown as typeof globalThis.cancelAnimationFrame;
-	});
-
-	afterEach(() => {
-		globalThis.requestAnimationFrame = originalRequest;
-		globalThis.cancelAnimationFrame = originalCancel;
-	});
-
 	/**
 	 * The defect: a container that never gets a box — a collapsed pane, a hidden
 	 * split — kept the old loop re-arming a frame every ~16 ms for the lifetime
@@ -160,6 +164,99 @@ describe("retryUntilSized", () => {
 		expect(drained).toBe(true);
 		expect(frames).toBe(3);
 		expect(onExhausted).toHaveBeenCalledTimes(1);
+	});
+});
+
+/**
+ * The defect this exists for: `CanvasTerminal.remeasure()` read the pane's box,
+ * found it degenerate, and returned — recording nothing and arming nothing. A
+ * full page reload (any src/ edit under `make dev`) mounts every terminal
+ * before layout has run, so that early return was the normal case, and the
+ * canvas kept its mount-time geometry — a small box in the corner of the pane,
+ * the rest black — until a window resize happened to run the measurement again.
+ *
+ * The measurement must therefore be re-taken when the pane gets a real box, and
+ * the retry must be bounded and cancellable for the same reason `retryUntilSized`
+ * is: a collapsed pane never gets one.
+ */
+describe("retryUntilMeasured", () => {
+	/**
+	 * A pane and the canvas it sizes. `measure` is the shape of `remeasure`: it
+	 * reads the pane's box and can do nothing at all without one.
+	 */
+	function stubPane(width: number, height: number) {
+		const pane = { width, height };
+		const canvas = { width: 0, height: 0 };
+		const measure = vi.fn(() => {
+			if (pane.width <= 0 || pane.height <= 0) return false;
+			canvas.width = pane.width;
+			canvas.height = pane.height;
+			return true;
+		});
+		return { pane, canvas, measure };
+	}
+
+	it("sizes the canvas on the frame a zero-sized pane gets a real box", () => {
+		const { pane, canvas, measure } = stubPane(0, 0);
+
+		retryUntilMeasured(measure);
+
+		raf.step();
+		expect(canvas).toEqual({ width: 0, height: 0 });
+
+		pane.width = 1200;
+		pane.height = 800;
+		raf.step();
+
+		expect(canvas).toEqual({ width: 1200, height: 800 });
+		expect(raf.pending.size).toBe(0);
+	});
+
+	it("stops once it has measured, instead of re-measuring every frame", () => {
+		const { pane, canvas, measure } = stubPane(0, 0);
+
+		retryUntilMeasured(measure);
+		raf.step();
+		pane.width = 640;
+		pane.height = 480;
+		raf.step();
+
+		const measured = measure.mock.calls.length;
+		const { drained } = raf.drain(50);
+
+		expect(drained).toBe(true);
+		expect(measure.mock.calls.length).toBe(measured);
+		expect(canvas).toEqual({ width: 640, height: 480 });
+	});
+
+	it("gives up on a pane that never gets a box instead of re-arming forever", () => {
+		const { canvas, measure } = stubPane(0, 0);
+		const onExhausted = vi.fn();
+
+		retryUntilMeasured(measure, onExhausted);
+
+		// Ten times the cap: reaching it means no cap exists.
+		const { drained, frames } = raf.drain(SIZE_RETRY_MAX_FRAMES * 10);
+
+		expect(drained).toBe(true);
+		expect(frames).toBe(SIZE_RETRY_MAX_FRAMES);
+		expect(onExhausted).toHaveBeenCalledTimes(1);
+		expect(canvas).toEqual({ width: 0, height: 0 });
+	});
+
+	it("measures nothing after dispose, even once the pane is sized", () => {
+		const { pane, canvas, measure } = stubPane(0, 0);
+
+		const dispose = retryUntilMeasured(measure);
+		raf.step();
+		dispose();
+
+		pane.width = 800;
+		pane.height = 600;
+		const { drained } = raf.drain(SIZE_RETRY_MAX_FRAMES * 10);
+
+		expect(drained).toBe(true);
+		expect(canvas).toEqual({ width: 0, height: 0 });
 	});
 });
 

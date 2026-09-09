@@ -53,6 +53,9 @@ import {
 	keyToSequence,
 	shouldReportMouseUp,
 } from "./terminalInput";
+import { buildScrollbarMarksHtml } from "./scrollbarMarks";
+import { cssColorToRgb, publishTerminalPalette } from "./terminalPalette";
+import { retryUntilMeasured, SIZE_RETRY_MAX_FRAMES } from "./visibilityLifecycle";
 
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame };
@@ -177,6 +180,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// pending request). Gated by isFrameTimingEnabled().
 	let mainDirtySince = 0;
 	let resizeDebounce: ReturnType<typeof setTimeout> | undefined;
+	// Disposer for the frame loop waiting on an unsized pane (see remeasure).
+	let cancelSizeRetry: (() => void) | undefined;
 	let dprMediaQuery: MediaQueryList | undefined;
 	let dprChangeHandler: (() => void) | undefined;
 	let cleanupTouch: (() => void) | undefined;
@@ -383,10 +388,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		return currentFrame.historySize - currentFrame.displayOffset + viewportRow;
 	}
 
-	function remeasure() {
-		if (!ctx) return;
+	/**
+	 * Measure the pane and apply its geometry to the metrics, both canvases and
+	 * the PTY. Returns false when there was no usable box to measure — the pane
+	 * has not been laid out yet, or is still too small to hold one cell — in
+	 * which case nothing here has run and the measurement is still owed.
+	 */
+	function measureNow(): boolean {
+		if (!ctx) return false;
 		const rect = containerRef.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0) return;
+		if (rect.width <= 0 || rect.height <= 0) return false;
 
 		const dpr = window.devicePixelRatio || 1;
 		const perTerminalSize = terminalsStore.state.terminals[props.terminalId]?.fontSize;
@@ -400,8 +411,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		cachedFgDefault = getComputedStyle(canvasRef).getPropertyValue("--fg-primary").trim() || "#d4d4d4";
 		gridRenderer.setTheme(cachedBgDefault, cachedFgDefault);
 
+		// The emulator answers OSC 10/11/12 from these. It has no other way to
+		// know the theme, and staying silent makes a probing agent retry forever
+		// (see terminalPalette.ts). Cursor reuses the foreground: that is what the
+		// overlay actually paints it with (octx.strokeStyle = cachedFgDefault).
+		const bgRgb = cssColorToRgb(cachedBgDefault);
+		const fgRgb = cssColorToRgb(cachedFgDefault);
+		if (bgRgb && fgRgb) publishTerminalPalette(fgRgb, bgRgb, fgRgb);
+
 		const { rows, cols } = gridDimsForBox(rect.width, rect.height, m.cellWidth, m.cellHeight);
-		if (cols <= 0 || rows <= 0) return;
+		if (cols <= 0 || rows <= 0) return false;
 		// A resize invalidates the smooth-scroll geometry (cell metrics, overscan,
 		// row cache). Cancel any in-flight gesture so the new geometry takes over
 		// cleanly. Cheap no-op when no gesture is active (scrollPosF already null).
@@ -478,6 +497,27 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			fullRepaintNeeded = true;
 			paintFrame(currentFrame, m);
 		}
+		return true;
+	}
+
+	/**
+	 * Measure the pane now, or as soon as it has a box to measure.
+	 *
+	 * A full page reload mounts every terminal before layout runs, so the first
+	 * measurement of a mount routinely lands on a 0x0 pane. Dropping it left the
+	 * canvas at its mount-time geometry — a small box in the corner of the pane,
+	 * the rest black — until a window resize ran the measurement again (#716-031e).
+	 */
+	function remeasure() {
+		cancelSizeRetry?.();
+		cancelSizeRetry = undefined;
+		if (measureNow()) return;
+		cancelSizeRetry = retryUntilMeasured(measureNow, () =>
+			appLogger.warn(
+				"terminal",
+				`Pane stayed unsized for ${SIZE_RETRY_MAX_FRAMES} frames — canvas geometry not applied for ${props.terminalId}`,
+			),
+		);
 	}
 
 	function paintFrame(frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
@@ -847,7 +887,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let lastScrollbarMarksKey = "";
 
 	function paintScrollbarMarks(totalRows: number) {
-		if (!scrollbarRef || !settingsStore.state.showScrollbarMarks) return;
+		if (!scrollbarRef) return;
 		if (!scrollbarMarksContainer) {
 			scrollbarMarksContainer = document.createElement("div");
 			scrollbarMarksContainer.style.cssText =
@@ -859,37 +899,29 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const blocks = term.commandBlocks;
 		const promptLines = term.userPromptLines;
 		const searchCount = search.matches.length;
-		const showBlocks = blockTimestampsVisible;
+		// `showScrollbarMarks` gates the HISTORY markers only — block boundaries and
+		// user-prompt ticks — not the search hits below. Command history is a display
+		// preference; a search hit is the live result of something the user just did,
+		// and a Cmd+F that silently draws nothing because of a terminal display
+		// setting is not a preference being honoured, it is a broken search.
+		//
+		// It is folded into `showBlocks` rather than returned on early, which also
+		// fixes turning the setting OFF: an early return above the key computation
+		// left the last-painted marks on screen forever, because the repaint that
+		// would clear them never ran.
+		const showBlocks = blockTimestampsVisible && settingsStore.state.showScrollbarMarks;
 		const key = `${showBlocks ? blocks.length : 0}:${showBlocks ? promptLines.length : 0}:${totalRows}:${showBlocks ? (blocks[blocks.length - 1]?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
 		if (key === lastScrollbarMarksKey) return;
 		lastScrollbarMarksKey = key;
 
-		const trackH = scrollbarTrackHeight;
-		let html = "";
-		if (showBlocks) {
-			for (const block of blocks) {
-				const ratio = block.promptLine / totalRows;
-				const color = block.exitCode !== null && block.exitCode !== 0 ? "#f85149" : "rgba(88,166,255,0.5)";
-				html += `<div style="position:absolute;right:0;width:100%;height:2px;top:${ratio * trackH}px;background:${color}"></div>`;
-			}
-			// Dedicated GREEN tick at each line where the USER submitted a prompt
-			// (distinct from the blue/red agent tool-call block ticks above): few,
-			// one per turn. Drawn after the block ticks so it sits on top.
-			for (const line of promptLines) {
-				const ratio = line / totalRows;
-				html += `<div style="position:absolute;right:0;width:100%;height:2px;top:${ratio * trackH}px;background:#3fb950"></div>`;
-			}
-		}
-		if (searchCount > 0) {
-			const seen = new Set<number>();
-			for (const match of search.matches) {
-				const rounded = Math.round((match.row / totalRows) * trackH);
-				if (seen.has(rounded)) continue;
-				seen.add(rounded);
-				html += `<div style="position:absolute;right:0;width:100%;height:2px;top:${rounded}px;background:#e8984c"></div>`;
-			}
-		}
-		scrollbarMarksContainer.innerHTML = html;
+		scrollbarMarksContainer.innerHTML = buildScrollbarMarksHtml({
+			blocks,
+			promptLines,
+			matchRows: search.matches.map((m) => m.row),
+			totalRows,
+			trackH: scrollbarTrackHeight,
+			showBlocks,
+		});
 	}
 
 	// --- Suggest / Intent overlay ---
@@ -3227,6 +3259,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		hiddenAck.cancel();
 		if (reconcileTimer) clearTimeout(reconcileTimer);
 		clearTimeout(resizeDebounce);
+		cancelSizeRetry?.();
+		cancelSizeRetry = undefined;
 		resizeObserver?.disconnect();
 		visibilityObserver?.disconnect();
 		if (dprChangeHandler) dprMediaQuery?.removeEventListener("change", dprChangeHandler);
