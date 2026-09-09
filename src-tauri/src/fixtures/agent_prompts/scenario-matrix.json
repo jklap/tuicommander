@@ -73,6 +73,23 @@
       "clear": ["bare-enter"]
     },
     {
+      "id": "goose-long-lived-command-working",
+      "agent": "goose",
+      "source": "raw-fixture",
+      "fixture": "goose-1.49.0-mid-turn.tcap",
+      "set": "working",
+      "clear": ["ready-screen", "interrupt", "pty-exit"],
+      "note": "OSC 133 marks `goose session` busy once. Only the ready screen clears it, so a missing adapter latches the tab busy for the whole process."
+    },
+    {
+      "id": "goose-composer-ready-screen",
+      "agent": "goose",
+      "source": "raw-fixture",
+      "fixture": "goose-1.49.0-idle.tcap",
+      "set": "none",
+      "clear": []
+    },
+    {
       "id": "turn-timer-input-race",
       "agent": "cross-agent",
       "source": "synthetic-concurrency",
