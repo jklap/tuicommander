@@ -293,6 +293,9 @@ describe("useAgentPolling", () => {
 	});
 
 	describe("session discovery", () => {
+		/** A discovery result with no rebuilt launch command (no readable agent process). */
+		const discovered = (sessionId: string) => ({ sessionId, launchCommand: null });
+
 		it("calls discover_agent_session when agentType transitions null→agent and agentSessionId is null", async () => {
 			let pollCount = 0;
 			mockInvoke.mockImplementation((cmd: string) => {
@@ -301,7 +304,7 @@ describe("useAgentPolling", () => {
 					return Promise.resolve(pollCount >= 2 ? "claude" : null);
 				}
 				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
-				if (cmd === "discover_agent_session") return Promise.resolve("found-uuid");
+				if (cmd === "discover_agent_session") return Promise.resolve(discovered("found-uuid"));
 				return Promise.resolve(null);
 			});
 
@@ -333,7 +336,7 @@ describe("useAgentPolling", () => {
 				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
 				if (cmd === "discover_agent_session") {
 					discoverCount++;
-					return Promise.resolve(discoverCount <= 2 ? "uuid-1" : "uuid-2");
+					return Promise.resolve(discovered(discoverCount <= 2 ? "uuid-1" : "uuid-2"));
 				}
 				return Promise.resolve(null);
 			});
@@ -365,7 +368,7 @@ describe("useAgentPolling", () => {
 				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
 				if (cmd === "discover_agent_session") {
 					discoverCount++;
-					return Promise.resolve(discoverCount <= 2 ? "found-uuid" : "new-uuid");
+					return Promise.resolve(discovered(discoverCount <= 2 ? "found-uuid" : "new-uuid"));
 				}
 				return Promise.resolve(null);
 			});
@@ -394,7 +397,7 @@ describe("useAgentPolling", () => {
 			mockInvoke.mockImplementation((cmd: string) => {
 				if (cmd === "get_session_foreground_process") return Promise.resolve("claude");
 				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
-				if (cmd === "discover_agent_session") return Promise.resolve("discovered-uuid");
+				if (cmd === "discover_agent_session") return Promise.resolve(discovered("discovered-uuid"));
 				return Promise.resolve(null);
 			});
 
@@ -418,7 +421,7 @@ describe("useAgentPolling", () => {
 			mockInvoke.mockImplementation((cmd: string) => {
 				if (cmd === "get_session_foreground_process") return Promise.resolve("gemini");
 				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
-				if (cmd === "discover_agent_session") return Promise.resolve("discovered-uuid");
+				if (cmd === "discover_agent_session") return Promise.resolve(discovered("discovered-uuid"));
 				return Promise.resolve(null);
 			});
 
@@ -586,7 +589,7 @@ describe("useAgentPolling", () => {
 				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
 				if (cmd === "discover_agent_session") {
 					discoverCount++;
-					return Promise.resolve(discoverCount <= 2 ? "uuid-1" : "uuid-2");
+					return Promise.resolve(discovered(discoverCount <= 2 ? "uuid-1" : "uuid-2"));
 				}
 				return Promise.resolve(null);
 			});
@@ -621,7 +624,7 @@ describe("useAgentPolling", () => {
 				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
 				if (cmd === "discover_agent_session") {
 					discoverCount++;
-					return Promise.resolve(discoverCount === 1 ? "uuid-a" : "uuid-b");
+					return Promise.resolve(discovered(discoverCount === 1 ? "uuid-a" : "uuid-b"));
 				}
 				return Promise.resolve(null);
 			});
@@ -654,9 +657,9 @@ describe("useAgentPolling", () => {
 			mockInvoke.mockImplementation((cmd: string) => {
 				if (cmd === "get_session_foreground_process") return Promise.resolve(null);
 				// Listing both sessions up front (sess-2 doesn't exist yet) keeps the
-				// 1Hz lifecycle poll from treating either as exited and clearing its
-				// sessionId — which would make detectAgentForTerminal bail out before
-				// the fallback poll under test ever gets a chance to run.
+				// mount-time lifecycle catch-up from treating either as exited and
+				// clearing its sessionId — which would make detectAgentForTerminal bail
+				// out before the fallback poll under test ever gets a chance to run.
 				if (cmd === "list_active_sessions")
 					return Promise.resolve([{ session_id: "sess-1" }, { session_id: "sess-2" }]);
 				return Promise.resolve(null);
@@ -682,32 +685,135 @@ describe("useAgentPolling", () => {
 			});
 		});
 
-		it("pauses the 1Hz lifecycle poll while the document is hidden and resyncs on visibility regain", async () => {
+		/// Supersedes the visibility-gated 1 Hz lifecycle poll (#652-0114). Gating
+		/// it on `document.visibilityState` only silenced a hidden window; a
+		/// visible idle one kept sampling forever. The backend now pushes
+		/// `session-state-changed`, so there is nothing left to gate — and a
+		/// visible window is the stricter case to assert.
+		it("never re-polls list_active_sessions after the mount-time catch-up", async () => {
 			mockInvoke.mockResolvedValue([]);
-			Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+			expect(document.visibilityState).not.toBe("hidden");
 
-			try {
-				await testInScopeAsync(async () => {
-					store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+			await testInScopeAsync(async () => {
+				store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-					const { useAgentPolling } = await import("../../hooks/useAgentPolling");
-					useAgentPolling();
-					await tick(0);
-					mockInvoke.mockClear();
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+				expect(mockInvoke).toHaveBeenCalledWith("list_active_sessions");
 
-					await tick(5_000); // 5 lifecycle-poll ticks would fire if not gated
+				mockInvoke.mockClear();
+				await tick(10_000); // 10 lifecycle-poll ticks would have fired
 
-					expect(mockInvoke).not.toHaveBeenCalledWith("list_active_sessions");
+				expect(mockInvoke).not.toHaveBeenCalledWith("list_active_sessions");
+			});
+		});
+	});
 
-					Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
-					document.dispatchEvent(new Event("visibilitychange"));
-					await tick(0);
+	describe("session-state push", () => {
+		/** Capture the handlers `subscribeEvents` registers on the Tauri window. */
+		async function captureWindowEvents(): Promise<Map<string, (event: { payload: unknown }) => void>> {
+			const listeners = new Map<string, (event: { payload: unknown }) => void>();
+			const { listen } = await import("@tauri-apps/api/event");
+			vi.mocked(listen).mockImplementation(async (name, handler) => {
+				listeners.set(name, handler as (event: { payload: unknown }) => void);
+				return () => {};
+			});
+			return listeners;
+		}
 
-					expect(mockInvoke).toHaveBeenCalledWith("list_active_sessions");
+		/** The mount-time catch-up must see the session, or it reaps the terminal
+		 *  and the push below would have no owner to apply to. */
+		const catchUpSnapshot = [{ session_id: "sess-1", state: {} }];
+
+		it("converges the store from a session-state-changed push, with no timer and no snapshot", async () => {
+			mockInvoke.mockResolvedValue(catchUpSnapshot);
+			const listeners = await captureWindowEvents();
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0); // subscribeEvents resolves its dynamic import
+
+				const push = listeners.get("session-state-changed");
+				expect(push, "the hook must subscribe to the backend push").toBeDefined();
+
+				// From here on nothing may reach the backend: no timer is advanced
+				// and no snapshot is fetched, so the event is the only input.
+				mockInvoke.mockClear();
+				push?.({
+					payload: {
+						session_id: "sess-1",
+						state: {
+							shell_state: "busy",
+							agent_state: "awaiting_input",
+							awaiting_input: true,
+							question_confident: true,
+							queued_commands: 2,
+						},
+					},
 				});
-			} finally {
-				Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
-			}
+
+				expect(store.get(id)?.agentState).toBe("awaiting_input");
+				expect(store.get(id)?.awaitingInput).toBe("question");
+				expect(store.get(id)?.awaitingInputConfident).toBe(true);
+				expect(store.get(id)?.shellState).toBe("busy");
+				expect(store.get(id)?.queuedCommands).toBe(2);
+				expect(mockInvoke).not.toHaveBeenCalled();
+			});
+		});
+
+		it("applies a later push, so a cleared question does not stay latched", async () => {
+			mockInvoke.mockResolvedValue(catchUpSnapshot);
+			const listeners = await captureWindowEvents();
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+				const push = listeners.get("session-state-changed");
+
+				push?.({
+					payload: {
+						session_id: "sess-1",
+						state: { awaiting_input: true, question_confident: true, agent_state: "awaiting_input" },
+					},
+				});
+				expect(store.get(id)?.awaitingInput).toBe("question");
+
+				// serde skips `queued_commands` at zero and omits `awaiting_input`
+				// when false, so the retraction arrives as an absence.
+				push?.({ payload: { session_id: "sess-1", state: { agent_state: "working", shell_state: "busy" } } });
+				expect(store.get(id)?.awaitingInput).toBeNull();
+				expect(store.get(id)?.awaitingInputConfident).toBe(false);
+				expect(store.get(id)?.agentState).toBe("working");
+				expect(store.get(id)?.queuedCommands).toBe(0);
+			});
+		});
+
+		it("ignores a push for a session no terminal owns", async () => {
+			mockInvoke.mockResolvedValue(catchUpSnapshot);
+			const listeners = await captureWindowEvents();
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+				store.update(id, { agentState: "working" });
+				const push = listeners.get("session-state-changed");
+
+				push?.({ payload: { session_id: "someone-elses-session", state: { agent_state: "idle" } } });
+				push?.({ payload: null });
+				push?.({ payload: { state: { agent_state: "idle" } } });
+
+				expect(store.get(id)?.agentState).toBe("working");
+			});
 		});
 	});
 });
