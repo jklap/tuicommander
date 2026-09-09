@@ -74,9 +74,18 @@ interface BackendConversationMeta {
 	provider?: string;
 	model?: string;
 }
+/** The agent run as the backend stores it — the panel's own state, verbatim,
+ * so neither side reshapes it. Absent in documents written before schema 3. */
+interface BackendAgentSnapshot {
+	state: AgentState;
+	currentIteration: number;
+	toolCalls: ToolCallEntry[];
+}
 interface BackendConversation {
 	meta: BackendConversationMeta;
 	messages: BackendChatMessage[];
+	agent?: BackendAgentSnapshot;
+	/** Stamped by the backend on save; never sent from here. */
 	schema_version?: number;
 }
 
@@ -170,6 +179,52 @@ const MAX_MESSAGES = 100;
 const MAX_TOOL_CALLS = 500;
 const PERSIST_DEBOUNCE_MS = 500;
 const DEFAULT_KEY = "__default__";
+
+/**
+ * Ceiling on the serialized tool-call log, in bytes.
+ *
+ * `MAX_TOOL_CALLS` alone does not bound the file: the two caps compound rather
+ * than trade off, because the backend independently caps each captured output
+ * at 8192 bytes (`conversation.rs TOOL_RESULT_MAX_BYTES`). Measured against the
+ * exact shape `save_conversation` writes — `serde_json::to_string_pretty`, which
+ * is what `JSON.stringify(x, null, 2)` produces — one entry at that output cap
+ * costs **8574 bytes on disk**, so 500 of them are **4.13 MB**. Persistence is a
+ * whole-document rewrite on a 500 ms debounce, so a sustained run rewrote up to
+ * **8.26 MB/s**, indefinitely.
+ *
+ * 512 KB caps that at about 1 MB/s, an 8x cut, and it is not an arbitrary
+ * round number: measured at the same shape, a run whose outputs average under
+ * roughly 1 KB keeps all 500 entries and is untouched by this cap, which is the
+ * ordinary case. Only a run that is genuinely producing megabytes of tool output
+ * loses anything, and it loses the oldest.
+ */
+const MAX_TOOL_CALL_BYTES = 512 * 1024;
+
+/**
+ * Apply both caps to the tool-call log, dropping from the OLDEST end.
+ *
+ * The count cap is cheap and runs first; the byte cap then walks backwards from
+ * the newest entry and stops at the first one that would cross the ceiling. The
+ * newest entry is always kept even if it alone exceeds the ceiling — a log whose
+ * last entry is missing tells the user nothing about where the run got to, which
+ * is the only reason the log is persisted at all.
+ *
+ * Entries are measured pretty-printed, because that is how they are written. The
+ * sum still runs a few percent under the bytes the document costs: nesting the
+ * array inside the document indents every line further, and that overhead is not
+ * knowable from one entry. The ceiling is a policy number, not a contract with
+ * the filesystem, so the gap is documented rather than modelled — the tests pin
+ * both this sum and the resulting document size.
+ */
+function trimToolCalls(calls: readonly ToolCallEntry[]): ToolCallEntry[] {
+	const capped = calls.length > MAX_TOOL_CALLS ? calls.slice(calls.length - MAX_TOOL_CALLS) : [...calls];
+	let bytes = 0;
+	for (let i = capped.length - 1; i >= 0; i--) {
+		bytes += JSON.stringify(capped[i], null, 2).length;
+		if (bytes > MAX_TOOL_CALL_BYTES && i < capped.length - 1) return capped.slice(i + 1);
+	}
+	return capped;
+}
 
 // ---------------------------------------------------------------------------
 // Per-terminal state map
@@ -398,11 +453,17 @@ function schedulePersist(key?: string): void {
 	}, PERSIST_DEBOUNCE_MS);
 }
 
+/** Whether there is anything worth writing to disk. An agent run adds no
+ * message until it ends, so "no messages" is not "nothing happened". */
+function hasPersistableState(s: PerTerminalConversationState): boolean {
+	return s.messages().length > 0 || s.toolCalls().length > 0 || s.agentState() !== "idle";
+}
+
 async function persistNow(key?: string): Promise<void> {
 	const resolvedKey = key ?? activeKey();
 	const s = getOrCreate(resolvedKey);
 	const msgs = s.messages();
-	if (msgs.length === 0) return;
+	if (!hasPersistableState(s)) return;
 	try {
 		const id = s.chatId();
 		const now = Date.now();
@@ -431,12 +492,52 @@ async function persistNow(key?: string): Promise<void> {
 				model,
 			},
 			messages: msgs.map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp })),
-			schema_version: 1,
+			agent: {
+				state: s.agentState(),
+				currentIteration: s.currentIteration(),
+				toolCalls: s.toolCalls(),
+			},
 		};
 		await invoke("save_conversation", { conversation: conv });
 	} catch (e) {
 		appLogger.warn("conversation", "persistNow failed", { error: String(e) });
 	}
+}
+
+/**
+ * Apply a conversation read off disk to a terminal's state.
+ *
+ * Shared by `initFromDisk` and `loadConversation` so a restored run can never
+ * come back in one of them and not the other.
+ *
+ * DEFERRED (2026-09-06) — a snapshot saved while the loop was `running` comes
+ * back as `running` even when the backend that ran it is gone (app restart).
+ * The banner then shows a run nobody is driving; Stop clears it. Reconciling
+ * needs `agent_loop_status` / `ACTIVE_CONVERSATIONS` per session, which is a
+ * wider change than restoring the state the reload lost (705-57fa).
+ */
+function applyLoadedConversation(s: PerTerminalConversationState, conv: BackendConversation): void {
+	batch(() => {
+		s.setChatId(conv.meta.id);
+		s.setMessages(
+			conv.messages
+				.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
+				.map((m) => ({
+					role: m.role as ConversationMessage["role"],
+					content: m.content ?? "",
+					timestamp: m.timestamp,
+				}))
+				.slice(-MAX_MESSAGES),
+		);
+		// Absent for anything written before schema 3 — an idle agent, as before.
+		const agent = conv.agent;
+		s.setAgentState(agent?.state ?? "idle");
+		s.setCurrentIteration(agent?.currentIteration ?? 0);
+		s.setToolCalls(trimToolCalls(agent?.toolCalls ?? []));
+		s.setStreamingText("");
+		s.setIsStreaming(false);
+		s.setError(null);
+	});
 }
 
 async function initFromDisk(tuicSession?: string): Promise<void> {
@@ -455,22 +556,7 @@ async function initFromDisk(tuicSession?: string): Promise<void> {
 					);
 				if (match) {
 					const conv = await invoke<BackendConversation>("load_conversation", { id: match.id });
-					batch(() => {
-						s.setChatId(conv.meta.id);
-						s.setMessages(
-							conv.messages
-								.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
-								.map((m) => ({
-									role: m.role as ConversationMessage["role"],
-									content: m.content ?? "",
-									timestamp: m.timestamp,
-								}))
-								.slice(-MAX_MESSAGES),
-						);
-						s.setStreamingText("");
-						s.setIsStreaming(false);
-						s.setError(null);
-					});
+					applyLoadedConversation(s, conv);
 					return;
 				}
 			} catch (e) {
@@ -494,12 +580,36 @@ async function initFromDisk(tuicSession?: string): Promise<void> {
 // ConversationEvent handler (Channel-based, used by both chat and agent)
 // ---------------------------------------------------------------------------
 
+/**
+ * Events after which the conversation on disk is stale.
+ *
+ * Token chunks are deliberately absent: the save is debounced, so a per-token
+ * schedule would reset the timer on every token and never fire — while writing
+ * the file once per pause. What a reload needs back is the run around the
+ * chunks, and every event that moves it is here.
+ */
+const PERSISTED_EVENT_TYPES: ReadonlySet<ConversationEvent["type"]> = new Set([
+	"thinking",
+	"tool_call",
+	"tool_result",
+	"paused",
+	"resumed",
+	"error",
+	"completed",
+]);
+
 function applyConversationEvent(s: PerTerminalConversationState, event: ConversationEvent, ownerKey?: string): void {
 	const mode = s.currentMode ?? "assisted";
 	switch (event.type) {
 		case "thinking":
-			s.setCurrentIteration(event.iteration);
-			s.setAgentState("running");
+			// The engine runs the same loop for both modes, so an assisted turn
+			// emits this too. Only an agent has a loop to report: marking one
+			// running here put the agent banner on a plain chat, and the assisted
+			// path has nothing that clears it again.
+			if (mode === "autonomous") {
+				s.setCurrentIteration(event.iteration);
+				s.setAgentState("running");
+			}
 			s.setIsThinking(true);
 			break;
 
@@ -526,10 +636,7 @@ function applyConversationEvent(s: PerTerminalConversationState, event: Conversa
 				args: event.args as Record<string, unknown>,
 				startedAt: Date.now(),
 			};
-			s.setToolCalls((prev) => {
-				const next = [...prev, entry];
-				return next.length > MAX_TOOL_CALLS ? next.slice(next.length - MAX_TOOL_CALLS) : next;
-			});
+			s.setToolCalls((prev) => trimToolCalls([...prev, entry]));
 			break;
 		}
 
@@ -547,7 +654,8 @@ function applyConversationEvent(s: PerTerminalConversationState, event: Conversa
 						break;
 					}
 				}
-				return updated;
+				// The output only arrives here, so this is where the log grows.
+				return trimToolCalls(updated);
 			});
 			break;
 
@@ -630,10 +738,14 @@ function applyConversationEvent(s: PerTerminalConversationState, event: Conversa
 						});
 					}
 				});
-				schedulePersist(ownerKey ?? activeKey());
 			}
 			break;
 		}
+	}
+
+	// After the switch, so the save reads the state this event just produced.
+	if (PERSISTED_EVENT_TYPES.has(event.type)) {
+		schedulePersist(ownerKey ?? activeKey());
 	}
 }
 
@@ -872,10 +984,7 @@ function processEvent(raw: unknown): void {
 				args: event.args,
 				startedAt: Date.now(),
 			};
-			s.setToolCalls((prev) => {
-				const next = [...prev, entry];
-				return next.length > MAX_TOOL_CALLS ? next.slice(next.length - MAX_TOOL_CALLS) : next;
-			});
+			s.setToolCalls((prev) => trimToolCalls([...prev, entry]));
 			break;
 		}
 		case "tool_result":
@@ -892,7 +1001,8 @@ function processEvent(raw: unknown): void {
 						break;
 					}
 				}
-				return updated;
+				// The output only arrives here, so this is where the log grows.
+				return trimToolCalls(updated);
 			});
 			break;
 		case "needs_approval":
@@ -958,7 +1068,7 @@ async function onTerminalClose(key: string): Promise<void> {
 		}
 	}
 
-	if (s.messages().length > 0) {
+	if (hasPersistableState(s)) {
 		await persistNow(key);
 	}
 
@@ -1008,22 +1118,7 @@ async function loadConversation(id: string): Promise<void> {
 			appLogger.info("conversation", "loadConversation: dropped a read the conversation outran", { id });
 			return;
 		}
-		batch(() => {
-			s.setChatId(conv.meta.id);
-			s.setMessages(
-				conv.messages
-					.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
-					.map((m) => ({
-						role: m.role as ConversationMessage["role"],
-						content: m.content ?? "",
-						timestamp: m.timestamp,
-					}))
-					.slice(-MAX_MESSAGES),
-			);
-			s.setStreamingText("");
-			s.setIsStreaming(false);
-			s.setError(null);
-		});
+		applyLoadedConversation(s, conv);
 	} catch (e) {
 		appLogger.warn("conversation", "loadConversation failed", { id, error: String(e) });
 	}

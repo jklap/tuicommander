@@ -101,6 +101,21 @@ pub(crate) struct OllamaModel {
 pub(crate) struct OllamaStatus {
     pub available: bool,
     pub models: Vec<OllamaModel>,
+    /// Why the endpoint is unusable, phrased for the settings UI. `None` when
+    /// available. The UI renders this verbatim — it never composes its own
+    /// wording, so a new failure mode is a change here and nowhere else.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+impl OllamaStatus {
+    fn unavailable(detail: String) -> Self {
+        Self {
+            available: false,
+            models: vec![],
+            detail: Some(detail),
+        }
+    }
 }
 
 /// Response shape from GET /api/tags
@@ -117,22 +132,33 @@ struct OllamaTagEntry {
     size: u64,
 }
 
+const OLLAMA_DETECT_TIMEOUT: Duration = Duration::from_secs(4);
+
 pub(crate) async fn detect_ollama(base: &str) -> OllamaStatus {
     let url = base.trim_end_matches('/').trim_end_matches("/v1");
     let tags_url = format!("{url}/api/tags");
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(4))
+        .timeout(OLLAMA_DETECT_TIMEOUT)
         .build()
         .unwrap_or_default();
 
     let resp = match client.get(&tags_url).send().await {
         Ok(r) if r.status().is_success() => r,
-        _ => {
-            return OllamaStatus {
-                available: false,
-                models: vec![],
-            };
+        Ok(r) => {
+            return OllamaStatus::unavailable(format!(
+                "{url} answered HTTP {} — check the base URL",
+                r.status().as_u16()
+            ));
+        }
+        Err(e) if e.is_timeout() => {
+            return OllamaStatus::unavailable(format!(
+                "Ollama at {url} did not answer within {}s",
+                OLLAMA_DETECT_TIMEOUT.as_secs()
+            ));
+        }
+        Err(_) => {
+            return OllamaStatus::unavailable(format!("Cannot reach {url} — is Ollama running?"));
         }
     };
 
@@ -151,6 +177,7 @@ pub(crate) async fn detect_ollama(base: &str) -> OllamaStatus {
                 size: t.size,
             })
             .collect(),
+        detail: None,
     }
 }
 
@@ -178,7 +205,7 @@ pub(crate) fn assemble_terminal_context_for_engine(
     let mut section = ctx.to_system_section();
 
     // Prefer OSC 133 block context; fall back to VtLogBuffer output already in section.
-    if let Some(entry) = state.session_knowledge.get(session_id) {
+    if let Some(entry) = state.ai.session_knowledge.get(session_id) {
         let knowledge = entry.lock();
         if let Some(block_ctx) = assemble_block_context(&knowledge, DEFAULT_CONTEXT_BUDGET) {
             // Replace the VtLogBuffer "Recent Terminal Output" with structured blocks.
@@ -259,14 +286,25 @@ pub(crate) fn load_conversation(id: String) -> Result<Conversation, String> {
     let path = dir.join(format!("{id}.json"));
     let data =
         std::fs::read_to_string(&path).map_err(|_| format!("Conversation not found: {id}"))?;
-    let conv: Conversation =
+    let mut conv: Conversation =
         serde_json::from_str(&data).map_err(|e| format!("Failed to parse conversation: {e}"))?;
+    // A document written by an older build is upgraded here, then written back
+    // so the next read has nothing to do. A failed write only costs the rewrite
+    // — the caller still gets the migrated conversation.
+    if conv.migrate()
+        && let Err(e) = save_conversation(conv.clone())
+    {
+        tracing::warn!(id = %id, error = %e, "Failed to re-save migrated conversation");
+    }
     Ok(conv)
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_conversation(mut conversation: Conversation) -> Result<(), String> {
     crate::ai_agent::knowledge::validate_file_stem(&conversation.meta.id)?;
+    // The on-disk format is ours, so the version is ours to stamp: a client
+    // never sends one and can never mislabel a file.
+    conversation.schema_version = crate::ai_agent::conversation::CURRENT_SCHEMA_VERSION;
     conversation.sanitize_for_persist();
     let dir = conversations_dir()?;
     let path = dir.join(format!("{}.json", conversation.meta.id));
@@ -620,13 +658,13 @@ fn assemble_terminal_context(
     }
 
     // CWD from PtySession
-    if let Some(sess) = state.sessions.get(session_id) {
+    if let Some(sess) = state.session_maps.sessions.get(session_id) {
         let sess = sess.lock();
         ctx.cwd = sess.cwd.clone();
     }
 
     // Terminal output from VtLogBuffer
-    if let Some(buf_entry) = state.vt_log_buffers.get(session_id) {
+    if let Some(buf_entry) = state.grid.vt_log_buffers.get(session_id) {
         let buf = buf_entry.lock();
         let lines = buf.lines();
         let n = context_lines as usize;
@@ -853,10 +891,93 @@ mod tests {
                     size: 5_000_000_000,
                 },
             ],
+            detail: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("qwen2.5:7b"));
         assert!(json.contains("\"available\":true"));
+        // The field is always present so the UI can branch on it without
+        // treating "absent" and "nothing wrong" as different cases.
+        assert!(json.contains("\"detail\":null"));
+    }
+
+    /// Serve one canned HTTP response on a loopback port and return that port.
+    async fn serve_once(response: String) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock.write_all(response.as_bytes()).await;
+        });
+        port
+    }
+
+    fn json_200(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn detect_ollama_reports_a_reachable_endpoint_without_a_reason() {
+        let port = serve_once(json_200(
+            r#"{"models":[{"name":"qwen2.5:7b","size":4000000000}]}"#,
+        ))
+        .await;
+
+        let status = detect_ollama(&format!("http://127.0.0.1:{port}/v1/")).await;
+        assert!(status.available);
+        assert_eq!(
+            status.detail, None,
+            "a reachable endpoint has nothing wrong"
+        );
+        assert_eq!(status.models.len(), 1);
+        assert_eq!(status.models[0].name, "qwen2.5:7b");
+    }
+
+    #[tokio::test]
+    async fn detect_ollama_explains_a_refused_connection() {
+        // Bind then drop: the port is guaranteed free, so the connect is refused
+        // immediately instead of hanging until the 4s timeout.
+        let port = {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            l.local_addr().unwrap().port()
+        };
+
+        let status = detect_ollama(&format!("http://127.0.0.1:{port}/v1/")).await;
+        assert!(!status.available);
+        assert!(status.models.is_empty());
+        let detail = status
+            .detail
+            .expect("an unreachable endpoint must say what is wrong");
+        assert!(
+            detail.contains(&format!("127.0.0.1:{port}")),
+            "the reason must name the endpoint the user configured: {detail}"
+        );
+        assert!(
+            detail.contains("Ollama"),
+            "the reason must tell the user what to start: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn detect_ollama_explains_an_http_error_status() {
+        let port = serve_once(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".to_string(),
+        )
+        .await;
+
+        let status = detect_ollama(&format!("http://127.0.0.1:{port}/v1/")).await;
+        assert!(!status.available);
+        let detail = status.detail.expect("an HTTP error must say what is wrong");
+        assert!(
+            detail.contains("500"),
+            "the reason must carry the status code: {detail}"
+        );
     }
 
     #[test]
@@ -950,6 +1071,7 @@ mod tests {
                 ),
             ],
             schema_version: crate::ai_agent::conversation::CURRENT_SCHEMA_VERSION,
+            agent: Default::default(),
         };
         let json = serde_json::to_string_pretty(&conv).unwrap();
         let loaded: Conversation = serde_json::from_str(&json).unwrap();
@@ -982,6 +1104,7 @@ mod tests {
             },
             messages: vec![ChatMessage::text("user", "hello", now_millis())],
             schema_version: crate::ai_agent::conversation::CURRENT_SCHEMA_VERSION,
+            agent: Default::default(),
         };
 
         // Save
@@ -1012,6 +1135,70 @@ mod tests {
             .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
             .collect();
         assert!(entries.is_empty());
+    }
+
+    /// A conversation saved by an older build is upgraded on read and written
+    /// back at the current version — it is never dropped for being old.
+    #[test]
+    fn load_migrates_a_v1_document_and_rewrites_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let conv_dir = dir.path().join(CONVERSATIONS_DIR);
+        std::fs::create_dir_all(&conv_dir).unwrap();
+        let path = conv_dir.join("legacy-1.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "meta": {"id":"legacy-1","title":"Legacy","created":1,"updated":2,"message_count":1},
+                "messages": [{"role":"user","content":"why is CI failing?","timestamp":1}]
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = load_conversation("legacy-1".to_string()).unwrap();
+        assert_eq!(
+            loaded.schema_version,
+            crate::ai_agent::conversation::CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(loaded.messages.len(), 1);
+        assert_eq!(loaded.messages[0].content, "why is CI failing?");
+
+        // Rewritten in place, so the next read has nothing left to migrate.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        let reread: Conversation = serde_json::from_str(&on_disk).unwrap();
+        assert_eq!(
+            reread.schema_version,
+            crate::ai_agent::conversation::CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    /// The schema number is the backend's to stamp: a client that sends a stale
+    /// one (or none) must not write a mislabelled file.
+    #[test]
+    fn save_stamps_the_current_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let conv = Conversation {
+            meta: ConversationMeta {
+                id: "stamped".to_string(),
+                title: "Stamped".to_string(),
+                session_id: None,
+                created: 1,
+                updated: 2,
+                message_count: 1,
+                provider: String::new(),
+                model: String::new(),
+            },
+            messages: vec![ChatMessage::text("user", "hi", 1)],
+            schema_version: 1,
+            agent: Default::default(),
+        };
+        save_conversation(conv).unwrap();
+        let loaded = load_conversation("stamped".to_string()).unwrap();
+        assert_eq!(
+            loaded.schema_version,
+            crate::ai_agent::conversation::CURRENT_SCHEMA_VERSION
+        );
     }
 
     #[test]
