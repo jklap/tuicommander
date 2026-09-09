@@ -303,6 +303,24 @@ const EMPTY_LOCK_STALE_SECS: u64 = 5;
 /// many seconds — wide margin over even large `stash`/`add` index writes.
 const NONEMPTY_LOCK_STALE_SECS: u64 = 30;
 
+/// The escape hatch for a lock **no probe can adjudicate** (#694-4fcc).
+///
+/// The owner probe fails closed: with no answer we keep the lock, because the
+/// thing fail-open destroys is a live `git add`'s index. But "keep it" cannot
+/// mean "forever". On a host with no `lsof` the probe is permanently
+/// unavailable, so a lock left by a crash would outlive the process that made
+/// it and strand the repo behind a guard nothing can ever satisfy.
+///
+/// So ownership is adjudicated by a second, much stronger rule when the first
+/// one has no answer: age alone, at a threshold no live git can reach. The
+/// hazard fail-closed protects against is a git that is merely *slow*, and the
+/// slowest legitimate index write is seconds, not an hour. A process holding
+/// `index.lock` for [`UNADJUDICATED_LOCK_STALE_SECS`] is not slow, it is dead.
+///
+/// One hour is deliberately far above [`NONEMPTY_LOCK_STALE_SECS`]: this rule
+/// runs *without* evidence, so it must be the one that almost never fires.
+const UNADJUDICATED_LOCK_STALE_SECS: u64 = 3600;
+
 /// Pure staleness rule for an `index.lock` of the given byte size and age.
 /// Split out from [`remove_stale_index_lock`] so the thresholds are unit-testable
 /// without touching the filesystem clock.
@@ -384,25 +402,33 @@ fn classify_owner_probe(probe: Result<std::process::Output, GitError>) -> LockOw
         Err(e) => return LockOwnership::Unknown(UnknownOwner::Unavailable(e.to_string())),
     };
 
-    // The exit code is not consulted: a file nobody has open exits non-zero with
-    // empty stdout, so stdout carries the whole answer.
+    // The exit code is deliberately not consulted, because it cannot separate the
+    // two cases that matter: measured on macOS lsof 4.91, "nobody has this file
+    // open" and "lsof could not stat the path" BOTH exit 1 with empty stdout.
+    // Only stderr tells them apart, and `-w` does not hide it — that flag
+    // silences warnings, not status errors.
     //
-    // DEFERRED (2026-09-06) — an `lsof` that runs and *fails* (permission
-    // denied, a path that vanished under us) also exits non-zero with empty
-    // stdout, so it still classifies as `Unowned` here rather than `Unknown`.
-    // Under today's fail-open policy that changes no outcome, and `lsof`'s
-    // stderr contract on a clean "not found" could only be verified on macOS
-    // from here, not on every platform we ship. Revisit if the `Unknown` path is
-    // ever made to fail closed, where the difference starts to decide deletions.
+    // Order matters, and it is the safe direction twice over:
+    //   1. PIDs win outright. A complaint does not outrank an answer, and
+    //      `HeldBy` keeps the lock.
+    //   2. Anything else with stderr is a probe that RAN AND FAILED, which is a
+    //      non-answer — `Unknown`, never `Unowned`. `Unowned` licenses a delete,
+    //      so letting a failure land there is a fail-open with no log and no name.
+    //   3. Silence with no PIDs is the real "no match", the only outcome that is
+    //      evidence.
     let pids: Vec<u32> = String::from_utf8_lossy(&out.stdout)
         .split_whitespace()
         .filter_map(|pid| pid.parse::<u32>().ok())
         .collect();
-    if pids.is_empty() {
-        LockOwnership::Unowned
-    } else {
-        LockOwnership::HeldBy(pids)
+    if !pids.is_empty() {
+        return LockOwnership::HeldBy(pids);
     }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let complaint = stderr.trim();
+    if !complaint.is_empty() {
+        return LockOwnership::Unknown(UnknownOwner::Unavailable(complaint.to_string()));
+    }
+    LockOwnership::Unowned
 }
 
 /// Which live processes currently hold `lock` open.
@@ -444,7 +470,15 @@ fn remove_stale_index_lock(cwd: &Path) {
 /// probe's three answers can be driven from a test without an `lsof` that fails
 /// on cue.
 fn reclaim_stale_index_lock(cwd: &Path, probe: impl FnOnce(&Path) -> LockOwnership) {
-    let lock = cwd.join(".git/index.lock");
+    // The pointer must be followed, not assumed. In a linked worktree `.git` is a
+    // FILE holding `gitdir: <path>`, so `cwd/.git/index.lock` traverses a file and
+    // the `metadata` below fails — the whole sweep used to return here, silently,
+    // in every worktree. TUIC runs most of its work in worktrees, so the guard was
+    // inert exactly where it was needed most.
+    let Some(git_dir) = crate::git::resolve_git_dir(cwd) else {
+        return;
+    };
+    let lock = git_dir.join("index.lock");
     let Ok(meta) = std::fs::metadata(&lock) else {
         return;
     };
@@ -476,20 +510,33 @@ fn reclaim_stale_index_lock(cwd: &Path, probe: impl FnOnce(&Path) -> LockOwnersh
             return;
         }
         LockOwnership::Unowned => {}
-        // FAIL OPEN, deliberately: with no answer we reclaim, exactly as this
-        // code did before the owner probe existed. Failing closed would strand a
-        // repo behind a lock nothing can prove is dead, and on a host with no
-        // `lsof` nothing ever could — the lock would outlive the process that
-        // left it. To fail closed instead, `return` here; that is the whole
-        // change, and `reason` already carries which of the two cases it is.
+        // FAIL CLOSED — Boss's decision, 2026-09-07 (#694-4fcc). With no answer
+        // we keep the lock: the age rule alone cannot tell a crashed git from a
+        // merely slow one, and reclaiming under a live `git add` corrupts the
+        // index. A stranded repo is recoverable by hand; a corrupted index is
+        // not, so the two costs are not symmetric.
         //
-        // The cost is real, so it is never silent: past this point the age rule
-        // decides alone, and the age rule cannot see a git that is merely slow.
+        // The escape hatch is age at a threshold no live git can reach, so
+        // "keep" never becomes "forever" — see `UNADJUDICATED_LOCK_STALE_SECS`.
+        // It matters most exactly where the probe can never work: on a host
+        // with no `lsof`, `Unavailable` is permanent, and without this branch
+        // the lock would outlive the process that left it.
+        LockOwnership::Unknown(reason) if age_secs < UNADJUDICATED_LOCK_STALE_SECS => {
+            tracing::warn!(
+                source = "git_cli",
+                "Keeping index.lock in {} — ownership could not be determined ({reason}), \
+                 so it is kept until it reaches {UNADJUDICATED_LOCK_STALE_SECS}s \
+                 (now {age_secs}s) rather than reclaimed on age alone",
+                cwd.display()
+            );
+            return;
+        }
         LockOwnership::Unknown(reason) => {
             tracing::warn!(
                 source = "git_cli",
-                "index.lock ownership in {} could not be determined ({reason}) — \
-                 reclaiming on age alone, which cannot tell a crashed git from a slow one",
+                "Reclaiming index.lock in {} on age alone: ownership could not be \
+                 determined ({reason}), but at {age_secs}s it is past the \
+                 {UNADJUDICATED_LOCK_STALE_SECS}s no live git can reach",
                 cwd.display()
             );
         }
@@ -665,6 +712,38 @@ mod tests {
         (dir, path)
     }
 
+    /// A linked worktree of `main`, whose `.git` is a **file** holding
+    /// `gitdir: <path>` rather than a directory — the shape that made the sweep
+    /// inert. `git worktree add` needs a commit to branch from, so one is made.
+    fn linked_worktree(main: &Path) -> (tempfile::TempDir, PathBuf) {
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(main)
+                .args(args)
+                .output()
+                .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        std::fs::write(main.join("seed.txt"), b"seed").expect("write seed");
+        run(&["add", "seed.txt"]);
+        run(&["commit", "-m", "seed"]);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("wt");
+        run(&[
+            "worktree",
+            "add",
+            "-b",
+            "wt",
+            path.to_str().expect("utf8 worktree path"),
+        ]);
+        (dir, path)
+    }
+
     #[test]
     fn parse_conflicted_files_porcelain_extracts_unmerged_paths() {
         let status = "\
@@ -791,6 +870,13 @@ DU src/deleted.rs
     }
 
     /// The control: nobody owns the lock, so the age rule still reclaims it.
+    ///
+    /// The probe is injected rather than real. Since the policy went
+    /// fail-closed (#694-4fcc) a missing `lsof` answers `Unavailable`, not
+    /// `Unowned`, and the lock would be KEPT — so with the real probe this test
+    /// would assert the host's `lsof` rather than the rule, and fail on Windows
+    /// (where no probe exists at all) for a reason that has nothing to do with
+    /// what it is checking.
     #[test]
     fn stale_lock_nobody_owns_is_reclaimed() {
         let (_dir, path) = setup_test_repo();
@@ -798,7 +884,7 @@ DU src/deleted.rs
         std::fs::write(&lock, b"index payload").expect("write lock");
         age_file(&lock, 120);
 
-        remove_stale_index_lock(&path);
+        reclaim_stale_index_lock(&path, |_| LockOwnership::Unowned);
         assert!(!lock.exists(), "an unowned stale lock must be reclaimed");
     }
 
@@ -837,12 +923,12 @@ DU src/deleted.rs
 
     /// Build the `Output` an `lsof` run would have produced.
     #[cfg(unix)]
-    fn probe_output(stdout: &[u8], code: i32) -> std::process::Output {
+    fn probe_output(stdout: &[u8], code: i32, stderr: &[u8]) -> std::process::Output {
         use std::os::unix::process::ExitStatusExt;
         std::process::Output {
             status: std::process::ExitStatus::from_raw(code << 8),
             stdout: stdout.to_vec(),
-            stderr: Vec::new(),
+            stderr: stderr.to_vec(),
         }
     }
 
@@ -852,12 +938,55 @@ DU src/deleted.rs
     #[test]
     fn probe_reads_an_empty_answer_as_unowned_and_pids_as_held() {
         assert_eq!(
-            classify_owner_probe(Ok(probe_output(b"", 1))),
+            classify_owner_probe(Ok(probe_output(b"", 1, b""))),
             LockOwnership::Unowned
         );
         assert_eq!(
-            classify_owner_probe(Ok(probe_output(b"431\n7\n", 0))),
+            classify_owner_probe(Ok(probe_output(b"431\n7\n", 0, b""))),
             LockOwnership::HeldBy(vec![431, 7])
+        );
+    }
+
+    /// An `lsof` that RAN and FAILED must not read as "nobody owns this lock".
+    ///
+    /// Measured, macOS lsof 4.91: a missing path exits **1 with empty stdout** —
+    /// byte-identical to the clean "no match" — and the two are told apart only
+    /// by stderr, which `-w` does NOT suppress (it silences warnings, not status
+    /// errors). Without this, a probe that failed licensed a delete, which is the
+    /// same fail-open the `Unknown` arm exists to make visible, only invisible.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_that_ran_and_failed_is_unknown_not_unowned() {
+        let failed = probe_output(
+            b"",
+            1,
+            b"lsof: status error on .git/index.lock: No such file or directory\n",
+        );
+        match classify_owner_probe(Ok(failed)) {
+            LockOwnership::Unknown(UnknownOwner::Unavailable(detail)) => {
+                assert!(
+                    detail.contains("status error"),
+                    "the log must carry lsof's own complaint: {detail}"
+                );
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    /// A complaint does not outrank an answer. If `lsof` named a holder, the
+    /// lock is held whatever else it wrote to stderr — and `HeldBy` is the safe
+    /// direction, so a partial failure that still found a PID must keep the lock
+    /// rather than degrade to `Unknown`.
+    #[cfg(unix)]
+    #[test]
+    fn pids_outrank_stderr_noise() {
+        assert_eq!(
+            classify_owner_probe(Ok(probe_output(
+                b"9182\n",
+                0,
+                b"lsof: WARNING: something\n"
+            ))),
+            LockOwnership::HeldBy(vec![9182])
         );
     }
 
@@ -895,11 +1024,13 @@ DU src/deleted.rs
         }
     }
 
-    /// Fail-open is the recorded policy: an undetermined owner still reclaims.
-    /// It must not do so silently — with no answer this is the age rule alone,
-    /// and the log is the only place that weakening is visible.
+    /// Fail-closed is the recorded policy (Boss, 2026-09-07, #694-4fcc): with
+    /// no answer the lock is KEPT, because the age rule alone cannot tell a
+    /// crashed git from a slow one and reclaiming under a live `git add`
+    /// corrupts the index. The log must still name why, so the guard that is
+    /// now holding the lock is visible rather than silent.
     #[test]
-    fn an_unavailable_probe_reclaims_and_records_why() {
+    fn an_unavailable_probe_keeps_the_lock_and_records_why() {
         let (_dir, path) = setup_test_repo();
         let lock = path.join(".git/index.lock");
         std::fs::write(&lock, b"index payload").expect("write lock");
@@ -912,8 +1043,8 @@ DU src/deleted.rs
         });
 
         assert!(
-            !lock.exists(),
-            "fail-open: an undetermined owner still reclaims the lock"
+            lock.exists(),
+            "fail-closed: an undetermined owner must not license a delete"
         );
         assert!(logs.contains("could not be determined"), "logs: {logs}");
         assert!(
@@ -927,7 +1058,7 @@ DU src/deleted.rs
     /// absent means nothing can ever be known. One is worth chasing, the other
     /// is not.
     #[test]
-    fn a_slow_probe_reclaims_and_names_the_deadline() {
+    fn a_slow_probe_keeps_the_lock_and_names_the_deadline() {
         let (_dir, path) = setup_test_repo();
         let lock = path.join(".git/index.lock");
         std::fs::write(&lock, b"index payload").expect("write lock");
@@ -940,13 +1071,60 @@ DU src/deleted.rs
         });
 
         assert!(
-            !lock.exists(),
-            "fail-open: a probe that timed out still reclaims the lock"
+            lock.exists(),
+            "fail-closed: a probe that timed out must not license a delete"
         );
         assert!(logs.contains("could not be determined"), "logs: {logs}");
         assert!(
             logs.contains("outlived its 2s deadline"),
             "the log must name the deadline, not just the failure: {logs}"
+        );
+    }
+
+    /// The escape hatch, and the reason fail-closed does not strand a repo.
+    /// On a host with no `lsof` the probe is permanently unavailable, so
+    /// without this branch a crash-orphaned lock would outlive the process that
+    /// left it and no future call could ever clear it. Age at a threshold no
+    /// live git can reach adjudicates what the probe cannot.
+    #[test]
+    fn an_unadjudicated_lock_is_reclaimed_once_no_live_git_could_still_hold_it() {
+        let (_dir, path) = setup_test_repo();
+        let lock = path.join(".git/index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+        age_file(&lock, UNADJUDICATED_LOCK_STALE_SECS + 60);
+
+        let (_, logs) = capture_tracing(|| {
+            reclaim_stale_index_lock(&path, |_| {
+                LockOwnership::Unknown(UnknownOwner::Unavailable("no lsof on PATH".to_string()))
+            })
+        });
+
+        assert!(
+            !lock.exists(),
+            "past the escape-hatch age an unadjudicated lock must be reclaimed, \
+             or a host without lsof could never clear one"
+        );
+        assert!(
+            logs.contains("on age alone") && logs.contains("no lsof on PATH"),
+            "the log must say it reclaimed without evidence, and why: {logs}"
+        );
+    }
+
+    /// The hatch must not swallow a real answer. A live owner outranks age at
+    /// every age — otherwise a slow `git add` on a huge monorepo would lose its
+    /// index to a rule that never even asked.
+    #[test]
+    fn the_escape_hatch_never_overrides_a_named_owner() {
+        let (_dir, path) = setup_test_repo();
+        let lock = path.join(".git/index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+        age_file(&lock, UNADJUDICATED_LOCK_STALE_SECS * 24);
+
+        reclaim_stale_index_lock(&path, |_| LockOwnership::HeldBy(vec![4321]));
+
+        assert!(
+            lock.exists(),
+            "evidence of a holder outranks age no matter how old the lock is"
         );
     }
 
@@ -970,6 +1148,50 @@ DU src/deleted.rs
             logs.contains("4321"),
             "the log must name the holder: {logs}"
         );
+    }
+
+    /// In a linked worktree `.git` is a **file** holding `gitdir: <path>`, so
+    /// `cwd/.git/index.lock` traverses a file and `metadata()` fails — the whole
+    /// sweep returned before ever looking at a lock. TUIC runs most of its work
+    /// in worktrees, so the guard was inert exactly where it was needed most.
+    #[test]
+    fn a_stale_lock_in_a_linked_worktree_is_reclaimed() {
+        let (_dir, main) = setup_test_repo();
+        let (_wt_dir, worktree) = linked_worktree(&main);
+
+        let git_dir = crate::git::resolve_git_dir(&worktree).expect("worktree gitdir resolves");
+        assert!(
+            !worktree.join(".git").is_dir(),
+            "a linked worktree must have .git as a file for this test to mean anything"
+        );
+
+        let lock = git_dir.join("index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+        age_file(&lock, 120);
+
+        reclaim_stale_index_lock(&worktree, |_| LockOwnership::Unowned);
+
+        assert!(
+            !lock.exists(),
+            "the sweep must follow the gitdir pointer, not assume cwd/.git is a directory"
+        );
+    }
+
+    /// The mirror of the above: a *live* lock in a worktree must still be kept,
+    /// so following the pointer widens the guard's reach without weakening it.
+    #[test]
+    fn a_held_lock_in_a_linked_worktree_is_kept() {
+        let (_dir, main) = setup_test_repo();
+        let (_wt_dir, worktree) = linked_worktree(&main);
+
+        let git_dir = crate::git::resolve_git_dir(&worktree).expect("worktree gitdir resolves");
+        let lock = git_dir.join("index.lock");
+        std::fs::write(&lock, b"index payload").expect("write lock");
+        age_file(&lock, 120);
+
+        reclaim_stale_index_lock(&worktree, |_| LockOwnership::HeldBy(vec![4321]));
+
+        assert!(lock.exists(), "a worktree lock with a live owner is kept");
     }
 
     /// The probe stays off the hot path: only a lock the age rule has already
