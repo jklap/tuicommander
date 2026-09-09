@@ -56,8 +56,8 @@ pub(crate) async fn start_mcp_upstream_oauth(
     state: State<'_, Arc<AppState>>,
     name: String,
 ) -> Result<StartOAuthResponse, String> {
-    let registry = state.mcp_upstream_registry.clone();
-    let flow_mgr = state.oauth_flow_manager.clone();
+    let registry = state.mcp.upstream_registry.clone();
+    let flow_mgr = state.mcp.oauth_flow_manager.clone();
 
     // Ensure the upstream is in the live registry (it might be missing if
     // the app was restarted after the config was saved but before the entry
@@ -214,13 +214,15 @@ pub(crate) async fn mcp_oauth_callback(
     oauth_state: String,
 ) -> Result<(), String> {
     let (upstream_name, _tokens) = state
+        .mcp
         .oauth_flow_manager
         .complete_flow(&oauth_state, &code)
         .await
         .map_err(|e| e.to_string())?;
 
     state
-        .mcp_upstream_registry
+        .mcp
+        .upstream_registry
         .on_oauth_complete(&upstream_name)
         .await
 }
@@ -234,8 +236,8 @@ pub(crate) async fn cancel_mcp_upstream_oauth(
     state: State<'_, Arc<AppState>>,
     name: String,
 ) -> Result<(), String> {
-    state.oauth_flow_manager.cancel_flows_for(&name);
-    state.mcp_upstream_registry.cancel_authenticating(&name);
+    state.mcp.oauth_flow_manager.cancel_flows_for(&name);
+    state.mcp.upstream_registry.cancel_authenticating(&name);
     Ok(())
 }
 

@@ -1777,7 +1777,7 @@ mod tests {
 
     // --- growth bounds ---
     //
-    // The buffer lives in `state.input_buffers` for the whole life of a
+    // The buffer lives in `state.session_maps.input_buffers` for the whole life of a
     // session, so anything it accumulates without a newline it accumulates
     // forever. The literals below mirror `MAX_LINE_CHARS` / `MAX_CSI_PARAM_BYTES`
     // on purpose: a silent change to either cap should fail here.

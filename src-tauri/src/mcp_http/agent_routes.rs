@@ -231,7 +231,7 @@ pub(super) async fn spawn_agent_session(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    if state.sessions.len() >= MAX_CONCURRENT_SESSIONS {
+    if state.session_maps.sessions.len() >= MAX_CONCURRENT_SESSIONS {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "Max concurrent sessions reached"})),
@@ -406,6 +406,7 @@ pub(super) async fn spawn_agent_session(
         session_state.agent_type = Some(agent_type.clone());
     }
     state
+        .session_maps
         .session_states
         .insert(session_id.clone(), session_state);
 
@@ -628,7 +629,7 @@ mod tests {
                 .unwrap()
                 .contains("bare prompt")
         );
-        assert!(state.sessions.is_empty());
+        assert!(state.session_maps.sessions.is_empty());
     }
 
     #[tokio::test]
@@ -647,7 +648,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(response_json(response).await["error"].is_string());
-        assert!(state.sessions.is_empty());
+        assert!(state.session_maps.sessions.is_empty());
     }
 }
 

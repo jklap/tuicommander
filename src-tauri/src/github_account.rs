@@ -682,7 +682,7 @@ pub(crate) fn github_remove_account_impl(
     remove_account_everywhere(&id)?;
     // Drop the account's per-account runtime state and its cooldown keys
     // ("{id}:owner/repo"). github.com cooldowns ("owner/repo") are untouched.
-    state.ghe_state.remove(&id);
+    state.github.ghe_state.remove(&id);
     let prefix = format!("{id}:");
     state
         .git_cache

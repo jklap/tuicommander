@@ -236,7 +236,7 @@ pub(crate) async fn handle(
                 "error": "Missing required argument: session_id"
             });
         };
-        if !state.file_sandboxes.contains_key(sid) {
+        if !state.ai.file_sandboxes.contains_key(sid) {
             // Generic message: echoing the caller-supplied id turns this path
             // into an enumeration oracle for valid session IDs.
             return serde_json::json!({

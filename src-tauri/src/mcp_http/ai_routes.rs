@@ -229,6 +229,7 @@ pub(super) async fn scheduler_config_put(
 /// commands do). The rule mutations themselves live in `ai_agent::watcher::*_rule`.
 fn watcher_cfg(state: &Arc<AppState>) -> Result<Arc<RwLock<WatcherConfig>>, String> {
     Ok(state
+        .ai
         .watcher_engine
         .get()
         .ok_or("Watcher engine not initialized")?

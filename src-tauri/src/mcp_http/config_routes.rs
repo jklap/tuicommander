@@ -93,7 +93,7 @@ pub(super) async fn put_config(
     };
 
     if effects.tools_changed {
-        let _ = state.mcp_tools_changed.send(());
+        let _ = state.mcp.tools_changed.send(());
     }
     // Parity with the IPC `save_config`: rebind the listener so the running process
     // cannot keep serving a config the disk disagrees with.
@@ -564,8 +564,8 @@ pub(super) async fn get_mcp_status_http(State(state): State<Arc<AppState>>) -> i
     Json(serde_json::json!({
         "enabled": true,
         "running": running,
-        "active_sessions": state.sessions.len(),
-        "mcp_clients": state.mcp_sessions.len(),
+        "active_sessions": state.session_maps.sessions.len(),
+        "mcp_clients": state.mcp.sessions.len(),
         "max_sessions": MAX_CONCURRENT_SESSIONS,
     }))
 }

@@ -122,7 +122,8 @@ fn recipient_supports_active_claude_channel(
     managed_recipient: bool,
 ) -> bool {
     let owner_supports_channel = state
-        .mcp_sessions
+        .mcp
+        .sessions
         .get(mcp_session_id)
         .is_some_and(|session| session.is_claude_code && session.has_sse_stream);
     if !owner_supports_channel {
@@ -201,7 +202,7 @@ pub(crate) fn marker_flags_for_agent(state: &AppState, agent_type: Option<&str>)
 /// Shared by `session(close)`, `session(kill)`, and `pty::mark_session_exited`
 /// (natural exit) so all three exit paths drain `session_html_tabs` identically.
 pub(crate) fn emit_close_html_tabs(state: &AppState, session_id: &str) {
-    let Some((_, tab_ids)) = state.session_html_tabs.remove(session_id) else {
+    let Some((_, tab_ids)) = state.session_maps.session_html_tabs.remove(session_id) else {
         return;
     };
     let _ = state.event_bus.send(crate::state::AppEvent::CloseHtmlTabs {
@@ -364,6 +365,7 @@ fn link_pending_children_to_parent(
 ) -> usize {
     let pending_parent = pending_parent_id(mcp_session_id);
     let children: Vec<String> = state
+        .session_maps
         .session_parent
         .iter()
         .filter(|entry| entry.value() == &pending_parent)
@@ -371,6 +373,7 @@ fn link_pending_children_to_parent(
         .collect();
     for child in &children {
         state
+            .session_maps
             .session_parent
             .insert(child.clone(), parent_tuic_session.to_string());
     }
@@ -437,16 +440,18 @@ fn bind_peer_identity_locked(
     // split between the stale and current bridge.
     if let Some(prior_mcp) = prior_mcp {
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .remove_if(&prior_mcp, |_, mapped| mapped == tuic_session);
-        let remove_reverse = if let Some(mut reverse) = state.session_to_mcp.get_mut(tuic_session) {
-            reverse.retain(|sid| sid != &prior_mcp);
-            reverse.is_empty()
-        } else {
-            false
-        };
+        let remove_reverse =
+            if let Some(mut reverse) = state.mcp.session_to_mcp.get_mut(tuic_session) {
+                reverse.retain(|sid| sid != &prior_mcp);
+                reverse.is_empty()
+            } else {
+                false
+            };
         if remove_reverse {
-            state.session_to_mcp.remove(tuic_session);
+            state.mcp.session_to_mcp.remove(tuic_session);
         }
         // The retired bridge may still hold `agent wait` leases. They outlive its
         // routing entries and keep beating terminal delivery, so the reconnected
@@ -465,9 +470,11 @@ fn bind_peer_identity_locked(
         },
     );
     state
-        .mcp_to_session
+        .mcp
+        .to_session
         .insert(mcp_sid.to_string(), tuic_session.to_string());
     let mut reverse = state
+        .mcp
         .session_to_mcp
         .entry(tuic_session.to_string())
         .or_default();
@@ -488,6 +495,7 @@ enum PeerIdentityOwnership {
 
 fn mcp_session_has_live_owner(state: &AppState, mcp_sid: &str) -> bool {
     let has_sse_subscriber = state
+        .session_maps
         .messaging_channels
         .get(mcp_sid)
         .is_some_and(|sender| sender.receiver_count() > 0);
@@ -495,7 +503,8 @@ fn mcp_session_has_live_owner(state: &AppState, mcp_sid: &str) -> bool {
         return true;
     }
     state
-        .mcp_sessions
+        .mcp
+        .sessions
         .get(mcp_sid)
         .is_some_and(|meta| meta.last_activity.elapsed() <= MCP_OWNER_ACTIVITY_GRACE)
 }
@@ -528,7 +537,8 @@ fn peer_identity_ownership_locked(
 /// happens after an earlier header assertion or registration bound the two.
 fn mcp_session_routes_to(state: &AppState, mcp_sid: &str, tuic_session: &str) -> bool {
     state
-        .mcp_to_session
+        .mcp
+        .to_session
         .get(mcp_sid)
         .is_some_and(|bound| bound.value() == tuic_session)
 }
@@ -540,9 +550,11 @@ fn mcp_session_routes_to(state: &AppState, mcp_sid: &str, tuic_session: &str) ->
 /// both to read the same mail.
 fn join_peer_identity_locked(state: &AppState, mcp_sid: &str, tuic_session: &str) {
     state
-        .mcp_to_session
+        .mcp
+        .to_session
         .insert(mcp_sid.to_string(), tuic_session.to_string());
     let mut reverse = state
+        .mcp
         .session_to_mcp
         .entry(tuic_session.to_string())
         .or_default();
@@ -597,13 +609,17 @@ fn retire_repaired_phantom_identity(
         let was_orchestrator = state.orchestrator_peers.remove(phantom).is_some();
         if was_orchestrator {
             let children: Vec<String> = state
+                .session_maps
                 .session_parent
                 .iter()
                 .filter(|entry| entry.value() == phantom)
                 .map(|entry| entry.key().clone())
                 .collect();
             for child in children {
-                state.session_parent.insert(child, repaired.to_string());
+                state
+                    .session_maps
+                    .session_parent
+                    .insert(child, repaired.to_string());
             }
             state.orchestrator_peers.insert(repaired.to_string());
         }
@@ -765,12 +781,13 @@ fn managed_parent_cwd_from_header(
     header: Option<&str>,
 ) -> Option<String> {
     let tuic_session = header.filter(|value| is_valid_uuid(value))?;
-    if let Some(bound_tuic) = mcp_session_id.and_then(|sid| state.mcp_to_session.get(sid))
+    if let Some(bound_tuic) = mcp_session_id.and_then(|sid| state.mcp.to_session.get(sid))
         && bound_tuic.value() != tuic_session
     {
         return None;
     }
     state
+        .session_maps
         .sessions
         .get(tuic_session)
         .and_then(|session| session.lock().cwd.clone())
@@ -786,10 +803,10 @@ fn refresh_mcp_session(
     is_claude_code: bool,
     tuic_session_header: Option<&str>,
 ) {
-    if let Some(mut meta) = state.mcp_sessions.get_mut(mcp_sid) {
+    if let Some(mut meta) = state.mcp.sessions.get_mut(mcp_sid) {
         meta.last_activity = std::time::Instant::now();
     } else {
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             mcp_sid.to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -815,7 +832,7 @@ fn initialize_session_id(state: &AppState, headers: &HeaderMap) -> (String, Init
         .and_then(|value| value.to_str().ok())
         .filter(|session_id| is_valid_uuid(session_id));
     match presented {
-        Some(sid) if state.mcp_sessions.contains_key(sid) => {
+        Some(sid) if state.mcp.sessions.contains_key(sid) => {
             (sid.to_string(), InitializeKind::Resumed)
         }
         // The client came back holding a session id we no longer have — reaped by
@@ -978,6 +995,7 @@ fn build_mcp_instructions_for_mode(
 
     // ── Dynamic: sessions ───────────────────────────────────────────
     let sessions: Vec<_> = state
+        .session_maps
         .sessions
         .iter()
         .map(|entry| {
@@ -1181,7 +1199,7 @@ pub(crate) const META_TOOL_NAMES: [&str; 3] = ["search_tools", "get_tool_schema"
 /// (not in server instructions) so they don't compete with protocol markers
 /// for the model's attention at turn 1.
 fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value {
-    let upstream_count = state.mcp_upstream_registry.aggregated_tools().len();
+    let upstream_count = state.mcp.upstream_registry.aggregated_tools().len();
     let upstream_suffix = if upstream_count > 0 {
         format!(", plus {upstream_count} upstream tool(s) from connected MCP servers")
     } else {
@@ -1255,7 +1273,7 @@ fn resolve_allowed_upstreams(
     mcp_session_id: Option<&str>,
 ) -> Option<Vec<String>> {
     let repo_path = mcp_session_id
-        .and_then(|sid| state.mcp_sessions.get(sid))
+        .and_then(|sid| state.mcp.sessions.get(sid))
         .and_then(|meta| meta.repo_path.clone())?;
     let repo_settings = crate::config::load_repo_settings();
     repo_settings
@@ -1295,7 +1313,7 @@ fn merged_tool_definitions(
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let force_meta_tools = mcp_session_id
-        .and_then(|sid| state.mcp_sessions.get(sid))
+        .and_then(|sid| state.mcp.sessions.get(sid))
         .is_some_and(|meta| meta.requires_meta_tools);
     merged_tool_definitions_for_mode(state, mcp_session_id, force_meta_tools)
 }
@@ -1312,7 +1330,8 @@ fn merged_tool_definitions_for_mode(
     let mut tools = filtered_native_tools(state);
     let allowed = resolve_allowed_upstreams(state, mcp_session_id);
     let upstream_tools = state
-        .mcp_upstream_registry
+        .mcp
+        .upstream_registry
         .aggregated_tools_for_repo(allowed.as_deref());
     tools.extend(upstream_tools);
 
@@ -1469,7 +1488,7 @@ fn require_path(args: &serde_json::Value, action: &str) -> Result<String, serde_
 /// Upstream allow/deny filters are applied inside `aggregated_tools()`.
 fn searchable_tool_definitions(state: &Arc<AppState>) -> Vec<serde_json::Value> {
     let mut tools = filtered_native_tools(state);
-    tools.extend(state.mcp_upstream_registry.aggregated_tools());
+    tools.extend(state.mcp.upstream_registry.aggregated_tools());
     tools
 }
 
@@ -1480,7 +1499,7 @@ fn searchable_tool_definitions(state: &Arc<AppState>) -> Vec<serde_json::Value> 
 pub(crate) fn rebuild_tool_search_index(state: &Arc<AppState>) {
     let tools = searchable_tool_definitions(state);
     let index = crate::tool_search::ToolSearchIndex::build(&tools);
-    *state.tool_search_index.write() = index;
+    *state.mcp.tool_search_index.write() = index;
 }
 
 /// Spawn the background task that subscribes to `mcp_tools_changed` and
@@ -1490,7 +1509,7 @@ pub(crate) fn spawn_tool_search_index_updater(state: Arc<AppState>) {
     // Initial build so search_tools works before the first tools_changed signal.
     rebuild_tool_search_index(&state);
 
-    let mut rx = state.mcp_tools_changed.subscribe();
+    let mut rx = state.mcp.tools_changed.subscribe();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -1521,7 +1540,7 @@ fn handle_search_tools(state: &Arc<AppState>, args: &serde_json::Value) -> serde
     };
     let limit = args["limit"].as_u64().unwrap_or(10).clamp(1, 100) as usize;
 
-    let index = state.tool_search_index.read();
+    let index = state.mcp.tool_search_index.read();
     let results = index.search(query, limit);
 
     let ranked: Vec<serde_json::Value> = results
@@ -1542,7 +1561,7 @@ fn handle_get_tool_schema(state: &Arc<AppState>, args: &serde_json::Value) -> se
         }
     };
 
-    let index = state.tool_search_index.read();
+    let index = state.mcp.tool_search_index.read();
 
     match index.get_schema(tool_name) {
         Some(def) => def.clone(),
@@ -1594,7 +1613,8 @@ async fn handle_call_tool(
     if is_upstream {
         let allowed = resolve_allowed_upstreams(state, mcp_session_id);
         match state
-            .mcp_upstream_registry
+            .mcp
+            .upstream_registry
             .proxy_tool_call_for_repo(&tool_name, tool_args, allowed.as_deref())
             .await
         {
@@ -1680,7 +1700,7 @@ async fn handle_mcp_tool_call_with_context(
     }
     // Resolve client identity at dispatch level — tool handlers get a plain bool
     let is_claude_code = mcp_session_id
-        .and_then(|sid| state.mcp_sessions.get(sid))
+        .and_then(|sid| state.mcp.sessions.get(sid))
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
@@ -1826,9 +1846,10 @@ fn session_wait_met(state: &AppState, session_id: &str, until: &str) -> bool {
         // tombstone TTL. Using only this signal avoids a false "exited" for a
         // never-created (typo'd) session id, which would otherwise return met
         // immediately because it isn't in `sessions`.
-        "exited" => state.exit_codes.contains_key(session_id),
+        "exited" => state.session_maps.exit_codes.contains_key(session_id),
         // Default and "idle": shell state reached IDLE.
         _ => state
+            .session_maps
             .shell_states
             .get(session_id)
             .map(|a| a.load(std::sync::atomic::Ordering::Relaxed) == crate::pty::SHELL_IDLE)
@@ -1849,9 +1870,13 @@ fn session_wait_response(
             "until": until,
         });
     }
-    let shell_state = state.shell_states.get(session_id).and_then(|value| {
-        crate::pty::shell_state_wire(value.load(std::sync::atomic::Ordering::Relaxed))
-    });
+    let shell_state = state
+        .session_maps
+        .shell_states
+        .get(session_id)
+        .and_then(|value| {
+            crate::pty::shell_state_wire(value.load(std::sync::atomic::Ordering::Relaxed))
+        });
     let mut response = serde_json::json!({
         "met": true,
         "timed_out": false,
@@ -1869,6 +1894,7 @@ fn session_wait_response(
         object,
         "exit_code",
         state
+            .session_maps
             .exit_codes
             .get(session_id)
             .map(|entry| serde_json::Value::from(*entry.value())),
@@ -1904,7 +1930,7 @@ async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) ->
     // ids that were ever real sessions, so a caller passing made-up ids grew
     // `pty_event_channels` with entries nothing will ever remove. It also spared
     // the caller a pointless full-timeout block on a session that cannot exist.
-    if !state.sessions.contains_key(&session_id) {
+    if !state.session_maps.sessions.contains_key(&session_id) {
         return serde_json::json!({
             "error": format!("Unknown session \"{session_id}\"")
         });
@@ -1957,6 +1983,7 @@ enum BeginSubmission {
 
 fn submission_turn_epoch(state: &AppState, session_id: &str) -> u64 {
     state
+        .session_maps
         .session_states
         .get(session_id)
         .map(|session| session.turn_epoch)
@@ -1965,6 +1992,7 @@ fn submission_turn_epoch(state: &AppState, session_id: &str) -> u64 {
 
 fn submission_output_offset(state: &AppState, session_id: &str) -> Option<u64> {
     state
+        .session_maps
         .output_buffers
         .get(session_id)
         .map(|buffer| buffer.lock().total_written)
@@ -1985,7 +2013,7 @@ fn begin_session_submit(state: &Arc<AppState>, args: &serde_json::Value) -> Begi
     };
     let submission_id = Uuid::new_v4().to_string();
     let turn_epoch = submission_turn_epoch(state, &session_id);
-    if !state.sessions.contains_key(&session_id) {
+    if !state.session_maps.sessions.contains_key(&session_id) {
         return BeginSubmission::Response(serde_json::json!({
             "status": "rejected",
             "submission_id": submission_id,
@@ -2145,7 +2173,11 @@ async fn handle_session_submit(
                 },
             });
         }
-        if !state.sessions.contains_key(&started.session_id) {
+        if !state
+            .session_maps
+            .sessions
+            .contains_key(&started.session_id)
+        {
             let mut response = serde_json::json!({
                 "status": "session_ended",
                 "submission_id": started.submission_id,
@@ -2157,7 +2189,7 @@ async fn handle_session_submit(
                 "turn_epoch": started.turn_epoch,
                 "composer_state": "unknown",
             });
-            if let Some(exit_code) = state.exit_codes.get(&started.session_id) {
+            if let Some(exit_code) = state.session_maps.exit_codes.get(&started.session_id) {
                 response["exit_code"] = serde_json::json!(*exit_code.value());
             }
             return response;
@@ -2322,7 +2354,7 @@ fn drop_identity_buffers(state: &AppState, tuic_session: &str) {
     state.agent_inbox_evictions.remove(tuic_session);
     state.active_agent_waiters.remove(tuic_session);
     state.pending_injections.remove(tuic_session);
-    state.session_to_mcp.remove(tuic_session);
+    state.mcp.session_to_mcp.remove(tuic_session);
     state.agent_read_cursor.remove(tuic_session);
 }
 
@@ -2368,7 +2400,7 @@ async fn handle_agent_wait(
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let caller_tuic = match mcp_session_id
-        .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()))
+        .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
     {
         Some(t) => t,
         None => {
@@ -2422,9 +2454,10 @@ fn handle_session(
     match action {
         "list" => {
             let caller_tuic = mcp_session_id
-                .and_then(|sid| state.mcp_to_session.get(sid))
+                .and_then(|sid| state.mcp.to_session.get(sid))
                 .map(|entry| entry.value().clone());
             let sessions: Vec<serde_json::Value> = state
+                .session_maps
                 .sessions
                 .iter()
                 .map(|entry| {
@@ -2449,10 +2482,17 @@ fn handle_session(
                     let background_work = session_state
                         .as_ref()
                         .is_some_and(|snapshot| snapshot.background_work);
-                    let alias = state.term_aliases.get(&id).map(|e| e.value().clone());
+                    let alias = state
+                        .session_maps
+                        .term_aliases
+                        .get(&id)
+                        .map(|e| e.value().clone());
                     let child_pid = s._child.process_id();
                     #[cfg(unix)]
-                    let standby = state.standby_sessions.contains_key(id.as_str());
+                    let standby = state
+                        .session_maps
+                        .standby_sessions
+                        .contains_key(id.as_str());
                     #[cfg(not(unix))]
                     let standby = false;
                     let mut session = serde_json::json!({
@@ -2479,6 +2519,7 @@ fn handle_session(
                         object,
                         "pty_description",
                         state
+                            .session_maps
                             .pty_descriptions
                             .get(&id)
                             .map(|value| serde_json::Value::String(value.value().clone())),
@@ -2529,7 +2570,7 @@ fn handle_session(
             serde_json::json!(sessions)
         }
         "create" => {
-            if state.sessions.len() >= MAX_CONCURRENT_SESSIONS {
+            if state.session_maps.sessions.len() >= MAX_CONCURRENT_SESSIONS {
                 return serde_json::json!({"error": "Max concurrent sessions reached"});
             }
             let rows = args["rows"].as_u64().unwrap_or(24) as u16;
@@ -2582,13 +2623,14 @@ fn handle_session(
                 return serde_json::json!({"error": "Action 'input' requires 'input' (text), 'special_key', or 'pty_description'"});
             }
             if text.is_empty() && key_seq.is_none() {
-                if !state.sessions.contains_key(session_id) {
+                if !state.session_maps.sessions.contains_key(session_id) {
                     return serde_json::json!({"error": "Session not found"});
                 }
                 apply_pty_description(state, session_id, pty_description);
                 return serde_json::json!({"ok": true});
             }
             let agent_type = state
+                .session_maps
                 .session_states
                 .get(session_id)
                 .and_then(|s| s.agent_type.clone());
@@ -2647,18 +2689,18 @@ fn handle_session(
             // Resolve the session's lifecycle state.
             //
             // A session can be in four observable states here:
-            //   1. Live       — present in `state.sessions`, child still running
-            //   2. Draining   — present in `state.sessions`, child already exited
-            //   3. Tombstoned — absent from `state.sessions` but buffers still present
+            //   1. Live       — present in `state.session_maps.sessions`, child still running
+            //   2. Draining   — present in `state.session_maps.sessions`, child already exited
+            //   3. Tombstoned — absent from `state.session_maps.sessions` but buffers still present
             //                   (reader thread called `mark_session_exited` on EOF;
             //                   reaped by `spawn_tombstone_sweeper` after TTL)
             //   4. Unknown    — no trace at all; either never existed or already reaped
             //
             // `exited` is only true for (2) and (3) — cases where we have evidence
             // the process actually terminated. (4) returns a structured error.
-            let session_entry = state.sessions.get(session_id);
-            let buffers_present = state.vt_log_buffers.contains_key(session_id)
-                || state.output_buffers.contains_key(session_id);
+            let session_entry = state.session_maps.sessions.get(session_id);
+            let buffers_present = state.grid.vt_log_buffers.contains_key(session_id)
+                || state.session_maps.output_buffers.contains_key(session_id);
 
             let (exited, exit_code): (bool, Option<i64>) = if let Some(entry) = &session_entry {
                 match entry.lock()._child.try_wait() {
@@ -2676,7 +2718,11 @@ fn handle_session(
                 // Tombstoned — the reader thread captured the exit code if it could.
                 (
                     true,
-                    state.exit_codes.get(session_id).map(|e| *e.value() as i64),
+                    state
+                        .session_maps
+                        .exit_codes
+                        .get(session_id)
+                        .map(|e| *e.value() as i64),
                 )
             } else {
                 // Unknown — no session entry, no buffers, no tombstone.
@@ -2686,7 +2732,7 @@ fn handle_session(
             // Default: serve clean rows from VtLogBuffer (no strip_ansi needed).
             // Pass format="raw" to get the raw ring buffer content with ANSI.
             if args["format"].as_str() != Some("raw") {
-                let vt_log = match state.vt_log_buffers.get(session_id) {
+                let vt_log = match state.grid.vt_log_buffers.get(session_id) {
                     Some(b) => b,
                     None => {
                         return serde_json::json!({
@@ -2744,7 +2790,7 @@ fn handle_session(
                 );
                 return response;
             }
-            let ring = match state.output_buffers.get(session_id) {
+            let ring = match state.session_maps.output_buffers.get(session_id) {
                 Some(r) => r,
                 None => {
                     return serde_json::json!({
@@ -2775,7 +2821,7 @@ fn handle_session(
             if let Err(msg) = super::validate_terminal_size(rows, cols) {
                 return serde_json::json!({"error": msg});
             }
-            let entry = match state.sessions.get(session_id) {
+            let entry = match state.session_maps.sessions.get(session_id) {
                 Some(e) => e,
                 None => return serde_json::json!({"error": "Session not found"}),
             };
@@ -2796,7 +2842,7 @@ fn handle_session(
             };
             // Self-close guard: prevent an agent from closing its own session.
             if let Some(sid) = mcp_session_id
-                && let Some(own_pty) = state.mcp_to_session.get(sid)
+                && let Some(own_pty) = state.mcp.to_session.get(sid)
                 && own_pty.value() == session_id
             {
                 return serde_json::json!({"error": "Cannot close own session. Use exit to terminate yourself."});
@@ -2805,7 +2851,7 @@ fn handle_session(
             // post-mortem MCP reads keep returning final output + exit code.
             // Idempotent: returns ok even if session was already tombstoned.
             let existed = crate::pty::close_pty_core(state, session_id, false).is_some()
-                || state.vt_log_buffers.contains_key(session_id);
+                || state.grid.vt_log_buffers.contains_key(session_id);
             if existed {
                 // Notify frontend and SSE consumers so the tab is removed from
                 // the UI. Without this the reader thread's EOF-driven
@@ -2837,7 +2883,7 @@ fn handle_session(
             };
             // Self-kill guard: mirror the close branch — an agent must not SIGKILL itself.
             if let Some(sid) = mcp_session_id
-                && let Some(own_pty) = state.mcp_to_session.get(sid)
+                && let Some(own_pty) = state.mcp.to_session.get(sid)
                 && own_pty.value() == session_id
             {
                 return serde_json::json!({"error": "Cannot kill own session. Use exit to terminate yourself."});
@@ -2870,7 +2916,7 @@ fn handle_session(
                 Ok(id) => id,
                 Err(e) => return e,
             };
-            let entry = match state.sessions.get(session_id) {
+            let entry = match state.session_maps.sessions.get(session_id) {
                 Some(e) => e,
                 None => return serde_json::json!({"error": "Session not found"}),
             };
@@ -2882,7 +2928,7 @@ fn handle_session(
                 Ok(id) => id,
                 Err(e) => return e,
             };
-            let entry = match state.sessions.get(session_id) {
+            let entry = match state.session_maps.sessions.get(session_id) {
                 Some(e) => e,
                 None => return serde_json::json!({"error": "Session not found"}),
             };
@@ -2896,12 +2942,17 @@ fn handle_session(
             };
             match state.session_state_with_shell(session_id) {
                 Some(ss) => {
-                    let exit_code = state.exit_codes.get(session_id).map(|e| *e.value());
+                    let exit_code = state
+                        .session_maps
+                        .exit_codes
+                        .get(session_id)
+                        .map(|e| *e.value());
                     let now_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_millis() as u64;
                     let since_ms = state
+                        .session_maps
                         .shell_state_since_ms
                         .get(session_id)
                         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
@@ -2914,12 +2965,13 @@ fn handle_session(
                     let is_idle = ss.shell_state.as_deref() == Some("idle");
                     let is_busy = ss.shell_state.as_deref() == Some("busy");
                     let delivery_uncertain = state
+                        .session_maps
                         .silence_states
                         .get(session_id)
                         .map(|silence| silence.lock().injection_delivery_uncertain)
                         .unwrap_or(false);
                     #[cfg(unix)]
-                    let standby = state.standby_sessions.contains_key(session_id);
+                    let standby = state.session_maps.standby_sessions.contains_key(session_id);
                     #[cfg(not(unix))]
                     let standby = false;
                     let mut response = serde_json::json!({
@@ -3314,6 +3366,7 @@ fn resolve_effective_spawn_cwd(
         .or_else(|| {
             caller_tuic.and_then(|parent| {
                 state
+                    .session_maps
                     .sessions
                     .get(parent)
                     .and_then(|session| session.lock().cwd.clone())
@@ -3328,7 +3381,8 @@ fn resolve_effective_spawn_cwd(
         .or_else(|| {
             mcp_session_id.and_then(|sid| {
                 state
-                    .mcp_sessions
+                    .mcp
+                    .sessions
                     .get(sid)
                     .and_then(|meta| meta.repo_path.clone())
             })
@@ -3385,7 +3439,7 @@ fn handle_agent_with_parent_cwd(
                 Ok(update) => resolve_spawn_pty_description(update, &prompt),
                 Err(error) => return error,
             };
-            if state.sessions.len() >= MAX_CONCURRENT_SESSIONS {
+            if state.session_maps.sessions.len() >= MAX_CONCURRENT_SESSIONS {
                 return serde_json::json!({"error": "Max concurrent sessions reached"});
             }
 
@@ -3452,7 +3506,7 @@ fn handle_agent_with_parent_cwd(
             // Resolve caller's tuic_session from their MCP session via the O(1) reverse map.
             // Only set when caller is a registered peer — drives multi-agent context + TUIC_PARENT.
             let caller_tuic: Option<String> = mcp_session_id
-                .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()));
+                .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()));
 
             // Effective prompt: context prepended for managed-peer spawns, unchanged otherwise.
             let effective_prompt =
@@ -3661,6 +3715,7 @@ fn handle_agent_with_parent_cwd(
                 session_state.agent_type = effective_agent_type.clone();
             }
             state
+                .session_maps
                 .session_states
                 .insert(session_id.clone(), session_state);
             // Prefill-only TUIs (codex): the task was withheld from argv — queue it
@@ -3744,7 +3799,10 @@ fn handle_agent_with_parent_cwd(
                 .clone()
                 .or_else(|| mcp_session_id.map(pending_parent_id))
             {
-                state.session_parent.insert(session_id.clone(), parent_id);
+                state
+                    .session_maps
+                    .session_parent
+                    .insert(session_id.clone(), parent_id);
                 if state.pending_initial_prompts.contains_key(&session_id) {
                     let watchdog_state = Arc::clone(state);
                     let watchdog_session = session_id.clone();
@@ -3859,7 +3917,7 @@ fn handle_task(
     }
 
     let caller_tuic: Option<String> =
-        mcp_session_id.and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()));
+        mcp_session_id.and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()));
     let identities = caller_task_identities(caller_tuic.as_deref(), mcp_session_id);
 
     // A task handle is a capability over a spawned agent, so ownership is checked
@@ -3930,7 +3988,8 @@ fn resolve_registration_identity(
     mcp_sid: &str,
 ) -> Result<(String, bool), serde_json::Value> {
     let current = state
-        .mcp_to_session
+        .mcp
+        .to_session
         .get(mcp_sid)
         .map(|entry| entry.value().clone());
     if let Some(explicit) = args["tuic_session"]
@@ -3972,7 +4031,7 @@ fn resolve_registration_identity(
 }
 
 fn managed_recipient_state(state: &AppState, tuic_session: &str) -> Option<serde_json::Value> {
-    let _session = state.sessions.get(tuic_session)?;
+    let _session = state.session_maps.sessions.get(tuic_session)?;
     let snapshot = state.session_state_with_shell(tuic_session);
     let mut summary = serde_json::Map::new();
     if let Some(snapshot) = snapshot {
@@ -4013,7 +4072,8 @@ fn handle_messaging(
                 }
             };
             let previously_bound = state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get(&mcp_sid)
                 .map(|entry| entry.value().clone());
             let (tuic_session, generated_identity) =
@@ -4144,6 +4204,7 @@ fn handle_messaging(
                 .live_pty_for_peer(&tuic_session)
                 .and_then(|session_id| {
                     state
+                        .session_maps
                         .session_states
                         .get(&session_id)
                         .map(|session| session.agent_type.is_some())
@@ -4228,7 +4289,7 @@ fn handle_messaging(
                                 .live_pty_for_peer(&p.tuic_session)
                                 .and_then(|session_id| {
                                     state
-                                        .session_states
+                                        .session_maps.session_states
                                         .get(&session_id)
                                         .map(|session| session.agent_type.is_some())
                                 })
@@ -4267,7 +4328,7 @@ fn handle_messaging(
             }
             // Resolve sender via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
             let sender = match mcp_session_id
-                .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()))
+                .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
                 .and_then(|tuic| {
                     state
                         .peer_agents
@@ -4423,7 +4484,7 @@ fn handle_messaging(
                     ) {
                         return false;
                     }
-                    let Some(channel) = state.messaging_channels.get(mcp_sid) else {
+                    let Some(channel) = state.session_maps.messaging_channels.get(mcp_sid) else {
                         return false;
                     };
                     channel.send(notification).is_ok()
@@ -4546,7 +4607,7 @@ fn handle_messaging(
         "inbox" => {
             // Resolve caller's tuic_session via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
             let tuic_session = match mcp_session_id
-                .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()))
+                .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
                 .filter(|tuic| state.peer_agents.contains_key(tuic))
             {
                 Some(ts) => ts,
@@ -4640,7 +4701,7 @@ fn handle_config(
             }) {
                 Ok(effects) => {
                     if effects.tools_changed {
-                        let _ = state.mcp_tools_changed.send(());
+                        let _ = state.mcp.tools_changed.send(());
                     }
                     if effects.server_changed {
                         super::restart_after_server_settings_change(
@@ -4780,10 +4841,15 @@ fn handle_debug(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::
             let session_ids: Vec<String> = if let Some(sid) = args["session_id"].as_str() {
                 vec![sid.to_string()]
             } else {
-                state.sessions.iter().map(|e| e.key().clone()).collect()
+                state
+                    .session_maps
+                    .sessions
+                    .iter()
+                    .map(|e| e.key().clone())
+                    .collect()
             };
             let results: Vec<serde_json::Value> = session_ids.iter().map(|sid| {
-                let entry = match state.sessions.get(sid) {
+                let entry = match state.session_maps.sessions.get(sid) {
                     Some(e) => e,
                     None => return serde_json::json!({ "error": "session not found", "session_id": sid }),
                 };
@@ -4836,6 +4902,7 @@ fn handle_debug(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::
         }
         "sessions" => {
             let sessions: Vec<serde_json::Value> = state
+                .session_maps
                 .sessions
                 .iter()
                 .map(|entry| {
@@ -5000,7 +5067,7 @@ fn resolve_mcp_origin_session(
     state: &Arc<AppState>,
     mcp_session_id: Option<&str>,
 ) -> Option<String> {
-    mcp_session_id.and_then(|mcp_sid| state.mcp_to_session.get(mcp_sid).map(|s| s.value().clone()))
+    mcp_session_id.and_then(|mcp_sid| state.mcp.to_session.get(mcp_sid).map(|s| s.value().clone()))
 }
 
 fn resolve_mcp_origin_repo_path(
@@ -5015,12 +5082,19 @@ fn resolve_mcp_origin_repo_path(
                 .peer_agents
                 .get(tuic)
                 .and_then(|p| p.project.clone())
-                .or_else(|| state.sessions.get(tuic).and_then(|s| s.lock().cwd.clone()))
+                .or_else(|| {
+                    state
+                        .session_maps
+                        .sessions
+                        .get(tuic)
+                        .and_then(|s| s.lock().cwd.clone())
+                })
         })
         .or_else(|| {
             mcp_session_id.and_then(|sid| {
                 state
-                    .mcp_sessions
+                    .mcp
+                    .sessions
                     .get(sid)
                     .and_then(|m| m.repo_path.clone())
             })
@@ -5069,7 +5143,8 @@ fn handle_ui(
             // Guard: if a tuic session_id is provided and it already has a terminal,
             // decline to create an HTML tab (agent should use the terminal instead).
             if let Some(sid) = args["session_id"].as_str()
-                && (state.vt_log_buffers.contains_key(sid) || state.sessions.contains_key(sid))
+                && (state.grid.vt_log_buffers.contains_key(sid)
+                    || state.session_maps.sessions.contains_key(sid))
             {
                 return serde_json::json!({
                     "ok": false,
@@ -5082,7 +5157,7 @@ fn handle_ui(
             // in the repo where the agent is actually working, not whichever
             // repo happens to have focus in the frontend.
             let caller_tuic = mcp_session_id
-                .and_then(|mcp_sid| state.mcp_to_session.get(mcp_sid).map(|s| s.value().clone()));
+                .and_then(|mcp_sid| state.mcp.to_session.get(mcp_sid).map(|s| s.value().clone()));
             let origin_repo_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
             let mut payload = serde_json::json!({
                 "id": id,
@@ -5101,6 +5176,7 @@ fn handle_ui(
             // closed automatically when that session exits.
             if let Some(ref tuic_session) = caller_tuic {
                 let mut registered = state
+                    .session_maps
                     .session_html_tabs
                     .entry(tuic_session.clone())
                     .or_default();
@@ -5432,7 +5508,7 @@ pub(super) async fn mcp_post(
                 });
 
             let now = std::time::Instant::now();
-            if let Some(mut meta) = state.mcp_sessions.get_mut(&session_id) {
+            if let Some(mut meta) = state.mcp.sessions.get_mut(&session_id) {
                 meta.last_activity = now;
                 meta.is_claude_code = is_claude_code;
                 meta.requires_meta_tools = requires_meta_tools;
@@ -5440,7 +5516,7 @@ pub(super) async fn mcp_post(
                     meta.repo_path = repo_path;
                 }
             } else {
-                state.mcp_sessions.insert(
+                state.mcp.sessions.insert(
                     session_id.clone(),
                     crate::state::McpSessionMeta {
                         last_activity: now,
@@ -5562,7 +5638,8 @@ pub(super) async fn mcp_post(
             // init completes — and never refetches on tools/list_changed
             // (anthropics/claude-code#4118), so a stale list would otherwise stick.
             state
-                .mcp_upstream_registry
+                .mcp
+                .upstream_registry
                 .await_initial_settle(std::time::Duration::from_secs(3))
                 .await;
             let tools = merged_tool_definitions(&state, list_session_id);
@@ -5636,7 +5713,8 @@ pub(super) async fn mcp_post(
                 // pay for it.
                 let allowed = resolve_allowed_upstreams(&state, session_id_str.as_deref());
                 match state
-                    .mcp_upstream_registry
+                    .mcp
+                    .upstream_registry
                     .proxy_tool_call_for_repo(&tool_name, args.clone(), allowed.as_deref())
                     .await
                 {
@@ -5725,16 +5803,22 @@ impl Drop for SseStreamTeardown {
         // shard before the removal below. A reconnect landing in that window
         // recreates the session, subscribes to a fresh sender, and then loses it
         // to this drop. Only `entry` keeps the shard locked over an absent key.
-        match self.state.mcp_sessions.entry(self.mcp_sid.clone()) {
+        match self.state.mcp.sessions.entry(self.mcp_sid.clone()) {
             // Superseded: a newer stream owns the session and its channel.
             Entry::Occupied(meta) if meta.get().sse_generation != self.generation => {}
             Entry::Occupied(mut meta) => {
                 meta.get_mut().has_sse_stream = false;
-                self.state.messaging_channels.remove(&self.mcp_sid);
+                self.state
+                    .session_maps
+                    .messaging_channels
+                    .remove(&self.mcp_sid);
             }
             // The session itself is gone; nobody is left to own the channel.
             Entry::Vacant(_) => {
-                self.state.messaging_channels.remove(&self.mcp_sid);
+                self.state
+                    .session_maps
+                    .messaging_channels
+                    .remove(&self.mcp_sid);
             }
         }
     }
@@ -5756,12 +5840,12 @@ pub(super) async fn mcp_get(
         return StatusCode::UNAUTHORIZED.into_response();
     };
 
-    if !state.mcp_sessions.contains_key(&sid) {
+    if !state.mcp.sessions.contains_key(&sid) {
         tracing::warn!(
             "MCP SSE session auto-recovered (stale session_id: {sid}); \
              is_claude_code={is_cc_ua} (from User-Agent)"
         );
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             sid.clone(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -5780,20 +5864,21 @@ pub(super) async fn mcp_get(
     // the sender *after* this stream had already subscribed to it, and the
     // replacement would open onto a closed channel.
     let (generation, msg_rx) = {
-        let Some(mut meta) = state.mcp_sessions.get_mut(&sid) else {
+        let Some(mut meta) = state.mcp.sessions.get_mut(&sid) else {
             // Removed between the insert above and here (DELETE /mcp, reaper).
             return StatusCode::UNAUTHORIZED.into_response();
         };
         meta.has_sse_stream = true;
         meta.sse_generation = next_sse_generation();
         let tx = state
+            .session_maps
             .messaging_channels
             .entry(sid.clone())
             .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
         (meta.sse_generation, tx.subscribe())
     };
 
-    let mut tools_rx = state.mcp_tools_changed.subscribe();
+    let mut tools_rx = state.mcp.tools_changed.subscribe();
     let mut msg_rx = msg_rx;
     // Teardown hangs off a drop guard, not off code after the loop. A client that
     // walks away has axum drop the response body mid-`select!`, so anything
@@ -5862,7 +5947,7 @@ pub(super) async fn mcp_delete(
         .get(MCP_SESSION_HEADER)
         .and_then(|v| v.to_str().ok())
     {
-        state.mcp_sessions.remove(sid);
+        state.mcp.sessions.remove(sid);
         // Now that an identity can have co-owners, teardown has to read the
         // survivor list and act on it as one step: a bridge joining in the middle
         // would otherwise re-create the routes this loop is about to delete and be
@@ -5873,15 +5958,16 @@ pub(super) async fn mcp_delete(
         // Routes belong to the protocol session, so a sibling bridge that never
         // became delivery owner still drops its own — otherwise its mapping
         // outlives it and keeps resolving to an identity it no longer serves.
-        state.mcp_to_session.remove(sid);
+        state.mcp.to_session.remove(sid);
         let routed: Vec<String> = state
+            .mcp
             .session_to_mcp
             .iter()
             .filter(|entry| entry.value().iter().any(|mapped| mapped == sid))
             .map(|entry| entry.key().clone())
             .collect();
         for tuic in &routed {
-            let survivors = match state.session_to_mcp.get_mut(tuic) {
+            let survivors = match state.mcp.session_to_mcp.get_mut(tuic) {
                 Some(mut reverse) => {
                     reverse.retain(|mapped_sid| mapped_sid != sid);
                     reverse.clone()
@@ -5900,7 +5986,7 @@ pub(super) async fn mcp_delete(
                     }
                 }
                 None => {
-                    state.session_to_mcp.remove(tuic);
+                    state.mcp.session_to_mcp.remove(tuic);
                 }
             }
         }
@@ -6713,7 +6799,7 @@ mod tests {
             "the session header must still be echoed"
         );
         assert!(
-            state.mcp_sessions.contains_key("mcp-legacy-c1"),
+            state.mcp.sessions.contains_key("mcp-legacy-c1"),
             "a stale or first-seen session must still be (re-)registered on tools/call"
         );
     }
@@ -6911,7 +6997,7 @@ mod tests {
     async fn successful_upstream_result_passes_through_direct_and_collapsed_http_paths() {
         let state = test_state();
         let upstream_url = spawn_upstream_passthrough_mock().await;
-        state.mcp_upstream_registry.inject_ready_http_upstream(
+        state.mcp.upstream_registry.inject_ready_http_upstream(
             "passthrough",
             &upstream_url,
             &["inspect"],
@@ -7051,160 +7137,12 @@ mod tests {
         }
     }
 
-    fn test_state() -> Arc<AppState> {
-        let state = Arc::new(AppState {
-            sessions: dashmap::DashMap::new(),
-            live_pty_by_tuic_session: dashmap::DashMap::new(),
-            data_dir: std::env::temp_dir().join("test-tuic-data"),
-            worktrees_dir: std::env::temp_dir().join("test-worktrees"),
-            metrics: crate::SessionMetrics::new(),
-            output_buffers: dashmap::DashMap::new(),
-            mcp_sessions: dashmap::DashMap::new(),
-            ws_clients: dashmap::DashMap::new(),
-            config: parking_lot::RwLock::new(crate::config::AppConfig::default()),
-            git_cache: crate::state::GitCacheState::new(),
-            repo_watchers: dashmap::DashMap::new(),
-            repo_git_fingerprints: dashmap::DashMap::new(),
-            repo_head_targets: dashmap::DashMap::new(),
-            repo_head_emits_suppressed: std::sync::atomic::AtomicU64::new(0),
-            dir_watchers: dashmap::DashMap::new(),
-            theme_watcher: parking_lot::Mutex::new(None),
-            mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
-            http_client: reqwest::Client::new(),
-            github_token: parking_lot::RwLock::new(None),
-            github_token_source: parking_lot::RwLock::new(Default::default()),
-            github_circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
-            github_poller: parking_lot::Mutex::new(None),
-            github_viewer_login: parking_lot::RwLock::new(None),
-            github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
-            ghe_state: dashmap::DashMap::new(),
-            server_shutdown: parking_lot::Mutex::new(None),
-            ipc_started: std::sync::atomic::AtomicBool::new(false),
-            session_token: parking_lot::RwLock::new(uuid::Uuid::new_v4().to_string()),
-            auth_rate_limits: dashmap::DashMap::new(),
-            #[cfg(feature = "desktop")]
-            app_handle: parking_lot::RwLock::new(None),
-            plugin_watchers: dashmap::DashMap::new(),
-            ansi_colors: parking_lot::RwLock::new(None),
-            vt_log_buffers: dashmap::DashMap::new(),
-            pty_raw_rings: dashmap::DashMap::new(),
-            #[cfg(feature = "desktop")]
-            grid_channels: dashmap::DashMap::new(),
-            grid_watch: dashmap::DashMap::new(),
-            grid_gates: dashmap::DashMap::new(),
-            pending_scroll: dashmap::DashMap::new(),
-            kitty_states: dashmap::DashMap::new(),
-            input_buffers: dashmap::DashMap::new(),
-            last_prompts: dashmap::DashMap::new(),
-            pty_descriptions: dashmap::DashMap::new(),
-            silence_states: dashmap::DashMap::new(),
-            claude_usage_cache: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            log_buffer: std::sync::Arc::new(parking_lot::Mutex::new(
-                crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
-            )),
-            event_bus: tokio::sync::broadcast::channel(256).0,
-            event_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            sse_filters: Default::default(),
-            session_states: dashmap::DashMap::new(),
-            session_state_events: crate::state::SessionStateEventQueue::new(),
-            mcp_upstream_registry: std::sync::Arc::new(
-                crate::mcp_proxy::registry::UpstreamRegistry::new(),
-            ),
-            oauth_flow_manager: std::sync::Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
-            mcp_tools_changed: tokio::sync::broadcast::channel(16).0,
-            tool_search_index: std::sync::Arc::new(parking_lot::RwLock::new(
-                crate::tool_search::ToolSearchIndex::build(&[]),
-            )),
-            content_indices: dashmap::DashMap::new(),
-            index_in_flight: std::sync::Arc::new(dashmap::DashSet::new()),
-            worktree_recreate_in_flight: std::sync::Arc::new(dashmap::DashSet::new()),
-            index_build_sem: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
-            monitoring_git_sem: std::sync::Arc::new(tokio::sync::Semaphore::new(
-                crate::state::MONITORING_GIT_CONCURRENCY,
-            )),
-            indexer_throttle: std::sync::Arc::new(crate::content_index::IndexerThrottle::default()),
-            slash_mode: dashmap::DashMap::new(),
-            last_output_ms: dashmap::DashMap::new(),
-            last_input_ms: dashmap::DashMap::new(),
-            shell_states: dashmap::DashMap::new(),
-            terminal_rows: dashmap::DashMap::new(),
-            resize_locks: dashmap::DashMap::new(),
-            exit_codes: dashmap::DashMap::new(),
-            shell_state_since_ms: dashmap::DashMap::new(),
-            loaded_plugins: dashmap::DashMap::new(),
-            plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
-            relay: crate::state::RelayState::new(),
-            peer_agents: dashmap::DashMap::new(),
-            agent_inbox: dashmap::DashMap::new(),
-            agent_inbox_evictions: dashmap::DashMap::new(),
-            agent_read_cursor: dashmap::DashMap::new(),
-            marker_stats: dashmap::DashMap::new(),
-            pending_injections: dashmap::DashMap::new(),
-            pending_initial_prompts: dashmap::DashMap::new(),
-            active_agent_waiters: dashmap::DashMap::new(),
-            orchestrator_peers: dashmap::DashSet::new(),
-            session_html_tabs: dashmap::DashMap::new(),
-            mcp_to_session: dashmap::DashMap::new(),
-            session_to_mcp: dashmap::DashMap::new(),
-            session_parent: dashmap::DashMap::new(),
-            messaging_channels: dashmap::DashMap::new(),
-            pty_event_channels: dashmap::DashMap::new(),
-            session_knowledge: dashmap::DashMap::new(),
-            knowledge_dirty: dashmap::DashMap::new(),
-            has_osc133_integration: dashmap::DashMap::new(),
-            file_sandboxes: dashmap::DashMap::new(),
-            unrestricted_sessions: dashmap::DashMap::new(),
-            #[cfg(unix)]
-            bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
-            tailscale_state: parking_lot::RwLock::new(
-                crate::tailscale::TailscaleState::NotInstalled,
-            ),
-            acp: crate::acp::AcpClientManager::new(),
-            push_store: crate::push::PushStore::load(&std::env::temp_dir()),
-            desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
-            server_start_time: std::time::Instant::now(),
-            term_aliases: dashmap::DashMap::new(),
-            term_alias_counters: dashmap::DashMap::new(),
-            session_visibility: dashmap::DashMap::new(),
-            watcher_engine: std::sync::OnceLock::new(),
-            scheduler_running: std::sync::atomic::AtomicBool::new(false),
-            scheduler_stop: Arc::new(tokio::sync::Notify::new()),
-            trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
-            ai_suggestions_enabled: dashmap::DashMap::new(),
-            grid_frame_dirty: dashmap::DashMap::new(),
-            sync_update_active: dashmap::DashMap::new(),
-            tunnel_manager: {
-                let audit = std::sync::Arc::new(parking_lot::Mutex::new(
-                    crate::tunnels::audit::AuditLog::open(
-                        &std::env::temp_dir().join("test-tunnel-audit.db"),
-                    )
-                    .unwrap(),
-                ));
-                std::sync::Arc::new(crate::tunnels::manager::TunnelManager::new(audit))
-            },
-            tunnel_audit: std::sync::Arc::new(parking_lot::Mutex::new(
-                crate::tunnels::audit::AuditLog::open(
-                    &std::env::temp_dir().join("test-tunnel-audit2.db"),
-                )
-                .unwrap(),
-            )),
-            tasks: std::sync::Arc::new(crate::tasks::TaskRegistry::new()),
-            connections_lock: tokio::sync::Mutex::new(()),
-            screenshot_responses: dashmap::DashMap::new(),
-            confirm_responses: dashmap::DashMap::new(),
-            standby_sessions: dashmap::DashMap::new(),
-            process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
-            hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
-        });
-        // Tests start with all native tools enabled (override production default
-        // which disables config, knowledge, debug).
-        state.config.write().disabled_native_tools = Vec::new();
-        // Populate the cached tool search index so handlers that read from
-        // it (search_tools, get_tool_schema) work in tests without requiring
-        // the background updater task.
-        rebuild_tool_search_index(&state);
-        state
-    }
+    // The parent module's `test_state` was already this function, byte for byte:
+    // the same helper, the same two overrides — all native tools enabled, and the
+    // tool search index built so `search_tools`/`get_tool_schema` work without the
+    // background updater. Both were hand-copied `AppState` literals before
+    // #678-9a75; one of them is enough.
+    use super::super::tests::test_state;
 
     #[tokio::test]
     async fn session_create_emits_event_bus_session_created() {
@@ -7292,15 +7230,15 @@ mod tests {
         let sid = result["session_id"].as_str().unwrap();
 
         assert!(
-            state.vt_log_buffers.contains_key(sid),
+            state.grid.vt_log_buffers.contains_key(sid),
             "vt_log_buffers should contain session"
         );
         assert!(
-            state.last_output_ms.contains_key(sid),
+            state.session_maps.last_output_ms.contains_key(sid),
             "last_output_ms should contain session"
         );
         assert!(
-            state.output_buffers.contains_key(sid),
+            state.session_maps.output_buffers.contains_key(sid),
             "output_buffers should contain session"
         );
     }
@@ -7324,6 +7262,7 @@ mod tests {
         assert!(input.get("error").is_none(), "unexpected error: {input}");
         assert!(
             state
+                .session_maps
                 .last_input_ms
                 .get(sid)
                 .is_some_and(|stamp| stamp.load(std::sync::atomic::Ordering::Relaxed) > 0),
@@ -7331,6 +7270,7 @@ mod tests {
         );
         assert!(
             state
+                .session_maps
                 .slash_mode
                 .get(sid)
                 .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)),
@@ -7392,7 +7332,7 @@ mod tests {
             .spawn_command(CommandBuilder::new("true"))
             .expect("spawn test PTY child");
         let writer = pair.master.take_writer().expect("open test PTY writer");
-        state.sessions.insert(
+        state.session_maps.sessions.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(PtySession {
                 writer: Arc::new(parking_lot::Mutex::new(writer)),
@@ -7439,26 +7379,31 @@ mod tests {
         let writer: Box<dyn std::io::Write + Send> = Box::new(SubmissionRecordingWriter {
             bytes: Arc::clone(&bytes),
         });
-        state.sessions.get(session_id).unwrap().lock().writer =
-            Arc::new(parking_lot::Mutex::new(writer));
-        state.session_states.insert(
+        state
+            .session_maps
+            .sessions
+            .get(session_id)
+            .unwrap()
+            .lock()
+            .writer = Arc::new(parking_lot::Mutex::new(writer));
+        state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState {
                 agent_type: Some("codex".to_string()),
                 ..Default::default()
             },
         );
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             session_id.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
         );
         let mut silence = crate::pty::SilenceState::new();
         silence.confirm_idle();
-        state.silence_states.insert(
+        state.session_maps.silence_states.insert(
             session_id.to_string(),
             Arc::new(parking_lot::Mutex::new(silence)),
         );
-        state.output_buffers.insert(
+        state.session_maps.output_buffers.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(OutputRingBuffer::new(4096)),
         );
@@ -7494,6 +7439,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         state
+            .session_maps
             .output_buffers
             .get(session_id)
             .unwrap()
@@ -7552,6 +7498,7 @@ mod tests {
         );
         assert_eq!(
             state
+                .session_maps
                 .input_buffers
                 .get(session_id)
                 .unwrap()
@@ -7585,6 +7532,7 @@ mod tests {
         assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15no child output\r");
         assert_eq!(
             state
+                .session_maps
                 .output_buffers
                 .get(session_id)
                 .unwrap()
@@ -7610,6 +7558,7 @@ mod tests {
         let mut composer = crate::input_line_buffer::InputLineBuffer::new();
         composer.feed("Boss draft");
         state
+            .session_maps
             .input_buffers
             .insert(session_id.to_string(), parking_lot::Mutex::new(composer));
 
@@ -7635,6 +7584,7 @@ mod tests {
         assert!(bytes.lock().unwrap().is_empty());
         assert_eq!(
             state
+                .session_maps
                 .input_buffers
                 .get(session_id)
                 .unwrap()
@@ -7658,6 +7608,7 @@ mod tests {
         assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15/clear\r");
         assert!(
             !state
+                .session_maps
                 .slash_mode
                 .get(session_id)
                 .unwrap()
@@ -7665,6 +7616,7 @@ mod tests {
         );
         assert_eq!(
             state
+                .session_maps
                 .input_buffers
                 .get(session_id)
                 .unwrap()
@@ -7693,9 +7645,18 @@ mod tests {
 
         assert_eq!(response, serde_json::json!({"ok": true}));
         assert_eq!(bytes.lock().unwrap().as_slice(), b"literal draft");
-        assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 0);
         assert_eq!(
             state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .turn_epoch,
+            0
+        );
+        assert_eq!(
+            state
+                .session_maps
                 .input_buffers
                 .get(session_id)
                 .unwrap()
@@ -7727,7 +7688,7 @@ mod tests {
                 .as_str()
                 .is_some_and(|error| error.contains("restricted to localhost"))
         );
-        assert!(state.sessions.is_empty());
+        assert!(state.session_maps.sessions.is_empty());
     }
 
     #[test]
@@ -7737,7 +7698,8 @@ mod tests {
         assert!(bound, "valid header must auto-bind");
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get("mcp-init-1")
                 .map(|v| v.value().clone()),
             Some(TEST_UUID_A.to_string()),
@@ -7749,6 +7711,7 @@ mod tests {
         );
         assert!(
             state
+                .mcp
                 .session_to_mcp
                 .get(TEST_UUID_A)
                 .map(|v| v.contains(&"mcp-init-1".to_string()))
@@ -7767,7 +7730,7 @@ mod tests {
     fn initialize_tells_a_reconnect_apart_from_a_first_contact() {
         let state = test_state();
         let live = "11111111-1111-4111-8111-111111111111";
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             live.to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -7818,7 +7781,7 @@ mod tests {
             "mcp-x",
             Some("not-a-uuid")
         ));
-        assert!(state.mcp_to_session.is_empty(), "no binding on bad header");
+        assert!(state.mcp.to_session.is_empty(), "no binding on bad header");
         assert!(state.peer_agents.is_empty());
     }
 
@@ -7939,7 +7902,8 @@ mod tests {
         );
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get("mcp-sibling")
                 .map(|entry| entry.value().clone()),
             Some(TEST_UUID_A.to_string()),
@@ -7947,7 +7911,8 @@ mod tests {
         );
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get("mcp-live")
                 .map(|entry| entry.value().clone()),
             Some(TEST_UUID_A.to_string()),
@@ -7961,6 +7926,7 @@ mod tests {
         );
         assert_eq!(
             state
+                .mcp
                 .session_to_mcp
                 .get(TEST_UUID_A)
                 .map(|entry| entry.clone()),
@@ -8026,7 +7992,7 @@ mod tests {
             "mcp-live"
         );
         assert!(
-            !state.mcp_to_session.contains_key("mcp-stranger"),
+            !state.mcp.to_session.contains_key("mcp-stranger"),
             "a rejected claimant must gain no forward route"
         );
     }
@@ -8039,7 +8005,7 @@ mod tests {
             "mcp-old",
             Some(TEST_UUID_A)
         ));
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "mcp-old".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now()
@@ -8063,11 +8029,12 @@ mod tests {
             "mcp-new"
         );
         assert!(
-            state.mcp_to_session.get("mcp-old").is_none(),
+            state.mcp.to_session.get("mcp-old").is_none(),
             "stale owner must lose its forward route"
         );
         assert_eq!(
             state
+                .mcp
                 .session_to_mcp
                 .get(TEST_UUID_A)
                 .map(|entry| entry.clone()),
@@ -8081,7 +8048,7 @@ mod tests {
         apply_initialize_identity(&state, "mcp-dup", Some(TEST_UUID_A));
         live_mcp_session(&state, "mcp-dup");
         apply_initialize_identity(&state, "mcp-dup", Some(TEST_UUID_A));
-        let reverse = state.session_to_mcp.get(TEST_UUID_A).unwrap();
+        let reverse = state.mcp.session_to_mcp.get(TEST_UUID_A).unwrap();
         assert_eq!(
             reverse.iter().filter(|s| *s == "mcp-dup").count(),
             1,
@@ -8191,7 +8158,7 @@ mod tests {
     async fn proxied_initialize_reuses_eager_live_session_and_keeps_spawn_ready() {
         let state = test_state();
         let eager_mcp_session = TEST_UUID_B;
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             eager_mcp_session.to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -8209,6 +8176,7 @@ mod tests {
         ));
         let (sender, _live_sse) = tokio::sync::broadcast::channel(4);
         state
+            .session_maps
             .messaging_channels
             .insert(eager_mcp_session.to_string(), sender);
 
@@ -8243,7 +8211,8 @@ mod tests {
         );
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get(eager_mcp_session)
                 .map(|entry| entry.value().clone()),
             Some(TEST_UUID_A.to_string()),
@@ -8418,7 +8387,10 @@ mod tests {
         let clean = state
             .tasks
             .create(TaskKind::AgentSpawn, "owner", Some("sess-clean"));
-        state.exit_codes.insert("sess-clean".to_string(), 0);
+        state
+            .session_maps
+            .exit_codes
+            .insert("sess-clean".to_string(), 0);
         crate::pty::mark_session_exited("sess-clean", &state);
         let rec = state.tasks.get(&clean).expect("task must survive");
         assert_eq!(rec.status, TaskStatus::Completed);
@@ -8427,7 +8399,10 @@ mod tests {
         let broken = state
             .tasks
             .create(TaskKind::AgentSpawn, "owner", Some("sess-broken"));
-        state.exit_codes.insert("sess-broken".to_string(), 137);
+        state
+            .session_maps
+            .exit_codes
+            .insert("sess-broken".to_string(), 137);
         crate::pty::mark_session_exited("sess-broken", &state);
         let rec = state.tasks.get(&broken).expect("task must survive");
         assert_eq!(rec.status, TaskStatus::Failed);
@@ -8460,7 +8435,8 @@ mod tests {
             .tasks
             .create(TaskKind::AgentSpawn, "peer-a", Some("sess-1"));
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert("mcp-a".to_string(), "peer-a".to_string());
 
         let working = task_call(
@@ -8510,7 +8486,8 @@ mod tests {
         let state = test_state();
         let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", None);
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert("mcp-a".to_string(), "peer-a".to_string());
         state
             .tasks
@@ -8547,7 +8524,8 @@ mod tests {
         let state = test_state();
         let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", None);
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert("mcp-b".to_string(), "peer-b".to_string());
 
         for action in ["get", "cancel"] {
@@ -8592,7 +8570,8 @@ mod tests {
 
         // Now it binds a real TUIC identity on the same MCP session.
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert("mcp-late".to_string(), TEST_UUID_A.to_string());
 
         let got = task_call(
@@ -8616,7 +8595,8 @@ mod tests {
             .tasks
             .create(TaskKind::AgentSpawn, "peer-a", Some("sess-1"));
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert("mcp-a".to_string(), "peer-a".to_string());
 
         let cancelled = task_call(
@@ -8657,7 +8637,8 @@ mod tests {
         let state = test_state();
         let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", None);
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert("mcp-a".to_string(), "peer-a".to_string());
 
         let refused = task_call(
@@ -8763,7 +8744,10 @@ mod tests {
             .create(TaskKind::AgentSpawn, "owner", Some("sess-cancel"));
         state.tasks.cancel(&id).expect("cancel");
 
-        state.exit_codes.insert("sess-cancel".to_string(), 0);
+        state
+            .session_maps
+            .exit_codes
+            .insert("sess-cancel".to_string(), 0);
         crate::pty::mark_session_exited("sess-cancel", &state);
 
         assert_eq!(
@@ -8796,7 +8780,7 @@ mod tests {
     #[test]
     fn refresh_mcp_session_repairs_lost_peer_binding() {
         let state = test_state();
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "mcp-stale".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -8812,7 +8796,8 @@ mod tests {
 
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get("mcp-stale")
                 .map(|entry| entry.value().clone()),
             Some(TEST_UUID_A.to_string())
@@ -8834,7 +8819,8 @@ mod tests {
         assert_eq!(r["ok"], true);
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get("mcp-reg-1")
                 .map(|v| v.value().clone()),
             Some(TEST_UUID_A.to_string())
@@ -8855,12 +8841,13 @@ mod tests {
         let generated = first["tuic_session"].as_str().unwrap();
         assert!(is_valid_uuid(generated));
         assert!(
-            state.sessions.is_empty(),
+            state.session_maps.sessions.is_empty(),
             "registration must not create a PTY"
         );
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get("mcp-external")
                 .map(|entry| entry.value().clone()),
             Some(generated.to_string())
@@ -8899,8 +8886,8 @@ mod tests {
 
         assert!(!state.peer_agents.contains_key(&generated));
         assert!(!state.agent_inbox.contains_key(&generated));
-        assert!(!state.mcp_to_session.contains_key("mcp-external-delete"));
-        assert!(!state.session_to_mcp.contains_key(&generated));
+        assert!(!state.mcp.to_session.contains_key("mcp-external-delete"));
+        assert!(!state.mcp.session_to_mcp.contains_key(&generated));
     }
 
     /// The read cursor is per-identity state like the inbox it indexes, so it has
@@ -9077,13 +9064,14 @@ mod tests {
         );
         assert_eq!(
             state
+                .mcp
                 .session_to_mcp
                 .get(TEST_UUID_A)
                 .map(|entry| entry.clone()),
             Some(vec!["mcp-sibling".to_string()]),
             "the departed session must drop its own route"
         );
-        assert!(!state.mcp_to_session.contains_key("mcp-primary"));
+        assert!(!state.mcp.to_session.contains_key("mcp-primary"));
     }
 
     /// A bridge joining while the last co-owner tears the identity down must not
@@ -9103,13 +9091,14 @@ mod tests {
             end_mcp_session(&state, "mcp-primary").await;
             joiner.await.expect("joining task panicked");
 
-            if state.mcp_to_session.contains_key("mcp-joiner") {
+            if state.mcp.to_session.contains_key("mcp-joiner") {
                 assert!(
                     state.peer_agents.contains_key(TEST_UUID_A),
                     "round {round}: the joiner kept a route to an identity that was torn down"
                 );
                 assert!(
                     state
+                        .mcp
                         .session_to_mcp
                         .get(TEST_UUID_A)
                         .is_some_and(|reverse| reverse.iter().any(|s| s == "mcp-joiner")),
@@ -9136,9 +9125,10 @@ mod tests {
             state.peer_agents.contains_key(TEST_UUID_A),
             "a non-owner leaving must not retire the identity"
         );
-        assert!(!state.mcp_to_session.contains_key("mcp-sibling"));
+        assert!(!state.mcp.to_session.contains_key("mcp-sibling"));
         assert_eq!(
             state
+                .mcp
                 .session_to_mcp
                 .get(TEST_UUID_A)
                 .map(|entry| entry.clone()),
@@ -9149,8 +9139,8 @@ mod tests {
         assert!(!state.peer_agents.contains_key(TEST_UUID_A));
         assert!(!state.agent_inbox.contains_key(TEST_UUID_A));
         assert!(!state.orchestrator_peers.contains(TEST_UUID_A));
-        assert!(!state.session_to_mcp.contains_key(TEST_UUID_A));
-        assert!(!state.mcp_to_session.contains_key("mcp-primary"));
+        assert!(!state.mcp.session_to_mcp.contains_key(TEST_UUID_A));
+        assert!(!state.mcp.to_session.contains_key("mcp-primary"));
     }
 
     #[test]
@@ -9161,7 +9151,7 @@ mod tests {
         let state = test_state();
         apply_initialize_identity(&state, "mcp-self", Some(TEST_UUID_A));
         // Simulate the mcp session being live (guard checks mcp_sessions).
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "mcp-self".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -9224,7 +9214,8 @@ mod tests {
         );
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get(mcp)
                 .map(|e| e.value().clone())
                 .unwrap_or_default(),
@@ -9263,7 +9254,8 @@ mod tests {
         );
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get(mcp)
                 .map(|e| e.value().clone())
                 .unwrap_or_default(),
@@ -9544,11 +9536,11 @@ mod tests {
     fn send_reaches_a_repaired_peer_through_its_terminal() {
         let state = test_state();
         insert_managed_test_session(&state, "pty-addressable", "/tmp");
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             "pty-addressable".to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
         );
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             "pty-addressable".to_string(),
             crate::state::SessionState {
                 agent_type: Some("codex".to_string()),
@@ -9664,10 +9656,12 @@ mod tests {
         use std::sync::atomic::AtomicU8;
         let state = test_state();
         state
+            .session_maps
             .shell_states
             .insert("s1".to_string(), AtomicU8::new(crate::pty::SHELL_BUSY));
         assert!(!session_wait_met(&state, "s1", "idle"), "busy → not met");
         state
+            .session_maps
             .shell_states
             .insert("s1".to_string(), AtomicU8::new(crate::pty::SHELL_IDLE));
         assert!(session_wait_met(&state, "s1", "idle"), "idle → met");
@@ -9676,7 +9670,7 @@ mod tests {
             !session_wait_met(&state, "s2", "exited"),
             "unknown session → not exited (avoid false immediate met)"
         );
-        state.exit_codes.insert("s3".to_string(), 0);
+        state.session_maps.exit_codes.insert("s3".to_string(), 0);
         assert!(
             session_wait_met(&state, "s3", "exited"),
             "exit code recorded → exited"
@@ -9692,6 +9686,7 @@ mod tests {
         let state = test_state();
         insert_managed_test_session(&state, "s", "/tmp");
         state
+            .session_maps
             .shell_states
             .insert("s".to_string(), AtomicU8::new(crate::pty::SHELL_IDLE));
         let r = handle_session_wait(
@@ -9710,6 +9705,7 @@ mod tests {
         let state = test_state();
         insert_managed_test_session(&state, "s", "/tmp");
         state
+            .session_maps
             .shell_states
             .insert("s".to_string(), AtomicU8::new(crate::pty::SHELL_BUSY));
         let r = handle_session_wait(
@@ -9745,7 +9741,7 @@ mod tests {
             "unexpected response: {r}"
         );
         assert!(
-            state.pty_event_channels.is_empty(),
+            state.session_maps.pty_event_channels.is_empty(),
             "an unknown id must not leave a broadcast channel behind"
         );
         assert!(
@@ -9806,6 +9802,7 @@ mod tests {
         let state = test_state();
         insert_managed_test_session(&state, "reaped", "/tmp");
         let pid = state
+            .session_maps
             .sessions
             .get("reaped")
             .and_then(|entry| entry.value().lock()._child.process_id())
@@ -9814,16 +9811,20 @@ mod tests {
 
         crate::pty::mark_session_exited("reaped", &state);
         assert_eq!(
-            state.exit_codes.get("reaped").map(|e| *e.value()),
+            state
+                .session_maps
+                .exit_codes
+                .get("reaped")
+                .map(|e| *e.value()),
             Some(0),
             "mark_session_exited must record the exit code"
         );
         assert!(
-            !state.sessions.contains_key("reaped"),
+            !state.session_maps.sessions.contains_key("reaped"),
             "…and then drop the session entry — that pairing is the whole defect"
         );
 
-        let channels_before = state.pty_event_channels.len();
+        let channels_before = state.session_maps.pty_event_channels.len();
         let r = handle_session_wait(
             &state,
             &serde_json::json!({
@@ -9846,7 +9847,7 @@ mod tests {
             "the recorded exit code must come back, not be omitted: {r}"
         );
         assert_eq!(
-            state.pty_event_channels.len(),
+            state.session_maps.pty_event_channels.len(),
             channels_before,
             "an already-met wait must not subscribe to anything"
         );
@@ -9882,7 +9883,7 @@ mod tests {
             "unexpected response: {r}"
         );
         assert!(
-            state.pty_event_channels.is_empty(),
+            state.session_maps.pty_event_channels.is_empty(),
             "an unknown id must not leave a broadcast channel behind"
         );
         assert!(
@@ -9933,6 +9934,7 @@ mod tests {
         let probe = format!("\x1b[2J\x1b[H{}", "x".repeat(260));
         let rows = {
             let vt = state
+                .grid
                 .vt_log_buffers
                 .get(&session_id)
                 .expect("spawn registers a VT screen");
@@ -9960,7 +9962,7 @@ mod tests {
 
         let state = test_state();
         insert_managed_test_session(&state, "event-session", "/tmp");
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             "event-session".to_string(),
             AtomicU8::new(crate::pty::SHELL_BUSY),
         );
@@ -9979,6 +9981,7 @@ mod tests {
         });
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         state
+            .session_maps
             .shell_states
             .get("event-session")
             .unwrap()
@@ -10295,7 +10298,8 @@ mod tests {
         assert!(is_valid_uuid(generated));
         assert_eq!(
             state
-                .mcp_to_session
+                .mcp
+                .to_session
                 .get("mcp-1")
                 .map(|entry| entry.value().clone()),
             Some(generated.to_owned())
@@ -10400,7 +10404,7 @@ mod tests {
 
     /// Mark an MCP session as live so the anti-hijack guard sees it as occupied.
     fn live_mcp_session(state: &Arc<AppState>, sid: &str) {
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             sid.to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -10525,7 +10529,7 @@ mod tests {
             Some("mcp-old"),
         );
         assert_eq!(first["ok"], true);
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "mcp-old".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now()
@@ -10551,11 +10555,15 @@ mod tests {
             "mcp-new"
         );
         assert!(
-            state.mcp_to_session.get("mcp-old").is_none(),
+            state.mcp.to_session.get("mcp-old").is_none(),
             "stale protocol session must lose inbox ownership"
         );
         assert_eq!(
-            state.session_to_mcp.get(tuic).map(|entry| entry.clone()),
+            state
+                .mcp
+                .session_to_mcp
+                .get(tuic)
+                .map(|entry| entry.clone()),
             Some(vec!["mcp-new".to_string()])
         );
     }
@@ -10620,7 +10628,7 @@ mod tests {
             .expect("spawn probe shell");
         let mut reader = pair.master.try_clone_reader().expect("clone probe reader");
         let writer = pair.master.take_writer().expect("take probe writer");
-        state.sessions.insert(
+        state.session_maps.sessions.insert(
             session_id.to_string(),
             Mutex::new(PtySession {
                 writer: Arc::new(Mutex::new(writer)),
@@ -10635,7 +10643,7 @@ mod tests {
                 shell: "/bin/sh".to_string(),
             }),
         );
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState {
                 agent_type: Some(agent_type.to_string()),
@@ -10643,14 +10651,14 @@ mod tests {
                 ..Default::default()
             },
         );
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             session_id.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
         );
         let mut silence = crate::pty::SilenceState::new();
         silence.confirm_idle();
         silence.mark_suggest_candidate(vec!["old completion".to_string()], 0);
-        state.silence_states.insert(
+        state.session_maps.silence_states.insert(
             session_id.to_string(),
             std::sync::Arc::new(parking_lot::Mutex::new(silence)),
         );
@@ -10674,11 +10682,15 @@ mod tests {
         register_peer(&state, tuic, "agent", mcp);
 
         assert_eq!(
-            state.mcp_to_session.get(mcp).map(|e| e.value().clone()),
+            state.mcp.to_session.get(mcp).map(|e| e.value().clone()),
             Some(tuic.to_string()),
             "forward index must be populated"
         );
-        let reverse = state.session_to_mcp.get(tuic).map(|e| e.value().clone());
+        let reverse = state
+            .mcp
+            .session_to_mcp
+            .get(tuic)
+            .map(|e| e.value().clone());
         assert_eq!(
             reverse,
             Some(vec![mcp.to_string()]),
@@ -10784,7 +10796,7 @@ mod tests {
         let state = test_state();
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -10797,6 +10809,7 @@ mod tests {
         );
         let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
         state
+            .session_maps
             .messaging_channels
             .insert("mcp-recipient".to_string(), channel);
         let submitted_output =
@@ -10889,6 +10902,7 @@ mod tests {
         register_peer(&state, TEST_UUID_B, "orchestrator", "mcp-recipient");
         state.orchestrator_peers.insert(TEST_UUID_B.to_string());
         state
+            .session_maps
             .session_parent
             .insert(TEST_UUID_A.to_string(), TEST_UUID_B.to_string());
         let submitted_output =
@@ -10938,7 +10952,7 @@ mod tests {
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "orchestrator", "mcp-recipient");
         state.orchestrator_peers.insert(TEST_UUID_B.to_string());
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -10951,22 +10965,25 @@ mod tests {
         );
         let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
         state
+            .session_maps
             .messaging_channels
             .insert("mcp-recipient".to_string(), channel);
         let _submitted_output =
             install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
         state
+            .session_maps
             .session_states
             .get_mut(TEST_UUID_B)
             .unwrap()
             .suggested_actions = None;
         state
+            .session_maps
             .silence_states
             .get(TEST_UUID_B)
             .unwrap()
             .lock()
             .reset_suggest_memory();
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             TEST_UUID_B.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
         );
@@ -11001,7 +11018,7 @@ mod tests {
         let state = test_state();
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -11014,21 +11031,28 @@ mod tests {
         );
         let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
         state
+            .session_maps
             .messaging_channels
             .insert("mcp-recipient".to_string(), channel);
         let _submitted_output =
             install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
         {
-            let mut session = state.session_states.get_mut(TEST_UUID_B).unwrap();
+            let mut session = state
+                .session_maps
+                .session_states
+                .get_mut(TEST_UUID_B)
+                .unwrap();
             session.suggested_actions = None;
         }
         state
+            .session_maps
             .silence_states
             .get(TEST_UUID_B)
             .unwrap()
             .lock()
             .reset_suggest_memory();
         state
+            .session_maps
             .shell_states
             .get(TEST_UUID_B)
             .unwrap()
@@ -11056,7 +11080,7 @@ mod tests {
         let state = test_state();
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             TEST_UUID_B.to_string(),
             crate::state::SessionState {
                 agent_type: Some("codex".to_string()),
@@ -11064,14 +11088,14 @@ mod tests {
                 ..Default::default()
             },
         );
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             TEST_UUID_B.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
         );
         let mut silence = crate::pty::SilenceState::new();
         silence.confirm_idle();
         silence.mark_suggest_candidate(vec!["old completion".to_string()], 0);
-        state.silence_states.insert(
+        state.session_maps.silence_states.insert(
             TEST_UUID_B.to_string(),
             std::sync::Arc::new(parking_lot::Mutex::new(silence)),
         );
@@ -11103,7 +11127,7 @@ mod tests {
         let state = test_state();
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -11119,6 +11143,7 @@ mod tests {
         );
         let (channel, mut channel_receiver) = tokio::sync::broadcast::channel(4);
         state
+            .session_maps
             .messaging_channels
             .insert("mcp-recipient".to_string(), channel);
         let submitted_output =
@@ -11681,7 +11706,7 @@ mod tests {
     fn grok_session_uses_meta_tools_without_mutating_global_config() {
         let state = test_state();
         assert!(!state.config.read().collapse_tools);
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             "grok-session".to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -12237,7 +12262,7 @@ mod tests {
         let state = test_state();
         let mcp_sid = "mcp-toast-origin".to_string();
         let tuic = "00000000-0000-0000-0000-000000000003".to_string();
-        state.mcp_to_session.insert(mcp_sid.clone(), tuic.clone());
+        state.mcp.to_session.insert(mcp_sid.clone(), tuic.clone());
         state.peer_agents.insert(
             tuic.clone(),
             PeerAgent {
@@ -12283,7 +12308,7 @@ mod tests {
         let state = test_state();
         let mcp_sid = "mcp-toast-origin-session".to_string();
         let tuic = "00000000-0000-0000-0000-000000000004".to_string();
-        state.mcp_to_session.insert(mcp_sid.clone(), tuic.clone());
+        state.mcp.to_session.insert(mcp_sid.clone(), tuic.clone());
         state.peer_agents.insert(
             tuic.clone(),
             PeerAgent {
@@ -12595,7 +12620,7 @@ mod tests {
         // the flag and rebuild so the index matches the full native tool set.
         state.config.write().ai_terminal_mcp_enabled = true;
         rebuild_tool_search_index(&state);
-        let idx = state.tool_search_index.read();
+        let idx = state.mcp.tool_search_index.read();
         let native_count = native_tool_definitions().as_array().unwrap().len();
         assert_eq!(idx.len(), native_count);
         // Spot-check a few well-known native tools by name.
@@ -12611,6 +12636,7 @@ mod tests {
         let state = test_state();
         assert!(
             state
+                .mcp
                 .tool_search_index
                 .read()
                 .get_schema("session")
@@ -12620,6 +12646,7 @@ mod tests {
         rebuild_tool_search_index(&state);
         assert!(
             state
+                .mcp
                 .tool_search_index
                 .read()
                 .get_schema("session")
@@ -12641,6 +12668,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(
             state
+                .mcp
                 .tool_search_index
                 .read()
                 .get_schema("session")
@@ -12649,12 +12677,13 @@ mod tests {
 
         // Mutate config and fire the signal; the updater must rebuild.
         state.config.write().disabled_native_tools = vec!["session".to_string()];
-        let _ = state.mcp_tools_changed.send(());
+        let _ = state.mcp.tools_changed.send(());
 
         // Poll for the rebuild with a short deadline — the task is async.
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         while std::time::Instant::now() < deadline {
             if state
+                .mcp
                 .tool_search_index
                 .read()
                 .get_schema("session")
@@ -12675,13 +12704,13 @@ mod tests {
         let state = test_state();
         spawn_tool_search_index_updater(state.clone());
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        let before = state.tool_search_index.read().len();
+        let before = state.mcp.tool_search_index.read().len();
 
         state.config.write().collapse_tools = true;
-        let _ = state.mcp_tools_changed.send(());
+        let _ = state.mcp.tools_changed.send(());
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let after = state.tool_search_index.read().len();
+        let after = state.mcp.tool_search_index.read().len();
         assert_eq!(
             before, after,
             "collapse_tools toggle must not change searchable corpus size"
@@ -12689,6 +12718,7 @@ mod tests {
         // And native tools must still be searchable.
         assert!(
             state
+                .mcp
                 .tool_search_index
                 .read()
                 .get_schema("session")
@@ -12747,7 +12777,7 @@ mod tests {
         let mcp_sid = "mcp-xyz".to_string();
         let tuic = "00000000-0000-0000-0000-000000000001".to_string();
         // Register an MCP→tuic mapping and a peer agent with a project path.
-        state.mcp_to_session.insert(mcp_sid.clone(), tuic.clone());
+        state.mcp.to_session.insert(mcp_sid.clone(), tuic.clone());
         state.peer_agents.insert(
             tuic.clone(),
             PeerAgent {
@@ -12796,7 +12826,7 @@ mod tests {
         let state = test_state();
         let mcp_sid = "mcp-no-peer".to_string();
         let tuic = "00000000-0000-0000-0000-000000000002".to_string();
-        state.mcp_to_session.insert(mcp_sid.clone(), tuic.clone());
+        state.mcp.to_session.insert(mcp_sid.clone(), tuic.clone());
 
         // Spawn a minimal PTY session with cwd set so we can exercise the fallback.
         let pty_system = native_pty_system();
@@ -12812,7 +12842,7 @@ mod tests {
         cmd.cwd("/tmp");
         let child = pair.slave.spawn_command(cmd).expect("spawn");
         let writer = pair.master.take_writer().expect("writer");
-        state.sessions.insert(
+        state.session_maps.sessions.insert(
             tuic.clone(),
             parking_lot::Mutex::new(PtySession {
                 writer: Arc::new(parking_lot::Mutex::new(writer)),
@@ -12855,7 +12885,7 @@ mod tests {
     fn ui_tab_falls_back_to_mcp_session_repo_path() {
         let state = test_state();
         let mcp_sid = "mcp-no-peer-no-pty".to_string();
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             mcp_sid.clone(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -12992,7 +13022,7 @@ mod tests {
         use crate::state::VtLogBuffer;
         let state = test_state();
         // Simulate an active session by inserting into vt_log_buffers
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             "sess-active".to_string(),
             parking_lot::Mutex::new(VtLogBuffer::new(24, 220, 500)),
         );
@@ -13071,7 +13101,7 @@ mod tests {
             "mcp-orch",
         );
         // Map mcp_session_id → tuic_session
-        state.mcp_to_session.insert(
+        state.mcp.to_session.insert(
             "mcp-orch".to_string(),
             "550e8400-e29b-41d4-a716-446655440b02".to_string(),
         );
@@ -13091,6 +13121,7 @@ mod tests {
 
         // session_html_tabs should have the tab registered under the creator's session
         let tabs = state
+            .session_maps
             .session_html_tabs
             .get("550e8400-e29b-41d4-a716-446655440b02");
         assert!(
@@ -13100,7 +13131,7 @@ mod tests {
         assert!(tabs.unwrap().contains(&"orch-status".to_string()));
 
         // Insert vt_log_buffers so close succeeds
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             "550e8400-e29b-41d4-a716-446655440b02".to_string(),
             parking_lot::Mutex::new(VtLogBuffer::new(24, 220, 500)),
         );
@@ -13113,6 +13144,7 @@ mod tests {
 
         assert!(
             state
+                .session_maps
                 .session_html_tabs
                 .get("550e8400-e29b-41d4-a716-446655440b02")
                 .is_none(),
@@ -13131,7 +13163,8 @@ mod tests {
         let state = test_state();
         register_peer(&state, tuic, "capper", "mcp-cap");
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert("mcp-cap".to_string(), tuic.to_string());
 
         let open = |id: String| {
@@ -13151,7 +13184,12 @@ mod tests {
             assert_eq!(open("same".to_string())["ok"], serde_json::json!(true));
         }
         assert_eq!(
-            state.session_html_tabs.get(tuic).unwrap().len(),
+            state
+                .session_maps
+                .session_html_tabs
+                .get(tuic)
+                .unwrap()
+                .len(),
             1,
             "re-opening the same tab id must register it once"
         );
@@ -13159,7 +13197,7 @@ mod tests {
         for i in 0..SESSION_HTML_TAB_LIMIT + 4 {
             open(format!("tab-{i}"));
         }
-        let tabs = state.session_html_tabs.get(tuic).unwrap();
+        let tabs = state.session_maps.session_html_tabs.get(tuic).unwrap();
         assert_eq!(
             tabs.len(),
             SESSION_HTML_TAB_LIMIT,
@@ -13183,11 +13221,12 @@ mod tests {
         let target = "550e8400-e29b-41d4-a716-446655440d01";
         let state = test_state();
         state
+            .session_maps
             .session_html_tabs
             .insert(target.to_string(), vec!["html-tab-1".to_string()]);
 
         use crate::state::VtLogBuffer;
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             target.to_string(),
             parking_lot::Mutex::new(VtLogBuffer::new(24, 220, 500)),
         );
@@ -13197,7 +13236,7 @@ mod tests {
             None,
         );
         assert!(
-            state.session_html_tabs.get(target).is_none(),
+            state.session_maps.session_html_tabs.get(target).is_none(),
             "html tabs entry must be removed after close (drives SIMP-1 helper)"
         );
     }
@@ -13221,12 +13260,14 @@ mod tests {
         let mut ring = OutputRingBuffer::new(4096);
         ring.write(b"hello from the crypt\n");
         state
+            .session_maps
             .output_buffers
             .insert(sid.clone(), parking_lot::Mutex::new(ring));
 
         let mut vt = VtLogBuffer::new(24, 80, 100);
         vt.process(b"hello from the crypt\r\n");
         state
+            .grid
             .vt_log_buffers
             .insert(sid.clone(), parking_lot::Mutex::new(vt));
 
@@ -13235,12 +13276,13 @@ mod tests {
             .unwrap_or_default()
             .as_millis() as u64;
         state
+            .session_maps
             .last_output_ms
             .insert(sid.clone(), AtomicU64::new(now_ms));
-        state.exit_codes.insert(sid.clone(), 42);
+        state.session_maps.exit_codes.insert(sid.clone(), 42);
 
         // Sanity: session entry is absent (this IS the tombstone).
-        assert!(!state.sessions.contains_key(&sid));
+        assert!(!state.session_maps.sessions.contains_key(&sid));
 
         // Raw format path.
         let raw_res = handle_session(
@@ -13292,6 +13334,7 @@ mod tests {
         let mut ring = OutputRingBuffer::new(4096);
         ring.write(b"final output\n");
         state
+            .session_maps
             .output_buffers
             .insert(sid.to_string(), parking_lot::Mutex::new(ring));
 
@@ -13318,7 +13361,7 @@ mod tests {
         use std::sync::atomic::AtomicU8;
         let state = test_state();
         insert_managed_test_session(&state, "busy-session", "/tmp");
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             "busy-session".to_string(),
             AtomicU8::new(crate::pty::SHELL_BUSY),
         );
@@ -13351,6 +13394,7 @@ mod tests {
         let mut ring = OutputRingBuffer::new(4096);
         ring.write(b"line one\n");
         state
+            .session_maps
             .output_buffers
             .insert(sid.clone(), parking_lot::Mutex::new(ring));
 
@@ -13360,6 +13404,7 @@ mod tests {
             vt.process(format!("line {i}\r\n").as_bytes());
         }
         state
+            .grid
             .vt_log_buffers
             .insert(sid.clone(), parking_lot::Mutex::new(vt));
 
@@ -13368,9 +13413,10 @@ mod tests {
             .unwrap_or_default()
             .as_millis() as u64;
         state
+            .session_maps
             .last_output_ms
             .insert(sid.clone(), AtomicU64::new(now_ms));
-        state.exit_codes.insert(sid.clone(), 0);
+        state.session_maps.exit_codes.insert(sid.clone(), 0);
 
         let res = handle_session(
             &state,
@@ -13401,7 +13447,7 @@ mod tests {
         let state = test_state();
         let sid = "since-cursor-test".to_string();
 
-        state.output_buffers.insert(
+        state.session_maps.output_buffers.insert(
             sid.clone(),
             parking_lot::Mutex::new(OutputRingBuffer::new(4096)),
         );
@@ -13419,6 +13465,7 @@ mod tests {
             vt.process(format!("new line {i}\r\n").as_bytes());
         }
         state
+            .grid
             .vt_log_buffers
             .insert(sid.clone(), parking_lot::Mutex::new(vt));
 
@@ -13427,9 +13474,10 @@ mod tests {
             .unwrap_or_default()
             .as_millis() as u64;
         state
+            .session_maps
             .last_output_ms
             .insert(sid.clone(), AtomicU64::new(now_ms));
-        state.exit_codes.insert(sid.clone(), 0);
+        state.session_maps.exit_codes.insert(sid.clone(), 0);
 
         let res = handle_session(
             &state,
@@ -13487,19 +13535,24 @@ mod tests {
         let sid = "mark-exited-test".to_string();
 
         // Insert buffers + transient state as if a session had been running.
-        state.output_buffers.insert(
+        state.session_maps.output_buffers.insert(
             sid.clone(),
             parking_lot::Mutex::new(OutputRingBuffer::new(1024)),
         );
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             sid.clone(),
             parking_lot::Mutex::new(VtLogBuffer::new(24, 80, 100)),
         );
-        state.last_output_ms.insert(sid.clone(), AtomicU64::new(0));
         state
+            .session_maps
+            .last_output_ms
+            .insert(sid.clone(), AtomicU64::new(0));
+        state
+            .session_maps
             .shell_states
             .insert(sid.clone(), AtomicU8::new(crate::pty::SHELL_BUSY));
         state
+            .session_maps
             .terminal_rows
             .insert(sid.clone(), std::sync::atomic::AtomicU16::new(24));
 
@@ -13509,24 +13562,24 @@ mod tests {
 
         // Tombstone survivors.
         assert!(
-            state.output_buffers.contains_key(&sid),
+            state.session_maps.output_buffers.contains_key(&sid),
             "output buffer must survive"
         );
         assert!(
-            state.vt_log_buffers.contains_key(&sid),
+            state.grid.vt_log_buffers.contains_key(&sid),
             "vt log must survive"
         );
         assert!(
-            state.last_output_ms.contains_key(&sid),
+            state.session_maps.last_output_ms.contains_key(&sid),
             "last_output_ms must survive"
         );
         // Transient state must be reaped.
         assert!(
-            !state.shell_states.contains_key(&sid),
+            !state.session_maps.shell_states.contains_key(&sid),
             "shell_states reaped"
         );
         assert!(
-            !state.terminal_rows.contains_key(&sid),
+            !state.session_maps.terminal_rows.contains_key(&sid),
             "terminal_rows reaped"
         );
     }
@@ -13581,7 +13634,7 @@ mod tests {
 
         let unbound_hint =
             managed_parent_cwd_from_header(&state, Some("mcp-unbound"), Some(TEST_UUID_A));
-        assert!(state.mcp_to_session.get("mcp-unbound").is_none());
+        assert!(state.mcp.to_session.get("mcp-unbound").is_none());
         assert_eq!(
             resolve_effective_spawn_cwd(
                 &state,
@@ -13620,7 +13673,8 @@ mod tests {
         }
 
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert("mcp-bound".to_string(), TEST_UUID_A.to_string());
         let mismatched_hint =
             managed_parent_cwd_from_header(&state, Some("mcp-bound"), Some(TEST_UUID_B));
@@ -13641,7 +13695,7 @@ mod tests {
             "the verified caller binding remains authoritative"
         );
         assert!(
-            state.mcp_to_session.get("mcp-unbound").is_none(),
+            state.mcp.to_session.get("mcp-unbound").is_none(),
             "cwd fallback must not repair the missing identity binding"
         );
     }
@@ -13965,6 +14019,7 @@ mod tests {
         );
         assert_eq!(
             state
+                .session_maps
                 .sessions
                 .get(session_id)
                 .unwrap()
@@ -14039,7 +14094,7 @@ mod tests {
             result["error"],
             "Action 'spawn' requires 'name' to be a non-empty string when provided"
         );
-        assert!(state.sessions.is_empty());
+        assert!(state.session_maps.sessions.is_empty());
     }
 
     #[cfg(unix)]
@@ -14146,7 +14201,7 @@ mod tests {
     fn session_status_omits_absent_optional_fields() {
         let state = test_state();
         let session_id = "status-compact";
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState::default(),
         );
@@ -14176,13 +14231,14 @@ mod tests {
         let state = test_state();
         let sid = "s-exit-test";
         state
+            .session_maps
             .session_states
             .insert(sid.to_string(), crate::state::SessionState::default());
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             sid.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
         );
-        state.exit_codes.insert(sid.to_string(), 42);
+        state.session_maps.exit_codes.insert(sid.to_string(), 42);
 
         let result = handle_session(
             &state,
@@ -14202,9 +14258,10 @@ mod tests {
         let state = test_state();
         let sid = "s-idle-test";
         state
+            .session_maps
             .session_states
             .insert(sid.to_string(), crate::state::SessionState::default());
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             sid.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
         );
@@ -14214,6 +14271,7 @@ mod tests {
             .as_millis() as u64
             - 500;
         state
+            .session_maps
             .shell_state_since_ms
             .insert(sid.to_string(), std::sync::atomic::AtomicU64::new(since));
 
@@ -14243,9 +14301,10 @@ mod tests {
         let state = test_state();
         let sid = "s-busy-test";
         state
+            .session_maps
             .session_states
             .insert(sid.to_string(), crate::state::SessionState::default());
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             sid.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
         );
@@ -14255,6 +14314,7 @@ mod tests {
             .as_millis() as u64
             - 300;
         state
+            .session_maps
             .shell_state_since_ms
             .insert(sid.to_string(), std::sync::atomic::AtomicU64::new(since));
 
@@ -14288,9 +14348,10 @@ mod tests {
         // Here we just verify the status handler path we control returns shell_state.
         let sid = "s-list-test";
         state
+            .session_maps
             .session_states
             .insert(sid.to_string(), crate::state::SessionState::default());
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             sid.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
         );
@@ -14310,7 +14371,7 @@ mod tests {
     fn session_status_distinguishes_declared_completion_from_idle() {
         let state = test_state();
         let sid = "s-completed-test";
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             sid.to_string(),
             crate::state::SessionState {
                 agent_type: Some("codex".to_string()),
@@ -14318,7 +14379,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             sid.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
         );
@@ -14450,7 +14511,7 @@ mod tests {
             },
         );
 
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             parent_mcp.to_string(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -14477,6 +14538,7 @@ mod tests {
         assert_eq!(registered["linked_children"], 1);
         assert_eq!(
             state
+                .session_maps
                 .session_parent
                 .get(child)
                 .map(|entry| entry.value().clone()),
@@ -14611,7 +14673,8 @@ mod tests {
         let mcp_sid = "mcp-kill-guard-test";
         let tuic_sid = "550e8400-e29b-41d4-a716-446655440001";
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert(mcp_sid.to_string(), tuic_sid.to_string());
 
         let result = handle_session(
@@ -14641,7 +14704,8 @@ mod tests {
         let mcp_sid = "mcp-close-guard-test";
         let tuic_sid = "550e8400-e29b-41d4-a716-446655440009";
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert(mcp_sid.to_string(), tuic_sid.to_string());
 
         let result = handle_session(
@@ -14665,7 +14729,8 @@ mod tests {
         let own_tuic = "550e8400-e29b-41d4-a716-446655440002";
         let other_tuic = "550e8400-e29b-41d4-a716-446655440003";
         state
-            .mcp_to_session
+            .mcp
+            .to_session
             .insert(mcp_sid.to_string(), own_tuic.to_string());
 
         // Killing a different session — should NOT be blocked by self-kill guard.
@@ -14932,7 +14997,7 @@ mod tests {
             return;
         }
         let recipient = created["session_id"].as_str().unwrap();
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             recipient.to_string(),
             crate::state::SessionState {
                 agent_type: Some("codex".to_string()),
@@ -14940,7 +15005,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             recipient.to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
         );
@@ -16116,7 +16181,7 @@ mod tests {
 
     fn insert_sse_session(state: &Arc<AppState>) -> String {
         let sid = uuid::Uuid::new_v4().to_string();
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             sid.clone(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
@@ -16143,12 +16208,13 @@ mod tests {
 
         let response = mcp_get(State(state.clone()), headers).await.into_response();
         assert!(
-            state.messaging_channels.contains_key(&sid),
+            state.session_maps.messaging_channels.contains_key(&sid),
             "subscribing must have created the per-session channel"
         );
         assert!(
             state
-                .mcp_sessions
+                .mcp
+                .sessions
                 .get(&sid)
                 .is_some_and(|meta| meta.has_sse_stream),
             "the session must be flagged as streaming while the response is alive"
@@ -16156,12 +16222,13 @@ mod tests {
 
         drop(response);
         assert!(
-            !state.messaging_channels.contains_key(&sid),
+            !state.session_maps.messaging_channels.contains_key(&sid),
             "dropping the stream must evict the messaging channel"
         );
         assert!(
             state
-                .mcp_sessions
+                .mcp
+                .sessions
                 .get(&sid)
                 .is_some_and(|meta| !meta.has_sse_stream),
             "dropping the stream must clear has_sse_stream"
@@ -16187,6 +16254,7 @@ mod tests {
 
         // The replacement holds a receiver on the session's sender.
         let mut rx = state
+            .session_maps
             .messaging_channels
             .get(&sid)
             .expect("the replacement must have a channel")
@@ -16194,12 +16262,13 @@ mod tests {
 
         drop(first);
         assert!(
-            state.messaging_channels.contains_key(&sid),
+            state.session_maps.messaging_channels.contains_key(&sid),
             "the superseded stream must not evict the live stream's channel"
         );
         assert!(
             state
-                .mcp_sessions
+                .mcp
+                .sessions
                 .get(&sid)
                 .is_some_and(|meta| meta.has_sse_stream),
             "the session is still streaming through the replacement"
@@ -16214,10 +16283,11 @@ mod tests {
 
         // The owner's own teardown still releases everything.
         drop(second);
-        assert!(!state.messaging_channels.contains_key(&sid));
+        assert!(!state.session_maps.messaging_channels.contains_key(&sid));
         assert!(
             state
-                .mcp_sessions
+                .mcp
+                .sessions
                 .get(&sid)
                 .is_some_and(|meta| !meta.has_sse_stream)
         );
@@ -16239,11 +16309,12 @@ mod tests {
             .await
             .into_response();
         // DELETE /mcp retires the session while `first` is still draining.
-        state.mcp_sessions.remove(&sid);
+        state.mcp.sessions.remove(&sid);
         // The same id comes back and is auto-recovered from scratch.
         let second = mcp_get(State(state.clone()), headers).await.into_response();
 
         let mut rx = state
+            .session_maps
             .messaging_channels
             .get(&sid)
             .expect("the new stream must have a channel")
@@ -16251,7 +16322,7 @@ mod tests {
 
         drop(first);
         assert!(
-            state.messaging_channels.contains_key(&sid),
+            state.session_maps.messaging_channels.contains_key(&sid),
             "the retired stream must not release the recreated session"
         );
         assert!(
@@ -16262,7 +16333,7 @@ mod tests {
             "the new stream's receiver must still be open"
         );
         drop(second);
-        assert!(!state.messaging_channels.contains_key(&sid));
+        assert!(!state.session_maps.messaging_channels.contains_key(&sid));
     }
 
     /// The generation check protects the *present* session. When `DELETE /mcp`
@@ -16291,21 +16362,21 @@ mod tests {
             .into_response();
 
         // DELETE /mcp retires the id: teardown will take the absent-key path.
-        state.mcp_sessions.remove(&sid);
+        state.mcp.sessions.remove(&sid);
 
         // Hold the channel's shard so the removal inside teardown has to wait
         // there, with whatever it took on the session map still held.
-        let channel_shard = state.messaging_channels.entry(sid.clone());
+        let channel_shard = state.session_maps.messaging_channels.entry(sid.clone());
 
         let dropper = std::thread::spawn(move || drop(first));
 
         let mut held = false;
         for _ in 0..200 {
-            if matches!(state.mcp_sessions.try_get(&sid), TryResult::Locked) {
+            if matches!(state.mcp.sessions.try_get(&sid), TryResult::Locked) {
                 // A momentary `get_mut` on an absent key also locks the shard,
                 // so a single observation proves nothing — the hold has to last.
                 std::thread::sleep(std::time::Duration::from_millis(100));
-                held = matches!(state.mcp_sessions.try_get(&sid), TryResult::Locked);
+                held = matches!(state.mcp.sessions.try_get(&sid), TryResult::Locked);
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -16318,7 +16389,7 @@ mod tests {
         drop(channel_shard);
         dropper.join().expect("teardown thread");
         assert!(
-            !state.messaging_channels.contains_key(&sid),
+            !state.session_maps.messaging_channels.contains_key(&sid),
             "with nobody left to own it, the channel is still released"
         );
     }
@@ -16403,7 +16474,7 @@ mod tests {
 
         let state = test_state();
         let sid = uuid::Uuid::new_v4().to_string();
-        state.mcp_sessions.insert(
+        state.mcp.sessions.insert(
             sid.clone(),
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),

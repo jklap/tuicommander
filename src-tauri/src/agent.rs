@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::pty::spawn_reader_thread;
 use crate::state::{
     AgentConfig, AppState, OUTPUT_RING_BUFFER_CAPACITY, OutputRingBuffer, PtyConfig, PtySession,
-    VT_LOG_BUFFER_CAPACITY, VtLogBuffer,
+    VT_LOG_BUFFER_CAPACITY,
 };
 
 // resolve_cli and has_cli are now in crate::cli — re-export for backwards compatibility
@@ -997,7 +997,7 @@ pub(crate) async fn spawn_agent(
 
     // Store session (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
-    state.sessions.insert(
+    state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(writer)),
@@ -1019,15 +1019,16 @@ pub(crate) async fn spawn_agent(
         .fetch_add(1, Ordering::Relaxed);
 
     // Create ring buffer and VT log buffer for this session
-    state.output_buffers.insert(
+    state.session_maps.output_buffers.insert(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    state.vt_log_buffers.insert(
+    state.grid.vt_log_buffers.insert(
         session_id.clone(),
-        Mutex::new(VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY)),
+        Mutex::new(state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY)),
     );
     state
+        .session_maps
         .last_output_ms
         .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
 

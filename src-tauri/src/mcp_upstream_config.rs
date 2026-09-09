@@ -256,7 +256,7 @@ pub(crate) async fn auto_connect_saved_upstreams(state: &crate::state::AppState)
     let config: UpstreamMcpConfig = load_json_config(UPSTREAMS_FILE);
     if config.servers.is_empty() {
         // No upstreams to wait for — let tools/list serve immediately.
-        state.mcp_upstream_registry.mark_initial_connect_complete();
+        state.mcp.upstream_registry.mark_initial_connect_complete();
         return;
     }
 
@@ -268,7 +268,7 @@ pub(crate) async fn auto_connect_saved_upstreams(state: &crate::state::AppState)
         }
     }
 
-    let registry = &state.mcp_upstream_registry;
+    let registry = &state.mcp.upstream_registry;
     tracing::info!(
         source = "mcp_upstream",
         count = config.servers.len(),
@@ -492,7 +492,7 @@ pub(crate) async fn save_mcp_upstreams_inner(
         base,
         config,
         self_port,
-        &state.mcp_upstream_registry,
+        &state.mcp.upstream_registry,
         || std::future::ready(()),
     )
     .await
@@ -589,7 +589,7 @@ pub(crate) fn set_project_mcp_upstreams_inner(
     entry.mcp_upstreams = upstream_names;
     crate::config::save_repo_settings(settings)?;
     // Notify connected MCP clients that the tool list may have changed
-    let _ = state.mcp_tools_changed.send(());
+    let _ = state.mcp.tools_changed.send(());
     Ok(())
 }
 
@@ -618,7 +618,7 @@ pub(crate) async fn reconnect_mcp_upstream(
         .find(|s| s.name == name)
         .ok_or_else(|| format!("Upstream '{name}' not found in config"))?;
 
-    let registry = &state.mcp_upstream_registry;
+    let registry = &state.mcp.upstream_registry;
 
     // Emit reconnecting event so the UI can show feedback
     registry.emit_status_change(&name, "connecting");
@@ -636,7 +636,7 @@ pub(crate) async fn reconnect_mcp_upstream(
 pub(crate) fn get_mcp_upstream_status(
     state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
 ) -> serde_json::Value {
-    state.mcp_upstream_registry.status_snapshot()
+    state.mcp.upstream_registry.status_snapshot()
 }
 
 // ---------------------------------------------------------------------------
@@ -1676,7 +1676,7 @@ mod tests {
         let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
 
         let state = crate::state::tests_support::make_test_app_state();
-        let mut rx = state.mcp_tools_changed.subscribe();
+        let mut rx = state.mcp.tools_changed.subscribe();
 
         // Set allowlist
         set_project_mcp_upstreams_inner(

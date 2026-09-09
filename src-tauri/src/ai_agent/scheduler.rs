@@ -123,7 +123,7 @@ impl Scheduler {
 
     async fn fire_job(&self, job: &ScheduledJob) {
         let session_id = match &job.target_session {
-            Some(sid) if self.state.sessions.contains_key(sid) => sid.clone(),
+            Some(sid) if self.state.session_maps.sessions.contains_key(sid) => sid.clone(),
             _ => {
                 match crate::pty::spawn_session_for_agent(
                     &self.state,
@@ -274,13 +274,14 @@ pub(crate) fn ensure_running(state: &Arc<AppState>) {
         return;
     }
     if state
+        .ai
         .scheduler_running
         .swap(true, std::sync::atomic::Ordering::AcqRel)
     {
         return; // already running
     }
     let sched_state = state.clone();
-    let stop = state.scheduler_stop.clone();
+    let stop = state.ai.scheduler_stop.clone();
     tokio::spawn(async move {
         let scheduler = Scheduler::new(sched_state, stop);
         scheduler.run().await;
@@ -294,10 +295,11 @@ pub(crate) fn reconcile_after_config_change(state: &Arc<AppState>, config: &Sche
     if has_enabled_jobs(config) {
         ensure_running(state);
     } else if state
+        .ai
         .scheduler_running
         .swap(false, std::sync::atomic::Ordering::AcqRel)
     {
-        state.scheduler_stop.notify_one();
+        state.ai.scheduler_stop.notify_one();
     }
 }
 
@@ -344,6 +346,7 @@ mod tests {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let running = || {
             state
+                .ai
                 .scheduler_running
                 .load(std::sync::atomic::Ordering::Acquire)
         };

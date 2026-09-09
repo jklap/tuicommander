@@ -751,7 +751,7 @@ pub(crate) fn ensure_polling(
     issue_filter: String,
     pr_hide_drafts: bool,
 ) {
-    let mut guard = state.github_poller.lock();
+    let mut guard = state.github.poller.lock();
     if let Some(poller) = guard.as_ref() {
         send_poller_config(poller, paths, issue_filter, pr_hide_drafts, true);
         return;
@@ -792,7 +792,8 @@ pub(crate) async fn github_start_polling(
 /// never held across the send.
 pub(crate) fn send_poller_cmd(state: &AppState, cmd: PollerCmd) -> Result<(), String> {
     let tx = state
-        .github_poller
+        .github
+        .poller
         .lock()
         .as_ref()
         .map(|poller| poller.cmd_tx.clone())
@@ -811,7 +812,8 @@ pub(crate) fn send_poller_cmd(state: &AppState, cmd: PollerCmd) -> Result<(), St
 /// on the poll itself — see [`GitHubPoller::stop`].
 pub(crate) async fn stop_poller(state: &AppState) -> Result<(), String> {
     let poller = state
-        .github_poller
+        .github
+        .poller
         .lock()
         .take()
         .ok_or_else(|| "GitHub poller is not running".to_string())?;
@@ -876,7 +878,7 @@ pub(crate) fn github_set_pr_hide_drafts_impl(
     state: &Arc<AppState>,
     hide: bool,
 ) -> Result<(), String> {
-    if let Some(poller) = state.github_poller.lock().as_ref()
+    if let Some(poller) = state.github.poller.lock().as_ref()
         && let Err(e) = poller.cmd_tx.try_send(PollerCmd::SetPrHideDrafts(hide))
     {
         tracing::warn!(source = "github", "Failed to send SetPrHideDrafts: {e}");
@@ -916,7 +918,7 @@ mod tests {
     #[test]
     fn a_command_for_a_stopped_poller_is_an_error() {
         let state = crate::state::tests_support::make_test_app_state();
-        assert!(state.github_poller.lock().is_none(), "fixture: no poller");
+        assert!(state.github.poller.lock().is_none(), "fixture: no poller");
 
         let err = send_poller_cmd(&state, PollerCmd::SetVisibility(false))
             .expect_err("no poller must not report success");
@@ -966,7 +968,7 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel(8);
         let stop = Arc::new(tokio::sync::Notify::new());
-        *state.github_poller.lock() = Some(GitHubPoller {
+        *state.github.poller.lock() = Some(GitHubPoller {
             cmd_tx,
             stop: Arc::clone(&stop),
         });
@@ -985,7 +987,7 @@ mod tests {
             .expect("poll task panicked");
         assert!(!completed, "the poll must report that Stop cut it short");
         assert!(
-            state.github_poller.lock().is_none(),
+            state.github.poller.lock().is_none(),
             "stop_poller must clear the poller from state"
         );
     }
@@ -997,7 +999,7 @@ mod tests {
     async fn a_command_for_a_running_poller_is_delivered() {
         let state = crate::state::tests_support::make_test_app_state();
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(8);
-        *state.github_poller.lock() = Some(GitHubPoller {
+        *state.github.poller.lock() = Some(GitHubPoller {
             cmd_tx,
             stop: Arc::new(Notify::new()),
         });

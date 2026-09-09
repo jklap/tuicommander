@@ -82,7 +82,7 @@ pub(crate) async fn create_pty(
 
     // Store session (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
-    state.sessions.insert(
+    state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(writer)),
@@ -105,23 +105,23 @@ pub(crate) async fn create_pty(
         .fetch_add(1, Ordering::Relaxed);
 
     // Create ring buffer and VT log buffer for this session
-    state.output_buffers.insert(
+    state.session_maps.output_buffers.insert(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let mut vt_log = VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY);
-    if let Some(colors) = state.ansi_colors.read().as_ref() {
-        vt_log.set_ansi_colors(colors);
-    }
+    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
     state
+        .grid
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
     let grid_watch_tx = crate::grid_gate::new_grid_watch();
-    state.grid_watch.insert(session_id.clone(), grid_watch_tx);
+    state.grid.watch.insert(session_id.clone(), grid_watch_tx);
     state
+        .session_maps
         .last_output_ms
         .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
     state
+        .session_maps
         .terminal_rows
         .insert(session_id.clone(), std::sync::atomic::AtomicU16::new(rows));
     let mut ss = crate::state::SessionState::default();
@@ -132,7 +132,10 @@ pub(crate) async fn create_pty(
             ss.agent_type.as_deref(),
         );
     }
-    state.session_states.insert(session_id.clone(), ss);
+    state
+        .session_maps
+        .session_states
+        .insert(session_id.clone(), ss);
 
     spawn_reader_thread(
         reader,
@@ -243,7 +246,7 @@ pub(crate) async fn create_pty_with_worktree(
 
     // Store session with worktree info (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
-    state.sessions.insert(
+    state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(writer)),
@@ -266,23 +269,22 @@ pub(crate) async fn create_pty_with_worktree(
         .fetch_add(1, Ordering::Relaxed);
 
     // Create ring buffer, VT log buffer, and diff renderer for this session
-    state.output_buffers.insert(
+    state.session_maps.output_buffers.insert(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let mut vt_log = VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY);
-    if let Some(colors) = state.ansi_colors.read().as_ref() {
-        vt_log.set_ansi_colors(colors);
-    }
+    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
     state
+        .grid
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
     let grid_watch_tx = crate::grid_gate::new_grid_watch();
-    state.grid_watch.insert(session_id.clone(), grid_watch_tx);
+    state.grid.watch.insert(session_id.clone(), grid_watch_tx);
     state
+        .session_maps
         .last_output_ms
         .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
-    state.terminal_rows.insert(
+    state.session_maps.terminal_rows.insert(
         session_id.clone(),
         std::sync::atomic::AtomicU16::new(pty_rows),
     );
@@ -294,7 +296,10 @@ pub(crate) async fn create_pty_with_worktree(
             ss.agent_type.as_deref(),
         );
     }
-    state.session_states.insert(session_id.clone(), ss);
+    state
+        .session_maps
+        .session_states
+        .insert(session_id.clone(), ss);
 
     spawn_reader_thread(
         reader,
@@ -316,6 +321,7 @@ pub(crate) async fn create_pty_with_worktree(
 #[tauri::command]
 pub(crate) fn list_worktrees(state: State<'_, Arc<AppState>>) -> Vec<serde_json::Value> {
     state
+        .session_maps
         .sessions
         .iter()
         .filter_map(|entry| {
@@ -367,6 +373,7 @@ pub(crate) fn get_input_buffer_content(
     session_id: String,
 ) -> String {
     state
+        .session_maps
         .input_buffers
         .get(&session_id)
         .map(|entry| entry.lock().content())
@@ -380,7 +387,11 @@ pub(crate) fn get_last_prompt(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Option<String> {
-    state.last_prompts.get(&session_id).map(|v| v.clone())
+    state
+        .session_maps
+        .last_prompts
+        .get(&session_id)
+        .map(|v| v.clone())
 }
 
 /// Get the current shell state for a PTY session.
@@ -392,9 +403,13 @@ pub(crate) fn get_shell_state(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Option<String> {
-    state.shell_states.get(&session_id).and_then(|atom| {
-        shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed)).map(str::to_string)
-    })
+    state
+        .session_maps
+        .shell_states
+        .get(&session_id)
+        .and_then(|atom| {
+            shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed)).map(str::to_string)
+        })
 }
 
 /// Return the classified shell family for a PTY session.
@@ -408,6 +423,7 @@ pub(crate) fn get_session_shell_family(
     session_id: String,
 ) -> Option<ShellFamily> {
     state
+        .session_maps
         .sessions
         .get(&session_id)
         .map(|entry| classify_shell(&entry.lock().shell))
@@ -442,7 +458,7 @@ pub(crate) fn set_ansi_colors(
     colors: [[u8; 3]; 16],
 ) -> Result<(), String> {
     *state.ansi_colors.write() = Some(colors);
-    for entry in state.vt_log_buffers.iter() {
+    for entry in state.grid.vt_log_buffers.iter() {
         entry.value().lock().set_ansi_colors(&colors);
     }
     Ok(())
@@ -453,6 +469,7 @@ pub(crate) fn set_ansi_colors(
 #[tauri::command]
 pub(crate) fn pause_pty(state: State<'_, Arc<AppState>>, session_id: String) -> Result<(), String> {
     let entry = state
+        .session_maps
         .sessions
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
@@ -473,6 +490,7 @@ pub(crate) fn resume_pty(
     session_id: String,
 ) -> Result<(), String> {
     let entry = state
+        .session_maps
         .sessions
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
@@ -491,6 +509,7 @@ pub(crate) fn resume_pty(
 #[tauri::command]
 pub(crate) fn get_kitty_flags(state: State<'_, Arc<AppState>>, session_id: String) -> u32 {
     state
+        .session_maps
         .kitty_states
         .get(&session_id)
         .map(|entry| entry.lock().current_flags())
@@ -546,7 +565,7 @@ pub(crate) fn get_session_foreground_process(
     ];
 
     let (detected, fg_is_shell) = {
-        let entry = state.sessions.get(&session_id)?;
+        let entry = state.session_maps.sessions.get(&session_id)?;
         let session = entry.value().lock();
         #[cfg(not(windows))]
         {
@@ -572,6 +591,7 @@ pub(crate) fn get_session_foreground_process(
             return None;
         }
         state
+            .session_maps
             .session_states
             .get(&session_id)
             .and_then(|s| s.agent_type.clone())
@@ -594,7 +614,7 @@ pub(crate) fn get_session_foreground_process(
     // source=idle) on its store mirror; backend must match or the parser
     // gates off while the UI still shows the agent active. Session teardown
     // clears session_states entirely, so no explicit reset is needed here.
-    if let Some(mut entry) = state.session_states.get_mut(&session_id)
+    if let Some(mut entry) = state.session_maps.session_states.get_mut(&session_id)
         && effective.is_some()
         && entry.agent_type != effective
     {
@@ -620,7 +640,7 @@ pub(crate) fn get_session_leaf_pid(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Option<u32> {
-    let entry = state.sessions.get(&session_id)?;
+    let entry = state.session_maps.sessions.get(&session_id)?;
     let session = entry.value().lock();
     #[cfg(not(windows))]
     {
@@ -658,7 +678,7 @@ pub(crate) fn has_foreground_process(
         "pwsh",
         "cmd",
     ];
-    let entry = state.sessions.get(&session_id)?;
+    let entry = state.session_maps.sessions.get(&session_id)?;
     // Extract pid under lock, then drop before the blocking syscall
     #[cfg(not(windows))]
     let pid = {
@@ -690,7 +710,7 @@ pub(crate) fn debug_agent_detection(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> serde_json::Value {
-    let entry = match state.sessions.get(&session_id) {
+    let entry = match state.session_maps.sessions.get(&session_id) {
         Some(e) => e,
         None => {
             return serde_json::json!({ "error": "session not found", "session_id": session_id });
@@ -747,7 +767,7 @@ pub(crate) fn get_session_metrics(state: State<'_, Arc<AppState>>) -> serde_json
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn can_spawn_session(state: State<'_, Arc<AppState>>) -> bool {
-    state.sessions.len() < MAX_CONCURRENT_SESSIONS
+    state.session_maps.sessions.len() < MAX_CONCURRENT_SESSIONS
 }
 
 /// Set the display name of a PTY session (syncs tab title to backend for PWA visibility).
@@ -760,6 +780,7 @@ pub(crate) fn set_session_name(
     is_custom: Option<bool>,
 ) -> Result<(), String> {
     let entry = state
+        .session_maps
         .sessions
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
@@ -818,6 +839,7 @@ pub(crate) fn remove_queued_agent_command(
 #[tauri::command]
 pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<ActiveSessionInfo> {
     state
+        .session_maps
         .sessions
         .iter()
         .map(|entry| {
@@ -835,6 +857,7 @@ pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<Activ
                 display_name_is_custom: session.display_name_is_custom,
                 is_remote: session.is_remote,
                 pty_description: state
+                    .session_maps
                     .pty_descriptions
                     .get(entry.key())
                     .map(|value| value.value().clone()),
@@ -922,8 +945,8 @@ pub(crate) fn subscribe_terminal_grid(
     // on the same call.
     let gate = Arc::new(crate::grid_gate::GridGate::new());
     let epoch = gate.epoch();
-    state.grid_gates.insert(session_id.clone(), gate);
-    state.grid_channels.insert(session_id, channel);
+    state.grid.gates.insert(session_id.clone(), gate);
+    state.grid.channels.insert(session_id, channel);
     epoch
 }
 
@@ -948,7 +971,7 @@ pub(crate) fn ack_terminal_frame(
     epoch: u64,
     received: u64,
 ) {
-    if let Some(gate) = state.grid_gates.get(&session_id) {
+    if let Some(gate) = state.grid.gates.get(&session_id) {
         gate.ack(epoch, received);
     }
 }
@@ -957,7 +980,7 @@ pub(crate) fn ack_terminal_frame(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_request_frame(state: State<'_, Arc<AppState>>, session_id: String) {
-    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+    if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
         let frame = {
             let mut vt = vt.lock();
             vt.grid_force_full_damage();
@@ -986,14 +1009,15 @@ pub(crate) fn unsubscribe_terminal_grid(
     epoch: u64,
 ) {
     let is_current = state
-        .grid_gates
+        .grid
+        .gates
         .get(&session_id)
         .is_some_and(|gate| gate.epoch() == epoch);
     if !is_current {
         return;
     }
-    state.grid_channels.remove(&session_id);
-    state.grid_gates.remove(&session_id);
+    state.grid.channels.remove(&session_id);
+    state.grid.gates.remove(&session_id);
 }
 
 /// Exit alternate screen via the terminal grid (display side only, never touches PTY stdin).
@@ -1005,7 +1029,7 @@ pub(crate) fn terminal_exit_alt_screen(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> bool {
-    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+    if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
         let (was_alt, frame) = {
             let mut vt = vt.lock();
             if !vt.is_alternate_screen() {
@@ -1026,7 +1050,7 @@ pub(crate) fn terminal_exit_alt_screen(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_scroll(state: State<'_, Arc<AppState>>, session_id: String, delta: i32) {
-    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+    if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
         let frame = {
             let mut vt = vt.lock();
             vt.grid_scroll(delta);
@@ -1046,10 +1070,10 @@ pub(crate) fn terminal_scroll_to_offset(
     session_id: String,
     offset: usize,
 ) {
-    if let Some(p) = state.pending_scroll.get(&session_id) {
+    if let Some(p) = state.grid.pending_scroll.get(&session_id) {
         p.store(offset as i64, std::sync::atomic::Ordering::Relaxed);
     }
-    if let Some(d) = state.grid_frame_dirty.get(&session_id) {
+    if let Some(d) = state.grid.frame_dirty.get(&session_id) {
         d.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -1081,7 +1105,7 @@ pub(crate) async fn terminal_styled_rows(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_scroll_to(state: State<'_, Arc<AppState>>, session_id: String, line: usize) {
-    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+    if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
         let frame = {
             let mut vt = vt.lock();
             vt.grid_scroll_to_line(line);
@@ -1255,7 +1279,10 @@ pub(crate) async fn set_session_visible(
     session_id: String,
     visible: bool,
 ) -> Result<(), String> {
-    state.session_visibility.insert(session_id.clone(), visible);
+    state
+        .session_maps
+        .session_visibility
+        .insert(session_id.clone(), visible);
     #[cfg(unix)]
     if visible && let Err(e) = wake_session(&state, &session_id) {
         tracing::warn!(session_id, error = %e, "Wake on focus failed");

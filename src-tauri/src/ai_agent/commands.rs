@@ -358,7 +358,7 @@ pub(crate) async fn get_knowledge_session_detail_impl(
     state: &Arc<AppState>,
     session_id: String,
 ) -> Result<Option<SessionDetail>, String> {
-    if let Some(entry) = state.session_knowledge.get(&session_id) {
+    if let Some(entry) = state.ai.session_knowledge.get(&session_id) {
         let k = entry.lock();
         return Ok(Some(to_detail(&session_id, &k)));
     }
@@ -485,6 +485,7 @@ pub(crate) fn watcher_create_impl(
     };
 
     let engine = state
+        .ai
         .watcher_engine
         .get()
         .ok_or("Watcher engine not initialized")?;
@@ -499,6 +500,7 @@ pub(crate) async fn watcher_list(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<super::watcher::WatcherRule>, String> {
     let engine = state
+        .ai
         .watcher_engine
         .get()
         .ok_or("Watcher engine not initialized")?;
@@ -514,6 +516,7 @@ pub(crate) async fn watcher_delete(
     id: String,
 ) -> Result<(), String> {
     let engine = state
+        .ai
         .watcher_engine
         .get()
         .ok_or("Watcher engine not initialized")?;
@@ -530,6 +533,7 @@ pub(crate) async fn watcher_toggle(
     enabled: bool,
 ) -> Result<(), String> {
     let engine = state
+        .ai
         .watcher_engine
         .get()
         .ok_or("Watcher engine not initialized")?;
@@ -546,6 +550,7 @@ pub(crate) async fn watcher_attach(
     session_id: String,
 ) -> Result<String, String> {
     let engine = state
+        .ai
         .watcher_engine
         .get()
         .ok_or("Watcher engine not initialized")?;
@@ -561,6 +566,7 @@ pub(crate) async fn watcher_detach(
     id: String,
 ) -> Result<(), String> {
     let engine = state
+        .ai
         .watcher_engine
         .get()
         .ok_or("Watcher engine not initialized")?;
@@ -610,6 +616,7 @@ pub(crate) fn watcher_update_impl(
     cooldown_secs: Option<u32>,
 ) -> Result<(), String> {
     let engine = state
+        .ai
         .watcher_engine
         .get()
         .ok_or("Watcher engine not initialized")?;
@@ -644,7 +651,7 @@ pub(crate) fn get_session_knowledge_impl(
     state: &Arc<AppState>,
     session_id: String,
 ) -> Result<SessionKnowledgeSummary, String> {
-    let entry = state.session_knowledge.get(&session_id);
+    let entry = state.ai.session_knowledge.get(&session_id);
     let summary = match entry {
         Some(e) => SessionKnowledgeSummary::from_knowledge(&session_id, &e.lock()),
         None => SessionKnowledgeSummary {
@@ -668,18 +675,20 @@ pub(crate) fn toggle_ai_suggestions(state: State<'_, Arc<AppState>>, session_id:
 /// Non-gated core for HTTP parity (browser/PWA). See `toggle_ai_suggestions`.
 pub(crate) fn toggle_ai_suggestions_impl(state: &Arc<AppState>, session_id: String) -> bool {
     let current = state
+        .ai
         .ai_suggestions_enabled
         .get(&session_id)
         .map(|v| *v)
         .unwrap_or_else(|| {
             state
+                .session_maps
                 .session_states
                 .get(&session_id)
                 .map(|s| s.agent_type.is_some())
                 .unwrap_or(false)
         });
     let new_val = !current;
-    state.ai_suggestions_enabled.insert(session_id, new_val);
+    state.ai.ai_suggestions_enabled.insert(session_id, new_val);
     new_val
 }
 
@@ -692,11 +701,13 @@ pub(crate) fn get_ai_suggestions_enabled(
     session_id: String,
 ) -> bool {
     state
+        .ai
         .ai_suggestions_enabled
         .get(&session_id)
         .map(|v| *v)
         .unwrap_or_else(|| {
             state
+                .session_maps
                 .session_states
                 .get(&session_id)
                 .map(|s| s.agent_type.is_some())
@@ -786,13 +797,16 @@ mod tests {
         // Simulate what start_agent_loop does: create and insert sandbox for cwd.
         let root = std::env::temp_dir();
         let sandbox = FileSandbox::new(&root).expect("temp_dir should be a valid sandbox root");
-        state.file_sandboxes.insert(sid.to_string(), sandbox);
-        assert!(state.file_sandboxes.contains_key(sid), "sandbox inserted");
+        state.ai.file_sandboxes.insert(sid.to_string(), sandbox);
+        assert!(
+            state.ai.file_sandboxes.contains_key(sid),
+            "sandbox inserted"
+        );
 
         // Simulate what engine cleanup does at loop end.
-        state.file_sandboxes.remove(sid);
+        state.ai.file_sandboxes.remove(sid);
         assert!(
-            !state.file_sandboxes.contains_key(sid),
+            !state.ai.file_sandboxes.contains_key(sid),
             "sandbox removed after loop"
         );
     }

@@ -317,6 +317,37 @@ pub enum AppEvent {
         branch: String,
         reason: String,
     },
+    /// A session's derived lifecycle state moved (working / idle / awaiting).
+    ///
+    /// The only OUTPUT of the session-state accumulator, and the only variant
+    /// nothing feeds back into it — see the no-op arm in
+    /// `apply_event_to_session_state`. Published once per real transition so the
+    /// desktop can render badges from a push instead of a 1 Hz
+    /// `list_active_sessions` poll (#687-be9d).
+    ///
+    /// The payload is field-for-field an entry of that command's response
+    /// (`ActiveSessionInfo`'s `session_id` + `state`), and the same object the
+    /// browser-mode WebSocket already sends as `{"type":"state","state":…}`, so
+    /// one frontend applier serves every transport.
+    #[serde(rename = "session-state-changed")]
+    SessionStateChanged {
+        session_id: String,
+        /// Boxed: `SessionState` is ~528 bytes against ~144 for the next-largest
+        /// arm, and `AppEvent` is cloned once per broadcast subscriber, so an
+        /// inline copy makes every *other* event pay for this one.
+        state: Box<SessionState>,
+    },
+}
+
+/// The wire body of [`AppEvent::SessionStateChanged`], shared by the desktop
+/// window event and the `/events` SSE arm.
+///
+/// One builder rather than two: the payload has to be byte-identical across the
+/// transports for the same frontend applier to consume both, and the pairs this
+/// codebase builds from separate code in separate files are exactly the ones
+/// that drift.
+pub(crate) fn session_state_payload(session_id: &str, state: &SessionState) -> serde_json::Value {
+    serde_json::json!({ "session_id": session_id, "state": state })
 }
 
 impl AppEvent {
@@ -474,6 +505,12 @@ pub(crate) struct SessionStateEventQueue {
     depth: AtomicUsize,
 }
 
+impl Default for SessionStateEventQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionStateEventQueue {
     pub(crate) fn new() -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -522,7 +559,7 @@ impl SessionStateEventQueue {
 
 pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, data: &str) -> bool {
     {
-        let Some(mut session) = state.session_states.get_mut(session_id) else {
+        let Some(mut session) = state.session_maps.session_states.get_mut(session_id) else {
             return false;
         };
         let Some(prompt) = session.choice_prompt.as_ref() else {
@@ -876,6 +913,13 @@ impl OutputRingBuffer {
             write_pos: 0,
             total_written: 0,
         }
+    }
+
+    /// Bytes this ring holds. The buffer is allocated full at construction, so
+    /// this — not `len` — is what `memory_report` must count: `len` reads zero
+    /// on a ring that has already reserved its whole capacity.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Append data to the ring buffer using bulk copy to avoid per-byte overhead.
@@ -1387,96 +1431,101 @@ pub(crate) const AGENT_MESSAGE_MAX_BYTES: usize = 64 * 1024;
 /// storm that a repo-changed burst across many repos would otherwise cause.
 pub(crate) const MONITORING_GIT_CONCURRENCY: usize = 8;
 
-/// Global state for managing PTY sessions and worktrees
-pub struct AppState {
-    pub sessions: DashMap<String, Mutex<PtySession>>,
-    pub(crate) data_dir: PathBuf,
-    pub(crate) worktrees_dir: PathBuf,
-    pub(crate) metrics: SessionMetrics,
-    /// Ring buffers for MCP output access (one per session)
-    pub output_buffers: DashMap<String, Mutex<OutputRingBuffer>>,
-    /// Active MCP Streamable HTTP sessions (session_id -> metadata for TTL reaping + client identity)
-    pub mcp_sessions: DashMap<String, McpSessionMeta>,
-    /// WebSocket clients per PTY session for streaming output
-    pub ws_clients: DashMap<String, Vec<WsClientTx>>,
-    /// Cached AppConfig to avoid re-reading from disk on every request
-    pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
-    /// TTL caches for git and GitHub query results
-    pub(crate) git_cache: GitCacheState,
-    /// Raw file watchers per repo (keyed by repo path), with per-category
-    /// debounce. macOS/Windows: one recursive `notify::RecommendedWatcher` over
-    /// the repo root. Linux: pruned non-recursive working-tree watches + targeted
-    /// `.git` watches (issue #82). Stored behind `Arc` so the Linux event callback
-    /// can clone a stable handle and add watches for newly created dirs without
-    /// holding a `DashMap` ref across the blocking `watch()` call.
-    pub(crate) repo_watchers: DashMap<String, Arc<crate::repo_watcher::RepoWatchHandle>>,
-    /// Last emitted git-state fingerprint per repo path. The repo watcher skips
-    /// the `repo-changed` (git-state) emit when the fingerprint is unchanged, so a
-    /// no-op `.git` touch (e.g. a `--no-optional-locks` status refreshing the index
-    /// stat cache) doesn't trigger the full ~20-panel frontend re-render cascade.
-    pub(crate) repo_git_fingerprints: DashMap<String, u64>,
-    /// Last emitted resolved-HEAD target per repo path (`resolve_head_target`
-    /// output). The repo watcher skips the `head-changed` emit when this is
-    /// unchanged, suppressing the Linux inotify storm where `.git/HEAD` events
-    /// recur without HEAD actually moving (issue #82).
-    pub(crate) repo_head_targets: DashMap<String, String>,
-    /// Count of `head-changed` emits suppressed by the `repo_head_targets`
-    /// guard — surfaced in diagnostic snapshots to quantify watcher storm
-    /// volume in production (issue #82).
-    pub(crate) repo_head_emits_suppressed: AtomicU64,
-    /// File watchers for directory contents (keyed by absolute dir path)
-    pub(crate) dir_watchers: DashMap<String, crate::repo_watcher::WatchHandle>,
-    /// File watcher for the themes/ directory — kept alive for the app lifetime.
-    pub(crate) theme_watcher: parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
-    /// Shared mdkb daemon client for AST navigation (outline, goto-def, references).
-    pub(crate) mdkb_daemon: crate::mdkb_daemon::SharedMdkbDaemon,
-    /// Shared async HTTP client for GitHub API requests.
-    /// Built by [`build_http_client`] — always with timeouts, never
-    /// `reqwest::Client::new()`.
-    pub(crate) http_client: reqwest::Client,
+/// The GitHub half of [`AppState`], grouped so the 116-field struct reads as
+/// subsystems rather than a flat list (#678-9a75).
+///
+/// Every field is constructible without arguments, so the group carries its own
+/// `Default` and `AppState::new` names it once instead of seven times.
+pub(crate) struct GitHubState {
     /// GitHub API token — updated on fallback when a 401 triggers candidate rotation
-    pub(crate) github_token: parking_lot::RwLock<Option<String>>,
+    pub(crate) token: parking_lot::RwLock<Option<String>>,
     /// Where the current GitHub token came from (env, OAuth keyring, gh CLI)
-    pub(crate) github_token_source: parking_lot::RwLock<crate::github_auth::TokenSource>,
+    pub(crate) token_source: parking_lot::RwLock<crate::github_auth::TokenSource>,
     /// Circuit breaker for GitHub API calls
-    pub(crate) github_circuit_breaker: crate::github::GitHubCircuitBreaker,
+    pub(crate) circuit_breaker: crate::github::GitHubCircuitBreaker,
     /// Background GitHub poller task handle
-    pub(crate) github_poller: parking_lot::Mutex<Option<crate::github_poller::GitHubPoller>>,
+    pub(crate) poller: parking_lot::Mutex<Option<crate::github_poller::GitHubPoller>>,
     /// Cached GitHub viewer login (authenticated user) for issue filtering.
-    pub(crate) github_viewer_login: parking_lot::RwLock<Option<String>>,
+    pub(crate) viewer_login: parking_lot::RwLock<Option<String>>,
     /// Remaining GraphQL points from last poll — used for proactive throttling.
     /// Initialized to u32::MAX (no constraint). Written by each successful batch poll.
     /// This is the github.com budget; GHE accounts track their own in `ghe_state`.
-    pub(crate) github_rate_limit_remaining: std::sync::atomic::AtomicU32,
+    pub(crate) rate_limit_remaining: std::sync::atomic::AtomicU32,
     /// Per-account runtime state for non-github.com (GHE) accounts: breaker +
     /// viewer-login cache + rate budget, keyed by account id. github.com uses the
     /// global fields above, so a github.com-only user is byte-for-byte unchanged.
     pub(crate) ghe_state: DashMap<String, crate::github::GheAccountState>,
-    /// Shutdown sender for the HTTP server — send () to gracefully stop it.
-    /// Only the TCP listener + TLS renewal task listen to this signal now;
-    /// IPC listeners (Unix socket / named pipe) and the session reaper live
-    /// for the whole app lifetime regardless of TCP restarts.
-    pub(crate) server_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    /// One-shot guard: IPC listeners (Unix socket / named pipe), MCP session
-    /// reaper, and upstream health checker are spawned the first time
-    /// `start_server` runs and persist across restarts. Prevents a ~200ms
-    /// socket-rebind window on `save_config` / TLS state changes that was
-    /// tripping the MCP bridge's 3-failure / 9s health threshold and flipping
-    /// it offline.
-    pub(crate) ipc_started: std::sync::atomic::AtomicBool,
-    /// Random session token for browser cookie auth — generated once when empty,
-    /// then persisted in config and reused across server starts (not regenerated
-    /// per start). Browsers auto-send cookies in fetch(), unlike stored Basic Auth.
-    /// Behind RwLock so it can be regenerated at runtime (invalidating all sessions).
-    pub(crate) session_token: parking_lot::RwLock<String>,
-    pub(crate) auth_rate_limits: DashMap<std::net::IpAddr, (u32, Instant)>,
-    #[cfg(feature = "desktop")]
-    pub(crate) app_handle: parking_lot::RwLock<Option<AppHandle>>,
-    /// Plugin filesystem watchers: watch_id → (plugin_id, watcher)
-    pub plugin_watchers: DashMap<String, (String, notify::RecommendedWatcher)>,
-    /// Current ANSI color overrides from the frontend theme (indices 0-15).
-    /// Applied to new VtLogBuffers at creation time.
-    pub(crate) ansi_colors: parking_lot::RwLock<Option<[[u8; 3]; 16]>>,
+}
+
+impl Default for GitHubState {
+    fn default() -> Self {
+        Self {
+            token: parking_lot::RwLock::new(None),
+            token_source: parking_lot::RwLock::new(Default::default()),
+            circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
+            poller: parking_lot::Mutex::new(None),
+            viewer_login: parking_lot::RwLock::new(None),
+            // u32::MAX means "no constraint known yet", not "no budget left".
+            rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
+            ghe_state: dashmap::DashMap::new(),
+        }
+    }
+}
+
+/// The MCP half of [`AppState`] (#678-9a75): Streamable-HTTP sessions, the
+/// upstream proxy registry, OAuth flows, and the tool-search index they feed.
+pub struct McpState {
+    /// Active MCP Streamable HTTP sessions (session_id -> metadata for TTL reaping + client identity)
+    pub sessions: DashMap<String, McpSessionMeta>,
+    /// Upstream MCP proxy registry — aggregates tools from all connected upstreams.
+    pub(crate) upstream_registry: Arc<crate::mcp_proxy::registry::UpstreamRegistry>,
+    /// Orchestrator for in-flight OAuth 2.1 authorization flows. Flows run
+    /// concurrently — each one owns its `state` nonce, PKCE verifier and
+    /// callback port, so there is nothing to serialize.
+    pub(crate) oauth_flow_manager: Arc<crate::mcp_oauth::flow::OAuthFlowManager>,
+    /// Broadcast channel for MCP `notifications/tools/list_changed`.
+    /// Fired when native tools are toggled or upstream tool lists change.
+    pub(crate) tools_changed: tokio::sync::broadcast::Sender<()>,
+    /// MCP session → PTY session mapping for caller identity resolution.
+    /// Populated at agent spawn time; used by self-close guard in session(close).
+    pub to_session: DashMap<String, String>,
+    /// Reverse index of `to_session`: tuic_session → list of mcp_session_ids.
+    /// Populated alongside `to_session` at agent(register). Lets
+    /// `tombstone_transient_cleanup` remove entries in O(1) instead of scanning
+    /// every entry of `to_session` on each session exit.
+    pub session_to_mcp: DashMap<String, Vec<String>>,
+    /// Cached BM25 search index over the full tool corpus (native + upstream),
+    /// filtered by `disabled_native_tools`. Used by the MCP `search_tools` /
+    /// `get_tool_schema` meta-handlers and the Command Palette. Rebuilt on
+    /// every `tools_changed` signal by the updater task in
+    /// `mcp_http::mcp_transport::spawn_tool_search_index_updater`.
+    pub(crate) tool_search_index: Arc<parking_lot::RwLock<crate::tool_search::ToolSearchIndex>>,
+}
+
+impl Default for McpState {
+    fn default() -> Self {
+        Self {
+            sessions: DashMap::new(),
+            upstream_registry: Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new()),
+            oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
+            tools_changed: tokio::sync::broadcast::channel(16).0,
+            to_session: DashMap::new(),
+            session_to_mcp: DashMap::new(),
+            // Empty until the updater task builds the real corpus.
+            tool_search_index: Arc::new(parking_lot::RwLock::new(
+                crate::tool_search::ToolSearchIndex::build(&[]),
+            )),
+        }
+    }
+}
+
+/// The rendering half of [`AppState`] (#678-9a75): one VT grid per session,
+/// the raw-byte flight recorder beside it, and the channels and gates that
+/// deliver frames to a frontend.
+///
+/// Every field is an empty map at startup, so the group derives its `Default`.
+#[derive(Default)]
+pub(crate) struct GridState {
     /// Per-session VT100 log buffers for clean mobile/REST output (session_id → buffer).
     /// Separate DashMap to avoid writer contention on PtySession.
     pub(crate) vt_log_buffers: DashMap<String, Mutex<VtLogBuffer>>,
@@ -1486,21 +1535,21 @@ pub struct AppState {
     /// the wild, GET /sessions/{id}/raw-ring dumps the exact byte stream for
     /// offline replay (terminal_grid.rs `replay_capture_from_env`).
     pub(crate) pty_raw_rings: DashMap<String, Mutex<std::collections::VecDeque<u8>>>,
-    #[cfg(feature = "desktop")]
     /// Binary on purpose: `Channel<Vec<u8>>` serialises to a JSON number array,
     /// `Channel<Response>` keeps the raw bytes. See `send_grid_frame`.
-    pub(crate) grid_channels: DashMap<String, tauri::ipc::Channel<tauri::ipc::Response>>,
+    #[cfg(feature = "desktop")]
+    pub(crate) channels: DashMap<String, tauri::ipc::Channel<tauri::ipc::Response>>,
     /// Watch channel for WebSocket grid streaming (session_id → sender).
     /// Uses latest-frame-wins semantics: slow WS clients skip intermediate frames.
-    pub(crate) grid_watch: DashMap<String, crate::grid_gate::GridWatchTx>,
+    pub(crate) watch: DashMap<String, crate::grid_gate::GridWatchTx>,
     /// Flow control: frames sent vs frames the frontend reported receiving. While
     /// the gate is closed the ticker skips sending — damage accumulates in
     /// alacritty. See [`crate::grid_gate::GridGate`] for why it counts instead of
     /// holding a bool.
-    pub(crate) grid_gates: DashMap<String, Arc<crate::grid_gate::GridGate>>,
+    pub(crate) gates: DashMap<String, Arc<crate::grid_gate::GridGate>>,
     /// Dirty flag: set by PTY reader when new data is processed, cleared by frame ticker.
     /// Decouples read() from frame serialization to coalesce rapid writes (spinners).
-    pub(crate) grid_frame_dirty: DashMap<String, Arc<AtomicBool>>,
+    pub(crate) frame_dirty: DashMap<String, Arc<AtomicBool>>,
     /// Hint: true while a DEC 2026 synchronized update is open on this session.
     /// Written by the PTY reader after each `process()`, read by the frame ticker
     /// so an idle tick only takes the vt lock for sessions that can actually have
@@ -1511,6 +1560,58 @@ pub struct AppState {
     /// frame ticker under the lock it already holds, so scroll never blocks on the
     /// PTY output processor.
     pub(crate) pending_scroll: DashMap<String, Arc<AtomicI64>>,
+}
+
+/// TUIC's own AI-agent subsystem inside [`AppState`] (#678-9a75): what the
+/// agent loop knows per session, what it is allowed to touch, and the two
+/// background engines (watcher, cron scheduler) that drive it.
+///
+/// `Default` is derived: every field starts empty, unset or false.
+#[derive(Default)]
+pub(crate) struct AiAgentState {
+    /// Per-session command outcome + error/fix knowledge store.
+    /// Populated by pty.rs OSC 133 hooks and SessionState transitions.
+    /// Consumed by the agent loop for context injection.
+    pub(crate) session_knowledge:
+        DashMap<String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>,
+    /// Sessions with unpersisted knowledge changes. Flushed to disk every 2s
+    /// by the background knowledge-persist task.
+    pub(crate) knowledge_dirty: DashMap<String, ()>,
+    /// Per-session filesystem sandbox for the L2 agent's file/shell tools.
+    /// Keyed by session_id. Populated when the agent loop starts, rooted at the
+    /// session's git repo root or CWD. See `ai_agent::sandbox::FileSandbox`.
+    pub(crate) file_sandboxes: DashMap<String, crate::ai_agent::sandbox::FileSandbox>,
+    /// Sessions running in unrestricted (TrustLevel::Unrestricted) mode.
+    /// Present = unrestricted; absent = standard safety gates apply.
+    pub(crate) unrestricted_sessions: DashMap<String, ()>,
+    /// Terminal watcher engine handle — initialized once at startup.
+    /// Commands access the shared config via `engine.config()`.
+    pub(crate) watcher_engine: std::sync::OnceLock<Arc<crate::ai_agent::watcher::WatcherEngine>>,
+    /// Whether the AI cron scheduler's 30s tick loop is currently spawned.
+    /// Lets `save_scheduler_config` start it only when the saved config has
+    /// at least one enabled job, and stop it when the last one is removed,
+    /// instead of ticking (and re-reading `ai-cron.json` from disk) forever
+    /// from boot regardless of whether any job exists (#672-c1a3).
+    pub(crate) scheduler_running: std::sync::atomic::AtomicBool,
+    /// Shared with the running `Scheduler` (if any) so it can be told to stop.
+    /// Reused across start/stop cycles — always exists, whether or not a
+    /// scheduler task is currently spawned.
+    pub(crate) scheduler_stop: Arc<tokio::sync::Notify>,
+    /// Evaluates CommandOutcome records and emits suggestions for AI investigation.
+    pub(crate) trigger_classifier: crate::ai_agent::triggers::TriggerClassifier,
+    /// Per-session opt-in for AI suggestions. Present + true = enabled.
+    pub(crate) ai_suggestions_enabled: DashMap<String, bool>,
+}
+
+/// The per-session side tables of [`AppState`] (#678-9a75).
+///
+/// Every one is keyed by session id and starts empty, so the group derives its
+/// own `Default` and `AppState::new` names it once instead of 28 times.
+#[derive(Default)]
+pub struct SessionMaps {
+    pub sessions: DashMap<String, Mutex<PtySession>>,
+    /// Ring buffers for MCP output access (one per session)
+    pub output_buffers: DashMap<String, Mutex<OutputRingBuffer>>,
     /// Per-session kitty keyboard protocol state (session_id → state).
     /// Separate DashMap (not inside PtySession) to avoid writer contention.
     pub(crate) kitty_states: DashMap<String, Mutex<KittyKeyboardState>>,
@@ -1527,65 +1628,10 @@ pub struct AppState {
     /// Per-session silence state for fallback question detection.
     /// Shared between the reader thread and write_pty so user-typed lines can be suppressed.
     pub(crate) silence_states: DashMap<String, Arc<Mutex<crate::pty::SilenceState>>>,
-    /// Incremental cache for Claude session transcript parsing.
-    /// Loaded from disk on startup, persisted after each scan.
-    pub(crate) claude_usage_cache: Mutex<crate::claude_usage::SessionStatsCache>,
-    /// Centralized application log ring buffer (1000 entries).
-    /// Frontend pushes via push_log, reads via get_logs.
-    /// Wrapped in Arc so the tracing subscriber layer can share the same buffer.
-    pub(crate) log_buffer: Arc<Mutex<crate::app_logger::LogRingBuffer>>,
-    /// Broadcast channel for all backend events (SSE, WebSocket, live consumers).
-    /// Capacity 256 — lagged receivers get `RecvError::Lagged` and should reconnect.
-    pub(crate) event_bus: tokio::sync::broadcast::Sender<AppEvent>,
-    /// Monotonic counter for SSE event IDs.
-    pub(crate) event_counter: Arc<AtomicU64>,
-    /// Live type filters of the open `/events` streams, so a browser that starts
-    /// listening for a new event type widens its stream in place instead of
-    /// reconnecting — a reconnect drops every event published between the close
-    /// and the new subscription, and nothing replays them.
-    pub(crate) sse_filters: crate::mcp_http::sse_routes::SseFilters,
     /// Per-session state accumulated from broadcast events (for REST polling).
     pub(crate) session_states: DashMap<String, SessionState>,
     /// Lossless single-consumer lane for PTY events that mutate `session_states`.
     pub(crate) session_state_events: SessionStateEventQueue,
-    /// Upstream MCP proxy registry — aggregates tools from all connected upstreams.
-    pub(crate) mcp_upstream_registry: Arc<crate::mcp_proxy::registry::UpstreamRegistry>,
-    /// Orchestrator for in-flight OAuth 2.1 authorization flows. Flows run
-    /// concurrently — each one owns its `state` nonce, PKCE verifier and
-    /// callback port, so there is nothing to serialize.
-    pub(crate) oauth_flow_manager: Arc<crate::mcp_oauth::flow::OAuthFlowManager>,
-    /// Broadcast channel for MCP `notifications/tools/list_changed`.
-    /// Fired when native tools are toggled or upstream tool lists change.
-    pub(crate) mcp_tools_changed: tokio::sync::broadcast::Sender<()>,
-    /// Cached BM25 search index over the full tool corpus (native + upstream),
-    /// filtered by `disabled_native_tools`. Used by the MCP `search_tools` /
-    /// `get_tool_schema` meta-handlers and the Command Palette. Rebuilt on
-    /// every `mcp_tools_changed` signal by the updater task in
-    /// `mcp_http::mcp_transport::spawn_tool_search_index_updater`.
-    pub(crate) tool_search_index: Arc<parking_lot::RwLock<crate::tool_search::ToolSearchIndex>>,
-    /// Per-repo BM25 content index for sub-millisecond file content search.
-    /// Built in background on first search or repo load, rebuilt on `RepoChanged`.
-    pub(crate) content_indices:
-        DashMap<String, Arc<parking_lot::RwLock<crate::content_index::ContentIndex>>>,
-    /// Cooperative CPU throttle for content-index builders. Search handlers
-    /// acquire a guard here so indexers pause and yield priority to the user.
-    pub(crate) indexer_throttle: Arc<crate::content_index::IndexerThrottle>,
-    /// Repos whose content index build is currently in-flight (shared by
-    /// `ensure_index` and `rebuild_index` to prevent duplicate concurrent builds).
-    pub(crate) index_in_flight: Arc<DashSet<String>>,
-    /// Stale-dir worktree recreate tasks in-flight. Key: `${base_repo}::${task_name}`.
-    /// Prevents double-spawn racing on the same path when a user triggers two
-    /// concurrent create_worktree calls before the first background recreate finishes.
-    pub(crate) worktree_recreate_in_flight: Arc<DashSet<String>>,
-    /// Global semaphore limiting concurrent index builds to 1. Prevents startup
-    /// pre-warm from spawning N simultaneous BM25 builds that saturate the CPU.
-    pub(crate) index_build_sem: Arc<tokio::sync::Semaphore>,
-    /// Global semaphore bounding concurrent *monitoring* git subprocesses
-    /// (repo summary/structure/diff-stats fan-out, poller batch). On a
-    /// repo-changed burst these would otherwise spawn hundreds of git pipes at
-    /// once → FD spikes (EMFILE) and CPU/IPC storms that stall the WebView.
-    /// Operational (user-initiated) git is NEVER gated by this.
-    pub(crate) monitoring_git_sem: Arc<tokio::sync::Semaphore>,
     /// Per-session slash command mode (true when input starts with `/`).
     /// Used to suppress false-positive slash menu detection on PTY output.
     pub(crate) slash_mode: DashMap<String, std::sync::atomic::AtomicBool>,
@@ -1624,6 +1670,184 @@ pub struct AppState {
     /// Updated by `pty::try_shell_transition` on every successful CAS.
     /// Used by `session(status)` to compute idle_since_ms / busy_duration_ms.
     pub(crate) shell_state_since_ms: DashMap<String, std::sync::atomic::AtomicU64>,
+    /// HTML tab IDs (pluginIds) created by each session (tuic_session → [tab_id]).
+    /// Populated by ui(tab) calls from registered agents; cleared on session exit
+    /// so orphan tabs can be auto-closed by the frontend.
+    pub(crate) session_html_tabs: DashMap<String, Vec<String>>,
+    /// `$TUIC_SESSION` → the PTY session key that currently backs it.
+    ///
+    /// These are two independently minted UUIDs: `create_pty` keys `sessions` by a
+    /// fresh `Uuid::new_v4()` while exporting the caller-supplied `tuic_session` to
+    /// the agent's environment, and the messaging layer historically assumed they
+    /// were the same value. They never are, so a self-registered agent's peer
+    /// identity matched no PTY and its wake-ups silently degraded to inbox-only.
+    /// Recording the pair here is what lets delivery resolve a stable peer identity
+    /// to whatever terminal currently backs it — including after a respawn, which
+    /// mints a new session key under the same `$TUIC_SESSION`.
+    pub(crate) live_pty_by_tuic_session: DashMap<String, String>,
+    /// Parent session for swarm-spawned agents (child_tuic_session → parent_tuic_session).
+    /// Populated at spawn time when caller_tuic is set. Used to route auto-notifications
+    /// (state_change messages) to the orchestrator's inbox on exit and idle transitions.
+    pub(crate) session_parent: DashMap<String, String>,
+    /// Per-MCP-session broadcast channels for inter-agent messaging notifications.
+    /// Each SSE listener subscribes; `send` action pushes here for real-time delivery.
+    pub(crate) messaging_channels: DashMap<String, tokio::sync::broadcast::Sender<String>>,
+    /// Per-PTY-session broadcast channels carrying that session's `AppEvent`s
+    /// (`PtyParsed`/`PtyExit`/`SessionClosed`). Populated by `emit_pty_event`
+    /// ALONGSIDE the global `event_bus` (which still feeds `/events` SSE and the
+    /// state accumulator). The session-scoped WS handlers subscribe here instead
+    /// of the global bus, so a session's events are no longer cloned+filtered by
+    /// every other session's WS receiver. Created on-demand when a WS handler
+    /// subscribes; reaped in `cleanup_session`/`tombstone_transient_cleanup`.
+    pub(crate) pty_event_channels: DashMap<String, tokio::sync::broadcast::Sender<AppEvent>>,
+    /// Sessions whose shell has emitted at least one OSC 133 marker. Presence
+    /// here suppresses the Inferred-outcome fallback, since the shell-integration
+    /// path is authoritative once wired.
+    pub(crate) has_osc133_integration: DashMap<String, ()>,
+    /// session_id → human alias (e.g. "tc-1", "nr-2"). Assigned on session creation/restore.
+    pub(crate) term_aliases: DashMap<String, String>,
+    /// Per-prefix counter for alias numbering (e.g. "tc" → 2 means next is tc-3).
+    pub(crate) term_alias_counters: DashMap<String, u32>,
+    /// Per-session tab visibility (session_id → visible). Updated by the
+    /// frontend on tab focus changes. Read by the watcher engine to evaluate
+    /// the Unseen trigger (fires only when the terminal tab is not visible).
+    pub(crate) session_visibility: DashMap<String, bool>,
+    /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
+    #[cfg(unix)]
+    pub(crate) standby_sessions: DashMap<String, u64>,
+    /// Per-session marker tallies, so "the agents are ignoring the markers" can be
+    /// answered with a number instead of by grepping scrollback — which counts any
+    /// mention of the word and is capped by buffer size (#4421).
+    pub(crate) marker_stats: DashMap<String, MarkerStats>,
+}
+
+/// Global state for managing PTY sessions and worktrees
+pub struct AppState {
+    /// Every per-session side table, keyed by session id.
+    pub(crate) session_maps: SessionMaps,
+    pub(crate) data_dir: PathBuf,
+    pub(crate) worktrees_dir: PathBuf,
+    pub(crate) metrics: SessionMetrics,
+    /// Everything MCP: HTTP sessions, the proxy registry, OAuth flows and
+    /// the tool-search index.
+    pub mcp: McpState,
+    /// WebSocket clients per PTY session for streaming output
+    pub ws_clients: DashMap<String, Vec<WsClientTx>>,
+    /// Cached AppConfig to avoid re-reading from disk on every request
+    pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
+    /// TTL caches for git and GitHub query results
+    pub(crate) git_cache: GitCacheState,
+    /// Raw file watchers per repo (keyed by repo path), with per-category
+    /// debounce. macOS/Windows: one recursive `notify::RecommendedWatcher` over
+    /// the repo root. Linux: pruned non-recursive working-tree watches + targeted
+    /// `.git` watches (issue #82). Stored behind `Arc` so the Linux event callback
+    /// can clone a stable handle and add watches for newly created dirs without
+    /// holding a `DashMap` ref across the blocking `watch()` call.
+    pub(crate) repo_watchers: DashMap<String, Arc<crate::repo_watcher::RepoWatchHandle>>,
+    /// Last emitted git-state fingerprint per repo path. The repo watcher skips
+    /// the `repo-changed` (git-state) emit when the fingerprint is unchanged, so a
+    /// no-op `.git` touch (e.g. a `--no-optional-locks` status refreshing the index
+    /// stat cache) doesn't trigger the full ~20-panel frontend re-render cascade.
+    pub(crate) repo_git_fingerprints: DashMap<String, u64>,
+    /// Last emitted resolved-HEAD target per repo path (`resolve_head_target`
+    /// output). The repo watcher skips the `head-changed` emit when this is
+    /// unchanged, suppressing the Linux inotify storm where `.git/HEAD` events
+    /// recur without HEAD actually moving (issue #82).
+    pub(crate) repo_head_targets: DashMap<String, String>,
+    /// Count of `head-changed` emits suppressed by the `repo_head_targets`
+    /// guard — surfaced in diagnostic snapshots to quantify watcher storm
+    /// volume in production (issue #82).
+    pub(crate) repo_head_emits_suppressed: AtomicU64,
+    /// File watchers for directory contents (keyed by absolute dir path)
+    pub(crate) dir_watchers: DashMap<String, crate::repo_watcher::WatchHandle>,
+    /// File watcher for the themes/ directory — kept alive for the app lifetime.
+    pub(crate) theme_watcher: parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
+    /// Shared mdkb daemon client for AST navigation (outline, goto-def, references).
+    pub(crate) mdkb_daemon: crate::mdkb_daemon::SharedMdkbDaemon,
+    /// Shared async HTTP client for GitHub API requests.
+    /// Built by [`build_http_client`] — always with timeouts, never
+    /// `reqwest::Client::new()`.
+    pub(crate) http_client: reqwest::Client,
+    /// Everything GitHub: credentials, the poller, and per-account budgets.
+    pub(crate) github: GitHubState,
+    /// Shutdown sender for the HTTP server — send () to gracefully stop it.
+    /// Only the TCP listener + TLS renewal task listen to this signal now;
+    /// IPC listeners (Unix socket / named pipe) and the session reaper live
+    /// for the whole app lifetime regardless of TCP restarts.
+    pub(crate) server_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// One-shot guard: IPC listeners (Unix socket / named pipe), MCP session
+    /// reaper, and upstream health checker are spawned the first time
+    /// `start_server` runs and persist across restarts. Prevents a ~200ms
+    /// socket-rebind window on `save_config` / TLS state changes that was
+    /// tripping the MCP bridge's 3-failure / 9s health threshold and flipping
+    /// it offline.
+    pub(crate) ipc_started: std::sync::atomic::AtomicBool,
+    /// Random session token for browser cookie auth — generated once when empty,
+    /// then persisted in config and reused across server starts (not regenerated
+    /// per start). Browsers auto-send cookies in fetch(), unlike stored Basic Auth.
+    /// Behind RwLock so it can be regenerated at runtime (invalidating all sessions).
+    pub(crate) session_token: parking_lot::RwLock<String>,
+    pub(crate) auth_rate_limits: DashMap<std::net::IpAddr, (u32, Instant)>,
+    #[cfg(feature = "desktop")]
+    pub(crate) app_handle: parking_lot::RwLock<Option<AppHandle>>,
+    /// Last time the desktop WebView's main JS thread proved it was running.
+    /// Read by the diagnostics thread; see `frontend_liveness`.
+    pub(crate) frontend_liveness: crate::frontend_liveness::FrontendLiveness,
+    /// The last URL the main WebView was seen holding while healthy — the only
+    /// address a recovery can aim at once the frame is on `about:`. Written by
+    /// the webview-recovery thread; see `webview_recovery`.
+    pub(crate) webview_boot_url: parking_lot::RwLock<Option<url::Url>>,
+    /// Plugin filesystem watchers: watch_id → (plugin_id, watcher)
+    pub plugin_watchers: DashMap<String, (String, notify::RecommendedWatcher)>,
+    /// Current ANSI color overrides from the frontend theme (indices 0-15).
+    /// Applied to new VtLogBuffers at creation time.
+    pub(crate) ansi_colors: parking_lot::RwLock<Option<[[u8; 3]; 16]>>,
+    /// Everything the renderer reads: the VT grids, the raw-byte flight
+    /// recorder, and the per-session frame delivery channels and gates.
+    pub(crate) grid: GridState,
+    /// Incremental cache for Claude session transcript parsing.
+    /// Loaded from disk on startup, persisted after each scan.
+    ///
+    /// NOT desktop-gated: `/claude/usage/timeline` is mounted unconditionally in
+    /// `build_router`, so `tuic-remote` needs this field to compile at all.
+    pub(crate) claude_usage_cache: Mutex<crate::claude_usage::SessionStatsCache>,
+    /// Centralized application log ring buffer (1000 entries).
+    /// Frontend pushes via push_log, reads via get_logs.
+    /// Wrapped in Arc so the tracing subscriber layer can share the same buffer.
+    pub(crate) log_buffer: Arc<Mutex<crate::app_logger::LogRingBuffer>>,
+    /// Broadcast channel for all backend events (SSE, WebSocket, live consumers).
+    /// Capacity 256 — lagged receivers get `RecvError::Lagged` and should reconnect.
+    pub(crate) event_bus: tokio::sync::broadcast::Sender<AppEvent>,
+    /// Monotonic counter for SSE event IDs.
+    pub(crate) event_counter: Arc<AtomicU64>,
+    /// Live type filters of the open `/events` streams, so a browser that starts
+    /// listening for a new event type widens its stream in place instead of
+    /// reconnecting — a reconnect drops every event published between the close
+    /// and the new subscription, and nothing replays them.
+    pub(crate) sse_filters: crate::mcp_http::sse_routes::SseFilters,
+    /// Per-repo BM25 content index for sub-millisecond file content search.
+    /// Built in background on first search or repo load, rebuilt on `RepoChanged`.
+    pub(crate) content_indices:
+        DashMap<String, Arc<parking_lot::RwLock<crate::content_index::ContentIndex>>>,
+    /// Cooperative CPU throttle for content-index builders. Search handlers
+    /// acquire a guard here so indexers pause and yield priority to the user.
+    pub(crate) indexer_throttle: Arc<crate::content_index::IndexerThrottle>,
+    /// Repos whose content index build is currently in-flight (shared by
+    /// `ensure_index` and `rebuild_index` to prevent duplicate concurrent builds).
+    pub(crate) index_in_flight: Arc<DashSet<String>>,
+    /// Stale-dir worktree recreate tasks in-flight. Key: `${base_repo}::${task_name}`.
+    /// Prevents double-spawn racing on the same path when a user triggers two
+    /// concurrent create_worktree calls before the first background recreate finishes.
+    pub(crate) worktree_recreate_in_flight: Arc<DashSet<String>>,
+    /// Global semaphore limiting concurrent index builds to 1. Prevents startup
+    /// pre-warm from spawning N simultaneous BM25 builds that saturate the CPU.
+    pub(crate) index_build_sem: Arc<tokio::sync::Semaphore>,
+    /// Global semaphore bounding concurrent *monitoring* git subprocesses
+    /// (repo summary/structure/diff-stats fan-out, poller batch). On a
+    /// repo-changed burst these would otherwise spawn hundreds of git pipes at
+    /// once → FD spikes (EMFILE) and CPU/IPC storms that stall the WebView.
+    /// Operational (user-initiated) git is NEVER gated by this.
+    pub(crate) monitoring_git_sem: Arc<tokio::sync::Semaphore>,
     /// Loaded plugin capabilities: plugin_id → list of capability strings.
     /// Populated by the frontend via `register_loaded_plugin` on plugin load.
     /// Used by Rust plugin commands to enforce capability checks server-side.
@@ -1657,10 +1881,6 @@ pub struct AppState {
     /// the position instead: an omitted `since` resumes from here, an explicit one
     /// overrides it, and `since=0` stays the deliberate replay escape hatch.
     pub(crate) agent_read_cursor: DashMap<String, u64>,
-    /// Per-session marker tallies, so "the agents are ignoring the markers" can be
-    /// answered with a number instead of by grepping scrollback — which counts any
-    /// mention of the word and is capped by buffer size (#4421).
-    pub(crate) marker_stats: DashMap<String, MarkerStats>,
     /// Peer messages and Compose commands waiting for a recipient's next safe
     /// idle window. Entries share one typed FIFO so delivery order is global,
     /// while Compose count/clear operations can select only `UserCommand`.
@@ -1679,33 +1899,6 @@ pub struct AppState {
     /// inbox-only delivery while working and generic, coalesced wake notices
     /// while idle; ordinary managed agents retain direct message delivery.
     pub(crate) orchestrator_peers: DashSet<String>,
-    /// HTML tab IDs (pluginIds) created by each session (tuic_session → [tab_id]).
-    /// Populated by ui(tab) calls from registered agents; cleared on session exit
-    /// so orphan tabs can be auto-closed by the frontend.
-    pub(crate) session_html_tabs: DashMap<String, Vec<String>>,
-    /// MCP session → PTY session mapping for caller identity resolution.
-    /// Populated at agent spawn time; used by self-close guard in session(close).
-    pub mcp_to_session: DashMap<String, String>,
-    /// Reverse index of `mcp_to_session`: tuic_session → list of mcp_session_ids.
-    /// Populated alongside `mcp_to_session` at agent(register). Lets
-    /// `tombstone_transient_cleanup` remove entries in O(1) instead of scanning
-    /// every entry of `mcp_to_session` on each session exit.
-    pub session_to_mcp: DashMap<String, Vec<String>>,
-    /// `$TUIC_SESSION` → the PTY session key that currently backs it.
-    ///
-    /// These are two independently minted UUIDs: `create_pty` keys `sessions` by a
-    /// fresh `Uuid::new_v4()` while exporting the caller-supplied `tuic_session` to
-    /// the agent's environment, and the messaging layer historically assumed they
-    /// were the same value. They never are, so a self-registered agent's peer
-    /// identity matched no PTY and its wake-ups silently degraded to inbox-only.
-    /// Recording the pair here is what lets delivery resolve a stable peer identity
-    /// to whatever terminal currently backs it — including after a respawn, which
-    /// mints a new session key under the same `$TUIC_SESSION`.
-    pub(crate) live_pty_by_tuic_session: DashMap<String, String>,
-    /// Parent session for swarm-spawned agents (child_tuic_session → parent_tuic_session).
-    /// Populated at spawn time when caller_tuic is set. Used to route auto-notifications
-    /// (state_change messages) to the orchestrator's inbox on exit and idle transitions.
-    pub(crate) session_parent: DashMap<String, String>,
     /// Actual bound socket path (may differ from default if another instance holds mcp.sock).
     /// Updated by `start_server` after successful bind.
     #[cfg(unix)]
@@ -1729,61 +1922,9 @@ pub struct AppState {
     pub(crate) desktop_window_focused: std::sync::atomic::AtomicBool,
     /// Server start time for uptime calculation in health endpoint.
     pub(crate) server_start_time: std::time::Instant,
-    /// Per-MCP-session broadcast channels for inter-agent messaging notifications.
-    /// Each SSE listener subscribes; `send` action pushes here for real-time delivery.
-    pub(crate) messaging_channels: DashMap<String, tokio::sync::broadcast::Sender<String>>,
-    /// Per-PTY-session broadcast channels carrying that session's `AppEvent`s
-    /// (`PtyParsed`/`PtyExit`/`SessionClosed`). Populated by `emit_pty_event`
-    /// ALONGSIDE the global `event_bus` (which still feeds `/events` SSE and the
-    /// state accumulator). The session-scoped WS handlers subscribe here instead
-    /// of the global bus, so a session's events are no longer cloned+filtered by
-    /// every other session's WS receiver. Created on-demand when a WS handler
-    /// subscribes; reaped in `cleanup_session`/`tombstone_transient_cleanup`.
-    pub(crate) pty_event_channels: DashMap<String, tokio::sync::broadcast::Sender<AppEvent>>,
-    /// Per-session command outcome + error/fix knowledge store.
-    /// Populated by pty.rs OSC 133 hooks and SessionState transitions.
-    /// Consumed by the agent loop for context injection.
-    pub(crate) session_knowledge:
-        DashMap<String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>,
-    /// Sessions with unpersisted knowledge changes. Flushed to disk every 2s
-    /// by the background knowledge-persist task.
-    pub(crate) knowledge_dirty: DashMap<String, ()>,
-    /// Sessions whose shell has emitted at least one OSC 133 marker. Presence
-    /// here suppresses the Inferred-outcome fallback, since the shell-integration
-    /// path is authoritative once wired.
-    pub(crate) has_osc133_integration: DashMap<String, ()>,
-    /// Per-session filesystem sandbox for the L2 agent's file/shell tools.
-    /// Keyed by session_id. Populated when the agent loop starts, rooted at the
-    /// session's git repo root or CWD. See `ai_agent::sandbox::FileSandbox`.
-    pub(crate) file_sandboxes: DashMap<String, crate::ai_agent::sandbox::FileSandbox>,
-    /// Sessions running in unrestricted (TrustLevel::Unrestricted) mode.
-    /// Present = unrestricted; absent = standard safety gates apply.
-    pub(crate) unrestricted_sessions: DashMap<String, ()>,
-    /// session_id → human alias (e.g. "tc-1", "nr-2"). Assigned on session creation/restore.
-    pub(crate) term_aliases: DashMap<String, String>,
-    /// Per-prefix counter for alias numbering (e.g. "tc" → 2 means next is tc-3).
-    pub(crate) term_alias_counters: DashMap<String, u32>,
-    /// Per-session tab visibility (session_id → visible). Updated by the
-    /// frontend on tab focus changes. Read by the watcher engine to evaluate
-    /// the Unseen trigger (fires only when the terminal tab is not visible).
-    pub(crate) session_visibility: DashMap<String, bool>,
-    /// Terminal watcher engine handle — initialized once at startup.
-    /// Commands access the shared config via `engine.config()`.
-    pub(crate) watcher_engine: std::sync::OnceLock<Arc<crate::ai_agent::watcher::WatcherEngine>>,
-    /// Whether the AI cron scheduler's 30s tick loop is currently spawned.
-    /// Lets `save_scheduler_config` start it only when the saved config has
-    /// at least one enabled job, and stop it when the last one is removed,
-    /// instead of ticking (and re-reading `ai-cron.json` from disk) forever
-    /// from boot regardless of whether any job exists (#672-c1a3).
-    pub(crate) scheduler_running: std::sync::atomic::AtomicBool,
-    /// Shared with the running `Scheduler` (if any) so it can be told to stop.
-    /// Reused across start/stop cycles — always exists, whether or not a
-    /// scheduler task is currently spawned.
-    pub(crate) scheduler_stop: Arc<tokio::sync::Notify>,
-    /// Evaluates CommandOutcome records and emits suggestions for AI investigation.
-    pub(crate) trigger_classifier: crate::ai_agent::triggers::TriggerClassifier,
-    /// Per-session opt-in for AI suggestions. Present + true = enabled.
-    pub(crate) ai_suggestions_enabled: DashMap<String, bool>,
+    /// TUIC's own AI agent: per-session knowledge, sandboxes, the watcher
+    /// engine, the cron scheduler and the suggestion triggers.
+    pub(crate) ai: AiAgentState,
     /// SSH tunnel manager — owns running tunnel supervisors.
     /// No outer Mutex needed: `TunnelManager` uses `DashMap` for interior mutability
     /// and all its methods take `&self`. Wrapping in `Mutex` would prevent holding
@@ -1807,9 +1948,6 @@ pub struct AppState {
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
-    /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
-    #[cfg(unix)]
-    pub(crate) standby_sessions: DashMap<String, u64>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
     /// Repos with active terminals — used to throttle watcher/polling for cold repos.
@@ -1823,7 +1961,8 @@ impl AppState {
     /// must release it before locking the writer so a blocked kernel write can
     /// never prevent the reader from queuing a mandatory terminal reply.
     pub(crate) fn pty_writer(&self, session_id: &str) -> Option<SharedPtyWriter> {
-        self.sessions
+        self.session_maps
+            .sessions
             .get(session_id)
             .map(|session| session.lock().writer.clone())
     }
@@ -1863,9 +2002,9 @@ impl AppState {
     pub(crate) fn emit_pty_event(&self, event: AppEvent) {
         // State is authoritative and sticky, so it gets a lossless lane. The
         // broadcast copies remain best-effort transports for live consumers.
-        self.session_state_events.send(event.clone());
+        self.session_maps.session_state_events.send(event.clone());
         if let Some(sid) = event.pty_session_id()
-            && let Some(tx) = self.pty_event_channels.get(sid)
+            && let Some(tx) = self.session_maps.pty_event_channels.get(sid)
         {
             let _ = tx.send(event.clone());
         }
@@ -1878,17 +2017,23 @@ impl AppState {
     pub(crate) fn set_pty_description(&self, session_id: &str, description: Option<String>) {
         let changed = match description.as_deref() {
             Some(value) if !value.is_empty() => {
-                self.pty_descriptions
+                self.session_maps
+                    .pty_descriptions
                     .insert(session_id.to_string(), value.to_string())
                     .as_deref()
                     != Some(value)
             }
-            _ => self.pty_descriptions.remove(session_id).is_some(),
+            _ => self
+                .session_maps
+                .pty_descriptions
+                .remove(session_id)
+                .is_some(),
         };
         if !changed {
             return;
         }
         let description = self
+            .session_maps
             .pty_descriptions
             .get(session_id)
             .map(|value| value.value().clone());
@@ -1922,7 +2067,8 @@ impl AppState {
         session_id: &str,
     ) -> tokio::sync::broadcast::Receiver<AppEvent> {
         const CHANNEL_CAPACITY: usize = 256;
-        self.pty_event_channels
+        self.session_maps
+            .pty_event_channels
             .entry(session_id.to_string())
             .or_insert_with(|| tokio::sync::broadcast::channel(CHANNEL_CAPACITY).0)
             .subscribe()
@@ -2397,7 +2543,11 @@ impl AppState {
 
     /// Record one marker emission or one submitted turn for `session_id`.
     pub(crate) fn note_marker(&self, session_id: &str, kind: MarkerKind) {
-        let mut stats = self.marker_stats.entry(session_id.to_string()).or_default();
+        let mut stats = self
+            .session_maps
+            .marker_stats
+            .entry(session_id.to_string())
+            .or_default();
         let counter = match kind {
             MarkerKind::Intent => &mut stats.intent,
             MarkerKind::Suggest => &mut stats.suggest,
@@ -2410,7 +2560,8 @@ impl AppState {
     /// deliberately the same shape as all-zero: a session that never ran is not
     /// evidence of an agent ignoring anything.
     pub(crate) fn marker_stats_for(&self, session_id: &str) -> MarkerStats {
-        self.marker_stats
+        self.session_maps
+            .marker_stats
             .get(session_id)
             .map(|entry| *entry.value())
             .unwrap_or_default()
@@ -2497,13 +2648,14 @@ impl AppState {
     /// Resolved per call rather than cached on the peer, so a respawn under the same
     /// `$TUIC_SESSION` is picked up without anyone re-registering.
     pub(crate) fn live_pty_for_peer(&self, peer_id: &str) -> Option<String> {
-        if self.sessions.contains_key(peer_id) {
+        if self.session_maps.sessions.contains_key(peer_id) {
             return Some(peer_id.to_string());
         }
-        self.live_pty_by_tuic_session
+        self.session_maps
+            .live_pty_by_tuic_session
             .get(peer_id)
             .map(|entry| entry.value().clone())
-            .filter(|session_id| self.sessions.contains_key(session_id))
+            .filter(|session_id| self.session_maps.sessions.contains_key(session_id))
     }
 
     /// Whether a peer identity may be dropped when its MCP protocol session is
@@ -2529,6 +2681,7 @@ impl AppState {
     pub(crate) fn peer_identity_is_reapable(&self, peer_id: &str) -> bool {
         self.live_pty_for_peer(peer_id).is_none()
             && !self
+                .session_maps
                 .session_parent
                 .iter()
                 .any(|entry| entry.value() == peer_id)
@@ -2536,7 +2689,8 @@ impl AppState {
 
     /// Record the PTY now backing a `$TUIC_SESSION`. Called at spawn.
     pub(crate) fn bind_live_pty(&self, tuic_session: &str, session_id: &str) {
-        self.live_pty_by_tuic_session
+        self.session_maps
+            .live_pty_by_tuic_session
             .insert(tuic_session.to_string(), session_id.to_string());
     }
 
@@ -2549,13 +2703,14 @@ impl AppState {
     /// one more thing to keep consistent for no measurable gain.
     pub(crate) fn unbind_live_pty(&self, session_id: &str) -> Vec<String> {
         let orphaned: Vec<String> = self
+            .session_maps
             .live_pty_by_tuic_session
             .iter()
             .filter(|entry| entry.value() == session_id)
             .map(|entry| entry.key().clone())
             .collect();
         for identity in &orphaned {
-            self.live_pty_by_tuic_session.remove(identity);
+            self.session_maps.live_pty_by_tuic_session.remove(identity);
         }
         orphaned
     }
@@ -2618,7 +2773,6 @@ impl AppState {
         config: crate::config::AppConfig,
         log_buffer: Arc<Mutex<crate::app_logger::LogRingBuffer>>,
     ) -> Self {
-        let mcp_upstream_registry = Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new());
         let session_token = config.services.auth.session_token.clone();
         let push_store = crate::push::PushStore::load(&data_dir);
         let audit_path = data_dir.join("tunnel_audit.db");
@@ -2630,12 +2784,11 @@ impl AppState {
             tunnel_audit.clone(),
         ));
         Self {
-            sessions: DashMap::new(),
+            session_maps: SessionMaps::default(),
             data_dir,
             worktrees_dir,
             metrics: SessionMetrics::new(),
-            output_buffers: DashMap::new(),
-            mcp_sessions: DashMap::new(),
+            mcp: McpState::default(),
             ws_clients: DashMap::new(),
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
@@ -2647,62 +2800,29 @@ impl AppState {
             theme_watcher: parking_lot::Mutex::new(None),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
             http_client: build_http_client(),
-            github_token: parking_lot::RwLock::new(None),
-            github_token_source: parking_lot::RwLock::new(Default::default()),
-            github_circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
-            github_poller: parking_lot::Mutex::new(None),
-            github_viewer_login: parking_lot::RwLock::new(None),
-            github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
-            ghe_state: dashmap::DashMap::new(),
+            github: GitHubState::default(),
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(session_token),
             auth_rate_limits: DashMap::new(),
             #[cfg(feature = "desktop")]
             app_handle: parking_lot::RwLock::new(None),
+            frontend_liveness: Default::default(),
+            webview_boot_url: parking_lot::RwLock::new(None),
             plugin_watchers: DashMap::new(),
             ansi_colors: parking_lot::RwLock::new(None),
-            vt_log_buffers: DashMap::new(),
-            pty_raw_rings: DashMap::new(),
-            #[cfg(feature = "desktop")]
-            grid_channels: DashMap::new(),
-            grid_watch: DashMap::new(),
-            grid_gates: DashMap::new(),
-            grid_frame_dirty: DashMap::new(),
-            sync_update_active: DashMap::new(),
-            pending_scroll: DashMap::new(),
-            kitty_states: DashMap::new(),
-            input_buffers: DashMap::new(),
-            last_prompts: DashMap::new(),
-            pty_descriptions: DashMap::new(),
-            silence_states: DashMap::new(),
+            grid: GridState::default(),
             claude_usage_cache: parking_lot::Mutex::new(crate::claude_usage::load_cache_from_disk()),
             log_buffer,
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             sse_filters: Default::default(),
-            session_states: DashMap::new(),
-            session_state_events: SessionStateEventQueue::new(),
-            oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
-            mcp_upstream_registry,
-            mcp_tools_changed: tokio::sync::broadcast::channel(16).0,
-            tool_search_index: Arc::new(parking_lot::RwLock::new(
-                crate::tool_search::ToolSearchIndex::build(&[]),
-            )),
             content_indices: DashMap::new(),
             indexer_throttle: Arc::new(crate::content_index::IndexerThrottle::default()),
             index_in_flight: Arc::new(DashSet::new()),
             worktree_recreate_in_flight: Arc::new(DashSet::new()),
             index_build_sem: Arc::new(tokio::sync::Semaphore::new(1)),
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
-            slash_mode: DashMap::new(),
-            last_output_ms: DashMap::new(),
-            last_input_ms: DashMap::new(),
-            shell_states: DashMap::new(),
-            terminal_rows: DashMap::new(),
-            resize_locks: DashMap::new(),
-            exit_codes: DashMap::new(),
-            shell_state_since_ms: DashMap::new(),
             loaded_plugins: DashMap::new(),
             plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: RelayState::new(),
@@ -2710,23 +2830,11 @@ impl AppState {
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
-            marker_stats: DashMap::new(),
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             active_agent_waiters: DashMap::new(),
             orchestrator_peers: DashSet::new(),
-            session_html_tabs: DashMap::new(),
-            mcp_to_session: DashMap::new(),
-            session_to_mcp: DashMap::new(),
-            live_pty_by_tuic_session: DashMap::new(),
-            session_parent: DashMap::new(),
-            messaging_channels: DashMap::new(),
-            pty_event_channels: DashMap::new(),
-            session_knowledge: DashMap::new(),
-            knowledge_dirty: DashMap::new(),
-            has_osc133_integration: DashMap::new(),
-            file_sandboxes: DashMap::new(),
-            unrestricted_sessions: DashMap::new(),
+            ai: AiAgentState::default(),
             #[cfg(unix)]
             bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
             tailscale_state: parking_lot::RwLock::new(
@@ -2736,22 +2844,12 @@ impl AppState {
             push_store,
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
-            term_aliases: DashMap::new(),
-            term_alias_counters: DashMap::new(),
-            session_visibility: DashMap::new(),
-            watcher_engine: std::sync::OnceLock::new(),
-            scheduler_running: std::sync::atomic::AtomicBool::new(false),
-            scheduler_stop: Arc::new(tokio::sync::Notify::new()),
-            trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
-            ai_suggestions_enabled: DashMap::new(),
             tunnel_manager,
             tunnel_audit,
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
             confirm_responses: DashMap::new(),
-            #[cfg(unix)]
-            standby_sessions: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
         }
@@ -2760,12 +2858,15 @@ impl AppState {
     /// Wire event bus and MCP registry after construction.
     /// Must be called after wrapping in `Arc`.
     pub fn wire_event_bus(self: &Arc<Self>) {
-        self.mcp_upstream_registry
+        self.mcp
+            .upstream_registry
             .set_event_bus(self.event_bus.clone());
-        self.mcp_upstream_registry
-            .set_mcp_tools_tx(self.mcp_tools_changed.clone());
-        self.mcp_upstream_registry
-            .set_oauth_flow_manager(self.oauth_flow_manager.clone());
+        self.mcp
+            .upstream_registry
+            .set_mcp_tools_tx(self.mcp.tools_changed.clone());
+        self.mcp
+            .upstream_registry
+            .set_oauth_flow_manager(self.mcp.oauth_flow_manager.clone());
     }
 
     /// Assign a human-friendly alias based on the repo/cwd name.
@@ -2775,6 +2876,7 @@ impl AppState {
     /// Collision resolution only runs for new repo names whose base acronym clashes.
     pub(crate) fn assign_term_alias(&self, session_id: &str) -> String {
         let cwd = self
+            .session_maps
             .sessions
             .get(session_id)
             .and_then(|s| s.lock().cwd.clone());
@@ -2789,13 +2891,18 @@ impl AppState {
         let prefix = if let Some(existing) = self.find_prefix_for_repo(&repo_name) {
             existing
         } else {
-            repo_name_to_prefix(&repo_name, &self.term_aliases)
+            repo_name_to_prefix(&repo_name, &self.session_maps.term_aliases)
         };
 
-        let mut counter = self.term_alias_counters.entry(prefix.clone()).or_insert(0);
+        let mut counter = self
+            .session_maps
+            .term_alias_counters
+            .entry(prefix.clone())
+            .or_insert(0);
         *counter += 1;
         let alias = format!("{prefix}-{}", *counter);
-        self.term_aliases
+        self.session_maps
+            .term_aliases
             .insert(session_id.to_string(), alias.clone());
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
@@ -2812,10 +2919,11 @@ impl AppState {
 
     /// Find an existing prefix used by a session with the same repo name.
     fn find_prefix_for_repo(&self, repo_name: &str) -> Option<String> {
-        for entry in self.term_aliases.iter() {
+        for entry in self.session_maps.term_aliases.iter() {
             let sid = entry.key();
             let alias = entry.value();
             let other_cwd = self
+                .session_maps
                 .sessions
                 .get(sid.as_str())
                 .and_then(|s| s.lock().cwd.clone());
@@ -2835,7 +2943,8 @@ impl AppState {
 
     /// Look up session_id by alias (e.g. "tc-1" → UUID).
     pub(crate) fn resolve_alias(&self, alias: &str) -> Option<String> {
-        self.term_aliases
+        self.session_maps
+            .term_aliases
             .iter()
             .find(|e| e.value() == alias)
             .map(|e| e.key().clone())
@@ -2852,7 +2961,8 @@ impl AppState {
         session_id: &str,
     ) -> dashmap::mapref::one::RefMut<'_, String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>
     {
-        self.session_knowledge
+        self.ai
+            .session_knowledge
             .entry(session_id.to_string())
             .or_insert_with(|| {
                 Mutex::new(crate::ai_agent::knowledge::load_or_start_fresh(session_id))
@@ -2869,24 +2979,26 @@ impl AppState {
         // Evaluate trigger before recording (needs the outcome by ref).
         let suggestion = {
             let enabled = self
+                .ai
                 .ai_suggestions_enabled
                 .get(session_id)
                 .map(|v| *v)
                 .unwrap_or_else(|| {
-                    self.session_states
+                    self.session_maps
+                        .session_states
                         .get(session_id)
                         .map(|s| s.agent_type.is_some())
                         .unwrap_or(false)
                 });
             if enabled {
-                self.trigger_classifier.evaluate(session_id, &outcome)
+                self.ai.trigger_classifier.evaluate(session_id, &outcome)
             } else {
                 None
             }
         };
 
         let id = self.knowledge_entry(session_id).lock().record(outcome);
-        self.knowledge_dirty.insert(session_id.to_string(), ());
+        self.ai.knowledge_dirty.insert(session_id.to_string(), ());
 
         #[cfg(feature = "desktop")]
         if let Some(suggestion) = suggestion {
@@ -3205,6 +3317,35 @@ pub(crate) fn broadcast_to_ws_clients(
 
 impl AppState {
     /// Invalidate all operation caches (git + GitHub).
+    /// Build a session's VT log buffer with the settings that apply to every
+    /// session.
+    ///
+    /// The palette override and the scrollback-reflow flag were both being
+    /// applied per creation site — the palette at three of the five, the reflow
+    /// flag at none of them, which is why `scrollback_reflow` was a setting with
+    /// no consumer (#660-d087). One constructor means a sixth site cannot be
+    /// added that silently misses either.
+    pub(crate) fn new_vt_log_buffer(&self, rows: u16, cols: u16, capacity: usize) -> VtLogBuffer {
+        let mut vt = VtLogBuffer::new(rows, cols, capacity);
+        if let Some(colors) = self.ansi_colors.read().as_ref() {
+            vt.set_ansi_colors(colors);
+        }
+        vt.set_reflow_history(self.config.read().scrollback_reflow);
+        vt
+    }
+
+    /// Push a changed `scrollback_reflow` into every session that already exists.
+    ///
+    /// Called from `config::commit_config_change`, not from the `save_config`
+    /// callers: `ConfigSaveEffects` is only actioned by the callers that remember
+    /// to, and a toggle that silently needs a restart is the failure this whole
+    /// story is about.
+    pub(crate) fn apply_reflow_history(&self, on: bool) {
+        for entry in self.grid.vt_log_buffers.iter() {
+            entry.value().lock().set_reflow_history(on);
+        }
+    }
+
     pub(crate) fn clear_caches(&self) {
         self.git_cache.clear_all();
     }
@@ -3262,7 +3403,7 @@ impl AppState {
     /// Also expires stale rate limits based on retry_after_ms + timestamp.
     pub(crate) fn session_state_with_shell(&self, session_id: &str) -> Option<SessionState> {
         // Expire stale rate limits in-place before building the snapshot.
-        if let Some(mut entry) = self.session_states.get_mut(session_id)
+        if let Some(mut entry) = self.session_maps.session_states.get_mut(session_id)
             && entry.rate_limited
             && entry.rate_limit_set_ms > 0
         {
@@ -3282,18 +3423,30 @@ impl AppState {
         // Clone before consulting SilenceState so no session_states shard guard
         // is held across that mutex. Completion emission uses the inverse order
         // to serialize against a newly submitted input epoch.
-        let mut state = self.session_states.get(session_id).map(|s| s.clone())?;
+        let mut state = self
+            .session_maps
+            .session_states
+            .get(session_id)
+            .map(|s| s.clone())?;
         state.queued_commands = crate::pty::queued_command_count(self, session_id) as u32;
-        state.shell_state = self.shell_states.get(session_id).and_then(|atom| {
-            crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed))
-                .map(str::to_string)
-        });
-        let completion_declared = state.suggested_actions.is_some()
-            || self.silence_states.get(session_id).is_some_and(|silence| {
-                silence
-                    .lock()
-                    .completion_declared_for_epoch(state.turn_epoch)
+        state.shell_state = self
+            .session_maps
+            .shell_states
+            .get(session_id)
+            .and_then(|atom| {
+                crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed))
+                    .map(str::to_string)
             });
+        let completion_declared = state.suggested_actions.is_some()
+            || self
+                .session_maps
+                .silence_states
+                .get(session_id)
+                .is_some_and(|silence| {
+                    silence
+                        .lock()
+                        .completion_declared_for_epoch(state.turn_epoch)
+                });
         let background_work = state.has_pending_background_probe() || state.background_work;
         // A current-turn completion marker is stronger than a stale BUSY atom
         // (for example a completed Codex screen that still contains its last
@@ -3358,21 +3511,27 @@ impl AppState {
     pub(crate) fn spawn_session_state_accumulator(state: Arc<AppState>) {
         let mut broadcast_rx = state.event_bus.subscribe();
         let mut state_rx = state
+            .session_maps
             .session_state_events
             .rx
             .lock()
             .take()
             .expect("session state accumulator must be spawned exactly once");
         tokio::spawn(async move {
+            // Last state published per session, so a repaint that changes nothing
+            // publishes nothing. Task-local because this task is the sole writer
+            // of `session_states` and therefore the sole source of these pushes.
+            let mut published: HashMap<String, SessionState> = HashMap::new();
             loop {
                 tokio::select! {
                     event = state_rx.recv() => match event {
                         Some(event) => {
                             Self::apply_event_to_session_state(&state, &event);
+                            Self::publish_session_state_change(&state, &event, &mut published);
                             // After the apply, not before: the depth counts events the
                             // authoritative state has not absorbed yet, and an event
                             // being applied right now is still one of them.
-                            state.session_state_events.applied();
+                            state.session_maps.session_state_events.applied();
                         }
                         None => break,
                     },
@@ -3389,6 +3548,53 @@ impl AppState {
                     }
                 }
             }
+        });
+    }
+
+    /// Publish `SessionStateChanged` for the session `event` just mutated, when
+    /// the state a client renders actually moved.
+    ///
+    /// Called from the accumulator and nowhere else, because only the
+    /// accumulator can see a transition: it owns every write to `session_states`,
+    /// and `session_state_with_shell` folds in the three fields derived at read
+    /// time (`shell_state`, `queued_commands`, `agent_state`). Dedup is
+    /// `SessionState`'s `PartialEq`, which excludes `last_activity_ms` — the one
+    /// field a silent repaint does move.
+    ///
+    /// Only PTY-scoped events are considered: they are the only variants
+    /// `apply_event_to_session_state` writes state for, so a global event can
+    /// never hide a transition here.
+    fn publish_session_state_change(
+        state: &Arc<AppState>,
+        event: &AppEvent,
+        published: &mut HashMap<String, SessionState>,
+    ) {
+        let Some(session_id) = event.pty_session_id() else {
+            return;
+        };
+        let Some(current) = state.session_state_with_shell(session_id) else {
+            // The row is gone (`SessionClosed`). Drop the baseline too: a reused
+            // id must not be deduped against the state of a dead session.
+            published.remove(session_id);
+            return;
+        };
+        if published.get(session_id) == Some(&current) {
+            return;
+        }
+        published.insert(session_id.to_string(), current.clone());
+        // Dual-emit. Nothing forwards the bus to the desktop window, so the
+        // window listener is fed here and the bus feeds `/events` SSE — the
+        // IPC/HTTP parity rule in AGENTS.md. Both carry the same payload.
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "session-state-changed",
+                session_state_payload(session_id, &current),
+            );
+        }
+        let _ = state.event_bus.send(AppEvent::SessionStateChanged {
+            session_id: session_id.to_string(),
+            state: Box::new(current),
         });
     }
 
@@ -3437,7 +3643,7 @@ impl AppState {
                 ..
             } => {
                 state
-                    .session_states
+                    .session_maps.session_states
                     .entry(session_id.clone())
                     .and_modify(|session| {
                         session.last_activity_ms = now_ms;
@@ -3467,7 +3673,7 @@ impl AppState {
             // event exists to reach clients, not to be accumulated.
             AppEvent::PtyOsc133 { .. } | AppEvent::PtyCwd { .. } => {}
             AppEvent::SessionClosed { session_id, .. } => {
-                state.session_states.remove(session_id);
+                state.session_maps.session_states.remove(session_id);
             }
             AppEvent::PtyParsed { session_id, parsed } => {
                 let event_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -3480,7 +3686,7 @@ impl AppState {
                 let mut parked_wait: Option<(String, bool, &'static str)> = None;
 
                 let mut s = state
-                    .session_states
+                    .session_maps.session_states
                     .entry(session_id.clone())
                     .or_insert_with(|| SessionState {
                         last_activity_ms: now_ms,
@@ -3716,7 +3922,7 @@ impl AppState {
                         .load(std::sync::atomic::Ordering::Relaxed)
                 {
                     let session_name = state
-                        .sessions
+                        .session_maps.sessions
                         .get(&sid)
                         .and_then(|s| s.value().lock().display_name.clone())
                         .unwrap_or_else(|| sid.clone());
@@ -3729,7 +3935,7 @@ impl AppState {
                 }
             }
             AppEvent::PtyExit { session_id } => {
-                if let Some(mut entry) = state.session_states.get_mut(session_id) {
+                if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id) {
                     entry.awaiting_input = false;
                     entry.question_text = None;
                     entry.question_confident = false;
@@ -3746,7 +3952,7 @@ impl AppState {
                     .load(std::sync::atomic::Ordering::Relaxed)
                 {
                     let session_name = state
-                        .sessions
+                        .session_maps.sessions
                         .get(session_id)
                         .and_then(|s| s.value().lock().display_name.clone())
                         .unwrap_or_else(|| session_id.clone());
@@ -3783,6 +3989,9 @@ impl AppState {
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProposalsReady { .. }
             | AppEvent::WorktreeCreateFailed { .. }
+            // This accumulator's own output. Feeding it back in would make the
+            // session state a function of itself; it is a report, not an input.
+            | AppEvent::SessionStateChanged { .. }
             // An ACP connection is not a PTY session and has no row here.
             | AppEvent::AcpNotice(_) => {}
         }
@@ -3790,7 +3999,7 @@ impl AppState {
 
     /// Build orchestrator stats snapshot from current state.
     pub(crate) fn orchestrator_stats(&self) -> OrchestratorStats {
-        let active = self.sessions.len();
+        let active = self.session_maps.sessions.len();
         OrchestratorStats {
             active_sessions: active,
             max_sessions: MAX_CONCURRENT_SESSIONS,
@@ -4050,6 +4259,16 @@ impl VtLogBuffer {
 
     pub fn set_ansi_colors(&mut self, colors: &[[u8; 3]; 16]) {
         self.grid.set_ansi_colors(colors);
+    }
+
+    /// Reflow scrollback on a column resize, or truncate it.
+    ///
+    /// Live-settable rather than construction-only because the Settings toggle
+    /// must reach sessions that already exist: a user who narrows a terminal,
+    /// loses history and then finds the setting would otherwise have to restart
+    /// every session for it to mean anything (#660-d087).
+    pub fn set_reflow_history(&mut self, on: bool) {
+        self.grid.reflow_history = on;
     }
 
     /// Feed raw PTY bytes into the terminal grid.
@@ -4408,6 +4627,24 @@ impl VtLogBuffer {
 
     // --- private helpers ---
 
+    /// Roughly how much heap this buffer holds, for `memory_report`: the
+    /// captured log lines plus the terminal grid behind them. Walks the log
+    /// once, which is fine on demand and is why the report is not on the
+    /// diagnostics tick.
+    pub fn approx_bytes(&self) -> usize {
+        let log: usize = self
+            .log
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.text.len() + std::mem::size_of::<LogSpan>())
+                    .sum::<usize>()
+            })
+            .sum();
+        log + self.grid.approx_bytes()
+    }
+
     fn push_log_line(&mut self, line: LogLine) {
         if self.log.len() >= self.capacity {
             self.log.pop_front();
@@ -4468,7 +4705,7 @@ pub(crate) mod tests_support {
         command.args(["-c", "sleep 30"]);
         let child = pair.slave.spawn_command(command).expect("spawn shell");
         let writer = pair.master.take_writer().expect("writer");
-        state.sessions.insert(
+        state.session_maps.sessions.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(PtySession {
                 writer: std::sync::Arc::new(parking_lot::Mutex::new(writer)),
@@ -4527,6 +4764,69 @@ mod tests {
             timestamp: 1,
             delivered_via_channel: false,
         }
+    }
+
+    // ── scrollback_reflow: the config toggle reaches the grids ──
+
+    /// Fill a buffer's scrollback, then shrink it. With reflow the wrapped rows
+    /// are re-split and history grows; without it they are truncated in place.
+    fn history_after_shrink(vt: &mut VtLogBuffer) -> (usize, usize) {
+        vt.process(b"AAAAAAAAAABBBBBBBBBB\r\n");
+        vt.process(b"CCCCCCCCCCDDDDDDDDDD\r\n");
+        vt.process(b"EEEEEEEEEEFFFFFFFFFF\r\n");
+        vt.process(b"line4\r\nline5\r\nline6");
+        let before = vt.grid_history_size();
+        vt.resize(3, 10);
+        (before, vt.grid_history_size())
+    }
+
+    #[test]
+    fn new_vt_log_buffer_honors_scrollback_reflow_off() {
+        let state = tests_support::make_test_app_state();
+        state.config.write().scrollback_reflow = false;
+
+        let mut vt = state.new_vt_log_buffer(3, 20, 4096);
+        let (before, after) = history_after_shrink(&mut vt);
+
+        assert_eq!(
+            after, before,
+            "with the toggle off a resize must truncate history, not reflow it"
+        );
+    }
+
+    #[test]
+    fn new_vt_log_buffer_honors_scrollback_reflow_on() {
+        let state = tests_support::make_test_app_state();
+        state.config.write().scrollback_reflow = true;
+
+        let mut vt = state.new_vt_log_buffer(3, 20, 4096);
+        let (before, after) = history_after_shrink(&mut vt);
+
+        assert!(
+            after > before,
+            "with the toggle on a shrink must re-split history rows: {before} -> {after}"
+        );
+    }
+
+    /// The toggle has to reach sessions that already exist — a config change that
+    /// only affects the next session is the bug this story was opened for.
+    #[test]
+    fn apply_reflow_history_reaches_live_buffers() {
+        let state = tests_support::make_test_app_state();
+        state.config.write().scrollback_reflow = true;
+        state.grid.vt_log_buffers.insert(
+            "s1".to_string(),
+            Mutex::new(state.new_vt_log_buffer(3, 20, 4096)),
+        );
+
+        state.apply_reflow_history(false);
+
+        let buffer = state.grid.vt_log_buffers.get("s1").expect("buffer exists");
+        let (before, after) = history_after_shrink(&mut buffer.lock());
+        assert_eq!(
+            after, before,
+            "a live buffer must pick up the toggle without being recreated"
+        );
     }
 
     // ── push_agent_inbox: lifecycle notifications survive peer-send flooding ──
@@ -5394,6 +5694,7 @@ mod tests {
 
         // A session-scoped WS handler for "a" creates + subscribes to its channel.
         let mut rx_a = state
+            .session_maps
             .pty_event_channels
             .entry("a".to_string())
             .or_insert_with(|| tokio::sync::broadcast::channel(16).0)
@@ -5437,6 +5738,7 @@ mod tests {
         // consumers that mostly read one `type` field and drop the rest.
         let state = tests_support::make_test_app_state();
         let mut rx_session = state
+            .session_maps
             .pty_event_channels
             .entry("a".to_string())
             .or_insert_with(|| tokio::sync::broadcast::channel(16).0)
@@ -5468,6 +5770,7 @@ mod tests {
         // broadcast drains buffered messages before signalling Closed.
         let state = tests_support::make_test_app_state();
         let mut rx = state
+            .session_maps
             .pty_event_channels
             .entry("s".to_string())
             .or_insert_with(|| tokio::sync::broadcast::channel(16).0)
@@ -5478,7 +5781,7 @@ mod tests {
             reason: "process_exit".to_string(),
         });
         // Simulate cleanup_session/tombstone_transient_cleanup dropping the sender.
-        state.pty_event_channels.remove("s");
+        state.session_maps.pty_event_channels.remove("s");
 
         match rx.recv().await {
             Ok(AppEvent::SessionClosed { reason, .. }) => assert_eq!(reason, "process_exit"),
@@ -6146,150 +6449,12 @@ mod tests {
 
     // --- Cached config in AppState tests ---
 
-    fn make_test_app_state() -> AppState {
-        AppState {
-            sessions: dashmap::DashMap::new(),
-            data_dir: std::env::temp_dir().join("test-tuic-data"),
-            worktrees_dir: std::env::temp_dir().join("test-worktrees"),
-            metrics: SessionMetrics::new(),
-            output_buffers: dashmap::DashMap::new(),
-            mcp_sessions: dashmap::DashMap::new(),
-            ws_clients: dashmap::DashMap::new(),
-            config: parking_lot::RwLock::new(crate::config::AppConfig::default()),
-            git_cache: GitCacheState::new(),
-            repo_watchers: dashmap::DashMap::new(),
-            repo_git_fingerprints: dashmap::DashMap::new(),
-            repo_head_targets: dashmap::DashMap::new(),
-            repo_head_emits_suppressed: AtomicU64::new(0),
-            dir_watchers: dashmap::DashMap::new(),
-            theme_watcher: parking_lot::Mutex::new(None),
-            mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
-            http_client: build_http_client(),
-            github_token: parking_lot::RwLock::new(None),
-            github_token_source: parking_lot::RwLock::new(Default::default()),
-            github_circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
-            github_poller: parking_lot::Mutex::new(None),
-            github_viewer_login: parking_lot::RwLock::new(None),
-            github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
-            ghe_state: dashmap::DashMap::new(),
-            server_shutdown: parking_lot::Mutex::new(None),
-            ipc_started: std::sync::atomic::AtomicBool::new(false),
-            session_token: parking_lot::RwLock::new(String::from("test-token")),
-            auth_rate_limits: dashmap::DashMap::new(),
-            #[cfg(feature = "desktop")]
-            app_handle: parking_lot::RwLock::new(None),
-            plugin_watchers: dashmap::DashMap::new(),
-            ansi_colors: parking_lot::RwLock::new(None),
-            vt_log_buffers: dashmap::DashMap::new(),
-            pty_raw_rings: dashmap::DashMap::new(),
-            #[cfg(feature = "desktop")]
-            grid_channels: dashmap::DashMap::new(),
-            grid_watch: dashmap::DashMap::new(),
-            grid_gates: dashmap::DashMap::new(),
-            grid_frame_dirty: dashmap::DashMap::new(),
-            sync_update_active: dashmap::DashMap::new(),
-            pending_scroll: dashmap::DashMap::new(),
-            kitty_states: dashmap::DashMap::new(),
-            input_buffers: dashmap::DashMap::new(),
-            last_prompts: dashmap::DashMap::new(),
-            pty_descriptions: dashmap::DashMap::new(),
-            silence_states: dashmap::DashMap::new(),
-            claude_usage_cache: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            log_buffer: Arc::new(parking_lot::Mutex::new(
-                crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
-            )),
-            event_bus: tokio::sync::broadcast::channel(256).0,
-            event_counter: Arc::new(AtomicU64::new(0)),
-            sse_filters: Default::default(),
-            session_states: DashMap::new(),
-            session_state_events: SessionStateEventQueue::new(),
-            mcp_upstream_registry: {
-                Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new())
-            },
-            oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
-            mcp_tools_changed: tokio::sync::broadcast::channel(16).0,
-            tool_search_index: Arc::new(parking_lot::RwLock::new(
-                crate::tool_search::ToolSearchIndex::build(&[]),
-            )),
-            content_indices: DashMap::new(),
-            indexer_throttle: Arc::new(crate::content_index::IndexerThrottle::default()),
-            index_in_flight: Arc::new(DashSet::new()),
-            worktree_recreate_in_flight: Arc::new(DashSet::new()),
-            index_build_sem: Arc::new(tokio::sync::Semaphore::new(1)),
-            monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
-            slash_mode: DashMap::new(),
-            last_output_ms: DashMap::new(),
-            last_input_ms: DashMap::new(),
-            shell_states: DashMap::new(),
-            terminal_rows: DashMap::new(),
-            resize_locks: DashMap::new(),
-            exit_codes: DashMap::new(),
-            shell_state_since_ms: DashMap::new(),
-            loaded_plugins: DashMap::new(),
-            plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
-            relay: RelayState::new(),
-            peer_agents: DashMap::new(),
-            agent_inbox: DashMap::new(),
-            agent_inbox_evictions: DashMap::new(),
-            agent_read_cursor: DashMap::new(),
-            marker_stats: DashMap::new(),
-            pending_injections: DashMap::new(),
-            pending_initial_prompts: DashMap::new(),
-            active_agent_waiters: DashMap::new(),
-            orchestrator_peers: DashSet::new(),
-            session_html_tabs: DashMap::new(),
-            mcp_to_session: DashMap::new(),
-            session_to_mcp: DashMap::new(),
-            live_pty_by_tuic_session: DashMap::new(),
-            session_parent: DashMap::new(),
-            messaging_channels: DashMap::new(),
-            pty_event_channels: DashMap::new(),
-            session_knowledge: DashMap::new(),
-            knowledge_dirty: DashMap::new(),
-            has_osc133_integration: DashMap::new(),
-            file_sandboxes: DashMap::new(),
-            unrestricted_sessions: DashMap::new(),
-            #[cfg(unix)]
-            bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
-            tailscale_state: parking_lot::RwLock::new(
-                crate::tailscale::TailscaleState::NotInstalled,
-            ),
-            acp: crate::acp::AcpClientManager::new(),
-            push_store: crate::push::PushStore::load(&std::env::temp_dir()),
-            desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
-            server_start_time: std::time::Instant::now(),
-            term_aliases: DashMap::new(),
-            term_alias_counters: DashMap::new(),
-            session_visibility: DashMap::new(),
-            watcher_engine: std::sync::OnceLock::new(),
-            scheduler_running: std::sync::atomic::AtomicBool::new(false),
-            scheduler_stop: Arc::new(tokio::sync::Notify::new()),
-            trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
-            ai_suggestions_enabled: DashMap::new(),
-            tunnel_manager: {
-                let audit = Arc::new(parking_lot::Mutex::new(
-                    crate::tunnels::audit::AuditLog::open(
-                        &std::env::temp_dir().join("test-tunnel-audit.db"),
-                    )
-                    .unwrap(),
-                ));
-                Arc::new(crate::tunnels::manager::TunnelManager::new(audit))
-            },
-            tunnel_audit: Arc::new(parking_lot::Mutex::new(
-                crate::tunnels::audit::AuditLog::open(
-                    &std::env::temp_dir().join("test-tunnel-audit2.db"),
-                )
-                .unwrap(),
-            )),
-            tasks: Arc::new(crate::tasks::TaskRegistry::new()),
-            connections_lock: tokio::sync::Mutex::new(()),
-            screenshot_responses: DashMap::new(),
-            confirm_responses: DashMap::new(),
-            standby_sessions: DashMap::new(),
-            process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
-            hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
-        }
-    }
+    // The 116-field literal that used to sit here was a strictly worse copy of
+    // `tests_support::make_test_app_state`: same values everywhere it mattered,
+    // but a SHARED `test-tuic-data` dir, which is the SQLITE_BUSY collision the
+    // shared helper documents and avoids. Deleted rather than kept in sync
+    // (#678-9a75).
+    use super::tests_support::make_test_app_state;
 
     /// The registry is reached through `AppState` by every MCP task handler, so a
     /// state built without a live one would fail at request time, not at boot.
@@ -6715,6 +6880,7 @@ mod tests {
     fn apply(state: &Arc<AppState>, event: &AppEvent) -> SessionState {
         AppState::apply_event_to_session_state(state, event);
         state
+            .session_maps
             .session_states
             .get("s1")
             .map(|s| s.clone())
@@ -6723,13 +6889,17 @@ mod tests {
 
     fn fresh_state() -> Arc<AppState> {
         let s = Arc::new(make_test_app_state());
-        s.session_states
+        s.session_maps
+            .session_states
             .insert("s1".to_string(), SessionState::default());
         // Initialize last_output_ms for shell_state derivation
-        s.last_output_ms.insert("s1".to_string(), AtomicU64::new(0));
+        s.session_maps
+            .last_output_ms
+            .insert("s1".to_string(), AtomicU64::new(0));
         let mut silence = crate::pty::SilenceState::new();
         silence.confirm_idle();
-        s.silence_states
+        s.session_maps
+            .silence_states
             .insert("s1".to_string(), Arc::new(parking_lot::Mutex::new(silence)));
         s
     }
@@ -6755,6 +6925,7 @@ mod tests {
     fn test_session_state_pty_activity_does_not_restamp_last_activity() {
         let state = fresh_state();
         state
+            .session_maps
             .session_states
             .get_mut("s1")
             .expect("fresh_state seeds s1")
@@ -6818,6 +6989,7 @@ mod tests {
         let state = make_test_app_state();
         let session_id = "session-1";
         state
+            .session_maps
             .last_prompts
             .insert(session_id.to_string(), "the last user prompt".to_string());
         let mut events = state.event_bus.subscribe();
@@ -6825,13 +6997,19 @@ mod tests {
         state.set_pty_description(session_id, Some("Run validation".to_string()));
         assert_eq!(
             state
+                .session_maps
                 .pty_descriptions
                 .get(session_id)
                 .map(|value| value.value().clone()),
             Some("Run validation".to_string())
         );
         assert_eq!(
-            state.last_prompts.get(session_id).unwrap().value(),
+            state
+                .session_maps
+                .last_prompts
+                .get(session_id)
+                .unwrap()
+                .value(),
             "the last user prompt"
         );
         assert!(matches!(
@@ -6844,12 +7022,67 @@ mod tests {
         assert!(events.try_recv().is_err());
 
         state.set_pty_description(session_id, None);
-        assert!(!state.pty_descriptions.contains_key(session_id));
+        assert!(!state.session_maps.pty_descriptions.contains_key(session_id));
         assert!(matches!(
             events.try_recv().unwrap(),
             AppEvent::PtyDescriptionChanged { session_id: id, description: None }
                 if id == session_id
         ));
+    }
+
+    /// The desktop learns a session's lifecycle from this push, not from a 1 Hz
+    /// `list_active_sessions` poll (#687-be9d). Two properties make that safe:
+    /// a real transition produces exactly one push, and a repaint that leaves
+    /// the derived state identical produces none. The second is not a nicety —
+    /// an agent redrawing its spinner restamps `last_activity_ms` on every
+    /// chunk, so pushing on every applied event would be the poll again, at a
+    /// higher rate, with the whole `SessionState` attached.
+    #[tokio::test]
+    async fn session_state_changed_fires_on_a_transition_and_not_on_an_unchanged_repaint() {
+        let state = fresh_state();
+        let mut bus = state.event_bus.subscribe();
+        AppState::spawn_session_state_accumulator(Arc::clone(&state));
+
+        let question = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "Proceed?", "confident": true }),
+        );
+        state.emit_pty_event(question.clone());
+        // The same screen parsed twice: nothing a client renders has moved.
+        state.emit_pty_event(question);
+        state.emit_pty_event(make_parsed(
+            "user-input",
+            serde_json::json!({ "content": "yes" }),
+        ));
+
+        // Read until the answer's push arrives and assert on the whole sequence.
+        // A silence window would only prove the repaint was slow; the ordered
+        // lossless lane lets a leaked repaint show up as an extra `true`.
+        let mut awaiting_pushes: Vec<bool> = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Ok(AppEvent::SessionStateChanged {
+                    session_id,
+                    state: pushed,
+                }) = bus.recv().await
+                {
+                    assert_eq!(session_id, "s1");
+                    let awaiting = pushed.awaiting_input;
+                    awaiting_pushes.push(awaiting);
+                    if !awaiting {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("the accumulator never pushed the answered state back");
+
+        assert_eq!(
+            awaiting_pushes,
+            vec![true, false],
+            "one push per real transition; the identical repaint must add none"
+        );
     }
 
     #[test]
@@ -6889,8 +7122,13 @@ mod tests {
     #[tokio::test]
     async fn queued_prior_turn_suggest_cannot_restore_completion_after_submission() {
         let state = fresh_state();
-        state.session_states.get_mut("s1").unwrap().agent_type = Some("codex".to_string());
-        state.shell_states.insert(
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .agent_type = Some("codex".to_string());
+        state.session_maps.shell_states.insert(
             "s1".to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
         );
@@ -6910,6 +7148,7 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
                 if state
+                    .session_maps
                     .session_states
                     .get("s1")
                     .is_some_and(|session| session.last_activity_ms > 0)
@@ -6922,6 +7161,7 @@ mod tests {
         .await
         .expect("queued Suggest must drain through the accumulator");
         state
+            .session_maps
             .shell_states
             .get("s1")
             .unwrap()
@@ -6958,10 +7198,15 @@ mod tests {
 
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
-                if state.session_states.get("s1").is_some_and(|session| {
-                    session.awaiting_input
-                        && session.question_text.as_deref() == Some("final prompt")
-                }) {
+                if state
+                    .session_maps
+                    .session_states
+                    .get("s1")
+                    .is_some_and(|session| {
+                        session.awaiting_input
+                            && session.question_text.as_deref() == Some("final prompt")
+                    })
+                {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -7054,6 +7299,7 @@ mod tests {
     fn confident_question_routes_awaiting_input_to_the_spawning_parent() {
         let state = fresh_state();
         state
+            .session_maps
             .session_parent
             .insert("s1".to_string(), "parent-1".to_string());
         state.agent_inbox.entry("parent-1".to_string()).or_default();
@@ -7085,6 +7331,7 @@ mod tests {
     fn low_confidence_question_notifies_parent_with_confidence_metadata() {
         let state = fresh_state();
         state
+            .session_maps
             .session_parent
             .insert("s1".to_string(), "parent-1".to_string());
         state.agent_inbox.entry("parent-1".to_string()).or_default();
@@ -7110,6 +7357,7 @@ mod tests {
     fn repeated_confident_question_notifies_the_parent_only_once() {
         let state = fresh_state();
         state
+            .session_maps
             .session_parent
             .insert("s1".to_string(), "parent-1".to_string());
         state.agent_inbox.entry("parent-1".to_string()).or_default();
@@ -7174,8 +7422,14 @@ mod tests {
         use std::collections::VecDeque;
         use std::sync::atomic::AtomicU8;
         let state = fresh_state();
-        state.session_states.get_mut("s1").unwrap().agent_type = Some("claude".to_string());
         state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .agent_type = Some("claude".to_string());
+        state
+            .session_maps
             .shell_states
             .insert("s1".to_string(), AtomicU8::new(crate::pty::SHELL_IDLE));
         let q = make_parsed(
@@ -7263,7 +7517,12 @@ mod tests {
     #[test]
     fn stale_turn_question_cannot_rearm_awaiting_after_input() {
         let state = fresh_state();
-        state.session_states.get_mut("s1").unwrap().turn_epoch = 2;
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .turn_epoch = 2;
         let stale = make_parsed(
             "question",
             serde_json::json!({
@@ -7319,7 +7578,7 @@ mod tests {
                 }),
             ),
         );
-        let waiting = state.session_states.get("s1").unwrap().clone();
+        let waiting = state.session_maps.session_states.get("s1").unwrap().clone();
         assert!(waiting.awaiting_input);
         assert!(waiting.choice_prompt.is_some());
 
@@ -7380,7 +7639,12 @@ mod tests {
             session.choice_prompt.is_some(),
             "an animated status row must not erase a visible choice prompt"
         );
-        state.session_states.get_mut("s1").unwrap().agent_type = Some("claude".into());
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .agent_type = Some("claude".into());
         let snapshot = state.session_state_with_shell("s1").unwrap();
         assert_eq!(snapshot.agent_state.as_deref(), Some("awaiting_input"));
     }
@@ -7406,6 +7670,7 @@ mod tests {
         assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b[B"));
         assert!(
             state
+                .session_maps
                 .session_states
                 .get("s1")
                 .unwrap()
@@ -7414,7 +7679,7 @@ mod tests {
         );
 
         assert!(resolve_choice_prompt_input(&state, "s1", "1"));
-        let session = state.session_states.get("s1").unwrap();
+        let session = state.session_maps.session_states.get("s1").unwrap();
         assert!(session.choice_prompt.is_none());
         assert!(!session.awaiting_input);
     }
@@ -7457,6 +7722,7 @@ mod tests {
         let state = fresh_state();
         // Set shell_states to BUSY (1) — this is the source of truth from PTY reader
         state
+            .session_maps
             .shell_states
             .insert("s1".to_string(), std::sync::atomic::AtomicU8::new(1));
         // Intentionally leave last_output_ms at 0 (stale) — should NOT matter
@@ -7469,6 +7735,7 @@ mod tests {
 
         // Set shell_states to IDLE (2)
         state
+            .session_maps
             .shell_states
             .get("s1")
             .unwrap()
@@ -7477,7 +7744,7 @@ mod tests {
         assert_eq!(ss.shell_state.as_deref(), Some("idle"));
 
         // No shell_states entry → None
-        state.shell_states.remove("s1");
+        state.session_maps.shell_states.remove("s1");
         let ss = state.session_state_with_shell("s1").unwrap();
         assert!(
             ss.shell_state.is_none(),
@@ -7485,11 +7752,16 @@ mod tests {
         );
 
         // The explicit null sentinel also means unobserved, not idle.
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             "s1".to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_NULL),
         );
-        state.session_states.get_mut("s1").unwrap().agent_type = Some("codex".to_string());
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .agent_type = Some("codex".to_string());
         let ss = state.session_state_with_shell("s1").unwrap();
         assert!(ss.shell_state.is_none());
         assert_eq!(ss.agent_state.as_deref(), Some("starting"));
@@ -7499,11 +7771,11 @@ mod tests {
     fn test_current_turn_completion_normalizes_stale_busy_shell() {
         let state = fresh_state();
         {
-            let mut session = state.session_states.get_mut("s1").unwrap();
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
             session.agent_type = Some("codex".into());
             session.suggested_actions = Some(vec!["Review diff".into()]);
         }
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             "s1".into(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
         );
@@ -7518,7 +7790,7 @@ mod tests {
         for pending_probe in [false, true] {
             let state = fresh_state();
             {
-                let mut session = state.session_states.get_mut("s1").unwrap();
+                let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
                 session.agent_type = Some("claude".into());
                 session.suggested_actions = Some(vec!["Review result".into()]);
                 session.background_work = !pending_probe;
@@ -7526,7 +7798,7 @@ mod tests {
                     session.background_probe_turn_epoch = Some(session.turn_epoch);
                 }
             }
-            state.shell_states.insert(
+            state.session_maps.shell_states.insert(
                 "s1".into(),
                 std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
             );
@@ -9107,7 +9379,7 @@ mod tests {
         assert!(s.rate_limit_set_ms > 0);
 
         // Manually backdate the timestamp to simulate expiry
-        if let Some(mut entry) = state.session_states.get_mut("s1") {
+        if let Some(mut entry) = state.session_maps.session_states.get_mut("s1") {
             entry.rate_limit_set_ms = entry.rate_limit_set_ms.saturating_sub(6000);
         }
 
@@ -9151,7 +9423,7 @@ mod tests {
         assert!(s.retry_after_ms.is_none());
 
         // Backdate past the default expiry (120s)
-        if let Some(mut entry) = state.session_states.get_mut("s1") {
+        if let Some(mut entry) = state.session_maps.session_states.get_mut("s1") {
             entry.rate_limit_set_ms = entry.rate_limit_set_ms.saturating_sub(121_000);
         }
 
