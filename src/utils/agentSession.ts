@@ -22,32 +22,103 @@ import { pathBasename } from "./pathUtils";
  * Apply a run config to a resume command, preferring the original launch command
  * over the current default. This ensures that e.g. resuming a session started
  * with `c` (claude with custom flags/config-dir) doesn't switch to `c2`.
+ *
+ * The launch command may carry a leading `KEY=VALUE` env prefix — discovery
+ * rebuilds it from the live agent process, because a shell alias hides the env
+ * that decides where the session is stored. The prefix stays in front of the
+ * binary; the resume flags still go between the binary and its args.
  */
 function applyDefaultRunConfig(agentType: AgentType, command: string, launchCommand?: string | null): string {
-	const launchParts = launchCommand?.split(" ");
-	const runConfig = launchParts ? null : agentConfigsStore.getDefaultConfig(agentType);
-	if (!launchParts && !runConfig) return command;
+	const launch = launchCommand ? splitEnvPrefix(launchCommand) : null;
+	const runConfig = launch ? null : agentConfigsStore.getDefaultConfig(agentType);
+	if (!launch && !runConfig) return command;
 
-	const parts = command.split(" ");
-	const resumeFlags = parts.slice(1); // drop the hardcoded binary
+	const resumeFlags = tokenize(command).slice(1); // drop the hardcoded binary
 
-	if (launchParts) {
+	if (launch) {
 		// Use the original launch binary + its args, with resume flags in between
-		const [launchBinary, ...launchArgs] = launchParts;
-		return [launchBinary, ...resumeFlags, ...launchArgs].join(" ");
+		const [launchBinary, ...launchArgs] = launch.argv;
+		return [...launch.env, launchBinary, ...resumeFlags, ...launchArgs].join(" ");
 	}
 	// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 	return [runConfig!.command, ...resumeFlags, ...runConfig!.args].join(" ");
 }
 
-/** Resolve the environment of the run config that produced a persisted launch command. */
+/**
+ * Resolve the environment a persisted launch command runs under.
+ *
+ * A rebuilt launch command states it outright (`CLAUDE_CONFIG_DIR=… claude …`) —
+ * that is ground truth read from the agent process, and the only source that
+ * survives the process. Otherwise fall back to the run config, which knows the
+ * env only when the user typed it into TUIC rather than into a shell alias.
+ */
 function resolveLaunchEnv(agentType: AgentType, launchCommand?: string | null): Record<string, string> {
+	const prefix = launchCommand ? splitEnvPrefix(launchCommand).env : [];
+	if (prefix.length > 0) {
+		return Object.fromEntries(
+			prefix.map((assignment) => {
+				const eq = assignment.indexOf("=");
+				return [assignment.slice(0, eq), unquoteShellValue(assignment.slice(eq + 1))];
+			}),
+		);
+	}
 	const config = launchCommand
 		? agentConfigsStore
 				.getRunConfigs(agentType)
 				.find((candidate) => [candidate.command, ...candidate.args].join(" ") === launchCommand)
 		: agentConfigsStore.getDefaultConfig(agentType);
 	return config?.env ?? {};
+}
+
+/** Split a command into tokens, keeping single-quoted spans (paths with spaces) whole. */
+function tokenize(command: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let quoted = false;
+	let started = false;
+	for (const ch of command) {
+		if (ch === "'") {
+			quoted = !quoted;
+			current += ch;
+			started = true;
+		} else if (ch === " " && !quoted) {
+			if (started) tokens.push(current);
+			current = "";
+			started = false;
+		} else {
+			current += ch;
+			started = true;
+		}
+	}
+	if (started) tokens.push(current);
+	return tokens;
+}
+
+/** Separate a command's leading `KEY=VALUE` assignments from the command itself. */
+function splitEnvPrefix(command: string): { env: string[]; argv: string[] } {
+	const tokens = tokenize(command);
+	const cut = tokens.findIndex((token) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token));
+	const at = cut === -1 ? tokens.length : cut;
+	return { env: tokens.slice(0, at), argv: tokens.slice(at) };
+}
+
+/** Undo POSIX single-quoting (`'a'\''b'` → `a'b`), which is how the backend quotes. */
+function unquoteShellValue(value: string): string {
+	if (!value.includes("'")) return value;
+	let out = "";
+	let quoted = false;
+	for (let i = 0; i < value.length; i++) {
+		const ch = value[i];
+		if (ch === "'") {
+			quoted = !quoted;
+		} else if (ch === "\\" && !quoted && value[i + 1] === "'") {
+			out += "'";
+			i++;
+		} else {
+			out += ch;
+		}
+	}
+	return out;
 }
 
 /**

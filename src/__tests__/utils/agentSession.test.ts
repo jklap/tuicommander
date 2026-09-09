@@ -109,6 +109,24 @@ describe("buildResumeCommand", () => {
 	it("falls back to default when launchCommand is null", () => {
 		expect(buildResumeCommand("claude", "abc-123", null)).toBe("claude --resume abc-123");
 	});
+
+	it("keeps the env prefix in front of the binary, not in the resume flags", () => {
+		// Discovery rebuilds this from the live process: the alias c2 is gone, and the
+		// config dir it hid is stated outright. Resuming without it reads ~/.claude.
+		expect(
+			buildResumeCommand(
+				"claude",
+				"abc-123",
+				"CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --dangerously-skip-permissions",
+			),
+		).toBe("CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --resume abc-123 --dangerously-skip-permissions");
+	});
+
+	it("keeps a quoted env value whole when the path has spaces", () => {
+		expect(buildResumeCommand("claude", "abc-123", "CLAUDE_CONFIG_DIR='/Users/me/My Cfg/.claude' claude")).toBe(
+			"CLAUDE_CONFIG_DIR='/Users/me/My Cfg/.claude' claude --resume abc-123",
+		);
+	});
 });
 
 describe("sessionDiscovery in AgentConfig", () => {
@@ -238,5 +256,57 @@ describe("verifyAndBuildResumeCommand", () => {
 			envOverrides: { HOME: "/tmp/gemini-current-home" },
 		});
 		expect(result).toBe("gemini --resume discovered-gemini-id --model current-model");
+	});
+
+	// The failure this path exists for: the session lives in ~/.claude-private, the
+	// default run config is the c2 alias, and TUIC can only tell the two apart from
+	// the env the rebuilt launch command carries. Verify in the wrong store and the
+	// resume either aims at a session that is not there, or confirms one it will not
+	// open — Claude answers "No conversation found with session ID".
+	it("verifies against the config dir named by the rebuilt launch command", async () => {
+		mockAgentConfigsStore.getDefaultConfig.mockReturnValue({
+			name: "Claude Max",
+			command: "c2",
+			args: [],
+			env: {},
+			is_default: true,
+		});
+		mockRpc.mockResolvedValueOnce(true);
+
+		const result = await verifyAndBuildResumeCommand(
+			"claude",
+			"/tmp/repo",
+			"tuic-uuid-1",
+			"private-session-id",
+			"CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --dangerously-skip-permissions",
+		);
+
+		expect(mockRpc).toHaveBeenCalledWith("verify_agent_session", {
+			agentType: "claude",
+			sessionId: "private-session-id",
+			cwd: "/tmp/repo",
+			agentPid: null,
+			envOverrides: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-private" },
+		});
+		expect(result).toBe(
+			"CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --resume private-session-id --dangerously-skip-permissions",
+		);
+	});
+
+	it("unquotes an env value before handing it to verification", async () => {
+		mockRpc.mockResolvedValueOnce(true);
+
+		await verifyAndBuildResumeCommand(
+			"claude",
+			"/tmp/repo",
+			"tuic-uuid-1",
+			"private-session-id",
+			"CLAUDE_CONFIG_DIR='/Users/me/My Cfg/.claude' claude",
+		);
+
+		expect(mockRpc).toHaveBeenCalledWith(
+			"verify_agent_session",
+			expect.objectContaining({ envOverrides: { CLAUDE_CONFIG_DIR: "/Users/me/My Cfg/.claude" } }),
+		);
 	});
 });
