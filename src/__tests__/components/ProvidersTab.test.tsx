@@ -189,6 +189,65 @@ describe("ProvidersTab", () => {
 		expect(getByTestId("test-slot-main")).toBeTruthy();
 	});
 
+	// -- Ollama availability --
+
+	const ollamaProvider = { id: "ollama-local", type: "ollama", label: "Ollama", base_url: null };
+
+	function renderWithOllamaStatus(status: unknown) {
+		mockStore.state.registry.providers = [ollamaProvider] as unknown as (typeof anthropic)[];
+		mockInvoke.mockImplementation(async (cmd: string) => (cmd === "check_ollama_models" ? status : undefined));
+		return render(() => <ProvidersTab />);
+	}
+
+	it("renders a positive availability indicator when the provider is reachable", async () => {
+		const { findByTestId, queryByTestId } = renderWithOllamaStatus({
+			available: true,
+			models: [{ name: "llama3.3:8b", size: 1 }],
+			detail: null,
+		});
+		const badge = await findByTestId("availability-ollama-local");
+		expect(badge.dataset.available).toBe("true");
+		expect(badge.textContent).toContain("Reachable");
+		// No reason line: nothing is wrong.
+		expect(queryByTestId("availability-detail-ollama-local")).toBeNull();
+	});
+
+	it("renders a negative indicator plus the backend's reason when the provider is unreachable", async () => {
+		const { findByTestId } = renderWithOllamaStatus({
+			available: false,
+			models: [],
+			detail: "Cannot reach http://localhost:11434 — is Ollama running?",
+		});
+		const badge = await findByTestId("availability-ollama-local");
+		expect(badge.dataset.available).toBe("false");
+		expect(badge.textContent).toContain("Not detected");
+		const detail = await findByTestId("availability-detail-ollama-local");
+		expect(detail.textContent).toBe("Cannot reach http://localhost:11434 — is Ollama running?");
+	});
+
+	it("draws the indicator as an inline currentColor SVG, never an emoji", async () => {
+		for (const available of [true, false]) {
+			const { findByTestId, unmount } = renderWithOllamaStatus({
+				available,
+				models: [],
+				detail: available ? null : "Cannot reach http://localhost:11434 — is Ollama running?",
+			});
+			const badge = await findByTestId("availability-ollama-local");
+			const icon = badge.querySelector("svg");
+			expect(icon).toBeTruthy();
+			expect(icon?.getAttribute("fill")).toBe("currentColor");
+			expect(badge.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
+			unmount();
+		}
+	});
+
+	it("shows no availability badge for providers with no detection", async () => {
+		mockStore.state.registry.providers = [anthropic];
+		const { queryByTestId } = render(() => <ProvidersTab />);
+		await Promise.resolve();
+		expect(queryByTestId("availability-anthropic-main")).toBeNull();
+	});
+
 	// -- Suspense isolation --
 
 	it("does not collapse an ancestor Suspense while ollama models load", async () => {

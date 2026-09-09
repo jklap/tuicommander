@@ -59,6 +59,32 @@ function needsApiKey(type: ProviderType): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Availability indicator
+// ---------------------------------------------------------------------------
+
+/** Mirrors `OllamaStatus` in src-tauri/src/ai_chat.rs. */
+type ProviderAvailability = {
+	available: boolean;
+	models: { name: string; size: number }[];
+	/** Backend-authored reason the provider is unusable; null when reachable. */
+	detail: string | null;
+};
+
+/** Filled circle with a check — reachable */
+const ReachableIcon = () => (
+	<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+		<path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zm3.78 5.72a.75.75 0 0 0-1.06 0L7 9.44 5.28 7.72a.75.75 0 0 0-1.06 1.06l2.25 2.25a.75.75 0 0 0 1.06 0l4.25-4.25a.75.75 0 0 0 0-1.06z" />
+	</svg>
+);
+
+/** Filled circle with an exclamation — not reachable */
+const UnreachableIcon = () => (
+	<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+		<path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zm0 3.5a.75.75 0 0 0-.75.75v4a.75.75 0 0 0 1.5 0v-4A.75.75 0 0 0 8 3.5zm0 7a.9.9 0 1 0 0 1.8.9.9 0 0 0 0-1.8z" />
+	</svg>
+);
+
+// ---------------------------------------------------------------------------
 // Add Provider Wizard
 // ---------------------------------------------------------------------------
 
@@ -246,17 +272,17 @@ const ProviderCard: Component<{ provider: ProviderEntry }> = (props) => {
 	// Plain signal + onMount fetch, NOT createResource: a pending resource
 	// suspends the nearest ancestor Suspense — the App-level one wrapping the
 	// whole SettingsPanel — making the dialog flash on tab switch.
-	const [ollamaModels, setOllamaModels] = createSignal<string[]>([]);
+	const [availability, setAvailability] = createSignal<ProviderAvailability | null>(null);
+	const ollamaModels = () => (availability()?.models ?? []).map((m) => m.name);
 	onMount(async () => {
 		if (!isOllama()) return;
 		try {
-			const result = await invoke<{ available: boolean; models: { name: string; size: number }[] }>(
-				"check_ollama_models",
-				{ providerId: props.provider.id },
-			);
-			setOllamaModels((result.models ?? []).map((m) => m.name));
+			setAvailability(await invoke<ProviderAvailability>("check_ollama_models", { providerId: props.provider.id }));
 		} catch (e) {
+			// The probe itself could not run. That is still a verdict the user
+			// needs: report it as unreachable and show the error verbatim.
 			appLogger.warn("settings", `Ollama model check failed: ${String(e)}`);
+			setAvailability({ available: false, models: [], detail: String(e) });
 		}
 	});
 
@@ -301,7 +327,19 @@ const ProviderCard: Component<{ provider: ProviderEntry }> = (props) => {
 						data-testid={`key-status-${props.provider.id}`}
 					>
 						{needsApiKey(props.provider.type) ? (hasKey() ? "✓ key" : "no key") : "no key needed"}
-					</span>
+					</span>{" "}
+					<Show when={availability()}>
+						{(status) => (
+							<span
+								class={status().available ? s.availabilityOk : s.availabilityBad}
+								data-testid={`availability-${props.provider.id}`}
+								data-available={String(status().available)}
+							>
+								{status().available ? <ReachableIcon /> : <UnreachableIcon />}
+								{status().available ? "Reachable" : "Not detected"}
+							</span>
+						)}
+					</Show>
 				</div>
 				<button
 					class={s.groupDeleteBtn}
@@ -312,6 +350,15 @@ const ProviderCard: Component<{ provider: ProviderEntry }> = (props) => {
 					×
 				</button>
 			</div>
+
+			{/* Why the provider is unreachable — the wording comes from the backend */}
+			<Show when={availability()?.available === false && availability()?.detail}>
+				{(detail) => (
+					<div class={s.availabilityDetail} data-testid={`availability-detail-${props.provider.id}`}>
+						{detail()}
+					</div>
+				)}
+			</Show>
 
 			{/* Models */}
 			<div style={{ "margin-top": "8px" }}>

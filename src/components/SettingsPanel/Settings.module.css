@@ -1354,3 +1354,27 @@
   font-size: var(--font-xs);
   color: var(--fg-muted);
 }
+
+/* ── Provider availability indicator (ProvidersTab) ── */
+.availabilityOk,
+.availabilityBad {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-xs);
+  vertical-align: middle;
+}
+
+.availabilityOk {
+  color: var(--success);
+}
+
+.availabilityBad {
+  color: var(--warning);
+}
+
+.availabilityDetail {
+  margin-top: 4px;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+}
