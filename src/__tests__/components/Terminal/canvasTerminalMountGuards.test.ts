@@ -76,4 +76,27 @@ describe("CanvasTerminal mount guards", () => {
 		// one before any match is applied — not just the screen generation.
 		expect(untilFirstUse).toMatch(/!==\s*searchQuery/);
 	});
+
+	/**
+	 * The measurement is taken from `containerRef.getBoundingClientRect()`, and a
+	 * pane that mounts before layout has no box to give. Every re-measure path is
+	 * opportunistic — the ResizeObserver is not even installed until `onMount` has
+	 * awaited three IPC subscriptions and a webfont — so a dropped measurement is
+	 * a canvas stuck at its mount-time geometry until the user resizes the window
+	 * (#716-031e). `remeasure` must wait for the first real box, not drop it.
+	 *
+	 * The retry rule itself is behaviour-tested in `visibilityLifecycle.test.ts`;
+	 * this asserts the component is wired to it, which a render test cannot reach.
+	 */
+	it("waits for a real box instead of dropping a measurement on an unsized pane", () => {
+		const remeasure = source.slice(source.indexOf("function remeasure()"));
+		expect(remeasure).not.toBe("");
+		const body = remeasure.slice(0, remeasure.indexOf("\n\t}\n"));
+		expect(body).toMatch(/retryUntilMeasured\(/);
+		// The retry handle has to be cancellable, or a pane that never gets a box
+		// keeps a disposed component's callback alive.
+		expect(source).toMatch(/cancelSizeRetry/);
+		const cleanup = source.slice(source.indexOf("onCleanup(() => {"));
+		expect(cleanup).toMatch(/cancelSizeRetry\?\.\(\)/);
+	});
 });

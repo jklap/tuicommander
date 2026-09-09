@@ -1,8 +1,8 @@
 /**
- * Visibility lifecycle rules for `Terminal.tsx`, kept out of the component so
- * they can be tested — mounting the component itself needs the whole
- * canvas/transport mock stack, and `Terminal.tsx` is excluded from coverage for
- * exactly that reason.
+ * Visibility and sizing lifecycle rules for `Terminal.tsx` and
+ * `CanvasTerminal.tsx`, kept out of the components so they can be tested —
+ * mounting either needs the whole canvas/transport mock stack, which is why
+ * both are excluded from coverage.
  */
 
 /**
@@ -54,6 +54,36 @@ export function retryUntilSized(
 		if (handle) cancelAnimationFrame(handle);
 		handle = 0;
 	};
+}
+
+/** `retryUntilMeasured`'s attempt does its own work; there is nothing left to do after it. */
+const NOOP = () => {};
+
+/**
+ * Re-run a measurement that could not take its container's box, until it can.
+ *
+ * `CanvasTerminal.remeasure()` reads `getBoundingClientRect()` and can do
+ * nothing at all with a degenerate box — no metrics, no canvas size, no
+ * `resize_pty`. It used to just return there, which loses the measurement: a
+ * full page reload mounts every terminal before layout runs, and the canvas
+ * then kept its mount-time geometry (a small box in the corner of the pane)
+ * until a window resize happened to run the measurement again. The pane's
+ * ResizeObserver is no answer on its own — it is installed only after `onMount`
+ * has awaited three IPC subscriptions and a webfont load.
+ *
+ * `attempt` returns true once it has measured. It is its own predicate on
+ * purpose: it reads the box and returns immediately when there is nothing to
+ * measure, so polling it costs exactly what polling a separate `isSized` would.
+ *
+ * Returns a disposer, with the bound and the cancellation semantics of
+ * `retryUntilSized`.
+ */
+export function retryUntilMeasured(
+	attempt: () => boolean,
+	onExhausted?: () => void,
+	maxFrames: number = SIZE_RETRY_MAX_FRAMES,
+): () => void {
+	return retryUntilSized(attempt, NOOP, onExhausted, maxFrames);
 }
 
 /** What the visibility effect carries between runs. */
