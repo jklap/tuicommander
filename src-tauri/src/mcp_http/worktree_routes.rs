@@ -20,6 +20,7 @@ pub(super) struct CreatedWorktree {
 
 pub(super) async fn list_worktrees_http(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let worktrees: Vec<serde_json::Value> = state
+        .session_maps
         .sessions
         .iter()
         .filter_map(|entry| {

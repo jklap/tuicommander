@@ -244,9 +244,10 @@ pub(crate) fn with_account_breaker<R>(
     f: impl FnOnce(&GitHubCircuitBreaker) -> R,
 ) -> R {
     if account.is_ambient_default() {
-        f(&state.github_circuit_breaker)
+        f(&state.github.circuit_breaker)
     } else {
         let entry = state
+            .github
             .ghe_state
             .entry(account.id.clone())
             .or_insert_with(GheAccountState::new);
@@ -264,9 +265,10 @@ pub(crate) fn with_account_breaker<R>(
 /// keeps the proactive throttle honest.)
 pub(crate) fn min_rate_budget(state: &AppState) -> u32 {
     let mut min = state
-        .github_rate_limit_remaining
+        .github
+        .rate_limit_remaining
         .load(std::sync::atomic::Ordering::Relaxed);
-    for entry in state.ghe_state.iter() {
+    for entry in state.github.ghe_state.iter() {
         let b = entry
             .value()
             .rate_limit_remaining
@@ -489,20 +491,20 @@ fn rate_limit_wait_secs(reset_at: Option<u64>, retry_after: Option<u64>) -> u64 
 pub(crate) fn github_com_account(state: &AppState) -> crate::github_account::GitHubAccount {
     use crate::github_account::AccountKind;
     use crate::github_auth::TokenSource;
-    let kind = match *state.github_token_source.read() {
+    let kind = match *state.github.token_source.read() {
         TokenSource::Env => AccountKind::GithubComEnv,
         TokenSource::GhCli => AccountKind::GithubComGhCli,
         // OAuth, Pat (n/a for cloud), and None all map to the OAuth default.
         TokenSource::OAuth | TokenSource::Pat | TokenSource::None => AccountKind::GithubComOauth,
     };
-    let login = state.github_viewer_login.read().clone();
+    let login = state.github.viewer_login.read().clone();
     crate::github_account::GitHubAccount::github_com(kind, login)
 }
 
 /// Resolve a repo to `(account, token, owner, repo)` for a REST API call.
 ///
 /// Preserves github.com behavior: a github.com repo resolves to the implicit
-/// default account and uses the cached/rotated `state.github_token` (NOT a fresh
+/// default account and uses the cached/rotated `state.github.token` (NOT a fresh
 /// chain resolve), exactly as the old per-command preamble did. GHE-bound repos
 /// use their account's PAT + host. Errors when the repo is unbound, ambiguous,
 /// or unauthenticated.
@@ -513,7 +515,7 @@ async fn resolve_repo_for_rest(
     // Read the cheap AppState bits on the async thread, then run the blocking
     // registry/binding fs loads + keychain resolve on a blocking thread.
     let default = github_com_account(state);
-    let ambient_token = state.github_token.read().clone();
+    let ambient_token = state.github.token.read().clone();
     let repo_path = repo_path.to_string();
     tokio::task::spawn_blocking(move || {
         use crate::github_account::{
@@ -654,15 +656,15 @@ pub(crate) async fn graphql_with_retry(
     }
 
     // github.com path — cached/rotated token + 401 candidate fallback. Unchanged.
-    let mut current_token = state.github_token.read().clone();
+    let mut current_token = state.github.token.read().clone();
     // Lazy resolution: boot skips keychain, resolve on first use.
     if current_token.is_none() {
         let (t, s) = tokio::task::spawn_blocking(crate::github_auth::resolve_token_with_source)
             .await
             .map_err(|e| format!("token resolve task panicked: {e}"))?;
         if t.is_some() {
-            *state.github_token.write() = t.clone();
-            *state.github_token_source.write() = s;
+            *state.github.token.write() = t.clone();
+            *state.github.token_source.write() = s;
         }
         current_token = t;
     }
@@ -700,8 +702,8 @@ pub(crate) async fn graphql_with_retry(
                 {
                     Ok(response) => {
                         tracing::info!(source = "github", "Token fallback succeeded");
-                        *state.github_token.write() = Some(candidate.clone());
-                        *state.github_token_source.write() = *candidate_source;
+                        *state.github.token.write() = Some(candidate.clone());
+                        *state.github.token_source.write() = *candidate_source;
                         with_account_breaker(state, account, |b| b.record_success());
                         return Ok(response);
                     }
@@ -1166,14 +1168,14 @@ fn stamp_merge_policy(nodes: &mut [BranchPrStatus], repo_json: &serde_json::Valu
 /// Named accounts cache their own login in `ghe_state` and are unaffected — that
 /// is the point of the per-account cache.
 pub(crate) fn invalidate_viewer_login(state: &AppState) {
-    *state.github_viewer_login.write() = None;
+    *state.github.viewer_login.write() = None;
 }
 
 /// Fetch the authenticated user's GitHub login via `query { viewer { login } }`.
 /// Cached after first successful call for the session lifetime.
 pub(crate) async fn get_viewer_login(state: &AppState) -> Result<String, String> {
     // Check cached value first
-    if let Some(login) = state.github_viewer_login.read().as_ref() {
+    if let Some(login) = state.github.viewer_login.read().as_ref() {
         return Ok(login.clone());
     }
     let response = graphql_with_retry(
@@ -1188,7 +1190,7 @@ pub(crate) async fn get_viewer_login(state: &AppState) -> Result<String, String>
         .as_str()
         .ok_or_else(|| "Could not resolve viewer login".to_string())?
         .to_string();
-    *state.github_viewer_login.write() = Some(login.clone());
+    *state.github.viewer_login.write() = Some(login.clone());
     Ok(login)
 }
 
@@ -1207,6 +1209,7 @@ pub(crate) async fn get_viewer_login_for(
     // Per-account cache check (guard dropped before the await).
     {
         let entry = state
+            .github
             .ghe_state
             .entry(account.id.clone())
             .or_insert_with(crate::github::GheAccountState::new);
@@ -1228,6 +1231,7 @@ pub(crate) async fn get_viewer_login_for(
         .to_string();
     {
         let entry = state
+            .github
             .ghe_state
             .entry(account.id.clone())
             .or_insert_with(crate::github::GheAccountState::new);
@@ -1380,7 +1384,7 @@ pub(crate) async fn get_all_issues_impl(
     filter_mode: &str,
     state: &AppState,
 ) -> Result<std::collections::HashMap<String, Vec<GitHubIssue>>, String> {
-    if state.github_token.read().is_none() {
+    if state.github.token.read().is_none() {
         return Ok(std::collections::HashMap::new());
     }
 
@@ -1620,7 +1624,7 @@ pub(crate) async fn get_all_batch_impl(
         // account's viewer-login + batch GraphQL calls (see `prefetched_token`),
         // so the keychain shell-out runs once per poll cycle, not twice.
         let prefetched_token = if account.is_ambient_default() {
-            if state.github_token.read().is_none() {
+            if state.github.token.read().is_none() {
                 continue;
             }
             None
@@ -1724,10 +1728,12 @@ async fn poll_one_account(
         let budget = remaining as u32;
         if account.is_ambient_default() {
             state
-                .github_rate_limit_remaining
+                .github
+                .rate_limit_remaining
                 .store(budget, std::sync::atomic::Ordering::Relaxed);
         } else {
             state
+                .github
                 .ghe_state
                 .entry(account.id.clone())
                 .or_insert_with(crate::github::GheAccountState::new)
@@ -2347,7 +2353,7 @@ pub(crate) async fn get_repo_pr_statuses_impl(
 ) -> Result<Vec<BranchPrStatus>, String> {
     let repo_path = PathBuf::from(path);
 
-    if state.github_token.read().is_none() {
+    if state.github.token.read().is_none() {
         return Ok(vec![]); // No token = no GitHub API access
     }
 
@@ -2700,7 +2706,7 @@ pub(crate) async fn get_ci_checks_impl(
 ) -> Vec<serde_json::Value> {
     let repo_path = PathBuf::from(path);
 
-    if state.github_token.read().is_none() {
+    if state.github.token.read().is_none() {
         return vec![];
     }
 
@@ -6101,9 +6107,11 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         let named = named_cloud_account();
         state
-            .github_rate_limit_remaining
+            .github
+            .rate_limit_remaining
             .store(5000, Ordering::Relaxed);
         state
+            .github
             .ghe_state
             .entry(named.id.clone())
             .or_insert_with(GheAccountState::new)
@@ -6111,12 +6119,13 @@ mod tests {
             .store(10, Ordering::Relaxed);
 
         assert_eq!(
-            state.github_rate_limit_remaining.load(Ordering::Relaxed),
+            state.github.rate_limit_remaining.load(Ordering::Relaxed),
             5000,
             "ambient default budget unchanged"
         );
         assert_eq!(
             state
+                .github
                 .ghe_state
                 .get(&named.id)
                 .unwrap()
@@ -6133,10 +6142,12 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         // Ambient default has plenty; a named account is nearly exhausted.
         state
-            .github_rate_limit_remaining
+            .github
+            .rate_limit_remaining
             .store(5000, Ordering::Relaxed);
         let named = named_cloud_account();
         state
+            .github
             .ghe_state
             .entry(named.id.clone())
             .or_insert_with(GheAccountState::new)
@@ -6158,13 +6169,14 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         let named = named_cloud_account();
         state
+            .github
             .ghe_state
             .entry(named.id.clone())
             .or_insert_with(GheAccountState::new)
             .viewer_login
             .write()
             .replace("named-viewer".to_string());
-        *state.github_viewer_login.write() = Some("ambient-viewer".to_string());
+        *state.github.viewer_login.write() = Some("ambient-viewer".to_string());
 
         assert_eq!(
             get_viewer_login_for(&state, &named, None).await.unwrap(),
@@ -6223,6 +6235,7 @@ mod tests {
         let future = Instant::now() + std::time::Duration::from_secs(3600);
         // Seed per-account state + cooldowns for both a GHE account and github.com.
         state
+            .github
             .ghe_state
             .entry(ghe.id.clone())
             .or_insert_with(GheAccountState::new);
@@ -6236,14 +6249,14 @@ mod tests {
             .insert(cooldown_key(&cloud_account(), "octocat", "hello"), future);
 
         // Replicate github_remove_account's cache cleanup.
-        state.ghe_state.remove(&ghe.id);
+        state.github.ghe_state.remove(&ghe.id);
         let prefix = format!("{}:", ghe.id);
         state
             .git_cache
             .github_repo_cooldown
             .retain(|key, _| !key.starts_with(&prefix));
 
-        assert!(!state.ghe_state.contains_key("ghe.acme.com"));
+        assert!(!state.github.ghe_state.contains_key("ghe.acme.com"));
         assert!(
             !state
                 .git_cache
@@ -6510,7 +6523,7 @@ mod tests {
 
         let state = crate::state::tests_support::make_test_app_state();
         let account = github_com_account(&state);
-        state.github_circuit_breaker.record_rate_limit(60);
+        state.github.circuit_breaker.record_rate_limit(60);
 
         let url = format!("{}/repos/o/r/issues/1", server.url());
         let err = send_rest_with_breaker(&state, &account, state.http_client.get(&url))
@@ -6541,7 +6554,7 @@ mod tests {
         assert!(err.contains("rate-limit"), "unexpected error: {err}");
         mock.assert_async().await;
 
-        let follow_up = state.github_circuit_breaker.check().unwrap_err();
+        let follow_up = state.github.circuit_breaker.check().unwrap_err();
         assert!(
             follow_up.contains("rate-limit"),
             "the 429 must leave the breaker backing off: {follow_up}"
@@ -6580,7 +6593,7 @@ mod tests {
         .expect_err("an exhausted primary limit is a rate limit");
         assert!(err.contains("rate-limit"), "unexpected error: {err}");
         exhausted.assert_async().await;
-        state.github_circuit_breaker.reset();
+        state.github.circuit_breaker.reset();
 
         // The permission 403 comes back as a Response so the caller can read the
         // body and produce its own wording (friendly_approve_error, merge errors…).
@@ -6595,7 +6608,7 @@ mod tests {
         assert!(response.text().await.unwrap().contains("not accessible"));
         forbidden.assert_async().await;
         assert!(
-            state.github_circuit_breaker.check().is_ok(),
+            state.github.circuit_breaker.check().is_ok(),
             "a single permission denial must not open the breaker"
         );
     }
@@ -6626,7 +6639,7 @@ mod tests {
         }
 
         assert!(
-            state.github_circuit_breaker.check().is_ok(),
+            state.github.circuit_breaker.check().is_ok(),
             "three deterministic 4xx responses must not open the breaker"
         );
     }
@@ -6657,7 +6670,7 @@ mod tests {
         }
 
         mock.assert_async().await;
-        assert!(state.github_circuit_breaker.check().is_err());
+        assert!(state.github.circuit_breaker.check().is_err());
     }
 
     #[tokio::test]
@@ -6684,7 +6697,8 @@ mod tests {
         assert!(error.contains("rate-limit"), "{error}");
         assert!(
             state
-                .github_circuit_breaker
+                .github
+                .circuit_breaker
                 .check()
                 .unwrap_err()
                 .starts_with("rate-limit:")
@@ -6703,7 +6717,7 @@ mod tests {
 
         let state = crate::state::tests_support::make_test_app_state();
         let account = github_com_account(&state);
-        state.github_circuit_breaker.record_failure();
+        state.github.circuit_breaker.record_failure();
 
         let response = send_rest_with_breaker(
             &state,
@@ -6714,7 +6728,7 @@ mod tests {
         .expect("2xx");
         assert_eq!(response.status().as_u16(), 200);
         mock.assert_async().await;
-        assert!(state.github_circuit_breaker.check().is_ok());
+        assert!(state.github.circuit_breaker.check().is_ok());
     }
 
     // --- viewer login invalidation (#491-6bb2) ---
@@ -6725,11 +6739,11 @@ mod tests {
     #[test]
     fn invalidating_the_viewer_login_forgets_the_previous_account() {
         let state = crate::state::tests_support::make_test_app_state();
-        *state.github_viewer_login.write() = Some("old-user".to_string());
+        *state.github.viewer_login.write() = Some("old-user".to_string());
 
         invalidate_viewer_login(&state);
 
-        assert_eq!(*state.github_viewer_login.read(), None);
+        assert_eq!(*state.github.viewer_login.read(), None);
         assert_eq!(
             github_com_account(&state).login,
             None,
@@ -6743,8 +6757,9 @@ mod tests {
     fn invalidating_the_viewer_login_leaves_named_accounts_alone() {
         let state = crate::state::tests_support::make_test_app_state();
         let named = named_cloud_account();
-        *state.github_viewer_login.write() = Some("ambient-user".to_string());
+        *state.github.viewer_login.write() = Some("ambient-user".to_string());
         *state
+            .github
             .ghe_state
             .entry(named.id.clone())
             .or_insert_with(GheAccountState::new)
@@ -6753,9 +6768,10 @@ mod tests {
 
         invalidate_viewer_login(&state);
 
-        assert_eq!(*state.github_viewer_login.read(), None);
+        assert_eq!(*state.github.viewer_login.read(), None);
         assert_eq!(
             state
+                .github
                 .ghe_state
                 .get(&named.id)
                 .unwrap()

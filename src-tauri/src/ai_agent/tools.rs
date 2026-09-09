@@ -654,7 +654,7 @@ fn exec_read_screen(state: &AppState, args: &Value) -> ToolResult {
     let max_lines = (args["lines"].as_u64().unwrap_or(50) as usize).min(500);
     let since_cursor = args["since_cursor"].as_u64().map(|v| v as usize);
 
-    let vt_log = match state.vt_log_buffers.get(session_id) {
+    let vt_log = match state.grid.vt_log_buffers.get(session_id) {
         Some(v) => v,
         None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
     };
@@ -709,7 +709,7 @@ fn exec_search_scrollback(state: &AppState, args: &Value) -> ToolResult {
     };
     let limit = (args["limit"].as_u64().unwrap_or(50) as usize).min(500);
 
-    let vt_log = match state.vt_log_buffers.get(session_id) {
+    let vt_log = match state.grid.vt_log_buffers.get(session_id) {
         Some(v) => v,
         None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
     };
@@ -735,7 +735,7 @@ fn exec_get_hyperlinks(state: &AppState, args: &Value) -> ToolResult {
         Some(s) => s,
         None => return ToolResult::err("Missing session_id"),
     };
-    let vt_log = match state.vt_log_buffers.get(session_id) {
+    let vt_log = match state.grid.vt_log_buffers.get(session_id) {
         Some(v) => v,
         None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
     };
@@ -760,7 +760,7 @@ fn exec_get_semantic_zones(state: &AppState, args: &Value) -> ToolResult {
         Some(s) => s,
         None => return ToolResult::err("Missing session_id"),
     };
-    let vt_log = match state.vt_log_buffers.get(session_id) {
+    let vt_log = match state.grid.vt_log_buffers.get(session_id) {
         Some(v) => v,
         None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
     };
@@ -876,7 +876,7 @@ async fn exec_wait_for(state: &Arc<AppState>, args: &Value) -> ToolResult {
         }
 
         let current = {
-            let vt_log = match state.vt_log_buffers.get(&session_id) {
+            let vt_log = match state.grid.vt_log_buffers.get(&session_id) {
                 Some(v) => v,
                 None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
             };
@@ -908,7 +908,7 @@ fn exec_get_state(state: &AppState, args: &Value) -> ToolResult {
         None => return ToolResult::err("Missing session_id"),
     };
 
-    let Some(entry) = state.session_states.get(session_id) else {
+    let Some(entry) = state.session_maps.session_states.get(session_id) else {
         return ToolResult::err(format!("No state for session: {session_id}"));
     };
     match serde_json::to_value(entry.value()) {
@@ -928,6 +928,7 @@ fn exec_get_context(state: &AppState, args: &Value) -> ToolResult {
     };
 
     let shell_state = state
+        .session_maps
         .shell_states
         .get(session_id)
         .and_then(|atom| {
@@ -936,7 +937,7 @@ fn exec_get_context(state: &AppState, args: &Value) -> ToolResult {
         })
         .unwrap_or_else(|| "starting".to_string());
 
-    let ss = state.session_states.get(session_id);
+    let ss = state.session_maps.session_states.get(session_id);
     let agent_type = ss
         .as_ref()
         .and_then(|s| s.agent_type.clone())
@@ -950,6 +951,7 @@ fn exec_get_context(state: &AppState, args: &Value) -> ToolResult {
 
     // Working directory from the live PtySession.
     let cwd = state
+        .session_maps
         .sessions
         .get(session_id)
         .and_then(|s| s.lock().cwd.clone());
@@ -961,6 +963,7 @@ fn exec_get_context(state: &AppState, args: &Value) -> ToolResult {
 
     // Most recent command's exit code from the OSC 133 knowledge store.
     let last_exit_code = state
+        .ai
         .session_knowledge
         .get(session_id)
         .and_then(|entry| entry.lock().commands.back().and_then(|c| c.exit_code));
@@ -995,7 +998,7 @@ fn exec_get_command_history(state: &AppState, args: &Value) -> ToolResult {
     let limit = (args["limit"].as_u64().unwrap_or(20) as usize).min(200);
     let errors_only = args["errors_only"].as_bool().unwrap_or(false);
 
-    let Some(entry) = state.session_knowledge.get(session_id) else {
+    let Some(entry) = state.ai.session_knowledge.get(session_id) else {
         return ToolResult::ok(json!({"commands": []}).to_string());
     };
     let k = entry.lock();
@@ -1025,7 +1028,7 @@ fn exec_explain_last_failure(state: &AppState, args: &Value) -> ToolResult {
         Some(s) => s,
         None => return ToolResult::err("Missing session_id"),
     };
-    let Some(entry) = state.session_knowledge.get(session_id) else {
+    let Some(entry) = state.ai.session_knowledge.get(session_id) else {
         return ToolResult::ok(json!({"found": false}).to_string());
     };
     let k = entry.lock();
@@ -1055,7 +1058,7 @@ fn exec_get_error_fixes(state: &AppState, args: &Value) -> ToolResult {
         Some(s) => s,
         None => return ToolResult::err("Missing session_id"),
     };
-    let Some(entry) = state.session_knowledge.get(session_id) else {
+    let Some(entry) = state.ai.session_knowledge.get(session_id) else {
         return ToolResult::ok(json!({"fixes": []}).to_string());
     };
     let k = entry.lock();
@@ -1128,12 +1131,16 @@ async fn exec_drive_agent(state: &Arc<AppState>, args: &Value, skip_safety: bool
         }
 
         // Check shell_state for idle (most reliable signal)
-        let is_idle = state.shell_states.get(&session_id).is_some_and(|atom| {
-            atom.load(std::sync::atomic::Ordering::Relaxed) == crate::pty::SHELL_IDLE
-        });
+        let is_idle = state
+            .session_maps
+            .shell_states
+            .get(&session_id)
+            .is_some_and(|atom| {
+                atom.load(std::sync::atomic::Ordering::Relaxed) == crate::pty::SHELL_IDLE
+            });
 
         let current = {
-            let vt_log = match state.vt_log_buffers.get(&session_id) {
+            let vt_log = match state.grid.vt_log_buffers.get(&session_id) {
                 Some(v) => v,
                 None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
             };
@@ -1166,7 +1173,7 @@ async fn exec_drive_agent(state: &Arc<AppState>, args: &Value, skip_safety: bool
 
     // Step 3: read screen + state
     let since_cursor = args["since_cursor"].as_u64().map(|v| v as usize);
-    let vt_log = match state.vt_log_buffers.get(&session_id) {
+    let vt_log = match state.grid.vt_log_buffers.get(&session_id) {
         Some(v) => v,
         None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
     };
@@ -1185,11 +1192,13 @@ async fn exec_drive_agent(state: &Arc<AppState>, args: &Value, skip_safety: bool
     };
 
     let session_state = state
+        .session_maps
         .session_states
         .get(&session_id)
         .and_then(|entry| serde_json::to_value(entry.value()).ok());
 
     let shell_state = state
+        .session_maps
         .shell_states
         .get(&session_id)
         .and_then(|atom| {
@@ -1215,14 +1224,14 @@ async fn exec_drive_agent(state: &Arc<AppState>, args: &Value, skip_safety: bool
 /// fallback keeps tests + unconfigured sessions usable; production wiring
 /// will populate the map at agent-loop start.
 fn get_sandbox(state: &AppState, session_id: &str) -> Result<FileSandbox, String> {
-    if let Some(sb) = state.file_sandboxes.get(session_id) {
+    if let Some(sb) = state.ai.file_sandboxes.get(session_id) {
         return Ok(sb.clone());
     }
     Err(format!("No filesystem sandbox for session: {session_id}"))
 }
 
 fn is_session_unrestricted(state: &AppState, session_id: &str) -> bool {
-    state.unrestricted_sessions.contains_key(session_id)
+    state.ai.unrestricted_sessions.contains_key(session_id)
 }
 
 /// Whether the optional, off-by-default "warn before reading known secret
@@ -1951,7 +1960,7 @@ fn exec_search_tools(state: &AppState, args: &Value) -> ToolResult {
     let query = args["query"].as_str().map(|s| s.to_lowercase());
     let limit = args["limit"].as_u64().unwrap_or(20).min(100) as usize;
 
-    let all_tools = state.mcp_upstream_registry.aggregated_tools();
+    let all_tools = state.mcp.upstream_registry.aggregated_tools();
     let descriptors: Vec<Value> = all_tools
         .into_iter()
         .filter(|tool| {
@@ -1986,7 +1995,8 @@ async fn exec_call_tool(state: &AppState, args: &Value) -> ToolResult {
     };
 
     match state
-        .mcp_upstream_registry
+        .mcp
+        .upstream_registry
         .proxy_tool_call(tool_name, call_args)
         .await
     {
@@ -2003,11 +2013,15 @@ async fn exec_call_tool(state: &AppState, args: &Value) -> ToolResult {
 
 fn exec_list_sessions(state: &AppState) -> ToolResult {
     let mut sessions: Vec<Value> = Vec::new();
-    for entry_ref in state.sessions.iter() {
+    for entry_ref in state.session_maps.sessions.iter() {
         let sid = entry_ref.key().clone();
         let pty = entry_ref.value().lock();
-        let ss = state.session_states.get(&sid);
-        let alias = state.term_aliases.get(&sid).map(|e| e.value().clone());
+        let ss = state.session_maps.session_states.get(&sid);
+        let alias = state
+            .session_maps
+            .term_aliases
+            .get(&sid)
+            .map(|e| e.value().clone());
         sessions.push(json!({
             "session_id": sid,
             "alias": alias,
@@ -2025,6 +2039,7 @@ fn exec_list_sessions(state: &AppState) -> ToolResult {
 async fn exec_spawn_session(state: &Arc<AppState>, session_id: &str, args: &Value) -> ToolResult {
     let cwd = args["cwd"].as_str().map(|s| s.to_string()).or_else(|| {
         state
+            .ai
             .file_sandboxes
             .get(session_id)
             .map(|s| s.root().to_string_lossy().to_string())
@@ -2361,7 +2376,7 @@ fn exec_watch_for(
         );
     }
 
-    let Some(engine) = state.watcher_engine.get() else {
+    let Some(engine) = state.ai.watcher_engine.get() else {
         return ToolResult::err("Watcher engine not initialized");
     };
 
@@ -2399,7 +2414,7 @@ fn exec_watch_for(
 }
 
 fn exec_list_watches(state: &AppState, session_id: &str) -> ToolResult {
-    let Some(engine) = state.watcher_engine.get() else {
+    let Some(engine) = state.ai.watcher_engine.get() else {
         return ToolResult::err("Watcher engine not initialized");
     };
     let cfg = engine.config();
@@ -2427,7 +2442,7 @@ fn exec_cancel_watch(state: &AppState, session_id: &str, args: &Value) -> ToolRe
         Some(s) if !s.trim().is_empty() => s.trim().to_string(),
         _ => return ToolResult::err("Missing watch_id"),
     };
-    let Some(engine) = state.watcher_engine.get() else {
+    let Some(engine) = state.ai.watcher_engine.get() else {
         return ToolResult::err("Watcher engine not initialized");
     };
     let cfg = engine.config();
@@ -3167,6 +3182,7 @@ mod tests {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
         state
+            .grid
             .vt_log_buffers
             .insert("rs-test".to_string(), parking_lot::Mutex::new(vt));
         let result = dispatch(
@@ -3199,6 +3215,7 @@ mod tests {
             vt.process(format!("new {i}\r\n").as_bytes());
         }
         state
+            .grid
             .vt_log_buffers
             .insert("rs-delta".to_string(), parking_lot::Mutex::new(vt));
         let result = dispatch(
@@ -3226,9 +3243,10 @@ mod tests {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
         state
+            .grid
             .vt_log_buffers
             .insert("rs-state".to_string(), parking_lot::Mutex::new(vt));
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             "rs-state".to_string(),
             std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
         );
@@ -3238,7 +3256,10 @@ mod tests {
             ..Default::default()
         };
         ss.agent_type = Some("claude-code".to_string());
-        state.session_states.insert("rs-state".to_string(), ss);
+        state
+            .session_maps
+            .session_states
+            .insert("rs-state".to_string(), ss);
 
         let result = dispatch(
             &state,
@@ -3289,6 +3310,7 @@ mod tests {
             id: 0,
         });
         state
+            .ai
             .session_knowledge
             .insert("kh".into(), parking_lot::Mutex::new(k));
 
@@ -3648,10 +3670,11 @@ mod tests {
         // Insert a VtLogBuffer so the wait loop can read it
         let vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
         state
+            .grid
             .vt_log_buffers
             .insert("test-read".to_string(), parking_lot::Mutex::new(vt));
         // Set shell state to idle so it returns immediately
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             "test-read".to_string(),
             std::sync::atomic::AtomicU8::new(0), // 0 = idle
         );
@@ -3680,9 +3703,11 @@ mod tests {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
         state
+            .grid
             .vt_log_buffers
             .insert("cur-test".to_string(), parking_lot::Mutex::new(vt));
         state
+            .session_maps
             .shell_states
             .insert("cur-test".to_string(), std::sync::atomic::AtomicU8::new(0));
         let result = dispatch(
@@ -3721,9 +3746,10 @@ mod tests {
             vt.process(format!("new {i}\r\n").as_bytes());
         }
         state
+            .grid
             .vt_log_buffers
             .insert("delta-test".to_string(), parking_lot::Mutex::new(vt));
-        state.shell_states.insert(
+        state.session_maps.shell_states.insert(
             "delta-test".to_string(),
             std::sync::atomic::AtomicU8::new(0),
         );
@@ -3756,7 +3782,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let sb = FileSandbox::new(dir.path()).unwrap();
-        state.file_sandboxes.insert(session.to_string(), sb);
+        state.ai.file_sandboxes.insert(session.to_string(), sb);
         (dir, state)
     }
 
@@ -5075,7 +5101,7 @@ mod tests {
 
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let engine = Arc::new(super::super::watcher::WatcherEngine::new(state.clone()));
-        let _ = state.watcher_engine.set(engine);
+        let _ = state.ai.watcher_engine.set(engine);
 
         // Arm via the approved path (skips safety, as the user just approved).
         let armed = dispatch_approved(
@@ -5096,7 +5122,7 @@ mod tests {
 
         // Reachable via engine.config(), scoped to this session.
         {
-            let cfg = state.watcher_engine.get().unwrap().config();
+            let cfg = state.ai.watcher_engine.get().unwrap().config();
             let config = cfg.read();
             assert!(
                 config
@@ -5154,6 +5180,7 @@ mod tests {
         let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
         vt.process(b"the quick brown fox\r\njumped over fox tracks\r\n");
         state
+            .grid
             .vt_log_buffers
             .insert("sb-1".to_string(), parking_lot::Mutex::new(vt));
 
@@ -5195,6 +5222,7 @@ mod tests {
         let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
         vt.process(b"match\r\nmatch\r\nmatch\r\n");
         state
+            .grid
             .vt_log_buffers
             .insert("sb-lim".to_string(), parking_lot::Mutex::new(vt));
 
@@ -5219,6 +5247,7 @@ mod tests {
         // OSC 8 hyperlink: ESC ] 8 ; ; URI BEL  text  ESC ] 8 ; ; BEL
         vt.process(b"\x1b]8;;https://example.com/page\x07click here\x1b]8;;\x07\r\n");
         state
+            .grid
             .vt_log_buffers
             .insert("hl-1".to_string(), parking_lot::Mutex::new(vt));
 
@@ -5246,6 +5275,7 @@ mod tests {
         let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
         vt.process(b"no links here\r\n");
         state
+            .grid
             .vt_log_buffers
             .insert("hl-2".to_string(), parking_lot::Mutex::new(vt));
 
@@ -5270,6 +5300,7 @@ mod tests {
         // OSC 133: A=prompt, B=input (command), C=output.
         vt.process(b"\x1b]133;A\x07$ \x1b]133;B\x07ls -la\x1b]133;C\x07file1.txt");
         state
+            .grid
             .vt_log_buffers
             .insert("sz-1".to_string(), parking_lot::Mutex::new(vt));
 
@@ -5297,6 +5328,7 @@ mod tests {
         let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
         vt.process(b"plain output, no osc133\r\n");
         state
+            .grid
             .vt_log_buffers
             .insert("sz-2".to_string(), parking_lot::Mutex::new(vt));
 

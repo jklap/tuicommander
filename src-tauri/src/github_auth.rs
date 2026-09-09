@@ -243,13 +243,13 @@ pub(crate) async fn github_poll_login_impl(
                 e
             })?;
         // Activate immediately in runtime state
-        *state.github_token.write() = Some(access_token.clone());
-        *state.github_token_source.write() = TokenSource::OAuth;
+        *state.github.token.write() = Some(access_token.clone());
+        *state.github.token_source.write() = TokenSource::OAuth;
         // The token may belong to a different user than the one we cached, and the
         // cached login drives `author:@me` and the issue filters.
         crate::github::invalidate_viewer_login(state);
         // Reset the github.com circuit breaker so we retry any previously-failed repos
-        state.github_circuit_breaker.reset();
+        state.github.circuit_breaker.reset();
         // Clear only github.com cooldowns ("owner/name", no ':'), leaving GHE
         // cooldowns ("{id}:owner/name") untouched — github.com login must not
         // disturb other accounts' state.
@@ -325,8 +325,8 @@ pub(crate) async fn github_logout_impl(state: &Arc<AppState>) -> Result<(), Stri
     let (token, source) = tokio::task::spawn_blocking(resolve_token_with_source)
         .await
         .map_err(|e| format!("token resolve task panicked: {e}"))?;
-    *state.github_token.write() = token;
-    *state.github_token_source.write() = source;
+    *state.github.token.write() = token;
+    *state.github.token_source.write() = source;
     // The fallback token (env / gh CLI) is very likely a different user.
     crate::github::invalidate_viewer_login(state);
 
@@ -357,8 +357,8 @@ pub(crate) async fn github_disconnect_impl(state: &Arc<AppState>) -> Result<(), 
         tracing::warn!(source = "github", error = %e, "Failed to delete OAuth token during disconnect");
     }
     // Clear runtime state entirely
-    *state.github_token.write() = None;
-    *state.github_token_source.write() = TokenSource::None;
+    *state.github.token.write() = None;
+    *state.github.token_source.write() = TokenSource::None;
     crate::github::invalidate_viewer_login(state);
     tracing::info!(
         source = "github",
@@ -385,10 +385,11 @@ pub(crate) struct GitHubDiagnostics {
 /// Pure seam (no `State`/network) so the Step 0 characterization net can pin
 /// the diagnostics shape for a github.com-only setup.
 pub(crate) fn compute_diagnostics(state: &AppState) -> GitHubDiagnostics {
-    let cloud_status = state.github_circuit_breaker.check();
+    let cloud_status = state.github.circuit_breaker.check();
     // A GHE account whose breaker is open also counts as "open" for the UI, but
     // never changes the github.com-only output (ghe_state is empty then).
     let ghe_open = state
+        .github
         .ghe_state
         .iter()
         .any(|e| e.value().circuit_breaker.check().is_err());
@@ -449,8 +450,8 @@ pub(crate) async fn github_auth_status(
 }
 
 pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<AuthStatus, String> {
-    let mut token = state.github_token.read().clone();
-    let mut source = *state.github_token_source.read();
+    let mut token = state.github.token.read().clone();
+    let mut source = *state.github.token_source.read();
 
     // Lazy resolution: if boot skipped the keychain, try full resolution now.
     if token.is_none() {
@@ -458,8 +459,8 @@ pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<Aut
             .await
             .map_err(|e| format!("token resolve task panicked: {e}"))?;
         if t.is_some() {
-            *state.github_token.write() = t.clone();
-            *state.github_token_source.write() = s;
+            *state.github.token.write() = t.clone();
+            *state.github.token_source.write() = s;
         }
         token = t;
         source = s;
@@ -542,8 +543,8 @@ pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<Aut
                             tracing::warn!(source = "github", error = %e, "Token resolution panicked during 401 recovery");
                             (None, TokenSource::None)
                         });
-                *state.github_token.write() = fallback_token;
-                *state.github_token_source.write() = fallback_source;
+                *state.github.token.write() = fallback_token;
+                *state.github.token_source.write() = fallback_source;
             }
             Ok(AuthStatus {
                 authenticated: false,
@@ -827,7 +828,7 @@ pub(crate) fn resolve_token_without_keychain() -> (Option<String>, TokenSource) 
 /// No-op when the environment already won — nothing lower in the chain can
 /// outrank that value.
 pub(crate) fn spawn_deferred_token_resolution(state: Arc<AppState>) {
-    if state.github_token.read().is_some() {
+    if state.github.token.read().is_some() {
         return;
     }
     std::thread::spawn(move || {
@@ -841,12 +842,12 @@ pub(crate) fn spawn_deferred_token_resolution(state: Arc<AppState>) {
         };
         {
             // A login may have landed while the probe ran; an explicit one wins.
-            let mut slot = state.github_token.write();
+            let mut slot = state.github.token.write();
             if slot.is_some() {
                 return;
             }
             *slot = Some(token);
-            *state.github_token_source.write() = source;
+            *state.github.token_source.write() = source;
         }
         tracing::info!(
             source = "github",
@@ -931,12 +932,12 @@ mod tests {
     #[tokio::test]
     async fn disconnect_forgets_the_cached_viewer_login() {
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
-        *state.github_viewer_login.write() = Some("previous-user".to_string());
+        *state.github.viewer_login.write() = Some("previous-user".to_string());
 
         github_disconnect_impl(&state).await.expect("disconnect");
 
-        assert_eq!(*state.github_viewer_login.read(), None);
-        assert_eq!(*state.github_token.read(), None);
+        assert_eq!(*state.github.viewer_login.read(), None);
+        assert_eq!(*state.github.token.read(), None);
     }
 
     /// Logout falls back to whatever env/gh CLI token is around — very likely a
@@ -946,11 +947,11 @@ mod tests {
     #[tokio::test]
     async fn logout_forgets_the_cached_viewer_login() {
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
-        *state.github_viewer_login.write() = Some("previous-user".to_string());
+        *state.github.viewer_login.write() = Some("previous-user".to_string());
 
         github_logout_impl(&state).await.expect("logout");
 
-        assert_eq!(*state.github_viewer_login.read(), None);
+        assert_eq!(*state.github.viewer_login.read(), None);
     }
 
     /// A successful device-flow login installs a token that may belong to somebody
@@ -1280,7 +1281,7 @@ mod tests {
 
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(32);
-        *state.github_poller.lock() = Some(crate::github_poller::GitHubPoller {
+        *state.github.poller.lock() = Some(crate::github_poller::GitHubPoller {
             cmd_tx,
             stop: std::sync::Arc::new(tokio::sync::Notify::new()),
         });
@@ -1298,7 +1299,7 @@ mod tests {
              AND bypass change detection, or an unchanged updated_at hides it"
         );
         assert_eq!(
-            state.github_token.read().as_deref(),
+            state.github.token.read().as_deref(),
             Some("ghp_deferred_nudge")
         );
     }
@@ -1308,12 +1309,12 @@ mod tests {
     #[test]
     fn the_deferred_probe_skips_a_state_that_already_has_a_token() {
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
-        *state.github_token.write() = Some("gho_explicit_login".to_string());
+        *state.github.token.write() = Some("gho_explicit_login".to_string());
 
         spawn_deferred_token_resolution(state.clone());
 
         assert_eq!(
-            state.github_token.read().as_deref(),
+            state.github.token.read().as_deref(),
             Some("gho_explicit_login")
         );
     }

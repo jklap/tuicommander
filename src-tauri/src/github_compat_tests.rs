@@ -262,7 +262,7 @@ fn cooldown_key_is_owner_slash_name_for_github_com() {
 #[tokio::test]
 async fn viewer_login_returns_cached_value_without_network() {
     let state = make_test_app_state();
-    *state.github_viewer_login.write() = Some("octocat".to_string());
+    *state.github.viewer_login.write() = Some("octocat".to_string());
     // Cache hit short-circuits before any GraphQL call (no token configured).
     let login = github::get_viewer_login(&state).await.unwrap();
     assert_eq!(login, "octocat");

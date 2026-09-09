@@ -1,5 +1,5 @@
 use crate::pty::{build_shell_command, resolve_shell, spawn_reader_thread};
-use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VT_LOG_BUFFER_CAPACITY, VtLogBuffer};
+use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VT_LOG_BUFFER_CAPACITY};
 use crate::{AppState, MAX_CONCURRENT_SESSIONS, OutputRingBuffer, PtySession};
 use axum::Json;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -27,7 +27,7 @@ fn session_not_found() -> (StatusCode, Json<serde_json::Value>) {
 
 pub(super) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let uptime = state.server_start_time.elapsed().as_secs();
-    let session_count = state.sessions.len();
+    let session_count = state.session_maps.sessions.len();
     #[cfg(unix)]
     let socket_path = {
         let p = state.bound_socket_path.read();
@@ -57,6 +57,7 @@ pub(super) async fn app_version() -> Json<super::types::VersionResponse> {
 
 pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<SessionInfo>> {
     let sessions: Vec<SessionInfo> = state
+        .session_maps
         .sessions
         .iter()
         .map(|entry| {
@@ -75,6 +76,7 @@ pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Ve
                 display_name_is_custom: session.display_name_is_custom,
                 is_remote: session.is_remote,
                 pty_description: state
+                    .session_maps
                     .pty_descriptions
                     .get(&session_id)
                     .map(|value| value.value().clone()),
@@ -241,6 +243,7 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
     // guard across that call self-deadlocks its DashMap shard.
     let (actions, buffer_content) = {
         let input_entry = state
+            .session_maps
             .input_buffers
             .entry(session_id.to_string())
             .or_insert_with(|| {
@@ -262,7 +265,7 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
         )
     });
     if interrupted || data == "\x1b" {
-        if let Some(sl) = state.silence_states.get(session_id) {
+        if let Some(sl) = state.session_maps.silence_states.get(session_id) {
             sl.lock().note_interrupt_requested();
         }
     } else {
@@ -289,6 +292,7 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
         let dismissed = is_bare_esc || data.contains('\x03');
         !dismissed
             && state
+                .session_maps
                 .slash_mode
                 .get(session_id)
                 .is_some_and(|v| v.load(std::sync::atomic::Ordering::Relaxed))
@@ -299,6 +303,7 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
         data
     );
     state
+        .session_maps
         .slash_mode
         .entry(session_id.to_string())
         .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
@@ -313,7 +318,7 @@ pub(super) async fn set_session_name(
     Path(session_id): Path<String>,
     Json(body): Json<SetNameRequest>,
 ) -> impl IntoResponse {
-    let entry = match state.sessions.get(&session_id) {
+    let entry = match state.session_maps.sessions.get(&session_id) {
         Some(e) => e,
         None => return session_not_found(),
     };
@@ -359,7 +364,7 @@ pub(super) async fn get_raw_ring(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    match state.pty_raw_rings.get(&session_id) {
+    match state.grid.pty_raw_rings.get(&session_id) {
         Some(ring) => {
             let bytes: Vec<u8> = {
                 let ring = ring.lock();
@@ -385,7 +390,7 @@ pub(super) async fn get_output(
 
     // format=log: return VT100-extracted clean log lines (best for mobile/REST consumers)
     if format == "log" {
-        let vt_log = match state.vt_log_buffers.get(&session_id) {
+        let vt_log = match state.grid.vt_log_buffers.get(&session_id) {
             Some(b) => b,
             None => return session_not_found(),
         };
@@ -425,7 +430,7 @@ pub(super) async fn get_output(
     // screen while still being retained in the cursor log, producing duplicate
     // text even though the canonical terminal grid is correct.
     if format == "text" {
-        let vt_log = match state.vt_log_buffers.get(&session_id) {
+        let vt_log = match state.grid.vt_log_buffers.get(&session_id) {
             Some(b) => b,
             None => return session_not_found(),
         };
@@ -448,7 +453,7 @@ pub(super) async fn get_output(
         );
     }
 
-    let ring = match state.output_buffers.get(&session_id) {
+    let ring = match state.session_maps.output_buffers.get(&session_id) {
         Some(r) => r,
         None => return session_not_found(),
     };
@@ -470,7 +475,7 @@ pub(super) async fn close_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    if state.sessions.contains_key(&session_id) {
+    if state.session_maps.sessions.contains_key(&session_id) {
         // Send Ctrl+C then cleanup
         let _ = write_pty_input_bytes(&state, &session_id, &[0x03]);
         // Broadcast to SSE/WebSocket consumers BEFORE cleanup: cleanup_session reaps
@@ -534,6 +539,7 @@ pub(super) fn register_pty_session(
     let display_name = session.display_name.clone();
 
     state
+        .session_maps
         .sessions
         .insert(session_id.to_string(), Mutex::new(session));
     state.assign_term_alias(session_id);
@@ -543,25 +549,27 @@ pub(super) fn register_pty_session(
         .active_sessions
         .fetch_add(1, Ordering::Relaxed);
 
-    state.output_buffers.insert(
+    state.session_maps.output_buffers.insert(
         session_id.to_string(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    state.vt_log_buffers.insert(
+    state.grid.vt_log_buffers.insert(
         session_id.to_string(),
-        Mutex::new(VtLogBuffer::new(
+        Mutex::new(state.new_vt_log_buffer(
             rows,
             cols.max(NEW_SESSION_MIN_VT_COLS),
             VT_LOG_BUFFER_CAPACITY,
         )),
     );
     state
+        .session_maps
         .last_output_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
     // Without this `GET /sessions/{id}/stream?format=grid` finds no entry and
     // silently closes the socket.
     state
-        .grid_watch
+        .grid
+        .watch
         .insert(session_id.to_string(), crate::grid_gate::new_grid_watch());
 
     // Broadcast to SSE/WebSocket consumers before the reader thread starts.
@@ -589,7 +597,7 @@ pub(super) fn spawn_pty_session(
     // Honor a client-provided id when it is non-empty and not already taken
     // (browser duplicate-tab fix); otherwise mint a fresh one.
     let session_id = match requested_id {
-        Some(id) if !id.is_empty() && !state.sessions.contains_key(&id) => id,
+        Some(id) if !id.is_empty() && !state.session_maps.sessions.contains_key(&id) => id,
         _ => Uuid::new_v4().to_string(),
     };
     let (pair, child) = crate::pty::spawn_pty_pair_with_retry(
@@ -679,7 +687,7 @@ pub(super) async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateSessionRequest>,
 ) -> impl IntoResponse {
-    if state.sessions.len() >= MAX_CONCURRENT_SESSIONS {
+    if state.session_maps.sessions.len() >= MAX_CONCURRENT_SESSIONS {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "Max concurrent sessions reached"})),
@@ -719,7 +727,7 @@ pub(super) async fn pause_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let entry = match state.sessions.get(&session_id) {
+    let entry = match state.session_maps.sessions.get(&session_id) {
         Some(e) => e,
         None => return session_not_found(),
     };
@@ -735,7 +743,7 @@ pub(super) async fn resume_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let entry = match state.sessions.get(&session_id) {
+    let entry = match state.session_maps.sessions.get(&session_id) {
         Some(e) => e,
         None => return session_not_found(),
     };
@@ -748,6 +756,7 @@ pub(super) async fn get_kitty_flags(
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
     let flags = state
+        .session_maps
         .kitty_states
         .get(&session_id)
         .map(|entry| entry.lock().current_flags())
@@ -760,7 +769,7 @@ pub(super) async fn get_foreground_process(
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
     let agent = (|| -> Option<String> {
-        let entry = state.sessions.get(&session_id)?;
+        let entry = state.session_maps.sessions.get(&session_id)?;
         let session = entry.value().lock();
         #[cfg(not(windows))]
         {
@@ -791,9 +800,13 @@ pub(super) async fn get_shell_state(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let value = state.shell_states.get(&session_id).and_then(|atom| {
-        crate::pty::shell_state_wire(atom.load(Ordering::Relaxed)).map(str::to_string)
-    });
+    let value = state
+        .session_maps
+        .shell_states
+        .get(&session_id)
+        .and_then(|atom| {
+            crate::pty::shell_state_wire(atom.load(Ordering::Relaxed)).map(str::to_string)
+        });
     Json(serde_json::json!({ "state": value }))
 }
 
@@ -802,7 +815,11 @@ pub(super) async fn get_last_prompt(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let value = state.last_prompts.get(&session_id).map(|v| v.clone());
+    let value = state
+        .session_maps
+        .last_prompts
+        .get(&session_id)
+        .map(|v| v.clone());
     Json(serde_json::json!({ "prompt": value }))
 }
 
@@ -812,6 +829,7 @@ pub(super) async fn get_input_buffer_content(
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
     let content = state
+        .session_maps
         .input_buffers
         .get(&session_id)
         .map(|entry| entry.lock().content())
@@ -825,7 +843,7 @@ pub(super) async fn get_session_leaf_pid(
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
     let pid = (|| -> Option<u32> {
-        let entry = state.sessions.get(&session_id)?;
+        let entry = state.session_maps.sessions.get(&session_id)?;
         let session = entry.value().lock();
         #[cfg(not(windows))]
         {
@@ -863,7 +881,7 @@ pub(super) async fn has_foreground_process(
         "cmd",
     ];
     let process = (|| -> Option<String> {
-        let entry = state.sessions.get(&session_id)?;
+        let entry = state.session_maps.sessions.get(&session_id)?;
         #[cfg(not(windows))]
         let pid = {
             let session = entry.value().lock();
@@ -893,6 +911,7 @@ pub(super) async fn set_session_visible(
     Json(body): Json<SessionVisibleRequest>,
 ) -> impl IntoResponse {
     state
+        .session_maps
         .session_visibility
         .insert(session_id.clone(), body.visible);
     #[cfg(unix)]
@@ -924,7 +943,7 @@ pub(super) async fn create_session_with_worktree(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateSessionWithWorktreeRequest>,
 ) -> impl IntoResponse {
-    if state.sessions.len() >= MAX_CONCURRENT_SESSIONS {
+    if state.session_maps.sessions.len() >= MAX_CONCURRENT_SESSIONS {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "Max concurrent sessions reached"})),
@@ -1064,7 +1083,7 @@ pub(super) async fn ws_stream(
     Query(query): Query<OutputQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    if !state.sessions.contains_key(&id) {
+    if !state.session_maps.sessions.contains_key(&id) {
         return StatusCode::NOT_FOUND.into_response();
     }
     let format = query.format.as_deref().unwrap_or("raw");
@@ -1124,21 +1143,25 @@ async fn handle_ws_session(
     // two sides guarantees every byte is delivered either via catch-up or
     // via the live channel — never both (duplicate) nor neither (gap).
     let (tx, mut rx) = crate::state::new_ws_client_channel();
-    let snapshot = state.output_buffers.get(&session_id).map(|ring| {
-        let r = ring.lock();
-        let snap = if let Some(off) = initial_offset {
-            r.read_since(off as u64)
-        } else {
-            r.read_last(OUTPUT_RING_BUFFER_CAPACITY)
-        };
-        state
-            .ws_clients
-            .entry(session_id.clone())
-            .or_default()
-            .push(tx);
-        drop(r);
-        snap
-    });
+    let snapshot = state
+        .session_maps
+        .output_buffers
+        .get(&session_id)
+        .map(|ring| {
+            let r = ring.lock();
+            let snap = if let Some(off) = initial_offset {
+                r.read_since(off as u64)
+            } else {
+                r.read_last(OUTPUT_RING_BUFFER_CAPACITY)
+            };
+            state
+                .ws_clients
+                .entry(session_id.clone())
+                .or_default()
+                .push(tx);
+            drop(r);
+            snap
+        });
 
     // Send catch-up data in chunks (64 KB) so the client can render progressively.
     const CATCHUP_CHUNK_SIZE: usize = 64 * 1024;
@@ -1278,7 +1301,7 @@ async fn handle_ws_log_session(
     // When the client already fetched lines via HTTP, skip_offset = total_lines
     // from that response, so the catch-up only sends the delta.
     let initial_offset = {
-        if let Some(vt_log) = state.vt_log_buffers.get(&session_id) {
+        if let Some(vt_log) = state.grid.vt_log_buffers.get(&session_id) {
             let (total, catchup_frame) = {
                 let buf = vt_log.lock();
                 let total = buf.total_lines();
@@ -1340,7 +1363,7 @@ async fn handle_ws_log_session(
 
             let action = tokio::select! {
                 _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)) => {
-                    if state_poll.vt_log_buffers.contains_key(&sid_poll) {
+                    if state_poll.grid.vt_log_buffers.contains_key(&sid_poll) {
                         LoopAction::Poll
                     } else {
                         LoopAction::SessionGone
@@ -1393,7 +1416,7 @@ async fn handle_ws_log_session(
 
             // Poll arm: also send log lines and screen content
             if matches!(action, LoopAction::Poll) {
-                let Some(vt_log) = state_poll.vt_log_buffers.get(&sid_poll) else {
+                let Some(vt_log) = state_poll.grid.vt_log_buffers.get(&sid_poll) else {
                     break;
                 };
                 let (lines, new_offset, polled) = {
@@ -1537,7 +1560,7 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
     // Subscribe to the grid watch channel (newest-frame-wins for slow clients).
-    let mut frame_rx = match state.grid_watch.get(&session_id) {
+    let mut frame_rx = match state.grid.watch.get(&session_id) {
         Some(tx) => tx.subscribe(),
         None => {
             let _ = futures_util::SinkExt::send(&mut ws_sender, Message::Close(None)).await;
@@ -1657,7 +1680,7 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
     // The send task held the only other receiver, and aborting it drops it. If
     // that was the last one, nobody will ever read the frame still sitting in
     // the watch slot — free it instead of pinning it for the session's life.
-    if let Some(watch_tx) = state.grid_watch.get(&session_id)
+    if let Some(watch_tx) = state.grid.watch.get(&session_id)
         && watch_tx.receiver_count() == 0
     {
         crate::grid_gate::release_grid_frame(&watch_tx);
@@ -1777,12 +1800,25 @@ fn poll_screen(buf: &crate::state::VtLogBuffer, prev_hash: u64) -> ScreenPoll {
 // these routes also compile into the headless `tuic-remote` binary. See
 // `docs/backend/command-threading.md`.
 
+/// Publish the resolved terminal theme. Not session-scoped: one window, one
+/// palette, and the emulator answers colour queries from a process-wide value.
+pub(super) async fn terminal_theme_colors(
+    Json(body): Json<super::types::TerminalThemeColorsRequest>,
+) -> impl IntoResponse {
+    crate::terminal_grid::set_terminal_palette(crate::terminal_grid::TerminalPalette {
+        foreground: (body.foreground[0], body.foreground[1], body.foreground[2]),
+        background: (body.background[0], body.background[1], body.background[2]),
+        cursor: (body.cursor[0], body.cursor[1], body.cursor[2]),
+    });
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
 pub(super) async fn terminal_scroll(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Json(body): Json<super::types::TerminalScrollRequest>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+    let Some(vt) = state.grid.vt_log_buffers.get(&session_id) else {
         return session_not_found();
     };
     let frame = {
@@ -1799,7 +1835,7 @@ pub(super) async fn terminal_scroll_to(
     Path(session_id): Path<String>,
     Json(body): Json<super::types::TerminalScrollToRequest>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+    let Some(vt) = state.grid.vt_log_buffers.get(&session_id) else {
         return session_not_found();
     };
     let frame = {
@@ -1822,10 +1858,10 @@ pub(super) async fn terminal_scroll_to_offset(
     Path(session_id): Path<String>,
     Json(body): Json<super::types::TerminalScrollToOffsetRequest>,
 ) -> impl IntoResponse {
-    if let Some(p) = state.pending_scroll.get(&session_id) {
+    if let Some(p) = state.grid.pending_scroll.get(&session_id) {
         p.store(body.offset as i64, std::sync::atomic::Ordering::Relaxed);
     }
-    if let Some(d) = state.grid_frame_dirty.get(&session_id) {
+    if let Some(d) = state.grid.frame_dirty.get(&session_id) {
         d.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
@@ -1993,7 +2029,7 @@ pub(super) async fn terminal_get_lines(
 /// viewport state and without draining the bell, so a resync costs the other
 /// transports nothing at all.
 fn full_frame_for_single_client(state: &Arc<AppState>, session_id: &str) -> Option<Vec<u8>> {
-    let vt = state.vt_log_buffers.get(session_id)?;
+    let vt = state.grid.vt_log_buffers.get(session_id)?;
     let frame = vt.lock().serialize_full_frame();
     if frame.is_empty() { None } else { Some(frame) }
 }
@@ -2062,7 +2098,7 @@ pub(super) async fn terminal_request_frame(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+    let Some(vt) = state.grid.vt_log_buffers.get(&session_id) else {
         return session_not_found();
     };
     let frame = {
@@ -2082,6 +2118,7 @@ pub(super) async fn get_session_shell_family(
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
     let family = state
+        .session_maps
         .sessions
         .get(&session_id)
         .map(|entry| crate::pty::classify_shell(&entry.lock().shell));
@@ -2091,6 +2128,9 @@ pub(super) async fn get_session_shell_family(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Production builds a grid through `AppState::new_vt_log_buffer` so it picks
+    // up the config; tests that only exercise the grid construct it directly.
+    use crate::state::VtLogBuffer;
 
     #[cfg(unix)]
     struct WriteProbe {
@@ -2123,6 +2163,7 @@ mod tests {
             .expect("split input writes to the PTY");
 
         let split_slash_mode = state
+            .session_maps
             .slash_mode
             .get(split_session_id)
             .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed));
@@ -2137,6 +2178,7 @@ mod tests {
             .expect("concatenated input writes to the PTY");
 
         let concatenated_slash_mode = state
+            .session_maps
             .slash_mode
             .get(concatenated_session_id)
             .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed));
@@ -2172,12 +2214,14 @@ mod tests {
         let concatenated_session_id = "concatenated-choice-key";
         crate::state::tests_support::insert_dummy_session(&state, concatenated_session_id);
         state
+            .session_maps
             .session_states
             .insert(concatenated_session_id.to_string(), choice_state());
         write_pty_input(&state, concatenated_session_id, "1x")
             .expect("concatenated input writes to the PTY");
         assert!(
             state
+                .session_maps
                 .session_states
                 .get(concatenated_session_id)
                 .unwrap()
@@ -2189,12 +2233,14 @@ mod tests {
         let split_session_id = "split-choice-key";
         crate::state::tests_support::insert_dummy_session(&state, split_session_id);
         state
+            .session_maps
             .session_states
             .insert(split_session_id.to_string(), choice_state());
         write_pty_input_parts(&state, split_session_id, &["1", "x"])
             .expect("split input writes to the PTY");
         assert!(
             state
+                .session_maps
                 .session_states
                 .get(split_session_id)
                 .unwrap()
@@ -2217,7 +2263,13 @@ mod tests {
                 writes: Arc::clone(&writes),
                 flushes: Arc::clone(&flushes),
             })));
-        state.sessions.get(session_id).unwrap().lock().writer = writer;
+        state
+            .session_maps
+            .sessions
+            .get(session_id)
+            .unwrap()
+            .lock()
+            .writer = writer;
 
         write_pty_input_parts(&state, session_id, &["first", "second", "third"])
             .expect("all parts write to the PTY");
@@ -2238,7 +2290,7 @@ mod tests {
     fn mcp_regression_input_bookkeeping_releases_guard_before_pending_delivery() {
         let state = super::super::tests::test_state();
         let session_id = "deadlock-regression";
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState {
                 agent_type: Some("codex".to_string()),
@@ -2268,7 +2320,7 @@ mod tests {
     fn bare_enter_uses_the_same_submission_bookkeeping_as_desktop_input() {
         let state = super::super::tests::test_state();
         let session_id = "http-bare-enter";
-        state.session_states.insert(
+        state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState {
                 agent_type: Some("codex".to_string()),
@@ -2282,7 +2334,15 @@ mod tests {
 
         apply_input_bookkeeping(&state, session_id, "\r");
 
-        assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 1);
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .turn_epoch,
+            1
+        );
         let event = events.try_recv().expect("bare Enter emits UserInput");
         let crate::state::AppEvent::PtyParsed { parsed, .. } = event else {
             panic!("expected parsed input event");
@@ -2596,15 +2656,19 @@ mod tests {
     /// Feed enough output to dirty the grid, then drain the frame the ticker would
     /// have sent, leaving the buffer in the state a live session is in.
     fn dirty_session(state: &Arc<AppState>, session_id: &str, text: &str) {
-        state.vt_log_buffers.insert(
+        state.grid.vt_log_buffers.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
         );
-        state.grid_frame_dirty.insert(
+        state.grid.frame_dirty.insert(
             session_id.to_string(),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         );
-        let vt = state.vt_log_buffers.get(session_id).expect("just inserted");
+        let vt = state
+            .grid
+            .vt_log_buffers
+            .get(session_id)
+            .expect("just inserted");
         let mut vt = vt.lock();
         vt.process(text.as_bytes());
     }
@@ -2612,6 +2676,7 @@ mod tests {
     /// The frame the desktop ticker would take on its next tick.
     fn ticker_frame(state: &Arc<AppState>, session_id: &str) -> Vec<u8> {
         let vt = state
+            .grid
             .vt_log_buffers
             .get(session_id)
             .expect("session exists");
@@ -2622,6 +2687,7 @@ mod tests {
     /// Feed more output into a session that is already painted.
     fn feed(state: &Arc<AppState>, session_id: &str, text: &str) {
         let vt = state
+            .grid
             .vt_log_buffers
             .get(session_id)
             .expect("session exists");
@@ -2693,7 +2759,8 @@ mod tests {
         // resync itself.
         let _ = ticker_frame(&state, "wake-ticker");
         state
-            .grid_frame_dirty
+            .grid
+            .frame_dirty
             .get("wake-ticker")
             .expect("flag exists")
             .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -2702,7 +2769,8 @@ mod tests {
 
         assert!(
             !state
-                .grid_frame_dirty
+                .grid
+                .frame_dirty
                 .get("wake-ticker")
                 .expect("flag exists")
                 .load(std::sync::atomic::Ordering::Relaxed),
@@ -2748,6 +2816,7 @@ mod tests {
             vt.process(format!("line {i}\r\n").as_bytes());
         }
         state
+            .grid
             .vt_log_buffers
             .insert(session_id.to_string(), Mutex::new(vt));
         let stop = Arc::new(AtomicBool::new(false));
@@ -2769,6 +2838,7 @@ mod tests {
         loop {
             let offset = {
                 let vt = state
+                    .grid
                     .vt_log_buffers
                     .get(session_id)
                     .expect("the session outlives the scroll");
@@ -2797,7 +2867,7 @@ mod tests {
         // What `handle_ws_grid_session` holds for as long as a browser is attached.
         let watch = crate::grid_gate::new_grid_watch();
         let _browser = watch.subscribe();
-        state.grid_watch.insert(sid.clone(), watch);
+        state.grid.watch.insert(sid.clone(), watch);
 
         terminal_scroll_to_offset(
             State(state.clone()),
@@ -3050,7 +3120,7 @@ mod tests {
     async fn spawn_pty_session_registers_grid_watch() {
         let state = super::super::tests::test_state();
 
-        assert!(state.grid_watch.is_empty());
+        assert!(state.grid.watch.is_empty());
 
         let result = super::spawn_pty_session(
             state.clone(),
@@ -3068,13 +3138,13 @@ mod tests {
         };
 
         assert!(
-            state.grid_watch.contains_key(&session_id),
+            state.grid.watch.contains_key(&session_id),
             "spawn_pty_session must register a grid_watch channel"
         );
 
         // Verify the channel is functional, and that a published frame carries
         // the sequence number the WS reader needs to spot a dropped delta.
-        let tx = state.grid_watch.get(&session_id).unwrap();
+        let tx = state.grid.watch.get(&session_id).unwrap();
         let mut rx = tx.subscribe();
         let first_seq = rx.borrow_and_update().seq;
         crate::grid_gate::publish_grid_frame(&tx, vec![1, 2, 3]);

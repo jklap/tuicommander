@@ -754,13 +754,19 @@ impl WatcherEngine {
 
     async fn on_idle(self: Arc<Self>, session_id: &str) {
         #[cfg(unix)]
-        if self.state.standby_sessions.contains_key(session_id) {
+        if self
+            .state
+            .session_maps
+            .standby_sessions
+            .contains_key(session_id)
+        {
             return;
         }
         let last_exit_code = self.last_exit_code(session_id);
         let screen_tail = self.screen_tail(session_id);
         let tab_visible = self
             .state
+            .session_maps
             .session_visibility
             .get(session_id)
             .map(|v| *v)
@@ -1074,7 +1080,7 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
         .await?;
 
         // Associate the worktree so a later push to the same branch reuses this session.
-        if let Some(session) = self.state.sessions.get(&session_id) {
+        if let Some(session) = self.state.session_maps.sessions.get(&session_id) {
             session.lock().worktree = Some(worktree);
         }
         Ok(session_id)
@@ -1083,6 +1089,7 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
     fn find_existing_pr_session(&self, repo_path: &str, branch: &str) -> Option<String> {
         let projection: Vec<(String, Option<crate::state::WorktreeInfo>)> = self
             .state
+            .session_maps
             .sessions
             .iter()
             .map(|e| (e.key().clone(), e.value().lock().worktree.clone()))
@@ -1251,7 +1258,7 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
     fn build_context(&self, session_id: &str, screen_tail: &[String]) -> String {
         let mut parts = Vec::new();
 
-        if let Some(sk) = self.state.session_knowledge.get(session_id)
+        if let Some(sk) = self.state.ai.session_knowledge.get(session_id)
             && let Some(last) = sk.lock().commands.back()
         {
             parts.push(format!(
@@ -1340,6 +1347,7 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
 
     fn last_exit_code(&self, session_id: &str) -> Option<i32> {
         self.state
+            .ai
             .session_knowledge
             .get(session_id)
             .and_then(|sk| sk.lock().commands.back().and_then(|c| c.exit_code))
@@ -1347,6 +1355,7 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
 
     fn screen_tail(&self, session_id: &str) -> Vec<String> {
         self.state
+            .grid
             .vt_log_buffers
             .get(session_id)
             .map(|buf| {

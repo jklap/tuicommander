@@ -332,7 +332,10 @@ pub(crate) async fn start_conversation(
     }
 
     if config.autonomy == Autonomy::Autonomous {
-        state.unrestricted_sessions.insert(session_id.clone(), ());
+        state
+            .ai
+            .unrestricted_sessions
+            .insert(session_id.clone(), ());
     }
 
     let sid = session_id.clone();
@@ -350,8 +353,8 @@ pub(crate) async fn start_conversation(
         )
         .await;
 
-        state.unrestricted_sessions.remove(&sid);
-        state.file_sandboxes.remove(&sid);
+        state.ai.unrestricted_sessions.remove(&sid);
+        state.ai.file_sandboxes.remove(&sid);
         ACTIVE_CONVERSATIONS.remove(&sid);
 
         match result {
@@ -699,10 +702,12 @@ async fn run_conversation(
     // Create filesystem sandbox from the session's CWD so that file tools
     // (list_files, read_file, etc.) can resolve paths during the conversation.
     state
+        .ai
         .file_sandboxes
         .entry(session_id.clone())
         .or_try_insert_with(|| {
             let dir = state
+                .session_maps
                 .sessions
                 .get(&session_id)
                 .and_then(|s| s.lock().cwd.clone())

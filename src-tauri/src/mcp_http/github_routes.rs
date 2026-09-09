@@ -267,7 +267,7 @@ pub(super) async fn poller_start(
     // config + resync to one that is already running.
     #[cfg(not(feature = "desktop"))]
     {
-        if let Some(poller) = state.github_poller.lock().as_ref() {
+        if let Some(poller) = state.github.poller.lock().as_ref() {
             crate::github_poller::send_poller_config(
                 poller,
                 paths,

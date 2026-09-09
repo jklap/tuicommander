@@ -20,17 +20,14 @@ pub(crate) struct Suggestion {
     pub proposed_goal: String,
 }
 
+/// An empty classifier is a valid one — it only remembers when it last spoke —
+/// so `AiAgentState` can derive its own `Default` from this (#678-9a75).
+#[derive(Default)]
 pub(crate) struct TriggerClassifier {
     last_suggestion: parking_lot::Mutex<HashMap<String, Instant>>,
 }
 
 impl TriggerClassifier {
-    pub fn new() -> Self {
-        Self {
-            last_suggestion: parking_lot::Mutex::new(HashMap::new()),
-        }
-    }
-
     pub fn evaluate(&self, session_id: &str, outcome: &CommandOutcome) -> Option<Suggestion> {
         match &outcome.classification {
             OutcomeClass::Success
@@ -99,14 +96,14 @@ mod tests {
 
     #[test]
     fn success_returns_none() {
-        let tc = TriggerClassifier::new();
+        let tc = TriggerClassifier::default();
         let outcome = make_outcome(OutcomeClass::Success, "ls", Some(0));
         assert!(tc.evaluate("s1", &outcome).is_none());
     }
 
     #[test]
     fn error_returns_suggestion() {
-        let tc = TriggerClassifier::new();
+        let tc = TriggerClassifier::default();
         let outcome = make_outcome(
             OutcomeClass::Error {
                 error_type: "compile".to_string(),
@@ -122,7 +119,7 @@ mod tests {
 
     #[test]
     fn timeout_returns_suggestion() {
-        let tc = TriggerClassifier::new();
+        let tc = TriggerClassifier::default();
         let outcome = make_outcome(OutcomeClass::Timeout, "slow-cmd", None);
         let s = tc.evaluate("s1", &outcome).unwrap();
         assert!(s.trigger_reason.contains("timed out"));
@@ -130,7 +127,7 @@ mod tests {
 
     #[test]
     fn debounce_suppresses_second() {
-        let tc = TriggerClassifier::new();
+        let tc = TriggerClassifier::default();
         let outcome = make_outcome(
             OutcomeClass::Error {
                 error_type: "test".to_string(),
@@ -144,7 +141,7 @@ mod tests {
 
     #[test]
     fn debounce_is_per_session() {
-        let tc = TriggerClassifier::new();
+        let tc = TriggerClassifier::default();
         let outcome = make_outcome(
             OutcomeClass::Error {
                 error_type: "test".to_string(),
@@ -158,14 +155,14 @@ mod tests {
 
     #[test]
     fn user_cancelled_returns_none() {
-        let tc = TriggerClassifier::new();
+        let tc = TriggerClassifier::default();
         let outcome = make_outcome(OutcomeClass::UserCancelled, "sleep 999", None);
         assert!(tc.evaluate("s1", &outcome).is_none());
     }
 
     #[test]
     fn inferred_returns_none() {
-        let tc = TriggerClassifier::new();
+        let tc = TriggerClassifier::default();
         let outcome = make_outcome(OutcomeClass::Inferred, "unknown", None);
         assert!(tc.evaluate("s1", &outcome).is_none());
     }
