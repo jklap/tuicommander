@@ -305,6 +305,46 @@ export const GeneralTab: Component = () => {
 				hint="Display the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent"
 			/>
 
+			<SettingToggle
+				checked={settingsStore.state.showBlockTimestamps}
+				onChange={(v) => settingsStore.setShowBlockTimestamps(v)}
+				label={t("general.toggle.showBlockTimestamps", "Show block timestamps")}
+				hint={t(
+					"general.hint.showBlockTimestamps",
+					"While Ctrl+Cmd is held, label each command block with how long ago it started",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.blockFoldingEnabled}
+				onChange={(v) => settingsStore.setBlockFoldingEnabled(v)}
+				label={t("general.toggle.blockFolding", "Block folding")}
+				hint={t(
+					"general.hint.blockFolding",
+					"Let the Toggle Block Fold shortcut collapse a command block's output. Already-folded blocks stay collapsed when this is off.",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.showScrollbarMarks}
+				onChange={(v) => settingsStore.setShowScrollbarMarks(v)}
+				label={t("general.toggle.showScrollbarMarks", "Show scrollbar marks")}
+				hint={t(
+					"general.hint.showScrollbarMarks",
+					"Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.scrollbackReflow}
+				onChange={(v) => settingsStore.setScrollbackReflow(v)}
+				label={t("general.toggle.scrollbackReflow", "Reflow scrollback on resize")}
+				hint={t(
+					"general.hint.scrollbackReflow",
+					"Re-wrap scrollback history when the terminal changes width, so old output stays readable after a side panel opens. Turn it off to leave history lines as they were written and truncate them instead. The visible screen is never reflowed either way.",
+				)}
+			/>
+
 			<h3>{t("general.heading.powerManagement", "Power Management")}</h3>
 
 			<SettingToggle

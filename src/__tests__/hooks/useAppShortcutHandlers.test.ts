@@ -194,6 +194,28 @@ describe("useAppShortcutHandlers", () => {
 		expect(mockNavigate).toHaveBeenNthCalledWith(2, "term-2");
 	});
 
+	// This handler picks WHICH block to fold; whether folding is allowed at all
+	// is `blockFoldingEnabled`, enforced inside `toggleBlockFold` so both this
+	// path and CanvasTerminal's Cmd+Shift+. branch obey one check. The gate is
+	// covered in stores/terminalBlockFold.test.ts — asserting it here would
+	// only re-test a mock.
+	it("folds the block nearest the viewport centre", async () => {
+		mockStores.terminals.getActive.mockReturnValue({
+			id: "term-1",
+			ref: { getSessionId: () => "session-1" },
+			commandBlocks: [{ promptLine: 40 }, { promptLine: 90 }],
+		});
+		// [displayOffset, historySize, screenRows] — centres the view on line 90
+		mockInvoke.mockResolvedValue([0, 80, 20]);
+		const handlers = useAppShortcutHandlers(createOptions() as never);
+
+		handlers.blockFoldToggle();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(mockStores.terminals.toggleBlockFold).toHaveBeenCalledWith("term-1", 90);
+	});
+
 	it("executes and marks matching smart-prompt shortcuts", async () => {
 		const prompt = { id: "prompt-1", name: "Review", shortcut: "Cmd+R", enabled: true };
 		mockStores.prompts.getAllPrompts.mockReturnValue([prompt]);

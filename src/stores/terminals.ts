@@ -5,6 +5,7 @@ import { rpc } from "../transport";
 import type { TerminalMatch } from "../types";
 import { isPerfDebug } from "../utils/perfDebug";
 import { appLogger } from "./appLogger";
+import { settingsStore } from "./settings";
 import { activatePaneExclusively, registerPaneDeactivator, tabOrderingStore } from "./tabManager";
 
 /** Type of input being awaited */
@@ -75,7 +76,11 @@ export interface TerminalData {
 	queuedCommands: number; // Compose-panel commands waiting for the agent's next idle window
 	completionNotified: boolean; // Current busy cycle already produced its completion notification
 	agentType: AgentType | null; // Detected foreground agent process (e.g. "claude")
-	agentLaunchCommand: string | null; // Run-config command used to launch (e.g. "c"), for accurate resume
+	// Command used to launch the agent, for accurate resume. Set from the run config
+	// at launch (e.g. "c"), then upgraded by discovery to what the process really runs
+	// (e.g. "CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --dangerously-skip-permissions"),
+	// because a shell alias hides both the binary and the env that locates the session.
+	agentLaunchCommand: string | null;
 	pendingResumeCommand: string | null; // Set at restore time, consumed on first shell idle
 	pendingInitCommand: string | null; // Setup/run script to auto-execute on first shell idle
 	usageLimit: { percentage: number; limitType: string } | null; // Claude Code usage limit
@@ -730,7 +735,20 @@ function createTerminalsStore() {
 			});
 		},
 
+		/** Fold or unfold one command block.
+		 *
+		 *  The `blockFoldingEnabled` gate lives here rather than in the callers
+		 *  because there are two of them — CanvasTerminal's own Cmd+Shift+.
+		 *  branch and `toggleNearestCommandBlock` behind the `block-fold-toggle`
+		 *  action (shortcut and command palette) — and only the first used to
+		 *  check it, so the Settings toggle appeared to do nothing. One check at
+		 *  the point both paths converge on cannot be forgotten by a third.
+		 *
+		 *  Blocks folded before the setting was turned off stay folded: this
+		 *  disables the control, and silently expanding history on a settings
+		 *  change is the worse surprise. */
 		toggleBlockFold(id: string, promptLine: number): void {
+			if (!settingsStore.state.blockFoldingEnabled) return;
 			const term = state.terminals[id];
 			if (!term) return;
 			const next = new Set(term.foldedBlocks);
