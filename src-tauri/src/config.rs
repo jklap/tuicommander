@@ -216,7 +216,77 @@ fn load_json_config_strict_from_path<T: DeserializeOwned + Default>(
 /// itself failed (a read-only config dir, say); callers report that, they cannot fix it.
 fn preserve_corrupt_config(path: &std::path::Path) -> Option<PathBuf> {
     let aside = path.with_extension(format!("corrupt-{}", uuid::Uuid::new_v4()));
-    std::fs::rename(path, &aside).ok().map(|()| aside)
+    std::fs::rename(path, &aside).ok().map(|()| {
+        reap_corrupt_backups(&aside);
+        aside
+    })
+}
+
+/// How many `<name>.corrupt-<uuid>` backups to keep per config file.
+///
+/// A count, not an age: the point of the backup is hand recovery, and a user who
+/// comes back a month later would find an age rule had deleted the very file they
+/// came for. Five is enough to survive a corruption that repeats across a few
+/// restarts while still bounding the directory.
+const MAX_CORRUPT_BACKUPS: usize = 5;
+
+/// Drop the oldest backups of the file `keep` was just made from, leaving at most
+/// [`MAX_CORRUPT_BACKUPS`].
+///
+/// Scoped to one config file's own backups, by stem. A storm of
+/// `repositories.corrupt-*` must not evict the single `notes.corrupt-*` a user
+/// needs — that would be this cleanup causing exactly the data loss the rename
+/// exists to prevent.
+///
+/// `keep` is excluded explicitly rather than trusted to sort first: mtime has
+/// coarse resolution on some filesystems, so two backups written in the same
+/// tick can compare equal and the newest is not guaranteed to win a sort.
+///
+/// Every failure here is swallowed after logging. This runs inside a config load
+/// that has already failed; making that load fail differently because a stale
+/// backup could not be unlinked would be strictly worse than keeping the file.
+fn reap_corrupt_backups(keep: &std::path::Path) {
+    let (Some(dir), Some(stem)) = (keep.parent(), keep.file_stem().and_then(|s| s.to_str())) else {
+        return;
+    };
+    let prefix = format!("{stem}.corrupt-");
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(dir = %dir.display(), "Could not list corrupt backups: {e}");
+            return;
+        }
+    };
+    let mut backups: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| *p != keep)
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(&prefix))
+        })
+        .map(|p| {
+            // An unreadable mtime sorts as oldest, so a backup we cannot date is
+            // reaped before one we can. It is still never `keep`.
+            let modified = p
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            (modified, p)
+        })
+        .collect();
+    // Newest first, so the tail is what to drop. `keep` is not in this list and
+    // occupies one of the slots, hence `- 1`.
+    backups.sort_by_key(|a| std::cmp::Reverse(a.0));
+    for (_, stale) in backups
+        .into_iter()
+        .skip(MAX_CORRUPT_BACKUPS.saturating_sub(1))
+    {
+        if let Err(e) = std::fs::remove_file(&stale) {
+            tracing::warn!(path = %stale.display(), "Could not reap corrupt backup: {e}");
+        }
+    }
 }
 
 /// Atomically write `data` to `target` via temp+rename with 0600 perms.
@@ -646,7 +716,11 @@ pub(crate) struct AppConfig {
     /// Sub-flag: reflow scrollback history on column resize. Keeps scrollback
     /// readable when side panels temporarily narrow the terminal, without
     /// affecting cursor-addressed TUIs on the visible screen.
-    #[serde(default)]
+    ///
+    /// Defaults to true, including for a config.json written before the key
+    /// existed: the grid reflowed unconditionally until this flag gained a
+    /// consumer, so anything else would silently change behaviour on upgrade.
+    #[serde(default = "default_true")]
     pub(crate) scrollback_reflow: bool,
     /// Terminal cursor style: "bar" (default), "block", "underline"
     #[serde(default = "default_cursor_style")]
@@ -654,6 +728,20 @@ pub(crate) struct AppConfig {
     /// Terminal renderer: "webgl" (default, GPU-accelerated) or "canvas" (CPU, no atlas bugs)
     #[serde(default = "default_terminal_renderer")]
     pub(crate) terminal_renderer: String,
+    /// Label each command block with its elapsed time while Ctrl+Cmd is held.
+    /// Frontend-gated (the label is painted in the renderer); stored here so the
+    /// choice persists — a field absent from this struct is dropped by serde on
+    /// every `save_config`, which is exactly what happened to these three
+    /// before they had a Settings toggle.
+    #[serde(default = "default_true")]
+    pub(crate) show_block_timestamps: bool,
+    /// Draw command-block marks on the terminal scrollbar. Frontend-gated.
+    #[serde(default = "default_true")]
+    pub(crate) show_scrollbar_marks: bool,
+    /// Let the block-fold shortcut collapse a command block's output.
+    /// Frontend-gated.
+    #[serde(default = "default_true")]
+    pub(crate) block_folding_enabled: bool,
     /// Expose `ai_terminal_*` tools to external MCP. Default off: they need a
     /// per-session filesystem sandbox only the internal agent loop creates.
     ///
@@ -804,9 +892,12 @@ impl Default for AppConfig {
             ai_chat_enabled: false,
             ai_triage_enabled: false,
             ai_watchers_enabled: false,
-            scrollback_reflow: false,
+            scrollback_reflow: true,
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
+            show_block_timestamps: true,
+            show_scrollbar_marks: true,
+            block_folding_enabled: true,
             ai_terminal_mcp_enabled: false,
             index_strategy: default_index_strategy(),
             standby_timeout_minutes: default_standby_timeout(),
@@ -1968,7 +2059,14 @@ where
     // The file lock is already held from the authoritative read above. Acquiring it
     // again through save_app_config_locked would self-deadlock.
     save_app_config_with(next.clone(), |disk_config| file.write_atomic(disk_config))?;
+    let reflow_changed = cached.scrollback_reflow != next.scrollback_reflow;
+    let reflow = next.scrollback_reflow;
     *state.config.write() = next;
+    // `new_vt_log_buffer` only reads the config when a grid is built, so live
+    // sessions would keep the old behaviour until they are recreated.
+    if reflow_changed {
+        state.apply_reflow_history(reflow);
+    }
     // Long-lived tasks that own a service's lifecycle watch this instead of
     // being restarted: see `relay_client::supervise`. It goes here, not in each
     // caller, because `ConfigSaveEffects` is only actioned by the callers that
@@ -2040,7 +2138,7 @@ fn set_json_path(
 ///
 /// 1. `src-tauri/src/lib.rs` — a `#[tauri::command] config_patch` wrapper in the
 ///    `invoke_handler`. That wrapper MUST action the returned `ConfigSaveEffects`
-///    exactly as `save_config` does (`state.mcp_tools_changed.send(())` on
+///    exactly as `save_config` does (`state.mcp.tools_changed.send(())` on
 ///    `tools_changed`, `restart_server(...)` on `server_changed`); dropping them would
 ///    make patching `services.server.port` persist without rebinding the listener.
 /// 2. `src-tauri/src/mcp_http/mod.rs` — the matching axum route (IPC/HTTP parity).
@@ -3246,6 +3344,123 @@ mod tests {
         );
     }
 
+    /// Corrupt the same file `n` times, returning the content written on each
+    /// pass so a test can identify which backup holds what.
+    fn corrupt_n_times(path: &std::path::Path, n: usize) -> Vec<String> {
+        (0..n)
+            .map(|i| {
+                let content = format!("{{ corrupt pass {i}");
+                fs::write(path, &content).unwrap();
+                let loaded = load_json_config_strict_from_path::<serde_json::Value>(path);
+                assert!(loaded.is_err(), "pass {i} must not load");
+                content
+            })
+            .collect()
+    }
+
+    #[test]
+    fn corrupt_backups_are_capped_and_the_newest_always_survives() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("notes.json");
+
+        let written = corrupt_n_times(&path, MAX_CORRUPT_BACKUPS + 3);
+
+        let kept = corrupt_backups(dir.path());
+        assert_eq!(
+            kept.len(),
+            MAX_CORRUPT_BACKUPS,
+            "{} corruptions must leave exactly {MAX_CORRUPT_BACKUPS} backups, found {kept:?}",
+            written.len()
+        );
+
+        // Criterion 3, stated as the property that matters rather than as a count:
+        // the file a user would reach for is the LAST one, and no retention rule
+        // may delete it. Identified by content, not by name — the uuid is random.
+        let contents: Vec<String> = kept
+            .iter()
+            .map(|p| fs::read_to_string(p).unwrap())
+            .collect();
+        let newest = written.last().unwrap();
+        assert!(
+            contents.contains(newest),
+            "the most recent backup ({newest:?}) was reaped; kept {contents:?}"
+        );
+    }
+
+    #[test]
+    fn reaping_is_scoped_to_one_config_file() {
+        // A storm of corruptions in one file must not evict another file's only
+        // backup: that would make the cleanup cause the data loss the rename
+        // exists to prevent.
+        let dir = TempDir::new().expect("temp dir");
+        let notes = dir.path().join("notes.json");
+        let repos = dir.path().join("repositories.json");
+
+        corrupt_n_times(&repos, 1);
+        corrupt_n_times(&notes, MAX_CORRUPT_BACKUPS + 3);
+
+        let surviving: Vec<String> = corrupt_backups(dir.path())
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(
+            surviving
+                .iter()
+                .filter(|n| n.starts_with("repositories.corrupt-"))
+                .count(),
+            1,
+            "repositories' only backup was evicted by notes' churn: {surviving:?}"
+        );
+        assert_eq!(
+            surviving
+                .iter()
+                .filter(|n| n.starts_with("notes.corrupt-"))
+                .count(),
+            MAX_CORRUPT_BACKUPS
+        );
+    }
+
+    #[test]
+    fn a_failed_reap_does_not_fail_the_load() {
+        // The reaper runs inside a load that has ALREADY failed. Whatever it
+        // cannot delete, the caller must still get its parse error and its
+        // preserved file — never a different error because cleanup tripped.
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("notes.json");
+
+        // A directory where a backup file is expected: `remove_file` refuses it,
+        // which is the failure branch, without permission games that behave
+        // differently as root or on CI. Created FIRST so it is the oldest and
+        // therefore actually reaches the reap loop — created last it would sort
+        // into the keep window and the test would pass without exercising
+        // anything.
+        let undeletable = dir.path().join("notes.corrupt-0000");
+        fs::create_dir(&undeletable).unwrap();
+        corrupt_n_times(&path, MAX_CORRUPT_BACKUPS + 1);
+
+        fs::write(&path, "{ still broken").unwrap();
+        let err = load_json_config_strict_from_path::<serde_json::Value>(&path)
+            .expect_err("the parse error must survive a failed reap");
+        assert!(err.starts_with("Corrupt "), "unexpected error: {err}");
+        assert!(!path.exists(), "the bad file is still moved aside");
+        assert!(
+            undeletable.is_dir(),
+            "the undeletable entry is left alone, not partially removed"
+        );
+        // The real backups are still capped: one slot is wasted on the entry that
+        // cannot be removed, and the reaper does not compensate by deleting an
+        // extra file. Stated as an upper bound because that waste is the honest
+        // cost of not failing the load.
+        let files = corrupt_backups(dir.path())
+            .into_iter()
+            .filter(|p| p.is_file())
+            .count();
+        assert!(
+            files <= MAX_CORRUPT_BACKUPS,
+            "{files} real backups left, expected at most {MAX_CORRUPT_BACKUPS}"
+        );
+    }
+
     #[test]
     fn strict_load_reads_a_valid_file() {
         let dir = TempDir::new().expect("temp dir");
@@ -3413,11 +3628,16 @@ mod tests {
             ai_chat_enabled: false,
             ai_triage_enabled: false,
             ai_watchers_enabled: false,
-            scrollback_reflow: false,
+            scrollback_reflow: true,
             ai_terminal_mcp_enabled: false,
             index_strategy: "active_and_switch".to_string(),
             cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
+            // All three default to true, so `false` is the only value that can
+            // tell a real round trip from serde handing back the default.
+            show_block_timestamps: false,
+            show_scrollbar_marks: false,
+            block_folding_enabled: false,
             auto_update_plugins_enabled: false,
             standby_timeout_minutes: 5,
             custom_launchers: Vec::new(),
@@ -3456,6 +3676,13 @@ mod tests {
         );
         assert!(!loaded.intent_tab_title);
         assert!(!loaded.suggest_followups);
+        // These three round-trip through the frontend's `updateAppConfig`
+        // load-modify-save. Before they existed on this struct, serde dropped
+        // them from every `save_config` payload and the UI silently snapped
+        // back to the default on the next load.
+        assert!(!loaded.show_block_timestamps);
+        assert!(!loaded.show_scrollbar_marks);
+        assert!(!loaded.block_folding_enabled);
     }
 
     #[test]
@@ -3488,6 +3715,12 @@ mod tests {
         assert!(loaded.intent_tab_title); // defaults to true
         assert!(loaded.suggest_followups); // defaults to true
         assert!(!loaded.experimental_features_enabled);
+        // Every config.json written before these fields existed omits them, and
+        // the frontend store hydrates each with `?? true` — the two sides must
+        // agree or the Settings toggles read one value and the terminal another.
+        assert!(loaded.show_block_timestamps);
+        assert!(loaded.show_scrollbar_marks);
+        assert!(loaded.block_folding_enabled);
     }
 
     #[test]
