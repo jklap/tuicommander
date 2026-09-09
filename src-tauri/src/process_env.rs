@@ -25,30 +25,63 @@ pub fn read_process_env_var(pid: u32, name: &str) -> Option<String> {
 /// path names the interpreter (`node`), while argv[0] names the tool the user
 /// actually launched (`pi`). Returns `None` on any platform read failure, and on
 /// Windows, where the process-snapshot API exposes no argv.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn read_process_argv0(pid: u32) -> Option<String> {
+    read_process_argv(pid)?
+        .into_iter()
+        .next()
+        .filter(|s| !s.is_empty())
+}
+
+/// Read the full `argv` of a process by PID.
+///
+/// A shell alias is expanded before `exec`, so argv is the only place the real
+/// binary and its flags survive: `c2` never reaches the process table, but
+/// `claude --dangerously-skip-permissions` does. Returns `None` on any platform
+/// read failure, and on Windows, where the process-snapshot API exposes no argv.
+#[cfg(target_os = "macos")]
+pub fn read_process_argv(pid: u32) -> Option<Vec<String>> {
     let buf = read_procargs2_raw(pid).ok()?;
     let int_size = std::mem::size_of::<libc::c_int>();
     if buf.len() < int_size {
         return None;
     }
-    // Layout: [i32 argc] [exec_path\0 ...padding...] [argv[0]\0 ...]
-    let data = skip_leading_nulls(skip_cstring(&buf[int_size..]));
-    let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
-    if end == 0 {
+    let mut n_args: libc::c_int = 0;
+    unsafe {
+        std::ptr::copy_nonoverlapping(buf.as_ptr(), (&raw mut n_args).cast::<u8>(), int_size);
+    }
+    if !(0..=65535).contains(&n_args) {
         return None;
     }
-    Some(String::from_utf8_lossy(&data[..end]).into_owned())
+    // Layout: [i32 argc] [exec_path\0 ...padding...] [argv[0]\0 ... argv[n-1]\0] [env…]
+    let mut data = skip_cstring(&buf[int_size..]);
+    let mut argv = Vec::with_capacity(n_args as usize);
+    for _ in 0..n_args {
+        data = skip_leading_nulls(data);
+        if data.is_empty() {
+            break;
+        }
+        let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+        argv.push(String::from_utf8_lossy(&data[..end]).into_owned());
+        data = &data[end..];
+    }
+    (!argv.is_empty()).then_some(argv)
 }
 
 #[cfg(target_os = "linux")]
-pub fn read_process_argv0(pid: u32) -> Option<String> {
+pub fn read_process_argv(pid: u32) -> Option<Vec<String>> {
     let buf = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    if end == 0 {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&buf[..end]).into_owned())
+    let argv: Vec<String> = buf
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect();
+    (!argv.is_empty()).then_some(argv)
+}
+
+#[cfg(target_os = "windows")]
+pub fn read_process_argv(_pid: u32) -> Option<Vec<String>> {
+    None
 }
 
 // ─── macOS ──────────────────────────────────────────────────────────────────
@@ -355,6 +388,21 @@ mod tests {
     #[test]
     fn read_argv0_of_dead_process() {
         assert!(read_process_argv0(99999999).is_none());
+    }
+
+    #[test]
+    fn read_own_argv_starts_with_argv0() {
+        // Full argv is what a rebuilt launch command is made of: the flags an alias
+        // hid live in argv[1..], so reading only argv[0] would drop them.
+        let pid = std::process::id();
+        let argv = read_process_argv(pid).expect("own argv is readable");
+        assert!(!argv.is_empty());
+        assert_eq!(Some(&argv[0]), read_process_argv0(pid).as_ref());
+    }
+
+    #[test]
+    fn read_argv_of_dead_process() {
+        assert!(read_process_argv(99999999).is_none());
     }
 
     #[cfg(target_os = "macos")]

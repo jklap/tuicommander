@@ -109,7 +109,7 @@ fn process_content_inner(
 /// On Windows (`cmd /C`) we wrap in double quotes and escape embedded double
 /// quotes and shell metacharacters (`^`, `&`, `|`, `<`, `>`) with `^`. The two
 /// shells are invoked from `execute_shell_script` and share this entry point.
-fn shell_quote(value: &str) -> String {
+pub(crate) fn shell_quote(value: &str) -> String {
     #[cfg(target_os = "windows")]
     {
         cmd_shell_quote(value)

@@ -44,30 +44,151 @@ pub(crate) fn discover_agent_session(
     claimed_ids: Vec<String>,
     agent_pid: Option<u32>,
     env_overrides: HashMap<String, String>,
+) -> Option<DiscoveredSession> {
+    let session_id =
+        discover_session_id(&agent_type, &cwd, &claimed_ids, agent_pid, &env_overrides)?;
+    let launch_command = agent_pid.and_then(|pid| rebuild_launch_command(&agent_type, pid));
+    Some(DiscoveredSession {
+        session_id,
+        launch_command,
+    })
+}
+
+/// What discovery found: the agent's session id, plus the command that actually
+/// launched it when the live process could be read.
+///
+/// The launch command is the half that outlives the process. At restore time the
+/// pid is gone, so a session stored under `CLAUDE_CONFIG_DIR=~/.claude-private`
+/// can only be resumed if that env was captured while the agent was still running.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiscoveredSession {
+    pub session_id: String,
+    pub launch_command: Option<String>,
+}
+
+fn discover_session_id(
+    agent_type: &str,
+    cwd: &str,
+    claimed_ids: &[String],
+    agent_pid: Option<u32>,
+    env_overrides: &HashMap<String, String>,
 ) -> Option<String> {
-    let env = resolve_env_overrides(&agent_type, agent_pid, &env_overrides);
-    match agent_type.as_str() {
+    let env = resolve_env_overrides(agent_type, agent_pid, env_overrides);
+    match agent_type {
         "claude" => discover_claude_session(
-            &cwd,
-            &claimed_ids,
+            cwd,
+            claimed_ids,
             env.get("CLAUDE_CONFIG_DIR").map(|s| s.as_str()),
             agent_pid,
         ),
         "gemini" => discover_gemini_session(
-            &cwd,
-            &claimed_ids,
+            cwd,
+            claimed_ids,
             env.get("GEMINI_CLI_HOME").map(|s| s.as_str()),
         ),
-        "codex" => discover_codex_session(
-            &cwd,
-            &claimed_ids,
-            env.get("CODEX_HOME").map(|s| s.as_str()),
-        ),
+        "codex" => {
+            discover_codex_session(cwd, claimed_ids, env.get("CODEX_HOME").map(|s| s.as_str()))
+        }
         // Goose stores sessions in SQLite — no filesystem discovery.
         // Shell wrapper injects --name $TUIC_SESSION for deterministic binding.
         "goose" => None,
-        "grok" => discover_grok_session(&cwd, &claimed_ids, agent_pid),
+        "grok" => discover_grok_session(cwd, claimed_ids, agent_pid),
         _ => None,
+    }
+}
+
+/// Flags that select which session an agent opens. They are mutually exclusive
+/// with the `--resume <id>` TUIC appends, so a rebuilt launch command must drop
+/// them — otherwise a resume carries the *previous* run's session selection.
+///
+/// Only agents listed here get a rebuilt launch command; the rest fall back to
+/// the run config, exactly as before. Adding one means verifying its flags
+/// against the real CLI, not guessing them.
+///
+/// DEFERRED (2026-09-08) — gemini/codex/grok are exposed to the same config-dir
+/// mismatch (`GEMINI_CLI_HOME`, `CODEX_HOME`) but codex selects a session with a
+/// `resume` *subcommand* rather than a flag, so the drop rule below does not
+/// transfer. Add them once each CLI's session surface is checked.
+const AGENT_SESSION_FLAGS: &[(&str, &[&str])] = &[(
+    "claude",
+    &[
+        "--resume",
+        "-r",
+        "--continue",
+        "-c",
+        "--session-id",
+        "--fork-session",
+    ],
+)];
+
+/// Rebuild the command that actually launched an agent, from its live process.
+///
+/// A shell alias is expanded before `exec`, so what TUIC has on file is not what
+/// runs: the run config says `c2` with no env, while the process is really
+/// `claude --dangerously-skip-permissions` under
+/// `CLAUDE_CONFIG_DIR=~/.claude-private`. Both halves are needed at restore time,
+/// when the pid is gone — resuming a `~/.claude-private` session with the default
+/// run config sends `--resume <id>` to a binary that reads `~/.claude`, and Claude
+/// answers `No conversation found with session ID`.
+///
+/// Returns `None` for agents with no entry in `AGENT_SESSION_FLAGS`, and when argv
+/// cannot be read (Windows, or the process already exited).
+///
+/// DEFERRED (2026-09-08) — argv is kept whole apart from session flags, so an agent
+/// launched with an inline prompt (`claude 'fix this'` — TUIC's own worktree seed
+/// does this) rebuilds with that prompt attached and re-sends it on resume. Telling
+/// a prompt from a flag value needs the CLI's flag arity (`--model opus` takes one,
+/// `--add-dir a b c` takes many), which argv alone does not carry.
+fn rebuild_launch_command(agent_type: &str, pid: u32) -> Option<String> {
+    let argv = crate::process_env::read_process_argv(pid)?;
+    compose_launch_command(agent_type, &argv, read_agent_env_overrides(agent_type, pid))
+}
+
+/// The pure half of `rebuild_launch_command`: everything except reading the process.
+fn compose_launch_command(
+    agent_type: &str,
+    argv: &[String],
+    env: HashMap<String, String>,
+) -> Option<String> {
+    let session_flags = AGENT_SESSION_FLAGS
+        .iter()
+        .find(|(t, _)| *t == agent_type)
+        .map(|(_, flags)| *flags)?;
+
+    let mut env: Vec<(String, String)> = env.into_iter().collect();
+    env.sort(); // stable output: the command is persisted and diffed against itself
+    let mut parts: Vec<String> = env
+        .into_iter()
+        .map(|(key, value)| format!("{key}={}", quote_if_needed(&value)))
+        .collect();
+
+    let mut argv = argv.iter().peekable();
+    parts.push(quote_if_needed(argv.next()?));
+    while let Some(token) = argv.next() {
+        if session_flags.contains(&token.as_str()) {
+            // Drop the value too, when the next token is one rather than a flag.
+            if argv.peek().is_some_and(|next| !next.starts_with('-')) {
+                argv.next();
+            }
+            continue;
+        }
+        parts.push(quote_if_needed(token));
+    }
+    Some(parts.join(" "))
+}
+
+/// Shell-quote a token only when it needs it, so a rebuilt command stays readable
+/// in the terminal (`claude --resume <id>`, not `'claude' '--resume' '<id>'`).
+fn quote_if_needed(value: &str) -> String {
+    let safe = !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    if safe {
+        value.to_string()
+    } else {
+        crate::prompt::shell_quote(value)
     }
 }
 
@@ -1771,5 +1892,143 @@ mod tests {
             None,
             HashMap::new(),
         ));
+    }
+
+    // ─── Launch command rebuild ──────────────────────────────────────────────
+
+    fn argv(tokens: &[&str]) -> Vec<String> {
+        tokens.iter().map(|t| (*t).to_string()).collect()
+    }
+
+    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    /// The bug this whole path exists for: the alias is expanded before exec, so the
+    /// config dir survives only in the process env. Without it the resume command
+    /// reads `~/.claude` and Claude answers "No conversation found with session ID".
+    #[test]
+    fn compose_launch_command_keeps_the_config_dir_the_alias_hid() {
+        let cmd = compose_launch_command(
+            "claude",
+            &argv(&["claude", "--dangerously-skip-permissions"]),
+            env(&[("CLAUDE_CONFIG_DIR", "/Users/me/.claude-private")]),
+        );
+        assert_eq!(
+            cmd.as_deref(),
+            Some(
+                "CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --dangerously-skip-permissions"
+            )
+        );
+    }
+
+    #[test]
+    fn compose_launch_command_without_env_is_just_the_argv() {
+        let cmd = compose_launch_command(
+            "claude",
+            &argv(&["claude", "--model", "opus"]),
+            HashMap::new(),
+        );
+        assert_eq!(cmd.as_deref(), Some("claude --model opus"));
+    }
+
+    /// A session flag from the previous run must not survive: TUIC appends its own
+    /// `--resume <id>`, and two of them select different conversations.
+    #[test]
+    fn compose_launch_command_drops_session_flags_and_their_values() {
+        let cmd = compose_launch_command(
+            "claude",
+            &argv(&[
+                "claude",
+                "--resume",
+                "af467730-5e79-49d9-8a17-ebd94c99f262",
+                "--model",
+                "opus",
+                "--continue",
+                "--session-id",
+                "af467730-5e79-49d9-8a17-ebd94c99f263",
+                "--fork-session",
+            ]),
+            HashMap::new(),
+        );
+        assert_eq!(cmd.as_deref(), Some("claude --model opus"));
+    }
+
+    /// `--resume` takes an optional value, so a bare one must not eat the next flag.
+    #[test]
+    fn compose_launch_command_keeps_a_flag_that_follows_a_valueless_resume() {
+        let cmd = compose_launch_command(
+            "claude",
+            &argv(&["claude", "--resume", "--dangerously-skip-permissions"]),
+            HashMap::new(),
+        );
+        assert_eq!(
+            cmd.as_deref(),
+            Some("claude --dangerously-skip-permissions")
+        );
+    }
+
+    #[test]
+    fn compose_launch_command_quotes_only_what_needs_it() {
+        let cmd = compose_launch_command(
+            "claude",
+            &argv(&["claude", "--append-system-prompt", "be terse"]),
+            env(&[("CLAUDE_CONFIG_DIR", "/Users/me/My Configs/.claude")]),
+        );
+        assert_eq!(
+            cmd.as_deref(),
+            Some(
+                "CLAUDE_CONFIG_DIR='/Users/me/My Configs/.claude' claude --append-system-prompt 'be terse'"
+            )
+        );
+    }
+
+    /// Agents with no verified session-flag list get no rebuilt command, so the
+    /// caller keeps the run config it already had rather than a guessed rewrite.
+    #[test]
+    fn compose_launch_command_declines_agents_without_a_flag_list() {
+        assert_eq!(
+            compose_launch_command("codex", &argv(&["codex"]), HashMap::new()),
+            None
+        );
+        assert_eq!(
+            compose_launch_command("claude", &[], HashMap::new()),
+            None,
+            "empty argv has no binary to launch"
+        );
+    }
+
+    /// The composed half is unit-tested above; this covers the half that reads a
+    /// real process, which is where the platform APIs can silently return nothing.
+    #[test]
+    fn rebuild_launch_command_reads_a_live_process() {
+        let pid = std::process::id();
+        let rebuilt = rebuild_launch_command("claude", pid).expect("own process is readable");
+        let argv0 = crate::process_env::read_process_argv0(pid).expect("own argv0 is readable");
+        assert!(
+            rebuilt.contains(&argv0),
+            "rebuilt command {rebuilt:?} should name the running binary {argv0:?}"
+        );
+        assert_eq!(
+            rebuild_launch_command("codex", pid),
+            None,
+            "an agent with no verified flag list gets no rebuilt command"
+        );
+    }
+
+    /// Discovery must not invent a launch command when it has no pid to read.
+    #[test]
+    fn discover_agent_session_reports_no_launch_command_without_a_pid() {
+        let found = discover_agent_session(
+            "goose".to_string(),
+            "/tmp".to_string(),
+            Vec::new(),
+            None,
+            HashMap::new(),
+        );
+        assert_eq!(found, None, "goose has no filesystem discovery");
     }
 }
