@@ -6976,6 +6976,36 @@ mod tests {
         assert_eq!(&*out, "beforeafter");
     }
 
+    /// Regression test (color-tools plan, Phase 0): `strip_kitty_sequences` scans
+    /// for the three-byte prefixes `ESC [ >`, `ESC [ <`, `ESC [ ?` — it has no
+    /// knowledge of APC (`ESC _ ... ESC \`), which is what the Kitty *graphics*
+    /// protocol uses. This is safe in practice because a base64 payload's
+    /// alphabet (`A-Za-z0-9+/=`) cannot contain a raw ESC byte, and a Kitty
+    /// graphics sequence's own framing ESCs are never immediately followed by
+    /// `[` (`\x1b_` opens it, `\x1b\\` closes it) — so the fast-path `contains()`
+    /// check can never trigger on one. Locks in that safety property before
+    /// Phase 3 adds real APC handling elsewhere in the pipeline.
+    #[test]
+    fn test_strip_kitty_ignores_kitty_graphics_apc_sequence() {
+        use std::borrow::Cow;
+        // A representative Kitty graphics transmit+display sequence: base64
+        // payload deliberately includes characters that could be mistaken for
+        // sequence syntax if this function were byte-scanning naively.
+        let input = "before\x1b_Gi=31,a=T,f=24,s=1,v=1;PD8+Kz0=\x1b\\after";
+        let (out, actions) = strip_kitty_sequences(input);
+        assert!(
+            actions.is_empty(),
+            "an APC/Kitty-graphics sequence must never be parsed as a kitty \
+             keyboard-protocol action"
+        );
+        assert!(
+            matches!(out, Cow::Borrowed(_)),
+            "fast path should return Cow::Borrowed — the APC sequence must not \
+             trigger the slow path at all"
+        );
+        assert_eq!(&*out, input, "the APC sequence must pass through untouched");
+    }
+
     // Helpers for session-state accumulator tests
     fn make_parsed(type_: &str, extra: serde_json::Value) -> AppEvent {
         let mut obj = serde_json::json!({ "type": type_ });

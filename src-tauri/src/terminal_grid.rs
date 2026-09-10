@@ -3416,6 +3416,59 @@ mod tests {
         )
     }
 
+    /// Deterministic small grid used by the cross-language golden-byte frame
+    /// fixture (color-tools plan, Phase 0). 2 rows x 4 cols; row 0 is "Hi" in a
+    /// 24-bit fg color, row 1 is left blank. Kept tiny and hand-verifiable.
+    fn golden_frame_bytes() -> Vec<u8> {
+        let mut grid = TerminalGrid::new(2, 4, 0);
+        let _ = grid.process(b"\x1b[38;2;100;150;200mHi\x1b[0m");
+        grid.serialize_dirty_rows()
+    }
+
+    fn golden_frame_fixture_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/fixtures/frame_protocol")
+            .join("golden_frame.bin")
+    }
+
+    /// Regenerates `golden_frame.bin` from the current Rust encoder. Deliberately
+    /// `#[ignore]`d — never runs in CI/check-gate — because the fixture is meant
+    /// to be a stable cross-language golden byte sequence: `canvasTerminalUtils`'s
+    /// `decodeBinaryFrame` is tested against these exact bytes in
+    /// `src/components/Terminal/__tests__/frameGolden.test.ts`. Run explicitly
+    /// (`cargo test -p tuicommander --lib golden_frame_fixture_matches_current_encoder_output -- --ignored`)
+    /// only when intentionally changing the wire format on both sides at once.
+    #[test]
+    #[ignore = "regenerates the checked-in golden fixture; run explicitly, never in CI"]
+    fn regenerate_golden_frame_fixture() {
+        let buf = golden_frame_bytes();
+        std::fs::write(golden_frame_fixture_path(), &buf).expect("write golden fixture");
+    }
+
+    /// The Phase 0 gap this closes: the Rust encoder and the TS decoder
+    /// (`decodeBinaryFrame`) were tested independently against a *written*
+    /// spec (this file's own header-layout comments), never against a shared
+    /// *generated* artifact — so a synchronized-but-wrong change to both sides
+    /// could pass every existing test. This test asserts the live encoder still
+    /// produces byte-for-byte the same output as the checked-in fixture;
+    /// `frameGolden.test.ts` decodes that same fixture file and asserts on the
+    /// resulting field values. If this test fails after a deliberate wire-format
+    /// change, regenerate via `regenerate_golden_frame_fixture` above and update
+    /// the TS test's expectations together, in the same commit.
+    #[test]
+    fn golden_frame_fixture_matches_current_encoder_output() {
+        let expected = std::fs::read(golden_frame_fixture_path())
+            .expect("golden_frame.bin fixture missing — see regenerate_golden_frame_fixture");
+        let actual = golden_frame_bytes();
+        assert_eq!(
+            actual, expected,
+            "live serialize_dirty_rows() output no longer matches the checked-in \
+             golden fixture — if this is an intentional wire-format change, \
+             regenerate the fixture (see regenerate_golden_frame_fixture's doc \
+             comment) and update frameGolden.test.ts in the same commit"
+        );
+    }
+
     /// A `suggest:` line longer than the terminal is one logical line split over
     /// two display rows. The frontend overlay has to know that to mask the block
     /// (#8fc7) — and the frame is its only source of truth about the grid.
@@ -4559,6 +4612,58 @@ mod tests {
         let grid = TerminalGrid::new(5, 20, 0);
         let text = grid.get_row_text(999);
         assert_eq!(text, "");
+    }
+
+    /// Characterization test (color-tools plan, Phase 0): confirms `CellExtra`'s
+    /// existing `hyperlink` ref is cleared as a side effect of an ordinary
+    /// character overwrite, with no hyperlink-specific cleanup code involved.
+    /// `write_at_cursor` (`term/mod.rs`) assigns the cursor template's *entire*
+    /// `extra` onto the written cell (`cursor_cell.extra = extra;`) — so printing
+    /// a plain character with no active OSC 8 span replaces the whole `extra`,
+    /// hyperlink included, rather than merging fields. This is the exact
+    /// clear-on-overwrite property the planned `CellExtra.image` field depends on
+    /// (color-tools plan, Architecture section) — this test locks in that the
+    /// mechanism already works today for the sibling `hyperlink` field, before
+    /// any image code exists to lean on it.
+    #[test]
+    fn cell_extra_hyperlink_is_cleared_by_a_later_plain_overwrite() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        // Open an OSC 8 hyperlink, print one char under it, close the hyperlink.
+        grid.process(b"\x1b]8;;https://example.com\x07L\x1b]8;;\x07");
+        assert_eq!(
+            grid.hyperlink_at(0, 0),
+            Some("https://example.com".to_string()),
+            "sanity check: the hyperlinked cell should carry the URI right after writing it"
+        );
+
+        // Move the cursor back and overwrite the same cell with no hyperlink active.
+        grid.process(b"\x1b[1;1HX");
+        assert_eq!(
+            grid.hyperlink_at(0, 0),
+            None,
+            "overwriting a hyperlinked cell with plain text must clear its hyperlink ref"
+        );
+    }
+
+    /// Characterization test (color-tools plan, Phase 0): `CSI 14 t`
+    /// (`text_area_size_pixels`) is parsed and sends `Event::TextAreaSizeRequest`,
+    /// but that event is currently in the ignore arm of `TermEventCollector::send_event`
+    /// (see the `Event::TextAreaSizeRequest(..)` match arm above), so nothing is ever
+    /// written back to the PTY. This locks in *today's* silent-drop behavior before
+    /// Phase 1 flips it to answer with a real `WindowSize`. When Phase 1 lands, this
+    /// test's assertion inverts: `drain_pty_write_events()` should then be non-empty
+    /// and contain a `\x1b[4;<h>;<w>t` reply.
+    #[test]
+    fn csi_14t_text_area_size_pixels_currently_produces_no_reply() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b[14t");
+        let replies = grid.drain_pty_write_events();
+        assert!(
+            replies.is_empty(),
+            "CSI 14t should not (yet) produce a PtyWrite reply — got: {replies:?}. \
+             If this now fails because Phase 1 implemented the reply, update this \
+             test to assert the real WindowSize-based reply instead of no reply."
+        );
     }
 
     #[test]
