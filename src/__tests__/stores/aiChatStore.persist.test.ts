@@ -536,9 +536,7 @@ describe("conversationStore agent run persistence (705-57fa)", () => {
 			}
 			if (cmd === "new_conversation_id") return Promise.resolve("new-id");
 			if (cmd === "list_conversations") {
-				return Promise.resolve(
-					saved ? [(saved as { meta: Record<string, unknown> }).meta] : [],
-				);
+				return Promise.resolve(saved ? [(saved as { meta: Record<string, unknown> }).meta] : []);
 			}
 			if (cmd === "load_conversation") return Promise.resolve(saved);
 			return Promise.resolve();
