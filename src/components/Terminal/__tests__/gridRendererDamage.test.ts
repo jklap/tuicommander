@@ -5,6 +5,7 @@ import {
 	ATTR_ITALIC,
 	type CellMetrics,
 	type DecodedRow,
+	GUTTER_PX,
 } from "../canvasTerminalUtils";
 import { createGridRenderer, type PaintGridOptions } from "../gridRenderer";
 
@@ -74,7 +75,7 @@ it("history growth copies retained pixels instead of repainting every glyph (204
 	);
 	expect(ctx.drawImage).toHaveBeenCalledTimes(1);
 	expect(ctx.fillText.mock.calls.map((call) => call[0])).toEqual(["D", "D", "D", "D"]);
-	expect(ctx.fillRect).toHaveBeenCalledWith(-6, 40, 60, 20);
+	expect(ctx.fillRect).toHaveBeenCalledWith(-GUTTER_PX, 40, 60, 20);
 });
 
 it("pixel scrolling repaints changed retained rows rather than copying stale text (2040)", () => {
@@ -166,7 +167,7 @@ it.each(["color", "combining", "shorter"])(
 		expect(ctx.fillText).toHaveBeenCalled();
 		expect(ctx.fillRect).toHaveBeenCalled();
 		if (kind === "combining") expect(ctx.fillText.mock.calls.map((call) => call[0])).toContain("D\u0301");
-		if (kind === "shorter") expect(ctx.fillRect).toHaveBeenCalledWith(-6, 0, 60, 20);
+		if (kind === "shorter") expect(ctx.fillRect).toHaveBeenCalledWith(-GUTTER_PX, 0, 60, 20);
 	},
 );
 
@@ -205,6 +206,6 @@ it("first-column damage clears italic left bearings from the gutter (TERM-2)", (
 	renderer.paintGrid(new Map([[0, before]]), metrics, { fullRepaint: true });
 	ctx.fillRect.mockClear();
 	renderer.paintGrid(new Map([[0, after]]), metrics, { fullRepaint: false, dirtyIndices: new Set([0]) });
-	expect(ctx.rect).toHaveBeenCalledWith(-6, 0, 26, 20);
-	expect(ctx.fillRect).toHaveBeenCalledWith(-6, 0, 26, 20);
+	expect(ctx.rect).toHaveBeenCalledWith(-GUTTER_PX, 0, GUTTER_PX + 20, 20);
+	expect(ctx.fillRect).toHaveBeenCalledWith(-GUTTER_PX, 0, GUTTER_PX + 20, 20);
 });

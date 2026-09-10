@@ -291,6 +291,37 @@ Search text across all open terminal buffers from the command palette:
 
 Also accessible via the "Search Terminals" command in the palette.
 
+## Shell Integration
+
+Command blocks for a plain shell session (not an AI agent — see "Two sources feed blocks"
+below) come from OSC 133 markers your shell prints around each prompt/command/exit. **zsh gets
+this automatically** — TUICommander injects it via a `ZDOTDIR` wrapper on every PTY spawn, no
+setup needed. **bash and fish need one line added to your own startup file**, since there's no
+equivalent zero-config trick for either:
+
+- **Bash** — add to `~/.bashrc` (or `~/.bash_profile`):
+  ```bash
+  [ -n "$TUIC_SHELL_INTEGRATION" ] && source "$TUIC_SHELL_INTEGRATION"
+  ```
+- **Fish** — add to `~/.config/fish/config.fish`:
+  ```fish
+  if set -q TUIC_SHELL_INTEGRATION; source $TUIC_SHELL_INTEGRATION; end
+  ```
+
+`TUIC_SHELL_INTEGRATION` is an environment variable TUICommander sets on every bash/fish PTY it
+spawns, pointing at that session's integration script — the snippet just needs to exist once in
+your startup file. Settings > Terminal > Shell Integration has a **Copy** button for each snippet. Without
+it, bash/fish sessions still work normally; they just won't produce command blocks, gutter
+marks, or block-scoped search/fold.
+
+**How this compares to iTerm2:** iTerm2 supports bash, zsh, fish, tcsh, and xonsh, each via its
+own downloadable script, and its installer (`iTerm2 > Install Shell Integration`) auto-detects
+your shell and edits the matching dotfile for you — no manual copy-paste required, though it
+does mean the installer writes to your rc files (idempotency on a second run isn't documented).
+TUICommander takes the more conservative path for bash/fish today: a copyable snippet you add
+yourself, so nothing here ever edits your dotfiles automatically. An iTerm2-style one-click
+installer is a natural follow-up if the manual step proves too easy to miss.
+
 ## Command Blocks
 
 Terminal output is segmented into command blocks — one per prompt+output cycle:
@@ -307,13 +338,22 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
   still-open turn), coverage falls back to text-pattern matching (`⎿ Error: Exit code N`, Bash
   only, or a detected API error), which *is* recovery-aware: a failure the agent resolves before
   the turn ends does not flag the block.
-- **Timestamp overlay** — Hold `Ctrl+Cmd` to see how long ago each block started.
-- **Gutter click** — Click the gutter next to a block to select its entire output.
-- **Fold/unfold** — `Cmd+Shift+.` collapses or expands the block nearest the middle of the
-  viewport. Fold state lives in memory for the session only — it does not survive a restart.
+- **Timestamp overlay** — Settings > Terminal > Blocks controls when relative-time labels show:
+  never, only while holding `Ctrl+Cmd`, or always.
+- **Gutter marks** — For a shell-integration-driven block (zsh automatic, bash/fish via a
+  startup-script snippet — see below), the gutter shows a red bar next to a failed command's
+  prompt line and a green bar next to a succeeded one.
+- **Gutter click** — Click the fold chevron on a block's header row to fold/unfold it; click
+  anywhere else in the block's gutter to select its entire output for copying. The gutter is a
+  wider click target than the text column next to it, and the cursor changes to a pointer over it.
+- **Fold/unfold** — `Cmd+Shift+.`, or the gutter chevron, collapses or expands the block nearest
+  the middle of the viewport (keyboard) or the clicked block (gutter). Folded output is fully
+  hidden behind a "N lines folded" summary line, not just dimmed. Fold state lives in memory for
+  the session only — it does not survive a restart.
 - **Block navigation** — `Cmd+Shift+Up`/`Cmd+Shift+Down` jump to the previous/next block
   boundary. Rebindable in Keyboard Shortcuts.
-- **Block-scoped search** — `Cmd+Shift+B` restricts `Cmd+F` search to the current block.
+- **Block-scoped search** — `Cmd+Shift+B` restricts `Cmd+F` search to the current block. An
+  amber accent bar along the left edge of the terminal marks which block that is.
 
 Two sources feed blocks, and a session only ever uses one:
 
@@ -330,8 +370,8 @@ Two sources feed blocks, and a session only ever uses one:
 
 - **No marks at all** — the agent has no hook instrumentation installed and its output never
   produced a heuristic match either; marks require at least one detected block.
-- **Folding does nothing** — you're on a version predating the `endLine` fix; folding is a no-op
-  against a heuristic block whose end line was computed incorrectly.
+- **The fold gutter chevron doesn't appear** — Settings > Terminal > Blocks > Enable block
+  folding is off, or the block hasn't closed yet (a still-running command has nothing to fold).
 - **No red tick on a real failure** — check whether the agent has hook instrumentation
   installed; without it, only Bash-shaped failures are detected via the text-pattern fallback.
 
@@ -545,3 +585,11 @@ On mobile, scroll back in CLI or Chat to show the floating down-arrow at the bot
 Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
 
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+### OSC 1337 Commands
+
+A subset of the proprietary OSC 1337 escape codes is recognized, for compatibility with scripts and tools that emit them:
+
+- **`CursorShape`** and **`ClearScrollback`** — change the cursor shape or clear scrollback history, same as their xterm/CSI equivalents.
+- **`Copy`** and **`CopyToClipboard`…`EndCopy`** — write to the system clipboard, gated by the same Settings > Terminal > "Allow OSC 52 clipboard writes" toggle as OSC 52.
+- **`StealFocus`** (bring the window to the front) and **`RequestAttention`** (bounce the dock icon) — gated by Settings > Terminal > "Allow terminal focus/attention requests" (default on). Disable this if a script or log ever spams either.
+- **`OpenURL`** — always shows a confirmation dialog naming the URL before opening it (the same dialog `ui action=confirm` MCP requests use, so any connected client — desktop, browser, or the mobile app — can answer it), and only ever opens `http://`, `https://`, or `mailto:` links.

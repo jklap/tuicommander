@@ -18,6 +18,7 @@ import {
 	type StepStatus,
 } from "../PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { PromptDialog } from "../PromptDialog";
+import { PtyOpenUrlHost } from "../PtyOpenUrlHost/PtyOpenUrlHost";
 import { CloseDialog } from "../QuitDialog/CloseDialog";
 import { RemoteRepoPicker } from "../RemoteRepoPicker";
 import { RenameBranchDialog } from "../RenameBranchDialog";
@@ -286,6 +287,7 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 			/>
 			<GitDialogOverlays contract={props.git} />
 			<McpConfirmHost />
+			<PtyOpenUrlHost />
 			<PromptDialog
 				visible={props.prompts.terminalRenameVisible()}
 				title="Terminal Title"
