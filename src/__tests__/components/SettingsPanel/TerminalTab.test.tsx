@@ -205,6 +205,7 @@ describe("TerminalTab placement", () => {
 	const TOGGLE_IDS: Record<string, string> = {
 		"Restore open terminals on launch": "app.restore_shell_terminals",
 		"Save terminal scrollback": "app.restore_scrollback",
+		"Allow terminal focus/attention requests": "app.osc1337_focus_attention",
 	};
 	function toggleByLabel(container: HTMLElement, label: string): HTMLInputElement {
 		const bound = container.querySelector(`[data-setting-id="${TOGGLE_IDS[label]}"]`);
@@ -251,6 +252,22 @@ describe("TerminalTab placement", () => {
 		fireEvent.click(button);
 
 		expect(mockInvoke).toHaveBeenCalledWith("clear_saved_scrollback", {});
+	});
+
+	it("persists the OSC 1337 focus/attention toggle under osc1337_focus_attention", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ osc1337_focus_attention: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const toggle = toggleByLabel(container, "Allow terminal focus/attention requests");
+		expect(toggle.checked).toBe(false);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggle, { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.osc1337FocusAttention).toBe(true);
+		expect(savedConfigs().at(-1)?.osc1337_focus_attention).toBe(true);
 	});
 
 	describe("modifier-symbol-dependent label/hint text", () => {

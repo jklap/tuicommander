@@ -28,6 +28,7 @@ vi.mock("../useVersionCheck", () => ({
 	useVersionCheck: () => ({ updateAvailable: () => false, serverDown: () => false, applyUpdate: vi.fn() }),
 }));
 vi.mock("../../components/McpConfirmHost/McpConfirmHost", () => ({ McpConfirmHost: () => <div /> }));
+vi.mock("../../components/PtyOpenUrlHost/PtyOpenUrlHost", () => ({ PtyOpenUrlHost: () => null }));
 
 const appChrome = (background: string) => ({
 	bg_primary: background,

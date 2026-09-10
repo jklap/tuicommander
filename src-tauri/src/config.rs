@@ -1173,6 +1173,13 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates osc52 clipboard for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) osc52_clipboard: bool,
+    /// Honor OSC 1337 `StealFocus` (bring the window to the front) and
+    /// `RequestAttention` (bounce the dock icon) sequences from terminal
+    /// output. Disable if a misbehaving script/log spams either. Backend-gated
+    /// (checked in `pty.rs` before acting), unlike `osc52_clipboard` above.
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates osc1337 focus attention for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) osc1337_focus_attention: bool,
     /// Show last prompt overlay bar at the top of the terminal
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show last prompt for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1609,6 +1616,7 @@ impl Default for AppConfig {
             progress_tracking: true,
             copy_on_select: true,
             osc52_clipboard: true,
+            osc1337_focus_attention: true,
             show_last_prompt: true,
             bell_style: default_bell_style(),
             global_hotkey: None,
@@ -5957,6 +5965,7 @@ mod tests {
             global_hotkey: Some("CommandOrControl+Shift+T".to_string()),
             copy_on_select: true,
             osc52_clipboard: true,
+            osc1337_focus_attention: false,
             show_last_prompt: false,
             bell_style: "visual".to_string(),
             collapse_tools: true,

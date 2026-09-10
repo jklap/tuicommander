@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MobileApp from "../MobileApp";
 
 vi.mock("../../transport", () => ({ rpc: vi.fn(async () => ({ repos: {} })) }));
+vi.mock("../../components/PtyOpenUrlHost/PtyOpenUrlHost", () => ({ PtyOpenUrlHost: () => null }));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/settings", () => ({

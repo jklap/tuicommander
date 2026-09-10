@@ -573,3 +573,12 @@ On mobile, scroll back in CLI or Chat to show the floating down-arrow at the bot
 Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
 
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+
+### OSC 1337 Commands
+
+A subset of the proprietary OSC 1337 escape codes is recognized, for compatibility with scripts and tools that emit them:
+
+- **`CursorShape`** and **`ClearScrollback`** — change the cursor shape or clear scrollback history, same as their xterm/CSI equivalents.
+- **`Copy`** and **`CopyToClipboard`…`EndCopy`** — write to the system clipboard, gated by the same Settings > Terminal > "Allow OSC 52 clipboard writes" toggle as OSC 52.
+- **`StealFocus`** (bring the window to the front) and **`RequestAttention`** (bounce the dock icon) — gated by Settings > Terminal > "Allow terminal focus/attention requests" (default on). Disable this if a script or log ever spams either.
+- **`OpenURL`** — always shows a confirmation dialog naming the URL before opening it (the same dialog `ui action=confirm` MCP requests use, so any connected client — desktop, browser, or the mobile app — can answer it), and only ever opens `http://`, `https://`, or `mailto:` links.

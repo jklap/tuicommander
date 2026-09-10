@@ -90,6 +90,7 @@ interface RustAppConfig {
 	suggest_followups: boolean;
 	copy_on_select: boolean;
 	osc52_clipboard: boolean;
+	osc1337_focus_attention: boolean;
 	show_last_prompt: boolean;
 	bell_style: string;
 	global_hotkey: string | null;
@@ -360,6 +361,7 @@ interface SettingsStoreState {
 	suggestFollowups: boolean;
 	copyOnSelect: boolean;
 	osc52Clipboard: boolean;
+	osc1337FocusAttention: boolean;
 	showLastPrompt: boolean;
 	bellStyle: "none" | "visual" | "sound" | "both";
 	globalHotkey: string | null;
@@ -446,6 +448,7 @@ function createSettingsStore() {
 		suggestFollowups: true,
 		copyOnSelect: true,
 		osc52Clipboard: true,
+		osc1337FocusAttention: true,
 		showLastPrompt: true,
 		bellStyle: "visual",
 		globalHotkey: null,
@@ -536,6 +539,7 @@ function createSettingsStore() {
 		values.progressTracking = config.progress_tracking ?? true;
 		values.copyOnSelect = config.copy_on_select ?? true;
 		values.osc52Clipboard = config.osc52_clipboard ?? true;
+		values.osc1337FocusAttention = config.osc1337_focus_attention ?? true;
 		values.showLastPrompt = config.show_last_prompt ?? true;
 		values.bellStyle = (config.bell_style || "visual") as SettingsStoreState["bellStyle"];
 		values.suggestFollowups = config.suggest_followups ?? true;
@@ -628,6 +632,7 @@ function createSettingsStore() {
 			suggest_followups: values.suggestFollowups,
 			copy_on_select: values.copyOnSelect,
 			osc52_clipboard: values.osc52Clipboard,
+			osc1337_focus_attention: values.osc1337FocusAttention,
 			show_last_prompt: values.showLastPrompt,
 			bell_style: values.bellStyle,
 			issue_filter: values.issueFilter,
@@ -1071,6 +1076,12 @@ function createSettingsStore() {
 		/** Enable/disable honoring OSC 52 clipboard-write sequences from terminal output */
 		setOsc52Clipboard(enabled: boolean): void {
 			setState("osc52Clipboard", enabled);
+			save();
+		},
+
+		/** Enable/disable honoring OSC 1337 StealFocus/RequestAttention sequences from terminal output */
+		setOsc1337FocusAttention(enabled: boolean): void {
+			setState("osc1337FocusAttention", enabled);
 			save();
 		},
 
