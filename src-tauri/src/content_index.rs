@@ -711,7 +711,8 @@ impl ContentIndex {
             self.known_binaries.insert(rel_path, stamp);
         }
 
-        if let Some((after, before)) = crate::memory_report::malloc_bytes_in_use().zip(heap_before) {
+        if let Some((after, before)) = crate::memory_report::malloc_bytes_in_use().zip(heap_before)
+        {
             let delta = after as i64 - before as i64;
             self.engine_bytes = (self.engine_bytes as i64 + delta).max(0) as usize;
         }
@@ -966,7 +967,11 @@ pub fn warm_index(state: &Arc<crate::state::AppState>, repo_path: &str) {
 /// leaves the repo searchable and bounds the process at that one index, whereas
 /// refusing it would silently remove content search from a real repo.
 pub(crate) fn enforce_memory_budget(state: &Arc<crate::state::AppState>, keep: &str) {
-    let budget = state.config.read().index_memory_budget_mb.saturating_mul(1024 * 1024);
+    let budget = state
+        .config
+        .read()
+        .index_memory_budget_mb
+        .saturating_mul(1024 * 1024);
 
     // Snapshot first: the map must not be borrowed while entries are removed.
     let mut resident: Vec<(String, usize, u64)> = Vec::new();
@@ -1985,7 +1990,11 @@ mod tests {
 
         // The next file added must land in the hole, not past the end — otherwise
         // a repo that churns files grows `entries` without bound.
-        fs::write(dir.path().join("later.rs"), "fn later() { let axolotl = 3; }\n").unwrap();
+        fs::write(
+            dir.path().join("later.rs"),
+            "fn later() { let axolotl = 3; }\n",
+        )
+        .unwrap();
         rebuild_in_place(&index, dir.path().to_str().unwrap(), None);
 
         assert!(hits(&index, "axolotl").contains(&"later.rs".to_string()));
@@ -2000,7 +2009,11 @@ mod tests {
 
         fs::remove_file(dir.path().join("file_3.rs")).unwrap();
         rebuild_in_place(&index, dir.path().to_str().unwrap(), None);
-        fs::write(dir.path().join("later.rs"), "fn later() { let axolotl = 3; }\n").unwrap();
+        fs::write(
+            dir.path().join("later.rs"),
+            "fn later() { let axolotl = 3; }\n",
+        )
+        .unwrap();
         rebuild_in_place(&index, dir.path().to_str().unwrap(), None);
 
         // The slot that held file_3 now holds later.rs. If `remove` had left the
@@ -2038,7 +2051,11 @@ mod tests {
         let index = built(dir.path());
         assert_eq!(index.read().len(), 100);
 
-        fs::write(dir.path().join("blob.bin"), "fn now_text() { let wombat = 4; }\n").unwrap();
+        fs::write(
+            dir.path().join("blob.bin"),
+            "fn now_text() { let wombat = 4; }\n",
+        )
+        .unwrap();
         rebuild_in_place(&index, dir.path().to_str().unwrap(), None);
 
         assert!(hits(&index, "wombat").contains(&"blob.bin".to_string()));
@@ -2144,7 +2161,11 @@ mod tests {
         assert_eq!(restored.free_ids.len(), 2);
         assert_eq!(restored.len(), 98);
         for (path, &id) in &index.read().path_to_idx {
-            assert_eq!(restored.path_to_idx.get(path), Some(&id), "slot moved for {path}");
+            assert_eq!(
+                restored.path_to_idx.get(path),
+                Some(&id),
+                "slot moved for {path}"
+            );
         }
     }
 
@@ -2213,8 +2234,14 @@ mod tests {
         let restored = ContentIndex::restore(data_dir.path(), key).expect("written, so readable");
         assert_eq!(restored.len(), index.len());
         assert_eq!(
-            restored.search("search", 5).first().map(|r| r.rel_path.clone()),
-            index.search("search", 5).first().map(|r| r.rel_path.clone())
+            restored
+                .search("search", 5)
+                .first()
+                .map(|r| r.rel_path.clone()),
+            index
+                .search("search", 5)
+                .first()
+                .map(|r| r.rel_path.clone())
         );
     }
 
@@ -2364,7 +2391,12 @@ mod tests {
         resident_index(&state, "/idle", 900_000);
         resident_index(&state, "/built", 900_000);
         state.index_in_flight.insert("/loading".to_string());
-        state.content_indices.get("/loading").unwrap().read().touch();
+        state
+            .content_indices
+            .get("/loading")
+            .unwrap()
+            .read()
+            .touch();
         state.content_indices.get("/idle").unwrap().read().touch();
 
         enforce_memory_budget(&state, "/built");
@@ -2406,12 +2438,22 @@ mod tests {
     fn a_hit_on_ensure_index_counts_as_a_use() {
         let state = budget_state(1);
         resident_index(&state, "/warm", 100_000);
-        let before = state.content_indices.get("/warm").unwrap().read().last_used();
+        let before = state
+            .content_indices
+            .get("/warm")
+            .unwrap()
+            .read()
+            .last_used();
 
         // The occupied branch returns without spawning, so this needs no runtime.
         ensure_index(&state, "/warm");
 
-        let after = state.content_indices.get("/warm").unwrap().read().last_used();
+        let after = state
+            .content_indices
+            .get("/warm")
+            .unwrap()
+            .read()
+            .last_used();
         assert!(
             after > before,
             "a warm index callers keep reaching for must not look idle to the budget"

@@ -298,12 +298,18 @@ mod tests {
         touch(&lock);
         set_mtime_secs_ago(&lock, 3600);
 
-        let result =
-            is_lock_stale_inner(&lock, 4096, 3600, |_| LockOwnership::HeldBy(vec![4321]), || {
-                panic!("must not wait once a live owner is found")
-            });
+        let result = is_lock_stale_inner(
+            &lock,
+            4096,
+            3600,
+            |_| LockOwnership::HeldBy(vec![4321]),
+            || panic!("must not wait once a live owner is found"),
+        );
 
-        assert!(!result, "a lock a live process holds must never be flagged stale");
+        assert!(
+            !result,
+            "a lock a live process holds must never be flagged stale"
+        );
     }
 
     #[test]
@@ -321,7 +327,10 @@ mod tests {
             || panic!("must not wait when the age is below the escape hatch"),
         );
 
-        assert!(!result, "no answer + young age must fail closed, same as git_cli.rs");
+        assert!(
+            !result,
+            "no answer + young age must fail closed, same as git_cli.rs"
+        );
     }
 
     #[test]
@@ -339,7 +348,10 @@ mod tests {
             || {},
         );
 
-        assert!(result, "age past the escape hatch must be flagged even with no probe answer");
+        assert!(
+            result,
+            "age past the escape hatch must be flagged even with no probe answer"
+        );
     }
 
     #[test]
@@ -353,11 +365,18 @@ mod tests {
         // the stability window, in the `wait` step itself — no background
         // thread, no sleep race against the real clock.
         let lock_for_wait = lock.clone();
-        let result = is_lock_stale_inner(&lock, 4096, 3600, |_| LockOwnership::Unowned, || {
-            set_mtime_secs_ago(&lock_for_wait, 0)
-        });
+        let result = is_lock_stale_inner(
+            &lock,
+            4096,
+            3600,
+            |_| LockOwnership::Unowned,
+            || set_mtime_secs_ago(&lock_for_wait, 0),
+        );
 
-        assert!(!result, "a lock whose mtime moved must never be reported stale");
+        assert!(
+            !result,
+            "a lock whose mtime moved must never be reported stale"
+        );
     }
 
     // --- find_stale_lock_files (integration, real probe) ---
@@ -394,7 +413,10 @@ mod tests {
 
         let msg = describe_stale_lock(dir.path()).expect("stale lock should be found");
 
-        assert!(msg.contains("index.lock"), "message must name the file: {msg}");
+        assert!(
+            msg.contains("index.lock"),
+            "message must name the file: {msg}"
+        );
         assert!(
             msg.contains(&git_cli::UNADJUDICATED_LOCK_STALE_SECS.to_string()),
             "message must name the age: {msg}"
