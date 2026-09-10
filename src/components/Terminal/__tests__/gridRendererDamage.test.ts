@@ -5,6 +5,7 @@ import {
 	ATTR_ITALIC,
 	type CellMetrics,
 	type DecodedRow,
+	GUTTER_PX,
 } from "../canvasTerminalUtils";
 import { createGridRenderer, type PaintGridOptions } from "../gridRenderer";
 
@@ -74,7 +75,7 @@ it("history growth copies retained pixels instead of repainting every glyph (204
 	);
 	expect(ctx.drawImage).toHaveBeenCalledTimes(1);
 	expect(ctx.fillText.mock.calls.map((call) => call[0])).toEqual(["D", "D", "D", "D"]);
-	expect(ctx.fillRect).toHaveBeenCalledWith(-6, 40, 60, 20);
+	expect(ctx.fillRect).toHaveBeenCalledWith(-GUTTER_PX, 40, 60, 20);
 });
 
 it("pixel scrolling repaints changed retained rows rather than copying stale text (2040)", () => {
@@ -137,9 +138,9 @@ it("scrolling back into history copies retained pixels and paints only the expos
 	);
 	expect(ctx.drawImage).toHaveBeenCalledTimes(1);
 	// Rows 0-1 of the old paint land on slots 1-2: source from the top, target one row down.
-	expect(ctx.drawImage).toHaveBeenCalledWith(ctx.canvas, 0, 0, 120, 80, -6, 20, 60, 40);
+	expect(ctx.drawImage).toHaveBeenCalledWith(ctx.canvas, 0, 0, 120, 80, -GUTTER_PX, 20, 60, 40);
 	expect(ctx.fillText.mock.calls.map((call) => call[0])).toEqual(["A", "A", "A", "A"]);
-	expect(ctx.fillRect).toHaveBeenCalledWith(-6, 0, 60, 20);
+	expect(ctx.fillRect).toHaveBeenCalledWith(-GUTTER_PX, 0, 60, 20);
 });
 it("explicit invalidation prevents history pixels crossing a theme or screen boundary (2040)", () => {
 	const { ctx, renderer } = setup();
@@ -196,7 +197,7 @@ it.each(["color", "combining", "shorter"])(
 		expect(ctx.fillText).toHaveBeenCalled();
 		expect(ctx.fillRect).toHaveBeenCalled();
 		if (kind === "combining") expect(ctx.fillText.mock.calls.map((call) => call[0])).toContain("D\u0301");
-		if (kind === "shorter") expect(ctx.fillRect).toHaveBeenCalledWith(-6, 0, 60, 20);
+		if (kind === "shorter") expect(ctx.fillRect).toHaveBeenCalledWith(-GUTTER_PX, 0, 60, 20);
 	},
 );
 
@@ -235,6 +236,6 @@ it("first-column damage clears italic left bearings from the gutter (TERM-2)", (
 	renderer.paintGrid(new Map([[0, before]]), metrics, { fullRepaint: true });
 	ctx.fillRect.mockClear();
 	renderer.paintGrid(new Map([[0, after]]), metrics, { fullRepaint: false, dirtyIndices: new Set([0]) });
-	expect(ctx.rect).toHaveBeenCalledWith(-6, 0, 26, 20);
-	expect(ctx.fillRect).toHaveBeenCalledWith(-6, 0, 26, 20);
+	expect(ctx.rect).toHaveBeenCalledWith(-GUTTER_PX, 0, GUTTER_PX + 20, 20);
+	expect(ctx.fillRect).toHaveBeenCalledWith(-GUTTER_PX, 0, GUTTER_PX + 20, 20);
 });

@@ -8,10 +8,13 @@ import { resetPlatformCache } from "../../../platform";
 // on the new page, gone from the old ones — and that the fields that moved
 // still round-trip through the exact config key they always used.
 
-const { mockInvoke, mockListen } = vi.hoisted(() => ({
+const { mockInvoke, mockListen, mockWriteClipboard } = vi.hoisted(() => ({
 	mockInvoke: vi.fn(),
 	mockListen: vi.fn().mockResolvedValue(vi.fn()),
+	mockWriteClipboard: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("../../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 
 vi.mock("../../../invoke", () => ({
 	invoke: mockInvoke,
@@ -134,6 +137,69 @@ describe("TerminalTab placement", () => {
 		expect(savedConfigs()[0].terminal_link_activation).toBe("modifier");
 	});
 
+	function timestampModeSelect(container: HTMLElement): HTMLSelectElement {
+		const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+		const select = selects.find((s) => Array.from(s.options).some((o) => o.value === "always"));
+		if (!select) throw new Error("block timestamp mode select not found");
+		return select;
+	}
+
+	it("shows the block timestamp mode select with the migrated value and its three options", async () => {
+		mockInvoke.mockImplementation(invokeImpl({ show_block_timestamps: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const modeSelect = timestampModeSelect(container);
+		expect(modeSelect.value).toBe("off");
+		expect(Array.from(modeSelect.options).map((o) => o.value)).toEqual(["off", "modifier", "always"]);
+	});
+
+	it("persists a block timestamp mode change under block_timestamp_mode", async () => {
+		vi.useFakeTimers();
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		mockInvoke.mockClear();
+		fireEvent.change(timestampModeSelect(container), { target: { value: "always" } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.blockTimestampMode).toBe("always");
+		expect(savedConfigs().at(-1)?.block_timestamp_mode).toBe("always");
+	});
+
+	describe("shell integration snippets", () => {
+		it("shows the bash and fish snippets", async () => {
+			await settingsStore.hydrate();
+			const { container } = render(() => <TerminalTab />);
+			expect(headingExists(container, "Shell Integration")).toBe(true);
+			expect(container.textContent).toContain('[ -n "$TUIC_SHELL_INTEGRATION" ] && source "$TUIC_SHELL_INTEGRATION"');
+			expect(container.textContent).toContain("if set -q TUIC_SHELL_INTEGRATION; source $TUIC_SHELL_INTEGRATION; end");
+		});
+
+		it("copies the bash snippet and shows 'Copied!' feedback", async () => {
+			await settingsStore.hydrate();
+			const { getAllByText, findByText, unmount } = render(() => <TerminalTab />);
+			fireEvent.click(getAllByText("Copy")[0]);
+			expect(mockWriteClipboard).toHaveBeenCalledWith(
+				'[ -n "$TUIC_SHELL_INTEGRATION" ] && source "$TUIC_SHELL_INTEGRATION"',
+			);
+			await findByText("Copied!");
+			// The "Copied!" reset is a real setTimeout(2000) — unmount (which runs the
+			// component's onCleanup) rather than let it dangle past the test.
+			unmount();
+		});
+
+		it("copies the fish snippet independently of the bash one", async () => {
+			await settingsStore.hydrate();
+			const { getAllByText, findAllByText, unmount } = render(() => <TerminalTab />);
+			fireEvent.click(getAllByText("Copy")[1]);
+			expect(mockWriteClipboard).toHaveBeenCalledWith(
+				"if set -q TUIC_SHELL_INTEGRATION; source $TUIC_SHELL_INTEGRATION; end",
+			);
+			const copiedLabels = await findAllByText("Copied!");
+			expect(copiedLabels).toHaveLength(1);
+			unmount();
+		});
+	});
+
 	function toggleByLabel(container: HTMLElement, label: string): HTMLInputElement {
 		const span = Array.from(container.querySelectorAll("span")).find((el) => el.textContent === label);
 		const input = span?.parentElement?.querySelector("input[type=checkbox]");
@@ -179,6 +245,22 @@ describe("TerminalTab placement", () => {
 		fireEvent.click(button);
 
 		expect(mockInvoke).toHaveBeenCalledWith("clear_saved_scrollback", {});
+	});
+
+	it("persists the OSC 1337 focus/attention toggle under osc1337_focus_attention", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ osc1337_focus_attention: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const toggle = toggleByLabel(container, "Allow terminal focus/attention requests");
+		expect(toggle.checked).toBe(false);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggle, { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.osc1337FocusAttention).toBe(true);
+		expect(savedConfigs().at(-1)?.osc1337_focus_attention).toBe(true);
 	});
 
 	describe("modifier-symbol-dependent label/hint text", () => {
