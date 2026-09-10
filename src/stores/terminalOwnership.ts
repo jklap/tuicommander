@@ -1,16 +1,19 @@
 import { batch } from "solid-js";
 import { appLogger } from "./appLogger";
+import { globalWorkspaceStore } from "./globalWorkspace";
 import { placementBranchFor, repositoriesStore, resolveRepoOwner } from "./repositories";
 import { terminalsStore } from "./terminals";
 
 /**
  * Re-home terminals whose branch placement disagrees with their own cwd.
  *
- * A terminal whose cwd matched no registered repo is parked in whatever repo was
- * active, with `repoPath: null` recording that the placement is a guess. Nothing
- * used to undo that guess: registering the real repo afterwards left the tab
- * stranded under a repo it never belonged to, which is one half of the tabs
- * showing up in the wrong place. The other half is a placement that was correct
+ * A terminal whose cwd matched no registered repo is parked in the Global
+ * Workspace, with `repoPath: null` recording that it has no owner yet. Nothing
+ * used to undo that: registering the real repo afterwards left the tab stranded,
+ * which is one half of the tabs showing up in the wrong place. (Until 2026-09-10
+ * the parking spot was the ACTIVE repo, which was worse than stranded — two
+ * sessions from one unregistered repo landed under two different repos depending
+ * on where the user was standing.) The other half is a placement that was correct
  * once and went stale — a repo removed, a worktree added, a branch renamed.
  *
  * Both are the same question asked again: given this cwd and the repos we know
@@ -38,11 +41,23 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 		const branchName = placementBranchFor(owner);
 		if (!branchName) continue;
 
+		// A null `repoPath` is the parked marker: this tab sits in the Global
+		// Workspace because nothing claimed its cwd. Now something does, so it
+		// leaves. The check has to happen BEFORE the placement below overwrites
+		// the field — and it must be this field rather than "is it promoted",
+		// because a tab the user promoted BY HAND is also promoted and owned, and
+		// yanking that out from under them on every reconcile would be a second
+		// bug wearing the first one's clothes.
+		const wasParked = terminal.repoPath == null;
+
 		const current = repositoriesStore.findOwnerForTerminal(terminalId);
 		if (current?.repoPath === owner.repoPath && current.branchName === branchName) {
 			// Placement already correct; the record may still be stale if the repo was
 			// registered after the terminal was parked here.
-			if (terminal.repoPath !== owner.repoPath) terminalsStore.setRepoPath(terminalId, owner.repoPath);
+			if (terminal.repoPath !== owner.repoPath) {
+				terminalsStore.setRepoPath(terminalId, owner.repoPath);
+				if (wasParked) globalWorkspaceStore.unpromote(terminalId);
+			}
 			continue;
 		}
 
@@ -54,6 +69,7 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 			if (current) repositoriesStore.removeTerminalFromBranch(current.repoPath, current.branchName, terminalId);
 			terminalsStore.setRepoPath(terminalId, owner.repoPath);
 			repositoriesStore.addTerminalToBranch(owner.repoPath, branchName, terminalId);
+			if (wasParked) globalWorkspaceStore.unpromote(terminalId);
 		});
 		moved++;
 	}
