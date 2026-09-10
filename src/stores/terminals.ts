@@ -270,6 +270,8 @@ export interface TerminalRef {
 	openComposeWithText: (text: string) => void;
 	/** Insert text at the Compose caret (keeping the draft), opening Compose first when it is closed. */
 	quoteIntoCompose: (text: string) => void;
+	/** Whether the Compose panel is currently open for this terminal */
+	isComposeOpen: () => boolean;
 	/** Search the terminal buffer for a query string (case-insensitive) */
 	searchBuffer: (query: string) => TerminalMatch[] | Promise<TerminalMatch[]>;
 	/** Scroll to an absolute buffer line index (centered in viewport) */
