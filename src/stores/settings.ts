@@ -90,6 +90,7 @@ interface RustAppConfig {
 	suggest_followups: boolean;
 	copy_on_select: boolean;
 	osc52_clipboard: boolean;
+	osc1337_focus_attention: boolean;
 	show_last_prompt: boolean;
 	bell_style: string;
 	global_hotkey: string | null;
@@ -107,7 +108,10 @@ interface RustAppConfig {
 	word_separators?: string;
 	word_selection_regex?: string;
 	smart_selection_rules?: RustSmartSelectionRule[];
+	/** @deprecated superseded by `block_timestamp_mode` (issue #5) — kept only so a config
+	 *  saved by an older build still deserializes; no longer written by `save()`. */
 	show_block_timestamps?: boolean;
+	block_timestamp_mode?: string;
 	show_scrollbar_marks?: boolean;
 	show_block_marks?: boolean;
 	show_prompt_marks?: boolean;
@@ -284,6 +288,27 @@ function validateWordSelectionMode(value: string | null): WordSelectionMode {
 		: "characters";
 }
 
+/** Command-block timestamp overlay display mode (issue #5). "modifier" (hold
+ *  Ctrl+Cmd to reveal) was the only behavior before this field existed, so it's
+ *  the fallback whenever migration can't determine otherwise. */
+export type BlockTimestampMode = "off" | "always" | "modifier";
+const VALID_BLOCK_TIMESTAMP_MODES: readonly BlockTimestampMode[] = ["off", "always", "modifier"];
+
+/**
+ * Resolves `block_timestamp_mode`, migrating a pre-existing config that only
+ * ever had the legacy `show_block_timestamps` boolean: `true` becomes
+ * "modifier" (today's only behavior, preserved), `false` becomes "off". A
+ * config that already carries a valid `block_timestamp_mode` always wins —
+ * migration only fires for a config saved before this field existed.
+ */
+function resolveBlockTimestampMode(
+	mode: string | null | undefined,
+	legacyBool: boolean | undefined,
+): BlockTimestampMode {
+	if (mode && (VALID_BLOCK_TIMESTAMP_MODES as readonly string[]).includes(mode)) return mode as BlockTimestampMode;
+	return legacyBool === false ? "off" : "modifier";
+}
+
 /** Split tab mode */
 export type SplitTabMode = "separate" | "unified";
 
@@ -336,6 +361,7 @@ interface SettingsStoreState {
 	suggestFollowups: boolean;
 	copyOnSelect: boolean;
 	osc52Clipboard: boolean;
+	osc1337FocusAttention: boolean;
 	showLastPrompt: boolean;
 	bellStyle: "none" | "visual" | "sound" | "both";
 	globalHotkey: string | null;
@@ -353,7 +379,7 @@ interface SettingsStoreState {
 	wordSeparators: string;
 	wordSelectionRegex: string;
 	smartSelectionRules: SmartSelectionRule[];
-	showBlockTimestamps: boolean;
+	blockTimestampMode: BlockTimestampMode;
 	/** Master toggle for the scrollbar history ticks; the two below pick the categories. */
 	showScrollbarMarks: boolean;
 	showBlockMarks: boolean;
@@ -422,6 +448,7 @@ function createSettingsStore() {
 		suggestFollowups: true,
 		copyOnSelect: true,
 		osc52Clipboard: true,
+		osc1337FocusAttention: true,
 		showLastPrompt: true,
 		bellStyle: "visual",
 		globalHotkey: null,
@@ -439,7 +466,7 @@ function createSettingsStore() {
 		wordSeparators: DEFAULT_WORD_SEPARATORS,
 		wordSelectionRegex: "",
 		smartSelectionRules: [],
-		showBlockTimestamps: true,
+		blockTimestampMode: "modifier",
 		showScrollbarMarks: true,
 		showBlockMarks: true,
 		showPromptMarks: true,
@@ -512,6 +539,7 @@ function createSettingsStore() {
 		values.progressTracking = config.progress_tracking ?? true;
 		values.copyOnSelect = config.copy_on_select ?? true;
 		values.osc52Clipboard = config.osc52_clipboard ?? true;
+		values.osc1337FocusAttention = config.osc1337_focus_attention ?? true;
 		values.showLastPrompt = config.show_last_prompt ?? true;
 		values.bellStyle = (config.bell_style || "visual") as SettingsStoreState["bellStyle"];
 		values.suggestFollowups = config.suggest_followups ?? true;
@@ -531,7 +559,10 @@ function createSettingsStore() {
 		values.wordSeparators = config.word_separators ?? DEFAULT_WORD_SEPARATORS;
 		values.wordSelectionRegex = config.word_selection_regex ?? "";
 		values.smartSelectionRules = (config.smart_selection_rules ?? []).map(ruleFromWire);
-		values.showBlockTimestamps = config.show_block_timestamps ?? true;
+		values.blockTimestampMode = resolveBlockTimestampMode(
+			config.block_timestamp_mode ?? null,
+			config.show_block_timestamps,
+		);
 		values.showScrollbarMarks = config.show_scrollbar_marks ?? true;
 		values.showBlockMarks = config.show_block_marks ?? true;
 		values.showPromptMarks = config.show_prompt_marks ?? true;
@@ -600,6 +631,7 @@ function createSettingsStore() {
 			suggest_followups: values.suggestFollowups,
 			copy_on_select: values.copyOnSelect,
 			osc52_clipboard: values.osc52Clipboard,
+			osc1337_focus_attention: values.osc1337FocusAttention,
 			show_last_prompt: values.showLastPrompt,
 			bell_style: values.bellStyle,
 			issue_filter: values.issueFilter,
@@ -616,7 +648,7 @@ function createSettingsStore() {
 			word_separators: values.wordSeparators,
 			word_selection_regex: values.wordSelectionRegex,
 			smart_selection_rules: values.smartSelectionRules.map(ruleToWire),
-			show_block_timestamps: values.showBlockTimestamps,
+			block_timestamp_mode: values.blockTimestampMode,
 			show_scrollbar_marks: values.showScrollbarMarks,
 			show_block_marks: values.showBlockMarks,
 			show_prompt_marks: values.showPromptMarks,
@@ -1046,6 +1078,12 @@ function createSettingsStore() {
 			save();
 		},
 
+		/** Enable/disable honoring OSC 1337 StealFocus/RequestAttention sequences from terminal output */
+		setOsc1337FocusAttention(enabled: boolean): void {
+			setState("osc1337FocusAttention", enabled);
+			save();
+		},
+
 		setShowLastPrompt(enabled: boolean): void {
 			setState("showLastPrompt", enabled);
 			save();
@@ -1088,9 +1126,9 @@ function createSettingsStore() {
 			save();
 		},
 
-		/** Show each command block's elapsed time while Ctrl+Cmd is held */
-		setShowBlockTimestamps(enabled: boolean): void {
-			setState("showBlockTimestamps", enabled);
+		/** When each command block's relative start time is painted: never, while Ctrl+Cmd is held, or always */
+		setBlockTimestampMode(mode: BlockTimestampMode): void {
+			setState("blockTimestampMode", mode);
 			save();
 		},
 

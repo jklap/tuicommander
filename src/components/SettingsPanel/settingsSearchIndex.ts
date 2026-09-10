@@ -351,6 +351,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
 	{ tab: "terminal", section: "Preview" },
 	{ tab: "terminal", section: "Behavior" },
+	{ tab: "terminal", section: "Shell Integration", sectionKey: "terminal.heading.shellIntegration" },
 	{ tab: "terminal", section: "Session Restore", sectionKey: "terminal.heading.sessionRestore" },
 	{ tab: "terminal", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
 	{
@@ -381,12 +382,20 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.osc52_clipboard",
 	},
+	{
+		tab: "terminal",
+		section: "Behavior",
+		label: "Allow terminal focus/attention requests",
+		labelKey: "general.toggle.osc1337FocusAttention",
+		expert: true,
+		configKey: "app.osc1337_focus_attention",
+	},
 	{ tab: "terminal", section: "Behavior", label: "Open links on", labelKey: "terminal.label.linkActivation" },
 	{
 		tab: "terminal",
 		section: "Behavior",
 		label: "Show block timestamps",
-		labelKey: "general.toggle.showBlockTimestamps",
+		labelKey: "terminal.label.blockTimestampMode",
 	},
 	{
 		tab: "terminal",

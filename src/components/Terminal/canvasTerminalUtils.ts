@@ -1,8 +1,40 @@
 // --- Binary frame decoding and font measurement for CanvasTerminal ---
 
 // Layout constants
-export const GUTTER_PX = 6;
+// Widened from 6px (issue #2: the gutter click-to-copy/fold target was too
+// narrow to hit reliably) — wide enough for a comfortable click target while
+// staying a thin sliver next to the content; every consumer derives its
+// layout from this one constant, so there's nothing else to touch.
+export const GUTTER_PX = 14;
 export const SCROLLBAR_PX = 14;
+
+/**
+ * Clamps an absolute-row range `[startRow, endRow)` to the rows currently in
+ * the viewport (`[viewTop, viewBottom)`), returning viewport-relative
+ * start/end (inclusive), or `null` if the range doesn't overlap the viewport
+ * at all. A multi-row range needs this rather than mapping each edge to a
+ * viewport row independently and defaulting a `null` result: when BOTH edges
+ * have scrolled past the viewport (one above, one below — a fold or
+ * search-scoped block taller than the screen), each edge individually maps
+ * out of range, which is indistinguishable from "this range doesn't overlap
+ * the viewport at all" unless the overlap is checked first. Two real bugs in
+ * `CanvasTerminal.tsx` shipped from exactly that ambiguity: `paintFoldedBlocks`
+ * skipped drawing its opaque hide-rect entirely whenever the fold's start row
+ * scrolled off the top (even with part of the fold still visible below), and
+ * `paintSearchScopeIndicator` fell back to the full viewport height once the
+ * scoped block scrolled fully off-screen in either direction.
+ */
+export function clampRowRangeToViewport(
+	startRow: number,
+	endRow: number,
+	viewTop: number,
+	viewBottom: number,
+): { startVp: number; endVp: number } | null {
+	if (endRow <= viewTop || startRow >= viewBottom) return null;
+	const clampedStart = Math.max(startRow, viewTop);
+	const clampedEnd = Math.min(endRow, viewBottom) - 1;
+	return { startVp: clampedStart - viewTop, endVp: clampedEnd - viewTop };
+}
 
 // Wire format constants (must match terminal_grid.rs)
 const HEADER_SIZE = 26;

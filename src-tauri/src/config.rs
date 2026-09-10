@@ -1149,6 +1149,13 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates osc52 clipboard for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) osc52_clipboard: bool,
+    /// Honor OSC 1337 `StealFocus` (bring the window to the front) and
+    /// `RequestAttention` (bounce the dock icon) sequences from terminal
+    /// output. Disable if a misbehaving script/log spams either. Backend-gated
+    /// (checked in `pty.rs` before acting), unlike `osc52_clipboard` above.
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates osc1337 focus attention for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) osc1337_focus_attention: bool,
     /// Show last prompt overlay bar at the top of the terminal
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show last prompt for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1233,14 +1240,23 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Replaces all smart selection rules, including the commands their actions run.","operations":["get","set"],"confirmationClass":"execution_authority"}, "x-atomic-list" = true))]
     pub(crate) smart_selection_rules: Vec<SmartSelectionRule>,
-    /// Label each command block with its elapsed time while Ctrl+Cmd is held.
-    /// Frontend-gated (the label is painted in the renderer); stored here so the
-    /// choice persists — a field absent from this struct is dropped by serde on
+    /// Deprecated (issue #5): superseded by `block_timestamp_mode` below. Kept only
+    /// so a config saved by an older build still deserializes; the frontend migrates
+    /// it once at load time (`true` -> "modifier", `false` -> "off") and no longer
+    /// writes this field on save.
     /// every `save_config`, which is exactly what happened to these three
     /// before they had a Settings toggle.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show block timestamps for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) show_block_timestamps: bool,
+    /// Command-block timestamp overlay display mode: "off", "always", or "modifier"
+    /// (hold Ctrl+Cmd to reveal — the only behavior before this field existed, hence
+    /// the default). The frontend owns migrating a pre-existing `show_block_timestamps`
+    /// bool into this field; Rust just persists whatever it's given.
+    #[serde(default = "default_block_timestamp_mode")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates block timestamp mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["off","always","modifier"]))]
+    pub(crate) block_timestamp_mode: String,
     /// Draw command-block marks on the terminal scrollbar. Frontend-gated.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show scrollbar marks for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1255,8 +1271,9 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show prompt marks for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) show_prompt_marks: bool,
-    /// Let the block-fold shortcut collapse a command block's output.
-    /// Frontend-gated.
+    /// Allow collapsing a command block's output (Cmd+Shift+.). A gutter click also
+    /// folds/unfolds when it lands on the block's header row (the chevron); anywhere
+    /// else in the block's gutter run still selects its output for copying.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates block folding enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) block_folding_enabled: bool,
@@ -1449,6 +1466,10 @@ fn default_word_selection_mode() -> String {
     "characters".to_string()
 }
 
+fn default_block_timestamp_mode() -> String {
+    "modifier".to_string()
+}
+
 /// Punctuation separators matching the frontend's hardcoded `WORD_SEPARATOR_RE`
 /// (`canvasTerminalSelection.ts`) exactly, so the default preserves today's
 /// double-click behavior losslessly. Whitespace and control characters are
@@ -1563,6 +1584,7 @@ impl Default for AppConfig {
             progress_tracking: true,
             copy_on_select: true,
             osc52_clipboard: true,
+            osc1337_focus_attention: true,
             show_last_prompt: true,
             bell_style: default_bell_style(),
             global_hotkey: None,
@@ -1580,6 +1602,7 @@ impl Default for AppConfig {
             smart_selection_rules: Vec::new(),
             show_block_timestamps: true,
             show_scrollbar_marks: true,
+            block_timestamp_mode: default_block_timestamp_mode(),
             show_block_marks: true,
             show_prompt_marks: true,
             block_folding_enabled: true,
@@ -5884,6 +5907,7 @@ mod tests {
             global_hotkey: Some("CommandOrControl+Shift+T".to_string()),
             copy_on_select: true,
             osc52_clipboard: true,
+            osc1337_focus_attention: false,
             show_last_prompt: false,
             bell_style: "visual".to_string(),
             collapse_tools: true,
@@ -5916,6 +5940,7 @@ mod tests {
             // tell a real round trip from serde handing back the default.
             show_block_timestamps: false,
             show_scrollbar_marks: false,
+            block_timestamp_mode: "always".to_string(),
             show_block_marks: false,
             show_prompt_marks: false,
             block_folding_enabled: false,
@@ -6008,6 +6033,7 @@ mod tests {
         // back to the default on the next load.
         assert!(!loaded.show_block_timestamps);
         assert!(!loaded.show_scrollbar_marks);
+        assert_eq!(loaded.block_timestamp_mode, "always");
         assert!(!loaded.show_block_marks);
         assert!(!loaded.show_prompt_marks);
         assert!(!loaded.block_folding_enabled);
@@ -6253,6 +6279,7 @@ mod tests {
         // agree or the Settings toggles read one value and the terminal another.
         assert!(loaded.show_block_timestamps);
         assert!(loaded.show_scrollbar_marks);
+        assert_eq!(loaded.block_timestamp_mode, "modifier"); // defaults to "modifier"
         assert!(loaded.show_block_marks); // defaults to true
         assert!(loaded.show_prompt_marks); // defaults to true
         assert!(loaded.block_folding_enabled);

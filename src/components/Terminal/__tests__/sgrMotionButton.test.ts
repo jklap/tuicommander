@@ -72,8 +72,8 @@ describe("motionReportButton", () => {
 
 describe("lastGridCol", () => {
 	it("subtracts the gutter before dividing by cell width, matching canvasToGrid's maxCol", () => {
-		// GUTTER_PX is 6; (800 - 6) / 8 = 99.25 -> floor 99, then -1 for zero-based last column.
-		expect(lastGridCol(800, 8)).toBe(98);
+		// GUTTER_PX is 14; (800 - 14) / 8 = 98.25 -> floor 98, then -1 for zero-based last column.
+		expect(lastGridCol(800, 8)).toBe(97);
 	});
 
 	it("never goes negative for a narrower-than-one-cell width", () => {
