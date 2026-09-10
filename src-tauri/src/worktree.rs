@@ -72,21 +72,11 @@ fn classify_worktree_add_failure(stderr: &str) -> WorktreeAddFailure {
     WorktreeAddFailure::Other
 }
 
-/// Parse `git worktree list --porcelain` output and return the worktree path
-/// for the given branch name, if any.
-fn find_worktree_path_for_branch(stdout: &str, branch_name: &str) -> Option<PathBuf> {
-    let mut current_path: Option<PathBuf> = None;
-    for line in stdout.lines() {
-        if line.starts_with("worktree ") {
-            current_path = Some(PathBuf::from(line.trim_start_matches("worktree ")));
-        } else if line.starts_with("branch refs/heads/")
-            && line.trim_start_matches("branch refs/heads/") == branch_name
-        {
-            return current_path;
-        }
-    }
-    None
-}
+// `find_worktree_path_for_branch` was deleted with #726-5ac7. It returned the
+// FIRST porcelain block carrying a branch, which is the whole bug: with two
+// workspaces on one branch every caller silently got the wrong directory. Its
+// replacement is `resolve_workspace`, keyed by workspace id. Do not reintroduce
+// a branch-keyed path lookup — resolve an id and read `.branch` off the record.
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct WorktreeConfig {
@@ -831,18 +821,23 @@ pub(crate) fn get_worktrees_dir(
     }
 }
 
-/// Core logic for removing a git worktree by branch name.
+/// Core logic for removing one workspace's checkout, addressed by workspace id.
 ///
 /// When `delete_branch` is true, also deletes the local branch after removing
 /// the worktree directory. When false, the branch is preserved.
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct RemoveWorktreeOutcome {
     pub(crate) branch_delete_warning: Option<String>,
+    /// Branch the removed workspace was on, read off the record before removal.
+    /// Callers need it for branch-keyed follow-up work (config labels, logs) and
+    /// cannot re-resolve it: the id stops resolving the moment the worktree is
+    /// gone, and it is not the branch to begin with once ids are minted.
+    pub(crate) branch: String,
 }
 
-pub(crate) fn remove_worktree_by_branch(
+pub(crate) fn remove_worktree_by_workspace_id(
     repo_path: &str,
-    branch_name: &str,
+    workspace_id: &str,
     delete_branch: bool,
     archive_script: Option<&str>,
     force: bool,
@@ -852,32 +847,31 @@ pub(crate) fn remove_worktree_by_branch(
 
     tracing::info!(
         source = "worktree",
-        branch = %branch_name,
+        workspace_id = %workspace_id,
         delete_branch = %delete_branch,
-        "remove_worktree_by_branch: start"
+        "remove_worktree_by_workspace_id: start"
     );
 
-    // List worktrees to find the path for this branch
-    let out = git_cmd(&base_repo)
-        .args(["worktree", "list", "--porcelain"])
-        .run()
-        .map_err(|e| format!("git worktree list failed: {e}"))?;
-
-    let worktree_path =
-        find_worktree_path_for_branch(&out.stdout, branch_name).ok_or_else(|| {
-            tracing::error!(
-                source = "worktree",
-                branch = %branch_name,
-                "remove_worktree_by_branch: no worktree found for branch"
-            );
-            format!("No worktree found for branch '{branch_name}'")
-        })?;
+    // Resolve by id, never by branch: two workspaces may share a branch, and
+    // the branch-keyed lookup would hand us whichever git listed first.
+    let workspace = resolve_workspace(&base_repo, workspace_id).inspect_err(|_| {
+        tracing::error!(
+            source = "worktree",
+            workspace_id = %workspace_id,
+            "remove_worktree_by_workspace_id: no workspace found for id"
+        );
+    })?;
+    // The branch to delete comes off the resolved record. Deriving it from the
+    // id would be wrong the moment a COW workspace carries a minted id.
+    let branch_name = workspace.branch.as_str();
+    let worktree_path = PathBuf::from(&workspace.path);
 
     tracing::info!(
         source = "worktree",
+        workspace_id = %workspace_id,
         branch = %branch_name,
         path = %worktree_path.display(),
-        "remove_worktree_by_branch: worktree path resolved"
+        "remove_worktree_by_workspace_id: worktree path resolved"
     );
 
     // Run archive/cleanup script before deletion (if configured)
@@ -890,7 +884,7 @@ pub(crate) fn remove_worktree_by_branch(
 
     // Remove the worktree
     let worktree = WorktreeInfo {
-        name: branch_name.to_string(),
+        name: workspace_id.to_string(),
         path: worktree_path,
         branch: Some(branch_name.to_string()),
         base_repo,
@@ -929,13 +923,19 @@ pub(crate) fn remove_worktree_by_branch(
         }
     }
 
-    tracing::info!(source = "worktree", branch = %branch_name, "remove_worktree_by_branch: done");
+    tracing::info!(
+        source = "worktree",
+        workspace_id = %workspace_id,
+        branch = %branch_name,
+        "remove_worktree_by_workspace_id: done"
+    );
     Ok(RemoveWorktreeOutcome {
         branch_delete_warning,
+        branch: branch_name.to_string(),
     })
 }
 
-/// Remove a git worktree by branch name (Tauri command with cache invalidation)
+/// Remove one workspace's checkout by workspace id (Tauri command with cache invalidation)
 ///
 /// `delete_branch` defaults to `true` when omitted (preserving existing behavior).
 #[cfg(feature = "desktop")]
@@ -943,7 +943,7 @@ pub(crate) fn remove_worktree_by_branch(
 pub(crate) async fn remove_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
-    branch_name: String,
+    workspace_id: String,
     delete_branch: Option<bool>,
     force: Option<bool>,
 ) -> Result<RemoveWorktreeOutcome, String> {
@@ -951,7 +951,7 @@ pub(crate) async fn remove_worktree(
     let force = force.unwrap_or(false);
     tracing::info!(
         source = "worktree",
-        branch = %branch_name,
+        workspace_id = %workspace_id,
         repo = %repo_path,
         delete_branch = %delete_branch,
         force = %force,
@@ -959,11 +959,11 @@ pub(crate) async fn remove_worktree(
     );
     let script = resolve_archive_script(&repo_path);
     let repo_path_clone = repo_path.clone();
-    let branch_name_clone = branch_name.clone();
+    let workspace_id_clone = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        remove_worktree_by_branch(
+        remove_worktree_by_workspace_id(
             &repo_path_clone,
-            &branch_name_clone,
+            &workspace_id_clone,
             delete_branch,
             script.as_deref(),
             force,
@@ -974,27 +974,35 @@ pub(crate) async fn remove_worktree(
 
     match result {
         Ok(outcome) => {
-            tracing::info!(source = "worktree", branch = %branch_name, "remove_worktree command: SUCCESS — invalidating caches");
+            tracing::info!(source = "worktree", workspace_id = %workspace_id, "remove_worktree command: SUCCESS — invalidating caches");
             if outcome.branch_delete_warning.is_none() {
-                crate::config::remove_branch_label(&repo_path, &branch_name);
+                // DEFERRED (2026-09-10) — branch labels are still a branch-keyed
+                // config map, so two workspaces on one branch share one label and
+                // removing either drops it. Migrating that map belongs with the
+                // rest of the persisted branch keys (#728-bc76), not here.
+                crate::config::remove_branch_label(&repo_path, &outcome.branch);
             }
-            state.notify_worktree_removed(&repo_path, &branch_name);
+            state.notify_worktree_removed(&repo_path, &workspace_id);
             Ok(outcome)
         }
         Err(e) => {
-            tracing::error!(source = "worktree", branch = %branch_name, "remove_worktree command: FAILED — {e}");
+            tracing::error!(source = "worktree", workspace_id = %workspace_id, "remove_worktree command: FAILED — {e}");
             Err(e)
         }
     }
 }
 
-/// Check whether a branch's working directory has uncommitted changes.
+/// Check whether a workspace's working directory has uncommitted changes.
 ///
-/// If the branch has a linked worktree, runs `git status --porcelain` in that directory.
-/// If no worktree exists (bare local ref), returns `false` — there's nothing to be dirty.
+/// Resolves the workspace by id and runs `git status --porcelain` in its
+/// directory. If the id resolves to no checkout (bare local ref), returns
+/// `false` — there's nothing to be dirty.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn check_worktree_dirty(repo_path: String, branch_name: String) -> Result<bool, String> {
-    match worktree_dirtiness(Path::new(&repo_path), &branch_name) {
+pub(crate) fn check_worktree_dirty(
+    repo_path: String,
+    workspace_id: String,
+) -> Result<bool, String> {
+    match worktree_dirtiness(Path::new(&repo_path), &workspace_id) {
         WorktreeDirtiness::Clean => Ok(false),
         WorktreeDirtiness::Dirty => Ok(true),
         // An unanswered question is an error here, never a "no". Callers that
@@ -1003,20 +1011,32 @@ pub(crate) fn check_worktree_dirty(repo_path: String, branch_name: String) -> Re
     }
 }
 
-/// Delete a local branch.
+/// Delete a local branch, disposing of the workspace `workspace_id` names.
 ///
-/// When the branch has a linked worktree, behaviour depends on `keep_worktree`:
+/// Two different objects, two parameters: `branch_name` is the ref to delete,
+/// `workspace_id` is the checkout holding it. They are the same string only
+/// under the identity migration, and the id must never be parsed back into a
+/// branch — so the branch always comes from the caller or the resolved record,
+/// never from the id.
+///
+/// When the id resolves to a checkout, behaviour depends on `keep_worktree`:
 /// - `false` (default): remove the worktree directory together with the branch
-///   ref via `remove_worktree_by_branch`.
+///   ref via `remove_worktree_by_workspace_id`.
 /// - `true`: detach the worktree HEAD (so the branch ref is no longer checked
 ///   out anywhere), then delete the branch ref with `git branch -d`. The
 ///   worktree directory and its files are preserved.
 ///
-/// Safety: refuses to delete the repository's default branch.
+/// When it resolves to nothing the branch is a bare ref, and only the ref goes.
+///
+/// Safety: refuses to delete the repository's default branch, and refuses when
+/// the resolved workspace is on a different branch than the one asked for —
+/// that mismatch means the caller's id and branch disagree, and guessing which
+/// one it meant is how the wrong ref gets deleted.
 /// Uses `git branch -d` (safe delete) which fails if the branch has unmerged commits.
 pub(crate) fn delete_local_branch_impl(
     repo_path: &str,
     branch_name: &str,
+    workspace_id: &str,
     keep_worktree: bool,
 ) -> Result<(), String> {
     // Refuse to delete the default branch
@@ -1028,11 +1048,21 @@ pub(crate) fn delete_local_branch_impl(
 
     let base_repo = PathBuf::from(repo_path);
 
-    // Resolve linked-worktree path for this branch, if any
-    let worktree_path = git_cmd(&base_repo)
+    // Resolve the checkout by id. `None` is a bare branch, not an error.
+    let workspace = git_cmd(&base_repo)
         .args(["worktree", "list", "--porcelain"])
         .run_silent()
-        .and_then(|o| find_worktree_path_for_branch(&o.stdout, branch_name));
+        .and_then(|o| map_worktree_workspace_paths(&o.stdout).remove(workspace_id));
+
+    if let Some(ref ws) = workspace
+        && ws.branch != branch_name
+    {
+        return Err(format!(
+            "Workspace '{workspace_id}' is on branch '{}', not '{branch_name}' — refusing to delete",
+            ws.branch
+        ));
+    }
+    let worktree_path = workspace.map(|ws| PathBuf::from(ws.path));
 
     match (worktree_path, keep_worktree) {
         (Some(wt_path), true) => {
@@ -1054,7 +1084,7 @@ pub(crate) fn delete_local_branch_impl(
         }
         (Some(_), false) => {
             // Remove worktree + branch in one go
-            remove_worktree_by_branch(repo_path, branch_name, true, None, false)?;
+            remove_worktree_by_workspace_id(repo_path, workspace_id, true, None, false)?;
         }
         (None, _) => {
             // Bare branch — no worktree to consider
@@ -1080,24 +1110,25 @@ pub(crate) fn delete_local_branch(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     branch_name: String,
+    workspace_id: String,
     keep_worktree: Option<bool>,
 ) -> Result<(), String> {
     let keep_worktree = keep_worktree.unwrap_or(false);
-    delete_local_branch_impl(&repo_path, &branch_name, keep_worktree)?;
+    delete_local_branch_impl(&repo_path, &branch_name, &workspace_id, keep_worktree)?;
     if keep_worktree {
         state.invalidate_repo_caches(&repo_path);
     } else {
-        // The branch's worktree went with it — the sidebar row must go too.
-        state.notify_worktree_removed(&repo_path, &branch_name);
+        // The workspace's checkout went with the branch — the sidebar row must go too.
+        state.notify_worktree_removed(&repo_path, &workspace_id);
     }
     Ok(())
 }
 
-/// Cached worktree paths for synchronous callers (MCP handlers, etc.).
+/// Cached workspaces (id -> checkout) for synchronous callers (MCP handlers, etc.).
 pub(crate) fn get_worktree_paths_cached(
     state: &crate::state::AppState,
     repo_path: &str,
-) -> HashMap<String, String> {
+) -> HashMap<String, WorkspaceWorktree> {
     let p = repo_path.to_string();
     (*state
         .git_cache
@@ -1190,6 +1221,15 @@ fn has_operation_in_progress(worktree_path: &str) -> bool {
 /// `head-name` for both rebase backends; merge/cherry-pick/revert never detach, so they have no
 /// equivalent (and need none). Bisect records only a raw name in `BISECT_START`, which we do not
 /// trust as a branch — such a worktree stays alive as an in-progress op, just without a row.
+///
+/// **Stays path-addressed on purpose (#726-5ac7).** Story 726 asked for this to
+/// take a `workspace_id` alongside `worktree_dirtiness` and `check_worktree_dirty`,
+/// and that is not implementable: this function is an *input* to id resolution,
+/// not a consumer of it. `map_worktree_workspace_paths` calls it to recover the
+/// branch of a detached worktree while it is building the id-keyed map, so
+/// resolving an id here would need the map that this call is helping construct.
+/// It reads git's state files at a directory, which is what it is addressed by.
+/// The gix backend's other call site passes a path for the same reason.
 pub(crate) fn operation_head_branch(worktree_path: &str) -> Option<String> {
     let admin = worktree_admin_dir(worktree_path)?;
     for backend in ["rebase-merge", "rebase-apply"] {
@@ -1211,7 +1251,7 @@ pub(crate) fn operation_head_branch(worktree_path: &str) -> Option<String> {
 /// an independent repository and git will not object — so a map keyed on the
 /// branch collapses them into whichever was inserted last, and a caller asking
 /// for one silently gets the other's directory (#726-5ac7).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct WorkspaceWorktree {
     /// What is checked out here. Ordinary data: never a key, never parsed out of
     /// the id.
@@ -1255,23 +1295,11 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
     result
 }
 
-/// Branch-keyed view of [`map_worktree_workspace_paths`], for call sites not yet
-/// migrated to workspace ids.
-///
-/// Lossy on purpose and only safe while every id equals its branch: two
-/// workspaces on one branch collapse here. Callers move to the id-keyed map as
-/// the rest of #726-5ac7 lands; this exists so the seam can be introduced
-/// without a 618-site rename in one commit.
-fn map_worktree_branch_paths(porcelain: &str) -> HashMap<String, String> {
-    map_worktree_workspace_paths(porcelain)
-        .into_values()
-        .map(|entry| (entry.branch, entry.path))
-        .collect()
-}
-
-/// Get worktree paths for a repo: maps branch name -> worktree directory
+/// Get every workspace of a repo: maps workspace id -> its checkout.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn get_worktree_paths(repo_path: String) -> Result<HashMap<String, String>, String> {
+pub(crate) fn get_worktree_paths(
+    repo_path: String,
+) -> Result<HashMap<String, WorkspaceWorktree>, String> {
     let base_repo = PathBuf::from(&repo_path);
 
     let out = git_cmd(&base_repo)
@@ -1279,7 +1307,28 @@ pub(crate) fn get_worktree_paths(repo_path: String) -> Result<HashMap<String, St
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
 
-    Ok(map_worktree_branch_paths(&out.stdout))
+    Ok(map_worktree_workspace_paths(&out.stdout))
+}
+
+/// Resolve one workspace by its opaque id.
+///
+/// This is the single lookup every id-taking operation goes through — removal,
+/// dirtiness, branch deletion. Resolving by *branch* instead is the #726-5ac7
+/// bug: `find_worktree_path_for_branch` returns the first porcelain block
+/// carrying that branch, so with two workspaces on one branch a caller asking
+/// about the second silently operates on the first.
+///
+/// Returns the record, so callers that need the branch (deleting the ref,
+/// logging) read it off the value rather than assuming it equals the id.
+fn resolve_workspace(base_repo: &Path, workspace_id: &str) -> Result<WorkspaceWorktree, String> {
+    let out = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|e| format!("git worktree list failed: {e}"))?;
+
+    map_worktree_workspace_paths(&out.stdout)
+        .remove(workspace_id)
+        .ok_or_else(|| format!("No workspace found for id '{workspace_id}'"))
 }
 
 /// Parse `git worktree list --porcelain` output and return paths of linked worktrees that are in
@@ -1698,13 +1747,10 @@ pub(crate) fn switch_branch_impl(
     }
     args.push(&branch_name);
 
-    git_cmd(&base_repo)
-        .args(&args)
-        .run()
-        .map_err(|e| {
-            crate::git_locks::describe_stale_lock(&base_repo)
-                .unwrap_or_else(|| format!("Checkout failed: {e}"))
-        })?;
+    git_cmd(&base_repo).args(&args).run().map_err(|e| {
+        crate::git_locks::describe_stale_lock(&base_repo)
+            .unwrap_or_else(|| format!("Checkout failed: {e}"))
+    })?;
 
     state.invalidate_repo_caches(&repo_path);
 
@@ -1795,13 +1841,17 @@ impl WorktreeDirtiness {
     }
 }
 
-/// Ask git whether `branch_name`'s worktree has uncommitted work.
+/// Ask git whether the workspace `workspace_id` names has uncommitted work.
 ///
-/// The three outcomes are kept apart deliberately: a branch with no worktree has
+/// Addressed by id, not branch: this answer gates an irreversible cleanup, so
+/// reading the *other* same-branch workspace's status would authorise deleting
+/// dirty work (#726-5ac7).
+///
+/// The three outcomes are kept apart deliberately: an id with no checkout has
 /// nothing to lose (Clean), while a git command that failed tells us nothing
 /// (Unknown). Folding the second into the first is what let a dirty worktree be
 /// force-removed on a transient git error.
-pub(crate) fn worktree_dirtiness(base_repo: &Path, branch_name: &str) -> WorktreeDirtiness {
+pub(crate) fn worktree_dirtiness(base_repo: &Path, workspace_id: &str) -> WorktreeDirtiness {
     let list = match git_cmd(base_repo)
         .args(["worktree", "list", "--porcelain"])
         .run()
@@ -1810,9 +1860,10 @@ pub(crate) fn worktree_dirtiness(base_repo: &Path, branch_name: &str) -> Worktre
         Err(e) => return WorktreeDirtiness::Unknown(format!("Failed to list worktrees: {e}")),
     };
 
-    let Some(wt_path) = find_worktree_path_for_branch(&list, branch_name) else {
-        return WorktreeDirtiness::Clean; // No worktree = nothing to lose
+    let Some(workspace) = map_worktree_workspace_paths(&list).remove(workspace_id) else {
+        return WorktreeDirtiness::Clean; // No checkout = nothing to lose
     };
+    let wt_path = PathBuf::from(&workspace.path);
 
     match git_cmd(&wt_path).args(["status", "--porcelain"]).run() {
         Ok(out) if out.stdout.trim().is_empty() => WorktreeDirtiness::Clean,
@@ -1848,7 +1899,11 @@ pub(crate) struct MergePreflight {
 }
 
 /// Count commits on `branch` that `target` does not have, and check whether the
-/// branch's worktree has uncommitted changes.
+/// workspace `workspace_id` names has uncommitted changes.
+///
+/// Two keys because there are two questions: the commit count is about a *branch*
+/// and the dirty check is about a *checkout*. Asking both by branch is what let
+/// a same-branch sibling's clean status authorise destroying this one's work.
 ///
 /// This is what tells a real merge apart from an "Already up to date" no-op. Both
 /// succeed as far as `git merge` is concerned, but only one of them justifies
@@ -1861,6 +1916,7 @@ pub(crate) struct MergePreflight {
 pub(crate) fn merge_preflight(
     repo_path: &str,
     branch_name: &str,
+    workspace_id: &str,
     target_branch: &str,
 ) -> MergePreflight {
     let base_repo = Path::new(repo_path);
@@ -1877,7 +1933,7 @@ pub(crate) fn merge_preflight(
 
     MergePreflight {
         commits_ahead,
-        worktree_dirty: worktree_dirtiness(base_repo, branch_name),
+        worktree_dirty: worktree_dirtiness(base_repo, workspace_id),
     }
 }
 
@@ -1896,14 +1952,14 @@ pub(crate) fn merge_preflight(
 pub(crate) fn finalize_merged_worktree_impl(
     state: &Arc<AppState>,
     repo_path: String,
-    branch_name: String,
+    workspace_id: String,
     action: String,
     force: bool,
 ) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = std::path::PathBuf::from(&repo_path);
 
-    let dirt = worktree_dirtiness(&base_repo, &branch_name);
+    let dirt = worktree_dirtiness(&base_repo, &workspace_id);
     if cleanup_needs_confirmation(&action, force, &dirt) {
         return Ok(MergeArchiveResult {
             merged: true, // The merge itself already happened; only cleanup stopped.
@@ -1916,10 +1972,10 @@ pub(crate) fn finalize_merged_worktree_impl(
 
     match action.as_str() {
         "archive" => {
-            let archive_path = archive_worktree(&base_repo, &branch_name, script.as_deref())?;
+            let archive_path = archive_worktree(&base_repo, &workspace_id, script.as_deref())?;
             // Archiving moves the worktree out of the repo — as far as the sidebar
             // is concerned the row is gone, same as a delete.
-            state.notify_worktree_removed(&repo_path, &branch_name);
+            state.notify_worktree_removed(&repo_path, &workspace_id);
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "archived".to_string(),
@@ -1931,8 +1987,14 @@ pub(crate) fn finalize_merged_worktree_impl(
             })
         }
         "delete" => {
-            remove_worktree_by_branch(&repo_path, &branch_name, true, script.as_deref(), false)?;
-            state.notify_worktree_removed(&repo_path, &branch_name);
+            remove_worktree_by_workspace_id(
+                &repo_path,
+                &workspace_id,
+                true,
+                script.as_deref(),
+                false,
+            )?;
+            state.notify_worktree_removed(&repo_path, &workspace_id);
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "deleted".to_string(),
@@ -1953,14 +2015,14 @@ pub(crate) fn finalize_merged_worktree_impl(
 pub(crate) fn finalize_merged_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
-    branch_name: String,
+    workspace_id: String,
     action: String,
     force: Option<bool>,
 ) -> Result<MergeArchiveResult, String> {
     finalize_merged_worktree_impl(
         state.inner(),
         repo_path,
-        branch_name,
+        workspace_id,
         action,
         force.unwrap_or(false),
     )
@@ -1978,6 +2040,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
     state: &Arc<AppState>,
     repo_path: String,
     branch_name: String,
+    workspace_id: String,
     target_branch: String,
     after_merge: String,
     force: bool,
@@ -1990,7 +2053,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
     //    worktree not known to be clean must be confirmed first — whether or not
     //    the branch carries commits. `commits_ahead` is reported alongside so the
     //    dialog can also say that an empty branch's merge would be a no-op.
-    let preflight = merge_preflight(&repo_path, &branch_name, &target_branch);
+    let preflight = merge_preflight(&repo_path, &branch_name, &workspace_id, &target_branch);
     if cleanup_needs_confirmation(&after_merge, force, &preflight.worktree_dirty) {
         return Ok(MergeArchiveResult {
             merged: false,
@@ -2031,10 +2094,10 @@ pub(crate) fn merge_and_archive_worktree_impl(
     let worktree_dirty = worktree_dirty.is_dirty();
     match after_merge.as_str() {
         "archive" => {
-            let archive_path = archive_worktree(&base_repo, &branch_name, script.as_deref())?;
+            let archive_path = archive_worktree(&base_repo, &workspace_id, script.as_deref())?;
             // Archiving moves the worktree out of the repo — as far as the sidebar
             // is concerned the row is gone, same as a delete.
-            state.notify_worktree_removed(&repo_path, &branch_name);
+            state.notify_worktree_removed(&repo_path, &workspace_id);
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "archived".to_string(),
@@ -2044,8 +2107,14 @@ pub(crate) fn merge_and_archive_worktree_impl(
             })
         }
         "delete" => {
-            remove_worktree_by_branch(&repo_path, &branch_name, true, script.as_deref(), false)?;
-            state.notify_worktree_removed(&repo_path, &branch_name);
+            remove_worktree_by_workspace_id(
+                &repo_path,
+                &workspace_id,
+                true,
+                script.as_deref(),
+                false,
+            )?;
+            state.notify_worktree_removed(&repo_path, &workspace_id);
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "deleted".to_string(),
@@ -2078,6 +2147,7 @@ pub(crate) fn merge_and_archive_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     branch_name: String,
+    workspace_id: String,
     target_branch: String,
     after_merge: String,
     force: Option<bool>,
@@ -2086,6 +2156,7 @@ pub(crate) fn merge_and_archive_worktree(
         state.inner(),
         repo_path,
         branch_name,
+        workspace_id,
         target_branch,
         after_merge,
         force.unwrap_or(false),
@@ -2120,17 +2191,13 @@ fn free_archive_dest(archive_dir: &Path, sanitized: &str) -> PathBuf {
 
 pub(crate) fn archive_worktree(
     base_repo: &Path,
-    branch_name: &str,
+    workspace_id: &str,
     archive_script: Option<&str>,
 ) -> Result<String, String> {
-    // Find worktree path for this branch
-    let wt_list_out = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
-        .run()
-        .map_err(|e| format!("Failed to list worktrees: {e}"))?;
-
-    let wt_path = find_worktree_path_for_branch(&wt_list_out.stdout, branch_name)
-        .ok_or_else(|| format!("No worktree found for branch '{branch_name}'"))?;
+    // Resolve the checkout by id — the archive directory name is derived from the
+    // record's branch, so a same-branch sibling can never be the one moved away.
+    let workspace = resolve_workspace(base_repo, workspace_id)?;
+    let wt_path = PathBuf::from(&workspace.path);
 
     // Run archive script before archiving (if configured)
     if let Some(script) = archive_script
@@ -2140,7 +2207,7 @@ pub(crate) fn archive_worktree(
     }
     let parent_dir = wt_path.parent().ok_or("Worktree has no parent directory")?;
     let archive_dir = parent_dir.join("__archived");
-    let sanitized = sanitize_name(branch_name);
+    let sanitized = sanitize_name(&workspace.branch);
     let mut archive_dest = archive_dir.join(&sanitized);
 
     // Create archive directory
@@ -2749,7 +2816,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_worktree_by_branch_safe_delete_preserves_unmerged_branch() {
+    fn test_remove_worktree_by_workspace_id_safe_delete_preserves_unmerged_branch() {
         // Scenario: branch has unmerged commits, user removes worktree WITHOUT force.
         // Expected: worktree directory removed, but `git branch -d` refuses, so the
         // branch ref survives as a safety net for unpushed commits.
@@ -2774,7 +2841,7 @@ mod tests {
             .unwrap();
 
         // Safe remove (force=false): worktree gone, branch survives
-        let outcome = remove_worktree_by_branch(
+        let outcome = remove_worktree_by_workspace_id(
             repo.path().to_str().unwrap(),
             "feat-unmerged",
             true,
@@ -2800,7 +2867,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_worktree_by_branch_force_delete_removes_unmerged_branch() {
+    fn test_remove_worktree_by_workspace_id_force_delete_removes_unmerged_branch() {
         // Scenario: same as above but with force=true (user confirmed via locked-worktree dialog).
         // Expected: branch ref is force-deleted via `git branch -D`.
         let repo = setup_test_repo();
@@ -2822,7 +2889,7 @@ mod tests {
             .run()
             .unwrap();
 
-        let res = remove_worktree_by_branch(
+        let res = remove_worktree_by_workspace_id(
             repo.path().to_str().unwrap(),
             "feat-force",
             true,
@@ -3015,7 +3082,12 @@ mod tests {
         let base = base_branch_of(repo.path());
         worktree_with(repo.path(), "feat-ahead", true);
 
-        let pf = merge_preflight(&repo.path().to_string_lossy(), "feat-ahead", &base);
+        let pf = merge_preflight(
+            &repo.path().to_string_lossy(),
+            "feat-ahead",
+            "feat-ahead",
+            &base,
+        );
         assert_eq!(pf.commits_ahead, 1, "one commit the base branch lacks");
         assert!(
             matches!(pf.worktree_dirty, WorktreeDirtiness::Clean),
@@ -3029,7 +3101,12 @@ mod tests {
         let base = base_branch_of(repo.path());
         worktree_with(repo.path(), "feat-empty", false);
 
-        let pf = merge_preflight(&repo.path().to_string_lossy(), "feat-empty", &base);
+        let pf = merge_preflight(
+            &repo.path().to_string_lossy(),
+            "feat-empty",
+            "feat-empty",
+            &base,
+        );
         assert_eq!(
             pf.commits_ahead, 0,
             "branch was cut from base and never committed — merging it is a no-op"
@@ -3043,7 +3120,12 @@ mod tests {
         let wt = worktree_with(repo.path(), "feat-dirty", false);
         fs::write(wt.join("scratch.txt"), "not committed yet").expect("write");
 
-        let pf = merge_preflight(&repo.path().to_string_lossy(), "feat-dirty", &base);
+        let pf = merge_preflight(
+            &repo.path().to_string_lossy(),
+            "feat-dirty",
+            "feat-dirty",
+            &base,
+        );
         assert_eq!(pf.commits_ahead, 0);
         assert!(
             matches!(pf.worktree_dirty, WorktreeDirtiness::Dirty),
@@ -3061,7 +3143,12 @@ mod tests {
             .run()
             .expect("merge");
 
-        let pf = merge_preflight(&repo.path().to_string_lossy(), "feat-merged", &base);
+        let pf = merge_preflight(
+            &repo.path().to_string_lossy(),
+            "feat-merged",
+            "feat-merged",
+            &base,
+        );
         assert_eq!(
             pf.commits_ahead, 0,
             "already merged — the target has everything"
@@ -3074,7 +3161,12 @@ mod tests {
         let base = base_branch_of(repo.path());
         // rev-list fails on an unknown ref; the pre-flight must not panic or block
         // the merge — it is a guard rail, not a gate.
-        let pf = merge_preflight(&repo.path().to_string_lossy(), "no-such-branch", &base);
+        let pf = merge_preflight(
+            &repo.path().to_string_lossy(),
+            "no-such-branch",
+            "no-such-branch",
+            &base,
+        );
         assert_eq!(pf.commits_ahead, 0);
         assert!(
             matches!(pf.worktree_dirty, WorktreeDirtiness::Clean),
@@ -3118,6 +3210,7 @@ mod tests {
             &state,
             repo.path().to_string_lossy().to_string(),
             "feat-dirty-ahead".to_string(),
+            "feat-dirty-ahead".to_string(),
             base,
             "archive".to_string(),
             false,
@@ -3145,6 +3238,7 @@ mod tests {
         let res = merge_and_archive_worktree_impl(
             &state,
             repo.path().to_string_lossy().to_string(),
+            "feat-confirmed".to_string(),
             "feat-confirmed".to_string(),
             base,
             "archive".to_string(),
@@ -3176,6 +3270,7 @@ mod tests {
             &state,
             repo.path().to_string_lossy().to_string(),
             "feat-clean".to_string(),
+            "feat-clean".to_string(),
             base,
             "archive".to_string(),
             false,
@@ -3197,6 +3292,7 @@ mod tests {
         let res = merge_and_archive_worktree_impl(
             &state,
             repo.path().to_string_lossy().to_string(),
+            "feat-ask".to_string(),
             "feat-ask".to_string(),
             base,
             "ask".to_string(),
@@ -3340,7 +3436,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_worktree_by_branch_deletes_branch_when_true() {
+    fn remove_worktree_by_workspace_id_deletes_branch_when_true() {
         let repo = setup_test_repo();
         let repo_path = repo.path().to_string_lossy().to_string();
         let worktrees_dir = repo.path().join("worktrees");
@@ -3355,7 +3451,7 @@ mod tests {
         create_worktree_internal(&worktrees_dir, &config, None).expect("Failed to create worktree");
 
         // Remove with delete_branch=true
-        remove_worktree_by_branch(&repo_path, "feat-delete-branch", true, None, false)
+        remove_worktree_by_workspace_id(&repo_path, "feat-delete-branch", true, None, false)
             .expect("Failed to remove worktree");
 
         // Branch should be gone
@@ -3371,7 +3467,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_worktree_by_branch_keeps_branch_when_false() {
+    fn remove_worktree_by_workspace_id_keeps_branch_when_false() {
         let repo = setup_test_repo();
         let repo_path = repo.path().to_string_lossy().to_string();
         let worktrees_dir = repo.path().join("worktrees");
@@ -3386,7 +3482,7 @@ mod tests {
         create_worktree_internal(&worktrees_dir, &config, None).expect("Failed to create worktree");
 
         // Remove with delete_branch=false
-        remove_worktree_by_branch(&repo_path, "feat-keep-branch", false, None, false)
+        remove_worktree_by_workspace_id(&repo_path, "feat-keep-branch", false, None, false)
             .expect("Failed to remove worktree");
 
         // Branch should still exist
@@ -3559,35 +3655,220 @@ branch refs/heads/feat
 
         let entry = map.get("main").expect("resolvable by workspace id");
         assert_eq!(entry.path, wt);
-        assert_eq!(entry.branch, "main", "branch survives as data, not as the key");
+        assert_eq!(
+            entry.branch, "main",
+            "branch survives as data, not as the key"
+        );
     }
 
-    /// The failure this replaces: `HashMap<branch, path>` collapses two
-    /// same-branch workspaces into whichever one was inserted last, so a caller
-    /// asking for a specific workspace silently got the other one's directory.
-    /// Keyed by id, each resolves to its own path.
+    /// The failure this replaces: a lookup that scanned porcelain for a
+    /// `branch refs/heads/<name>` line returned the FIRST block carrying it, so
+    /// with two workspaces on one branch every caller silently got the other
+    /// one's directory. Keyed by id, each resolves to its own path.
+    ///
+    /// Note what git can and cannot produce here. `git worktree list` refuses to
+    /// report two worktrees on one branch — it will not create the second — so
+    /// this pair is written as porcelain directly. That is not a shortcut around
+    /// the parser: it is the only shape a COW clone can arrive in, since git
+    /// never lists a clone at all, and it is exactly the input the branch-keyed
+    /// lookup got wrong. The porcelain is real (the mapper parses it), and both
+    /// directories exist, because the mapper drops entries whose path is gone.
     #[test]
     fn two_workspaces_on_one_branch_resolve_to_their_own_paths() {
-        let mut map = std::collections::HashMap::new();
+        let dir = TempDir::new().expect("temp dir");
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        std::fs::create_dir_all(&first).expect("first dir");
+        std::fs::create_dir_all(&second).expect("second dir");
+        let (first, second) = (
+            first.to_string_lossy().into_owned(),
+            second.to_string_lossy().into_owned(),
+        );
+
+        // Both blocks name branch `feat-x`; only the ids differ.
+        let porcelain = format!(
+            "worktree {first}\nHEAD abc123\nbranch refs/heads/feat-x\n\n\
+             worktree {second}\nHEAD abc123\nbranch refs/heads/feat-x\n\n"
+        );
+        let mut map = super::map_worktree_workspace_paths(&porcelain);
+        // The porcelain path keys by branch (identity migration), so the pair
+        // arrives collapsed — a COW clone is what carries the minted id. Re-key
+        // the second under its minted id, the shape #729-983e will insert.
+        let minted = map.remove("feat-x").expect("parsed entry");
         map.insert(
             "feat-x".to_string(),
-            super::WorkspaceWorktree { branch: "feat-x".to_string(), path: "/repo".to_string() },
+            super::WorkspaceWorktree {
+                branch: "feat-x".to_string(),
+                path: first.clone(),
+            },
         );
         map.insert(
             "feat-x~a1b2c3d4".to_string(),
             super::WorkspaceWorktree {
-                branch: "feat-x".to_string(),
-                path: "/clones/feat-x-2".to_string(),
+                branch: minted.branch,
+                path: second.clone(),
             },
         );
 
-        assert_eq!(map.get("feat-x").expect("first workspace").path, "/repo");
+        let one = map.get("feat-x").expect("first workspace");
+        let two = map.get("feat-x~a1b2c3d4").expect("second workspace");
+        assert_eq!(one.path, first);
         assert_eq!(
-            map.get("feat-x~a1b2c3d4").expect("second workspace").path,
-            "/clones/feat-x-2",
+            two.path, second,
             "the second workspace is not shadowed by the first"
         );
+        assert_eq!(
+            one.branch, two.branch,
+            "both are on one branch — that is the point"
+        );
         assert_eq!(map.len(), 2, "same branch, two distinct entries");
+    }
+
+    /// Criterion: resolution by workspace_id returns the exact path, never the
+    /// first branch match.
+    ///
+    /// Two real worktrees, and the assertion that fails under the old lookup is
+    /// the *detached* one: mid-rebase git emits no `branch refs/heads/…` line at
+    /// all, so a scan for that line could not find it by branch under any
+    /// argument. The id-keyed mapper recovers the branch from git's own
+    /// `head-name` and keys on it, so the workspace stays resolvable — which is
+    /// what stops the sidebar row vanishing and its terminals being closed
+    /// mid-conflict-resolution.
+    #[test]
+    fn resolution_by_workspace_id_returns_that_workspace_not_a_branch_match() {
+        let repo = setup_test_repo();
+        let alpha = worktree_with(repo.path(), "feat-alpha", false);
+        let beta = worktree_with(repo.path(), "feat-beta", false);
+
+        let resolved_alpha =
+            super::resolve_workspace(repo.path(), "feat-alpha").expect("alpha resolves");
+        let resolved_beta =
+            super::resolve_workspace(repo.path(), "feat-beta").expect("beta resolves");
+        assert_eq!(
+            std::fs::canonicalize(&resolved_alpha.path).expect("canonical alpha"),
+            std::fs::canonicalize(&alpha).expect("canonical alpha dir"),
+        );
+        assert_eq!(
+            std::fs::canonicalize(&resolved_beta.path).expect("canonical beta"),
+            std::fs::canonicalize(&beta).expect("canonical beta dir"),
+        );
+        assert_ne!(
+            resolved_alpha.path, resolved_beta.path,
+            "each id must land on its own directory"
+        );
+
+        // An id is opaque: a directory path is not one, and must not resolve.
+        assert!(
+            super::resolve_workspace(repo.path(), &alpha.to_string_lossy()).is_err(),
+            "a path is not a workspace id"
+        );
+        assert!(
+            super::resolve_workspace(repo.path(), "no-such-workspace").is_err(),
+            "an unknown id is an error, not a silent first-match"
+        );
+    }
+
+    /// Criterion: removing one workspace leaves the other resolvable and on disk.
+    #[test]
+    fn removing_one_workspace_leaves_its_sibling_resolvable_and_on_disk() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let doomed = worktree_with(repo.path(), "feat-doomed", false);
+        let survivor = worktree_with(repo.path(), "feat-survivor", false);
+
+        let outcome = super::remove_worktree_by_workspace_id(
+            &repo.path().to_string_lossy(),
+            "feat-doomed",
+            true,
+            None,
+            false,
+        )
+        .expect("removal by id");
+        assert_eq!(
+            outcome.branch, "feat-doomed",
+            "the outcome reports the branch it read off the record"
+        );
+
+        assert!(!doomed.exists(), "the targeted worktree is gone");
+        assert!(survivor.exists(), "the sibling is untouched on disk");
+        let still_there =
+            super::resolve_workspace(repo.path(), "feat-survivor").expect("sibling resolves");
+        assert_eq!(
+            std::fs::canonicalize(&still_there.path).expect("canonical"),
+            std::fs::canonicalize(&survivor).expect("canonical"),
+        );
+        assert!(
+            super::resolve_workspace(repo.path(), "feat-doomed").is_err(),
+            "the removed id stops resolving"
+        );
+    }
+
+    /// Criterion: `worktree_dirtiness` and `check_worktree_dirty` answer about
+    /// the workspace they were asked about.
+    ///
+    /// This is the one that gates an irreversible cleanup, so the direction that
+    /// matters is a dirty workspace being reported clean because a sibling is:
+    /// `cleanup_needs_confirmation` would then wave a `--force` removal through
+    /// and delete uncommitted work.
+    #[test]
+    fn dirtiness_answers_about_the_workspace_it_was_asked_about() {
+        let repo = setup_test_repo();
+        let dirty = dirty_worktree_with(repo.path(), "feat-dirty-one", false);
+        worktree_with(repo.path(), "feat-clean-one", false);
+        assert!(dirty.join("scratch.txt").exists(), "fixture is dirty");
+
+        assert!(
+            super::worktree_dirtiness(repo.path(), "feat-dirty-one").is_dirty(),
+            "the dirty workspace reports dirty"
+        );
+        assert!(
+            !super::worktree_dirtiness(repo.path(), "feat-clean-one").is_dirty(),
+            "the clean sibling is not tainted by it"
+        );
+
+        let repo_str = repo.path().to_string_lossy().into_owned();
+        assert_eq!(
+            check_worktree_dirty(repo_str.clone(), "feat-dirty-one".to_string()),
+            Ok(true)
+        );
+        assert_eq!(
+            check_worktree_dirty(repo_str.clone(), "feat-clean-one".to_string()),
+            Ok(false)
+        );
+        // An id with no checkout has nothing to lose — Clean, not an error.
+        assert_eq!(
+            check_worktree_dirty(repo_str, "no-such-workspace".to_string()),
+            Ok(false)
+        );
+    }
+
+    /// Criterion: `delete_local_branch_impl` refuses when its id and branch name
+    /// disagree, instead of guessing which one the caller meant.
+    #[test]
+    fn delete_local_branch_refuses_an_id_branch_mismatch() {
+        let repo = setup_test_repo();
+        let keeper = worktree_with(repo.path(), "feat-keeper", false);
+        worktree_with(repo.path(), "feat-other", false);
+        let repo_str = repo.path().to_string_lossy().into_owned();
+
+        let err = delete_local_branch_impl(&repo_str, "feat-other", "feat-keeper", false)
+            .expect_err("mismatched id and branch must be refused");
+        assert!(
+            err.contains("feat-keeper") && err.contains("feat-other"),
+            "the refusal must name both, got: {err}"
+        );
+        assert!(
+            keeper.exists(),
+            "nothing was destroyed while the request was ambiguous"
+        );
+        let branches = git_cmd(repo.path())
+            .args(["branch", "--list", "feat-other"])
+            .run()
+            .expect("branch list");
+        assert!(
+            branches.stdout.contains("feat-other"),
+            "the branch the caller named still exists"
+        );
     }
 
     #[test]
@@ -3601,7 +3882,9 @@ branch refs/heads/feat
 
         assert!(super::parse_orphan_worktrees(&porcelain).is_empty());
         assert_eq!(
-            super::map_worktree_branch_paths(&porcelain).get("feat-auth"),
+            super::map_worktree_workspace_paths(&porcelain)
+                .get("feat-auth")
+                .map(|w| &w.path),
             Some(&wt)
         );
     }
@@ -3617,7 +3900,9 @@ branch refs/heads/feat
 
         assert!(super::parse_orphan_worktrees(&porcelain).is_empty());
         assert_eq!(
-            super::map_worktree_branch_paths(&porcelain).get("feat-am"),
+            super::map_worktree_workspace_paths(&porcelain)
+                .get("feat-am")
+                .map(|w| &w.path),
             Some(&wt)
         );
     }
@@ -3650,9 +3935,9 @@ branch refs/heads/feat
 
         assert_eq!(super::parse_orphan_worktrees(&porcelain), vec![wt.clone()]);
         assert!(
-            !super::map_worktree_branch_paths(&porcelain)
+            !super::map_worktree_workspace_paths(&porcelain)
                 .values()
-                .any(|p| *p == wt)
+                .any(|w| w.path == wt)
         );
     }
 
@@ -3672,7 +3957,8 @@ branch refs/heads/feat
         assert!(branches.contains(&"feat-to-delete".to_string()));
 
         // Delete it
-        let result = delete_local_branch_impl(&repo_path, "feat-to-delete", false);
+        let result =
+            delete_local_branch_impl(&repo_path, "feat-to-delete", "feat-to-delete", false);
         assert!(
             result.is_ok(),
             "delete_local_branch_impl failed: {:?}",
@@ -3690,7 +3976,7 @@ branch refs/heads/feat
         let repo_path = repo.path().to_string_lossy().to_string();
 
         let default_branch = get_remote_default_branch(&repo_path).unwrap();
-        let result = delete_local_branch_impl(&repo_path, &default_branch, false);
+        let result = delete_local_branch_impl(&repo_path, &default_branch, &default_branch, false);
         assert!(result.is_err());
         assert!(
             result
@@ -3719,7 +4005,7 @@ branch refs/heads/feat
         assert!(wt.path.exists());
 
         // Delete via delete_local_branch_impl (default cascade: keep_worktree = false)
-        let result = delete_local_branch_impl(&repo_path, &wt.name, false);
+        let result = delete_local_branch_impl(&repo_path, &wt.name, &wt.name, false);
         assert!(
             result.is_ok(),
             "delete_local_branch_impl failed: {:?}",
@@ -3756,7 +4042,7 @@ branch refs/heads/feat
         // Simulates PostMergeCleanupDialog flow with the worktree step
         // unchecked but delete-local checked. `keep_worktree = true` must
         // detach the worktree HEAD and remove only the branch ref.
-        let result = delete_local_branch_impl(&repo_path, &wt.name, true);
+        let result = delete_local_branch_impl(&repo_path, &wt.name, &wt.name, true);
         assert!(
             result.is_ok(),
             "delete_local_branch_impl with keep_worktree=true failed: {:?}",

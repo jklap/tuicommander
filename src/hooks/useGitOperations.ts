@@ -33,15 +33,15 @@ export interface GitOperationsDeps {
 			is_git_repo: boolean;
 		}>;
 		getDiffStats: (path: string) => Promise<{ additions: number; deletions: number }>;
-		getWorktreePaths: (repoPath: string) => Promise<Record<string, string>>;
+		getWorktreePaths: (repoPath: string) => Promise<Record<string, import("./useRepository").WorkspaceWorktree>>;
 		getRepoSummary: (repoPath: string) => Promise<{
-			worktree_paths: Record<string, string>;
+			worktree_paths: Record<string, import("./useRepository").WorkspaceWorktree>;
 			merged_branches: string[];
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
 		}>;
 		getRepoStructure: (repoPath: string) => Promise<{
-			worktree_paths: Record<string, string>;
+			worktree_paths: Record<string, import("./useRepository").WorkspaceWorktree>;
 			merged_branches: string[];
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
@@ -50,7 +50,7 @@ export interface GitOperationsDeps {
 		}>;
 		removeWorktree: (
 			repoPath: string,
-			branchName: string,
+			workspaceId: string,
 			deleteBranch: boolean,
 			force?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
@@ -68,6 +68,7 @@ export interface GitOperationsDeps {
 		mergeAndArchiveWorktree: (
 			repoPath: string,
 			branchName: string,
+			workspaceId: string,
 			targetBranch: string,
 			afterMerge: string,
 			force?: boolean,
@@ -80,7 +81,7 @@ export interface GitOperationsDeps {
 		}>;
 		finalizeMergedWorktree: (
 			repoPath: string,
-			branchName: string,
+			workspaceId: string,
 			action: "archive" | "delete",
 			force?: boolean,
 		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;

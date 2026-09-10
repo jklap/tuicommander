@@ -45,6 +45,15 @@ export interface BaseRefOption {
 
 export interface RemoveWorktreeResult {
 	branch_delete_warning?: string | null;
+	/** Branch the removed workspace was on, read off the record before removal. */
+	branch: string;
+}
+
+/** One workspace's checkout. Keyed by workspace id; the branch is a field on the
+ *  value because two workspaces may share one. */
+export interface WorkspaceWorktree {
+	branch: string;
+	path: string;
 }
 
 /** Repository hook for git operations */
@@ -89,16 +98,16 @@ export function useRepository() {
 		}
 	}
 
-	/** Remove a worktree by branch name */
+	/** Remove one workspace's checkout, addressed by workspace id */
 	async function removeWorktree(
 		repoPath: string,
-		branchName: string,
+		workspaceId: string,
 		deleteBranch: boolean,
 		force?: boolean,
 	): Promise<RemoveWorktreeResult> {
 		return await invoke<RemoveWorktreeResult>("remove_worktree", {
 			repoPath,
-			branchName,
+			workspaceId,
 			deleteBranch,
 			force: force ?? false,
 		});
@@ -120,10 +129,10 @@ export function useRepository() {
 		return await invoke("create_worktree", { baseRepo, branchName, createBranch, baseRef });
 	}
 
-	/** Get worktree paths: branch name → worktree directory */
-	async function getWorktreePaths(repoPath: string): Promise<Record<string, string>> {
+	/** Get workspaces: workspace id → its checkout */
+	async function getWorktreePaths(repoPath: string): Promise<Record<string, WorkspaceWorktree>> {
 		try {
-			return await invoke<Record<string, string>>("get_worktree_paths", { repoPath });
+			return await invoke<Record<string, WorkspaceWorktree>>("get_worktree_paths", { repoPath });
 		} catch (err) {
 			appLogger.warn("git", `Failed to get worktree paths for ${repoPath}`, err);
 			return {};
@@ -225,6 +234,7 @@ export function useRepository() {
 	async function mergeAndArchiveWorktree(
 		repoPath: string,
 		branchName: string,
+		workspaceId: string,
 		targetBranch: string,
 		afterMerge: string,
 		force = false,
@@ -232,6 +242,7 @@ export function useRepository() {
 		return await invoke<MergeArchiveResult>("merge_and_archive_worktree", {
 			repoPath,
 			branchName,
+			workspaceId,
 			targetBranch,
 			afterMerge,
 			force,
@@ -244,13 +255,13 @@ export function useRepository() {
 	 *  be clean comes back as `action: "needs_confirmation"` instead of being wiped. */
 	async function finalizeMergedWorktree(
 		repoPath: string,
-		branchName: string,
+		workspaceId: string,
 		action: "archive" | "delete",
 		force = false,
 	): Promise<MergeArchiveResult> {
 		return await invoke<MergeArchiveResult>("finalize_merged_worktree", {
 			repoPath,
-			branchName,
+			workspaceId,
 			action,
 			force,
 		});
@@ -276,7 +287,7 @@ export function useRepository() {
 	/** Aggregate repo snapshot: worktree paths + merged branches + per-path diff stats.
 	 *  Replaces 3 separate IPC calls in refreshAllBranchStats with one round-trip. */
 	async function getRepoSummary(repoPath: string): Promise<{
-		worktree_paths: Record<string, string>;
+		worktree_paths: Record<string, WorkspaceWorktree>;
 		merged_branches: string[];
 		diff_stats: Record<string, { additions: number; deletions: number }>;
 		last_commit_ts: Record<string, number | null>;
@@ -292,7 +303,7 @@ export function useRepository() {
 	/** Fast structural snapshot: worktree paths + merged branches only.
 	 *  Used by progressive loading Phase 1 — returns before expensive diff stats. */
 	async function getRepoStructure(repoPath: string): Promise<{
-		worktree_paths: Record<string, string>;
+		worktree_paths: Record<string, WorkspaceWorktree>;
 		merged_branches: string[];
 	}> {
 		try {

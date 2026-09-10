@@ -1103,13 +1103,14 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create worktree. Requires path. Optional: branch, base_ref, spawn_session.\n- worktree_remove: Remove worktree. Requires path, branch.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create worktree. Requires path. Optional: branch, base_ref, spawn_session.\n- worktree_remove: Remove worktree. Requires path, workspace_id.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove)" },
+                "workspace_id": { "type": "string", "description": "Opaque workspace id from action=worktree_list (action=worktree_remove required). Never a branch name: two workspaces may share a branch." },
                 "filter": { "type": "string", "description": "Issue filter, default 'assigned' (action=issues)" },
                 "issue_number": { "type": "integer", "description": "Issue number (action=close_issue/reopen_issue, required)" },
-                "branch": { "type": "string", "description": "Branch name (action=worktree_create optional, action=worktree_remove required)" },
+                "branch": { "type": "string", "description": "Branch name (action=worktree_create optional)" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" }
             }, "required": ["action"] }
@@ -3229,7 +3230,8 @@ async fn handle_worktree(
             let branch_name = branch.unwrap_or_else(|| {
                 let existing: Vec<String> = match crate::worktree::get_worktree_paths(path.clone())
                 {
-                    Ok(wts) => wts.keys().cloned().collect(),
+                    // Branch names, so read the records — the keys are workspace ids.
+                    Ok(wts) => wts.into_values().map(|w| w.branch).collect(),
                     Err(e) => {
                         tracing::warn!("Failed to list worktrees for name generation: {e}");
                         vec![]
@@ -3297,22 +3299,22 @@ async fn handle_worktree(
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
-            let branch = match args["branch"].as_str() {
+            let workspace_id = match args["workspace_id"].as_str() {
                 Some(b) => b.to_string(),
                 None => {
-                    return serde_json::json!({"error": "Action 'worktree_remove' requires 'branch' parameter"});
+                    return serde_json::json!({"error": "Action 'worktree_remove' requires 'workspace_id' parameter"});
                 }
             };
             let archive = crate::worktree::resolve_archive_script(&path);
-            match crate::worktree::remove_worktree_by_branch(
+            match crate::worktree::remove_worktree_by_workspace_id(
                 &path,
-                &branch,
+                &workspace_id,
                 true,
                 archive.as_deref(),
                 false,
             ) {
                 Ok(outcome) => {
-                    state.notify_worktree_removed(&path, &branch);
+                    state.notify_worktree_removed(&path, &workspace_id);
                     worktree_remove_success_response(outcome.branch_delete_warning)
                 }
                 Err(e) => serde_json::json!({"error": e}),

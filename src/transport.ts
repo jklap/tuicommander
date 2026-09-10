@@ -792,7 +792,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	check_worktree_dirty: {
 		map: (_args, p) => ({
 			method: "GET",
-			path: `/repo/worktree-dirty?repoPath=${p("repoPath")}&branchName=${p("branchName")}`,
+			path: `/repo/worktree-dirty?repoPath=${p("repoPath")}&workspaceId=${p("workspaceId")}`,
 		}),
 	},
 	list_base_ref_options: {
@@ -830,7 +830,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/delete-local-branch",
-			body: { repoPath: args.repoPath, branchName: args.branchName, keepWorktree: args.keepWorktree },
+			body: {
+				repoPath: args.repoPath,
+				branchName: args.branchName,
+				workspaceId: args.workspaceId,
+				keepWorktree: args.keepWorktree,
+			},
 		}),
 	},
 	update_from_base: {
@@ -854,6 +859,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: {
 				repoPath: args.repoPath,
 				branchName: args.branchName,
+				workspaceId: args.workspaceId,
 				targetBranch: args.targetBranch,
 				afterMerge: args.afterMerge,
 				force: args.force,
@@ -1494,7 +1500,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			const force = args.force === true ? "&force=true" : "";
 			return {
 				method: "DELETE",
-				path: `/worktrees/${p("branchName")}?repoPath=${p("repoPath")}&deleteBranch=${args.deleteBranch ?? true}${force}`,
+				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${args.deleteBranch ?? true}${force}`,
 			};
 		},
 	},
@@ -1511,7 +1517,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: "/worktrees/finalize",
 			body: {
 				repoPath: args.repoPath,
-				branchName: args.branchName,
+				workspaceId: args.workspaceId,
 				action: args.action,
 				force: args.force,
 			},

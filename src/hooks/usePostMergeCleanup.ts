@@ -27,7 +27,7 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 	// When the "worktree" step is present in the list but unchecked, the user
 	// explicitly chose to keep the worktree on disk. The "delete-local" step
 	// must communicate that to the Rust side, otherwise `delete_local_branch`
-	// will cascade through `remove_worktree_by_branch` and destroy the
+	// will cascade through `remove_worktree_by_workspace_id` and destroy the
 	// worktree directory regardless of the user's intent.
 	const worktreeStep = steps.find((s) => s.id === "worktree");
 	const keepWorktree = worktreeStep !== undefined && !worktreeStep.checked;
@@ -45,9 +45,11 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 					// uncommitted-work warning under this very step (worktreeDirty)
 					// before the user checks it and presses Execute. Without it the
 					// backend guard would bounce the step back as an opaque failure.
+					// `branchName` is the store key, i.e. the workspace id under the
+					// identity migration; #728-bc76 renames it at the source.
 					await invoke("finalize_merged_worktree", {
 						repoPath,
-						branchName,
+						workspaceId: branchName,
 						action: config.worktreeAction,
 						force: true,
 					});
@@ -83,6 +85,7 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 						await invoke("delete_local_branch", {
 							repoPath,
 							branchName,
+							workspaceId: branchName,
 							keepWorktree,
 						});
 					} catch (e) {

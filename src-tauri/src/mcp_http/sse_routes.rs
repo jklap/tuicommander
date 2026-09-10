@@ -422,8 +422,11 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({ "repo_path": repo_path, "branch": branch, "worktree_path": worktree_path })
         }
-        AppEvent::WorktreeRemoved { repo_path, branch } => {
-            serde_json::json!({ "repo_path": repo_path, "branch": branch })
+        AppEvent::WorktreeRemoved {
+            repo_path,
+            workspace_id,
+        } => {
+            serde_json::json!({ "repo_path": repo_path, "workspace_id": workspace_id })
         }
         AppEvent::PeerRegistered { tuic_session, name } => {
             serde_json::json!({ "tuic_session": tuic_session, "name": name })

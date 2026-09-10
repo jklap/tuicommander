@@ -1391,3 +1391,34 @@ sessions already running.
    satisfy "this branch has a terminal" and suppress it, an empty active branch now
    opens one of its own. Confirm this is the behaviour you want and not one extra
    terminal per launch that annoys you.
+
+## Rust worktree API keys on workspace_id (story `726-5ac7`, 2026-09-10) — **Rust + IPC shape, needs a `make dev` restart**
+
+The whole removal/dirtiness/archive path now resolves by opaque `workspace_id`
+instead of branch name, and `get_worktree_paths` changed shape from
+`{branch: path}` to `{workspace_id: {branch, path}}`. Under the identity
+migration a git worktree's id **is** its branch, so nothing visible should
+change — which is exactly why it needs eyes: a silent mismatch between the new
+payload and the sidebar would look like nothing happening.
+
+1. [ ] **Sidebar still lists every worktree.** After the restart, each repo's
+   branch rows appear with their diff badges and merged marks intact. An empty
+   sidebar with a live repo means the frontend failed to read the new
+   `{branch, path}` value shape.
+2. [ ] **Remove a worktree from the sidebar.** The row disappears immediately
+   (the `worktree-removed` event now carries `workspace_id`, not `branch` — if
+   the payload key were still misread the row would linger until a refresh).
+3. [ ] **Merge & archive, then merge & delete a worktree.** Both must complete
+   and the archived directory must still contain any uncommitted file, since
+   `archive_worktree` now derives the archive folder name from the resolved
+   record's branch rather than the caller's string.
+4. [ ] **The dirty-worktree guard still asks.** Leave an uncommitted file in a
+   worktree, then archive it. It must come back as a confirmation prompt, not a
+   silent destroy — `worktree_dirtiness` is now id-addressed and this is the
+   path that gates the irreversible part.
+5. [ ] **Post-merge cleanup dialog with "keep worktree" unchecked.** The branch
+   goes, the directory stays, HEAD detaches. `delete_local_branch` now takes a
+   branch *and* a workspace id and refuses when they disagree.
+6. [ ] **MCP `repo action=worktree_remove` now requires `workspace_id`.** A call
+   passing only `branch` must be refused with a message naming `workspace_id`.
+   Get an id from `repo action=worktree_list` first.

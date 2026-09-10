@@ -226,7 +226,10 @@ pub enum AppEvent {
     /// A worktree was removed (UI, MCP, HTTP, or merge&archive) — frontend must
     /// drop its sidebar row and close any terminal still living in it.
     #[serde(rename = "worktree-removed")]
-    WorktreeRemoved { repo_path: String, branch: String },
+    WorktreeRemoved {
+        repo_path: String,
+        workspace_id: String,
+    },
     /// A peer agent registered for inter-agent messaging
     #[serde(rename = "peer-registered")]
     PeerRegistered { tuic_session: String, name: String },
@@ -3184,7 +3187,8 @@ pub(crate) struct GitCacheState {
     pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
     pub(crate) git_panel_context: GitCache<crate::git::GitPanelContext>,
-    pub(crate) worktree_paths: GitCache<std::collections::HashMap<String, String>>,
+    pub(crate) worktree_paths:
+        GitCache<std::collections::HashMap<String, crate::worktree::WorkspaceWorktree>>,
     /// Repos that returned null from GitHub GraphQL (not found / no access).
     /// Keyed by "owner/name", value is the cooldown expiry time.
     /// Excluded from batch queries until the cooldown expires (1 hour).
@@ -3356,7 +3360,12 @@ impl AppState {
         crate::prompt::invalidate_repo_vars(path);
     }
 
-    /// Announce that `branch`'s worktree is gone, so the sidebar drops its row.
+    /// Announce that the workspace `workspace_id` names is gone, so the sidebar
+    /// drops its row.
+    ///
+    /// Addressed by workspace id, not branch: the row the frontend must drop is
+    /// keyed by id, and two workspaces may share a branch — so a branch-keyed
+    /// event cannot say which of them died (#726-5ac7).
     ///
     /// Every removal path must call this — UI, MCP `repo worktree_remove`, the HTTP
     /// route, and merge&archive. Without it a backend-initiated removal leaves a
@@ -3366,17 +3375,17 @@ impl AppState {
     ///
     /// Caches are invalidated first, so any refresh the event triggers reads
     /// post-removal worktree state.
-    pub(crate) fn notify_worktree_removed(&self, repo_path: &str, branch: &str) {
+    pub(crate) fn notify_worktree_removed(&self, repo_path: &str, workspace_id: &str) {
         self.invalidate_repo_caches(repo_path);
         let _ = self.event_bus.send(AppEvent::WorktreeRemoved {
             repo_path: repo_path.to_string(),
-            branch: branch.to_string(),
+            workspace_id: workspace_id.to_string(),
         });
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
             let _ = app.emit(
                 "worktree-removed",
-                serde_json::json!({ "repo_path": repo_path, "branch": branch }),
+                serde_json::json!({ "repo_path": repo_path, "workspace_id": workspace_id }),
             );
         }
     }

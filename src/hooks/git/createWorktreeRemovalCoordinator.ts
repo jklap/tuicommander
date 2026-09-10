@@ -8,7 +8,7 @@ interface WorktreeRemovalCoordinatorDeps {
 	repo: {
 		removeWorktree: (
 			repoPath: string,
-			branchName: string,
+			workspaceId: string,
 			deleteBranch: boolean,
 			force?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;

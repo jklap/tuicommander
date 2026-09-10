@@ -42,7 +42,10 @@ pub(crate) trait GitReads: Send + Sync {
     ) -> Result<Vec<CommitLogEntry>, String>;
     fn graph_commits(&self, repo: &Path, count: u32) -> Result<Vec<RawCommit>, String>;
     fn ahead_behind(&self, repo: &Path, left: &str, right: &str) -> Result<(u32, u32), String>;
-    fn worktree_paths(&self, repo: &Path) -> Result<HashMap<String, String>, String>;
+    fn worktree_paths(
+        &self,
+        repo: &Path,
+    ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String>;
     fn status_counts(&self, repo: &Path) -> StatusCounts;
     fn diff_stats(&self, repo: &Path, scope: Option<&str>) -> DiffStats;
     fn blame(&self, repo: &Path, file: &str) -> Result<Vec<BlameLine>, String>;
@@ -73,7 +76,10 @@ impl GitReads for CliGitReads {
         crate::git::ahead_behind_cli(repo, left, right)
     }
 
-    fn worktree_paths(&self, repo: &Path) -> Result<HashMap<String, String>, String> {
+    fn worktree_paths(
+        &self,
+        repo: &Path,
+    ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
         crate::worktree::get_worktree_paths(repo.to_string_lossy().into_owned())
     }
 
@@ -713,7 +719,10 @@ impl GitReads for GixGitReads {
         Ok((count_excl(l, r)?, count_excl(r, l)?))
     }
 
-    fn worktree_paths(&self, repo: &Path) -> Result<HashMap<String, String>, String> {
+    fn worktree_paths(
+        &self,
+        repo: &Path,
+    ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
         use gix::bstr::ByteSlice;
         let grepo = self.repo(repo)?;
         let mut map = HashMap::new();
@@ -740,7 +749,15 @@ impl GitReads for GixGitReads {
             && let Ok(main_repo) = gix::open(main_wd)
             && let Some(branch) = branch_of(&main_repo)
         {
-            map.insert(branch, real(main_wd));
+            // Identity migration: a git worktree's workspace id IS its branch.
+            // Only minted COW ids differ, and gix never reports those.
+            map.insert(
+                branch.clone(),
+                crate::worktree::WorkspaceWorktree {
+                    branch,
+                    path: real(main_wd),
+                },
+            );
         }
 
         // Linked worktrees on a branch whose directory still exists.
@@ -759,7 +776,10 @@ impl GitReads for GixGitReads {
             let branch = branch_of(&wt_repo)
                 .or_else(|| crate::worktree::operation_head_branch(&base.to_string_lossy()));
             if let Some(branch) = branch {
-                map.insert(branch, path);
+                map.insert(
+                    branch.clone(),
+                    crate::worktree::WorkspaceWorktree { branch, path },
+                );
             }
         }
         Ok(map)
@@ -961,7 +981,10 @@ impl GitReadsRouter {
         }
     }
 
-    pub(crate) fn worktree_paths(&self, repo: &Path) -> Result<HashMap<String, String>, String> {
+    pub(crate) fn worktree_paths(
+        &self,
+        repo: &Path,
+    ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
         match self.backend.worktree_paths {
             Backend::Cli => self.cli.worktree_paths(repo),
             Backend::Gix => self.gix.worktree_paths(repo),

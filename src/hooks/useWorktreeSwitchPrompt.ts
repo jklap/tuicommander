@@ -20,7 +20,9 @@ interface WorktreeCreatedPayload {
 
 interface WorktreeRemovedPayload {
 	repo_path: string;
-	branch: string;
+	/** Which workspace died. Not a branch: two workspaces may share one, so a
+	 *  branch cannot name the row to drop (#726-5ac7). */
+	workspace_id: string;
 }
 
 /**
@@ -86,18 +88,18 @@ export async function switchToCreatedWorktree(
  */
 export async function pruneRemovedWorktree(
 	repoPath: string,
-	branchName: string,
-	closeTerminalsForBranch: (repoPath: string, branchName: string) => Promise<void>,
+	workspaceId: string,
+	closeTerminalsForBranch: (repoPath: string, workspaceId: string) => Promise<void>,
 ): Promise<void> {
-	const branch = repositoriesStore.get(repoPath)?.workspaces[branchName];
-	if (!branch) return;
-	if (branch.worktreePath === repoPath) return;
+	const workspace = repositoriesStore.get(repoPath)?.workspaces[workspaceId];
+	if (!workspace) return;
+	if (workspace.worktreePath === repoPath) return;
 
-	if (branch.terminals.length > 0) {
-		await closeTerminalsForBranch(repoPath, branchName);
+	if (workspace.terminals.length > 0) {
+		await closeTerminalsForBranch(repoPath, workspaceId);
 	}
-	repositoriesStore.removeBranch(repoPath, branchName);
-	appLogger.info("git", `Worktree removed — pruned sidebar row "${branchName}"`, { repoPath });
+	repositoriesStore.removeBranch(repoPath, workspaceId);
+	appLogger.info("git", `Worktree removed — pruned sidebar row "${workspaceId}"`, { repoPath });
 }
 
 /** `repo__wt/feature` — the last two segments, enough to tell two worktrees of
@@ -170,9 +172,9 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		.catch((err) => appLogger.error("app", "Failed to register worktree-created listener", err));
 
 	listen<WorktreeRemovedPayload>("worktree-removed", (event) => {
-		const { repo_path, branch } = event.payload;
-		pruneRemovedWorktree(repo_path, branch, deps.closeTerminalsForBranch).catch((err) =>
-			appLogger.warn("git", `Failed to prune removed worktree "${branch}"`, err),
+		const { repo_path, workspace_id } = event.payload;
+		pruneRemovedWorktree(repo_path, workspace_id, deps.closeTerminalsForBranch).catch((err) =>
+			appLogger.warn("git", `Failed to prune removed worktree "${workspace_id}"`, err),
 		);
 	})
 		.then((fn) => {

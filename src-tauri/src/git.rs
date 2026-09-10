@@ -1438,7 +1438,9 @@ pub(crate) async fn get_merged_branches(
 /// Returns fast (two git subprocesses, no per-worktree diff stats).
 #[derive(Serialize)]
 pub(crate) struct RepoStructure {
-    worktree_paths: HashMap<String, String>,
+    /// Workspace id -> its checkout. Never keyed by branch: two workspaces may
+    /// share one (#726-5ac7).
+    worktree_paths: HashMap<String, crate::worktree::WorkspaceWorktree>,
     merged_branches: Vec<String>,
 }
 
@@ -1455,11 +1457,16 @@ pub(crate) struct RepoDiffStats {
 /// into a single round-trip.
 #[derive(Serialize)]
 pub(crate) struct RepoSummary {
-    worktree_paths: HashMap<String, String>,
+    /// Workspace id -> its checkout. Never keyed by branch: two workspaces may
+    /// share one (#726-5ac7).
+    worktree_paths: HashMap<String, crate::worktree::WorkspaceWorktree>,
     merged_branches: Vec<String>,
-    /// Per-worktree diff stats, keyed by worktree path (matches keys of worktree_paths values).
+    /// Per-worktree diff stats, keyed by worktree path (matches the `path` field
+    /// of worktree_paths values).
     diff_stats: HashMap<String, DiffStats>,
     /// Unix timestamp of the last commit on each branch, keyed by branch name.
+    /// Branch-keyed on purpose: the answer is a property of the ref, so two
+    /// workspaces on one branch share the entry.
     last_commit_ts: HashMap<String, Option<i64>>,
 }
 
@@ -1496,7 +1503,7 @@ fn get_last_commit_timestamps(
     result
 }
 
-/// The repo's branch→worktree-path map, shared across every phase of a refresh.
+/// The repo's workspace-id→checkout map, shared across every phase of a refresh.
 ///
 /// Progressive loading calls `get_repo_structure` then `get_repo_diff_stats` for
 /// one bump and both need this map, so reading it per call forked
@@ -1507,7 +1514,7 @@ fn get_last_commit_timestamps(
 async fn cached_worktree_paths(
     state: &AppState,
     repo_path: String,
-) -> Result<HashMap<String, String>, String> {
+) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
     let p = repo_path.clone();
     cached_try(
         state.git_cache.worktree_paths.clone(),
@@ -1547,7 +1554,7 @@ pub(crate) async fn get_repo_summary_impl(
     // per-worktree fan-out — multiplied across repos on repo-changed bursts —
     // is bounded to MONITORING_GIT_CONCURRENCY concurrent refreshes instead of
     // spiking git pipes past the FD limit (EMFILE) and storming CPU/IPC.
-    let paths: Vec<String> = worktree_paths.values().cloned().collect();
+    let paths: Vec<String> = worktree_paths.values().map(|w| w.path.clone()).collect();
     let mut diff_handles = Vec::with_capacity(paths.len());
     for path in paths {
         diff_handles.push(tokio::task::spawn_blocking(move || {
@@ -1556,7 +1563,9 @@ pub(crate) async fn get_repo_summary_impl(
         }));
     }
 
-    let branch_names: Vec<String> = worktree_paths.keys().cloned().collect();
+    // Branch names come off the records, never the keys: the key is a workspace
+    // id and only equals the branch under the identity migration.
+    let branch_names: Vec<String> = worktree_paths.values().map(|w| w.branch.clone()).collect();
     let ts_repo_path = repo_path.clone();
     let ts_handle = tokio::task::spawn_blocking(move || {
         get_last_commit_timestamps(Path::new(&ts_repo_path), &branch_names)
@@ -1637,7 +1646,7 @@ pub(crate) async fn get_repo_diff_stats_impl(
     // (`get_repo_structure`) of this same refresh already read them.
     let worktree_paths = cached_worktree_paths(state, repo_path.clone()).await?;
 
-    let paths: Vec<String> = worktree_paths.values().cloned().collect();
+    let paths: Vec<String> = worktree_paths.values().map(|w| w.path.clone()).collect();
     let mut diff_handles = Vec::with_capacity(paths.len());
     for path in paths {
         diff_handles.push(tokio::task::spawn_blocking(move || {
@@ -1646,7 +1655,9 @@ pub(crate) async fn get_repo_diff_stats_impl(
         }));
     }
 
-    let branch_names: Vec<String> = worktree_paths.keys().cloned().collect();
+    // Branch names come off the records, never the keys: the key is a workspace
+    // id and only equals the branch under the identity migration.
+    let branch_names: Vec<String> = worktree_paths.values().map(|w| w.branch.clone()).collect();
     let ts_repo_path = repo_path.clone();
     let ts_handle = tokio::task::spawn_blocking(move || {
         get_last_commit_timestamps(Path::new(&ts_repo_path), &branch_names)
@@ -4262,8 +4273,11 @@ mod tests {
         state.git_cache.worktree_paths.insert(
             repo.clone(),
             Arc::new(HashMap::from([(
-                "sentinel-branch".to_string(),
-                repo.clone(),
+                "sentinel-id".to_string(),
+                crate::worktree::WorkspaceWorktree {
+                    branch: "sentinel-branch".to_string(),
+                    path: repo.clone(),
+                },
             )])),
         );
 

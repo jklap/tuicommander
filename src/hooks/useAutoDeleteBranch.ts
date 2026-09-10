@@ -68,7 +68,8 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): void {
 		// If auto mode, check dirty state first
 		if (effectiveMode === "auto") {
 			try {
-				const dirty = await invoke<boolean>("check_worktree_dirty", { repoPath, branchName: branch });
+				// `branch` is the store key, i.e. the workspace id (identity migration).
+				const dirty = await invoke<boolean>("check_worktree_dirty", { repoPath, workspaceId: branch });
 				if (dirty) {
 					appLogger.info("git", `Branch '${branch}' has uncommitted changes — asking before deleting`);
 					effectiveMode = "ask";
@@ -93,7 +94,7 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): void {
 
 		// Perform deletion
 		try {
-			await invoke("delete_local_branch", { repoPath, branchName: branch });
+			await invoke("delete_local_branch", { repoPath, branchName: branch, workspaceId: branch });
 			repositoriesStore.bumpGitRevision(repoPath);
 			appLogger.info("git", `Auto-deleted branch '${branch}' (PR #${prNumber} ${type})`);
 		} catch (err) {
