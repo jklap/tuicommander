@@ -151,6 +151,35 @@ pub trait OnResize {
 /// Event Loop for notifying the renderer about terminal events.
 pub trait EventListener {
     fn send_event(&self, _event: Event) {}
+
+    /// Current cell pixel size (and grid dimensions), for computing an inline
+    /// image's cell footprint from a pixel/percent size spec (color-tools
+    /// plan). Default returns all zeros — a listener that doesn't track this
+    /// (e.g. `VoidListener`, the `ref.rs` fixture-replay `Mock`) simply can't
+    /// answer `px`/`%`-based image sizing correctly, which is fine for those
+    /// callers since neither exercises inline images.
+    fn window_size(&self) -> WindowSize {
+        WindowSize {
+            num_lines: 0,
+            num_cols: 0,
+            cell_width: 0,
+            cell_height: 0,
+        }
+    }
+
+    /// Register a newly transmitted inline image (color-tools plan) and
+    /// return a handle to it, or `None` if refused (e.g. over a per-session
+    /// byte cap). Default refuses everything — only a listener that actually
+    /// owns image storage (the app's `TermEventCollector`) can accept one.
+    fn store_image(
+        &self,
+        _bytes: Arc<[u8]>,
+        _mime: String,
+        _intrinsic_width: u32,
+        _intrinsic_height: u32,
+    ) -> Option<Arc<crate::term::cell::ImageData>> {
+        None
+    }
 }
 
 /// Null sink for events.
