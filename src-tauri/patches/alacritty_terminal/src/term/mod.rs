@@ -29,6 +29,7 @@ use crate::vte::ansi::{
 pub mod cell;
 pub mod color;
 pub mod iterm2;
+pub mod kitty;
 pub mod search;
 
 /// Minimum number of columns.
@@ -406,6 +407,12 @@ pub struct Term<T> {
     /// any (color-tools plan, Phase 2). At most one at a time — iTerm2
     /// doesn't define concurrent multipart transfers.
     pending_multipart: Option<iterm2::PendingMultipart>,
+
+    /// In-progress Kitty graphics chunked transmission (`m=1` on one or more
+    /// sequences), if any (color-tools plan, Phase 3). At most one at a
+    /// time; a new chunked transfer starting while one is already open
+    /// silently replaces it.
+    pending_kitty_transmission: Option<kitty::PendingTransmission>,
 }
 
 /// Configuration options for the [`Term`].
@@ -540,6 +547,7 @@ impl<T> Term<T> {
             mode: Default::default(),
             clipboard_capture: None,
             pending_multipart: None,
+            pending_kitty_transmission: None,
         }
     }
 
@@ -1386,10 +1394,14 @@ impl<T: EventListener> Term<T> {
             self.screen_lines() as u32,
         );
 
-        let Some(image) =
-            self.event_proxy
-                .store_image(Arc::from(bytes), mime, intrinsic_width, intrinsic_height)
-        else {
+        // iTerm2 has no client-chosen image identity.
+        let Some(image) = self.event_proxy.store_image(
+            None,
+            Arc::from(bytes),
+            mime,
+            intrinsic_width,
+            intrinsic_height,
+        ) else {
             return;
         };
         // iTerm2 has no explicit placement-id concept (unlike Kitty) — an
@@ -1439,6 +1451,192 @@ impl<T: EventListener> Term<T> {
         }
         self.linefeed();
         self.carriage_return();
+    }
+
+    /// Kitty graphics protocol entry point (color-tools plan, Phase 3). See
+    /// `term::kitty`'s module doc comment for exactly what's implemented.
+    fn kitty_graphics_dispatch(&mut self, data: &[u8]) {
+        let Some((control_text, payload_chunk)) = kitty::split_payload(data) else {
+            return; // Not a Kitty graphics APC sequence (missing 'G' marker).
+        };
+        let control = kitty::parse_control_data(control_text);
+
+        if let Some(pending) = self.pending_kitty_transmission.as_mut() {
+            // Continuation chunk: per spec it carries only m=/q=, so the
+            // ORIGINAL (first chunk's) control data is what's authoritative,
+            // not this chunk's mostly-default one.
+            pending.payload_b64.extend_from_slice(payload_chunk);
+            if control.more_chunks {
+                return;
+            }
+            let pending = self.pending_kitty_transmission.take().unwrap();
+            let payload = pending.payload_b64;
+            self.kitty_process(pending.control, &payload);
+            return;
+        }
+
+        if control.more_chunks {
+            self.pending_kitty_transmission = Some(kitty::PendingTransmission {
+                control,
+                payload_b64: payload_chunk.to_vec(),
+            });
+            return;
+        }
+
+        self.kitty_process(control, payload_chunk);
+    }
+
+    fn kitty_respond_ok(&mut self, control: &kitty::ControlData) {
+        if control.quiet >= 1 {
+            return;
+        }
+        let text = kitty::ok_response(control.image_id, control.placement_id);
+        self.event_proxy.send_event(Event::PtyWrite(text));
+    }
+
+    fn kitty_respond_error(&mut self, control: &kitty::ControlData, code: &str, message: &str) {
+        if control.quiet >= 2 {
+            return;
+        }
+        let text = kitty::error_response(control.image_id, code, message);
+        self.event_proxy.send_event(Event::PtyWrite(text));
+    }
+
+    fn kitty_process(&mut self, control: kitty::ControlData, payload_b64: &[u8]) {
+        match control.action {
+            kitty::Action::Query => {
+                // Capability probe: must not store or display anything.
+                self.kitty_respond_ok(&control);
+            }
+            kitty::Action::Unsupported => {
+                // Animation frames/composition etc. — no well-defined
+                // response of their own; silently no-op.
+            }
+            kitty::Action::Delete => {
+                match control.delete_target {
+                    Some('a') | Some('A') => self.event_proxy.forget_all_images(),
+                    Some('i') | Some('I') => self.event_proxy.forget_image(control.image_id),
+                    _ => {} // other d= variants not implemented
+                }
+                self.kitty_respond_ok(&control);
+            }
+            kitty::Action::Place => {
+                let Some(image) = self.event_proxy.image_by_id(control.image_id) else {
+                    self.kitty_respond_error(&control, "ENOENT", "no image with that id");
+                    return;
+                };
+                self.kitty_display(&control, image);
+                self.kitty_respond_ok(&control);
+            }
+            kitty::Action::Transmit | kitty::Action::TransmitAndDisplay => {
+                if control.medium != kitty::Medium::Direct {
+                    self.kitty_respond_error(
+                        &control,
+                        "EINVAL",
+                        "only direct (t=d) transmission is supported",
+                    );
+                    return;
+                }
+                if control.compressed {
+                    self.kitty_respond_error(
+                        &control,
+                        "EINVAL",
+                        "compressed (o=z) payloads are not supported",
+                    );
+                    return;
+                }
+                let Ok(bytes) = Base64.decode(payload_b64) else {
+                    self.kitty_respond_error(&control, "EINVAL", "payload is not valid base64");
+                    return;
+                };
+                if bytes.is_empty() {
+                    self.kitty_respond_error(&control, "EINVAL", "empty payload");
+                    return;
+                }
+
+                let (intrinsic_width, intrinsic_height, mime) = match control.format {
+                    kitty::Format::Rgb => {
+                        (control.width_px, control.height_px, "raw-rgb".to_string())
+                    }
+                    kitty::Format::Rgba => {
+                        (control.width_px, control.height_px, "raw-rgba".to_string())
+                    }
+                    kitty::Format::Png => {
+                        let (w, h) = iterm2::sniff_image_dimensions(&bytes).unwrap_or((0, 0));
+                        (w, h, "image/png".to_string())
+                    }
+                };
+
+                let client_id = (control.image_id != 0).then_some(control.image_id);
+                let Some(image) = self.event_proxy.store_image(
+                    client_id,
+                    Arc::from(bytes),
+                    mime,
+                    intrinsic_width,
+                    intrinsic_height,
+                ) else {
+                    self.kitty_respond_error(
+                        &control,
+                        "ENOSPC",
+                        "over the per-session image byte cap",
+                    );
+                    return;
+                };
+
+                if control.action == kitty::Action::TransmitAndDisplay {
+                    self.kitty_display(&control, image);
+                }
+                self.kitty_respond_ok(&control);
+            }
+        }
+    }
+
+    /// Display a (transmitted-or-looked-up) image per its placement's
+    /// control data. `U=1` (Unicode virtual placeholders) is registration
+    /// only for now — see the `kitty` module's own doc comment on why the
+    /// diacritic-decoding step is deliberately not implemented yet; no cells
+    /// are touched in that case.
+    fn kitty_display(&mut self, control: &kitty::ControlData, image: Arc<cell::ImageData>) {
+        if control.unicode_placeholder {
+            return;
+        }
+        let (cols, rows) = if control.cols > 0 && control.rows > 0 {
+            (control.cols, control.rows)
+        } else {
+            let window_size = self.event_proxy.window_size();
+            let cell_w = (window_size.cell_width as u32).max(1);
+            let cell_h = (window_size.cell_height as u32).max(1);
+            let w = if image.intrinsic_width > 0 {
+                image.intrinsic_width.div_ceil(cell_w)
+            } else {
+                1
+            };
+            let h = if image.intrinsic_height > 0 {
+                image.intrinsic_height.div_ceil(cell_h)
+            } else {
+                1
+            };
+            (w.max(1), h.max(1))
+        };
+        let placement_id = if control.placement_id != 0 {
+            control.placement_id
+        } else {
+            image.image_id
+        };
+
+        if control.no_move_cursor {
+            // Reserve without moving the cursor. Note: if the reservation
+            // itself scrolls the screen (a tall image reserved near the
+            // bottom), restoring the saved absolute position can now point
+            // at different content than before — a known, documented
+            // simplification rather than reimplementing full
+            // reserve-without-scroll-disturbance semantics.
+            let saved = self.grid.cursor.point;
+            self.reserve_image_footprint(image, placement_id, cols, rows);
+            self.grid.cursor.point = saved;
+        } else {
+            self.reserve_image_footprint(image, placement_id, cols, rows);
+        }
     }
 }
 
@@ -2826,6 +3024,14 @@ impl<T: EventListener> Handler for Term<T> {
         if let Some(pending) = self.pending_multipart.take() {
             self.osc_1337_display(pending.args, &pending.payload_b64);
         }
+    }
+
+    /// Kitty graphics protocol (color-tools plan, Phase 3): one raw,
+    /// unparsed APC payload. See `term::kitty`'s module doc comment for
+    /// scope; the real logic lives in the inherent `kitty_graphics_dispatch`
+    /// (a trait impl can't hold non-trait helper methods).
+    fn kitty_graphics(&mut self, data: &[u8]) {
+        self.kitty_graphics_dispatch(data);
     }
 
     #[inline]
