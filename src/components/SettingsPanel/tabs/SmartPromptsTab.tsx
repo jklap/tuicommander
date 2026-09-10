@@ -1,5 +1,6 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../../../agents";
+import { ALL_SMART_PLACEMENTS, SMART_PLACEMENT_INFO } from "../../../data/smartPlacementLabels";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
 import { useAgentDetection } from "../../../hooks/useAgentDetection";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
@@ -21,18 +22,6 @@ import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import { HeadlessAgentSelect } from "../HeadlessAgentSelect";
 import s from "../Settings.module.css";
 import sp from "./SmartPromptsTab.module.css";
-
-// All placements for the checkbox grid
-const ALL_PLACEMENTS: SmartPlacement[] = [
-	"toolbar",
-	"git-changes",
-	"git-branches",
-	"pr-popover",
-	"issue-popover",
-	"terminal-context",
-	"command-palette",
-	"file-context",
-];
 
 // Categories extracted from smart prompt tags
 const CATEGORIES = ["git", "review", "pr", "merge", "ci", "investigation", "code", "release"] as const;
@@ -354,16 +343,17 @@ const PromptEditor: Component<{
 			{/* Placement */}
 			<div class={sp.editorSection}>
 				<label class={sp.editorLabel}>Placement</label>
+				<p class={sp.fieldHint}>Where this prompt can be triggered from</p>
 				<div class={sp.placementGrid}>
-					<For each={ALL_PLACEMENTS}>
+					<For each={ALL_SMART_PLACEMENTS}>
 						{(placement) => (
-							<label class={sp.placementCheck}>
+							<label class={sp.placementCheck} title={SMART_PLACEMENT_INFO[placement].hint}>
 								<input
 									type="checkbox"
 									checked={props.prompt.placement?.includes(placement) ?? false}
 									onChange={() => handlePlacementToggle(placement)}
 								/>
-								<span>{placement}</span>
+								<span>{SMART_PLACEMENT_INFO[placement].label}</span>
 							</label>
 						)}
 					</For>
@@ -402,29 +392,26 @@ const PromptEditor: Component<{
 						<label class={sp.editorLabel}>Target</label>
 						<select
 							class={sp.editorInput}
-							value={props.prompt.injectTarget ?? "compose"}
+							value={props.prompt.injectTarget ?? "auto"}
 							onChange={(e) => {
 								const val = e.currentTarget.value;
-								if (val === "terminal" || val === "compose") {
+								if (val === "terminal" || val === "compose" || val === "auto") {
 									promptLibraryStore.updatePrompt(props.prompt.id, { injectTarget: val });
 								}
 							}}
 						>
+							<option value="auto">Auto — Compose if open, else Terminal</option>
 							<option value="compose">Compose box (review)</option>
 							<option value="terminal">Terminal (send to agent)</option>
 						</select>
 						<p class={sp.fieldHint}>
-							Compose fills the input for review; Terminal sends to the agent and waits for idle
+							Auto reviews in an already-open Compose box, otherwise sends to the terminal; Compose always opens for
+							review; Terminal always sends to the agent and waits for idle
 						</p>
 					</div>
 				</Show>
 
-				<Show
-					when={
-						(props.prompt.executionMode ?? "inject") === "inject" &&
-						(props.prompt.injectTarget ?? "compose") === "terminal"
-					}
-				>
+				<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
 					<div class={sp.editorSection} style={{ flex: "1" }}>
 						<label class={sp.editorLabel}>Auto-execute</label>
 						<label class={sp.autoExecLabel}>
