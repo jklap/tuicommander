@@ -8921,7 +8921,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repositories",
       "group": "repos",
-      "order": 23,
+      "order": 24,
       "path": "/repos/{key}/auto_consolidate_worktrees",
       "labelKey": "settings.catalogue.repositories.repos.{key}.auto_consolidate_worktrees.label",
       "helpKey": "settings.catalogue.repositories.repos.{key}.auto_consolidate_worktrees.help",
@@ -9162,6 +9162,63 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "repositories.repos.{key}.copy_paths": {
+      "id": "repositories.repos.{key}.copy_paths",
+      "store": "repositories",
+      "owner": "instance",
+      "area": "repositories",
+      "group": "repos",
+      "order": 23,
+      "path": "/repos/{key}/copy_paths",
+      "labelKey": "settings.catalogue.repositories.repos.{key}.copy_paths.label",
+      "helpKey": "settings.catalogue.repositories.repos.{key}.copy_paths.help",
+      "label": "copy paths",
+      "schema": {
+        "description": "Files/directories always copied (or symlinked) into every new worktree\nof this repo, independent of `copy_ignored_files`/`copy_untracked_files`.\nRepo-specific, not inheritable — same rationale as `branch_labels`.",
+        "type": "array",
+        "items": {
+          "description": "One entry in a repo's \"always copy these files/directories\" list\n(`RepoSettingsEntry::copy_paths`). `path` is relative to the repo root —\ndeliberately named `path`/`mode` (not `filePath`/`copyMode`) so the\nfrontend's shallow camelCase<->snake_case key conversion (`caseKeys.ts`,\ntop-level keys only) never has to look inside this struct.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "mode": {
+              "description": "How a `CopyPathEntry` should land in a freshly created worktree.",
+              "oneOf": [
+                {
+                  "description": "Recursively copy the file/directory (symlinks inside a copied directory\nare recreated pointing at the same target, not dereferenced).",
+                  "type": "string",
+                  "const": "copy"
+                },
+                {
+                  "description": "Create a symlink in the new worktree pointing at the source repo's copy,\nso both worktrees share the same file/directory on disk (e.g. a large\n`node_modules`, or a `.env` meant to stay identical everywhere).",
+                  "type": "string",
+                  "const": "symlink"
+                }
+              ],
+              "default": "copy"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Used when the next worktree of this repository is created; existing worktrees are unchanged.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "repositories.repos.{key}.copy_untracked_files": {
       "id": "repositories.repos.{key}.copy_untracked_files",
       "store": "repositories",
@@ -9237,7 +9294,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repositories",
       "group": "repos",
-      "order": 24,
+      "order": 25,
       "path": "/repos/{key}/dev_server_url",
       "labelKey": "settings.catalogue.repositories.repos.{key}.dev_server_url.label",
       "helpKey": "settings.catalogue.repositories.repos.{key}.dev_server_url.help",
@@ -9665,7 +9722,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repositories",
       "group": "repos",
-      "order": 25,
+      "order": 26,
       "path": "/repos/{key}/terminal_meta_hotkeys",
       "labelKey": "settings.catalogue.repositories.repos.{key}.terminal_meta_hotkeys.label",
       "helpKey": "settings.catalogue.repositories.repos.{key}.terminal_meta_hotkeys.help",

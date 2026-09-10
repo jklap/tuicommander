@@ -38,6 +38,7 @@ function Preview() {
 		autoConsolidateWorktrees: false,
 		devServerUrl: null,
 		branchLabels: {},
+		copyPaths: [],
 		baseBranch: null,
 		copyIgnoredFiles: null,
 		copyUntrackedFiles: false,

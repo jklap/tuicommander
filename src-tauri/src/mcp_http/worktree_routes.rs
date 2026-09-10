@@ -251,7 +251,7 @@ pub(super) async fn create_worktree_shared(
             .ok()
             .flatten();
             pending_guard.armed = false;
-            let (setup_script, setup_script_error, _warm_task) = run_setup_then_warm(
+            let (setup_script, setup_script_error, warm_task) = run_setup_then_warm(
                 script,
                 warm_source,
                 warm_destination,
@@ -265,6 +265,13 @@ pub(super) async fn create_worktree_shared(
                 },
             )
             .await;
+            crate::worktree::spawn_worktree_file_sync(
+                state,
+                &base_repo,
+                &branch_name,
+                &workspace.path,
+                Some(warm_task),
+            );
             Ok(CreatedWorktree {
                 worktree: crate::state::WorktreeInfo {
                     name: workspace

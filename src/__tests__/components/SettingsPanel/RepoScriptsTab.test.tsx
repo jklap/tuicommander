@@ -33,6 +33,7 @@ function makeSettings(overrides: Partial<RepoSettings> = {}): RepoSettings {
 		prHideCiFailing: null,
 		branchLabels: {},
 		devServerUrl: null,
+		copyPaths: [],
 		...overrides,
 	};
 }
