@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { McpConfirmHost } from "../components/McpConfirmHost/McpConfirmHost";
+import { PtyOpenUrlHost } from "../components/PtyOpenUrlHost/PtyOpenUrlHost";
 import { appLogger } from "../stores/appLogger";
 import { notesStore } from "../stores/notes";
 import { BottomTabs, type TabId } from "./components/BottomTabs";
@@ -165,6 +166,7 @@ export default function MobileApp() {
 			</Show>
 			<MobileToastContainer />
 			<McpConfirmHost />
+			<PtyOpenUrlHost />
 		</div>
 	);
 }

@@ -742,6 +742,28 @@ pub trait Handler {
 
     /// OSC 7770 — TUIC protocol event (verb=payload).
     fn osc7770(&mut self, _verb: &str, _payload: &str) {}
+
+    /// iTerm2 OSC 1337 `StealFocus` — bring the terminal application to the
+    /// foreground.
+    fn request_focus(&mut self) {}
+
+    /// iTerm2 OSC 1337 `RequestAttention=<value>` — `value` is one of "yes",
+    /// "once", "no", or "fireworks" (unrecognized values are ignored by the
+    /// caller).
+    fn request_attention(&mut self, _value: &str) {}
+
+    /// iTerm2 OSC 1337 `CopyToClipboard=<name>` — begin capturing subsequently
+    /// printed text verbatim, to be flushed to the clipboard on
+    /// [`Handler::end_clipboard_capture`]. `name` is the (currently unused)
+    /// named-pasteboard hint iTerm2 supports ("", "rule", "find", "font").
+    fn start_clipboard_capture(&mut self, _name: &str) {}
+
+    /// iTerm2 OSC 1337 `EndCopy` — stop capturing and flush the buffer
+    /// accumulated since [`Handler::start_clipboard_capture`] to the clipboard.
+    fn end_clipboard_capture(&mut self) {}
+
+    /// iTerm2 OSC 1337 `OpenURL=:<base64>` — `base64` is the base64-encoded URL.
+    fn open_url(&mut self, _base64: &[u8]) {}
 }
 
 bitflags! {
@@ -996,7 +1018,7 @@ pub enum LineClearMode {
 /// Mode for clearing terminal.
 ///
 /// Relative to cursor.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ClearMode {
     /// Clear below cursor.
     Below,
@@ -1573,6 +1595,60 @@ where
                 }
             },
 
+            // iTerm2 proprietary commands. `params[1]` is the whole
+            // `Key` or `Key=value` body — none of the values below can
+            // legally contain a literal `;` (numeric, base64, or the fixed
+            // set of named-pasteboard/attention tokens), so it is never split
+            // across further `params` entries.
+            b"1337" if params.len() >= 2 => {
+                let body = params[1];
+                let (key, value) = match body.iter().position(|&b| b == b'=') {
+                    Some(pos) => (&body[..pos], Some(&body[pos + 1..])),
+                    None => (body, None),
+                };
+                match (key, value) {
+                    // CursorShape=[N]: 0=block, 1=beam, 2=underline. Reuses
+                    // the same handler as OSC 50's `CursorShape=` variant.
+                    (b"CursorShape", Some(v)) if !v.is_empty() => {
+                        let shape = match v[0] {
+                            b'0' => CursorShape::Block,
+                            b'1' => CursorShape::Beam,
+                            b'2' => CursorShape::Underline,
+                            _ => return unhandled(params),
+                        };
+                        self.handler.set_cursor_shape(shape);
+                    },
+                    (b"StealFocus", None) => self.handler.request_focus(),
+                    (b"ClearScrollback", None) => {
+                        self.handler.clear_screen(ClearMode::Saved);
+                    },
+                    // CopyToClipboard=[name] ... EndCopy: capture verbatim
+                    // output until EndCopy, then flush to the clipboard. The
+                    // named-pasteboard hint ("rule"/"find"/"font"/"") is
+                    // accepted but not distinguished — everything lands on
+                    // the general clipboard.
+                    (b"CopyToClipboard", Some(name)) => {
+                        self.handler.start_clipboard_capture(&String::from_utf8_lossy(name));
+                    },
+                    (b"CopyToClipboard", None) => self.handler.start_clipboard_capture(""),
+                    (b"EndCopy", None) => self.handler.end_clipboard_capture(),
+                    // Copy=:<base64>: a single-shot equivalent of OSC 52's
+                    // clipboard store, just under the 1337 namespace.
+                    (b"Copy", Some(v)) => {
+                        let payload = v.strip_prefix(b":").unwrap_or(v);
+                        self.handler.clipboard_store(b'c', payload);
+                    },
+                    (b"RequestAttention", Some(v)) => {
+                        self.handler.request_attention(&String::from_utf8_lossy(v));
+                    },
+                    (b"OpenURL", Some(v)) => {
+                        let payload = v.strip_prefix(b":").unwrap_or(v);
+                        self.handler.open_url(payload);
+                    },
+                    _ => unhandled(params),
+                }
+            },
+
             _ => unhandled(params),
         }
     }
@@ -2099,6 +2175,14 @@ mod tests {
         identity_reported: bool,
         color: Option<Rgb>,
         reset_colors: Vec<usize>,
+        cursor_shape: Option<CursorShape>,
+        clear_screen_modes: Vec<ClearMode>,
+        clipboard_store_calls: Vec<(u8, Vec<u8>)>,
+        focus_requested: bool,
+        attention_requests: Vec<String>,
+        capture_started: Option<String>,
+        capture_ended: bool,
+        open_url_payloads: Vec<Vec<u8>>,
     }
 
     impl Handler for MockHandler {
@@ -2130,6 +2214,38 @@ mod tests {
         fn reset_color(&mut self, index: usize) {
             self.reset_colors.push(index)
         }
+
+        fn set_cursor_shape(&mut self, shape: CursorShape) {
+            self.cursor_shape = Some(shape);
+        }
+
+        fn clear_screen(&mut self, mode: ClearMode) {
+            self.clear_screen_modes.push(mode);
+        }
+
+        fn clipboard_store(&mut self, clipboard: u8, base64: &[u8]) {
+            self.clipboard_store_calls.push((clipboard, base64.to_vec()));
+        }
+
+        fn request_focus(&mut self) {
+            self.focus_requested = true;
+        }
+
+        fn request_attention(&mut self, value: &str) {
+            self.attention_requests.push(value.to_string());
+        }
+
+        fn start_clipboard_capture(&mut self, name: &str) {
+            self.capture_started = Some(name.to_string());
+        }
+
+        fn end_clipboard_capture(&mut self) {
+            self.capture_ended = true;
+        }
+
+        fn open_url(&mut self, base64: &[u8]) {
+            self.open_url_payloads.push(base64.to_vec());
+        }
     }
 
     impl Default for MockHandler {
@@ -2141,6 +2257,14 @@ mod tests {
                 identity_reported: false,
                 color: None,
                 reset_colors: Vec::new(),
+                cursor_shape: None,
+                clear_screen_modes: Vec::new(),
+                clipboard_store_calls: Vec::new(),
+                focus_requested: false,
+                attention_requests: Vec::new(),
+                capture_started: None,
+                capture_ended: false,
+                open_url_payloads: Vec::new(),
             }
         }
     }
@@ -2368,6 +2492,110 @@ mod tests {
 
         let expected: Vec<usize> = (0..256).collect();
         assert_eq!(handler.reset_colors, expected);
+    }
+
+    #[test]
+    fn parse_osc1337_cursor_shape() {
+        for (input, expected) in [
+            (&b"\x1b]1337;CursorShape=0\x1b\\"[..], CursorShape::Block),
+            (&b"\x1b]1337;CursorShape=1\x1b\\"[..], CursorShape::Beam),
+            (&b"\x1b]1337;CursorShape=2\x1b\\"[..], CursorShape::Underline),
+        ] {
+            let mut parser = Processor::<TestSyncHandler>::new();
+            let mut handler = MockHandler::default();
+            parser.advance(&mut handler, input);
+            assert_eq!(handler.cursor_shape, Some(expected));
+        }
+    }
+
+    #[test]
+    fn parse_osc1337_cursor_shape_invalid_value_ignored() {
+        let bytes: &[u8] = b"\x1b]1337;CursorShape=9\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.cursor_shape, None);
+    }
+
+    #[test]
+    fn parse_osc1337_steal_focus() {
+        let bytes: &[u8] = b"\x1b]1337;StealFocus\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert!(handler.focus_requested);
+    }
+
+    #[test]
+    fn parse_osc1337_clear_scrollback() {
+        let bytes: &[u8] = b"\x1b]1337;ClearScrollback\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.clear_screen_modes, vec![ClearMode::Saved]);
+    }
+
+    #[test]
+    fn parse_osc1337_copy_to_clipboard_and_end_copy() {
+        let bytes: &[u8] = b"\x1b]1337;CopyToClipboard=rule\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.capture_started, Some("rule".to_string()));
+        assert!(!handler.capture_ended);
+
+        parser.advance(&mut handler, b"\x1b]1337;EndCopy\x1b\\");
+        assert!(handler.capture_ended);
+    }
+
+    #[test]
+    fn parse_osc1337_copy_to_clipboard_empty_name() {
+        let bytes: &[u8] = b"\x1b]1337;CopyToClipboard=\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.capture_started, Some(String::new()));
+    }
+
+    #[test]
+    fn parse_osc1337_copy() {
+        // base64("hi") == "aGk="
+        let bytes: &[u8] = b"\x1b]1337;Copy=:aGk=\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.clipboard_store_calls, vec![(b'c', b"aGk=".to_vec())]);
+    }
+
+    #[test]
+    fn parse_osc1337_request_attention() {
+        for value in ["yes", "once", "no", "fireworks"] {
+            let bytes = alloc::format!("\x1b]1337;RequestAttention={value}\x1b\\");
+            let mut parser = Processor::<TestSyncHandler>::new();
+            let mut handler = MockHandler::default();
+            parser.advance(&mut handler, bytes.as_bytes());
+            assert_eq!(handler.attention_requests, vec![value.to_string()]);
+        }
+    }
+
+    #[test]
+    fn parse_osc1337_open_url() {
+        // base64("https://example.com") == "aHR0cHM6Ly9leGFtcGxlLmNvbQ=="
+        let bytes: &[u8] = b"\x1b]1337;OpenURL=:aHR0cHM6Ly9leGFtcGxlLmNvbQ==\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.open_url_payloads, vec![b"aHR0cHM6Ly9leGFtcGxlLmNvbQ==".to_vec()]);
+    }
+
+    #[test]
+    fn parse_osc1337_unknown_key_is_unhandled_and_does_not_panic() {
+        let bytes: &[u8] = b"\x1b]1337;File=name=foo.txt:aGk=\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert!(handler.open_url_payloads.is_empty());
+        assert!(handler.capture_started.is_none());
     }
 
     #[test]
