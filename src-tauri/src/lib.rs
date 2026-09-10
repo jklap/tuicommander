@@ -75,6 +75,8 @@ pub(crate) mod ego_cli;
 #[path = "dictation/ownership.rs"]
 mod input_ownership;
 pub(crate) use tuic_core::error_classification;
+#[cfg(feature = "desktop")]
+mod finder_service;
 pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
 pub(crate) mod generators;
@@ -3206,6 +3208,10 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             tuic_cli::dismiss_cli_prompt,
             tuic_cli::get_last_seen_version,
             tuic_cli::set_last_seen_version,
+            finder_service::get_finder_service_status,
+            finder_service::install_finder_service,
+            finder_service::uninstall_finder_service,
+            finder_service::dismiss_finder_service_prompt,
             tunnels::tauri_commands::list_tunnel_profiles,
             tunnels::tauri_commands::save_tunnel_profile,
             tunnels::tauri_commands::delete_tunnel_profile,

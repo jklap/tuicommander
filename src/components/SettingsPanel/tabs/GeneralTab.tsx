@@ -32,6 +32,11 @@ interface CliStatus {
 	prompt_dismissed: boolean;
 }
 
+interface FinderServiceStatus {
+	installed: boolean;
+	prompt_dismissed: boolean;
+}
+
 interface MdkbStatus {
 	available: boolean;
 	connected: boolean;
@@ -42,6 +47,8 @@ interface MdkbStatus {
 export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 	const [cliStatus, setCliStatus] = createSignal<CliStatus | null>(null);
 	const [cliInstalling, setCliInstalling] = createSignal(false);
+	const [finderServiceStatus, setFinderServiceStatus] = createSignal<FinderServiceStatus | null>(null);
+	const [finderServiceInstalling, setFinderServiceInstalling] = createSignal(false);
 	const [mdkbStatus, setMdkbStatus] = createSignal<MdkbStatus | null>(null);
 	const [mdkbInstalling, setMdkbInstalling] = createSignal(false);
 	const [mdkbError, setMdkbError] = createSignal<string | null>(null);
@@ -53,6 +60,16 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 			setCliStatus(status);
 		} catch (err) {
 			appLogger.error("app", "Failed to get CLI status", err);
+		}
+	};
+
+	const refreshFinderServiceStatus = async () => {
+		if (!isTauri() || !isMacOS()) return;
+		try {
+			const status = await invoke<FinderServiceStatus>("get_finder_service_status");
+			setFinderServiceStatus(status);
+		} catch (err) {
+			appLogger.error("app", "Failed to get Finder service status", err);
 		}
 	};
 
@@ -79,6 +96,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 			.then(setHomeDirectory)
 			.catch((err) => appLogger.error("app", "Failed to get home directory", err));
 		refreshCliStatus();
+		refreshFinderServiceStatus();
 		refreshMdkbStatus();
 	});
 
@@ -100,6 +118,27 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 			await refreshCliStatus();
 		} catch (err) {
 			appLogger.error("app", "Failed to uninstall CLI", err);
+		}
+	};
+
+	const handleInstallFinderService = async () => {
+		setFinderServiceInstalling(true);
+		try {
+			await invoke("install_finder_service");
+			await refreshFinderServiceStatus();
+		} catch (err) {
+			appLogger.error("app", "Failed to install Finder service", err);
+		} finally {
+			setFinderServiceInstalling(false);
+		}
+	};
+
+	const handleUninstallFinderService = async () => {
+		try {
+			await invoke("uninstall_finder_service");
+			await refreshFinderServiceStatus();
+		} catch (err) {
+			appLogger.error("app", "Failed to uninstall Finder service", err);
 		}
 	};
 
@@ -262,6 +301,49 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 										</button>
 									</Show>
 								</div>
+							)}
+						</SettingRow>
+					</Show>
+					<Show when={isMacOS() && finderServiceStatus()}>
+						<SettingRow
+							label={t("general.heading.finderService", "Finder Integration")}
+							hint={
+								finderServiceStatus()?.installed
+									? t("general.hint.finderServiceInstalled", "Installed — look for it in Finder's right-click menu.")
+									: t(
+											"general.hint.finderServiceNotInstalled",
+											'Add "New TUICommander Tab Here" to the Finder right-click menu.',
+										)
+							}
+							help={t(
+								"general.hint.finderServiceInfo",
+								'Adds a "New TUICommander Tab Here" item to the Finder right-click menu for any folder or file. TUICommander opens the pane in whichever repo owns that folder, falls back to the repo you\'re currently working in, or asks you which one.',
+							)}
+						>
+							{() => (
+								<Show
+									when={finderServiceStatus()?.installed}
+									fallback={
+										<button
+											data-non-setting="Install or remove the macOS Finder Service bundle; not a stored setting"
+											class={s.testBtn}
+											onClick={handleInstallFinderService}
+											disabled={finderServiceInstalling()}
+										>
+											{finderServiceInstalling()
+												? t("general.btn.installing", "Installing...")
+												: t("general.btn.installFinderService", "Add Finder Integration")}
+										</button>
+									}
+								>
+									<button
+										data-non-setting="Install or remove the macOS Finder Service bundle; not a stored setting"
+										class={s.testBtn}
+										onClick={handleUninstallFinderService}
+									>
+										{t("general.btn.uninstallFinderService", "Remove")}
+									</button>
+								</Show>
 							)}
 						</SettingRow>
 					</Show>
