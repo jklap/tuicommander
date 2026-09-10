@@ -319,12 +319,20 @@ const NONEMPTY_LOCK_STALE_SECS: u64 = 30;
 ///
 /// One hour is deliberately far above [`NONEMPTY_LOCK_STALE_SECS`]: this rule
 /// runs *without* evidence, so it must be the one that almost never fires.
-const UNADJUDICATED_LOCK_STALE_SECS: u64 = 3600;
+///
+/// `pub(crate)`: also the escape-hatch threshold [`crate::git_locks`] reuses
+/// so its read-only detector agrees with this module's adjudication instead
+/// of inventing a second, independent one (#694-4fcc, #724-9909).
+pub(crate) const UNADJUDICATED_LOCK_STALE_SECS: u64 = 3600;
 
 /// Pure staleness rule for an `index.lock` of the given byte size and age.
 /// Split out from [`remove_stale_index_lock`] so the thresholds are unit-testable
 /// without touching the filesystem clock.
-fn is_index_lock_stale(len: u64, age_secs: u64) -> bool {
+///
+/// `pub(crate)`: [`crate::git_locks`] calls this directly rather than
+/// re-deriving its own age/size threshold — see the note on
+/// [`UNADJUDICATED_LOCK_STALE_SECS`].
+pub(crate) fn is_index_lock_stale(len: u64, age_secs: u64) -> bool {
     let threshold = if len == 0 {
         EMPTY_LOCK_STALE_SECS
     } else {
@@ -346,8 +354,13 @@ const LOCK_OWNER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// `Option<Vec<u32>>`, and `None` meant both "nothing holds this lock" and "we
 /// could not find out" — so an `lsof` that merely ran slowly was read downstream
 /// as permission to delete a lock a live `git add` was holding.
+///
+/// `pub(crate)`: [`crate::git_locks`] matches on this directly so its
+/// detector's verdict is derived from the same probe result this module
+/// acts on, not a second call that could — even in principle — race to a
+/// different answer.
 #[derive(Debug, PartialEq, Eq)]
-enum LockOwnership {
+pub(crate) enum LockOwnership {
     /// The probe ran and named the live processes holding the lock open.
     HeldBy(Vec<u32>),
     /// The probe ran and found no holder. The only outcome that is evidence.
@@ -359,7 +372,7 @@ enum LockOwnership {
 /// Why the owner probe has no answer. The two cases are not interchangeable:
 /// one is permanent, the other is a bad minute.
 #[derive(Debug, PartialEq, Eq)]
-enum UnknownOwner {
+pub(crate) enum UnknownOwner {
     /// The probe could not be run at all — no `lsof` on `PATH`, exec refused, or
     /// a platform with no probe. Nothing can be determined here, ever, so
     /// retrying costs a fork and buys nothing.
@@ -436,8 +449,11 @@ fn classify_owner_probe(probe: Result<std::process::Output, GitError>) -> LockOw
 /// Only ever consulted for a lock the age rule has already condemned, so the
 /// `lsof` fork happens at most once per reclaim attempt and never on the hot
 /// path of an ordinary git call.
+///
+/// `pub(crate)`: shared with [`crate::git_locks`] — see
+/// [`UNADJUDICATED_LOCK_STALE_SECS`].
 #[cfg(unix)]
-fn probe_index_lock_owner(lock: &Path) -> LockOwnership {
+pub(crate) fn probe_index_lock_owner(lock: &Path) -> LockOwnership {
     // -t: PIDs only, one per line. -w: no warnings on unreadable mounts.
     //
     // Deadlined: this runs inside `git_cmd`, so an `lsof` stuck on a wedged
@@ -456,7 +472,7 @@ fn probe_index_lock_owner(lock: &Path) -> LockOwnership {
 /// No portable owner probe outside unix. Windows refuses to unlink a file another
 /// process holds open, so the OS itself provides the protection `lsof` gives us here.
 #[cfg(not(unix))]
-fn probe_index_lock_owner(_lock: &Path) -> LockOwnership {
+pub(crate) fn probe_index_lock_owner(_lock: &Path) -> LockOwnership {
     LockOwnership::Unknown(UnknownOwner::Unavailable(
         "no owner probe on this platform".to_string(),
     ))
