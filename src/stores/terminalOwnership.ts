@@ -1,7 +1,7 @@
 import { batch } from "solid-js";
 import { appLogger } from "./appLogger";
 import { globalWorkspaceStore } from "./globalWorkspace";
-import { placementBranchFor, repositoriesStore, resolveRepoOwner } from "./repositories";
+import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "./repositories";
 import { terminalsStore } from "./terminals";
 
 /**
@@ -38,8 +38,8 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 		// would only make it invisible.
 		if (!owner) continue;
 
-		const branchName = placementBranchFor(owner);
-		if (!branchName) continue;
+		const workspaceId = placementWorkspaceFor(owner);
+		if (!workspaceId) continue;
 
 		// A null `repoPath` is the parked marker: this tab sits in the Global
 		// Workspace because nothing claimed its cwd. Now something does, so it
@@ -51,7 +51,7 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 		const wasParked = terminal.repoPath == null;
 
 		const current = repositoriesStore.findOwnerForTerminal(terminalId);
-		if (current?.repoPath === owner.repoPath && current.branchName === branchName) {
+		if (current?.repoPath === owner.repoPath && current.workspaceId === workspaceId) {
 			// Placement already correct; the record may still be stale if the repo was
 			// registered after the terminal was parked here.
 			if (terminal.repoPath !== owner.repoPath) {
@@ -63,12 +63,12 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 
 		appLogger.info(
 			"terminal",
-			`[Reconcile] ${terminalId} ${current ? `${current.repoPath}:${current.branchName}` : "(unplaced)"} → ${owner.repoPath}:${branchName} (cwd=${terminal.cwd})`,
+			`[Reconcile] ${terminalId} ${current ? `${current.repoPath}:${current.workspaceId}` : "(unplaced)"} → ${owner.repoPath}:${workspaceId} (cwd=${terminal.cwd})`,
 		);
 		batch(() => {
-			if (current) repositoriesStore.removeTerminalFromBranch(current.repoPath, current.branchName, terminalId);
+			if (current) repositoriesStore.removeTerminalFromWorkspace(current.repoPath, current.workspaceId, terminalId);
 			terminalsStore.setRepoPath(terminalId, owner.repoPath);
-			repositoriesStore.addTerminalToBranch(owner.repoPath, branchName, terminalId);
+			repositoriesStore.addTerminalToWorkspace(owner.repoPath, workspaceId, terminalId);
 			if (wasParked) globalWorkspaceStore.unpromote(terminalId);
 		});
 		moved++;

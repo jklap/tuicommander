@@ -211,7 +211,7 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 
 		const owner = repositoriesStore.findOwnerForTerminal(id);
 		if (owner) {
-			repositoriesStore.removeTerminalFromBranch(owner.repoPath, owner.branchName, id);
+			repositoriesStore.removeTerminalFromWorkspace(owner.repoPath, owner.workspaceId, id);
 		}
 		const activeRepo = repositoriesStore.getActive();
 

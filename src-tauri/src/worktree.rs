@@ -640,10 +640,15 @@ pub(crate) async fn create_worktree(
     match first {
         Ok(worktree) => {
             state.invalidate_repo_caches(&config.base_repo);
+            let branch = worktree.branch.clone().unwrap_or_default();
             Ok(serde_json::json!({
                 "status": "ok",
                 "name": worktree.name,
                 "path": worktree.path.to_string_lossy(),
+                // Same field the HTTP route reports, for the same reason: this is
+                // how the caller addresses the workspace afterwards, and it must
+                // not be re-derived from the branch.
+                "workspace_id": workspace_id_of_worktree(&branch),
                 "branch": worktree.branch,
                 "base_repo": worktree.base_repo.to_string_lossy(),
             }))
@@ -666,11 +671,16 @@ pub(crate) async fn create_worktree(
                     key = %in_flight_key,
                     "create_worktree: recreate already in-flight, returning pending without re-spawning"
                 );
+                let branch = config
+                    .branch
+                    .clone()
+                    .unwrap_or_else(|| worktree_name.clone());
                 return Ok(serde_json::json!({
                     "status": "pending",
                     "name": worktree_name,
                     "path": stale_path.to_string_lossy(),
-                    "branch": config.branch.clone().unwrap_or_else(|| worktree_name.clone()),
+                    "workspace_id": workspace_id_of_worktree(&branch),
+                    "branch": branch,
                     "base_repo": config.base_repo,
                 }));
             }
@@ -793,11 +803,16 @@ pub(crate) async fn create_worktree(
             // Return pending immediately — JS will show placeholder until
             // either repo-changed (success/cleared) or worktree-create-failed
             // (error toast) fires.
+            let branch = config
+                .branch
+                .clone()
+                .unwrap_or_else(|| worktree_name.clone());
             Ok(serde_json::json!({
                 "status": "pending",
                 "name": worktree_name,
                 "path": stale_path.to_string_lossy(),
-                "branch": config.branch.clone().unwrap_or_else(|| worktree_name.clone()),
+                "workspace_id": workspace_id_of_worktree(&branch),
+                "branch": branch,
                 "base_repo": config.base_repo,
             }))
         }

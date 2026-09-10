@@ -32,12 +32,12 @@ describe("worktree consolidation", () => {
 	/** Register a repo with a main branch and `worktrees` worktree branches. */
 	function seedRepo(worktrees: string[]): Record<string, string> {
 		repositoriesStore.add({ path: REPO, displayName: "a" });
-		repositoriesStore.setBranch(REPO, "main", { isMain: true, worktreePath: null });
+		repositoriesStore.setWorkspace(REPO, "main", { isMain: true, worktreePath: null });
 		const ids: Record<string, string> = {};
 		for (const name of worktrees) {
-			repositoriesStore.setBranch(REPO, name, { worktreePath: `/wt/${name}` });
+			repositoriesStore.setWorkspace(REPO, name, { worktreePath: `/wt/${name}` });
 			const termId = terminalsStore.add(makeTerminal({ name }));
-			repositoriesStore.addTerminalToBranch(REPO, name, termId);
+			repositoriesStore.addTerminalToWorkspace(REPO, name, termId);
 			ids[name] = termId;
 		}
 		return ids;
@@ -48,7 +48,7 @@ describe("worktree consolidation", () => {
 			const ids = seedRepo(["feat-1", "feat-2"]);
 			// The main branch has no worktreePath, so its terminals stay out.
 			const mainTerm = terminalsStore.add(makeTerminal({ name: "main" }));
-			repositoriesStore.addTerminalToBranch(REPO, "main", mainTerm);
+			repositoriesStore.addTerminalToWorkspace(REPO, "main", mainTerm);
 
 			const selected = hook.worktreeTerminalsOf(REPO);
 

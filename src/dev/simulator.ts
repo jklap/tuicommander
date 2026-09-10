@@ -34,7 +34,7 @@ function ensureRepo(): { repoPath: string; branch: string } {
 	// Create a temporary simulated repo
 	if (!repositoriesStore.get(SIM_REPO_PATH)) {
 		repositoriesStore.add({ path: SIM_REPO_PATH, displayName: "Sim Repo", initials: "SR" });
-		repositoriesStore.setBranch(SIM_REPO_PATH, "feature/sim", {
+		repositoriesStore.setWorkspace(SIM_REPO_PATH, "feature/sim", {
 			branchName: "feature/sim",
 			isMain: false,
 			worktreePath: null,
@@ -72,12 +72,12 @@ const simulator = {
 	git(options: { branch?: string; additions?: number; deletions?: number }): void {
 		const { repoPath } = ensureRepo();
 		if (options.branch) {
-			repositoriesStore.setBranch(repoPath, options.branch);
+			repositoriesStore.setWorkspace(repoPath, options.branch);
 			repositoriesStore.setActiveWorkspace(repoPath, options.branch);
 		}
 		const branch = repositoriesStore.get(repoPath)?.activeWorkspaceId;
 		if (branch) {
-			repositoriesStore.updateBranchStats(repoPath, branch, options.additions ?? 0, options.deletions ?? 0);
+			repositoriesStore.updateWorkspaceStats(repoPath, branch, options.additions ?? 0, options.deletions ?? 0);
 		}
 		console.log(`[tuic] Git state updated for ${repoPath}`);
 	},

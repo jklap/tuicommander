@@ -30,6 +30,15 @@ vi.mock("../../stores/repositories", () => ({
 		get: mockGet,
 		bumpRevision: mockBumpRevision,
 		bumpGitRevision: mockBumpGitRevision,
+		// The real seam: scan the mocked repo's workspaces for one on that branch.
+		// Stubbing it as identity would hide the very lookup under test.
+		workspaceIdOnBranch: (repoPath: string, branchName: string) => {
+			const workspaces = mockGet(repoPath)?.workspaces ?? {};
+			for (const [workspaceId, workspace] of Object.entries(workspaces)) {
+				if ((workspace as { branchName?: string }).branchName === branchName) return workspaceId;
+			}
+			return null;
+		},
 	},
 }));
 
@@ -62,7 +71,7 @@ describe("useAutoDeleteBranch", () => {
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "off" });
 		mockGet.mockReturnValue({
 			workspaces: {
-				"feature/x": { name: "feature/x", isMain: false },
+				"feature/x": { branchName: "feature/x", isMain: false },
 			},
 		});
 	});
@@ -203,7 +212,7 @@ describe("useAutoDeleteBranch", () => {
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
 		mockGet.mockReturnValue({
 			workspaces: {
-				main: { name: "main", isMain: true },
+				main: { branchName: "main", isMain: true },
 			},
 		});
 		const dispose = setup();
@@ -221,7 +230,7 @@ describe("useAutoDeleteBranch", () => {
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
 		mockGet.mockReturnValue({
 			workspaces: {
-				"other-branch": { name: "other-branch", isMain: false },
+				"other-branch": { branchName: "other-branch", isMain: false },
 			},
 		});
 		const dispose = setup();

@@ -46,30 +46,31 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): void {
 		const mode = effective?.autoDeleteOnPrClose ?? "off";
 		if (mode === "off") return;
 
-		// Never delete the default/main branch
+		// A closed PR names its head BRANCH, so the row it belongs to comes from the
+		// single branch->id seam (see its DEFERRED note: with two workspaces on one
+		// branch, a PR cannot say which checkout to delete).
 		const repo = repositoriesStore.get(repoPath);
+		const workspaceId = repositoriesStore.workspaceIdOnBranch(repoPath, branch);
 		if (repo) {
-			const branchState = repo.workspaces[branch];
+			const branchState = workspaceId ? repo.workspaces[workspaceId] : undefined;
 			if (branchState?.isMain) {
 				appLogger.debug("git", `Skipping auto-delete for default branch '${branch}'`);
 				return;
 			}
 		}
 
-		// Check if branch even exists locally
-		const branches = repo?.workspaces;
-		if (branches && !(branch in branches)) {
-			// Branch doesn't exist locally — nothing to delete
-			return;
-		}
+		// No workspace has it checked out — nothing local to delete.
+		if (repo && !workspaceId) return;
 
 		let effectiveMode = mode;
 
 		// If auto mode, check dirty state first
 		if (effectiveMode === "auto") {
 			try {
-				// `branch` is the store key, i.e. the workspace id (identity migration).
-				const dirty = await invoke<boolean>("check_worktree_dirty", { repoPath, workspaceId: branch });
+				const dirty = await invoke<boolean>("check_worktree_dirty", {
+					repoPath,
+					workspaceId: workspaceId ?? branch,
+				});
 				if (dirty) {
 					appLogger.info("git", `Branch '${branch}' has uncommitted changes — asking before deleting`);
 					effectiveMode = "ask";

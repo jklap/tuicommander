@@ -99,8 +99,8 @@ describe("WorktreeManager", () => {
 
 	it("lists worktrees from repositories store", () => {
 		repositoriesStore.add({ path: "/repo", displayName: "MyRepo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setBranch("/repo", "feature-a", { worktreePath: "/repo/.wt/feature-a" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "feature-a", { worktreePath: "/repo/.wt/feature-a" });
 
 		worktreeManagerStore.open();
 		const { container } = render(() => <WorktreeManager />);
@@ -114,9 +114,51 @@ describe("WorktreeManager", () => {
 		expect(branchTexts[1]).toBe("main");
 	});
 
+	// Two rows on one branch, told apart by their directories, each acting on
+	// itself. Before the id keyed these rows, both carried the id
+	// `repoPath::feat` and a batch action ran twice against the same workspace.
+	it("renders two same-branch workspaces as two independently actionable rows", () => {
+		const onDelete = vi.fn();
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		repositoriesStore.setWorkspace("/repo", "feat~aaaa1111", {
+			branchName: "feat",
+			worktreePath: "/repo__cow/feat-one",
+			kind: "cow",
+		});
+		repositoriesStore.setWorkspace("/repo", "feat~bbbb2222", {
+			branchName: "feat",
+			worktreePath: "/repo__cow/feat-two",
+			kind: "cow",
+		});
+
+		worktreeManagerStore.open();
+		const { container } = render(() => (
+			<WorktreeManager actions={{ onOpenTerminal: vi.fn(), onDelete, onMergeAndArchive: vi.fn() }} />
+		));
+
+		// `div` because the row checkboxes also carry a `row`-prefixed class.
+		const rows = container.querySelectorAll("div[class*='row']");
+		expect(rows.length).toBe(3);
+		const paths = Array.from(rows).map((r) => r.querySelector("[class*='worktreePath']")?.textContent);
+		expect(paths).toContain("/repo__cow/feat-one");
+		expect(paths).toContain("/repo__cow/feat-two");
+
+		// Select both and batch-delete: two DIFFERENT workspaces are addressed.
+		const checkboxes = container.querySelectorAll("input[type='checkbox'][class*='rowCheckbox']");
+		expect(checkboxes.length).toBe(2);
+		for (const box of checkboxes) (box as HTMLInputElement).click();
+		const deleteButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+			btn.textContent?.includes("Delete"),
+		);
+		deleteButton!.click();
+
+		expect(onDelete.mock.calls.map((c) => c[1]).sort()).toEqual(["feat~aaaa1111", "feat~bbbb2222"]);
+	});
+
 	it("shows main badge on main worktree rows", () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 		worktreeManagerStore.open();
 		const { container } = render(() => <WorktreeManager />);
@@ -126,7 +168,7 @@ describe("WorktreeManager", () => {
 
 	it("shows dirty stats for worktrees with changes", () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "feature-x", { worktreePath: "/repo/.wt/x", additions: 5, deletions: 3 });
+		repositoriesStore.setWorkspace("/repo", "feature-x", { worktreePath: "/repo/.wt/x", additions: 5, deletions: 3 });
 
 		worktreeManagerStore.open();
 		const { container } = render(() => <WorktreeManager />);
@@ -138,7 +180,7 @@ describe("WorktreeManager", () => {
 
 	it("shows 'clean' for worktrees with no changes", () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "feature-y", { worktreePath: "/repo/.wt/y", additions: 0, deletions: 0 });
+		repositoriesStore.setWorkspace("/repo", "feature-y", { worktreePath: "/repo/.wt/y", additions: 0, deletions: 0 });
 
 		worktreeManagerStore.open();
 		const { container } = render(() => <WorktreeManager />);
@@ -174,8 +216,8 @@ describe("WorktreeManager", () => {
 
 	it("shows footer with worktree count", () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setBranch("/repo", "feat", { worktreePath: "/repo/.wt/feat" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "feat", { worktreePath: "/repo/.wt/feat" });
 
 		worktreeManagerStore.open();
 		const { container } = render(() => <WorktreeManager />);
@@ -185,7 +227,7 @@ describe("WorktreeManager", () => {
 
 	it("shows repo name badge", () => {
 		repositoriesStore.add({ path: "/home/user/my-project", displayName: "my-project" });
-		repositoriesStore.setBranch("/home/user/my-project", "feat", { worktreePath: "/home/user/my-project/.wt/feat" });
+		repositoriesStore.setWorkspace("/home/user/my-project", "feat", { worktreePath: "/home/user/my-project/.wt/feat" });
 
 		worktreeManagerStore.open();
 		const { container } = render(() => <WorktreeManager />);
@@ -196,9 +238,9 @@ describe("WorktreeManager", () => {
 	describe("repo filter pills", () => {
 		it("shows repo pill buttons including All", () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "Alpha" });
-			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 			repositoriesStore.add({ path: "/repo-b", displayName: "Beta" });
-			repositoriesStore.setBranch("/repo-b", "dev", { worktreePath: "/repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "dev", { worktreePath: "/repo-b" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager />);
@@ -211,9 +253,9 @@ describe("WorktreeManager", () => {
 
 		it("filters rows by selected repo", () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "Alpha" });
-			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 			repositoriesStore.add({ path: "/repo-b", displayName: "Beta" });
-			repositoriesStore.setBranch("/repo-b", "dev", { worktreePath: "/repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "dev", { worktreePath: "/repo-b" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.setRepoFilter("/repo-a");
@@ -226,9 +268,9 @@ describe("WorktreeManager", () => {
 
 		it("shows all repos when filter is null (All)", () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "Alpha" });
-			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 			repositoriesStore.add({ path: "/repo-b", displayName: "Beta" });
-			repositoriesStore.setBranch("/repo-b", "dev", { worktreePath: "/repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "dev", { worktreePath: "/repo-b" });
 
 			worktreeManagerStore.open();
 			// repoFilter is null by default
@@ -242,9 +284,9 @@ describe("WorktreeManager", () => {
 	describe("text search filter", () => {
 		it("filters rows by branch name substring (case-insensitive)", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature-auth", { worktreePath: "/repo/.wt/auth" });
-			repositoriesStore.setBranch("/repo", "feature-billing", { worktreePath: "/repo/.wt/billing" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature-auth", { worktreePath: "/repo/.wt/auth" });
+			repositoriesStore.setWorkspace("/repo", "feature-billing", { worktreePath: "/repo/.wt/billing" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.setTextFilter("AUTH");
@@ -273,7 +315,7 @@ describe("WorktreeManager", () => {
 
 		it("shows action buttons on non-main worktree rows", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature-x", { worktreePath: "/repo/.wt/x" });
+			repositoriesStore.setWorkspace("/repo", "feature-x", { worktreePath: "/repo/.wt/x" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager actions={mockActions} />);
@@ -284,7 +326,7 @@ describe("WorktreeManager", () => {
 
 		it("disables delete and merge on main worktree rows", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager actions={mockActions} />);
@@ -298,7 +340,7 @@ describe("WorktreeManager", () => {
 
 		it("calls onOpenTerminal when terminal button is clicked", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat", { worktreePath: "/repo/.wt/feat" });
+			repositoriesStore.setWorkspace("/repo", "feat", { worktreePath: "/repo/.wt/feat" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager actions={mockActions} />);
@@ -310,7 +352,7 @@ describe("WorktreeManager", () => {
 
 		it("calls onDelete when delete button is clicked", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat", { worktreePath: "/repo/.wt/feat" });
+			repositoriesStore.setWorkspace("/repo", "feat", { worktreePath: "/repo/.wt/feat" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager actions={mockActions} />);
@@ -322,7 +364,7 @@ describe("WorktreeManager", () => {
 
 		it("calls onMergeAndArchive when merge button is clicked", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat", { worktreePath: "/repo/.wt/feat" });
+			repositoriesStore.setWorkspace("/repo", "feat", { worktreePath: "/repo/.wt/feat" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager actions={mockActions} />);
@@ -336,10 +378,10 @@ describe("WorktreeManager", () => {
 	describe("composing filters", () => {
 		it("applies repo filter AND text filter together", () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "Alpha" });
-			repositoriesStore.setBranch("/repo-a", "feature-auth", { worktreePath: "/repo-a/.wt/auth" });
-			repositoriesStore.setBranch("/repo-a", "feature-billing", { worktreePath: "/repo-a/.wt/billing" });
+			repositoriesStore.setWorkspace("/repo-a", "feature-auth", { worktreePath: "/repo-a/.wt/auth" });
+			repositoriesStore.setWorkspace("/repo-a", "feature-billing", { worktreePath: "/repo-a/.wt/billing" });
 			repositoriesStore.add({ path: "/repo-b", displayName: "Beta" });
-			repositoriesStore.setBranch("/repo-b", "feature-auth", { worktreePath: "/repo-b/.wt/auth" });
+			repositoriesStore.setWorkspace("/repo-b", "feature-auth", { worktreePath: "/repo-b/.wt/auth" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.setRepoFilter("/repo-a");
@@ -362,8 +404,8 @@ describe("WorktreeManager", () => {
 
 		it("shows checkboxes when more than 1 non-main worktree exists", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
-			repositoriesStore.setBranch("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager actions={mockActions} />);
@@ -374,8 +416,8 @@ describe("WorktreeManager", () => {
 
 		it("toggles selection when checkbox is clicked", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
-			repositoriesStore.setBranch("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager actions={mockActions} />);
@@ -388,9 +430,9 @@ describe("WorktreeManager", () => {
 
 		it("shows select-all checkbox in header that selects all non-main rows", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
-			repositoriesStore.setBranch("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager actions={mockActions} />);
@@ -405,8 +447,8 @@ describe("WorktreeManager", () => {
 
 		it("shows selection count and Delete Selected button when items selected", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
-			repositoriesStore.setBranch("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.toggleSelect("/repo::feat-a");
@@ -422,8 +464,8 @@ describe("WorktreeManager", () => {
 
 		it("calls onDelete for each selected worktree on batch delete", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
-			repositoriesStore.setBranch("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.toggleSelect("/repo::feat-a");
@@ -439,7 +481,7 @@ describe("WorktreeManager", () => {
 
 		it("clears selection after batch delete", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.toggleSelect("/repo::feat-a");
@@ -453,8 +495,8 @@ describe("WorktreeManager", () => {
 
 		it("shows Merge & Archive Selected button when items selected", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
-			repositoriesStore.setBranch("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.toggleSelect("/repo::feat-a");
@@ -466,8 +508,8 @@ describe("WorktreeManager", () => {
 
 		it("calls onMergeAndArchive for each selected worktree on batch merge", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
-			repositoriesStore.setBranch("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.toggleSelect("/repo::feat-a");
@@ -484,8 +526,8 @@ describe("WorktreeManager", () => {
 
 		it("does not show checkboxes on main worktree rows", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
 
 			worktreeManagerStore.open();
 			const { container } = render(() => <WorktreeManager actions={mockActions} />);
@@ -498,9 +540,9 @@ describe("WorktreeManager", () => {
 	describe("orphan worktrees", () => {
 		it("calls detect_orphan_worktrees for each repo when panel opens", async () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "A" });
-			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 			repositoriesStore.add({ path: "/repo-b", displayName: "B" });
-			repositoriesStore.setBranch("/repo-b", "dev", { worktreePath: "/repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "dev", { worktreePath: "/repo-b" });
 
 			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
 				if (cmd === "detect_orphan_worktrees") return [];
@@ -519,7 +561,7 @@ describe("WorktreeManager", () => {
 
 		it("displays orphan rows with orphan badge", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
 				if (cmd === "detect_orphan_worktrees") return ["/repo/.wt/stale-branch"];
@@ -539,7 +581,7 @@ describe("WorktreeManager", () => {
 
 		it("shows prune button on orphan rows", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
 				if (cmd === "detect_orphan_worktrees") return ["/repo/.wt/stale"];
@@ -558,7 +600,7 @@ describe("WorktreeManager", () => {
 
 		it("keeps orphan row when remove_orphan_worktree fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
 				if (cmd === "detect_orphan_worktrees") return ["/repo/.wt/stale"];
@@ -584,7 +626,7 @@ describe("WorktreeManager", () => {
 
 		it("calls remove_orphan_worktree and removes row on prune click", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
 				if (cmd === "detect_orphan_worktrees") return ["/repo/.wt/stale"];
@@ -618,7 +660,7 @@ describe("WorktreeManager", () => {
 	describe("PR badge", () => {
 		it("shows PR number badge for open PR", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature-x", { worktreePath: "/repo/.wt/x" });
+			repositoriesStore.setWorkspace("/repo", "feature-x", { worktreePath: "/repo/.wt/x" });
 			githubStore.updateRepoData("/repo", [mockPr({ number: 42, title: "My PR", branch: "feature-x", state: "OPEN" })]);
 
 			worktreeManagerStore.open();
@@ -631,7 +673,7 @@ describe("WorktreeManager", () => {
 
 		it("shows 'Merged' badge for merged PR", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature-x", { worktreePath: "/repo/.wt/x" });
+			repositoriesStore.setWorkspace("/repo", "feature-x", { worktreePath: "/repo/.wt/x" });
 			githubStore.updateRepoData("/repo", [mockPr({ number: 10, branch: "feature-x", state: "MERGED" })]);
 
 			worktreeManagerStore.open();
@@ -644,7 +686,7 @@ describe("WorktreeManager", () => {
 
 		it("shows 'Closed' badge for closed PR", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature-x", { worktreePath: "/repo/.wt/x" });
+			repositoriesStore.setWorkspace("/repo", "feature-x", { worktreePath: "/repo/.wt/x" });
 			githubStore.updateRepoData("/repo", [mockPr({ number: 5, branch: "feature-x", state: "CLOSED" })]);
 
 			worktreeManagerStore.open();
@@ -665,8 +707,8 @@ describe("WorktreeManager", () => {
 
 		it("deselects all when select-all checkbox is clicked while all are selected", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
-			repositoriesStore.setBranch("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
+			repositoriesStore.setWorkspace("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });
+			repositoriesStore.setWorkspace("/repo", "feat-b", { worktreePath: "/repo/.wt/b" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.selectAll(["/repo::feat-a", "/repo::feat-b"]);
@@ -681,9 +723,9 @@ describe("WorktreeManager", () => {
 	describe("scoped revision subscriptions", () => {
 		it("only calls detect_orphan_worktrees for filtered repo when repoFilter is set", async () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "A" });
-			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 			repositoriesStore.add({ path: "/repo-b", displayName: "B" });
-			repositoriesStore.setBranch("/repo-b", "dev", { worktreePath: "/repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "dev", { worktreePath: "/repo-b" });
 
 			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
 				if (cmd === "detect_orphan_worktrees") return [];
@@ -709,9 +751,9 @@ describe("WorktreeManager", () => {
 
 		it("detects orphans for all repos when no repoFilter is set", async () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "A" });
-			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 			repositoriesStore.add({ path: "/repo-b", displayName: "B" });
-			repositoriesStore.setBranch("/repo-b", "dev", { worktreePath: "/repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "dev", { worktreePath: "/repo-b" });
 
 			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
 				if (cmd === "detect_orphan_worktrees") return [];
@@ -732,7 +774,7 @@ describe("WorktreeManager", () => {
 	describe("filter edge cases", () => {
 		it("shows empty state when filter combination matches nothing", () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "Alpha" });
-			repositoriesStore.setBranch("/repo-a", "feature-auth", { worktreePath: "/repo-a/.wt/auth" });
+			repositoriesStore.setWorkspace("/repo-a", "feature-auth", { worktreePath: "/repo-a/.wt/auth" });
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.setRepoFilter("/repo-a");

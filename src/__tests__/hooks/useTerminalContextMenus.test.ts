@@ -33,7 +33,7 @@ import { useTerminalContextMenus } from "../../hooks/useTerminalContextMenus";
 function createOptions(available: Array<{ type: string }> = []) {
 	return {
 		agentDetection: { getAvailable: vi.fn(() => available) },
-		gitOps: { handleAddTerminalToBranch: vi.fn().mockResolvedValue("new-term") },
+		gitOps: { handleAddTerminalToWorkspace: vi.fn().mockResolvedValue("new-term") },
 		splitPanes: { handleSplit: vi.fn() },
 		terminalLifecycle: { copyFromTerminal: vi.fn(), pasteToTerminal: vi.fn(), clearTerminal: vi.fn() },
 		closeActiveTabOrPane: vi.fn(),
@@ -89,7 +89,7 @@ describe("useTerminalContextMenus", () => {
 		const item = menus.buildSidebarAgentMenuItems("/repo", "feature")[0];
 		await item.action();
 
-		expect(options.gitOps.handleAddTerminalToBranch).toHaveBeenCalledWith("/repo", "feature");
+		expect(options.gitOps.handleAddTerminalToWorkspace).toHaveBeenCalledWith("/repo", "feature");
 		expect(mockTerminals.update).toHaveBeenCalledWith(
 			"new-term",
 			expect.objectContaining({ name: "Claude Code", agentType: "claude", agentLaunchCommand: "claude" }),

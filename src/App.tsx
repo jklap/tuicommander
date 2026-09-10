@@ -330,6 +330,7 @@ const App: Component = () => {
 		setWorktreeCleanupStepNotes({});
 		await executeCleanup({
 			repoPath: ctx.repoPath,
+			workspaceId: ctx.workspaceId,
 			branchName: ctx.branchName,
 			baseBranch: ctx.baseBranch,
 			steps: steps.map((s) => ({ id: s.id, checked: s.checked })),
@@ -724,15 +725,17 @@ const App: Component = () => {
 		executeSmartPrompt: smartPrompts.executeSmartPrompt,
 	});
 
-	// Worktree manager action callbacks
+	// Worktree manager action callbacks. Every one of them addresses a WORKSPACE:
+	// the manager rows are workspaces, and `mainBranch` below is the merge target,
+	// which is a ref and stays a branch name.
 	const worktreeActions: WorktreeActions = {
-		onOpenTerminal: (repoPath, branchName) => {
-			void gitOps.handleAddTerminalToBranch(repoPath, branchName);
+		onOpenTerminal: (repoPath, workspaceId) => {
+			void gitOps.handleAddTerminalToWorkspace(repoPath, workspaceId);
 		},
-		onDelete: (repoPath, branchName) => {
-			void gitOps.handleRemoveBranch(repoPath, branchName);
+		onDelete: (repoPath, workspaceId) => {
+			void gitOps.handleRemoveWorkspace(repoPath, workspaceId);
 		},
-		onMergeAndArchive: (repoPath, branchName) => {
+		onMergeAndArchive: (repoPath, workspaceId) => {
 			const repoState = repositoriesStore.get(repoPath);
 			const mainBranch = repoState ? Object.values(repoState.workspaces).find((b) => b.isMain)?.branchName : undefined;
 			if (!mainBranch) {
@@ -741,7 +744,7 @@ const App: Component = () => {
 			}
 			const effective = repoSettingsStore.getEffective(repoPath);
 			const afterMerge = effective?.afterMerge ?? "archive";
-			void gitOps.handleMergeAndArchive(repoPath, branchName, mainBranch, afterMerge);
+			void gitOps.handleMergeAndArchive(repoPath, workspaceId, mainBranch, afterMerge);
 		},
 	};
 
@@ -831,8 +834,8 @@ const App: Component = () => {
 				<Sidebar
 					quickSwitcherActive={quickSwitcherVisible()}
 					onBranchSelect={gitOps.handleBranchSelect}
-					onAddTerminal={gitOps.handleAddTerminalToBranch}
-					onRemoveBranch={gitOps.handleRemoveBranch}
+					onAddTerminal={gitOps.handleAddTerminalToWorkspace}
+					onRemoveBranch={gitOps.handleRemoveWorkspace}
 					onRenameBranch={(repoPath, branchName) => {
 						gitOps.handleOpenRenameBranchDialog(repoPath, branchName);
 						setRenameBranchDialogVisible(true);
@@ -992,11 +995,13 @@ const App: Component = () => {
 			<BranchSwitcher
 				activeRepoPath={repositoriesStore.state.activeRepoPath ?? undefined}
 				onSelect={(repoPath, branchName) => {
-					// If the branch exists in the store (has a worktree), just switch UI view.
-					// Otherwise it's a regular branch needing a real git checkout.
-					const branch = repositoriesStore.get(repoPath)?.workspaces[branchName];
-					if (branch) {
-						gitOps.handleBranchSelect(repoPath, branchName);
+					// The switcher lists BRANCHES, so this resolves through the single
+					// branch->id seam. A hit means some workspace already has that branch
+					// checked out and switching is a UI move; a miss means a real
+					// `git checkout` in the main worktree.
+					const workspaceId = repositoriesStore.workspaceIdOnBranch(repoPath, branchName);
+					if (workspaceId) {
+						gitOps.handleBranchSelect(repoPath, workspaceId);
 					} else {
 						gitOps.handleSwitchBranch(repoPath, branchName);
 					}

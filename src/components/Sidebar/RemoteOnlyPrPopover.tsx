@@ -67,9 +67,10 @@ export const RemoteOnlyPrPopover: Component<{
 		return repo?.activeWorkspaceId === ctx.baseBranch;
 	};
 
-	const closeTerminalsForBranch = async (repoPath: string, branchName: string) => {
+	/** Called by `executeCleanup`, which passes the workspace id it was given. */
+	const closeTerminalsForBranch = async (repoPath: string, workspaceId: string) => {
 		const repo = repositoriesStore.get(repoPath);
-		const branch = repo?.workspaces[branchName];
+		const branch = repo?.workspaces[workspaceId];
 		if (branch) {
 			for (const termId of branch.terminals) {
 				try {
@@ -91,6 +92,10 @@ export const RemoteOnlyPrPopover: Component<{
 
 		await executeCleanup({
 			repoPath: props.repoPath,
+			// A PR names its head branch, so the workspace is resolved through the
+			// single documented branch->id seam; the id addresses the row and the
+			// checkout, the branch stays the ref to delete.
+			workspaceId: repositoriesStore.workspaceIdOnBranch(props.repoPath, ctx.branchName) ?? ctx.branchName,
 			branchName: ctx.branchName,
 			baseBranch: ctx.baseBranch,
 			steps: steps.map((st) => ({ id: st.id, checked: st.checked })),

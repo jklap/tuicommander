@@ -180,7 +180,7 @@ describe("useGitOperations", () => {
 	describe("handleNewTab (#81 — Cmd+T / palette / File>New Tab path)", () => {
 		it("registers the new terminal in the active branch.terminals", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			await gitOps.handleBranchSelect("/repo", "main"); // auto-spawns the first terminal
 
 			const before = repositoriesStore.get("/repo")?.workspaces["main"]?.terminals.length ?? 0;
@@ -203,7 +203,7 @@ describe("useGitOperations", () => {
 	describe("handleBranchSelect", () => {
 		it("sets active repo and branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			await gitOps.handleBranchSelect("/repo", "main");
 
@@ -219,12 +219,12 @@ describe("useGitOperations", () => {
 			// simultaneously (duplicate terminals, pane-layout races). The FIFO queue
 			// must run them strictly one at a time.
 			//
-			// Each fresh-branch select awaits handleAddTerminalToBranch → pty.canSpawn(),
+			// Each fresh-branch select awaits handleAddTerminalToWorkspace → pty.canSpawn(),
 			// so canSpawn is the inner's yield point. Instrument it to detect overlap:
 			// with the bug, the three inner runs interleave here and maxActive reaches >1.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			for (const b of ["b1", "b2", "b3"]) {
-				repositoriesStore.setBranch("/repo", b, { worktreePath: `/repo/wt-${b}` });
+				repositoriesStore.setWorkspace("/repo", b, { worktreePath: `/repo/wt-${b}` });
 			}
 
 			let active = 0;
@@ -256,7 +256,7 @@ describe("useGitOperations", () => {
 
 		it("auto-spawns terminal on first branch select", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 
 			await gitOps.handleBranchSelect("/repo", "feature");
 
@@ -268,7 +268,7 @@ describe("useGitOperations", () => {
 
 		it("does not auto-spawn after user closed all terminals", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt", hadTerminals: true });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt", hadTerminals: true });
 
 			await gitOps.handleBranchSelect("/repo", "feature");
 
@@ -279,8 +279,8 @@ describe("useGitOperations", () => {
 
 		it("clears activeId when switching to branch with no terminals", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "develop", { worktreePath: "/repo/wt-dev", hadTerminals: true });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "develop", { worktreePath: "/repo/wt-dev", hadTerminals: true });
 
 			// Select main first — creates a terminal and sets activeId
 			await gitOps.handleBranchSelect("/repo", "main");
@@ -296,7 +296,7 @@ describe("useGitOperations", () => {
 
 		it("restores terminals from savedTerminals on branch click", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", {
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
 				savedTerminals: [
@@ -317,7 +317,7 @@ describe("useGitOperations", () => {
 
 		it("skips plain shell tabs and spawns fresh terminal on restore", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", {
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
 				savedTerminals: [
@@ -336,7 +336,7 @@ describe("useGitOperations", () => {
 
 		it("preserves terminal metadata during lazy restore", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", {
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
 				savedTerminals: [{ name: "My Terminal", cwd: "/custom/path", fontSize: 16, agentType: "claude" }],
@@ -355,7 +355,7 @@ describe("useGitOperations", () => {
 
 		it("preserves agentLaunchCommand during lazy restore", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", {
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
 				savedTerminals: [
@@ -382,7 +382,7 @@ describe("useGitOperations", () => {
 			// Simulate old terminal IDs in the branch (from before app restart)
 			const oldTermId1 = "old-term-1";
 			const oldTermId2 = "old-term-2";
-			repositoriesStore.setBranch("/repo", "feature", {
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
 				terminals: [oldTermId1, oldTermId2],
@@ -434,7 +434,7 @@ describe("useGitOperations", () => {
 
 		it("sets pendingResumeCommand on restored agent terminals", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", {
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
 				savedTerminals: [
@@ -454,7 +454,7 @@ describe("useGitOperations", () => {
 
 		it("does not restore savedTerminals when live terminals exist", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", {
+			repositoriesStore.setWorkspace("/repo", "main", {
 				worktreePath: "/repo",
 				savedTerminals: [{ name: "Saved", cwd: "/repo", fontSize: 14, agentType: null }],
 			});
@@ -467,7 +467,7 @@ describe("useGitOperations", () => {
 				cwd: "/repo",
 				awaitingInput: null,
 			});
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 
 			await gitOps.handleBranchSelect("/repo", "main");
 
@@ -479,7 +479,7 @@ describe("useGitOperations", () => {
 
 		it("activates existing terminal when branch has one", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			const id = terminalsStore.add({
 				sessionId: null,
@@ -488,7 +488,7 @@ describe("useGitOperations", () => {
 				cwd: "/repo",
 				awaitingInput: null,
 			});
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 
 			await gitOps.handleBranchSelect("/repo", "main");
 
@@ -497,12 +497,12 @@ describe("useGitOperations", () => {
 
 		it("preserves active tab when re-clicking the same branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1", cwd: "/repo" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2", cwd: "/repo" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
 
 			// Select the branch first so it becomes the active branch
 			await gitOps.handleBranchSelect("/repo", "main");
@@ -517,18 +517,18 @@ describe("useGitOperations", () => {
 
 		it("remembers last active tab when switching between branches", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt/feature" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt/feature" });
 
 			// Branch main: 2 terminals
 			const m1 = terminalsStore.add(makeTerminal({ name: "M1", cwd: "/repo" }));
 			const m2 = terminalsStore.add(makeTerminal({ name: "M2", cwd: "/repo" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", m1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", m2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", m1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", m2);
 
 			// Branch feature: 1 terminal
 			const f1 = terminalsStore.add(makeTerminal({ name: "F1", cwd: "/repo/wt/feature" }));
-			repositoriesStore.addTerminalToBranch("/repo", "feature", f1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", f1);
 
 			// Activate main, select tab m2
 			await gitOps.handleBranchSelect("/repo", "main");
@@ -545,8 +545,8 @@ describe("useGitOperations", () => {
 
 		it("persists and restores pane layout across branch switches", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 
 			// Start on main — auto-spawns a terminal
 			await gitOps.handleBranchSelect("/repo", "main");
@@ -578,9 +578,9 @@ describe("useGitOperations", () => {
 			// branchSwitching flag at true. The TabBar reads that flag and shows
 			// the previous repo's tabs until the app restarts.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt-feature" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt-feature" });
 			// Brand-new branch with no terminals triggers the auto-spawn path at the
-			// end of handleBranchSelectInner, which awaits handleAddTerminalToBranch.
+			// end of handleBranchSelectInner, which awaits handleAddTerminalToWorkspace.
 			mockPty.canSpawn.mockRejectedValueOnce(new Error("pty boom"));
 
 			await expect(gitOps.handleBranchSelect("/repo", "feature")).rejects.toThrow("pty boom");
@@ -590,7 +590,7 @@ describe("useGitOperations", () => {
 
 		it("serializes concurrent calls — no duplicate terminals from savedTerminals", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", {
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
 				savedTerminals: [{ name: "Claude", cwd: "/repo/wt", fontSize: 14, agentType: "claude" }],
@@ -608,12 +608,12 @@ describe("useGitOperations", () => {
 		});
 	});
 
-	describe("handleAddTerminalToBranch", () => {
+	describe("handleAddTerminalToWorkspace", () => {
 		it("creates terminal with branch worktree path", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt-feature" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt-feature" });
 
-			const id = await gitOps.handleAddTerminalToBranch("/repo", "feature");
+			const id = await gitOps.handleAddTerminalToWorkspace("/repo", "feature");
 
 			expect(id).toBeDefined();
 			const t = terminalsStore.get(id!);
@@ -624,9 +624,9 @@ describe("useGitOperations", () => {
 		it("sets status info when max sessions reached", async () => {
 			mockPty.canSpawn.mockResolvedValue(false);
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
-			await gitOps.handleAddTerminalToBranch("/repo", "main");
+			await gitOps.handleAddTerminalToWorkspace("/repo", "main");
 
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Max sessions reached (50)");
 		});
@@ -635,7 +635,7 @@ describe("useGitOperations", () => {
 	describe("handleRemoveRepo", () => {
 		it("removes repo after confirmation", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "My Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			gitOps.setCurrentRepoPath("/repo");
 
@@ -673,12 +673,12 @@ describe("useGitOperations", () => {
 		});
 	});
 
-	describe("handleRemoveBranch", () => {
+	describe("handleRemoveWorkspace", () => {
 		it("removes worktree branch after confirmation, passing deleteBranchOnRemove setting", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			// Default deleteBranchOnRemove is true (from repoDefaults)
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature");
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true);
@@ -690,11 +690,11 @@ describe("useGitOperations", () => {
 				branch_delete_warning: "git branch -d refused because branch is not fully merged",
 			});
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.setLabel("/repo", "feature", "Feature label");
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 			expect(repoSettingsStore.get("/repo")?.branchLabels["feature"]).toBe("Feature label");
@@ -705,28 +705,28 @@ describe("useGitOperations", () => {
 
 		it("passes deleteBranch=false when repo setting overrides default", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			// Set per-repo setting to override default deleteBranchOnRemove=true
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { deleteBranchOnRemove: false });
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", false);
 		});
 
 		it("rejects removal of non-worktree branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", {});
+			repositoriesStore.setWorkspace("/repo", "main", {});
 
-			await gitOps.handleRemoveBranch("/repo", "main");
+			await gitOps.handleRemoveWorkspace("/repo", "main");
 
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Cannot remove main: not a worktree");
 		});
 
 		it("sets isRemoving=true on store before invoking backend", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 
 			// Capture isRemoving state when removeWorktree is invoked
 			let isRemovingWhenInvoked: boolean | undefined;
@@ -734,7 +734,7 @@ describe("useGitOperations", () => {
 				isRemovingWhenInvoked = repositoriesStore.get("/repo")?.workspaces["feature"]?.isRemoving;
 			});
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(isRemovingWhenInvoked).toBe(true);
 			// After success: branch fully removed from store
@@ -743,7 +743,7 @@ describe("useGitOperations", () => {
 
 		it("prevents concurrent remove calls for the same branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 
 			// Block the first invoke until we release it
 			let resolveFirst: (() => void) | undefined;
@@ -762,11 +762,11 @@ describe("useGitOperations", () => {
 				}
 			});
 
-			const first = gitOps.handleRemoveBranch("/repo", "feature");
+			const first = gitOps.handleRemoveWorkspace("/repo", "feature");
 			// Wait until the first call has reached removeWorktree (lock is set)
 			await firstInvokedPromise;
 			// Now fire the second call — should hit the lock and no-op
-			const second = gitOps.handleRemoveBranch("/repo", "feature");
+			const second = gitOps.handleRemoveWorkspace("/repo", "feature");
 			await second;
 			// Release the first call
 			resolveFirst?.();
@@ -779,7 +779,7 @@ describe("useGitOperations", () => {
 	describe("handleRenameBranch", () => {
 		it("renames branch in backend and store", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "old-name", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "old-name", { worktreePath: "/repo" });
 			gitOps.setBranchToRename({ repoPath: "/repo", branchName: "old-name" });
 			gitOps.setCurrentBranch("old-name");
 
@@ -823,7 +823,7 @@ describe("useGitOperations", () => {
 
 		it("returns worktree path of active branch", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo/main" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo/main" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
@@ -838,7 +838,7 @@ describe("useGitOperations", () => {
 
 		it("returns saved run command", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.setRunCommand("/repo", "main", "npm test");
@@ -850,7 +850,7 @@ describe("useGitOperations", () => {
 	describe("handleNewTab", () => {
 		it("creates terminal in active branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
@@ -869,8 +869,8 @@ describe("useGitOperations", () => {
 		it("uses active terminal CWD to find correct branch when store activeBranch is stale", async () => {
 			// Setup: repo has main + feature/acme (linked worktree), store says main is active (stale)
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature/acme", { worktreePath: "/repo/.worktrees/acme" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature/acme", { worktreePath: "/repo/.worktrees/acme" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main"); // stale — HEAD actually moved to feature/acme
 
@@ -878,7 +878,7 @@ describe("useGitOperations", () => {
 			const existingTid = terminalsStore.add(
 				makeTerminal({ name: "T1", sessionId: "s1", cwd: "/repo/.worktrees/acme" }),
 			);
-			repositoriesStore.addTerminalToBranch("/repo", "feature/acme", existingTid);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature/acme", existingTid);
 			terminalsStore.setActive(existingTid);
 
 			await gitOps.handleNewTab();
@@ -893,14 +893,14 @@ describe("useGitOperations", () => {
 		it("uses active terminal CWD for main worktree when HEAD changed externally", async () => {
 			// Setup: repo with one branch, store activeBranch="old-branch" but terminal CWD is repo root
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "old-branch", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "new-branch", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "old-branch", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "new-branch", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "old-branch"); // stale
 
 			// Active terminal is at repo root (HEAD moved to new-branch externally)
 			const existingTid = terminalsStore.add(makeTerminal({ name: "T1", sessionId: "s2", cwd: "/repo" }));
-			repositoriesStore.addTerminalToBranch("/repo", "new-branch", existingTid);
+			repositoriesStore.addTerminalToWorkspace("/repo", "new-branch", existingTid);
 			terminalsStore.setActive(existingTid);
 
 			await gitOps.handleNewTab();
@@ -916,8 +916,8 @@ describe("useGitOperations", () => {
 	describe("handleMergeAndArchive", () => {
 		it("removes branch from sidebar when action is archive", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", isMain: true });
-			repositoriesStore.setBranch("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+			repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "feature/x");
 			mockRepo.mergeAndArchiveWorktree.mockResolvedValue({
@@ -938,8 +938,8 @@ describe("useGitOperations", () => {
 		describe("dirty-worktree guard", () => {
 			function seedBranch() {
 				repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-				repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", isMain: true });
-				repositoriesStore.setBranch("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+				repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+				repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
 			}
 
 			it("keeps the branch and does not force when the user declines", async () => {
@@ -1047,8 +1047,8 @@ describe("useGitOperations", () => {
 
 		it("sets mergePendingCtx when action is pending (ask mode)", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", isMain: true });
-			repositoriesStore.setBranch("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+			repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
 			mockRepo.mergeAndArchiveWorktree.mockResolvedValue({ merged: true, action: "pending", archive_path: null });
 
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "ask");
@@ -1058,6 +1058,7 @@ describe("useGitOperations", () => {
 			// Dialog context is populated
 			expect(gitOps.mergePendingCtx()).toEqual({
 				repoPath: "/repo",
+				workspaceId: "feature/x",
 				branchName: "feature/x",
 				baseBranch: "main",
 				hasDirtyFiles: false,
@@ -1067,8 +1068,8 @@ describe("useGitOperations", () => {
 
 		it("dismissMergePending clears the context and keeps branch in sidebar", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", isMain: true });
-			repositoriesStore.setBranch("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+			repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
 			mockRepo.mergeAndArchiveWorktree.mockResolvedValue({ merged: true, action: "pending", archive_path: null });
 
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "ask");
@@ -1081,9 +1082,9 @@ describe("useGitOperations", () => {
 
 		it("keeps branch and terminals when merge fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", isMain: true });
-			repositoriesStore.setBranch("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
-			repositoriesStore.addTerminalToBranch("/repo", "feature/x", "term-99");
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+			repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature/x", "term-99");
 			terminalsStore.register("term-99", makeTerminal({ name: "T-99", cwd: "/repo/.wt/x" }));
 			mockRepo.mergeAndArchiveWorktree.mockRejectedValueOnce(new Error("Merge failed (conflicts?)"));
 
@@ -1131,8 +1132,8 @@ describe("useGitOperations", () => {
 
 		beforeEach(() => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", isMain: true });
-			repositoriesStore.setBranch("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+			repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
 			githubStore.updateRepoData("/repo", [testPr]);
 		});
 
@@ -1173,6 +1174,7 @@ describe("useGitOperations", () => {
 			expect(mockRepo.mergePrViaGithub).toHaveBeenCalled();
 			expect(gitOps.mergePendingCtx()).toEqual({
 				repoPath: "/repo",
+				workspaceId: "feature/x",
 				branchName: "feature/x",
 				baseBranch: "main",
 				hasDirtyFiles: false,
@@ -1335,7 +1337,7 @@ describe("useGitOperations", () => {
 
 		it("updates branch stats for all repos", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockSummary({
 				worktree_paths: wtPaths({ main: "/repo" }),
 				merged_branches: [],
@@ -1355,7 +1357,7 @@ describe("useGitOperations", () => {
 			for (let index = 0; index < 7; index++) {
 				const path = `/repo-${index}`;
 				repositoriesStore.add({ path, displayName: `Repo ${index}` });
-				repositoriesStore.setBranch(path, "main", { worktreePath: path });
+				repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
 			}
 			repositoriesStore.setActive("/repo-6");
 			mockRepo.getRepoStructure.mockImplementation(
@@ -1389,14 +1391,14 @@ describe("useGitOperations", () => {
 			const t1 = terminalsStore.add(makeTerminal({ name: "t1" }));
 			const t2 = terminalsStore.add(makeTerminal({ name: "t2" }));
 			repositoriesStore.add({ path: "/shell-repo", displayName: "Shell", isGitRepo: false });
-			repositoriesStore.setBranch("/shell-repo", "shell", {
+			repositoriesStore.setWorkspace("/shell-repo", "shell", {
 				worktreePath: "/shell-repo",
 				isMain: true,
 				isShell: true,
 			});
-			repositoriesStore.addTerminalToBranch("/shell-repo", "shell", t1);
-			repositoriesStore.addTerminalToBranch("/shell-repo", "shell", t2);
-			repositoriesStore.setBranch("/shell-repo", "shell", { lastActiveTerminal: t2 });
+			repositoriesStore.addTerminalToWorkspace("/shell-repo", "shell", t1);
+			repositoriesStore.addTerminalToWorkspace("/shell-repo", "shell", t2);
+			repositoriesStore.setWorkspace("/shell-repo", "shell", { lastActiveTerminal: t2 });
 			repositoriesStore.setActiveWorkspace("/shell-repo", "shell");
 
 			mockRepo.getInfo.mockResolvedValue({
@@ -1419,11 +1421,61 @@ describe("useGitOperations", () => {
 			expect(repo?.workspaces["main"]?.lastActiveTerminal).toBe(t2);
 		});
 
+		// A COW workspace is an independent clone, so `git worktree list` in the
+		// parent never reports it. The prune reads "absent from worktree_paths" as
+		// "removed externally", which for this row would mean closing a live agent's
+		// terminals and deleting the only record of where its work is.
+		it("keeps a cow workspace that git worktree list cannot see", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+			repositoriesStore.setWorkspace("/repo", "feat~aaaa1111", {
+				branchName: "feat",
+				worktreePath: "/repo__cow/feat-1",
+				kind: "cow",
+			});
+			mockSummary({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+				diff_stats: {},
+				last_commit_ts: {},
+			});
+
+			await gitOps.refreshAllBranchStats("/repo");
+
+			expect(repositoriesStore.get("/repo")?.workspaces["feat~aaaa1111"]).toBeDefined();
+		});
+
+		// Stats are looked up by directory and branch but WRITTEN by workspace id.
+		// Writing them by `branchName` puts the clone's numbers on whichever row is
+		// keyed by the bare branch — no call fails, the wrong row just changes.
+		it("writes stats to the workspace that owns the directory, not to its same-branch sibling", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feat", { worktreePath: "/repo__wt/feat" });
+			repositoriesStore.setWorkspace("/repo", "feat~aaaa1111", {
+				branchName: "feat",
+				worktreePath: "/repo__cow/feat-1",
+				kind: "cow",
+			});
+			mockSummary({
+				worktree_paths: wtPaths({ feat: "/repo__wt/feat" }),
+				merged_branches: [],
+				diff_stats: { "/repo__cow/feat-1": { additions: 41, deletions: 9 } },
+				last_commit_ts: {},
+			});
+
+			await gitOps.refreshAllBranchStats("/repo");
+
+			const workspaces = repositoriesStore.get("/repo")!.workspaces;
+			expect(workspaces["feat~aaaa1111"]?.additions).toBe(41);
+			expect(workspaces["feat~aaaa1111"]?.deletions).toBe(9);
+			expect(workspaces.feat?.additions).toBe(0);
+		});
+
 		it("scopes to a single repo when a path is given — other repos untouched", async () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "A" });
-			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 			repositoriesStore.add({ path: "/repo-b", displayName: "B" });
-			repositoriesStore.setBranch("/repo-b", "main", { worktreePath: "/repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "main", { worktreePath: "/repo-b" });
 			mockSummary({
 				worktree_paths: wtPaths({ main: "/repo-a" }),
 				merged_branches: [],
@@ -1440,8 +1492,8 @@ describe("useGitOperations", () => {
 
 		it("prunes branches not in worktree paths", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "stale", { worktreePath: "/repo/stale" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "stale", { worktreePath: "/repo/stale" });
 			mockSummary({
 				worktree_paths: wtPaths({ main: "/repo" }),
 				merged_branches: [],
@@ -1457,9 +1509,9 @@ describe("useGitOperations", () => {
 
 		it("coalesces refresh storms without starving stale-worktree pruning", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "ghost-a", { worktreePath: "/repo/wt-a" });
-			repositoriesStore.setBranch("/repo", "ghost-b", { worktreePath: "/repo/wt-b" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "ghost-a", { worktreePath: "/repo/wt-a" });
+			repositoriesStore.setWorkspace("/repo", "ghost-b", { worktreePath: "/repo/wt-b" });
 
 			const structureResolvers: Array<(value: unknown) => void> = [];
 			mockRepo.getRepoStructure.mockImplementation(() => new Promise((resolve) => structureResolvers.push(resolve)));
@@ -1484,7 +1536,7 @@ describe("useGitOperations", () => {
 
 		it("runs the queued refresh after the active refresh fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			let rejectFirst!: (reason: Error) => void;
 			mockRepo.getRepoStructure
 				.mockReturnValueOnce(new Promise((_, reject) => (rejectFirst = reject)))
@@ -1506,7 +1558,7 @@ describe("useGitOperations", () => {
 
 		it("does not refresh a parked repository even when explicitly scoped", async () => {
 			repositoriesStore.add({ path: "/parked", displayName: "Parked" });
-			repositoriesStore.setBranch("/parked", "main", { worktreePath: "/parked" });
+			repositoriesStore.setWorkspace("/parked", "main", { worktreePath: "/parked" });
 			repositoriesStore.setPark("/parked", true);
 
 			await gitOps.refreshAllBranchStats("/parked");
@@ -1517,7 +1569,7 @@ describe("useGitOperations", () => {
 
 		it("discovers externally created worktrees", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			// Simulate an external `git worktree add` — new branch appears in summary
 			mockSummary({
 				worktree_paths: wtPaths({ main: "/repo", "feature-external": "/repo/.worktrees/feature-external" }),
@@ -1540,7 +1592,7 @@ describe("useGitOperations", () => {
 
 		it("removes stale activeBranch when HEAD moved to different branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			mockSummary({
@@ -1560,10 +1612,10 @@ describe("useGitOperations", () => {
 
 		it("migrates terminals from stale activeBranch to new worktree branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 			const tid = terminalsStore.add(makeTerminal({ name: "T1", sessionId: "s1", cwd: "/repo" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", tid);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", tid);
 
 			mockSummary({
 				worktree_paths: wtPaths({ "feature/acme": "/repo" }),
@@ -1582,7 +1634,7 @@ describe("useGitOperations", () => {
 
 		it("handles missing diff stats gracefully (no throw)", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockSummary({
 				worktree_paths: wtPaths({ main: "/repo" }),
 				merged_branches: [],
@@ -1597,8 +1649,8 @@ describe("useGitOperations", () => {
 
 		it("stores lastCommitTs converted from seconds to milliseconds", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature-x", { worktreePath: "/repo/wt-feature-x" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature-x", { worktreePath: "/repo/wt-feature-x" });
 
 			mockSummary({
 				worktree_paths: wtPaths({ main: "/repo", "feature-x": "/repo/wt-feature-x" }),
@@ -1619,7 +1671,7 @@ describe("useGitOperations", () => {
 
 		it("stores lastCommitTs as null when backend returns null", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", lastCommitTs: 999 });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", lastCommitTs: 999 });
 
 			mockSummary({
 				worktree_paths: wtPaths({ main: "/repo" }),
@@ -1635,15 +1687,15 @@ describe("useGitOperations", () => {
 
 		it("closes terminals and removes branch when worktree was deleted externally", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "worktree-agent-abc", { worktreePath: "/repo/.worktrees/agent-abc" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "worktree-agent-abc", { worktreePath: "/repo/.worktrees/agent-abc" });
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			// Add a live terminal on the worktree branch
 			const tid = terminalsStore.add(
 				makeTerminal({ name: "WT", sessionId: "wt-sess", cwd: "/repo/.worktrees/agent-abc" }),
 			);
-			repositoriesStore.addTerminalToBranch("/repo", "worktree-agent-abc", tid);
+			repositoriesStore.addTerminalToWorkspace("/repo", "worktree-agent-abc", tid);
 
 			// Backend reports worktree is gone (only main remains)
 			mockRepo.getRepoStructure.mockResolvedValue({
@@ -1666,10 +1718,10 @@ describe("useGitOperations", () => {
 		it("does not resurrect a branch deleted by user while refresh was in-flight", async () => {
 			// Regression: refreshAllBranchStats fetches worktree_paths before the deletion
 			// completes. When the batch runs with stale data (deleted branch still in
-			// worktree_paths), setBranch must not re-add it if the user already removed it.
+			// worktree_paths), setWorkspace must not re-add it if the user already removed it.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/.worktrees/feature" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/.worktrees/feature" });
 
 			// Hold getRepoStructure so we can inject a user deletion before it resolves
 			let resolveStructure!: (v: unknown) => void;
@@ -1679,7 +1731,7 @@ describe("useGitOperations", () => {
 			const refreshPromise = gitOps.refreshAllBranchStats();
 
 			// User deletes "feature" while refresh is awaiting getRepoStructure
-			repositoriesStore.removeBranch("/repo", "feature");
+			repositoriesStore.removeWorkspace("/repo", "feature");
 
 			// Resolve with STALE data: "feature" still present in worktree_paths
 			resolveStructure({
@@ -1699,7 +1751,7 @@ describe("useGitOperations", () => {
 			// snapshot AND are now gone. A brand-new external worktree (never in snapshot)
 			// must still be discovered and added.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			mockRepo.getRepoStructure.mockResolvedValue({
 				worktree_paths: wtPaths({ main: "/repo", "external-new": "/repo/.worktrees/external-new" }),
@@ -1724,7 +1776,7 @@ describe("useGitOperations", () => {
 	describe("refreshAllBranchStats — progressive loading", () => {
 		it("Phase 1 updates worktreePath before Phase 2 runs", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			let structureCallOrder = 0;
 			let diffStatsCallOrder = 0;
@@ -1761,7 +1813,7 @@ describe("useGitOperations", () => {
 
 		it("Phase 2 failure does not corrupt Phase 1 state", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			mockRepo.getRepoStructure.mockResolvedValue({
 				worktree_paths: wtPaths({ main: "/repo", "feature-a": "/repo/wt-a" }),
@@ -1781,7 +1833,7 @@ describe("useGitOperations", () => {
 
 		it("auto-archive runs after Phase 1, before Phase 2", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { autoArchiveMerged: true });
 
@@ -1807,13 +1859,13 @@ describe("useGitOperations", () => {
 		});
 	});
 
-	describe("handleRemoveBranch (backend failure)", () => {
+	describe("handleRemoveWorkspace (backend failure)", () => {
 		it("cleans up UI even when backend removal fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error("git error"));
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("worktree removal failed"));
@@ -1821,11 +1873,11 @@ describe("useGitOperations", () => {
 
 		it("closes branch terminals before removing", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
-			repositoriesStore.addTerminalToBranch("/repo", "feature", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
 		});
@@ -1833,23 +1885,23 @@ describe("useGitOperations", () => {
 		it("does not remove when user cancels worktree confirmation", async () => {
 			mockDialogs.confirmRemoveWorktree.mockResolvedValue(false);
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 		});
 	});
 
-	describe("handleRemoveBranch (locked worktree)", () => {
+	describe("handleRemoveWorkspace (locked worktree)", () => {
 		const LOCKED_ERROR = "worktree_locked:fatal: cannot remove a locked working tree, lock reason: claude agent";
 
 		it("shows confirmation dialog when worktree is locked by agent", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR));
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			// Dialog now receives the deleteBranch flag so it can warn about
 			// unmerged-commit loss when `-D` will run.
@@ -1858,12 +1910,12 @@ describe("useGitOperations", () => {
 
 		it("retries with force=true when user confirms force removal of locked worktree", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree
 				.mockRejectedValueOnce(new Error(LOCKED_ERROR)) // first attempt: locked
 				.mockResolvedValueOnce(undefined); // second attempt (force): success
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
 			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, true);
@@ -1872,11 +1924,11 @@ describe("useGitOperations", () => {
 
 		it("keeps branch in store when user cancels force removal of locked worktree", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR));
 			mockDialogs.confirmRemoveLockedWorktree.mockResolvedValue(false);
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1); // no retry
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
@@ -1884,12 +1936,12 @@ describe("useGitOperations", () => {
 
 		it("keeps branch in store when force removal also fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree
 				.mockRejectedValueOnce(new Error(LOCKED_ERROR))
 				.mockRejectedValueOnce(new Error("git worktree remove failed (locked): permission denied"));
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
@@ -1897,25 +1949,25 @@ describe("useGitOperations", () => {
 		});
 	});
 
-	describe("handleRemoveBranch (main worktree)", () => {
+	describe("handleRemoveWorkspace (main worktree)", () => {
 		const MAIN_ERROR = "worktree_is_main:fatal: '/repo' is a main working tree";
 
 		it("keeps branch in store when worktree is the main repo directory", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat/main-checkout", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feat/main-checkout", { worktreePath: "/repo" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(MAIN_ERROR));
 
-			await gitOps.handleRemoveBranch("/repo", "feat/main-checkout");
+			await gitOps.handleRemoveWorkspace("/repo", "feat/main-checkout");
 
 			expect(repositoriesStore.get("/repo")?.workspaces["feat/main-checkout"]).toBeDefined();
 		});
 
 		it("shows descriptive status message when worktree is main repo", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat/main-checkout", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feat/main-checkout", { worktreePath: "/repo" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(MAIN_ERROR));
 
-			await gitOps.handleRemoveBranch("/repo", "feat/main-checkout");
+			await gitOps.handleRemoveWorkspace("/repo", "feat/main-checkout");
 
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("main worktree"));
 		});
@@ -1924,11 +1976,11 @@ describe("useGitOperations", () => {
 	describe("handleRemoveRepo (edge cases)", () => {
 		it("closes all branch terminals", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
 			gitOps.setCurrentRepoPath("/repo");
 
 			await gitOps.handleRemoveRepo("/repo");
@@ -1945,7 +1997,7 @@ describe("useGitOperations", () => {
 
 		it("creates fallback terminal when no terminals remain", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			// No terminals in the branch, so after removal getCount() === 0
 
 			await gitOps.handleRemoveRepo("/repo");
@@ -1957,7 +2009,7 @@ describe("useGitOperations", () => {
 	describe("handleAddWorktree (dialog flow)", () => {
 		it("opens dialog with suggested name and branch lists", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.generateWorktreeName.mockResolvedValue("bold-nexus-042");
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 
@@ -1973,8 +2025,8 @@ describe("useGitOperations", () => {
 
 		it("passes existing worktree branches to name generator", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature-1", { worktreePath: "/repo/wt1" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature-1", { worktreePath: "/repo/wt1" });
 			mockRepo.generateWorktreeName.mockResolvedValue("cool-ripley-007");
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "feature-1", "develop"]);
 
@@ -1997,12 +2049,13 @@ describe("useGitOperations", () => {
 			});
 
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.generateWorktreeName.mockResolvedValue("bold-nexus-042");
 			mockRepo.listLocalBranches.mockResolvedValue(["main"]);
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "bold-nexus-042",
 				path: "/repo/.worktrees/bold-nexus-042",
+				workspace_id: "bold-nexus-042",
 				branch: "bold-nexus-042",
 				base_repo: "/repo",
 			});
@@ -2019,7 +2072,7 @@ describe("useGitOperations", () => {
 
 		it("shows dialog when promptOnCreate is true (default)", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.generateWorktreeName.mockResolvedValue("bold-nexus-042");
 			mockRepo.listLocalBranches.mockResolvedValue(["main"]);
 
@@ -2045,7 +2098,7 @@ describe("useGitOperations", () => {
 			});
 
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.generateWorktreeName.mockResolvedValue("cool-ripley-007");
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 			mockRepo.listBaseRefOptions.mockResolvedValue([
@@ -2055,6 +2108,7 @@ describe("useGitOperations", () => {
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "cool-ripley-007",
 				path: "/repo/.worktrees/cool-ripley-007",
+				workspace_id: "cool-ripley-007",
 				branch: "cool-ripley-007",
 				base_repo: "/repo",
 			});
@@ -2070,12 +2124,13 @@ describe("useGitOperations", () => {
 	describe("confirmCreateWorktree", () => {
 		it("creates worktree with new branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.generateWorktreeName.mockResolvedValue("bold-nexus-042");
 			mockRepo.listLocalBranches.mockResolvedValue(["main"]);
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "bold-nexus-042",
 				path: "/repo/.worktrees/bold-nexus-042",
+				workspace_id: "bold-nexus-042",
 				branch: "bold-nexus-042",
 				base_repo: "/repo",
 			});
@@ -2092,12 +2147,13 @@ describe("useGitOperations", () => {
 
 		it("creates worktree from existing branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.generateWorktreeName.mockResolvedValue("bold-nexus-042");
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "develop",
 				path: "/repo/.worktrees/develop",
+				workspace_id: "develop",
 				branch: "develop",
 				base_repo: "/repo",
 			});
@@ -2112,7 +2168,7 @@ describe("useGitOperations", () => {
 
 		it("handles pending status: shows placeholder with isPreparing=true, no setup script", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { setupScript: "npm install" });
 
@@ -2122,6 +2178,7 @@ describe("useGitOperations", () => {
 				status: "pending",
 				name: "feat-x",
 				path: "/repo/.worktrees/feat-x",
+				workspace_id: "feat-x",
 				branch: "feat-x",
 				base_repo: "/repo",
 			});
@@ -2156,13 +2213,14 @@ describe("useGitOperations", () => {
 
 		it("runs setupScript after worktree creation", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { setupScript: "npm install" });
 
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "feat-test",
 				path: "/repo/wt/feat-test",
+				workspace_id: "feat-test",
 				branch: "feat-test",
 				base_repo: "/repo",
 			});
@@ -2176,11 +2234,12 @@ describe("useGitOperations", () => {
 
 		it("does not run setupScript when empty", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "feat-test",
 				path: "/repo/wt/feat-test",
+				workspace_id: "feat-test",
 				branch: "feat-test",
 				base_repo: "/repo",
 			});
@@ -2194,13 +2253,14 @@ describe("useGitOperations", () => {
 
 		it("sets pendingInitCommand from runScript", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { runScript: "npm run dev" });
 
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "feat-test",
 				path: "/repo/wt/feat-test",
+				workspace_id: "feat-test",
 				branch: "feat-test",
 				base_repo: "/repo",
 			});
@@ -2219,13 +2279,14 @@ describe("useGitOperations", () => {
 
 		it("warns but continues when setupScript fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { setupScript: "exit 1" });
 
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "feat-test",
 				path: "/repo/wt/feat-test",
+				workspace_id: "feat-test",
 				branch: "feat-test",
 				base_repo: "/repo",
 			});
@@ -2246,7 +2307,7 @@ describe("useGitOperations", () => {
 	describe("handleCreateWorktreeFromBranch", () => {
 		it("runs setupScript after clone-worktree creation", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repoSettingsStore.getOrCreate("/repo", "Repo");
@@ -2256,6 +2317,7 @@ describe("useGitOperations", () => {
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "main--wt-42",
 				path: "/repo/wt/main--wt-42",
+				workspace_id: "main--wt-42",
 				branch: "main--wt-42",
 				base_repo: "/repo",
 			});
@@ -2268,7 +2330,7 @@ describe("useGitOperations", () => {
 
 		it("sets pendingInitCommand from runScript on clone-worktree", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repoSettingsStore.getOrCreate("/repo", "Repo");
@@ -2278,6 +2340,7 @@ describe("useGitOperations", () => {
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "main--wt-42",
 				path: "/repo/wt/main--wt-42",
+				workspace_id: "main--wt-42",
 				branch: "main--wt-42",
 				base_repo: "/repo",
 			});
@@ -2294,7 +2357,7 @@ describe("useGitOperations", () => {
 
 		it("does not run scripts when none configured", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
@@ -2302,6 +2365,7 @@ describe("useGitOperations", () => {
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "main--wt-42",
 				path: "/repo/wt/main--wt-42",
+				workspace_id: "main--wt-42",
 				branch: "main--wt-42",
 				base_repo: "/repo",
 			});
@@ -2321,7 +2385,7 @@ describe("useGitOperations", () => {
 			// setupNewWorktree (npm install etc.) would race with the background
 			// `rm -rf` + recreate.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repoSettingsStore.getOrCreate("/repo", "Repo");
@@ -2332,6 +2396,7 @@ describe("useGitOperations", () => {
 				status: "pending",
 				name: "main--wt-42",
 				path: "/repo/wt/main--wt-42",
+				workspace_id: "main--wt-42",
 				branch: "main--wt-42",
 				base_repo: "/repo",
 			});
@@ -2349,7 +2414,7 @@ describe("useGitOperations", () => {
 	describe("executeRunCommand", () => {
 		it("creates terminal and waits for session to send command", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
@@ -2377,7 +2442,7 @@ describe("useGitOperations", () => {
 
 		it("shows status when max sessions reached", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 			mockPty.canSpawn.mockResolvedValue(false);
@@ -2389,7 +2454,7 @@ describe("useGitOperations", () => {
 
 		it("truncates long command names in tab", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
@@ -2417,7 +2482,7 @@ describe("useGitOperations", () => {
 			});
 
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
@@ -2439,7 +2504,7 @@ describe("useGitOperations", () => {
 
 		it("executes saved command directly", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.setRunCommand("/repo", "main", "npm test");
@@ -2452,7 +2517,7 @@ describe("useGitOperations", () => {
 
 		it("opens dialog when forceDialog is true even with saved command", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.setRunCommand("/repo", "main", "npm test");
@@ -2488,7 +2553,7 @@ describe("useGitOperations", () => {
 
 		it("does not update currentBranch if renaming non-active branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			gitOps.setBranchToRename({ repoPath: "/repo", branchName: "feature" });
 			gitOps.setCurrentBranch("main");
 
@@ -2680,7 +2745,7 @@ describe("useGitOperations", () => {
 	describe("handleCheckoutRemoteBranch", () => {
 		it("calls repo.checkoutRemoteBranch and refreshes branch lists", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "feat-remote"]);
 			mockRepo.checkoutRemoteBranch.mockResolvedValue(undefined);
 
@@ -2692,7 +2757,7 @@ describe("useGitOperations", () => {
 
 		it("reports error when checkout fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.checkoutRemoteBranch.mockRejectedValue(new Error("branch already exists"));
 
 			await gitOps.handleCheckoutRemoteBranch("/repo", "feat-remote");
@@ -2704,7 +2769,7 @@ describe("useGitOperations", () => {
 	describe("handleSwitchBranch (dirty + stash recovery)", () => {
 		const seedRepo = () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		};
 
 		it("declining the stash prompt aborts without a second switch attempt", async () => {
@@ -2798,7 +2863,7 @@ describe("useGitOperations", () => {
 	describe("orphan worktree cleanup", () => {
 		beforeEach(() => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
 			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
 		});
@@ -2939,7 +3004,7 @@ describe("useGitOperations", () => {
 			// Two repos processed in parallel by Promise.all — both have orphans.
 			// The second should see orphanDialogOpen=true and skip.
 			repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
-			repositoriesStore.setBranch("/repo2", "main", { worktreePath: "/repo2" });
+			repositoriesStore.setWorkspace("/repo2", "main", { worktreePath: "/repo2" });
 
 			let resolveDialog!: (value: boolean) => void;
 			const confirmOrphanCleanup = vi.fn().mockImplementation(
@@ -2990,7 +3055,7 @@ describe("useGitOperations", () => {
 	describe("auto-archive merged worktrees", () => {
 		beforeEach(() => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.getRepoStructure.mockResolvedValue({
 				worktree_paths: wtPaths({ main: "/repo", "feature/x": "/repo/.worktrees/feature-x" }),
 				merged_branches: ["feature/x"],
@@ -3035,7 +3100,7 @@ describe("useGitOperations", () => {
 	describe("executeRunCommand (error path)", () => {
 		it("handles write failure gracefully", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
@@ -3068,13 +3133,13 @@ describe("useGitOperations", () => {
 		beforeEach(() => {
 			// Set up repo with main branch and a worktree branch
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature-x", { worktreePath: "/repo/.worktrees/feature-x" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature-x", { worktreePath: "/repo/.worktrees/feature-x" });
 		});
 
 		it("reassigns terminal from main to worktree branch on cwd change", async () => {
 			const id = addTerminal({ sessionId: "s1", cwd: "/repo" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 			terminalsStore.setActive(id);
 
 			gitOps.handleTerminalCwdChange(id, "/repo/.worktrees/feature-x");
@@ -3088,7 +3153,7 @@ describe("useGitOperations", () => {
 
 		it("does nothing when cwd maps to the same branch", async () => {
 			const id = addTerminal({ sessionId: "s2", cwd: "/repo" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 
 			gitOps.handleTerminalCwdChange(id, "/repo/src/deep/folder");
 			await vi.advanceTimersByTimeAsync(300);
@@ -3100,7 +3165,7 @@ describe("useGitOperations", () => {
 
 		it("longest prefix wins when worktrees nest", async () => {
 			const id = addTerminal({ sessionId: "s3", cwd: "/repo" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 			terminalsStore.setActive(id);
 
 			// cwd inside the feature-x worktree subdirectory
@@ -3114,9 +3179,9 @@ describe("useGitOperations", () => {
 		it("does not match repo-old when cwd is /repo (boundary check)", async () => {
 			// Add a second repo whose path is a string-prefix of "/repo" but not a path-prefix
 			repositoriesStore.add({ path: "/repo-old", displayName: "RepoOld" });
-			repositoriesStore.setBranch("/repo-old", "main", { worktreePath: "/repo-old" });
+			repositoriesStore.setWorkspace("/repo-old", "main", { worktreePath: "/repo-old" });
 			const id = addTerminal({ sessionId: "s4", cwd: "/repo-old" });
-			repositoriesStore.addTerminalToBranch("/repo-old", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo-old", "main", id);
 
 			// cwd "/repo" should NOT match "/repo-old" (the "/" boundary guard prevents it)
 			gitOps.handleTerminalCwdChange(id, "/repo");
@@ -3129,7 +3194,7 @@ describe("useGitOperations", () => {
 
 		it("does nothing for cwd outside all known repos", async () => {
 			const id = addTerminal({ sessionId: "s5", cwd: "/repo" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 
 			gitOps.handleTerminalCwdChange(id, "/tmp/random/path");
 			await vi.advanceTimersByTimeAsync(300);
@@ -3141,7 +3206,7 @@ describe("useGitOperations", () => {
 
 		it("debounces rapid cwd changes — only the last one takes effect", async () => {
 			const id = addTerminal({ sessionId: "s6", cwd: "/repo" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 			terminalsStore.setActive(id);
 
 			// Rapid fire: main → feature-x → main
@@ -3156,11 +3221,11 @@ describe("useGitOperations", () => {
 
 		it("does not crash when terminal was closed during debounce window", async () => {
 			const id = addTerminal({ sessionId: "s7", cwd: "/repo" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 
 			gitOps.handleTerminalCwdChange(id, "/repo/.worktrees/feature-x");
 			// Close terminal before debounce fires
-			repositoriesStore.removeTerminalFromBranch("/repo", "main", id);
+			repositoriesStore.removeTerminalFromWorkspace("/repo", "main", id);
 			terminalsStore.remove(id);
 
 			// Should not throw
@@ -3169,9 +3234,9 @@ describe("useGitOperations", () => {
 
 		it("keeps an owned tab in its own repo when the cwd moves to another repo", async () => {
 			repositoriesStore.add({ path: "/other", displayName: "Other" });
-			repositoriesStore.setBranch("/other", "main", { worktreePath: "/other" });
+			repositoriesStore.setWorkspace("/other", "main", { worktreePath: "/other" });
 			const id = addTerminal({ sessionId: "s9", cwd: "/repo" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 			terminalsStore.setRepoPath(id, "/repo");
 			terminalsStore.setActive(id);
 			repositoriesStore.setActive("/repo");
@@ -3189,7 +3254,7 @@ describe("useGitOperations", () => {
 
 		it("still follows a worktree switch inside the owning repo", async () => {
 			const id = addTerminal({ sessionId: "s10", cwd: "/repo" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 			terminalsStore.setRepoPath(id, "/repo");
 			terminalsStore.setActive(id);
 
@@ -3202,10 +3267,10 @@ describe("useGitOperations", () => {
 
 		it("still settles a parked tab that cds into a registered repo", async () => {
 			repositoriesStore.add({ path: "/other", displayName: "Other" });
-			repositoriesStore.setBranch("/other", "main", { worktreePath: "/other" });
+			repositoriesStore.setWorkspace("/other", "main", { worktreePath: "/other" });
 			const id = addTerminal({ sessionId: "s11", cwd: "/tmp" });
 			// Parked in whatever repo was active, with no owner recorded.
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 			terminalsStore.setRepoPath(id, null);
 			terminalsStore.setActive(id);
 
@@ -3218,7 +3283,7 @@ describe("useGitOperations", () => {
 
 		it("cancelCwdTracking cancels pending debounce timer", async () => {
 			const id = addTerminal({ sessionId: "s8", cwd: "/repo" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 			terminalsStore.setActive(id);
 
 			gitOps.handleTerminalCwdChange(id, "/repo/.worktrees/feature-x");
@@ -3234,7 +3299,7 @@ describe("useGitOperations", () => {
 	describe("handleRemoveRepo — settings cleanup", () => {
 		it("removes repo settings (including mcp_upstreams) when repo is removed", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", {});
+			repositoriesStore.setWorkspace("/repo", "main", {});
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { mcpUpstreams: ["alpha", "beta"] });
 
@@ -3257,7 +3322,7 @@ describe("useGitOperations", () => {
 		// through it rather than re-deriving that cleanup here.
 		it("closes the repo's editor, diff and markdown tabs too", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.add({ path: "/other", displayName: "Other" });
 
 			const edit = editorTabsStore.add("/repo", "src/main.ts");
@@ -3275,7 +3340,7 @@ describe("useGitOperations", () => {
 
 		it("forgets the removed repo's remembered focus target", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			recordTerminalRepo("term-1", "/repo");
 			expect(getFocusForRepo("/repo")).not.toBeNull();
 

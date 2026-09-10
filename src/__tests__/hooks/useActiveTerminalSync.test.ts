@@ -91,8 +91,8 @@ describe("useActiveTerminalSync", () => {
 	it("persists the last active terminal on its owning branch", async () => {
 		const id = addTerminal();
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.addTerminalToBranch("/repo", "main", id);
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 		await startSync();
 
 		terminalsStore.setActive(id);

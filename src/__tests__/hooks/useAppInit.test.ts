@@ -113,7 +113,7 @@ describe("initApp", () => {
 		const targetRepo = "/repos/aicheck";
 		for (const path of [sourceRepo, targetRepo]) {
 			repositoriesStore.add({ path, displayName: path.split("/").pop()! });
-			repositoriesStore.setBranch(path, "main", { branchName: "main", worktreePath: path });
+			repositoriesStore.setWorkspace(path, "main", { branchName: "main", worktreePath: path });
 			repositoriesStore.setActiveWorkspace(path, "main");
 		}
 		repositoriesStore.setActive(sourceRepo);
@@ -161,7 +161,7 @@ describe("initApp", () => {
 		const targetRepo = "/repos/aicheck";
 		for (const path of [sourceRepo, targetRepo]) {
 			repositoriesStore.add({ path, displayName: path.split("/").pop()! });
-			repositoriesStore.setBranch(path, "main", { branchName: "main", worktreePath: path });
+			repositoriesStore.setWorkspace(path, "main", { branchName: "main", worktreePath: path });
 			repositoriesStore.setActiveWorkspace(path, "main");
 		}
 		repositoriesStore.setActive(sourceRepo);
@@ -295,7 +295,7 @@ describe("initApp", () => {
 
 	it("matches surviving sessions to repos by cwd", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 		const deps = createMockDeps({
 			pty: {
@@ -312,7 +312,7 @@ describe("initApp", () => {
 
 	it("matches a surviving session whose cwd is nested below the repo", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 		const deps = createMockDeps({
 			pty: {
@@ -330,10 +330,10 @@ describe("initApp", () => {
 
 	it("assigns a surviving session to the most-specific nested repo", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Outer" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setBranch("/repo", "embedded", { worktreePath: "/repo/packages/app/" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "embedded", { worktreePath: "/repo/packages/app/" });
 		repositoriesStore.add({ path: "/repo/packages/app", displayName: "Nested" });
-		repositoriesStore.setBranch("/repo/packages/app", "main", { worktreePath: null });
+		repositoriesStore.setWorkspace("/repo/packages/app", "main", { worktreePath: null });
 		repositoriesStore.setActiveWorkspace("/repo/packages/app", "main");
 
 		const deps = createMockDeps({
@@ -356,10 +356,10 @@ describe("initApp", () => {
 
 	it("prefers a longer external worktree over an enclosing repo root", async () => {
 		repositoriesStore.add({ path: "/external", displayName: "External" });
-		repositoriesStore.setBranch("/external", "main", { worktreePath: "/external" });
+		repositoriesStore.setWorkspace("/external", "main", { worktreePath: "/external" });
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/external/feature" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/external/feature" });
 
 		const deps = createMockDeps({
 			pty: {
@@ -380,7 +380,7 @@ describe("initApp", () => {
 
 	it("deduplicates a session-created event while the surviving-session list is pending", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
@@ -442,7 +442,7 @@ describe("initApp", () => {
 
 	it("does not overwrite a newer shell event while reconciling a deduplicated surviving session", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
@@ -506,7 +506,7 @@ describe("initApp", () => {
 
 	it("applies a surviving shell snapshot newer than a pre-request shell event", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
@@ -542,7 +542,7 @@ describe("initApp", () => {
 
 	it("restores active repo/branch and eagerly calls handleBranchSelect", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 
 		const deps = createMockDeps();
@@ -556,7 +556,7 @@ describe("initApp", () => {
 
 	it("does not create terminals when repos exist but no active branch (lazy restore)", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		// No setBranch/setActiveBranch, so activeBranch is undefined
+		// No setWorkspace/setActiveBranch, so activeBranch is undefined
 
 		const deps = createMockDeps();
 		await initApp(deps);
@@ -600,8 +600,8 @@ describe("initApp", () => {
 
 	it("matches surviving session to worktree by cwd", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt-feature" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt-feature" });
 
 		const deps = createMockDeps({
 			pty: {
@@ -618,7 +618,7 @@ describe("initApp", () => {
 
 	it("restores active branch with surviving sessions", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 
 		// Add a terminal that will be cleared and re-adopted
@@ -645,7 +645,7 @@ describe("initApp", () => {
 	// every time, regardless of where the user is standing.
 	it("parks an unmatched surviving session in the Global Workspace, not the active branch", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
@@ -679,10 +679,10 @@ describe("initApp", () => {
 	// repo, two sessions, two different active repos at adoption time.
 	it("parks two sessions from one unregistered repo together, whatever repo has focus", async () => {
 		repositoriesStore.add({ path: "/repo-a", displayName: "A" });
-		repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+		repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 		repositoriesStore.setActiveWorkspace("/repo-a", "main");
 		repositoriesStore.add({ path: "/repo-b", displayName: "B" });
-		repositoriesStore.setBranch("/repo-b", "main", { worktreePath: "/repo-b" });
+		repositoriesStore.setWorkspace("/repo-b", "main", { worktreePath: "/repo-b" });
 		repositoriesStore.setActiveWorkspace("/repo-b", "main");
 		repositoriesStore.setActive("/repo-a");
 
@@ -722,7 +722,7 @@ describe("initApp", () => {
 
 		function parkedSessionDeps(): AppInitDeps {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.setActive("/repo");
 			return createMockDeps({
@@ -785,7 +785,7 @@ describe("initApp", () => {
 
 	it("snapshots agentSessionId into savedTerminals on beforeunload", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 		// Surviving session so initApp re-adopts and assigns to branch
 		const deps = createMockDeps({
@@ -811,7 +811,7 @@ describe("initApp", () => {
 
 	it("snapshots null agentSessionId for terminals without it", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
 		const deps = createMockDeps({
 			pty: {
@@ -1140,7 +1140,7 @@ describe("initApp", () => {
 		it("head-changed calls clear_repo_caches with repo path, not clear_caches", async () => {
 			const { getHeadChanged } = captureRepoAndHeadChanged();
 			repositoriesStore.add({ path: "/my/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/my/repo", "main", { worktreePath: null });
+			repositoriesStore.setWorkspace("/my/repo", "main", { worktreePath: null });
 			repositoriesStore.setActiveWorkspace("/my/repo", "main");
 
 			const deps = createMockDeps();
@@ -1159,7 +1159,7 @@ describe("initApp", () => {
 		it("repo-changed leaves the head-changed invalidation untouched", async () => {
 			const { getRepoChanged, getHeadChanged } = captureRepoAndHeadChanged();
 			repositoriesStore.add({ path: "/my/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/my/repo", "main", { worktreePath: null });
+			repositoriesStore.setWorkspace("/my/repo", "main", { worktreePath: null });
 			repositoriesStore.setActiveWorkspace("/my/repo", "main");
 			const deps = createMockDeps();
 			await initApp(deps);
@@ -1233,9 +1233,9 @@ describe("initApp", () => {
 			const { getCallback } = captureHeadChanged();
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
-			repositoriesStore.setBranch("/repo", "develop", { worktreePath: null });
+			repositoriesStore.setWorkspace("/repo", "develop", { worktreePath: null });
 			repositoriesStore.setActiveWorkspace("/repo", "develop");
-			repositoriesStore.addTerminalToBranch("/repo", "develop", "term-1");
+			repositoriesStore.addTerminalToWorkspace("/repo", "develop", "term-1");
 
 			await initApp(deps);
 
@@ -1254,7 +1254,7 @@ describe("initApp", () => {
 			const { getCallback } = captureHeadChanged();
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
-			repositoriesStore.setBranch("/repo", "wt-branch", { worktreePath: "/repo/.worktrees/wt-branch" });
+			repositoriesStore.setWorkspace("/repo", "wt-branch", { worktreePath: "/repo/.worktrees/wt-branch" });
 			repositoriesStore.setActiveWorkspace("/repo", "wt-branch");
 
 			await initApp(deps);
@@ -1272,8 +1272,8 @@ describe("initApp", () => {
 			const { getCallback } = captureHeadChanged();
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: null });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: null });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: null });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: null });
 			repositoriesStore.setActiveWorkspace("/repo", "feature");
 
 			await initApp(deps);
@@ -1289,7 +1289,7 @@ describe("initApp", () => {
 			const { getCallback } = captureHeadChanged();
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: null });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: null });
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			await initApp(deps);
@@ -1305,13 +1305,13 @@ describe("initApp", () => {
 			const { getCallback } = captureHeadChanged();
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
-			repositoriesStore.setBranch("/repo", "wip/global-config", { worktreePath: null });
+			repositoriesStore.setWorkspace("/repo", "wip/global-config", { worktreePath: null });
 			repositoriesStore.setActiveWorkspace("/repo", "wip/global-config");
-			repositoriesStore.addTerminalToBranch("/repo", "wip/global-config", "term-1");
-			repositoriesStore.addTerminalToBranch("/repo", "wip/global-config", "term-2");
+			repositoriesStore.addTerminalToWorkspace("/repo", "wip/global-config", "term-1");
+			repositoriesStore.addTerminalToWorkspace("/repo", "wip/global-config", "term-2");
 
 			// Simulate refreshAllBranchStats creating the new branch before head-changed fires
-			repositoriesStore.setBranch("/repo", "wip/memory-system-improvements", { worktreePath: null });
+			repositoriesStore.setWorkspace("/repo", "wip/memory-system-improvements", { worktreePath: null });
 
 			await initApp(deps);
 
@@ -1334,9 +1334,9 @@ describe("initApp", () => {
 			const { getCallback } = captureHeadChanged();
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActiveWorkspace("/repo", "main");
-			repositoriesStore.addTerminalToBranch("/repo", "main", "term-1");
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", "term-1");
 
 			await initApp(deps);
 

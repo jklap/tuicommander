@@ -23,6 +23,7 @@ import { compareBranches } from "../../utils/branchSort";
 import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { pathBasename } from "../../utils/pathUtils";
 import { timeSync } from "../../utils/perfTrace";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
@@ -232,12 +233,22 @@ export const BranchItem: Component<{
 	currentBranch?: () => string;
 	githubBaseUrl?: string | null;
 	onSetLabel?: (currentLabel: string | undefined) => void;
+	/** Set only when another row of this repo is on the same branch, in which case
+	 *  the branch name alone does not identify the row. Holds the workspace's
+	 *  directory leaf — the one thing that differs. */
+	disambiguator?: string;
 }> = (props) => {
 	const ctxMenu = createContextMenu();
 
 	const branchLabel = createMemo(
 		() => repoSettingsStore.getEffectiveField(props.repoPath, "branchLabels")?.[props.branch.branchName],
 	);
+
+	/** Hover text: enough to tell two same-branch rows apart without widening the row. */
+	const rowTitle = createMemo(() => {
+		const parts = [branchLabel(), props.branch.branchName, props.disambiguator].filter(Boolean);
+		return parts.join(" — ");
+	});
 
 	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.branchName));
 	const checks = createMemo(() => githubStore.getCheckSummary(props.repoPath, props.branch.branchName));
@@ -274,9 +285,9 @@ export const BranchItem: Component<{
 		props.onSelect();
 		if (!getBranchTabsAvailable(props.branch)) return;
 		if (wasActive) {
-			repositoriesStore.toggleBranchTabsExpanded(props.repoPath, props.branch.branchName);
+			repositoriesStore.toggleWorkspaceTabsExpanded(props.repoPath, props.branch.workspaceId);
 		} else if (!props.branch.tabsExpanded) {
-			repositoriesStore.setBranchTabsExpanded(props.repoPath, props.branch.branchName, true);
+			repositoriesStore.setWorkspaceTabsExpanded(props.repoPath, props.branch.workspaceId, true);
 		}
 	};
 
@@ -452,12 +463,16 @@ export const BranchItem: Component<{
 					branchHasTerminals={props.branch.terminals.length > 0}
 				/>
 				<div class={s.branchContent}>
-					<span class={s.branchName} onDblClick={handleDoubleClick} title={branchLabel() ?? props.branch.branchName}>
+					<span class={s.branchName} onDblClick={handleDoubleClick} title={rowTitle()}>
 						{branchLabel() ?? props.branch.branchName}
 					</span>
-					<Show when={branchLabel()}>
-						<span class={b.subLabel} title={props.branch.branchName}>
-							{props.branch.branchName}
+					{/* The sub-label carries whatever the main line is not already
+					    saying: the branch when a custom label replaced it, and — when
+					    a sibling row is on the same branch — the directory, which is
+					    the only thing that tells two same-branch rows apart. */}
+					<Show when={branchLabel() ?? props.disambiguator}>
+						<span class={b.subLabel} title={rowTitle()}>
+							{branchLabel() ? props.branch.branchName : props.disambiguator}
 						</span>
 					</Show>
 				</div>
@@ -642,7 +657,7 @@ export const RepoSection: Component<{
 	});
 	const sortedBranches = createMemo(() =>
 		// Freeze-investigation: this re-sort + the <For> reconcile below is the
-		// leading suspect for the git.refreshBatch flush cost — setBranch creates a
+		// leading suspect for the git.refreshBatch flush cost — setWorkspace creates a
 		// new branch object ref on every repo-changed, waking this memo even when
 		// nothing structural changed. timeSync is dormant unless perfDebug is on.
 		timeSync(`sidebar.sortedBranches:${props.repo.path}`, () => {
@@ -653,6 +668,29 @@ export const RepoSection: Component<{
 		}),
 	);
 	const canRemoveAny = createMemo(() => sortedBranches().length > 1);
+
+	/** Branches carried by more than one workspace of this repo. Two rows on one
+	 *  branch is the normal shape once a COW clone exists, and until then this set
+	 *  is empty and costs one pass over a handful of rows. */
+	const sharedBranches = createMemo(() => {
+		const seen = new Set<string>();
+		const shared = new Set<string>();
+		for (const workspace of branches()) {
+			if (seen.has(workspace.branchName)) shared.add(workspace.branchName);
+			seen.add(workspace.branchName);
+		}
+		return shared;
+	});
+
+	/** What to show under a row whose branch is not unique: the directory leaf.
+	 *  `undefined` when the branch already identifies the row, so the common case
+	 *  renders exactly as before. */
+	const disambiguatorFor = (workspace: WorkspaceState): string | undefined => {
+		if (!sharedBranches().has(workspace.branchName)) return undefined;
+		const path = workspace.worktreePath;
+		if (!path) return workspace.workspaceId;
+		return pathBasename(path) || workspace.workspaceId;
+	};
 
 	const localBranchNames = createMemo(() => new Set(Object.keys(props.repo.workspaces)));
 	const remoteOnlyPrs = createMemo(() => githubStore.getRemoteOnlyPrs(props.repo.path, localBranchNames()));
@@ -855,19 +893,24 @@ export const RepoSection: Component<{
 									repoPath={props.repo.path}
 									isActive={
 										repositoriesStore.state.activeRepoPath === props.repo.path &&
-										props.repo.activeWorkspaceId === branch.branchName
+										props.repo.activeWorkspaceId === branch.workspaceId
 									}
 									canRemove={canRemoveAny()}
 									shortcutIndex={props.quickSwitcherActive ? props.branchShortcutStart + index() : undefined}
+									// Selecting, adding a terminal to, or removing a row all address
+									// the WORKSPACE — the row is what the user clicked, and two rows
+									// may share a branch. Everything below that names a git ref
+									// (rename, create-from, switch, PR) still passes `branchName`.
 									agentMenuItems={
-										props.buildAgentMenuItems ? () => props.buildAgentMenuItems!(branch.branchName) : undefined
+										props.buildAgentMenuItems ? () => props.buildAgentMenuItems!(branch.workspaceId) : undefined
 									}
-									onSelect={() => props.onBranchSelect(branch.branchName)}
-									onAddTerminal={() => props.onAddTerminal(branch.branchName)}
-									isRemoving={props.removingBranches?.has(`${props.repo.path}::${branch.branchName}`)}
-									onRemove={() => props.onRemoveBranch(branch.branchName)}
+									onSelect={() => props.onBranchSelect(branch.workspaceId)}
+									onAddTerminal={() => props.onAddTerminal(branch.workspaceId)}
+									isRemoving={props.removingBranches?.has(`${props.repo.path}::${branch.workspaceId}`)}
+									onRemove={() => props.onRemoveBranch(branch.workspaceId)}
 									onRename={() => props.onRenameBranch(branch.branchName)}
 									onCreateBranch={props.onCreateBranch ? () => props.onCreateBranch!(branch.branchName) : undefined}
+									disambiguator={disambiguatorFor(branch)}
 									onSetLabel={(current) => setLabelDialogBranch({ name: branch.branchName, current })}
 									onShowPrDetail={() => props.onShowPrDetail(branch.branchName)}
 									onShowChanges={props.onShowChanges}
@@ -877,7 +920,7 @@ export const RepoSection: Component<{
 											: undefined
 									}
 									onMergeAndArchive={
-										props.onMergeAndArchive ? () => props.onMergeAndArchive!(branch.branchName) : undefined
+										props.onMergeAndArchive ? () => props.onMergeAndArchive!(branch.workspaceId) : undefined
 									}
 									onSwitchBranch={
 										branch.worktreePath === props.repo.path ? (name) => props.onSwitchBranch(name) : undefined

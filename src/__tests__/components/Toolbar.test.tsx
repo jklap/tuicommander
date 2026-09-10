@@ -202,7 +202,7 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "feature-x", { branchName: "feature-x" });
+		repositoriesStore.setWorkspace(repoPath, "feature-x", { branchName: "feature-x" });
 		repositoriesStore.setActiveWorkspace(repoPath, "feature-x");
 
 		const { container } = render(() => <Toolbar />);
@@ -217,7 +217,7 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "main", { branchName: "main" });
+		repositoriesStore.setWorkspace(repoPath, "main", { branchName: "main" });
 		repositoriesStore.setActiveWorkspace(repoPath, "main");
 
 		const { container } = render(() => <Toolbar onBranchClick={handleBranchClick} />);
@@ -254,7 +254,7 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "main", { branchName: "main" });
+		repositoriesStore.setWorkspace(repoPath, "main", { branchName: "main" });
 		repositoriesStore.setActiveWorkspace(repoPath, "main");
 
 		const { container } = render(() => <Toolbar />);
@@ -266,7 +266,7 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "dev", { branchName: "dev" });
+		repositoriesStore.setWorkspace(repoPath, "dev", { branchName: "dev" });
 		repositoriesStore.setActiveWorkspace(repoPath, "dev");
 
 		const { container } = render(() => <Toolbar />);
@@ -279,7 +279,7 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "feature", {
+		repositoriesStore.setWorkspace(repoPath, "feature", {
 			branchName: "feature",
 			worktreePath: "/test/repo-worktrees/feature",
 		});
@@ -294,7 +294,7 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "main", {
+		repositoriesStore.setWorkspace(repoPath, "main", {
 			branchName: "main",
 			worktreePath: null,
 		});

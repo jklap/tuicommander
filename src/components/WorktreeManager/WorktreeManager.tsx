@@ -13,9 +13,16 @@ import s from "./WorktreeManager.module.css";
 
 /** Row data derived from repo/branch state */
 interface WorktreeRow {
-	id: string; // repoPath::branchName
+	/** Opaque row key for selection only. Built from the repo path and the
+	 *  workspace id, and never taken apart again: the id is opaque by contract,
+	 *  so a row that needs its parts reads them off the row (which carries them
+	 *  as fields) instead of splitting this string. */
+	id: string;
 	repoPath: string;
 	repoName: string;
+	/** Which workspace this row IS — what every action addresses. */
+	workspaceId: string;
+	/** What it has checked out. Display, sort and PR lookup only. */
 	branch: string;
 	worktreePath: string;
 	additions: number;
@@ -40,9 +47,9 @@ function displayName(path: string): string {
 
 /** Action callbacks for worktree row operations */
 export interface WorktreeActions {
-	onOpenTerminal: (repoPath: string, branchName: string) => void;
-	onDelete: (repoPath: string, branchName: string) => void;
-	onMergeAndArchive: (repoPath: string, branchName: string) => void;
+	onOpenTerminal: (repoPath: string, workspaceId: string) => void;
+	onDelete: (repoPath: string, workspaceId: string) => void;
+	onMergeAndArchive: (repoPath: string, workspaceId: string) => void;
 }
 
 export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props) => {
@@ -117,19 +124,20 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 		const rows: WorktreeRow[] = [];
 
 		for (const repo of repos) {
-			for (const [branchName, branch] of Object.entries(repo.workspaces)) {
-				if (!branch.worktreePath) continue;
+			for (const [workspaceId, workspace] of Object.entries(repo.workspaces)) {
+				if (!workspace.worktreePath) continue;
 				rows.push({
-					id: `${repo.path}::${branchName}`,
+					id: `${repo.path}::${workspaceId}`,
 					repoPath: repo.path,
 					repoName: repo.displayName || displayName(repo.path),
-					branch: branchName,
-					worktreePath: branch.worktreePath,
-					additions: branch.additions,
-					deletions: branch.deletions,
-					isMain: branch.isMain,
-					prStatus: githubStore.getPrStatus(repo.path, branchName),
-					lastCommitTs: branch.lastCommitTs ?? null,
+					workspaceId,
+					branch: workspace.branchName,
+					worktreePath: workspace.worktreePath,
+					additions: workspace.additions,
+					deletions: workspace.deletions,
+					isMain: workspace.isMain,
+					prStatus: githubStore.getPrStatus(repo.path, workspace.branchName),
+					lastCommitTs: workspace.lastCommitTs ?? null,
 				});
 			}
 		}
@@ -188,30 +196,26 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 		}
 	}
 
-	/** Parse a worktree ID (repoPath::branchName) using lastIndexOf to handle paths with `::` */
-	function parseWorktreeId(id: string): { repoPath: string; branchName: string } | null {
-		const sep = id.lastIndexOf("::");
-		if (sep === -1) return null;
-		return { repoPath: id.slice(0, sep), branchName: id.slice(sep + 2) };
+	/** The rows a batch action applies to.
+	 *
+	 *  Resolved by looking the selected keys up in the row list, NOT by splitting
+	 *  the key back into a repo path and a name. Splitting was already fragile —
+	 *  a path may contain the separator — and it cannot survive an opaque id at
+	 *  all: the row is the only thing that knows which workspace it is. */
+	function selectedRows(): WorktreeRow[] {
+		const selected = worktreeManagerStore.state.selectedIds;
+		return allWorktrees().filter((row) => selected.has(row.id));
 	}
 
 	function handleBatchDelete() {
 		if (!props.actions) return;
-		const selected = [...worktreeManagerStore.state.selectedIds];
-		for (const id of selected) {
-			const parsed = parseWorktreeId(id);
-			if (parsed) props.actions.onDelete(parsed.repoPath, parsed.branchName);
-		}
+		for (const row of selectedRows()) props.actions.onDelete(row.repoPath, row.workspaceId);
 		worktreeManagerStore.clearSelection();
 	}
 
 	function handleBatchMerge() {
 		if (!props.actions) return;
-		const selected = [...worktreeManagerStore.state.selectedIds];
-		for (const id of selected) {
-			const parsed = parseWorktreeId(id);
-			if (parsed) props.actions.onMergeAndArchive(parsed.repoPath, parsed.branchName);
-		}
+		for (const row of selectedRows()) props.actions.onMergeAndArchive(row.repoPath, row.workspaceId);
 		worktreeManagerStore.clearSelection();
 	}
 
@@ -338,7 +342,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 													<button
 														class={s.actionBtn}
 														title="Open terminal"
-														onClick={() => actions().onOpenTerminal(wt.repoPath, wt.branch)}
+														onClick={() => actions().onOpenTerminal(wt.repoPath, wt.workspaceId)}
 													>
 														&gt;_
 													</button>
@@ -346,7 +350,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 														class={s.actionBtn}
 														title="Merge & archive"
 														disabled={wt.isMain}
-														onClick={() => actions().onMergeAndArchive(wt.repoPath, wt.branch)}
+														onClick={() => actions().onMergeAndArchive(wt.repoPath, wt.workspaceId)}
 													>
 														&#x2714;
 													</button>
@@ -354,7 +358,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 														class={`${s.actionBtn} ${s.actionBtnDanger}`}
 														title="Delete worktree"
 														disabled={wt.isMain}
-														onClick={() => actions().onDelete(wt.repoPath, wt.branch)}
+														onClick={() => actions().onDelete(wt.repoPath, wt.workspaceId)}
 													>
 														&#x2715;
 													</button>

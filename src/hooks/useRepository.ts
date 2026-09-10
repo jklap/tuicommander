@@ -123,6 +123,11 @@ export function useRepository() {
 		status: "ok" | "pending";
 		name: string;
 		path: string;
+		/** How to address the new workspace from here on — the store key, and the
+		 *  id every later call takes (removal, dirtiness, finalize). Reported by the
+		 *  backend rather than derived here, because for a COW clone it is not the
+		 *  branch (#727-2085). */
+		workspace_id: string;
 		branch: string;
 		base_repo: string;
 	}> {

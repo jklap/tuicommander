@@ -153,6 +153,12 @@ how it renders and whether it interrupts anything.
   **Switch**: the tab moves to the new branch and `cd`s into the worktree.
 - [ ] Repeat with a *running agent* as the active tab: the worktree opens in its
   own terminal and the agent's tab stays on its branch and CWD.
+- [ ] **Rust change — needs `make dev` restart** (#728-bc76). `create_worktree`
+  now returns `workspace_id`, and the frontend keys the new sidebar row by it.
+  Against an unrestarted backend that field is `undefined`, so the row lands
+  under the key `"undefined"`. After a restart: create a worktree from the "+"
+  button and from `repo worktree_create`, and check the row appears under the
+  branch, opens a terminal, and removes cleanly.
 - [ ] **Rust change — needs `make dev` restart** (#727-2085). Both worktree
   events now carry `workspace_id` *and* `branch`, and creation goes through the
   new `notify_worktree_created`. On an unrestarted backend the frontend reads

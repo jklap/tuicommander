@@ -280,6 +280,15 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 			const isVisible = (id: string): boolean => {
 				const tab = state.tabs[id];
 				if (!tab) return false;
+				// The pane draws whatever activeId points at, so hiding the active tab
+				// leaves content with no tab to name it, switch from or close — the same
+				// ghost panel `remove()` refuses to create by promotion. `_addTab`
+				// activates unconditionally, which is how opening a path from ANOTHER
+				// repo (an absolute path an agent printed) produced one: the tab was
+				// correctly filed under the repo that owns the file, and the repo gate
+				// below then hid it. Exempt only the active tab — exempting foreign
+				// tabs generally would leak every repo's tabs into every tab bar.
+				if (id === state.activeId) return true;
 				if (tab.repoPath) {
 					if (!currentBranchKey?.startsWith(tab.repoPath + "|")) return false;
 				}

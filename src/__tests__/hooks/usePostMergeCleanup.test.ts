@@ -11,7 +11,7 @@ const { mockRemoveBranch, mockBumpRevision, mockBumpGitRevision, mockGetBranches
 
 vi.mock("../../stores/repositories", () => ({
 	repositoriesStore: {
-		removeBranch: mockRemoveBranch,
+		removeWorkspace: mockRemoveBranch,
 		bumpRevision: mockBumpRevision,
 		bumpGitRevision: mockBumpGitRevision,
 		get: mockGetBranches,
@@ -32,6 +32,9 @@ import { type CleanupConfig, executeCleanup } from "../../hooks/usePostMergeClea
 function makeConfig(overrides?: Partial<CleanupConfig>): CleanupConfig {
 	return {
 		repoPath: "/repo",
+		// A linked worktree's id IS its branch, which is what these cases exercise;
+		// the same-branch case is asserted separately below with a minted id.
+		workspaceId: "feature/login",
 		branchName: "feature/login",
 		baseBranch: "main",
 		steps: [
@@ -222,7 +225,7 @@ describe("executeCleanup", () => {
 		expect(onStepDone).toHaveBeenCalledWith("delete-remote", "success", undefined);
 	});
 
-	it("calls removeBranch and bumpRevision after local branch delete", async () => {
+	it("calls removeWorkspace and bumpRevision after local branch delete", async () => {
 		const config = makeConfig({
 			steps: [
 				{ id: "switch", checked: false },

@@ -49,13 +49,43 @@ export interface WorkspaceState {
 	tabsExpanded?: boolean;
 }
 
+/** One entry as it may arrive off disk: any field may be absent. */
+type StoredWorkspace = Partial<WorkspaceState> & { name?: string };
+
 /** A repo record as it may arrive off disk: pre-migration, post-migration, or empty. */
 interface MigratableRepoRecord {
-	branches?: Record<string, Partial<WorkspaceState> & { name?: string }>;
-	workspaces?: Record<string, WorkspaceState>;
+	branches?: Record<string, StoredWorkspace>;
+	workspaces?: Record<string, StoredWorkspace>;
 	/** Pre-migration name for the pointer below. Held a branch, which was the key. */
 	activeBranch?: string | null;
 	activeWorkspaceId?: WorkspaceId | null;
+}
+
+/**
+ * Give one stored entry the identity fields the UI indexes without checking.
+ *
+ * Every field is filled from the key rather than defended at each read site, and
+ * a record already carrying one keeps it — a COW workspace's branch is not its
+ * key. The `branchName` fill is the sharp one: `compareBranches` calls
+ * `branchName.localeCompare`, so a missing value throws inside the sidebar's
+ * sort memo. Solid turns a throwing memo into an *undefined* one, so the crash
+ * surfaces at the reader (`sortedBranches().length`) and names nothing that
+ * leads back to the record that caused it.
+ */
+function repairIdentity(key: WorkspaceId, stored: StoredWorkspace): WorkspaceState {
+	const { name, ...rest } = stored;
+	// The legacy `name` field held the branch, and so did the key. Prefer the
+	// key: it is what every existing lookup in the app already resolved by.
+	void name;
+	return {
+		...(rest as Omit<WorkspaceState, "workspaceId" | "branchName" | "kind" | "parentRepoPath" | "worktreePath">),
+		workspaceId: rest.workspaceId ?? key,
+		branchName: rest.branchName ?? key,
+		// Nothing on disk predates COW, so a record is main or it is a worktree.
+		kind: rest.kind ?? (rest.isMain ? "main" : "worktree"),
+		parentRepoPath: rest.parentRepoPath ?? null,
+		worktreePath: rest.worktreePath ?? null,
+	};
 }
 
 /**
@@ -67,28 +97,23 @@ interface MigratableRepoRecord {
  * id is invented for data that already works — so a document that round-trips
  * through an older build and back is still readable.
  *
+ * A record already keyed by `workspaces` goes through the same repair rather
+ * than straight through. It is not only the legacy shape that arrives
+ * incomplete: a build that shipped a partial version of this migration writes a
+ * `workspaces` document with fields missing, and skipping the repair for those
+ * records means the gap survives every later load.
+ *
  * Pure: returns a fresh map and never touches the record it was given. Callers
  * assign the result; `normalizeLoadedRepo` is the single seam that does so, for
  * both the hydrate path and every record adopted from another client.
  */
 export function migrateRepoWorkspaces(repo: MigratableRepoRecord): Record<WorkspaceId, WorkspaceState> {
-	if (repo.workspaces) return structuredClone(repo.workspaces);
-	if (!repo.branches) return {};
+	const stored = repo.workspaces ?? repo.branches;
+	if (!stored) return {};
 
 	const workspaces: Record<WorkspaceId, WorkspaceState> = {};
-	for (const [key, branch] of Object.entries(repo.branches)) {
-		const { name, ...rest } = structuredClone(branch);
-		workspaces[key] = {
-			...(rest as Omit<WorkspaceState, "workspaceId" | "branchName" | "kind" | "parentRepoPath">),
-			workspaceId: key,
-			// The legacy `name` field held the branch, and so did the key. Prefer the
-			// key: it is what every existing lookup in the app already resolved by.
-			branchName: key,
-			// Nothing on disk predates COW, so a record is main or it is a worktree.
-			kind: branch.isMain ? "main" : "worktree",
-			parentRepoPath: null,
-		};
-		void name;
+	for (const [key, entry] of Object.entries(stored)) {
+		workspaces[key] = repairIdentity(key, structuredClone(entry));
 	}
 	return workspaces;
 }

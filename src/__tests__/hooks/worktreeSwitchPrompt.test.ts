@@ -40,10 +40,10 @@ describe("switchToCreatedWorktree", () => {
 
 	function seedActiveTerminal(agentType: "codex" | null): string {
 		repositoriesStore.add({ path: REPO, displayName: "repo" });
-		repositoriesStore.setBranch(REPO, "main", { worktreePath: REPO, isMain: true });
-		repositoriesStore.setBranch(REPO, BRANCH, { worktreePath: WORKTREE });
+		repositoriesStore.setWorkspace(REPO, "main", { worktreePath: REPO, isMain: true });
+		repositoriesStore.setWorkspace(REPO, BRANCH, { worktreePath: WORKTREE });
 		const terminalId = terminalsStore.add(makeTerminal({ sessionId: "session-main", cwd: REPO, agentType }));
-		repositoriesStore.addTerminalToBranch(REPO, "main", terminalId);
+		repositoriesStore.addTerminalToWorkspace(REPO, "main", terminalId);
 		terminalsStore.setActive(terminalId);
 		mockInvoke.mockClear();
 		return terminalId;
@@ -99,7 +99,7 @@ describe("switchToCreatedWorktree", () => {
 		await testInScopeAsync(async () => {
 			const shellId = seedActiveTerminal(null);
 			const agentId = terminalsStore.add(makeTerminal({ sessionId: "session-agent", cwd: REPO, agentType: "codex" }));
-			repositoriesStore.addTerminalToBranch(REPO, "main", agentId);
+			repositoriesStore.addTerminalToWorkspace(REPO, "main", agentId);
 			terminalsStore.setActive(agentId);
 			mockInvoke.mockClear();
 			const handleBranchSelect = vi.fn().mockResolvedValue(undefined);
@@ -161,7 +161,7 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 		branch = BRANCH,
 	) {
 		repositoriesStore.add({ path: REPO, displayName: "repo" });
-		repositoriesStore.setBranch(REPO, "main", { worktreePath: REPO, isMain: true });
+		repositoriesStore.setWorkspace(REPO, "main", { worktreePath: REPO, isMain: true });
 		useWorktreeSwitchPrompt({ handleBranchSelect, closeTerminalsForBranch: vi.fn() });
 		await Promise.resolve();
 		handlers.get("worktree-created")?.({

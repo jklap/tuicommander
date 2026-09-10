@@ -71,28 +71,28 @@ describe("resolveRepoOwnerIn", () => {
 	it("matches a repo root exactly", () => {
 		expect(resolveRepoOwnerIn(`${ROOT}/LS/veritas`, REPOS)).toEqual({
 			repoPath: `${ROOT}/LS/veritas`,
-			branchName: null,
+			workspaceId: null,
 		});
 	});
 
 	it("maps a nested cwd back to its repo root", () => {
 		expect(resolveRepoOwnerIn(`${ROOT}/LS/veritas/crates/parser`, REPOS)).toEqual({
 			repoPath: `${ROOT}/LS/veritas`,
-			branchName: null,
+			workspaceId: null,
 		});
 	});
 
-	// The repo root is reported as branchName null rather than as the main branch:
+	// The repo root is reported with a null workspaceId rather than as the main branch:
 	// whatever is checked out at the root moves under the user's feet, so the
 	// caller resolves it through activeBranch instead of freezing "master" here.
 	it("reports the repo root without claiming a branch", () => {
-		expect(resolveRepoOwnerIn(`${ROOT}/LS/agent2/src`, REPOS)?.branchName).toBeNull();
+		expect(resolveRepoOwnerIn(`${ROOT}/LS/agent2/src`, REPOS)?.workspaceId).toBeNull();
 	});
 
-	it("attributes a linked worktree to its branch, not just the repo", () => {
+	it("attributes a linked worktree to its workspace, not just the repo", () => {
 		expect(resolveRepoOwnerIn(`${ROOT}/LS/agent2__wt/refactor-inventory-dpkg-shadow/src`, REPOS)).toEqual({
 			repoPath: `${ROOT}/LS/agent2`,
-			branchName: "refactor-inventory-dpkg-shadow",
+			workspaceId: "refactor-inventory-dpkg-shadow",
 		});
 	});
 
