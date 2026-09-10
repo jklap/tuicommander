@@ -1,11 +1,12 @@
-//! Copy-on-write workspace creation: the capability probe and the guards that
-//! run before anything is copied.
+//! Copy-on-write workspace creation: the capability probe, the guards that run
+//! before anything is copied, and the clone itself.
 //!
 //! A COW workspace is a `clonefile` copy of a whole repository directory, which
 //! makes it an *independent repository* — two of them can sit on the same branch,
-//! and `node_modules`/`target` arrive warm. Everything in this module runs
-//! BEFORE the copy and answers two questions: can this pair of paths do COW at
-//! all, and is this repo in a shape that can be cloned safely.
+//! and `node_modules`/`target` arrive warm. The pre-flight half answers two
+//! questions: can this pair of paths do COW at all, and is this repo in a shape
+//! that can be cloned safely. The creation half copies, then applies the fixups
+//! without which the copy is not a usable repository.
 //!
 //! **A guard never repairs.** A repo that is not in a clonable shape is a
 //! refusal, not a fixup: deleting an inherited lock or finishing someone else's
@@ -18,10 +19,10 @@
 //! disk and 26 s for the clone. The rules below are the ones that PoC proved
 //! load-bearing, not a precautionary list.
 
-// The consumer of every item below is the creation path in #730-c047, the next
-// story of this plan. Split that way on purpose: the guards are the half that
-// has to be right before anything is copied, and they are testable on their
-// own. Remove this attribute with the first real caller.
+// The caller of this module is `mode=auto` in #731-ee0b, which picks between a
+// COW clone and a linked worktree. Split that way on purpose: the probe, the
+// guards and the clone are each testable without the policy that chooses
+// between them. Remove this attribute with that story.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -295,6 +296,219 @@ fn check_creation_guards_inner(
         warnings: collect_warnings(src, &git_path),
         stale_lock,
     })
+}
+
+/// What to do with the parent's uncommitted work. Three states, three prices,
+/// and only the third costs anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DirtyPolicy {
+    /// Carry the parent's work in progress over. Free — doing nothing writes no
+    /// blocks — and the default for exactly that reason.
+    #[default]
+    Inherit,
+    /// `clean -fdq`, deliberately WITHOUT `-x`: unlinking is metadata only, and
+    /// the ignored build artifacts are the point of the clone.
+    CleanUntracked,
+    /// `reset --hard --recurse-submodules` then the same clean. The paid one:
+    /// every rewritten block stops being shared. Measured 15 MB -> 113 MB.
+    Clean,
+}
+
+/// A COW workspace that now exists on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CowWorkspace {
+    pub(crate) path: PathBuf,
+    pub(crate) branch: String,
+    /// Repo shapes worth telling the caller about, from the guards.
+    pub(crate) warnings: Vec<String>,
+    /// How many paths the parent's working tree carried into this workspace.
+    /// Reported so a model does not read inherited WIP as its own bug.
+    pub(crate) carried_over: usize,
+    pub(crate) dirty_policy: DirtyPolicy,
+}
+
+/// Clone `src` to `dest` copy-on-write and make the copy a usable, independent
+/// repository on `branch`.
+///
+/// Assumes [`check_creation_guards`] passed and [`probe_cow_support`] said yes;
+/// the caller (`mode=auto`) degrades to a linked worktree when either refused.
+///
+/// **There is no full-copy fallback, on purpose.** The PoC fell back to a plain
+/// recursive copy, which on the repo it was measured against would silently
+/// turn a 19 MB, 26 s clone into a 12 GB one. A `cp -c -R` that fails after the
+/// probe succeeded means something changed underneath us, and the honest answer
+/// is an error the caller can degrade from.
+pub(crate) fn create_cow_workspace(
+    src: &Path,
+    dest: &Path,
+    branch: &str,
+    dirty: DirtyPolicy,
+    guards: &GuardReport,
+) -> Result<CowWorkspace, String> {
+    if dest.exists() {
+        return Err(format!("destination '{}' already exists", dest.display()));
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create '{}': {e}", parent.display()))?;
+    }
+
+    let out = Command::new("cp")
+        .arg("-c")
+        .arg("-R")
+        .arg(src)
+        .arg(dest)
+        .output()
+        .map_err(|e| format!("could not run cp: {e}"))?;
+    if !out.status.success() {
+        // Leave nothing half-copied behind for the next attempt to trip over.
+        let _ = std::fs::remove_dir_all(dest);
+        return Err(format!(
+            "copy-on-write clone of '{}' failed: {}",
+            src.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    match fixup_clone(src, dest, branch, dirty, guards) {
+        Ok(carried_over) => Ok(CowWorkspace {
+            path: dest.to_path_buf(),
+            branch: branch.to_string(),
+            warnings: guards.warnings.clone(),
+            carried_over,
+            dirty_policy: dirty,
+        }),
+        Err(e) => {
+            // A clone that failed its fixup is not a workspace: its .git/worktrees
+            // still points at the parent's admin dirs and its gc is unbounded.
+            // Leaving it on disk would hand the caller something that looks usable.
+            let _ = std::fs::remove_dir_all(dest);
+            Err(e)
+        }
+    }
+}
+
+/// Everything a raw `cp -c -R` of a repository still needs. None of this is
+/// precautionary — each step fixes something the PoC observed break.
+fn fixup_clone(
+    src: &Path,
+    dest: &Path,
+    branch: &str,
+    dirty: DirtyPolicy,
+    guards: &GuardReport,
+) -> Result<usize, String> {
+    // Debris inherited from the source, dropped HERE, in the copy.
+    drop_inherited_stale_lock(dest, guards);
+
+    // Inherited entries point at the PARENT's worktree directories and BLOCK
+    // checkout of those branches here: "fatal: 'x' is already used by worktree
+    // at ...". This is the fixup without which the clone cannot do the one
+    // thing it exists for.
+    let inherited_worktrees = dest.join(".git").join("worktrees");
+    if inherited_worktrees.exists() {
+        std::fs::remove_dir_all(&inherited_worktrees)
+            .map_err(|e| format!("could not drop inherited worktree admin entries: {e}"))?;
+    }
+
+    // A gc rewrites packfiles, and every rewritten block stops being shared —
+    // real disk goes from ~0 back to the full size of the repo.
+    config_or_fail(dest, "gc.auto", "0")?;
+    // There is no fetch-only remote in git: `remote add` alone still permits a
+    // push, so the push URL is set to one that cannot resolve.
+    let _ = git_cmd(dest)
+        .args(["remote", "add", "parent", &src.to_string_lossy()])
+        .run();
+    config_or_fail(dest, "remote.parent.pushurl", NO_PUSH_URL)?;
+    // Inherited fsmonitor state describes the parent's path, not this one.
+    config_or_fail(dest, "core.fsmonitor", "false")?;
+
+    apply_dirty_policy(dest, dirty)?;
+
+    // `clonefile` preserves mtime but changes ino and ctime, so every index
+    // entry reads stat-dirty and the first `git status` re-hashes the whole
+    // tree. Pay it here, inside creation, instead of in whatever command the
+    // agent happens to run first.
+    let _ = git_cmd(dest).args(["update-index", "--refresh"]).run();
+
+    checkout_branch(dest, branch)?;
+
+    Ok(dirty_path_count(dest))
+}
+
+/// Put the workspace on `branch`, whether or not the ref already exists.
+///
+/// The clone inherited every ref the parent had, so for the case this whole
+/// feature exists for — a second workspace on a branch someone is already
+/// working on — the branch is already there and `checkout -b` fails with
+/// "a branch named 'x' already exists". A COW workspace's isolation comes from
+/// being an independent repository, not from the branch being new.
+fn checkout_branch(dest: &Path, branch: &str) -> Result<(), String> {
+    let exists = git_cmd(dest)
+        .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
+        .run()
+        .is_ok();
+
+    let args: Vec<&str> = if exists {
+        vec!["checkout", branch]
+    } else {
+        vec!["checkout", "-b", branch]
+    };
+
+    git_cmd(dest)
+        .args(args)
+        .run()
+        .map(|_| ())
+        .map_err(|e| format!("could not check out '{branch}' in the workspace: {e}"))
+}
+
+/// A URL git will accept as configuration and can never push to. Not a real
+/// scheme on purpose: the failure has to be "this remote cannot be pushed to",
+/// not "this host is unreachable", which a firewall could turn into a hang.
+const NO_PUSH_URL: &str = "no-push://tuic-workspace-parent";
+
+fn config_or_fail(repo: &Path, key: &str, value: &str) -> Result<(), String> {
+    git_cmd(repo)
+        .args(["config", key, value])
+        .run()
+        .map(|_| ())
+        .map_err(|e| format!("could not set {key} in the workspace: {e}"))
+}
+
+fn apply_dirty_policy(dest: &Path, dirty: DirtyPolicy) -> Result<(), String> {
+    match dirty {
+        // Free: nothing runs, nothing is written, the parent's work in progress
+        // is simply there.
+        DirtyPolicy::Inherit => Ok(()),
+        DirtyPolicy::CleanUntracked => clean_untracked(dest),
+        DirtyPolicy::Clean => {
+            // `--recurse-submodules` is required: a plain reset does not descend,
+            // and leaves submodules modified (observed: ` M plugins` survived).
+            git_cmd(dest)
+                .args(["reset", "--hard", "--recurse-submodules", "HEAD"])
+                .run()
+                .map_err(|e| format!("could not reset the workspace: {e}"))?;
+            clean_untracked(dest)
+        }
+    }
+}
+
+/// `-fd`, never `-fdx`. The ignored build artifacts (`node_modules`, `target`)
+/// arrived warm at near-zero cost and are the reason to clone at all.
+fn clean_untracked(dest: &Path) -> Result<(), String> {
+    git_cmd(dest)
+        .args(["clean", "-fdq"])
+        .run()
+        .map(|_| ())
+        .map_err(|e| format!("could not clean the workspace: {e}"))
+}
+
+fn dirty_path_count(repo: &Path) -> usize {
+    git_cmd(repo)
+        .args(["status", "--porcelain"])
+        .run()
+        .map(|out| out.stdout.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0)
 }
 
 /// Delete an inherited stale lock — inside the COPY, never in the source.
@@ -741,5 +955,358 @@ mod tests {
         let report = check_creation_guards(&repo, &dest_parent.join("clone")).expect("passes");
 
         assert_eq!(report, GuardReport::default());
+    }
+
+    // ── the clone ────────────────────────────────────────────────────────
+
+    /// Guard-check then clone, the pair the caller always runs together.
+    fn clone_into(repo: &Path, dest: &Path, branch: &str, dirty: DirtyPolicy) -> CowWorkspace {
+        let guards = check_creation_guards(repo, dest).expect("guards pass");
+        create_cow_workspace(repo, dest, branch, dirty, &guards).expect("clone succeeds")
+    }
+
+    fn git_status(repo: &Path) -> String {
+        git_cmd(repo)
+            .args(["status", "--porcelain"])
+            .run()
+            .expect("status")
+            .stdout
+    }
+
+    /// The fixup this whole mechanism exists for. The parent holds `taken` in a
+    /// linked worktree, so its `.git/worktrees` entry travels with the copy and
+    /// git in the clone refuses the checkout with "already used by worktree at"
+    /// — pointing at a directory belonging to the parent.
+    #[test]
+    fn the_clone_can_check_out_a_branch_the_parent_holds_in_a_linked_worktree() {
+        let (_temp, repo, dest_parent) = setup();
+        let parent_worktree = dest_parent.join("parent-wt");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "taken",
+                &parent_worktree.to_string_lossy(),
+            ])
+            .run()
+            .expect("worktree add");
+        assert!(repo.join(".git").join("worktrees").exists());
+
+        let dest = dest_parent.join("clone");
+        let workspace = clone_into(&repo, &dest, "taken", DirtyPolicy::Inherit);
+
+        assert!(
+            !dest.join(".git").join("worktrees").exists(),
+            "the inherited worktree admin entries were not dropped"
+        );
+        let head = git_cmd(&workspace.path)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .run()
+            .expect("rev-parse")
+            .stdout;
+        assert_eq!(head.trim(), "taken");
+    }
+
+    #[test]
+    fn the_clone_can_fetch_from_the_parent_but_not_push_to_it() {
+        let (_temp, repo, dest_parent) = setup();
+        let dest = dest_parent.join("clone");
+        let workspace = clone_into(&repo, &dest, "feature", DirtyPolicy::Inherit);
+
+        git_cmd(&workspace.path)
+            .args(["fetch", "parent"])
+            .run()
+            .expect("fetch from the parent must work — that is how work gets published");
+
+        let pushed = git_cmd(&workspace.path)
+            .args(["push", "parent", "HEAD:refs/heads/should-never-arrive"])
+            .run();
+        assert!(pushed.is_err(), "push to the parent must fail");
+        assert!(
+            git_cmd(&repo)
+                .args(["rev-parse", "--verify", "should-never-arrive"])
+                .run()
+                .is_err(),
+            "the push reached the parent anyway"
+        );
+    }
+
+    #[test]
+    fn the_fixup_pins_gc_and_turns_the_inherited_fsmonitor_off() {
+        let (_temp, repo, dest_parent) = setup();
+        let dest = dest_parent.join("clone");
+        // The parent's fsmonitor setting describes the parent's path, and travels.
+        git_cmd(&repo)
+            .args(["config", "core.fsmonitor", "true"])
+            .run()
+            .expect("set fsmonitor");
+
+        let workspace = clone_into(&repo, &dest, "feature", DirtyPolicy::Inherit);
+
+        assert_eq!(read_config(&workspace.path, "gc.auto"), "0");
+        assert_eq!(read_config(&workspace.path, "core.fsmonitor"), "false");
+        assert_eq!(
+            read_config(&workspace.path, "remote.parent.pushurl"),
+            NO_PUSH_URL
+        );
+    }
+
+    fn read_config(repo: &Path, key: &str) -> String {
+        git_cmd(repo)
+            .args(["config", "--get", key])
+            .run()
+            .map(|out| out.stdout.trim().to_string())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn inherit_carries_the_parents_modified_paths_over() {
+        let (_temp, repo, dest_parent) = setup();
+        fs::write(repo.join("README.md"), "# Test\nwork in progress\n").expect("modify");
+        fs::write(repo.join("scratch.txt"), "untracked\n").expect("untracked");
+
+        let workspace = clone_into(
+            &repo,
+            &dest_parent.join("clone"),
+            "feature",
+            DirtyPolicy::Inherit,
+        );
+
+        let status = git_status(&workspace.path);
+        assert!(
+            status.contains("README.md"),
+            "tracked modification lost: {status:?}"
+        );
+        assert!(
+            status.contains("scratch.txt"),
+            "untracked file lost: {status:?}"
+        );
+        assert_eq!(
+            workspace.carried_over, 2,
+            "the count is what tells a model this WIP is not its own bug"
+        );
+        assert_eq!(
+            workspace.dirty_policy,
+            DirtyPolicy::default(),
+            "inherit is the default"
+        );
+    }
+
+    #[test]
+    fn clean_untracked_removes_untracked_files_but_keeps_ignored_build_artifacts() {
+        let (_temp, repo, dest_parent) = setup();
+        fs::write(repo.join(".gitignore"), "node_modules/\ntarget/\n").expect("gitignore");
+        git_cmd(&repo)
+            .args(["add", ".gitignore"])
+            .run()
+            .expect("add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "ignore build output"])
+            .run()
+            .expect("commit");
+        fs::create_dir_all(repo.join("node_modules").join("left-pad")).expect("node_modules");
+        fs::write(
+            repo.join("node_modules").join("left-pad").join("index.js"),
+            "module.exports = 1;\n",
+        )
+        .expect("artifact");
+        fs::write(repo.join("scratch.txt"), "untracked\n").expect("untracked");
+
+        let workspace = clone_into(
+            &repo,
+            &dest_parent.join("clone"),
+            "feature",
+            DirtyPolicy::CleanUntracked,
+        );
+
+        assert!(
+            !workspace.path.join("scratch.txt").exists(),
+            "the untracked file survived the clean"
+        );
+        assert!(
+            workspace
+                .path
+                .join("node_modules")
+                .join("left-pad")
+                .join("index.js")
+                .exists(),
+            "the warm build artifacts were deleted — they are the reason to clone at all"
+        );
+    }
+
+    #[test]
+    fn clean_resets_a_modified_submodule_which_a_plain_reset_leaves_alone() {
+        let (temp, repo, dest_parent) = setup();
+
+        // A local submodule, which modern git refuses over the file transport
+        // unless asked explicitly.
+        let sub = temp.path().join("sub-origin");
+        fs::create_dir_all(&sub).expect("sub dir");
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            git_cmd(&sub).args(args).run().expect("sub setup");
+        }
+        fs::write(sub.join("lib.txt"), "original\n").expect("sub file");
+        git_cmd(&sub).args(["add", "."]).run().expect("sub add");
+        git_cmd(&sub)
+            .args(["commit", "-m", "sub initial"])
+            .run()
+            .expect("sub commit");
+
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub.to_string_lossy(),
+                "vendor",
+            ])
+            .run()
+            .expect("submodule add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "add submodule"])
+            .run()
+            .expect("commit submodule");
+
+        // Dirty the submodule's working tree, the case a plain `reset --hard`
+        // does not descend into (observed as a surviving ` M plugins`).
+        fs::write(repo.join("vendor").join("lib.txt"), "edited\n").expect("dirty submodule");
+        assert!(
+            git_status(&repo).contains("vendor"),
+            "the fixture must start dirty"
+        );
+
+        let workspace = clone_into(
+            &repo,
+            &dest_parent.join("clone"),
+            "feature",
+            DirtyPolicy::Clean,
+        );
+
+        let status = git_status(&workspace.path);
+        assert!(
+            !status.contains("vendor"),
+            "the submodule is still modified — the reset did not recurse: {status:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.path.join("vendor").join("lib.txt")).expect("read"),
+            "original\n"
+        );
+    }
+
+    /// `clonefile` keeps mtime but changes ino and ctime, so every index entry
+    /// reads stat-dirty until something refreshes it. Without the refresh inside
+    /// creation, the first `status` an agent runs re-hashes the whole tree —
+    /// and on a repo with a stale index it reports modifications that are not.
+    #[test]
+    fn the_first_status_in_a_new_workspace_reports_nothing_spurious() {
+        let (_temp, repo, dest_parent) = setup();
+        fs::write(repo.join("a.txt"), "one\n").expect("a");
+        fs::write(repo.join("b.txt"), "two\n").expect("b");
+        git_cmd(&repo).args(["add", "."]).run().expect("add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "two files"])
+            .run()
+            .expect("commit");
+
+        let workspace = clone_into(
+            &repo,
+            &dest_parent.join("clone"),
+            "feature",
+            DirtyPolicy::Inherit,
+        );
+
+        assert_eq!(
+            git_status(&workspace.path).trim(),
+            "",
+            "the clone reports phantom changes"
+        );
+        assert_eq!(workspace.carried_over, 0);
+    }
+
+    /// The thing `git worktree` cannot do, and the reason this feature exists:
+    /// `git worktree add` refuses a branch that is already checked out
+    /// ("fatal: 'x' is already used by worktree at ..."). Two independent
+    /// clones have no such relationship, and a commit in one is invisible to
+    /// the other until it is published.
+    #[test]
+    fn two_workspaces_can_sit_on_one_branch_and_do_not_see_each_other() {
+        let (_temp, repo, dest_parent) = setup();
+        git_cmd(&repo)
+            .args(["branch", "shared"])
+            .run()
+            .expect("branch");
+
+        let first = clone_into(
+            &repo,
+            &dest_parent.join("one"),
+            "shared",
+            DirtyPolicy::Inherit,
+        );
+        let second = clone_into(
+            &repo,
+            &dest_parent.join("two"),
+            "shared",
+            DirtyPolicy::Inherit,
+        );
+
+        assert_eq!(first.branch, second.branch);
+        assert_ne!(first.path, second.path);
+
+        fs::write(first.path.join("only-here.txt"), "first\n").expect("write");
+        git_cmd(&first.path).args(["add", "."]).run().expect("add");
+        git_cmd(&first.path)
+            .args(["commit", "-m", "work in the first workspace"])
+            .run()
+            .expect("commit");
+
+        let second_head = git_cmd(&second.path)
+            .args(["rev-parse", "HEAD"])
+            .run()
+            .expect("rev-parse")
+            .stdout;
+        let first_head = git_cmd(&first.path)
+            .args(["rev-parse", "HEAD"])
+            .run()
+            .expect("rev-parse")
+            .stdout;
+        assert_ne!(
+            first_head.trim(),
+            second_head.trim(),
+            "the two workspaces share a HEAD — they are not independent repositories"
+        );
+        assert!(!second.path.join("only-here.txt").exists());
+        assert!(
+            !repo.join("only-here.txt").exists(),
+            "the commit reached the parent's working tree"
+        );
+    }
+
+    #[test]
+    fn an_existing_destination_is_refused_before_anything_is_copied() {
+        let (_temp, repo, dest_parent) = setup();
+        let dest = dest_parent.join("clone");
+        fs::create_dir_all(&dest).expect("dest");
+        fs::write(dest.join("keep.txt"), "mine\n").expect("existing content");
+
+        let err = create_cow_workspace(
+            &repo,
+            &dest,
+            "feature",
+            DirtyPolicy::Inherit,
+            &GuardReport::default(),
+        )
+        .expect_err("must refuse");
+
+        assert!(err.contains("already exists"), "{err}");
+        assert!(
+            dest.join("keep.txt").exists(),
+            "the existing directory was touched"
+        );
     }
 }
