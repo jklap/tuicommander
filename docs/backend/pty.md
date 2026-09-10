@@ -398,10 +398,14 @@ real cell pixel size before they'll attempt to display anything:
   preserves aspect ratio against the image's real proportions, not just its
   raw intrinsic size.
 - **Storage**: `Cell.extra.image: Option<ImageCellRef>` holds a direct
-  `Arc<ImageData>` (both in `term/cell.rs`, alongside `Hyperlink`) — eviction
-  is ordinary Rust ownership (the app-level `terminal_images::ImageStore`
-  keeps only `Weak` refs), not a cache policy. See that module's own doc
-  comment.
+  `Arc<ImageData>` (both in `term/cell.rs`, alongside `Hyperlink`). The
+  app-level `terminal_images::ImageStore` also holds its own **strong**
+  reference (not `Weak`) so images persist for the session's lifetime
+  independent of which cells currently display them — required for Kitty's
+  transmit-without-display + later-placement pattern (Phase 3); freed only
+  by an explicit forget (Kitty `a=d`) or the session ending. See that
+  module's own doc comment for the full reasoning, including the bug this
+  avoids.
 - **`inline=0`** (the default when omitted) is a display no-op, not a
   write-to-disk — the download path is out of scope for now.
 - **Known gap**: the PTY flight-recorder rings (`pty_raw_rings`,
@@ -412,6 +416,44 @@ real cell pixel size before they'll attempt to display anything:
 - **Known gap**: no frontend renderer exists yet. `terminal_image_ref_at`/
   `terminal_image_bytes` return real data once an image is transmitted, but
   nothing paints it to the canvas.
+
+## Kitty Graphics Protocol
+
+`patches/vte/src/lib.rs` splits APC (`ESC _ ... ST`) out of the shared
+`SosPmApcString` state into its own `State::ApcString`, accumulating and
+dispatching it via a new `Perform::apc_dispatch` (PM/SOS remain fully
+discarded, unaffected). `patches/alacritty_terminal/src/term/kitty.rs` (pure
+parsing, mirroring `iterm2.rs`'s split) plus `term/mod.rs`'s
+`kitty_graphics`/`kitty_graphics_dispatch`/`kitty_process`/`kitty_display`
+implement the protocol itself.
+
+- **Scope**: `a=t/T/p/d/q`, `f=24/32/100`, `t=d` (direct) only, `m=`
+  chunking, `i=`/`p=`/`c=`/`r=`/`z=`/`C=`/`q=`, and the capability-probe
+  response — see `kitty.rs`'s own module doc comment for exactly what's
+  implemented vs. deliberately deferred (`t=f`/`t=t`/`t=s` mediums, `o=z`
+  compression, and Unicode-placeholder diacritic decoding all get a
+  protocol-correct error response or a documented no-op, never silent
+  misbehavior).
+- **Client-chosen image ids**: unlike iTerm2, Kitty's `i=` is chosen by the
+  client and referenced by later `a=p`/`a=d` — `terminal_images::ImageStore`
+  accepts an optional `client_id` for exactly this (iTerm2 passes `None` and
+  gets an auto-allocated id).
+- **Responses**: `\x1b_Gi=<id>[,p=<placement>];OK\x1b\\` on success,
+  `\x1b_Gi=<id>;<CODE>:<message>\x1b\\` on failure, gated by `q=`
+  (0 = both, 1 = errors only, 2 = neither) — `Term::kitty_respond_ok`/
+  `kitty_respond_error`.
+- **Chunking**: `m=1` on all but the last sequence; only the *first* chunk
+  carries real control data (continuation chunks are `m=`/`q=` only per
+  spec), tracked via `pending_kitty_transmission`.
+- **`U=1` Unicode virtual placeholders**: registration only. The real
+  mechanism — recognizing an app-printed `U+10EEEE` placeholder character
+  (with diacritics encoding tile position, image id in the foreground color)
+  during ordinary `input()` and attaching an `ImageCellRef` instead of
+  storing it as a glyph — is not implemented. See `kitty.rs`'s module doc
+  comment for why (the diacritic table is large and easy to get subtly
+  wrong without a canonical reference to verify against).
+- **Known gap**: same diagnostics-ring and frontend-renderer gaps as OSC
+  1337, above.
 
 ## Shell Environment Variables
 

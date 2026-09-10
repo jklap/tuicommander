@@ -3224,18 +3224,19 @@ cloned repo.
   HEAD, then open the branch switcher again — confirm there is no phantom
   `(HEAD detached at ...`-style entry in the list.
 
-## Inline images (color-tools plan, Phases 1-2 backend)
+## Inline images (color-tools plan, Phases 1-3 backend)
 
 Rust changes here **require a `make dev` restart** to take effect (no hot-reload) — this whole
 section needs a human running the rebuilt app, not just re-running tests.
 
-- [ ] After a rebuild, run the real `imgcat`/`imgls`/`divider` scripts (or a hand-written OSC 1337
-  sequence) against a live `make dev` session and confirm an image visibly displays. **Backend
-  is fully implemented and unit/integration-tested (parsing, decode, footprint sizing incl.
-  `auto`/aspect-ratio, cell reservation, `CellExtra` attachment, eviction) but there is no
-  frontend renderer yet** — `terminal_image_ref_at`/`terminal_image_bytes` will return real data,
-  but nothing paints it to the canvas. This is the single largest remaining gap before the
-  feature is user-visible at all.
+- [ ] After a rebuild, run the real `imgcat`/`imgls`/`divider` scripts, a hand-written OSC 1337
+  sequence, or a real Kitty-protocol tool (`chafa -f kitty`, `mpv --vo=kitty`) against a live
+  `make dev` session and confirm an image visibly displays. **Both protocols' backends are fully
+  implemented and unit/integration-tested end to end (parsing, decode, footprint sizing incl.
+  `auto`/aspect-ratio, cell reservation, `CellExtra` attachment, transmit/place/delete/query,
+  chunking, quiet levels) but there is no frontend renderer yet** — `terminal_image_ref_at`/
+  `terminal_image_bytes` will return real data, but nothing paints it to the canvas. This is the
+  single largest remaining gap before the feature is user-visible at all.
 - [ ] Diagnostics-ring elision (color-tools plan, Architecture: PTY flight-recorder rings must
   not have a large image payload's base64 bytes evict their whole history) is **not implemented**.
   A large image transmission will currently consume a large fraction of `pty_raw_rings`'
@@ -3245,3 +3246,16 @@ section needs a human running the rebuilt app, not just re-running tests.
 - [ ] `CSI 14 t`/`CSI 16 t`/XTVERSION replies: confirm against a real client. `timg -pk` and
   `broot` are the easiest first targets — `broot`'s env-based detection already matches our
   `TERM_PROGRAM=ghostty` with zero further changes needed.
+- [ ] Kitty capability probe (`a=q` + immediate `i=` echo): confirm against yazi or blackcat, both
+  of which do a live runtime probe rather than an env-var allowlist. yazi in particular keys its
+  `kgp`/`kgp_shm` flags off the echoed `i=` matching what it sent — worth checking specifically.
+- [ ] Kitty scope gaps to verify don't silently break a real tool rather than cleanly erroring:
+  `t=f`/`t=t`/`t=s` transmission mediums (blackcat requires `t=s`; ranger's kitty backend probes
+  `t=f`) and `o=z` compression both return a protocol error response now — confirm the real client
+  actually falls back gracefully rather than hanging, since that's a client-side behavior this
+  session couldn't verify without the real binaries.
+- [ ] Unicode virtual placeholders (`U=1`, used by image.nvim/snacks.nvim/yazi's modern driver):
+  registration exists but nothing yet recognizes the `U+10EEEE` placeholder characters those tools
+  print, so images from these specific tools/paths will not display even once the frontend
+  renderer lands. Needs its own follow-up implementing the diacritic decode table against a
+  canonical reference (not attempted here — see `kitty.rs`'s module doc comment for why).

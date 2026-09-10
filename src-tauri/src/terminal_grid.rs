@@ -73,6 +73,7 @@ impl EventListener for TermEventCollector {
 
     fn store_image(
         &self,
+        client_id: Option<u32>,
         bytes: Arc<[u8]>,
         mime: String,
         intrinsic_width: u32,
@@ -81,8 +82,20 @@ impl EventListener for TermEventCollector {
         self.image_store
             .lock()
             .unwrap()
-            .store(bytes, mime, intrinsic_width, intrinsic_height)
+            .store(client_id, bytes, mime, intrinsic_width, intrinsic_height)
             .ok()
+    }
+
+    fn image_by_id(&self, image_id: u32) -> Option<Arc<alacritty_terminal::term::cell::ImageData>> {
+        self.image_store.lock().unwrap().get(image_id)
+    }
+
+    fn forget_image(&self, image_id: u32) {
+        self.image_store.lock().unwrap().forget(image_id);
+    }
+
+    fn forget_all_images(&self) {
+        self.image_store.lock().unwrap().forget_all();
     }
 
     fn send_event(&self, event: Event) {
@@ -647,12 +660,13 @@ impl TerminalGrid {
         self.image_store
             .lock()
             .unwrap()
-            .store(bytes, mime, intrinsic_width, intrinsic_height)
+            .store(None, bytes, mime, intrinsic_width, intrinsic_height)
     }
 
     /// Fetch a previously stored image's bytes by id, for the
-    /// `terminal_image_bytes` transport surface. `None` if unknown or already
-    /// evicted (no cell references it any more).
+    /// `terminal_image_bytes` transport surface. `None` if unknown or
+    /// forgotten (Kitty `a=d`) — images otherwise persist for the session's
+    /// lifetime regardless of which cells currently display them.
     pub fn image_bytes(&self, image_id: u32) -> Option<Arc<[u8]>> {
         self.image_store.lock().unwrap().bytes(image_id)
     }
@@ -4847,16 +4861,23 @@ mod tests {
             .unwrap();
         assert!(!grid.set_image_ref_at(999, 999, data2, 1, 0, 0));
 
-        // Overwriting the cell with a plain character clears the ref — same
+        // Overwriting the cell with a plain character clears its *ref* — same
         // mechanism as the hyperlink test above (`write_at_cursor` replacing
-        // the whole `extra`) — and since that was the only reference to the
-        // first image, its bytes are now unreachable.
+        // the whole `extra`).
         grid.process(b"\x1b[1;1HY");
         assert_eq!(grid.image_ref_at(0, 0), None);
+
+        // But the image's *bytes* remain fetchable: the store holds its own
+        // strong reference for the session's lifetime (per the color-tools
+        // plan's "in-memory, session lifetime" decision), independent of
+        // which cells currently display it — Kitty's `a=t` transmit-without-
+        // display and later `a=p` placement depend on exactly this. Only an
+        // explicit forget (Kitty `a=d`) or the session ending actually drops
+        // it.
         assert_eq!(
-            grid.image_bytes(image_id),
-            None,
-            "no cell references this image any more; its bytes must be gone"
+            grid.image_bytes(image_id).as_deref(),
+            Some(&[1u8, 2, 3, 4][..]),
+            "the store's own reference must outlive any single cell's ref"
         );
     }
 
@@ -4977,6 +4998,271 @@ mod tests {
         );
         assert_eq!(grid.image_ref_at(0, 10), None);
         assert_eq!(grid.image_ref_at(1, 0), None, "only 1 row expected");
+    }
+
+    /// End-to-end: `a=T` (transmit + display), `f=24` raw RGB, explicit
+    /// `c=`/`r=`, through the real vte/alacritty_terminal APC pipeline.
+    #[test]
+    fn kitty_transmit_and_display_direct_raw_rgb() {
+        use base64::Engine;
+        let raw_rgb = vec![0u8; 3 * 3]; // 3x3 px, doesn't matter what's in it
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let full = format!("\x1b_Gi=1,a=T,f=24,s=3,v=3,c=2,r=1;{payload}\x1b\\");
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(full.as_bytes());
+
+        let (image_id, placement_id, ..) = grid.image_ref_at(0, 0).expect("top-left tile");
+        assert_eq!(image_id, 1, "client-chosen i= must be respected");
+        assert_eq!(placement_id, 1, "falls back to image id when p= is absent");
+        assert!(grid.image_ref_at(0, 1).is_some());
+        assert_eq!(grid.image_ref_at(0, 2), None, "only 2 cols requested");
+        assert_eq!(grid.image_ref_at(1, 0), None, "only 1 row requested");
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+
+        // Default q=0 -> an OK response, echoing i=.
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(replies, vec!["\x1b_Gi=1;OK\x1b\\".to_string()]);
+    }
+
+    /// `a=t` (transmit only) must store the image without displaying it;
+    /// a later `a=p` (place) against the same id then displays it.
+    #[test]
+    fn kitty_transmit_only_then_place() {
+        use base64::Engine;
+        let raw_rgb = vec![0u8; 3 * 9];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=5,a=t,f=24,s=3,v=3,q=2;{payload}\x1b\\").as_bytes());
+        assert_eq!(grid.image_ref_at(0, 0), None, "a=t alone must not display");
+        assert_eq!(
+            grid.image_bytes(5).as_deref(),
+            Some(&raw_rgb[..]),
+            "but must still be stored"
+        );
+
+        grid.process(b"\x1b_Ga=p,i=5,c=1,r=1,q=2\x1b\\");
+        assert_eq!(grid.image_ref_at(0, 0), Some((5, 5, 0, 0)));
+    }
+
+    /// `a=p` against an unknown image id must respond with an error, not
+    /// silently no-op.
+    #[test]
+    fn kitty_place_unknown_image_id_errors() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_Ga=p,i=999,c=1,r=1\x1b\\");
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(
+            replies,
+            vec!["\x1b_Gi=999;ENOENT:no image with that id\x1b\\".to_string()]
+        );
+    }
+
+    /// `a=q` (capability probe) must acknowledge without storing or
+    /// displaying anything — real clients (yazi, blackcat) rely on exactly
+    /// this to detect support without side effects.
+    #[test]
+    fn kitty_query_action_is_a_pure_probe() {
+        use base64::Engine;
+        let payload = base64::engine::general_purpose::STANDARD.encode(b"AAAA");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=q,t=d,f=24,s=1,v=1;{payload}\x1b\\").as_bytes());
+
+        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert_eq!(
+            grid.image_bytes(42),
+            None,
+            "a query must not store anything"
+        );
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(replies, vec!["\x1b_Gi=42;OK\x1b\\".to_string()]);
+    }
+
+    /// `q=2` suppresses every response, success or failure.
+    #[test]
+    fn kitty_quiet_level_2_suppresses_all_responses() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_Ga=q,i=1,q=2\x1b\\");
+        assert!(
+            grid.drain_pty_write_events().is_empty(),
+            "OK must be suppressed"
+        );
+
+        grid.process(b"\x1b_Ga=p,i=999,q=2\x1b\\");
+        assert!(
+            grid.drain_pty_write_events().is_empty(),
+            "error must also be suppressed"
+        );
+    }
+
+    /// `q=1` suppresses only success (OK) responses; errors still fire.
+    #[test]
+    fn kitty_quiet_level_1_suppresses_only_ok() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_Ga=q,i=1,q=1\x1b\\");
+        assert!(grid.drain_pty_write_events().is_empty());
+
+        grid.process(b"\x1b_Ga=p,i=999,q=1\x1b\\");
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec!["\x1b_Gi=999;ENOENT:no image with that id\x1b\\".to_string()]
+        );
+    }
+
+    /// `t=f`/`t=t`/`t=s` are unimplemented transmission mediums and must get
+    /// a real protocol error response (so a well-behaved client can fall
+    /// back), not be silently ignored.
+    #[test]
+    fn kitty_unsupported_transmission_medium_gets_a_protocol_error() {
+        for medium in ["f", "t", "s"] {
+            let mut grid = TerminalGrid::new(24, 80, 0);
+            grid.process(format!("\x1b_Gi=1,a=T,t={medium},f=24,s=1,v=1\x1b\\").as_bytes());
+            assert_eq!(grid.image_ref_at(0, 0), None);
+            assert_eq!(
+                grid.drain_pty_write_events(),
+                vec![format!(
+                    "\x1b_Gi=1;EINVAL:only direct (t=d) transmission is supported\x1b\\"
+                )],
+                "medium t={medium}"
+            );
+        }
+    }
+
+    /// `o=z` (zlib compression) is unimplemented and must error rather than
+    /// attempt to display mis-decoded pixel data.
+    #[test]
+    fn kitty_compressed_payload_gets_a_protocol_error() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_Gi=1,a=T,f=24,s=1,v=1,o=z;AAAA\x1b\\");
+        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec!["\x1b_Gi=1;EINVAL:compressed (o=z) payloads are not supported\x1b\\".to_string()]
+        );
+    }
+
+    /// `a=d,d=I,i=<id>` forgets the store's own reference but must not
+    /// affect a cell already displaying that image — the cell holds its own
+    /// clone of the `Arc`, independent of the store's bookkeeping.
+    #[test]
+    fn kitty_delete_by_id_does_not_affect_already_displayed_cells() {
+        use base64::Engine;
+        let payload = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 3]);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=9,a=T,f=24,s=1,v=1,c=1,r=1;{payload}\x1b\\").as_bytes());
+        assert!(grid.image_ref_at(0, 0).is_some());
+        grid.drain_pty_write_events(); // the transmit+display's own OK
+
+        grid.process(b"\x1b_Ga=d,d=I,i=9\x1b\\");
+        grid.drain_pty_write_events(); // the delete's own OK
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "the already-displayed cell must keep showing the image"
+        );
+        // But a *new* placement can no longer reference it by id.
+        grid.process(b"\x1b_Ga=p,i=9,c=1,r=1\x1b\\");
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(
+            replies,
+            vec!["\x1b_Gi=9;ENOENT:no image with that id\x1b\\".to_string()]
+        );
+    }
+
+    /// `a=d,d=a` forgets every image the store knows about.
+    #[test]
+    fn kitty_delete_all_forgets_every_image() {
+        use base64::Engine;
+        let payload = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 3]);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=t,f=24,s=1,v=1,q=2;{payload}\x1b\\").as_bytes());
+        grid.process(format!("\x1b_Gi=2,a=t,f=24,s=1,v=1,q=2;{payload}\x1b\\").as_bytes());
+        grid.process(b"\x1b_Ga=d,d=a,q=2\x1b\\");
+
+        grid.process(b"\x1b_Ga=p,i=1,c=1,r=1,q=1\x1b\\");
+        assert!(
+            !grid.drain_pty_write_events().is_empty(),
+            "image 1 should be gone"
+        );
+        grid.process(b"\x1b_Ga=p,i=2,c=1,r=1,q=1\x1b\\");
+        assert!(
+            !grid.drain_pty_write_events().is_empty(),
+            "image 2 should be gone"
+        );
+    }
+
+    /// Chunked transmission (`m=1` on every sequence but the last): the
+    /// base64 payload must assemble correctly, and the control data must
+    /// come from the *first* chunk (continuation chunks carry only `m=`).
+    #[test]
+    fn kitty_chunked_transmission_assembles_across_sequences() {
+        use base64::Engine;
+        let raw_rgb = vec![7u8; 3 * 9]; // 3x3 px RGB
+        let full_payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let (part1, part2) = full_payload.split_at(full_payload.len() / 2);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=3,a=T,f=24,s=3,v=3,c=2,r=1,m=1;{part1}\x1b\\").as_bytes());
+        // Continuation chunk: only m=/payload, per spec.
+        grid.process(format!("\x1b_Gm=0;{part2}\x1b\\").as_bytes());
+
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "display only happens once assembled"
+        );
+        assert_eq!(grid.image_bytes(3).as_deref(), Some(&raw_rgb[..]));
+    }
+
+    /// A `PendingMultipart`/`PendingTransmission`-style abandoned chunked
+    /// transfer (no final `m=0` chunk) must not display anything and must
+    /// not wedge later, unrelated processing.
+    #[test]
+    fn kitty_abandoned_chunked_transmission_is_inert() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_Gi=1,a=T,f=24,s=1,v=1,c=1,r=1,m=1;AAAA\x1b\\");
+        // No final chunk. A later unrelated write must still work normally.
+        grid.process(b"hello");
+        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert_eq!(grid.get_row_text(0).trim_end(), "hello");
+    }
+
+    /// An APC sequence without the literal `G` marker isn't a Kitty graphics
+    /// sequence at all (some other, unimplemented APC use) and must be
+    /// silently ignored rather than misparsed.
+    #[test]
+    fn kitty_apc_without_g_marker_is_ignored() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_not-kitty-at-all\x1b\\hello");
+        assert!(grid.drain_pty_write_events().is_empty());
+        assert_eq!(grid.get_row_text(0).trim_end(), "hello");
+    }
+
+    /// True end-to-end proof of the color-tools plan's Phase 2/Phase 4 seam:
+    /// these are the *actual* bytes `tuic divider /tmp/test-image.bin`
+    /// (the real, compiled clean-room CLI, `crates/tuic-cli/src/imgcat.rs`)
+    /// printed on 2026-09-10 — captured via `xxd -p`, not hand-constructed —
+    /// fed through our own OSC 1337 parser. Proves the two halves of this
+    /// feature actually interoperate, not just that each was unit-tested in
+    /// isolation against its own idea of the wire format.
+    #[test]
+    fn real_tuic_divider_cli_output_displays_through_our_own_parser() {
+        let hex = "1b5d313333373b46696c653d696e6c696e653d313b77696474683d313030253b6865696768743d313b7072657365727665417370656374526174696f3d303a6147567362473867643239796247513d070a";
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(&bytes);
+
+        // width=100% of 80 cols, height=1 -> reserved across the whole row.
+        let (image_id, ..) = grid.image_ref_at(0, 0).expect("divider image displayed");
+        assert!(grid.image_ref_at(0, 79).is_some(), "full-width reservation");
+        assert_eq!(
+            grid.image_bytes(image_id).as_deref(),
+            Some(&b"hello world"[..]),
+            "the real CLI's base64 payload must decode to the original file bytes"
+        );
     }
 
     /// `CSI 14 t` (`text_area_size_pixels`) reports the text area size in
