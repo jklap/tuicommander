@@ -57,8 +57,8 @@ describe("switchToCreatedWorktree", () => {
 			await switchToCreatedWorktree({ handleBranchSelect, closeTerminalsForBranch: vi.fn() }, REPO, BRANCH, WORKTREE);
 
 			expect(handleBranchSelect).toHaveBeenCalledWith(REPO, BRANCH);
-			expect(repositoriesStore.get(REPO)!.branches.main.terminals).toContain(terminalId);
-			expect(repositoriesStore.get(REPO)!.branches[BRANCH].terminals).not.toContain(terminalId);
+			expect(repositoriesStore.get(REPO)!.workspaces.main.terminals).toContain(terminalId);
+			expect(repositoriesStore.get(REPO)!.workspaces[BRANCH].terminals).not.toContain(terminalId);
 			expect(mockInvoke).not.toHaveBeenCalled();
 		});
 	});
@@ -71,8 +71,8 @@ describe("switchToCreatedWorktree", () => {
 			await switchToCreatedWorktree({ handleBranchSelect, closeTerminalsForBranch: vi.fn() }, REPO, BRANCH, WORKTREE);
 
 			expect(handleBranchSelect).toHaveBeenCalledWith(REPO, BRANCH);
-			expect(repositoriesStore.get(REPO)!.branches.main.terminals).not.toContain(terminalId);
-			expect(repositoriesStore.get(REPO)!.branches[BRANCH].terminals).toContain(terminalId);
+			expect(repositoriesStore.get(REPO)!.workspaces.main.terminals).not.toContain(terminalId);
+			expect(repositoriesStore.get(REPO)!.workspaces[BRANCH].terminals).toContain(terminalId);
 			expect(mockInvoke).toHaveBeenCalledWith("write_pty", {
 				sessionId: "session-main",
 				data: `cd ${WORKTREE}\n`,
@@ -96,8 +96,8 @@ describe("switchToCreatedWorktree", () => {
 
 			// The agent is the active tab now, so nothing moves and no cd is written —
 			// even though a movable shell was active when the worktree was created.
-			expect(repositoriesStore.get(REPO)!.branches.main.terminals).toContain(shellId);
-			expect(repositoriesStore.get(REPO)!.branches[BRANCH].terminals).not.toContain(agentId);
+			expect(repositoriesStore.get(REPO)!.workspaces.main.terminals).toContain(shellId);
+			expect(repositoriesStore.get(REPO)!.workspaces[BRANCH].terminals).not.toContain(agentId);
 			expect(mockInvoke).not.toHaveBeenCalled();
 		});
 	});
@@ -167,7 +167,7 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 		await testInScopeAsync(async () => {
 			await emitCreated();
 
-			expect(repositoriesStore.get(REPO)!.branches[BRANCH]?.worktreePath).toBe(WORKTREE);
+			expect(repositoriesStore.get(REPO)!.workspaces[BRANCH]?.worktreePath).toBe(WORKTREE);
 			expect(activityStore.getForSection("worktrees").some((i) => i.title === `Worktree: ${BRANCH}`)).toBe(true);
 		});
 	});

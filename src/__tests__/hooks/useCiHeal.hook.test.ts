@@ -6,12 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // + buildCiFixPrompt purity is covered separately in useCiHeal.test.ts.)
 const h = vi.hoisted(() => {
 	const repoState = {
-		repositories: {} as Record<string, { branches: Record<string, { ciAutoHeal?: unknown; terminals: string[] }> }>,
+		repositories: {} as Record<string, { workspaces: Record<string, { ciAutoHeal?: unknown; terminals: string[] }> }>,
 	};
 	return {
 		repoState,
 		setCiAutoHeal: vi.fn((repoPath: string, branch: string, val: unknown) => {
-			repoState.repositories[repoPath].branches[branch].ciAutoHeal = val;
+			repoState.repositories[repoPath].workspaces[branch].ciAutoHeal = val;
 		}),
 		handlers: { onCiFailed: null as ((r: string, b: string, n: number) => void) | null },
 		terminals: new Map<string, unknown>(),
@@ -58,7 +58,7 @@ function seed(ciAutoHeal: unknown, opts: { withAgentTerminal?: boolean } = {}) {
 	h.terminals.clear();
 	if (withAgent) h.terminals.set("term1", { agentType: "claude", sessionId: "sess1", shellState: "idle" });
 	h.repoState.repositories = {
-		"/repo": { branches: { main: { ciAutoHeal, terminals: ["term1"] } } },
+		"/repo": { workspaces: { main: { ciAutoHeal, terminals: ["term1"] } } },
 	};
 }
 
@@ -134,7 +134,7 @@ describe("useCiHeal budget + re-entry guard", () => {
 		await flush();
 
 		expect(h.sendCommand).not.toHaveBeenCalled();
-		expect(h.repoState.repositories["/repo"].branches.main.ciAutoHeal).toEqual({
+		expect(h.repoState.repositories["/repo"].workspaces.main.ciAutoHeal).toEqual({
 			enabled: true,
 			attempts: 0,
 			healing: false,
@@ -147,7 +147,7 @@ describe("useCiHeal budget + re-entry guard", () => {
 		fireCiFailed();
 		await flush();
 
-		expect(h.repoState.repositories["/repo"].branches.main.ciAutoHeal).toEqual({
+		expect(h.repoState.repositories["/repo"].workspaces.main.ciAutoHeal).toEqual({
 			enabled: true,
 			attempts: 1,
 			healing: false,

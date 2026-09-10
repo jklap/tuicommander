@@ -75,14 +75,14 @@ export function resolveRepoOwnerIn(
 		if (pathStartsWith(path, repoPath)) {
 			candidates.push({ depth: segments(repoPath).length, repoPath, branchName: null });
 		}
-		for (const branch of Object.values(repo.branches)) {
+		for (const branch of Object.values(repo.workspaces)) {
 			// A main branch records the repo root as its worktree; that case is
 			// already covered by the root candidate above, and adding it again would
 			// claim a branch name for a checkout that can change at any time.
 			const worktree = branch.worktreePath;
 			if (!worktree || sameDir(worktree, repoPath)) continue;
 			if (pathStartsWith(path, worktree)) {
-				candidates.push({ depth: segments(worktree).length, repoPath, branchName: branch.name });
+				candidates.push({ depth: segments(worktree).length, repoPath, branchName: branch.branchName });
 			}
 		}
 	}

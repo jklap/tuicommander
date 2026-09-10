@@ -97,7 +97,7 @@ describe("useActiveTerminalSync", () => {
 
 		terminalsStore.setActive(id);
 
-		expect(repositoriesStore.state.repositories["/repo"].branches.main.lastActiveTerminal).toBe(id);
+		expect(repositoriesStore.state.repositories["/repo"].workspaces.main.lastActiveTerminal).toBe(id);
 	});
 
 	it("does not process the terminal that was active before registration", async () => {

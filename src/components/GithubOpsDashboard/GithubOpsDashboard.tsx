@@ -103,7 +103,7 @@ export const GithubOpsDashboard: Component<{ repoPath: string }> = (props) => {
 		const repo = repositoriesStore.get(props.repoPath);
 		if (!repo) return [];
 		const out: AutofixSession[] = [];
-		for (const [branchName, branch] of Object.entries(repo.branches)) {
+		for (const [branchName, branch] of Object.entries(repo.workspaces)) {
 			if (!AUTOFIX_BRANCH_RE.test(branchName)) continue;
 			for (const termId of branch.terminals) {
 				const term = terminalsStore.get(termId);

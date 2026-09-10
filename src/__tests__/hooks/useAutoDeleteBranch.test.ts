@@ -61,7 +61,7 @@ describe("useAutoDeleteBranch", () => {
 		mockConfirm.mockResolvedValue(true);
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "off" });
 		mockGet.mockReturnValue({
-			branches: {
+			workspaces: {
 				"feature/x": { name: "feature/x", isMain: false },
 			},
 		});
@@ -199,7 +199,7 @@ describe("useAutoDeleteBranch", () => {
 	it("never deletes the main branch", async () => {
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
 		mockGet.mockReturnValue({
-			branches: {
+			workspaces: {
 				main: { name: "main", isMain: true },
 			},
 		});
@@ -217,7 +217,7 @@ describe("useAutoDeleteBranch", () => {
 	it("skips branch that does not exist locally", async () => {
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
 		mockGet.mockReturnValue({
-			branches: {
+			workspaces: {
 				"other-branch": { name: "other-branch", isMain: false },
 			},
 		});

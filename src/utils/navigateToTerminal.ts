@@ -11,13 +11,13 @@ export function navigateToTerminal(id: string): void {
 	if (repoPath) {
 		const repo = repositoriesStore.state.repositories[repoPath];
 		if (repo) {
-			for (const [branchName, branch] of Object.entries(repo.branches)) {
+			for (const [branchName, branch] of Object.entries(repo.workspaces)) {
 				if (branch.terminals.includes(id)) {
 					if (repositoriesStore.state.activeRepoPath !== repoPath) {
 						repositoriesStore.setActive(repoPath);
 					}
-					if (repo.activeBranch !== branchName) {
-						repositoriesStore.setActiveBranch(repoPath, branchName);
+					if (repo.activeWorkspaceId !== branchName) {
+						repositoriesStore.setActiveWorkspace(repoPath, branchName);
 					}
 					break;
 				}

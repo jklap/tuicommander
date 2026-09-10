@@ -198,11 +198,11 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 		const activeRepoPath = repositoriesStore.state.activeRepoPath;
 		if (!activeRepoPath) return null;
 		const repo = repositoriesStore.state.repositories[activeRepoPath];
-		if (!repo?.activeBranch) return null;
-		return repo.branches[repo.activeBranch] || null;
+		if (!repo?.activeWorkspaceId) return null;
+		return repo.workspaces[repo.activeWorkspaceId] || null;
 	};
 
-	const activeBranchName = () => activeBranch()?.name || null;
+	const activeBranchName = () => activeBranch()?.branchName || null;
 
 	const activeRepoName = () => {
 		const activeRepoPath = repositoriesStore.state.activeRepoPath;

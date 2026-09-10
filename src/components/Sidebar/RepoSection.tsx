@@ -2,7 +2,7 @@ import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
-import type { BranchState, RepositoryState } from "../../stores/repositories";
+import type { RepositoryState, WorkspaceState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { writeClipboard } from "../../utils/clipboard";
@@ -166,7 +166,7 @@ export { _resetMergedActivityAccum };
  * more than one terminal. When off, the chevron, aria state, row-click toggle and
  * the list itself are all inert.
  */
-function getBranchTabsAvailable(branch: BranchState): boolean {
+function getBranchTabsAvailable(branch: WorkspaceState): boolean {
 	return settingsStore.state.tabTreeEnabled && branch.terminals.length > 1;
 }
 
@@ -211,7 +211,7 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 
 /** Branch item component */
 export const BranchItem: Component<{
-	branch: BranchState;
+	branch: WorkspaceState;
 	repoPath: string;
 	isActive: boolean;
 	canRemove: boolean;
@@ -236,11 +236,11 @@ export const BranchItem: Component<{
 	const ctxMenu = createContextMenu();
 
 	const branchLabel = createMemo(
-		() => repoSettingsStore.getEffectiveField(props.repoPath, "branchLabels")?.[props.branch.name],
+		() => repoSettingsStore.getEffectiveField(props.repoPath, "branchLabels")?.[props.branch.branchName],
 	);
 
-	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.name));
-	const checks = createMemo(() => githubStore.getCheckSummary(props.repoPath, props.branch.name));
+	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.branchName));
+	const checks = createMemo(() => githubStore.getCheckSummary(props.repoPath, props.branch.branchName));
 
 	const hasError = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.awaitingInput === "error");
 
@@ -274,9 +274,9 @@ export const BranchItem: Component<{
 		props.onSelect();
 		if (!getBranchTabsAvailable(props.branch)) return;
 		if (wasActive) {
-			repositoriesStore.toggleBranchTabsExpanded(props.repoPath, props.branch.name);
+			repositoriesStore.toggleBranchTabsExpanded(props.repoPath, props.branch.branchName);
 		} else if (!props.branch.tabsExpanded) {
-			repositoriesStore.setBranchTabsExpanded(props.repoPath, props.branch.name, true);
+			repositoriesStore.setBranchTabsExpanded(props.repoPath, props.branch.branchName, true);
 		}
 	};
 
@@ -293,7 +293,7 @@ export const BranchItem: Component<{
 
 	const contextMenuItems = (): ContextMenuItem[] => {
 		const isShell = props.branch.isShell;
-		const hasBranch = !isShell && !!props.branch.name;
+		const hasBranch = !isShell && !!props.branch.branchName;
 		const isLinkedWorktree = !!props.branch.worktreePath && props.branch.worktreePath !== props.repoPath;
 		const isMainWorktree = props.branch.worktreePath === props.repoPath;
 
@@ -309,9 +309,9 @@ export const BranchItem: Component<{
 		];
 		if (hasBranch && props.githubBaseUrl) {
 			const ghBase = props.githubBaseUrl;
-			const branchUrl = `${ghBase}/tree/${encodeURIComponent(props.branch.name)}`;
+			const branchUrl = `${ghBase}/tree/${encodeURIComponent(props.branch.branchName)}`;
 			quick.push({ label: "Open in GitHub", action: () => handleOpenUrl(branchUrl) });
-			const prStatus = githubStore.getPrStatus(props.repoPath, props.branch.name);
+			const prStatus = githubStore.getPrStatus(props.repoPath, props.branch.branchName);
 			if (prStatus?.url) {
 				quick.push({ label: "Open PR", action: () => handleOpenUrl(prStatus.url) });
 			}
@@ -376,7 +376,7 @@ export const BranchItem: Component<{
 		const workflow: ContextMenuItem[] = [];
 		const branchActions = contextMenuActionsStore.getContextActions("branch");
 		if (branchActions.length > 0) {
-			const ctx = { target: "branch" as const, repoPath: props.repoPath, branchName: props.branch.name };
+			const ctx = { target: "branch" as const, repoPath: props.repoPath, branchName: props.branch.branchName };
 			for (const a of branchActions) {
 				workflow.push({ label: a.label, action: () => a.action(ctx), disabled: a.disabled?.(ctx) });
 			}
@@ -389,7 +389,7 @@ export const BranchItem: Component<{
 			if (branchLabel()) {
 				meta.push({
 					label: "Clear Label",
-					action: () => repoSettingsStore.setLabel(props.repoPath, props.branch.name, null),
+					action: () => repoSettingsStore.setLabel(props.repoPath, props.branch.branchName, null),
 				});
 			}
 		}
@@ -414,7 +414,7 @@ export const BranchItem: Component<{
 				<div
 					class={cx(s.branchItem, s.branchPreparing)}
 					aria-busy="true"
-					aria-label={`${pendingLabel()} ${props.branch.name}`}
+					aria-label={`${pendingLabel()} ${props.branch.branchName}`}
 				>
 					<BranchIcon
 						isMainBranch={false}
@@ -428,7 +428,7 @@ export const BranchItem: Component<{
 					/>
 					<div class={s.branchContent}>
 						<span class={s.branchName} style={{ opacity: "0.5" }}>
-							{props.branch.name}
+							{props.branch.branchName}
 						</span>
 						<span class={b.subLabel}>{pendingLabel()}</span>
 					</div>
@@ -452,12 +452,12 @@ export const BranchItem: Component<{
 					branchHasTerminals={props.branch.terminals.length > 0}
 				/>
 				<div class={s.branchContent}>
-					<span class={s.branchName} onDblClick={handleDoubleClick} title={branchLabel() ?? props.branch.name}>
-						{branchLabel() ?? props.branch.name}
+					<span class={s.branchName} onDblClick={handleDoubleClick} title={branchLabel() ?? props.branch.branchName}>
+						{branchLabel() ?? props.branch.branchName}
 					</span>
 					<Show when={branchLabel()}>
-						<span class={b.subLabel} title={props.branch.name}>
-							{props.branch.name}
+						<span class={b.subLabel} title={props.branch.branchName}>
+							{props.branch.branchName}
 						</span>
 					</Show>
 				</div>
@@ -631,12 +631,12 @@ export const RepoSection: Component<{
 			.catch(() => {});
 	}
 
-	const branches = createMemo(() => Object.values(props.repo.branches));
+	const branches = createMemo(() => Object.values(props.repo.workspaces));
 	// Pre-compute PR statuses once per poll cycle; avoids calling getPrStatus inside sort comparator
 	const prStatuses = createMemo(() => {
 		const map = new Map<string, ReturnType<typeof githubStore.getPrStatus>>();
 		for (const b of branches()) {
-			map.set(b.name, githubStore.getPrStatus(props.repo.path, b.name));
+			map.set(b.branchName, githubStore.getPrStatus(props.repo.path, b.branchName));
 		}
 		return map;
 	});
@@ -647,12 +647,14 @@ export const RepoSection: Component<{
 		// nothing structural changed. timeSync is dormant unless perfDebug is on.
 		timeSync(`sidebar.sortedBranches:${props.repo.path}`, () => {
 			const statuses = prStatuses();
-			return [...branches()].sort((a, b) => compareBranches(a, b, statuses.get(a.name), statuses.get(b.name)));
+			return [...branches()].sort((a, b) =>
+				compareBranches(a, b, statuses.get(a.branchName), statuses.get(b.branchName)),
+			);
 		}),
 	);
 	const canRemoveAny = createMemo(() => sortedBranches().length > 1);
 
-	const localBranchNames = createMemo(() => new Set(Object.keys(props.repo.branches)));
+	const localBranchNames = createMemo(() => new Set(Object.keys(props.repo.workspaces)));
 	const remoteOnlyPrs = createMemo(() => githubStore.getRemoteOnlyPrs(props.repo.path, localBranchNames()));
 	const allOpenPrs = createMemo(() => githubStore.getAllOpenPrs(props.repo.path));
 	const repoIssues = createMemo(() => githubStore.getRepoIssues(props.repo.path));
@@ -853,24 +855,30 @@ export const RepoSection: Component<{
 									repoPath={props.repo.path}
 									isActive={
 										repositoriesStore.state.activeRepoPath === props.repo.path &&
-										props.repo.activeBranch === branch.name
+										props.repo.activeWorkspaceId === branch.branchName
 									}
 									canRemove={canRemoveAny()}
 									shortcutIndex={props.quickSwitcherActive ? props.branchShortcutStart + index() : undefined}
-									agentMenuItems={props.buildAgentMenuItems ? () => props.buildAgentMenuItems!(branch.name) : undefined}
-									onSelect={() => props.onBranchSelect(branch.name)}
-									onAddTerminal={() => props.onAddTerminal(branch.name)}
-									isRemoving={props.removingBranches?.has(`${props.repo.path}::${branch.name}`)}
-									onRemove={() => props.onRemoveBranch(branch.name)}
-									onRename={() => props.onRenameBranch(branch.name)}
-									onCreateBranch={props.onCreateBranch ? () => props.onCreateBranch!(branch.name) : undefined}
-									onSetLabel={(current) => setLabelDialogBranch({ name: branch.name, current })}
-									onShowPrDetail={() => props.onShowPrDetail(branch.name)}
+									agentMenuItems={
+										props.buildAgentMenuItems ? () => props.buildAgentMenuItems!(branch.branchName) : undefined
+									}
+									onSelect={() => props.onBranchSelect(branch.branchName)}
+									onAddTerminal={() => props.onAddTerminal(branch.branchName)}
+									isRemoving={props.removingBranches?.has(`${props.repo.path}::${branch.branchName}`)}
+									onRemove={() => props.onRemoveBranch(branch.branchName)}
+									onRename={() => props.onRenameBranch(branch.branchName)}
+									onCreateBranch={props.onCreateBranch ? () => props.onCreateBranch!(branch.branchName) : undefined}
+									onSetLabel={(current) => setLabelDialogBranch({ name: branch.branchName, current })}
+									onShowPrDetail={() => props.onShowPrDetail(branch.branchName)}
 									onShowChanges={props.onShowChanges}
 									onCreateWorktreeFromBranch={
-										props.onCreateWorktreeFromBranch ? () => props.onCreateWorktreeFromBranch!(branch.name) : undefined
+										props.onCreateWorktreeFromBranch
+											? () => props.onCreateWorktreeFromBranch!(branch.branchName)
+											: undefined
 									}
-									onMergeAndArchive={props.onMergeAndArchive ? () => props.onMergeAndArchive!(branch.name) : undefined}
+									onMergeAndArchive={
+										props.onMergeAndArchive ? () => props.onMergeAndArchive!(branch.branchName) : undefined
+									}
 									onSwitchBranch={
 										branch.worktreePath === props.repo.path ? (name) => props.onSwitchBranch(name) : undefined
 									}

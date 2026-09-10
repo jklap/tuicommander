@@ -368,10 +368,10 @@ export const TabBar: Component<TabBarProps> = (props) => {
 				ids = terminalsStore.getIds();
 			} else {
 				const repo = repositoriesStore.state.repositories[activeRepoPath];
-				if (!repo?.activeBranch) {
+				if (!repo?.activeWorkspaceId) {
 					ids = terminalsStore.getIds();
 				} else {
-					const branch = repo.branches[repo.activeBranch];
+					const branch = repo.workspaces[repo.activeWorkspaceId];
 					ids = branch?.terminals || [];
 				}
 			}
@@ -389,8 +389,8 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		if (ids.length === 0 && !repositoriesStore.state.branchSwitching) {
 			const activeRepoPath = repositoriesStore.state.activeRepoPath;
 			const repo = activeRepoPath ? repositoriesStore.state.repositories[activeRepoPath] : null;
-			const activeBranch = repo?.activeBranch;
-			const branchTerminals = activeBranch ? repo!.branches[activeBranch]?.terminals : null;
+			const activeBranch = repo?.activeWorkspaceId;
+			const branchTerminals = activeBranch ? repo!.workspaces[activeBranch]?.terminals : null;
 			if (branchTerminals && branchTerminals.length > 0) {
 				appLogger.warn("app", "TabBar: activeTerminals empty but branch has terminals", {
 					branchTerminals,

@@ -226,13 +226,13 @@ function CleanupOverlay(props: { contract: CleanupOverlayContract }) {
 			{(() => {
 				const context = props.contract.context()!;
 				const repo = repositoriesStore.get(context.repoPath);
-				const branch = repo?.branches[context.branchName];
+				const branch = repo?.workspaces[context.branchName];
 				return (
 					<PostMergeCleanupDialog
 						branchName={context.branchName}
 						baseBranch={context.baseBranch}
 						repoPath={context.repoPath}
-						isOnBaseBranch={(repo?.activeBranch ?? "") === context.baseBranch}
+						isOnBaseBranch={(repo?.activeWorkspaceId ?? "") === context.baseBranch}
 						isDefaultBranch={branch?.isMain ?? false}
 						hasTerminals={(branch?.terminals.length ?? 0) > 0}
 						hasDirtyFiles={context.hasDirtyFiles}

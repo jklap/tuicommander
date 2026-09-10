@@ -6,6 +6,7 @@ import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
+import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
 import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
@@ -136,7 +137,7 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 		const repo = repositoriesStore.get(repoPath);
 		if (!repo) continue;
 
-		for (const [branchName, branch] of Object.entries(repo.branches)) {
+		for (const [branchName, branch] of Object.entries(repo.workspaces)) {
 			if (branch.terminals.length === 0) continue;
 
 			const saved: SavedTerminal[] = [];
@@ -193,55 +194,65 @@ function assignSessionToRepoBranch(
 		}
 	}
 
-	// No owner. The tab still needs somewhere to render or the user cannot even see
-	// that it exists, so the active repo lends it a slot — but `repoPath` above is
-	// null, so this is marked as the guess it is and reconcileTerminalOwnership
-	// re-homes it the moment the real repo is registered.
-	const fallbackRepo = repositoriesStore.state.activeRepoPath;
-	const fallbackState = fallbackRepo ? repositoriesStore.get(fallbackRepo) : undefined;
-	const fallbackBranch = fallbackState?.activeBranch;
-	if (fallbackRepo && fallbackBranch) {
-		// Which repo the user would have to register to fix this. Without it the
-		// warning named only the symptom, and a tab from an unregistered repo landed
-		// silently in whichever repo happened to have focus — indistinguishable, to
-		// the user, from the app filing it in the wrong place.
-		const unregisteredRoot = unregisteredRepoRootFor(cwd);
-		appLogger.warn(
-			"app",
-			`Session ${sessionId}: cwd "${cwd ?? "(null)"}" is owned by no registered repo${
-				unregisteredRoot ? ` — register "${unregisteredRoot}" to give it a home` : ""
-			} — parking the tab in the active repo until one claims it`,
-		);
-		if (unregisteredRoot) {
-			// Repeats collapse: `hasVisible` dedups on title+message, so reconnecting
-			// twenty sessions from one unregistered repo raises one toast, not twenty.
-			//
-			// The button closes the loop the message opens: naming the directory still left
-			// the user to find it in the sidebar and add it by hand. Registration runs ONLY
-			// from this click — the user picked the moment, so the setActive() inside
-			// addRepoByPath is a repo switch they asked for, not one a background reconnect
-			// imposed (b7e6c360). addRepoByPath ends in reconcileTerminalOwnership(), which
-			// is what walks the parked tab home once the repo exists.
-			toastsStore.add(
-				"Tab parked in the wrong repo",
-				`Nothing claims "${unregisteredRoot}". Register it and the tab moves home by itself.`,
-				"warn",
-				false,
-				{
-					label: "Register",
-					onClick: () => {
-						void registerRepo(unregisteredRoot).catch((err) =>
-							appLogger.error("app", `Failed to register "${unregisteredRoot}" from the parked-tab toast`, err),
-						);
-					},
+	// No registered repo owns this cwd, so there is no honest placement to make.
+	//
+	// This used to borrow a slot from `activeRepoPath`. That made an orchestrated
+	// session's home depend on where the user happened to be standing when it
+	// arrived: two sessions from the SAME unregistered repo landed under two
+	// different repos, and neither was the right one. `repoOwnership.ts` exists to
+	// keep `activeRepoPath` out of this answer — the fallback had simply survived
+	// one level up, here in the caller.
+	//
+	// An unowned tab goes to the Global Workspace instead: a repo-independent
+	// bucket that needs no placement and already surfaces itself in the sidebar
+	// with a count. Stable and elsewhere beats visible and arbitrary. `repoPath`
+	// stays null above, so `reconcileTerminalOwnership` still walks the tab home
+	// the moment a repo claims its cwd.
+	// DEFERRED (2026-09-10) — the sidebar entry reads `hasPromoted()`, which counts
+	// only the CURRENT scope, so while `useWorktreeConsolidation` holds the store on
+	// a repo scope this tab is parked correctly but its badge is not on screen. It
+	// is still reachable (the session exists, reconcile re-homes it on registration)
+	// and consolidation is opt-in, so this waits for a real report rather than a
+	// speculative change to what the badge counts.
+	globalWorkspaceStore.promote(terminalId, MANUAL_SCOPE);
+
+	// Which repo the user would have to register to fix this. Without it the
+	// warning named only the symptom.
+	const unregisteredRoot = unregisteredRepoRootFor(cwd);
+	appLogger.warn(
+		"app",
+		`Session ${sessionId}: cwd "${cwd ?? "(null)"}" is owned by no registered repo${
+			unregisteredRoot ? ` — register "${unregisteredRoot}" to give it a home` : ""
+		} — parked in the Global Workspace until one claims it`,
+	);
+	if (unregisteredRoot) {
+		// Repeats collapse: `hasVisible` dedups on title+message+level+repoPath, so
+		// reconnecting twenty sessions from one unregistered repo raises one toast,
+		// not twenty. The repoPath argument is deliberately omitted — passing the
+		// active repo scoped the toast to it, so walking to another repo defeated
+		// the dedup and raised the same warning again there. It is a statement about
+		// a directory, not about a repo.
+		//
+		// The button closes the loop the message opens: naming the directory still left
+		// the user to find it in the sidebar and add it by hand. Registration runs ONLY
+		// from this click — the user picked the moment, so the setActive() inside
+		// addRepoByPath is a repo switch they asked for, not one a background reconnect
+		// imposed (b7e6c360). addRepoByPath ends in reconcileTerminalOwnership(), which
+		// is what walks the parked tab home once the repo exists.
+		toastsStore.add(
+			"Tab parked outside your repos",
+			`Nothing claims "${unregisteredRoot}". It is in the Global Workspace — register the repo and the tab moves home by itself.`,
+			"warn",
+			false,
+			{
+				label: "Register",
+				onClick: () => {
+					void registerRepo(unregisteredRoot).catch((err) =>
+						appLogger.error("app", `Failed to register "${unregisteredRoot}" from the parked-tab toast`, err),
+					);
 				},
-				undefined,
-				fallbackRepo,
-			);
-		}
-		repositoriesStore.addTerminalToBranch(fallbackRepo, fallbackBranch, terminalId);
-	} else {
-		appLogger.error("app", `Session ${sessionId}: no repo/branch to assign tab to — tab will be invisible`);
+			},
+		);
 	}
 }
 
@@ -340,12 +351,12 @@ export async function initApp(deps: AppInitDeps) {
 		if (!repo) return;
 
 		// Only update if branch actually changed
-		if (repo.activeBranch === branch) return;
+		if (repo.activeWorkspaceId === branch) return;
 
 		appLogger.info("app", `HeadWatcher: ${repo_path} branch changed to ${branch}`);
 
-		const oldBranch = repo.activeBranch;
-		const oldBranchState = oldBranch ? repo.branches[oldBranch] : null;
+		const oldBranch = repo.activeWorkspaceId;
+		const oldBranchState = oldBranch ? repo.workspaces[oldBranch] : null;
 
 		const isMainCheckout =
 			oldBranch &&
@@ -355,7 +366,7 @@ export async function initApp(deps: AppInitDeps) {
 		if (isMainCheckout) {
 			// Main checkout (not a worktree): rename the single branch entry so
 			// terminals, savedTerminals, hadTerminals etc. carry over seamlessly.
-			if (!repo.branches[branch]) {
+			if (!repo.workspaces[branch]) {
 				// Happy path: new branch doesn't exist yet — simple rename.
 				repositoriesStore.renameBranch(repo_path, oldBranch, branch);
 			} else {
@@ -363,14 +374,14 @@ export async function initApp(deps: AppInitDeps) {
 				// Merge terminal state from old → new, then remove the old entry.
 				repositoriesStore.mergeBranchState(repo_path, oldBranch, branch);
 				repositoriesStore.removeBranch(repo_path, oldBranch);
-				repositoriesStore.setActiveBranch(repo_path, branch);
+				repositoriesStore.setActiveWorkspace(repo_path, branch);
 			}
 		} else {
 			// Worktree branch — just ensure target exists and activate it.
-			if (!repo.branches[branch]) {
-				repositoriesStore.setBranch(repo_path, branch, { name: branch });
+			if (!repo.workspaces[branch]) {
+				repositoriesStore.setBranch(repo_path, branch, { branchName: branch });
 			}
-			repositoriesStore.setActiveBranch(repo_path, branch);
+			repositoriesStore.setActiveWorkspace(repo_path, branch);
 		}
 
 		// Invalidate caches for this repo so next poll fetches fresh data
@@ -582,7 +593,7 @@ export async function initApp(deps: AppInitDeps) {
 					const repo = repositoriesStore.get(repoPath);
 					repositoriesStore.setActive(repoPath);
 					deps.setCurrentRepoPath(repoPath);
-					deps.setCurrentBranch(repo?.activeBranch ?? null);
+					deps.setCurrentBranch(repo?.activeWorkspaceId ?? null);
 				}
 
 				// A background open must also stay in the background. Activating it
@@ -778,14 +789,14 @@ export async function initApp(deps: AppInitDeps) {
 	// before the shell-branch feature existed, or added via external paths).
 	for (const repoPath of repositoriesStore.getPaths()) {
 		const repo = repositoriesStore.get(repoPath);
-		if (repo && repo.isGitRepo === false && Object.keys(repo.branches).length === 0) {
+		if (repo && repo.isGitRepo === false && Object.keys(repo.workspaces).length === 0) {
 			const shellBranch = "shell";
 			repositoriesStore.setBranch(repoPath, shellBranch, {
 				worktreePath: repoPath,
 				isMain: true,
 				isShell: true,
 			});
-			repositoriesStore.setActiveBranch(repoPath, shellBranch);
+			repositoriesStore.setActiveWorkspace(repoPath, shellBranch);
 		}
 	}
 
@@ -824,10 +835,10 @@ export async function initApp(deps: AppInitDeps) {
 		const firstRepo = repositoriesStore.get(firstPath);
 		repositoriesStore.setActive(firstPath);
 		deps.setCurrentRepoPath(firstPath);
-		if (firstRepo?.activeBranch) {
-			deps.setCurrentBranch(firstRepo.activeBranch);
+		if (firstRepo?.activeWorkspaceId) {
+			deps.setCurrentBranch(firstRepo.activeWorkspaceId);
 			if (survivingSessions.length > 0) {
-				const branch = firstRepo.branches[firstRepo.activeBranch];
+				const branch = firstRepo.workspaces[firstRepo.activeWorkspaceId];
 				const validTerminals = branch?.terminals.filter((id) => terminalsStore.getIds().includes(id)) || [];
 				if (validTerminals.length > 0) {
 					const remembered = branch?.lastActiveTerminal;
@@ -838,13 +849,13 @@ export async function initApp(deps: AppInitDeps) {
 					);
 					terminalsStore.setActive(target);
 				} else {
-					await deps.handleBranchSelect(firstPath, firstRepo.activeBranch);
+					await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
 				}
 			} else {
 				// Eagerly restore terminals when a pane layout was loaded from disk —
 				// the layout references terminal IDs that must exist for panes to render.
 				// Without this, the split layout shows empty boxes after a fresh start.
-				await deps.handleBranchSelect(firstPath, firstRepo.activeBranch);
+				await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
 			}
 			return;
 		}

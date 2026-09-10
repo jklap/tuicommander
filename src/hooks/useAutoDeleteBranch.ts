@@ -49,7 +49,7 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): void {
 		// Never delete the default/main branch
 		const repo = repositoriesStore.get(repoPath);
 		if (repo) {
-			const branchState = repo.branches[branch];
+			const branchState = repo.workspaces[branch];
 			if (branchState?.isMain) {
 				appLogger.debug("git", `Skipping auto-delete for default branch '${branch}'`);
 				return;
@@ -57,7 +57,7 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): void {
 		}
 
 		// Check if branch even exists locally
-		const branches = repo?.branches;
+		const branches = repo?.workspaces;
 		if (branches && !(branch in branches)) {
 			// Branch doesn't exist locally — nothing to delete
 			return;

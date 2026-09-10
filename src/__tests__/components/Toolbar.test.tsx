@@ -202,8 +202,8 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "feature-x", { name: "feature-x" });
-		repositoriesStore.setActiveBranch(repoPath, "feature-x");
+		repositoriesStore.setBranch(repoPath, "feature-x", { branchName: "feature-x" });
+		repositoriesStore.setActiveWorkspace(repoPath, "feature-x");
 
 		const { container } = render(() => <Toolbar />);
 		const branchBtn = container.querySelector(".branch");
@@ -217,8 +217,8 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "main", { name: "main" });
-		repositoriesStore.setActiveBranch(repoPath, "main");
+		repositoriesStore.setBranch(repoPath, "main", { branchName: "main" });
+		repositoriesStore.setActiveWorkspace(repoPath, "main");
 
 		const { container } = render(() => <Toolbar onBranchClick={handleBranchClick} />);
 		const branchBtn = container.querySelector(".branch")!;
@@ -244,7 +244,7 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setActiveBranch(repoPath, "nonexistent");
+		repositoriesStore.setActiveWorkspace(repoPath, "nonexistent");
 
 		const { container } = render(() => <Toolbar />);
 		expect(container.querySelector(".branch")).toBeNull();
@@ -254,8 +254,8 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "main", { name: "main" });
-		repositoriesStore.setActiveBranch(repoPath, "main");
+		repositoriesStore.setBranch(repoPath, "main", { branchName: "main" });
+		repositoriesStore.setActiveWorkspace(repoPath, "main");
 
 		const { container } = render(() => <Toolbar />);
 		const branchBtn = container.querySelector(".branch")!;
@@ -266,8 +266,8 @@ describe("Toolbar", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
-		repositoriesStore.setBranch(repoPath, "dev", { name: "dev" });
-		repositoriesStore.setActiveBranch(repoPath, "dev");
+		repositoriesStore.setBranch(repoPath, "dev", { branchName: "dev" });
+		repositoriesStore.setActiveWorkspace(repoPath, "dev");
 
 		const { container } = render(() => <Toolbar />);
 		const icon = container.querySelector(".branchIcon");
@@ -280,10 +280,10 @@ describe("Toolbar", () => {
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
 		repositoriesStore.setBranch(repoPath, "feature", {
-			name: "feature",
+			branchName: "feature",
 			worktreePath: "/test/repo-worktrees/feature",
 		});
-		repositoriesStore.setActiveBranch(repoPath, "feature");
+		repositoriesStore.setActiveWorkspace(repoPath, "feature");
 
 		const { container } = render(() => <Toolbar repoPath={repoPath} />);
 		const launcher = container.querySelector("[data-testid='ide-launcher']")!;
@@ -295,10 +295,10 @@ describe("Toolbar", () => {
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
 		repositoriesStore.setActive(repoPath);
 		repositoriesStore.setBranch(repoPath, "main", {
-			name: "main",
+			branchName: "main",
 			worktreePath: null,
 		});
-		repositoriesStore.setActiveBranch(repoPath, "main");
+		repositoriesStore.setActiveWorkspace(repoPath, "main");
 
 		const { container } = render(() => <Toolbar repoPath={repoPath} />);
 		const launcher = container.querySelector("[data-testid='ide-launcher']")!;

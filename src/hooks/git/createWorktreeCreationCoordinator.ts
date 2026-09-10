@@ -66,7 +66,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		if (creatingWorktreeRepos().has(repoPath)) return;
 
 		const repoState = repositoriesStore.get(repoPath);
-		const worktreeBranches = repoState ? Object.keys(repoState.branches) : [];
+		const worktreeBranches = repoState ? Object.keys(repoState.workspaces) : [];
 
 		// Fetch data for the dialog in parallel
 		const [suggestedName, localBranches, worktreesDir, baseRefs] = await Promise.all([
@@ -115,7 +115,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 	) => {
 		markRecentlyCreated(repoPath, result.branch);
 		repositoriesStore.setBranch(repoPath, result.branch, { worktreePath: result.path });
-		repositoriesStore.setActiveBranch(repoPath, result.branch);
+		repositoriesStore.setActiveWorkspace(repoPath, result.branch);
 
 		const effective = repoSettingsStore.getEffective(repoPath);
 		if (effective?.setupScript) {
@@ -191,7 +191,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 					worktreePath: result.path,
 					isPreparing: true,
 				});
-				repositoriesStore.setActiveBranch(repoPath, result.branch);
+				repositoriesStore.setActiveWorkspace(repoPath, result.branch);
 				deps.setStatusInfo(`Preparing worktree ${options.branchName}...`);
 				pendingCreations.set(pendingKey(repoPath, result.branch), {
 					repoPath,
@@ -228,7 +228,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		let pendingHandoff = false;
 		try {
 			const repoState = repositoriesStore.get(repoPath);
-			const existingBranches = repoState ? Object.keys(repoState.branches) : [];
+			const existingBranches = repoState ? Object.keys(repoState.workspaces) : [];
 			const cloneName = await deps.repo.generateCloneBranchName(branchName, existingBranches);
 
 			deps.setStatusInfo(`Creating worktree ${cloneName}...`);
@@ -245,7 +245,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 					worktreePath: result.path,
 					isPreparing: true,
 				});
-				repositoriesStore.setActiveBranch(repoPath, result.branch);
+				repositoriesStore.setActiveWorkspace(repoPath, result.branch);
 				deps.setStatusInfo(`Preparing worktree ${cloneName}...`);
 				pendingCreations.set(pendingKey(repoPath, result.branch), {
 					repoPath,

@@ -431,10 +431,10 @@ describe("TabBar", () => {
 		addTerminal({ name: "Other Term" }); // Not in the branch
 
 		repositoriesStore.setBranch(repoPath, "main", {
-			name: "main",
+			branchName: "main",
 			terminals: [t1, t2],
 		});
-		repositoriesStore.setActiveBranch(repoPath, "main");
+		repositoriesStore.setActiveWorkspace(repoPath, "main");
 
 		const { container } = render(() => (
 			<TabBar
@@ -479,10 +479,10 @@ describe("TabBar", () => {
 		const repoBound = addTerminal({ name: "Repo Term" });
 
 		repositoriesStore.setBranch(repoPath, "main", {
-			name: "main",
+			branchName: "main",
 			terminals: [repoBound],
 		});
-		repositoriesStore.setActiveBranch(repoPath, "main");
+		repositoriesStore.setActiveWorkspace(repoPath, "main");
 
 		globalWorkspaceStore.promote(promoted1);
 		globalWorkspaceStore.promote(promoted2);
@@ -623,7 +623,7 @@ describe("TabBar", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setBranch("/repo", "main", { isMain: true, worktreePath: null });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 		}
 
 		it("renders diff tabs", () => {
@@ -705,7 +705,7 @@ describe("TabBar", () => {
 		function setupActiveRepo() {
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 		}
 
 		it("renders markdown tabs", () => {
@@ -771,7 +771,7 @@ describe("TabBar", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setBranch("/repo", "main", { isMain: true, worktreePath: null });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			const terminalId = addTerminal({ name: "Terminal" });
 			repositoriesStore.addTerminalToBranch("/repo", "main", terminalId);
 			const diffId = diffTabsStore.add("/repo", "/repo/change.ts", "M");
@@ -937,7 +937,7 @@ describe("TabBar", () => {
 				repositoriesStore.add({ path: "/repo", displayName: "repo" });
 				repositoriesStore.setBranch("/repo", "main", { isMain: true, worktreePath: null });
 				repositoriesStore.setActive("/repo");
-				repositoriesStore.setActiveBranch("/repo", "main");
+				repositoriesStore.setActiveWorkspace("/repo", "main");
 
 				const terminalId = addTerminal({ name: "Terminal parity" });
 				repositoriesStore.addTerminalToBranch("/repo", "main", terminalId);
@@ -1227,7 +1227,7 @@ describe("TabBar", () => {
 			repositoriesStore.setBranch("/repo", "main", { isMain: true, worktreePath: null });
 			repositoriesStore.setBranch("/repo", "feature-a", { isMain: false, worktreePath: "/repo-wt/feature-a" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 		}
 
 		it("shows Move to Worktree submenu when repo has multiple worktrees", () => {
@@ -1259,7 +1259,7 @@ describe("TabBar", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setBranch("/repo", "main", { isMain: true, worktreePath: null });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			const termId = addTerminal({ name: "T1", sessionId: "sess-1" });
 			repositoriesStore.addTerminalToBranch("/repo", "main", termId);
 			terminalsStore.setActive(termId);

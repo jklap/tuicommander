@@ -171,7 +171,7 @@ export function useSmartPrompts() {
 	function resolveFrontendVars(repoPath: string): Record<string, string> {
 		const vars: Record<string, string> = {};
 		const repo = repositoriesStore.get(repoPath);
-		const branch = repo?.activeBranch ?? "";
+		const branch = repo?.activeWorkspaceId ?? "";
 		if (branch) {
 			const pr = githubStore.getBranchPrData(repoPath, branch);
 			if (pr) Object.assign(vars, prContextVariables(pr));

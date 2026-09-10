@@ -137,8 +137,8 @@ describe("repositoriesStore.removeTerminalFromBranch() — batch() coalescing", 
 				// Track both fields changed by removeTerminalFromBranch when last terminal removed:
 				// 1. terminals array (filtered)
 				// 2. savedTerminals array (cleared)
-				void store.get("/repo")?.branches["main"]?.terminals?.length;
-				void store.get("/repo")?.branches["main"]?.savedTerminals?.length;
+				void store.get("/repo")?.workspaces["main"]?.terminals?.length;
+				void store.get("/repo")?.workspaces["main"]?.savedTerminals?.length;
 				notificationCount++;
 			});
 		});

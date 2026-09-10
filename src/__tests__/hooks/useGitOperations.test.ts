@@ -175,12 +175,12 @@ describe("useGitOperations", () => {
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			await gitOps.handleBranchSelect("/repo", "main"); // auto-spawns the first terminal
 
-			const before = repositoriesStore.get("/repo")?.branches["main"]?.terminals.length ?? 0;
+			const before = repositoriesStore.get("/repo")?.workspaces["main"]?.terminals.length ?? 0;
 			await gitOps.handleNewTab();
 
 			// The bug: Cmd+T routed to createNewTerminal, which never added the id to
 			// branch.terminals, so the tab only appeared after a worktree switch.
-			const branch = repositoriesStore.get("/repo")?.branches["main"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(branch?.terminals.length).toBe(before + 1);
 			expect(branch?.terminals).toContain(terminalsStore.state.activeId);
 		});
@@ -200,7 +200,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleBranchSelect("/repo", "main");
 
 			expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
-			expect(repositoriesStore.get("/repo")?.activeBranch).toBe("main");
+			expect(repositoriesStore.get("/repo")?.activeWorkspaceId).toBe("main");
 			expect(gitOps.currentRepoPath()).toBe("/repo");
 			expect(gitOps.currentBranch()).toBe("main");
 		});
@@ -242,7 +242,7 @@ describe("useGitOperations", () => {
 			expect(maxActive).toBe(1); // never ran two inner selects at once
 			// All three selects completed and each spawned exactly one terminal.
 			for (const b of ["b1", "b2", "b3"]) {
-				expect(repositoriesStore.get("/repo")?.branches[b]?.terminals.length).toBe(1);
+				expect(repositoriesStore.get("/repo")?.workspaces[b]?.terminals.length).toBe(1);
 			}
 		});
 
@@ -253,7 +253,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleBranchSelect("/repo", "feature");
 
 			// First time → should auto-create a terminal
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			expect(branch?.terminals.length).toBeGreaterThan(0);
 			expect(branch?.hadTerminals).toBe(true);
 		});
@@ -265,7 +265,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleBranchSelect("/repo", "feature");
 
 			// hadTerminals is true but no live terminals → show empty state, no spawn
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			expect(branch?.terminals.length).toBe(0);
 		});
 
@@ -299,7 +299,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleBranchSelect("/repo", "feature");
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			expect(branch?.terminals.length).toBe(2);
 			// savedTerminals should be consumed
 			expect(branch?.savedTerminals?.length).toBe(0);
@@ -320,7 +320,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleBranchSelect("/repo", "feature");
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			// Plain shell tabs filtered out → fresh terminal spawned
 			expect(branch?.terminals.length).toBe(1);
 			expect(branch?.savedTerminals?.length).toBe(0);
@@ -336,7 +336,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleBranchSelect("/repo", "feature");
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			const termId = branch?.terminals[0];
 			const terminal = termId ? terminalsStore.get(termId) : undefined;
 			expect(terminal?.name).toBe("My Terminal");
@@ -363,7 +363,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleBranchSelect("/repo", "feature");
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			const termId = branch?.terminals[0];
 			const terminal = termId ? terminalsStore.get(termId) : undefined;
 			expect(terminal?.agentLaunchCommand).toBe("claude --project /repo/wt --model opus");
@@ -437,7 +437,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleBranchSelect("/repo", "feature");
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			// Only the agent tab is restored (plain shell filtered out)
 			expect(branch?.terminals.length).toBe(1);
 			const agentTerm = terminalsStore.get(branch!.terminals[0]);
@@ -465,7 +465,7 @@ describe("useGitOperations", () => {
 
 			// Should activate the live terminal, not restore from saved
 			expect(terminalsStore.state.activeId).toBe(id);
-			const branch = repositoriesStore.get("/repo")?.branches["main"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(branch?.terminals.length).toBe(1);
 		});
 
@@ -593,7 +593,7 @@ describe("useGitOperations", () => {
 			const p2 = gitOps.handleBranchSelect("/repo", "feature");
 			await Promise.all([p1, p2]);
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			// Only ONE terminal should exist — the second call sees the restored
 			// terminal as a live validTerminal and does not duplicate.
 			expect(branch?.terminals.length).toBe(1);
@@ -674,7 +674,7 @@ describe("useGitOperations", () => {
 
 			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature");
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("surfaces partial branch-delete warning after removing worktree", async () => {
@@ -688,7 +688,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 			expect(repoSettingsStore.get("/repo")?.branchLabels["feature"]).toBe("Feature label");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(
 				"Removed feature worktree; branch was kept: git branch -d refused because branch is not fully merged",
@@ -723,14 +723,14 @@ describe("useGitOperations", () => {
 			// Capture isRemoving state when removeWorktree is invoked
 			let isRemovingWhenInvoked: boolean | undefined;
 			mockRepo.removeWorktree = vi.fn(async () => {
-				isRemovingWhenInvoked = repositoriesStore.get("/repo")?.branches["feature"]?.isRemoving;
+				isRemovingWhenInvoked = repositoriesStore.get("/repo")?.workspaces["feature"]?.isRemoving;
 			});
 
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
 			expect(isRemovingWhenInvoked).toBe(true);
 			// After success: branch fully removed from store
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("prevents concurrent remove calls for the same branch", async () => {
@@ -778,8 +778,8 @@ describe("useGitOperations", () => {
 			await gitOps.handleRenameBranch("old-name", "new-name");
 
 			expect(mockRepo.renameBranch).toHaveBeenCalledWith("/repo", "old-name", "new-name");
-			expect(repositoriesStore.get("/repo")?.branches["new-name"]).toBeDefined();
-			expect(repositoriesStore.get("/repo")?.branches["old-name"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["new-name"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["old-name"]).toBeUndefined();
 			expect(gitOps.currentBranch()).toBe("new-name");
 		});
 	});
@@ -792,7 +792,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleCreateBranch("feat/new", true);
 
 			expect(mockRepo.createBranch).toHaveBeenCalledWith("/repo", "feat/new", "main", true);
-			expect(repositoriesStore.get("/repo")?.branches["feat/new"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feat/new"]).toBeDefined();
 			expect(gitOps.currentBranch()).toBe("feat/new");
 		});
 
@@ -817,7 +817,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo/main" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			expect(gitOps.activeWorktreePath()).toBe("/repo/main");
 		});
@@ -832,7 +832,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.setRunCommand("/repo", "main", "npm test");
 
 			expect(gitOps.activeRunCommand()).toBe("npm test");
@@ -844,11 +844,11 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			await gitOps.handleNewTab();
 
-			const branch = repositoriesStore.get("/repo")?.branches["main"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(branch?.terminals.length).toBeGreaterThan(0);
 		});
 
@@ -864,7 +864,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setBranch("/repo", "feature/acme", { worktreePath: "/repo/.worktrees/acme" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main"); // stale — HEAD actually moved to feature/acme
+			repositoriesStore.setActiveWorkspace("/repo", "main"); // stale — HEAD actually moved to feature/acme
 
 			// Active terminal is in the feature/acme worktree directory
 			const existingTid = terminalsStore.add(
@@ -876,9 +876,9 @@ describe("useGitOperations", () => {
 			await gitOps.handleNewTab();
 
 			// New terminal must go to feature/acme (the CWD-matched branch), not main (stale activeBranch)
-			const featureBranch = repositoriesStore.get("/repo")?.branches["feature/acme"];
+			const featureBranch = repositoriesStore.get("/repo")?.workspaces["feature/acme"];
 			expect(featureBranch?.terminals.length).toBe(2); // existing + new
-			const mainBranch = repositoriesStore.get("/repo")?.branches["main"];
+			const mainBranch = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(mainBranch?.terminals.length).toBe(0);
 		});
 
@@ -888,7 +888,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.setBranch("/repo", "old-branch", { worktreePath: "/repo" });
 			repositoriesStore.setBranch("/repo", "new-branch", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "old-branch"); // stale
+			repositoriesStore.setActiveWorkspace("/repo", "old-branch"); // stale
 
 			// Active terminal is at repo root (HEAD moved to new-branch externally)
 			const existingTid = terminalsStore.add(makeTerminal({ name: "T1", sessionId: "s2", cwd: "/repo" }));
@@ -898,9 +898,9 @@ describe("useGitOperations", () => {
 			await gitOps.handleNewTab();
 
 			// New terminal goes to new-branch (matched by CWD), not old-branch
-			const newBranch = repositoriesStore.get("/repo")?.branches["new-branch"];
+			const newBranch = repositoriesStore.get("/repo")?.workspaces["new-branch"];
 			expect(newBranch?.terminals.length).toBe(2);
-			const oldBranch = repositoriesStore.get("/repo")?.branches["old-branch"];
+			const oldBranch = repositoriesStore.get("/repo")?.workspaces["old-branch"];
 			expect(oldBranch?.terminals.length).toBe(0);
 		});
 	});
@@ -911,7 +911,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", isMain: true });
 			repositoriesStore.setBranch("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "feature/x");
+			repositoriesStore.setActiveWorkspace("/repo", "feature/x");
 			mockRepo.mergeAndArchiveWorktree.mockResolvedValue({
 				merged: true,
 				action: "archived",
@@ -920,7 +920,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-			expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeUndefined();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("archived"));
 		});
 
@@ -949,7 +949,7 @@ describe("useGitOperations", () => {
 
 				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith("feature/x", "archive", 0);
 				expect(mockRepo.mergeAndArchiveWorktree).toHaveBeenCalledTimes(1);
-				expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
+				expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 			});
 
 			// The old guard only fired on an empty branch, so a worktree full of
@@ -969,7 +969,7 @@ describe("useGitOperations", () => {
 				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "delete");
 
 				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith("feature/x", "delete", 7);
-				expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
+				expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 			});
 
 			it("retries with force once the user confirms", async () => {
@@ -1000,7 +1000,7 @@ describe("useGitOperations", () => {
 					"archive",
 					true,
 				);
-				expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeUndefined();
+				expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeUndefined();
 			});
 
 			it("reports what the merge actually carried across", async () => {
@@ -1043,7 +1043,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "ask");
 
 			// Branch stays in sidebar — user must choose
-			expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 			// Dialog context is populated
 			expect(gitOps.mergePendingCtx()).toEqual({
 				repoPath: "/repo",
@@ -1064,7 +1064,7 @@ describe("useGitOperations", () => {
 			gitOps.dismissMergePending();
 
 			// Branch stays — cleanup dialog was skipped
-			expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 			expect(gitOps.mergePendingCtx()).toBeNull();
 		});
 
@@ -1079,7 +1079,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
 			// Branch stays in sidebar
-			expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 			// Terminal was NOT closed
 			expect(mockCloseTerminal).not.toHaveBeenCalled();
 			// Error was reported
@@ -1161,7 +1161,7 @@ describe("useGitOperations", () => {
 				hasDirtyFiles: false,
 				worktreeDirty: false,
 			});
-			expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 		});
 
 		it("uses local git merge when no PR exists for the branch", async () => {
@@ -1237,7 +1237,7 @@ describe("useGitOperations", () => {
 
 			expect(mockInvoke).toHaveBeenCalledWith("start_conflict_assist", { repoPath: "/repo", prNumber: 42 });
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("PR #42 rebased cleanly onto main");
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("warns when a conflict-free rebase used a base that could not be refreshed", async () => {
@@ -1256,7 +1256,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleConflictAssist("/repo", 43);
 
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Could not refresh origin/main"));
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("registers the existing worktree and seeds an agent with the resolution prompt on conflicts", async () => {
@@ -1274,7 +1274,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleConflictAssist("/repo", 7);
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			expect(branch?.worktreePath).toBe("/repo/.worktrees/feature");
 			const termId = branch?.terminals[0];
 			const term = termId ? terminalsStore.get(termId) : undefined;
@@ -1328,7 +1328,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.refreshAllBranchStats();
 
-			const branch = repositoriesStore.get("/repo")?.branches["main"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(branch?.additions).toBe(5);
 			expect(branch?.deletions).toBe(3);
 		});
@@ -1380,7 +1380,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.addTerminalToBranch("/shell-repo", "shell", t1);
 			repositoriesStore.addTerminalToBranch("/shell-repo", "shell", t2);
 			repositoriesStore.setBranch("/shell-repo", "shell", { lastActiveTerminal: t2 });
-			repositoriesStore.setActiveBranch("/shell-repo", "shell");
+			repositoriesStore.setActiveWorkspace("/shell-repo", "shell");
 
 			mockRepo.getInfo.mockResolvedValue({
 				path: "/shell-repo",
@@ -1395,11 +1395,11 @@ describe("useGitOperations", () => {
 
 			const repo = repositoriesStore.get("/shell-repo");
 			expect(repo?.isGitRepo).toBe(true);
-			expect(repo?.activeBranch).toBe("main");
-			expect(repo?.branches["shell"]).toBeUndefined();
+			expect(repo?.activeWorkspaceId).toBe("main");
+			expect(repo?.workspaces["shell"]).toBeUndefined();
 			// Both terminals carried over (not orphaned) + last-active preserved.
-			expect(repo?.branches["main"]?.terminals).toEqual([t1, t2]);
-			expect(repo?.branches["main"]?.lastActiveTerminal).toBe(t2);
+			expect(repo?.workspaces["main"]?.terminals).toEqual([t1, t2]);
+			expect(repo?.workspaces["main"]?.lastActiveTerminal).toBe(t2);
 		});
 
 		it("scopes to a single repo when a path is given — other repos untouched", async () => {
@@ -1434,8 +1434,8 @@ describe("useGitOperations", () => {
 
 			await gitOps.refreshAllBranchStats();
 
-			expect(repositoriesStore.get("/repo")?.branches["stale"]).toBeUndefined();
-			expect(repositoriesStore.get("/repo")?.branches["main"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["stale"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["main"]).toBeDefined();
 		});
 
 		it("coalesces refresh storms without starving stale-worktree pruning", async () => {
@@ -1462,7 +1462,7 @@ describe("useGitOperations", () => {
 			await Promise.all([first, ...queued]);
 
 			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(2);
-			expect(Object.keys(repositoriesStore.get("/repo")?.branches ?? {})).toEqual(["main"]);
+			expect(Object.keys(repositoriesStore.get("/repo")?.workspaces ?? {})).toEqual(["main"]);
 		});
 
 		it("runs the queued refresh after the active refresh fails", async () => {
@@ -1514,7 +1514,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.refreshAllBranchStats();
 
-			const newBranch = repositoriesStore.get("/repo")?.branches["feature-external"];
+			const newBranch = repositoriesStore.get("/repo")?.workspaces["feature-external"];
 			expect(newBranch).toBeDefined();
 			expect(newBranch?.worktreePath).toBe("/repo/.worktrees/feature-external");
 			expect(newBranch?.additions).toBe(2);
@@ -1524,7 +1524,7 @@ describe("useGitOperations", () => {
 		it("removes stale activeBranch when HEAD moved to different branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			mockSummary({
 				worktree_paths: { "feature/acme": "/repo" },
@@ -1536,15 +1536,15 @@ describe("useGitOperations", () => {
 			await gitOps.refreshAllBranchStats();
 
 			const repo = repositoriesStore.get("/repo");
-			expect(repo?.branches["main"]).toBeUndefined();
-			expect(repo?.branches["feature/acme"]).toBeDefined();
-			expect(repo?.activeBranch).toBe("feature/acme");
+			expect(repo?.workspaces["main"]).toBeUndefined();
+			expect(repo?.workspaces["feature/acme"]).toBeDefined();
+			expect(repo?.activeWorkspaceId).toBe("feature/acme");
 		});
 
 		it("migrates terminals from stale activeBranch to new worktree branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			const tid = terminalsStore.add(makeTerminal({ name: "T1", sessionId: "s1", cwd: "/repo" }));
 			repositoriesStore.addTerminalToBranch("/repo", "main", tid);
 
@@ -1558,9 +1558,9 @@ describe("useGitOperations", () => {
 			await gitOps.refreshAllBranchStats();
 
 			const repo = repositoriesStore.get("/repo");
-			expect(repo?.branches["main"]).toBeUndefined();
-			expect(repo?.branches["feature/acme"]?.terminals).toContain(tid);
-			expect(repo?.activeBranch).toBe("feature/acme");
+			expect(repo?.workspaces["main"]).toBeUndefined();
+			expect(repo?.workspaces["feature/acme"]?.terminals).toContain(tid);
+			expect(repo?.activeWorkspaceId).toBe("feature/acme");
 		});
 
 		it("handles missing diff stats gracefully (no throw)", async () => {
@@ -1575,7 +1575,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.refreshAllBranchStats();
 
-			expect(repositoriesStore.get("/repo")?.branches["main"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["main"]).toBeDefined();
 		});
 
 		it("stores lastCommitTs converted from seconds to milliseconds", async () => {
@@ -1596,8 +1596,8 @@ describe("useGitOperations", () => {
 			await gitOps.refreshAllBranchStats();
 
 			const repo = repositoriesStore.get("/repo");
-			expect(repo?.branches["main"]?.lastCommitTs).toBe(1700000001 * 1000);
-			expect(repo?.branches["feature-x"]?.lastCommitTs).toBe(1700000042 * 1000);
+			expect(repo?.workspaces["main"]?.lastCommitTs).toBe(1700000001 * 1000);
+			expect(repo?.workspaces["feature-x"]?.lastCommitTs).toBe(1700000042 * 1000);
 		});
 
 		it("stores lastCommitTs as null when backend returns null", async () => {
@@ -1613,14 +1613,14 @@ describe("useGitOperations", () => {
 
 			await gitOps.refreshAllBranchStats();
 
-			expect(repositoriesStore.get("/repo")?.branches["main"]?.lastCommitTs).toBeNull();
+			expect(repositoriesStore.get("/repo")?.workspaces["main"]?.lastCommitTs).toBeNull();
 		});
 
 		it("closes terminals and removes branch when worktree was deleted externally", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setBranch("/repo", "worktree-agent-abc", { worktreePath: "/repo/.worktrees/agent-abc" });
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			// Add a live terminal on the worktree branch
 			const tid = terminalsStore.add(
@@ -1643,7 +1643,7 @@ describe("useGitOperations", () => {
 			// Terminal should have been closed
 			expect(mockCloseTerminal).toHaveBeenCalledWith(tid, true);
 			// Branch should have been removed from the store
-			expect(repositoriesStore.get("/repo")?.branches["worktree-agent-abc"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["worktree-agent-abc"]).toBeUndefined();
 		});
 
 		it("does not resurrect a branch deleted by user while refresh was in-flight", async () => {
@@ -1673,8 +1673,8 @@ describe("useGitOperations", () => {
 			await refreshPromise;
 
 			// Refresh must not resurrect the user-deleted branch
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
-			expect(repositoriesStore.get("/repo")?.branches["main"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["main"]).toBeDefined();
 		});
 
 		it("still adds genuinely new external worktrees that were not in the snapshot", async () => {
@@ -1698,7 +1698,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.refreshAllBranchStats();
 
-			const newBranch = repositoriesStore.get("/repo")?.branches["external-new"];
+			const newBranch = repositoriesStore.get("/repo")?.workspaces["external-new"];
 			expect(newBranch).toBeDefined();
 			expect(newBranch?.worktreePath).toBe("/repo/.worktrees/external-new");
 		});
@@ -1724,7 +1724,7 @@ describe("useGitOperations", () => {
 				diffStatsCallOrder = ++callCounter;
 				// By now, Phase 1 should have already updated the store
 				const repo = repositoriesStore.get("/repo");
-				expect(repo?.branches["feature-new"]?.worktreePath).toBe("/repo/wt-new");
+				expect(repo?.workspaces["feature-new"]?.worktreePath).toBe("/repo/wt-new");
 				return {
 					diff_stats: {
 						"/repo": { additions: 1, deletions: 0 },
@@ -1738,8 +1738,8 @@ describe("useGitOperations", () => {
 
 			expect(structureCallOrder).toBeLessThan(diffStatsCallOrder);
 			const repo = repositoriesStore.get("/repo");
-			expect(repo?.branches["feature-new"]?.additions).toBe(3);
-			expect(repo?.branches["feature-new"]?.deletions).toBe(2);
+			expect(repo?.workspaces["feature-new"]?.additions).toBe(3);
+			expect(repo?.workspaces["feature-new"]?.deletions).toBe(2);
 		});
 
 		it("Phase 2 failure does not corrupt Phase 1 state", async () => {
@@ -1756,10 +1756,10 @@ describe("useGitOperations", () => {
 
 			const repo = repositoriesStore.get("/repo");
 			// Phase 1 state should be intact
-			expect(repo?.branches["feature-a"]?.worktreePath).toBe("/repo/wt-a");
-			expect(repo?.branches["feature-a"]?.isMerged).toBe(true);
+			expect(repo?.workspaces["feature-a"]?.worktreePath).toBe("/repo/wt-a");
+			expect(repo?.workspaces["feature-a"]?.isMerged).toBe(true);
 			// Stats should be at defaults (Phase 2 failed)
-			expect(repo?.branches["feature-a"]?.additions).toBe(0);
+			expect(repo?.workspaces["feature-a"]?.additions).toBe(0);
 		});
 
 		it("auto-archive runs after Phase 1, before Phase 2", async () => {
@@ -1798,7 +1798,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("worktree removal failed"));
 		});
 
@@ -1820,7 +1820,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 		});
 	});
 
@@ -1850,7 +1850,7 @@ describe("useGitOperations", () => {
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
 			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, true);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("keeps branch in store when user cancels force removal of locked worktree", async () => {
@@ -1862,7 +1862,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1); // no retry
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 		});
 
 		it("keeps branch in store when force removal also fails", async () => {
@@ -1875,7 +1875,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Failed to remove"));
 		});
 	});
@@ -1890,7 +1890,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveBranch("/repo", "feat/main-checkout");
 
-			expect(repositoriesStore.get("/repo")?.branches["feat/main-checkout"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feat/main-checkout"]).toBeDefined();
 		});
 
 		it("shows descriptive status message when worktree is main repo", async () => {
@@ -2113,7 +2113,7 @@ describe("useGitOperations", () => {
 			await gitOps.confirmCreateWorktree({ branchName: "feat-x", createBranch: false, baseRef: "main" });
 
 			// Placeholder branch added with isPreparing=true
-			const branch = repositoriesStore.get("/repo")?.branches["feat-x"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feat-x"];
 			expect(branch?.isPreparing).toBe(true);
 			expect(branch?.worktreePath).toBe("/repo/.worktrees/feat-x");
 
@@ -2193,7 +2193,7 @@ describe("useGitOperations", () => {
 			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
 
 			// Find the terminal created for this worktree
-			const branch = repositoriesStore.get("/repo")?.branches["feat-test"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feat-test"];
 			expect(branch?.terminals.length).toBeGreaterThan(0);
 			const termId = branch!.terminals[0];
 			const terminal = terminalsStore.get(termId);
@@ -2219,7 +2219,7 @@ describe("useGitOperations", () => {
 			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
 
 			// Should still create a terminal despite script failure
-			const branch = repositoriesStore.get("/repo")?.branches["feat-test"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feat-test"];
 			expect(branch?.terminals.length).toBeGreaterThan(0);
 			// Should warn about failure
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Setup script failed"));
@@ -2231,7 +2231,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { setupScript: "npm ci" });
 
@@ -2253,7 +2253,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { runScript: "make dev" });
 
@@ -2268,7 +2268,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleCreateWorktreeFromBranch("/repo", "main");
 
-			const branch = repositoriesStore.get("/repo")?.branches["main--wt-42"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main--wt-42"];
 			expect(branch?.terminals.length).toBeGreaterThan(0);
 			const termId = branch!.terminals[0];
 			const terminal = terminalsStore.get(termId);
@@ -2279,7 +2279,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			mockRepo.generateCloneBranchName.mockResolvedValue("main--wt-42");
 			mockRepo.createWorktree.mockResolvedValue({
@@ -2293,7 +2293,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleCreateWorktreeFromBranch("/repo", "main");
 
 			expect(mockRepo.runSetupScript).not.toHaveBeenCalled();
-			const branch = repositoriesStore.get("/repo")?.branches["main--wt-42"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main--wt-42"];
 			const termId = branch!.terminals[0];
 			expect(terminalsStore.get(termId)?.pendingInitCommand).toBeNull();
 		});
@@ -2306,7 +2306,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { setupScript: "npm ci" });
 
@@ -2321,7 +2321,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleCreateWorktreeFromBranch("/repo", "main");
 
-			const branch = repositoriesStore.get("/repo")?.branches["main--wt-42"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main--wt-42"];
 			expect(branch?.isPreparing).toBe(true);
 			expect(branch?.worktreePath).toBe("/repo/wt/main--wt-42");
 			expect(mockRepo.runSetupScript).not.toHaveBeenCalled();
@@ -2334,12 +2334,12 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			await gitOps.executeRunCommand("npm test");
 
 			// Should save command and create terminal
-			const branch = repositoriesStore.get("/repo")?.branches["main"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(branch?.runCommand).toBe("npm test");
 			expect(terminalsStore.getCount()).toBeGreaterThan(0);
 
@@ -2362,7 +2362,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			mockPty.canSpawn.mockResolvedValue(false);
 
 			await gitOps.executeRunCommand("npm test");
@@ -2374,7 +2374,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			await gitOps.executeRunCommand("npm run test:integration:coverage --verbose");
 
@@ -2402,7 +2402,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			await customGitOps.executeRunCommand("npm run test:integration");
 
@@ -2424,7 +2424,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.setRunCommand("/repo", "main", "npm test");
 
 			const openDialog = vi.fn();
@@ -2437,7 +2437,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.setRunCommand("/repo", "main", "npm test");
 
 			const openDialog = vi.fn();
@@ -2514,7 +2514,7 @@ describe("useGitOperations", () => {
 
 			expect(repositoriesStore.get("/new-repo")).toBeDefined();
 			expect(repositoriesStore.get("/new-repo")?.displayName).toBe("new-repo");
-			expect(repositoriesStore.get("/new-repo")?.activeBranch).toBe("main");
+			expect(repositoriesStore.get("/new-repo")?.activeWorkspaceId).toBe("main");
 		});
 
 		it("handles array result from dialog", async () => {
@@ -2559,7 +2559,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleAddRepo();
 
-			const branch = repositoriesStore.get("/fresh-repo")?.branches["main"];
+			const branch = repositoriesStore.get("/fresh-repo")?.workspaces["main"];
 			// Must create exactly 1 terminal — not 2 from double-spawn chain
 			expect(branch?.terminals.length).toBe(1);
 			expect(terminalsStore.state.activeId).toBe(branch?.terminals[0]);
@@ -3008,7 +3008,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			mockPty.write.mockRejectedValue(new Error("write failed"));
 
@@ -3051,8 +3051,8 @@ describe("useGitOperations", () => {
 			gitOps.handleTerminalCwdChange(id, "/repo/.worktrees/feature-x");
 			await vi.advanceTimersByTimeAsync(300);
 
-			const main = repositoriesStore.get("/repo")?.branches["main"];
-			const feature = repositoriesStore.get("/repo")?.branches["feature-x"];
+			const main = repositoriesStore.get("/repo")?.workspaces["main"];
+			const feature = repositoriesStore.get("/repo")?.workspaces["feature-x"];
 			expect(main?.terminals).not.toContain(id);
 			expect(feature?.terminals).toContain(id);
 		});
@@ -3065,7 +3065,7 @@ describe("useGitOperations", () => {
 			await vi.advanceTimersByTimeAsync(300);
 
 			// Still on main — /repo/src is a subdirectory of /repo (main's worktreePath)
-			const main = repositoriesStore.get("/repo")?.branches["main"];
+			const main = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(main?.terminals).toContain(id);
 		});
 
@@ -3078,7 +3078,7 @@ describe("useGitOperations", () => {
 			gitOps.handleTerminalCwdChange(id, "/repo/.worktrees/feature-x/src/components");
 			await vi.advanceTimersByTimeAsync(300);
 
-			const feature = repositoriesStore.get("/repo")?.branches["feature-x"];
+			const feature = repositoriesStore.get("/repo")?.workspaces["feature-x"];
 			expect(feature?.terminals).toContain(id);
 		});
 
@@ -3094,7 +3094,7 @@ describe("useGitOperations", () => {
 			await vi.advanceTimersByTimeAsync(300);
 
 			// Terminal should have moved away from /repo-old
-			const repoOldMain = repositoriesStore.get("/repo-old")?.branches["main"];
+			const repoOldMain = repositoriesStore.get("/repo-old")?.workspaces["main"];
 			expect(repoOldMain?.terminals).not.toContain(id);
 		});
 
@@ -3106,7 +3106,7 @@ describe("useGitOperations", () => {
 			await vi.advanceTimersByTimeAsync(300);
 
 			// Should still be on main — no reassignment
-			const main = repositoriesStore.get("/repo")?.branches["main"];
+			const main = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(main?.terminals).toContain(id);
 		});
 
@@ -3121,7 +3121,7 @@ describe("useGitOperations", () => {
 			await vi.advanceTimersByTimeAsync(300);
 
 			// Should end up on main (last cwd wins)
-			const main = repositoriesStore.get("/repo")?.branches["main"];
+			const main = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(main?.terminals).toContain(id);
 		});
 
@@ -3150,8 +3150,8 @@ describe("useGitOperations", () => {
 			gitOps.handleTerminalCwdChange(id, "/other/src");
 			await vi.advanceTimersByTimeAsync(300);
 
-			expect(repositoriesStore.get("/repo")?.branches["main"]?.terminals).toContain(id);
-			expect(repositoriesStore.get("/other")?.branches["main"]?.terminals).not.toContain(id);
+			expect(repositoriesStore.get("/repo")?.workspaces["main"]?.terminals).toContain(id);
+			expect(repositoriesStore.get("/other")?.workspaces["main"]?.terminals).not.toContain(id);
 			expect(terminalsStore.get(id)?.repoPath).toBe("/repo");
 			// The sidebar must not follow a cd either — that is what read as the app
 			// switching repo on its own.
@@ -3167,8 +3167,8 @@ describe("useGitOperations", () => {
 			gitOps.handleTerminalCwdChange(id, "/repo/.worktrees/feature-x");
 			await vi.advanceTimersByTimeAsync(300);
 
-			expect(repositoriesStore.get("/repo")?.branches["feature-x"]?.terminals).toContain(id);
-			expect(repositoriesStore.get("/repo")?.branches["main"]?.terminals).not.toContain(id);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature-x"]?.terminals).toContain(id);
+			expect(repositoriesStore.get("/repo")?.workspaces["main"]?.terminals).not.toContain(id);
 		});
 
 		it("still settles a parked tab that cds into a registered repo", async () => {
@@ -3183,7 +3183,7 @@ describe("useGitOperations", () => {
 			gitOps.handleTerminalCwdChange(id, "/other");
 			await vi.advanceTimersByTimeAsync(300);
 
-			expect(repositoriesStore.get("/other")?.branches["main"]?.terminals).toContain(id);
+			expect(repositoriesStore.get("/other")?.workspaces["main"]?.terminals).toContain(id);
 			expect(terminalsStore.get(id)?.repoPath).toBe("/other");
 		});
 
@@ -3197,7 +3197,7 @@ describe("useGitOperations", () => {
 			await vi.advanceTimersByTimeAsync(300);
 
 			// Timer was cancelled — terminal should still be on main
-			const main = repositoriesStore.get("/repo")?.branches["main"];
+			const main = repositoriesStore.get("/repo")?.workspaces["main"];
 			expect(main?.terminals).toContain(id);
 		});
 	});

@@ -27,14 +27,14 @@ export function useQuickSwitcher(deps: QuickSwitcherDeps) {
 		}
 
 		for (const repo of visibleRepos) {
-			const branches = Object.values(repo.branches).sort((a, b) => {
+			const branches = Object.values(repo.workspaces).sort((a, b) => {
 				if (a.isMain && !b.isMain) return -1;
 				if (!a.isMain && b.isMain) return 1;
-				return a.name.localeCompare(b.name);
+				return a.branchName.localeCompare(b.branchName);
 			});
 			for (const branch of branches) {
 				if (counter === index) {
-					deps.handleBranchSelect(repo.path, branch.name);
+					deps.handleBranchSelect(repo.path, branch.branchName);
 					return;
 				}
 				counter++;

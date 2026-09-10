@@ -111,12 +111,22 @@ interface RepositoryState {
   expanded: boolean;      // Show branch list
   collapsed: boolean;     // Icon-only mode
   parked: boolean;        // Hidden from sidebar (recallable via popover)
-  branches: Record<string, BranchState>;
-  activeBranch: string | null;
+  workspaces: Record<WorkspaceId, WorkspaceState>;
+  activeBranch: string | null;     // holds a WorkspaceId; renamed in a later pass
 }
 
-interface BranchState {
-  name: string;
+/**
+ * Opaque. Existing records were migrated with `workspaceId = branchName`, so the
+ * value looks parseable — but a COW workspace's id has no branch in it. Read
+ * `WorkspaceState.branchName` instead of taking the branch out of the key.
+ */
+type WorkspaceId = string;
+
+interface WorkspaceState {
+  workspaceId: WorkspaceId;        // equal to the key that holds this record
+  branchName: string;              // NOT a key: two workspaces may share it
+  kind: "main" | "worktree" | "cow";
+  parentRepoPath: string | null;   // set only for kind === "cow"
   isMain: boolean;
   isShell?: boolean;               // true for non-git directory shell entries
   worktreePath: string | null;

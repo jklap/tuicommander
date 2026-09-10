@@ -39,9 +39,9 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		// (which has auto-spawn logic that would create a duplicate terminal).
 		// Batch all store writes to flush the reactive graph once instead of 6+ times.
 		const activeRepo = repositoriesStore.getActive();
-		const needsSwitch = activeRepo?.path !== repoPath || activeRepo?.activeBranch !== branchName;
+		const needsSwitch = activeRepo?.path !== repoPath || activeRepo?.activeWorkspaceId !== branchName;
 
-		const branch = repositoriesStore.get(repoPath)?.branches[branchName];
+		const branch = repositoriesStore.get(repoPath)?.workspaces[branchName];
 		const termCount = branch?.terminals.length || 0;
 
 		const label = repoSettingsStore.getEffective(repoPath)?.branchLabels?.[branchName];
@@ -59,7 +59,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		batch(() => {
 			if (needsSwitch) {
 				repositoriesStore.setActive(repoPath);
-				repositoriesStore.setActiveBranch(repoPath, branchName);
+				repositoriesStore.setActiveWorkspace(repoPath, branchName);
 				deps.setCurrentRepoPath(repoPath);
 				deps.setCurrentBranch(branchName);
 			}
@@ -101,7 +101,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		// Auto-deactivate global workspace before branch switch
 		if (globalWorkspaceStore.isActive()) {
 			const prevRepoPath = repositoriesStore.state.activeRepoPath;
-			const prevBranch = prevRepoPath ? repositoriesStore.state.repositories[prevRepoPath]?.activeBranch : null;
+			const prevBranch = prevRepoPath ? repositoriesStore.state.repositories[prevRepoPath]?.activeWorkspaceId : null;
 			const key = prevRepoPath && prevBranch ? paneLayoutKey(prevRepoPath, prevBranch) : undefined;
 			globalWorkspaceStore.deactivate(key);
 		}
@@ -110,26 +110,28 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		try {
 			// Log the state we're LEAVING — critical for diagnosing terminal disappearance
 			const prevRepo = repositoriesStore.getActive();
-			const prevBranchName = prevRepo?.activeBranch;
-			const prevBranch = prevBranchName ? prevRepo?.branches[prevBranchName] : null;
+			const prevBranchName = prevRepo?.activeWorkspaceId;
+			const prevBranch = prevBranchName ? prevRepo?.workspaces[prevBranchName] : null;
 			appLogger.debug(
 				"terminal",
 				`BranchSelect ${prevBranchName ?? "(none)"} → ${branchName} terms=${(prevBranch?.terminals ?? []).length}→?`,
 			);
 
 			// Save state for the branch we're leaving
-			if (prevRepo?.activeBranch) {
+			if (prevRepo?.activeWorkspaceId) {
 				const currentActiveId = terminalsStore.state.activeId;
 				if (currentActiveId && prevBranch?.terminals.includes(currentActiveId)) {
-					repositoriesStore.setBranch(prevRepo.path, prevRepo.activeBranch, { lastActiveTerminal: currentActiveId });
+					repositoriesStore.setBranch(prevRepo.path, prevRepo.activeWorkspaceId, {
+						lastActiveTerminal: currentActiveId,
+					});
 				}
 				// Save pane layout for the branch we're leaving
 				if (paneLayoutStore.isSplit()) {
-					const key = paneLayoutKey(prevRepo.path, prevRepo.activeBranch);
+					const key = paneLayoutKey(prevRepo.path, prevRepo.activeWorkspaceId);
 					savedPaneLayouts.set(key, paneLayoutStore.serialize());
 				} else {
 					// Clear any stale layout if user unsplit while on this branch
-					savedPaneLayouts.delete(paneLayoutKey(prevRepo.path, prevRepo.activeBranch));
+					savedPaneLayouts.delete(paneLayoutKey(prevRepo.path, prevRepo.activeWorkspaceId));
 				}
 			}
 
@@ -139,12 +141,12 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			batch(() => {
 				deps.setCurrentRepoPath(repoPath);
 				repositoriesStore.setActive(repoPath);
-				repositoriesStore.setActiveBranch(repoPath, branchName);
+				repositoriesStore.setActiveWorkspace(repoPath, branchName);
 				deps.setCurrentBranch(branchName);
 			});
 
 			// Fire-and-forget: diff stats are cosmetic, don't block branch switch
-			const selectedBranch = repositoriesStore.get(repoPath)?.branches[branchName];
+			const selectedBranch = repositoriesStore.get(repoPath)?.workspaces[branchName];
 			if (selectedBranch?.worktreePath) {
 				const wtPath = selectedBranch.worktreePath;
 				deps.repo
@@ -154,15 +156,15 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 					})
 					.catch((err) => appLogger.debug("git", `getDiffStats failed for ${branchName}`, err));
 			}
-			let branch = repositoriesStore.get(repoPath)?.branches[branchName];
+			let branch = repositoriesStore.get(repoPath)?.workspaces[branchName];
 
 			// Adopt orphaned terminals whose cwd matches this branch's worktree path.
 			// Pre-compute claimed set O(B×T) once, then check in O(1) per terminal.
 			if (branch?.worktreePath) {
 				const branchTermSet = new Set(branch.terminals);
 				const claimedIds = new Set<string>();
-				for (const b of Object.values(repositoriesStore.get(repoPath)?.branches ?? {})) {
-					if (b.name !== branchName) {
+				for (const b of Object.values(repositoriesStore.get(repoPath)?.workspaces ?? {})) {
+					if (b.branchName !== branchName) {
 						for (const tid of b.terminals) claimedIds.add(tid);
 					}
 				}
@@ -175,7 +177,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 					}
 				}
 				// Re-read branch state after potential adoptions
-				branch = repositoriesStore.get(repoPath)?.branches[branchName];
+				branch = repositoriesStore.get(repoPath)?.workspaces[branchName];
 			}
 			const validTerminals = filterValidTerminals(branch?.terminals, terminalsStore.getIds()).filter(
 				(id) => !terminalsStore.isDetached(id),

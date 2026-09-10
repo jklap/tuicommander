@@ -108,7 +108,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 					worktreePath: result.path,
 					isPreparing: true,
 				});
-				repositoriesStore.setActiveBranch(repoPath, result.branch);
+				repositoriesStore.setActiveWorkspace(repoPath, result.branch);
 				deps.setStatusInfo(`Preparing auto-fix worktree ${branch}...`);
 				pendingCreations.set(pendingKey(repoPath, result.branch), {
 					repoPath,
@@ -199,7 +199,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 	/** Close all terminals belonging to a branch. */
 	const closeTerminalsForBranch = async (repoPath: string, branchName: string) => {
 		const repoState = repositoriesStore.get(repoPath);
-		const branch = repoState?.branches[branchName];
+		const branch = repoState?.workspaces[branchName];
 		if (branch) {
 			for (const termId of branch.terminals) {
 				await deps.closeTerminal(termId, true);

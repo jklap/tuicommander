@@ -502,7 +502,7 @@ describe("mdTabsStore", () => {
 		const addRepoWithBranch = (path: string, branch: string) => {
 			repositoriesStore.add({ path, displayName: path });
 			repositoriesStore.setBranch(path, branch, { worktreePath: path });
-			repositoriesStore.setActiveBranch(path, branch);
+			repositoriesStore.setActiveWorkspace(path, branch);
 		};
 
 		it("stamps branchKey from the tab's repo, not from the active repo", () => {

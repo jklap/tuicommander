@@ -71,7 +71,7 @@ describe("ToastContainer", () => {
 		// on the old repo while the pane drew the new terminal — no tab for it.
 		expect(terminalsStore.state.activeId).toBe(there);
 		expect(repositoriesStore.state.activeRepoPath).toBe("/there");
-		expect(repositoriesStore.get("/there")?.activeBranch).toBe("feature");
+		expect(repositoriesStore.get("/there")?.activeWorkspaceId).toBe("feature");
 	});
 
 	it("names the repo the toast came from", () => {

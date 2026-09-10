@@ -93,9 +93,9 @@ describe("repositoriesStore", () => {
 				vi.advanceTimersByTime(500);
 				// Find the last save_repositories call
 				const repo = lastRepositoryMutation().repos.find((mutation) => mutation.id === "/repo")?.after as {
-					branches: Record<string, { terminals: string[] }>;
+					workspaces: Record<string, { terminals: string[] }>;
 				};
-				expect(repo.branches.main.terminals).toEqual([]);
+				expect(repo.workspaces.main.terminals).toEqual([]);
 			});
 		});
 	});
@@ -108,9 +108,9 @@ describe("repositoriesStore", () => {
 				store.setCiAutoHeal("/repo", "main", { enabled: true, attempts: 1 });
 				vi.advanceTimersByTime(500);
 				const repo = lastRepositoryMutation().repos.find((mutation) => mutation.id === "/repo")?.after as {
-					branches: Record<string, { ciAutoHeal: unknown }>;
+					workspaces: Record<string, { ciAutoHeal: unknown }>;
 				};
-				expect(repo.branches.main.ciAutoHeal).toEqual({ enabled: true, attempts: 1 });
+				expect(repo.workspaces.main.ciAutoHeal).toEqual({ enabled: true, attempts: 1 });
 			});
 		});
 
@@ -121,9 +121,9 @@ describe("repositoriesStore", () => {
 				store.setCiAutoHeal("/repo", "main", { enabled: true, attempts: 2, healing: true });
 				vi.advanceTimersByTime(500);
 				const repo = lastRepositoryMutation().repos.find((mutation) => mutation.id === "/repo")?.after as {
-					branches: Record<string, { ciAutoHeal: { healing: boolean } }>;
+					workspaces: Record<string, { ciAutoHeal: { healing: boolean } }>;
 				};
-				expect(repo.branches.main.ciAutoHeal.healing).toBe(false);
+				expect(repo.workspaces.main.ciAutoHeal.healing).toBe(false);
 			});
 		});
 	});
@@ -219,9 +219,9 @@ describe("repositoriesStore", () => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setBranch("/repo", "feature/test");
 				const repo = store.get("/repo")!;
-				expect(repo.branches["feature/test"]).toBeDefined();
-				expect(repo.branches["feature/test"].name).toBe("feature/test");
-				expect(repo.branches["feature/test"].isMain).toBe(false);
+				expect(repo.workspaces["feature/test"]).toBeDefined();
+				expect(repo.workspaces["feature/test"].branchName).toBe("feature/test");
+				expect(repo.workspaces["feature/test"].isMain).toBe(false);
 			});
 		});
 
@@ -229,13 +229,13 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setBranch("/repo", "main");
-				expect(store.get("/repo")!.branches["main"].isMain).toBe(true);
+				expect(store.get("/repo")!.workspaces["main"].isMain).toBe(true);
 
 				store.setBranch("/repo", "master");
-				expect(store.get("/repo")!.branches["master"].isMain).toBe(true);
+				expect(store.get("/repo")!.workspaces["master"].isMain).toBe(true);
 
 				store.setBranch("/repo", "develop");
-				expect(store.get("/repo")!.branches["develop"].isMain).toBe(true);
+				expect(store.get("/repo")!.workspaces["develop"].isMain).toBe(true);
 			});
 		});
 
@@ -244,7 +244,7 @@ describe("repositoriesStore", () => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setBranch("/repo", "main");
 				store.setBranch("/repo", "main", { additions: 5, deletions: 3 });
-				expect(store.get("/repo")!.branches["main"].additions).toBe(5);
+				expect(store.get("/repo")!.workspaces["main"].additions).toBe(5);
 			});
 		});
 
@@ -252,8 +252,8 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setBranch("/repo", "main");
-				store.setActiveBranch("/repo", "main");
-				expect(store.get("/repo")!.activeBranch).toBe("main");
+				store.setActiveWorkspace("/repo", "main");
+				expect(store.get("/repo")!.activeWorkspaceId).toBe("main");
 			});
 		});
 	});
@@ -264,7 +264,7 @@ describe("repositoriesStore", () => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setBranch("/repo", "main");
 				store.addTerminalToBranch("/repo", "main", "term-1");
-				expect(store.get("/repo")!.branches["main"].terminals).toContain("term-1");
+				expect(store.get("/repo")!.workspaces["main"].terminals).toContain("term-1");
 			});
 		});
 
@@ -274,7 +274,7 @@ describe("repositoriesStore", () => {
 				store.setBranch("/repo", "main");
 				store.addTerminalToBranch("/repo", "main", "term-1");
 				store.addTerminalToBranch("/repo", "main", "term-1");
-				expect(store.get("/repo")!.branches["main"].terminals).toHaveLength(1);
+				expect(store.get("/repo")!.workspaces["main"].terminals).toHaveLength(1);
 			});
 		});
 
@@ -284,7 +284,7 @@ describe("repositoriesStore", () => {
 				store.setBranch("/repo", "main");
 				store.addTerminalToBranch("/repo", "main", "term-1");
 				store.removeTerminalFromBranch("/repo", "main", "term-1");
-				expect(store.get("/repo")!.branches["main"].terminals).toHaveLength(0);
+				expect(store.get("/repo")!.workspaces["main"].terminals).toHaveLength(0);
 			});
 		});
 
@@ -302,11 +302,11 @@ describe("repositoriesStore", () => {
 
 				// Remove first — savedTerminals should persist (still have one terminal)
 				store.removeTerminalFromBranch("/repo", "main", "term-1");
-				expect(store.get("/repo")!.branches["main"].savedTerminals).toHaveLength(2);
+				expect(store.get("/repo")!.workspaces["main"].savedTerminals).toHaveLength(2);
 
 				// Remove last — savedTerminals should be cleared
 				store.removeTerminalFromBranch("/repo", "main", "term-2");
-				expect(store.get("/repo")!.branches["main"].savedTerminals).toHaveLength(0);
+				expect(store.get("/repo")!.workspaces["main"].savedTerminals).toHaveLength(0);
 			});
 		});
 	});
@@ -360,7 +360,7 @@ describe("repositoriesStore", () => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setBranch("/repo", "feature");
 				store.removeBranch("/repo", "feature");
-				expect(store.get("/repo")!.branches["feature"]).toBeUndefined();
+				expect(store.get("/repo")!.workspaces["feature"]).toBeUndefined();
 			});
 		});
 
@@ -369,9 +369,9 @@ describe("repositoriesStore", () => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setBranch("/repo", "main");
 				store.setBranch("/repo", "feature");
-				store.setActiveBranch("/repo", "feature");
+				store.setActiveWorkspace("/repo", "feature");
 				store.removeBranch("/repo", "feature");
-				expect(store.get("/repo")!.activeBranch).toBe("main");
+				expect(store.get("/repo")!.activeWorkspaceId).toBe("main");
 			});
 		});
 	});
@@ -383,9 +383,9 @@ describe("repositoriesStore", () => {
 				store.setBranch("/repo", "old-name");
 				store.addTerminalToBranch("/repo", "old-name", "term-1");
 				store.renameBranch("/repo", "old-name", "new-name");
-				expect(store.get("/repo")!.branches["old-name"]).toBeUndefined();
-				expect(store.get("/repo")!.branches["new-name"]).toBeDefined();
-				expect(store.get("/repo")!.branches["new-name"].terminals).toContain("term-1");
+				expect(store.get("/repo")!.workspaces["old-name"]).toBeUndefined();
+				expect(store.get("/repo")!.workspaces["new-name"]).toBeDefined();
+				expect(store.get("/repo")!.workspaces["new-name"].terminals).toContain("term-1");
 			});
 		});
 
@@ -393,9 +393,9 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setBranch("/repo", "old-name");
-				store.setActiveBranch("/repo", "old-name");
+				store.setActiveWorkspace("/repo", "old-name");
 				store.renameBranch("/repo", "old-name", "new-name");
-				expect(store.get("/repo")!.activeBranch).toBe("new-name");
+				expect(store.get("/repo")!.activeWorkspaceId).toBe("new-name");
 			});
 		});
 	});
@@ -411,8 +411,8 @@ describe("repositoriesStore", () => {
 
 				store.mergeBranchState("/repo", "old-branch", "new-branch");
 
-				const oldB = store.get("/repo")!.branches["old-branch"];
-				const newB = store.get("/repo")!.branches["new-branch"];
+				const oldB = store.get("/repo")!.workspaces["old-branch"];
+				const newB = store.get("/repo")!.workspaces["new-branch"];
 				expect(oldB.terminals).toEqual([]);
 				expect(newB.terminals).toContain("term-1");
 				expect(newB.terminals).toContain("term-2");
@@ -432,8 +432,8 @@ describe("repositoriesStore", () => {
 
 				store.mergeBranchState("/repo", "old", "new");
 
-				expect(store.get("/repo")!.branches["old"].savedTerminals).toEqual([]);
-				expect(store.get("/repo")!.branches["new"].savedTerminals?.length).toBe(1);
+				expect(store.get("/repo")!.workspaces["old"].savedTerminals).toEqual([]);
+				expect(store.get("/repo")!.workspaces["new"].savedTerminals?.length).toBe(1);
 			});
 		});
 
@@ -450,7 +450,7 @@ describe("repositoriesStore", () => {
 				store.mergeBranchState("/repo", "old", "new");
 
 				// Target keeps its own savedTerminals
-				expect(store.get("/repo")!.branches["new"].savedTerminals?.[0]?.name).toBe("Existing");
+				expect(store.get("/repo")!.workspaces["new"].savedTerminals?.[0]?.name).toBe("Existing");
 			});
 		});
 	});
@@ -515,7 +515,7 @@ describe("repositoriesStore", () => {
 						initials: "TE",
 						expanded: true,
 						collapsed: false,
-						branches: {
+						workspaces: {
 							main: {
 								name: "main",
 								isMain: true,
@@ -534,7 +534,7 @@ describe("repositoriesStore", () => {
 				await store.hydrate();
 				const repo = store.get("/repo");
 				expect(repo).toBeDefined();
-				expect(repo!.branches["main"].terminals).toEqual([]);
+				expect(repo!.workspaces["main"].terminals).toEqual([]);
 				expect(mockInvoke).toHaveBeenCalledWith("load_repositories");
 			});
 		});
@@ -546,7 +546,7 @@ describe("repositoriesStore", () => {
 						path: "/repo",
 						displayName: "test",
 						initials: "TE",
-						branches: {
+						workspaces: {
 							main: {
 								name: "main",
 								isMain: true,
@@ -647,7 +647,7 @@ describe("repositoriesStore", () => {
 					"/repo": {
 						path: "/repo",
 						displayName: "Repo",
-						branches: {
+						workspaces: {
 							main: {
 								savedTerminals: [
 									{ name: "t1", cwd: null, fontSize: 12, agentType: "fx" },
@@ -662,7 +662,7 @@ describe("repositoriesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				const saved = store.get("/repo")?.branches.main?.savedTerminals ?? [];
+				const saved = store.get("/repo")?.workspaces.main?.savedTerminals ?? [];
 				expect(saved.map((t) => t.agentType)).toEqual([null, "claude"]);
 			});
 		});
@@ -708,7 +708,7 @@ describe("repositoriesStore", () => {
 					initials: "TE",
 					expanded: true,
 					collapsed: false,
-					branches: {},
+					workspaces: {},
 					activeBranch: null,
 				},
 			};
@@ -731,7 +731,7 @@ describe("repositoriesStore", () => {
 					expanded: true,
 					collapsed: false,
 					parked: false,
-					branches: {},
+					workspaces: {},
 					activeBranch: null,
 				},
 			};
@@ -768,9 +768,9 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "My Repo" });
 				store.setBranch("/repo", "feat/foo");
-				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBeFalsy();
+				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBeFalsy();
 				store.toggleBranchTabsExpanded("/repo", "feat/foo");
-				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(true);
+				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(true);
 			});
 		});
 
@@ -780,7 +780,7 @@ describe("repositoriesStore", () => {
 				store.setBranch("/repo", "feat/foo");
 				store.toggleBranchTabsExpanded("/repo", "feat/foo");
 				store.toggleBranchTabsExpanded("/repo", "feat/foo");
-				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(false);
+				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(false);
 			});
 		});
 
@@ -808,7 +808,7 @@ describe("repositoriesStore", () => {
 				store.add({ path: "/repo", displayName: "My Repo" });
 				store.setBranch("/repo", "feat/foo");
 				store.setBranchTabsExpanded("/repo", "feat/foo", true);
-				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(true);
+				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(true);
 			});
 		});
 
@@ -818,7 +818,7 @@ describe("repositoriesStore", () => {
 				store.setBranch("/repo", "feat/foo");
 				store.setBranchTabsExpanded("/repo", "feat/foo", true);
 				store.setBranchTabsExpanded("/repo", "feat/foo", true);
-				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(true);
+				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(true);
 			});
 		});
 
@@ -828,7 +828,7 @@ describe("repositoriesStore", () => {
 				store.setBranch("/repo", "feat/foo");
 				store.setBranchTabsExpanded("/repo", "feat/foo", true);
 				store.setBranchTabsExpanded("/repo", "feat/foo", false);
-				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(false);
+				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(false);
 			});
 		});
 
@@ -923,7 +923,7 @@ describe("repositoriesStore", () => {
 				store.addTerminalToBranch("/repo", "main", "term-2");
 				store.addTerminalToBranch("/repo", "main", "term-3");
 				store.reorderTerminals("/repo", "main", 0, 2);
-				expect(store.get("/repo")!.branches["main"].terminals).toEqual(["term-2", "term-3", "term-1"]);
+				expect(store.get("/repo")!.workspaces["main"].terminals).toEqual(["term-2", "term-3", "term-1"]);
 			});
 		});
 	});
@@ -934,7 +934,7 @@ describe("repositoriesStore", () => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setActive("/repo");
 				store.setBranch("/repo", "main");
-				store.setActiveBranch("/repo", "main");
+				store.setActiveWorkspace("/repo", "main");
 				store.addTerminalToBranch("/repo", "main", "term-1");
 				expect(store.getActiveTerminals()).toEqual(["term-1"]);
 			});
@@ -1051,7 +1051,7 @@ describe("repositoriesStore", () => {
 						initials: "TE",
 						expanded: true,
 						collapsed: false,
-						branches: {
+						workspaces: {
 							main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						},
 						activeBranch: "main",
@@ -1388,7 +1388,7 @@ describe("repositoriesStore", () => {
 						initials: "TE",
 						expanded: true,
 						collapsed: false,
-						branches: {
+						workspaces: {
 							main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						},
 						activeBranch: "main",
@@ -1546,7 +1546,7 @@ describe("repositoriesStore", () => {
 			// matches disk. The retry must carry disk's value as `before` and our value
 			// as `after` — last-writer-wins for the record we meant to change.
 			const onDisk = {
-				repos: { "/repo": { path: "/repo", displayName: "RenamedElsewhere", branches: {} } },
+				repos: { "/repo": { path: "/repo", displayName: "RenamedElsewhere", workspaces: {} } },
 				repoOrder: ["/repo"],
 				activeRepoPath: null,
 				groups: {},
@@ -1582,7 +1582,7 @@ describe("repositoriesStore", () => {
 			// later save diffed against a baseline disk had already moved past and was
 			// rejected too — permanently, for every repo, not just the conflicting one.
 			const onDisk = {
-				repos: { "/repo": { path: "/repo", displayName: "RenamedElsewhere", branches: {} } },
+				repos: { "/repo": { path: "/repo", displayName: "RenamedElsewhere", workspaces: {} } },
 				repoOrder: ["/repo"],
 				activeRepoPath: null,
 				groups: {},
