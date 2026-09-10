@@ -123,6 +123,32 @@ need a human with the real desktop app).
   runs (shell script executes / headless subprocess launches) instead of
   inserting its raw prompt text into the terminal.
 
+## Double-click smart selection no longer shrinks to a sub-word on real mouse jitter (2026-09-10, frontend only — HMR)
+
+Reported: double-clicking a long path/URL selected the whole thing, then
+immediately snapped down to just the word under the cursor. Root cause was a
+smart match reusing `"word"`-mode's drag anchor, which recomputes its live
+edge from a plain word-boundary resolver — narrower than the match at every
+point except its exact extent — so any `mousemove` before `mouseup`,
+including ordinary pointer jitter with zero real displacement, shrank it
+immediately. Fixed with a dedicated `"smart"` drag mode/anchor (see
+`AGENTS.md`'s "Smart Selection Drag Anchor"), and reproduced + covered by a
+real jsdom mouseDown/mouseDown/mouseMove/mouseUp sequence in
+`canvasTerminalGestures.pin.test.ts` plus unit coverage in
+`canvasTerminalSelection.test.ts`. What the automated coverage cannot fully
+stand in for is real trackpad/mouse hardware timing and coalescing, which
+jsdom's synthetic events only approximate.
+
+- [ ] In a real terminal session, double-click in the middle of a long path
+  or URL that's wider than a couple of words (e.g. `/usr/local/bin/some-tool`
+  or a long `https://` URL) using a real mouse/trackpad. The whole thing must
+  stay selected — no visible flicker/shrink to a sub-word.
+- [ ] Same double-click, then drag a little further in either direction
+  before releasing: the selection must extend outward by whole words from
+  the full match, not restart from just the word under the cursor.
+- [ ] Repeat both checks on a path/URL long enough to soft-wrap across two
+  terminal rows.
+
 ## Gutter-hover "pointer" cursor no longer freezes over a mouse-tracking app's prompt (2026-09-08, frontend only — HMR)
 
 Reported: after the command-block gutter widened and gained a hover cursor

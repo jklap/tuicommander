@@ -123,6 +123,51 @@ describe("CanvasTerminal mouse gestures — pinned behavior (Phase 0)", () => {
 		await mounted.dispose();
 	});
 
+	it("mouse jitter after a double-click on a URL keeps the whole smart match selected (regression)", async () => {
+		// Regression coverage: a smart match used to reuse "word" mode's anchor,
+		// which unions against a *plain* word boundary re-derived at the live
+		// mouse position on every mousemove — narrower than the URL at any point
+		// inside it (":", "/", "." are word separators). Even a mousemove with no
+		// real displacement (ordinary pointer jitter during the double-click
+		// itself, well within the double-click window) used to collapse the
+		// whole-URL selection down to just the sub-word under the cursor before
+		// mouseup ever fired.
+		const mounted = await mountCanvasTerminal({ sessionId: "s3c", terminalId: "t3c" });
+		fakeTransport.current!.pushFrame(buildTextFrame(["open https://example.com/a now"], 40));
+
+		const point = cellPoint(7, 0); // inside "https"
+		fireEvent.mouseDown(mounted.canvas, { button: 0, ...point });
+		fireEvent.mouseDown(mounted.canvas, { button: 0, ...point });
+		// Jitter: a mousemove at the exact same cell, before mouseup.
+		fireEvent.mouseMove(document, { buttons: 1, ...point });
+		await new Promise((r) => requestAnimationFrame(r));
+		fireEvent.mouseUp(mounted.canvas, { button: 0, ...point });
+
+		await selectionText(mounted.ref, "https://example.com/a");
+		await mounted.dispose();
+	});
+
+	it("dragging forward past a double-clicked URL's end extends by the whole next word (real multi-cell drag)", async () => {
+		// Integration-level coverage for the "smart" mode drag-extension branch,
+		// not just the zero-displacement jitter case above or the pure-unit
+		// extendSelectionDrag tests in canvasTerminalSelection.test.ts — exercises
+		// CanvasTerminal's actual mousedown/mousemove/mouseup wiring end to end.
+		const mounted = await mountCanvasTerminal({ sessionId: "s3d", terminalId: "t3d" });
+		fakeTransport.current!.pushFrame(buildTextFrame(["open https://example.com/a now"], 40));
+
+		const urlPoint = cellPoint(7, 0); // inside "https", URL spans cols 5-25
+		fireEvent.mouseDown(mounted.canvas, { button: 0, ...urlPoint });
+		fireEvent.mouseDown(mounted.canvas, { button: 0, ...urlPoint });
+		// Drag forward past the URL's end into "now" (cols 27-29).
+		const dragPoint = cellPoint(28, 0);
+		fireEvent.mouseMove(document, { buttons: 1, ...dragPoint });
+		await new Promise((r) => requestAnimationFrame(r));
+		fireEvent.mouseUp(mounted.canvas, { button: 0, ...dragPoint });
+
+		await selectionText(mounted.ref, "https://example.com/a now");
+		await mounted.dispose();
+	});
+
 	it("double-click on the scheme of a URL selects only the scheme token when doubleClickAction is 'word'", async () => {
 		settingsStore.setDoubleClickAction("word");
 		const mounted = await mountCanvasTerminal({ sessionId: "s3b", terminalId: "t3b" });

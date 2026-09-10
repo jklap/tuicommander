@@ -2820,12 +2820,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const clickCounter: ClickCounterState = { count: 0, lastClickTime: 0 };
 		/** Buttons this canvas reported down, so their release is owed to the app. */
 		const reportedDown = new Set<number>();
-		// Set alongside selection.mode at mousedown (word/line respectively); the
-		// fixed span flushSelectionDrag must keep fully included no matter which
+		// Set alongside selection.mode at mousedown (word/line/smart respectively);
+		// the fixed span flushSelectionDrag must keep fully included no matter which
 		// way the drag goes. Only read while selection.mode says to read them, so
 		// staleness across gestures can't leak in.
 		let wordAnchor: { row: number; left: number; right: number } | null = null;
 		let lineAnchorRow: number | null = null;
+		let smartAnchor: { start: SelectionPoint; end: SelectionPoint } | null = null;
 
 		// Rebuilt only when the underlying settings actually change (regex mode
 		// recompiles every alternate) — cheap key comparison on every call
@@ -2939,6 +2940,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				selection.end = absPos;
 				selection.selecting = true;
 				selection.mode = "char";
+				smartAnchor = null;
 				fullRepaintNeeded = true;
 				scheduleRepaint();
 				return;
@@ -2955,13 +2957,22 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const smartMatch = tryingSmart ? trySmartMatch(absRow, pos.col) : null;
 
 			if (smartMatch) {
-				const singleRow = smartMatch.startCoord.row === smartMatch.endCoord.row;
 				selection.start = smartMatch.startCoord;
 				selection.end = smartMatch.endCoord;
-				selection.mode = singleRow ? "word" : "char";
-				wordAnchor = singleRow
-					? { row: smartMatch.startCoord.row, left: smartMatch.startCoord.col, right: smartMatch.endCoord.col }
-					: null;
+				// Always "smart" mode, even for a single-row match: reusing "word"
+				// mode's wordAnchor here used to union the match against a *plain*
+				// word boundary recomputed at the live mouse position on every
+				// mousemove (including pointer jitter during the double-click
+				// itself). A path/URL's plain word boundary at any point inside it
+				// is narrower than the full match (e.g. "/" splits it), so that
+				// union's "dragging forward" branch blindly replaced the anchor's
+				// right edge with the narrower plain-word bound — collapsing the
+				// whole path down to just the sub-word under the cursor almost
+				// immediately. "smart" mode's row+col anchor (below) keeps the full
+				// match intact until the drag genuinely moves past its edges.
+				selection.mode = "smart";
+				wordAnchor = null;
+				smartAnchor = { start: smartMatch.startCoord, end: smartMatch.endCoord };
 				// Alt/Option+double-click runs the match's default action, if it has
 				// one — checked here (mousedown) rather than the eventual `click`
 				// event, since a double-click's 2nd mousedown is what carries the
@@ -2981,6 +2992,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				selection.end = decision.end;
 				selection.mode = decision.mode;
 				wordAnchor = decision.wordAnchor;
+				smartAnchor = null;
 				if (decision.lineAnchorRow !== null) lineAnchorRow = decision.lineAnchorRow;
 			}
 			selection.selecting = true;
@@ -3023,7 +3035,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const dragBounds = dragRow ? getWordBoundaryResolver()(dragRow, pos.col) : null;
 			const extended = extendSelectionDrag(
 				selection.mode,
-				{ wordAnchor, lineAnchorRow },
+				{ wordAnchor, lineAnchorRow, smartAnchor },
 				{ row: absRow, col: pos.col, bounds: dragBounds, maxCol: lastGridColForRect(rect) },
 				selection.start ?? { row: absRow, col: pos.col },
 			);

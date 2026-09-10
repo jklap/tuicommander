@@ -471,6 +471,44 @@ exactly how the corrupted value above sailed through validation on every launch)
 
 NEVER write text + `\r` directly to a PTY. Always use `sendCommand()` from `src/utils/sendCommand.ts` — it handles agent-specific Enter semantics (Ink raw mode needs split writes). This applies to dictation, command palette, suggested actions, and any other feature that sends input to a terminal.
 
+## Smart Selection Drag Anchor
+
+A double/quad-click "smart" match (a path, URL, etc. — see Smart Selection in
+`docs/frontend/terminal-features.md`) must never reuse `"word"` mode's drag
+anchor (`wordAnchor`/`extendSelectionDrag`'s `"word"` branch,
+`canvasTerminalSelection.ts`). That branch re-derives its live drag edge from
+the *plain* word-boundary resolver (`wordBoundsAt`/`getWordBoundaryResolver`)
+at the current mouse position — which is narrower than a multi-segment smart
+match at every point except its exact extent, since punctuation like `/`,
+`.`, `:` splits it. Any `mousemove` before `mouseup` — including ordinary
+pointer jitter during the double-click itself, well within the double-click
+window, with zero real displacement — recomputed that narrower boundary and
+collapsed the whole match down to just the sub-word under the cursor, before
+the user ever got to drag anywhere. This shipped and went unnoticed because
+the only existing test for a URL double-click (`canvasTerminalGestures.pin
+.test.ts`) fired `mousedown`×2 → `mouseup` with no intervening `mousemove` —
+exactly the one sequence real double-clicking never manages in practice.
+
+Fixed by giving smart matches their own `"smart"` `SelectionMode` and
+`smartAnchor` (full `{start, end}` coordinate pair) in `DragAnchor`, with a
+dedicated `extendSelectionDrag` branch: while the live drag position stays
+within `[start, end]` (inclusive both ends — a drag landing exactly on either
+edge must not shrink either), the full match is kept untouched; only once the
+drag genuinely moves past an edge does it extend outward, by whole word at
+the new position (not the raw point) — this last part matters because the
+built-in smart-selection rule set includes a low-precision catch-all `\S+`
+rule (`smartSelectionDefaults.ts`), so *every* plain double-clicked word is
+also technically a "smart match" under the hood, and dragging one across
+several words must keep pulling in whole words the way plain `"word"`-mode
+dragging always did — an early version of this fix used the raw drag point
+for that extension and broke that exact case (`canvasTerminalGestures.pin
+.test.ts`'s pre-existing "dragging after a double-click" tests caught it).
+
+If you add a fourth drag-extension mode, check whether its live boundary can
+ever be narrower than what was selected at mousedown — that mismatch, not
+row-span (a single-row smart match hit this identically to a multi-row one),
+is the actual failure condition.
+
 ## Terminal Query/Reply Latency (DSR/CPR, DA1/DA2, DECRQM)
 
 The alacritty fork's `Handler` impl (`patches/alacritty_terminal/src/term/mod.rs`) answers several terminal→app query sequences by queuing a `TermEvent::PtyWrite` — `device_status` (DSR-5/DSR-6 aka CPR), `identify_terminal` (DA1/DA2), `report_mode`/`report_private_mode` (DECRQM). These replies are latency-sensitive: real tools (pagers like `leaf`, readline libraries) set a short internal deadline waiting for them and print the raw escape sequence as visible garbage once it's late.
