@@ -42,6 +42,20 @@ tuic diff old.rs new.rs
 
 A directory lands in the sidebar and becomes the active repo. `tuic <dir>` and `tuic open <dir>` call the selected running server over local IPC through MCP `repo action=add`; development builds need no registered OS URL handler. Registration is explicit and takes effect immediately, without a confirmation dialog or a connected desktop window. Reopening preserves existing workspaces, terminals, names and groups. Registration does not create a terminal; use `tuic new` for a shell. Server errors produce a nonzero exit code.
 
+### Opening a plain terminal at a path
+
+```bash
+# Open a new terminal pane at this exact folder (files resolve to their parent directory)
+tuic open-here /path/to/folder
+
+# Multiple paths — one pane each, capped at 5
+tuic open-here /path/one /path/two
+```
+
+Unlike `tuic <dir>`, this never touches the sidebar's repo list — it just opens a terminal, filed
+under whichever repo owns the path (see [Finder Integration](finder-integration.md) for the
+placement rules). This is what the macOS Finder "New TUICommander Tab Here" service runs.
+
 ### Temporary directories are refused
 
 `tuic <dir>` registers the directory **permanently** — the sidebar keeps it across restarts. A temporary directory therefore becomes a row that points at something the operating system later deletes, and nothing records who added it. `tuic` refuses such a path instead:
