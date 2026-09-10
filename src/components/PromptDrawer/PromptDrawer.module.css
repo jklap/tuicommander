@@ -214,9 +214,31 @@
   cursor: pointer;
 }
 
-.hint {
-  font-size: var(--font-xs);
+/* Footer key hints — matches the Command Palette's footer chip style
+ * (CommandPalette.module.css .footer/.footerHint/.footerHint kbd) so the two
+ * dialogs' bottom chrome reads consistently. */
+.footerHints {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: var(--font-sm);
   color: var(--fg-muted);
+}
+
+.footerHint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.footerHint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--font-xs);
 }
 
 /* Variable Dialog */

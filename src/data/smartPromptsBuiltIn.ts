@@ -45,7 +45,17 @@ export const VARIABLE_DESCRIPTIONS: Record<string, string> = {
 	file_is_dir: "'true' if the target is a folder, else 'false'",
 };
 
-/** Shared defaults for all built-in smart prompts */
+/** Bumped whenever a built-in's non-content metadata (placement, mode, etc.) changes
+ *  in a way that should override a user's unmodified copy on next hydrate — see
+ *  `promptLibraryStore.hydrate()`'s built-in merge, which compares this per-prompt
+ *  against the stored value rather than blanket-overwriting every launch.
+ *
+ *  4: every built-in gained the "command-palette" placement (previously none did,
+ *  which is why the palette's "Prompts" scope chip always rendered empty). */
+const CURRENT_BUILTIN_VERSION = 4;
+
+/** Shared defaults for all built-in smart prompts. Every built-in is command-palette
+ *  invocable by default — there's no placement list here that should exclude it. */
 function builtin(
 	id: string,
 	name: string,
@@ -62,12 +72,12 @@ function builtin(
 		description,
 		content,
 		icon,
-		placement,
+		placement: placement.includes("command-palette") ? placement : [...placement, "command-palette"],
 		tags: ["smart", ...tags],
 		category: "custom",
 		isFavorite: false,
 		builtIn: true,
-		builtInVersion: 3,
+		builtInVersion: CURRENT_BUILTIN_VERSION,
 		autoExecute: true,
 		requiresIdle: true,
 		executionMode: "inject",
