@@ -261,6 +261,22 @@ describe("repoSettingsStore", () => {
 			});
 		});
 
+		it("defaults copyPaths to an empty list — repo-specific, no global tier to inherit from", () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				expect(store.getEffective("/repo")?.copyPaths).toEqual([]);
+			});
+		});
+
+		it("resolves copyPaths straight from the repo's own settings, not a global default", () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				store.update("/repo", { copyPaths: [{ path: ".env", mode: "symlink" }] });
+				expect(store.getEffective("/repo")?.copyPaths).toEqual([{ path: ".env", mode: "symlink" }]);
+				expect(store.getEffectiveField("/repo", "copyPaths")).toEqual([{ path: ".env", mode: "symlink" }]);
+			});
+		});
+
 		it("returns archiveScript from global default when not overridden", () => {
 			testInScope(() => {
 				store.getOrCreate("/repo", "my-repo");
@@ -552,13 +568,52 @@ describe("repoSettingsStore", () => {
 		});
 
 		it("fills a key the backend omitted", async () => {
-			// `branch_labels` and `mcp_upstreams` are skipped when empty.
+			// `branch_labels`, `mcp_upstreams`, and `copy_paths` are skipped when empty.
 			mockInvoke.mockResolvedValueOnce({ repos: { "/repo": { path: "/repo", color: "" } } });
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
 				expect(store.get("/repo")?.branchLabels).toEqual({});
 				expect(store.get("/repo")?.mcpUpstreams).toBeNull();
+				expect(store.get("/repo")?.copyPaths).toEqual([]);
+			});
+		});
+
+		it("saves copyPaths under copy_paths, with each entry's path/mode keys untouched", () => {
+			// caseKeys.ts is shallow (top-level keys only) — this is exactly why
+			// CopyPathEntry's fields are named `path`/`mode` rather than something
+			// like `filePath`/`copyMode` that a shallow converter would silently
+			// fail to round-trip.
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				mockInvoke.mockClear();
+				store.update("/repo", {
+					copyPaths: [
+						{ path: ".env", mode: "copy" },
+						{ path: "node_modules", mode: "symlink" },
+					],
+				});
+
+				const entry = lastSavedEntry("/repo");
+				expect(entry.copy_paths).toEqual([
+					{ path: ".env", mode: "copy" },
+					{ path: "node_modules", mode: "symlink" },
+				]);
+			});
+		});
+
+		it("round-trips copyPaths through the wire shape", async () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				mockInvoke.mockClear();
+				store.update("/repo", { copyPaths: [{ path: "config/local.json", mode: "copy" }] });
+			});
+			const saved = lastSavedEntry("/repo");
+
+			mockInvoke.mockResolvedValueOnce({ repos: { "/repo": saved } });
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.get("/repo")?.copyPaths).toEqual([{ path: "config/local.json", mode: "copy" }]);
 			});
 		});
 
@@ -689,7 +744,7 @@ describe("repoSettingsStore", () => {
 
 		// The contrast that motivates getEffectiveField: the same one-field read
 		// through getEffective wakes on a default the field never consults,
-		// because getEffective touches all 53 properties on every call.
+		// because getEffective touches every property on every call.
 		it("getEffective wakes a one-field reader on an unrelated default", async () => {
 			store.getOrCreate("/repo", "my-repo");
 			let runs = 0;

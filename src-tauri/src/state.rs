@@ -462,6 +462,32 @@ pub enum AppEvent {
         /// inline copy makes every *other* event pay for this one.
         state: Box<SessionState>,
     },
+    /// A background copy of ignored/untracked/explicit-listed files into a
+    /// freshly created worktree has started. See `worktree_sync.rs`. Only
+    /// fired when there is actually something configured to copy — silent
+    /// otherwise, so a repo with both toggles off and no `copy_paths` never
+    /// shows a toast.
+    #[serde(rename = "worktree-sync-started")]
+    WorktreeSyncStarted { repo_path: String, branch: String },
+    /// Throttled progress for the same background copy (not on every single
+    /// file — see `worktree::spawn_worktree_file_sync`'s throttling).
+    #[serde(rename = "worktree-sync-progress")]
+    WorktreeSyncProgress {
+        repo_path: String,
+        branch: String,
+        copied: usize,
+        total: usize,
+    },
+    /// The background copy finished (successfully or with some per-path
+    /// errors — `errors` is non-fatal detail, not a failure signal on its own).
+    #[serde(rename = "worktree-sync-completed")]
+    WorktreeSyncCompleted {
+        repo_path: String,
+        branch: String,
+        copied: usize,
+        total: usize,
+        errors: Vec<String>,
+    },
 }
 
 /// The wire body of [`AppEvent::SessionStateChanged`], shared by the desktop
@@ -4589,7 +4615,10 @@ impl AppState {
             // session state a function of itself; it is a report, not an input.
             | AppEvent::SessionStateChanged { .. }
             // An ACP connection is not a PTY session and has no row here.
-            | AppEvent::AcpNotice(_) => {}
+            | AppEvent::AcpNotice(_)
+            | AppEvent::WorktreeSyncStarted { .. }
+            | AppEvent::WorktreeSyncProgress { .. }
+            | AppEvent::WorktreeSyncCompleted { .. } => {}
         }
     }
 
