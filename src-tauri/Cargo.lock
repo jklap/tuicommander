@@ -9121,6 +9121,7 @@ dependencies = [
 name = "tuic-cli"
 version = "1.7.7"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "dirs",
  "serde_json",
