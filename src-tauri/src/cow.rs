@@ -953,6 +953,74 @@ fn validate_branch_name(branch: &str) -> Result<(), String> {
         .map_err(|_| format!("'{branch}' is not a valid branch name"))
 }
 
+/// Directories worth telling a model it already has. Build output, in the
+/// order a reader scans them.
+const WARM_ARTIFACT_DIRS: [&str; 7] = [
+    "node_modules",
+    "target",
+    "src-tauri/target",
+    ".venv",
+    "build",
+    "dist",
+    ".next",
+];
+
+/// One warm artifact directory: what it is and how much of it there is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct WarmArtifact {
+    pub(crate) path: String,
+    /// Human-readable, as `du -sh` prints it — the number is for a reader to
+    /// weigh "already have it" against "rebuild it", not for arithmetic.
+    pub(crate) size: String,
+}
+
+/// The warm artifact directories present in `workspace`, with their sizes.
+///
+/// Measured with `du`, in PARALLEL. Sequentially this is the slowest part of
+/// reporting a creation: measured on this repo, `node_modules` takes ~790 ms
+/// and a 9.6 GB `src-tauri/target` ~1060 ms warm, so seven directories would
+/// add seconds to an operation whose whole selling point is that it took 26.
+/// Run together, the cost is the slowest one instead of their sum.
+pub(crate) fn warm_artifacts(workspace: &Path) -> Vec<WarmArtifact> {
+    let present: Vec<&str> = WARM_ARTIFACT_DIRS
+        .iter()
+        .copied()
+        .filter(|dir| workspace.join(dir).is_dir())
+        .collect();
+
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = present
+            .iter()
+            .map(|dir| {
+                let full = workspace.join(dir);
+                scope.spawn(move || directory_size(&full))
+            })
+            .collect();
+
+        present
+            .iter()
+            .zip(handles)
+            .filter_map(|(dir, handle)| {
+                handle.join().ok().flatten().map(|size| WarmArtifact {
+                    path: (*dir).to_string(),
+                    size,
+                })
+            })
+            .collect()
+    })
+}
+
+fn directory_size(path: &Path) -> Option<String> {
+    let out = Command::new("du").arg("-sh").arg(path).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+}
+
 /// The ref namespace a COW workspace mirrors its parent's branches into, so
 /// "reachable from the parent" is a local question.
 const PARENT_MIRROR_GLOB: &str = "refs/parent";

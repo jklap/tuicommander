@@ -1103,7 +1103,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create worktree. Requires path. Optional: branch, base_ref, spawn_session.\n- worktree_remove: Remove worktree. Requires path, workspace_id.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a workspace. Requires path. Optional: branch, base_ref, spawn_session, mode, dirty. The response carries the isolation semantics of the workspace you got — read it.\n- worktree_remove: Remove worktree. Requires path, workspace_id.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove)" },
@@ -1111,6 +1111,8 @@ fn native_tool_definitions() -> serde_json::Value {
                 "filter": { "type": "string", "description": "Issue filter, default 'assigned' (action=issues)" },
                 "issue_number": { "type": "integer", "description": "Issue number (action=close_issue/reopen_issue, required)" },
                 "branch": { "type": "string", "description": "Branch name (action=worktree_create optional)" },
+                "mode": { "type": "string", "enum": ["auto", "cow", "worktree"], "description": "action=worktree_create optional, default auto. 'auto' takes a copy-on-write clone of the whole repo directory where the filesystem allows it (independent repo, two workspaces may share a branch, node_modules/target arrive warm) and a linked worktree otherwise; 'cow' fails if COW is unavailable; 'worktree' forces the linked worktree. The response says which you got and, if it degraded, why." },
+                "dirty": { "type": "string", "enum": ["inherit", "clean_untracked", "clean"], "description": "action=worktree_create optional, default inherit. What to do with the parent's uncommitted work in a COW clone. 'inherit' is free and carries it over; 'clean_untracked' removes untracked files but KEEPS ignored build output; 'clean' resets everything and costs real disk (measured 15 MB -> 113 MB). Ask for 'clean' only if the task needs a pristine tree." },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" }
             }, "required": ["action"] }
@@ -3240,11 +3242,26 @@ async fn handle_worktree(
                 crate::worktree::generate_worktree_name(&existing)
             });
 
+            // `mode` and `dirty` are the model's two levers. Unparseable values
+            // fall back to the defaults rather than failing the creation: a model
+            // that guessed a value still gets a workspace, and the response tells
+            // it which mechanism it actually got.
+            let mode = args["mode"]
+                .as_str()
+                .and_then(|s| serde_json::from_value(serde_json::json!(s)).ok())
+                .unwrap_or_default();
+            let dirty = args["dirty"]
+                .as_str()
+                .and_then(|s| serde_json::from_value(serde_json::json!(s)).ok())
+                .unwrap_or_default();
+
             match super::worktree_routes::create_worktree_shared(
                 state,
                 path.clone(),
                 branch_name,
                 base_ref,
+                mode,
+                dirty,
             )
             .await
             {
@@ -3258,6 +3275,11 @@ async fn handle_worktree(
                         // for a linked worktree and not for a COW clone.
                         "workspace_id": &created.workspace_id,
                         "branch": &branch_name,
+                        // The same value the HTTP route returns, not a second
+                        // rendering of it: one payload, two carriers, so the two
+                        // transports cannot describe the same workspace
+                        // differently (#734-ca73).
+                        "instructions": &created.instructions,
                     });
                     // Optionally spawn a PTY session in the new worktree
                     if args["spawn_session"].as_bool().unwrap_or(false) {
@@ -7299,6 +7321,8 @@ mod tests {
                 base_repo: "relative/path".to_string(),
                 branch_name: "feature/test".to_string(),
                 base_ref: None,
+                mode: Default::default(),
+                dirty: Default::default(),
             }),
         )
         .await

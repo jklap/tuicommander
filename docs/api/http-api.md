@@ -1831,11 +1831,23 @@ Returns list of managed worktrees.
 POST /worktrees
 Content-Type: application/json
 
-{ "base_repo": "/path", "branch_name": "feature-x" }
+{ "base_repo": "/path", "branch_name": "feature-x", "mode": "auto", "dirty": "inherit" }
 ```
 
 `base_repo` must be an absolute, normalized path. The route rejects invalid paths
 before invoking git, matching MCP `repo action=worktree_create` validation.
+
+`mode` (`auto` | `cow` | `worktree`, default `auto`) chooses the mechanism.
+`auto` takes a copy-on-write clone of the whole repo directory where the
+filesystem and the repo shape allow it — an independent repository, so two
+workspaces may sit on one branch and `node_modules`/`target` arrive warm — and a
+linked worktree otherwise, reporting why. `cow` fails when COW is unavailable,
+naming the check. `worktree` forces the old behaviour.
+
+`dirty` (`inherit` | `clean_untracked` | `clean`, default `inherit`) decides what
+happens to the parent's uncommitted work in a clone. `inherit` writes zero
+blocks. `clean_untracked` removes untracked files but KEEPS ignored build
+output. `clean` resets everything and costs real disk — measured 15 MB → 113 MB.
 
 `201` returns:
 
@@ -1848,6 +1860,13 @@ before invoking git, matching MCP `repo action=worktree_create` validation.
   "base_repo": "/path"
 }
 ```
+
+`instructions` is the model-facing payload: the dirty policy applied and how
+many paths carried over, the warm artifact directories with their sizes and an
+explicit instruction not to run an install or a full build, and the isolation
+semantics of the mechanism this workspace actually got. It is byte-identical to
+what MCP `repo action=worktree_create` returns — one value, two carriers — and
+it is the ONLY instruction channel: there is no enforcement layer behind it.
 
 `workspace_id` is how every later call addresses this workspace — `DELETE
 /worktrees/:workspaceId`, `POST /worktrees/finalize`,

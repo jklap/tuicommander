@@ -502,6 +502,10 @@ pub(crate) fn publish_workspace(
 /// which one it got rather than infer it from the directory's shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CreatedWorkspace {
+    /// How the caller addresses this workspace from here on. Minted HERE, in
+    /// the backend, because creation happens here: an id invented by whichever
+    /// client happened to ask would not exist for the other transports.
+    pub(crate) workspace_id: String,
     pub(crate) path: PathBuf,
     pub(crate) branch: String,
     pub(crate) kind: crate::cow::WorkspaceKind,
@@ -515,6 +519,107 @@ pub(crate) struct CreatedWorkspace {
     /// Paths the parent's working tree carried over. Always 0 for a linked
     /// worktree, which starts from a clean checkout of the branch.
     pub(crate) carried_over: usize,
+    /// What was asked of the parent's uncommitted work. Reported because the
+    /// caller needs to know whether an empty tree means "clean policy" or
+    /// "nothing was dirty".
+    pub(crate) dirty_policy: crate::cow::DirtyPolicy,
+}
+
+impl CreatedWorkspace {
+    /// What the caller needs to know to USE this workspace, at the moment it
+    /// can act on it.
+    ///
+    /// Boss ruled out every enforcement layer — no deny hooks, no shell
+    /// override, no PATH shim — so this response is the only instruction
+    /// channel there is. It states the things a model would otherwise get
+    /// wrong by reflex, with their consequences, rather than in a preamble read
+    /// 200k tokens ago:
+    ///
+    /// - inherited work in progress is not the model's own bug,
+    /// - the warm artifacts are already there, so setting up is not a build,
+    /// - and, for a clone, that the parent cannot see this branch — the failure
+    ///   is silent, because `git merge` in the parent finds a same-named ref
+    ///   and merges the WRONG one.
+    pub(crate) fn instruction_payload(&self) -> serde_json::Value {
+        let warm = crate::cow::warm_artifacts(&self.path);
+        let is_cow = self.kind == crate::cow::WorkspaceKind::Cow;
+
+        let isolation = if is_cow {
+            format!(
+                "This is an independent repository, not a linked worktree. Commits you make exist ONLY \
+                 here until they are published: the parent repo cannot see this branch, and `git merge \
+                 {}` run in the parent will NOT find your work — worse, it silently merges a same-named \
+                 branch there if one exists. Publish with the `publish_workspace` command (it fetches \
+                 into the parent and pushes to origin). Removal refuses while unpublished commits \
+                 exist; publish rather than working around it.",
+                self.branch
+            )
+        } else {
+            "This is a linked worktree: refs and objects are shared with the parent repository, so \
+             your commits are visible there immediately. There is nothing to publish."
+                .to_string()
+        };
+
+        let setup = if warm.is_empty() {
+            "No build output came with this workspace.".to_string()
+        } else {
+            "These came with the workspace at near-zero cost. Do NOT run an install or a full build \
+             to \"set up\" — they are already warm. Run one only if a lockfile or a dependency \
+             actually changed."
+                .to_string()
+        };
+
+        let carried = match self.carried_over {
+            0 => {
+                "Nothing was carried over: this workspace starts from a clean checkout.".to_string()
+            }
+            n => format!(
+                "{n} modified path(s) carried over from the parent, so this workspace starts from the \
+                 parent's work in progress rather than a clean HEAD. That is deliberate and free — it \
+                 is not damage, and it is not yours to fix unless the task says so."
+            ),
+        };
+
+        serde_json::json!({
+            "workspace_id": self.workspace_id,
+            "path": self.path.to_string_lossy(),
+            "branch": self.branch,
+            "kind": self.kind,
+            "degraded_reason": self.degraded_reason,
+            "warnings": self.warnings,
+            "state": {
+                "dirty_policy": self.dirty_policy,
+                "carried_over": self.carried_over,
+                "note": carried,
+            },
+            "warm_artifacts": {
+                "present": warm,
+                "note": setup,
+            },
+            "isolation": isolation,
+        })
+    }
+}
+
+/// Every workspace id `base_repo` already has, from both sources, so a minted
+/// one cannot collide with either.
+fn taken_workspace_ids(base_repo: &Path) -> Vec<String> {
+    let from_git: Vec<String> = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .ok()
+        .map(|out| {
+            map_worktree_workspace_paths(&out.stdout)
+                .into_keys()
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let from_records = crate::cow::cow_workspaces_for(base_repo)
+        .into_iter()
+        .map(|record| record.workspace_id);
+
+    from_git.into_iter().chain(from_records).collect()
 }
 
 /// Create the workspace `mode` asks for, degrading rather than failing.
@@ -567,21 +672,32 @@ pub(crate) fn create_workspace_with(
 
     match crate::cow::choose_mechanism_with(&src, &dest, mode, probe)? {
         crate::cow::Mechanism::Cow(guards) => {
+            // A clone's id is MINTED: it is a second workspace on a branch that
+            // may already have one, so the branch cannot name it. Minted before
+            // the copy so a failure leaves no id claimed.
+            let workspace_id = crate::cow::mint_workspace_id(&branch, &taken_workspace_ids(&src));
             let workspace = crate::cow::create_cow_workspace(&src, &dest, &branch, dirty, &guards)?;
             Ok(CreatedWorkspace {
+                workspace_id,
                 path: workspace.path,
                 branch: workspace.branch,
                 kind: crate::cow::WorkspaceKind::Cow,
                 degraded_reason: None,
                 warnings: workspace.warnings,
                 carried_over: workspace.carried_over,
+                dirty_policy: workspace.dirty_policy,
             })
         }
         crate::cow::Mechanism::Worktree { degraded_reason } => {
             let worktree = create_worktree_with_stale_recovery(worktrees_dir, config, base_ref)?;
+            let branch = worktree.branch.unwrap_or(branch);
             Ok(CreatedWorkspace {
+                // A linked worktree's id IS its branch — the identity migration,
+                // the same rule `map_worktree_workspace_paths` applies when it
+                // reads them back.
+                workspace_id: workspace_id_of_worktree(&branch),
                 path: worktree.path,
-                branch: worktree.branch.unwrap_or(branch),
+                branch,
                 kind: crate::cow::WorkspaceKind::Worktree,
                 degraded_reason,
                 warnings: Vec::new(),
@@ -589,6 +705,9 @@ pub(crate) fn create_workspace_with(
                 // parent's uncommitted work stays in the parent, which is the
                 // isolation difference the caller has to be told about.
                 carried_over: 0,
+                // Recorded as asked for, not as applied: no dirty policy runs
+                // on a worktree, because there is nothing carried over to clean.
+                dirty_policy: dirty,
             })
         }
     }
@@ -5328,6 +5447,188 @@ branch refs/heads/feat
                 .contains("inside the source repository"),
             "{:?}",
             created.degraded_reason
+        );
+    }
+
+    // ── the model-facing creation payload ────────────────────────────────
+
+    /// The payload is the ONLY instruction channel — Boss ruled out deny hooks,
+    /// shell overrides and PATH shims — so a clone claiming shared refs, or a
+    /// worktree telling a model to publish, is not a wording bug. It is the
+    /// model acting on the wrong isolation model with no backstop.
+    #[test]
+    fn the_creation_payload_says_opposite_things_for_the_two_mechanisms() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let cloned = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "cloned"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow")
+        .instruction_payload();
+        let linked = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "linked"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("worktree")
+        .instruction_payload();
+
+        let cow_isolation = cloned["isolation"].as_str().expect("isolation");
+        assert!(cow_isolation.contains("independent repository"));
+        assert!(cow_isolation.contains("ONLY here"), "{cow_isolation}");
+        assert!(
+            cow_isolation.contains("silently merges"),
+            "the silent-wrong-merge is the failure it must name: {cow_isolation}"
+        );
+        assert!(cow_isolation.contains("publish_workspace"));
+        assert!(
+            !cow_isolation.contains("shared with the parent"),
+            "a clone must never claim shared refs: {cow_isolation}"
+        );
+
+        let worktree_isolation = linked["isolation"].as_str().expect("isolation");
+        assert!(worktree_isolation.contains("shared with the parent"));
+        assert!(worktree_isolation.contains("nothing to publish"));
+        assert!(
+            !worktree_isolation
+                .to_lowercase()
+                .contains("publish_workspace"),
+            "a worktree must not send a model looking for a publish step: {worktree_isolation}"
+        );
+
+        assert_eq!(cloned["kind"], "cow");
+        assert_eq!(linked["kind"], "worktree");
+    }
+
+    #[test]
+    fn the_payload_reports_the_dirty_policy_and_what_it_carried_over() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join("README.md"), "# Test\nin progress\n").expect("dirty");
+
+        let payload = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "carries"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow")
+        .instruction_payload();
+
+        assert_eq!(payload["state"]["dirty_policy"], "inherit");
+        assert_eq!(payload["state"]["carried_over"], 1);
+        let note = payload["state"]["note"].as_str().expect("note");
+        assert!(
+            note.contains("not yours to fix"),
+            "inherited WIP must not read as the model's own bug: {note}"
+        );
+    }
+
+    #[test]
+    fn the_payload_lists_warm_artifacts_and_tells_the_model_not_to_rebuild_them() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join(".gitignore"), "node_modules/\n").expect("gitignore");
+        git_cmd(&repo).args(["add", "."]).run().expect("add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "ignore node_modules"])
+            .run()
+            .expect("commit");
+        fs::create_dir_all(repo.join("node_modules").join("left-pad")).expect("dir");
+        fs::write(
+            repo.join("node_modules").join("left-pad").join("index.js"),
+            "module.exports = 1;\n",
+        )
+        .expect("artifact");
+
+        let payload = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "warm"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow")
+        .instruction_payload();
+
+        let present = payload["warm_artifacts"]["present"]
+            .as_array()
+            .expect("present");
+        assert_eq!(present.len(), 1, "{present:?}");
+        assert_eq!(present[0]["path"], "node_modules");
+        assert!(
+            !present[0]["size"].as_str().unwrap_or_default().is_empty(),
+            "a size the model can weigh against rebuilding: {present:?}"
+        );
+        let note = payload["warm_artifacts"]["note"].as_str().expect("note");
+        assert!(
+            note.contains("Do NOT run an install or a full build"),
+            "{note}"
+        );
+    }
+
+    #[test]
+    fn a_degraded_workspace_says_so_in_the_payload() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let payload = create_workspace_with(
+            &workspaces,
+            &workspace_config(&repo, "degraded"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+            probe_unavailable,
+        )
+        .expect("degrades")
+        .instruction_payload();
+
+        assert_eq!(payload["kind"], "worktree");
+        assert!(
+            payload["degraded_reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("reflink"),
+            "{payload:?}"
+        );
+    }
+
+    /// A minted id must reach the caller: `worktree_remove`, `publish_workspace`
+    /// and `check_worktree_dirty` all take one, and a clone's is not its branch.
+    #[test]
+    fn a_cow_workspace_reports_a_minted_id_and_a_worktree_reports_its_branch() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let cloned = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "minted"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow");
+        let linked = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "plain"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("worktree");
+
+        assert!(
+            cloned.workspace_id.starts_with("minted~"),
+            "{}",
+            cloned.workspace_id
+        );
+        assert_ne!(cloned.workspace_id, cloned.branch);
+        assert_eq!(
+            linked.workspace_id, "plain",
+            "a linked worktree's id IS its branch"
         );
     }
 

@@ -11,6 +11,11 @@ use super::{err_500, json_result, validate_repo_path};
 pub(super) struct CreatedWorktree {
     pub worktree: crate::state::WorktreeInfo,
     pub path: String,
+    /// What the caller needs in order to USE this workspace: the dirty policy
+    /// applied, the warm artifacts, and the isolation semantics of the
+    /// mechanism it actually got. The only instruction channel there is
+    /// (#734-ca73) — there is no enforcement layer behind it.
+    pub instructions: serde_json::Value,
     /// The id the caller must use to address this workspace afterwards — removal,
     /// dirtiness and finalize all take an id. Reported rather than left implicit:
     /// a caller cannot re-derive it, because for a COW clone it is not the branch.
@@ -79,6 +84,8 @@ pub(super) async fn create_worktree_http(
         body.base_repo.clone(),
         body.branch_name.clone(),
         body.base_ref.clone(),
+        body.mode,
+        body.dirty,
     )
     .await
     {
@@ -89,6 +96,10 @@ pub(super) async fn create_worktree_http(
     let mut response = serde_json::json!({
         "name": created.worktree.name,
         "path": &created.path,
+        // The instruction payload rides on both transports identically: the
+        // model reading it over MCP and the client reading it over HTTP need
+        // the same isolation semantics (#734-ca73).
+        "instructions": &created.instructions,
         // How the caller addresses this workspace from here on. `branch` is what
         // is checked out; the two match for a linked worktree and will not for a
         // COW clone, so both are reported.
@@ -111,6 +122,8 @@ pub(super) async fn create_worktree_shared(
     base_repo: String,
     branch_name: String,
     base_ref: Option<String>,
+    mode: crate::cow::WorkspaceMode,
+    dirty: crate::cow::DirtyPolicy,
 ) -> Result<CreatedWorktree, (StatusCode, Json<serde_json::Value>)> {
     validate_repo_path(&base_repo)?;
     // Model provides only branch_name and optionally base_ref (start point).
@@ -125,16 +138,20 @@ pub(super) async fn create_worktree_shared(
         std::path::Path::new(&config.base_repo),
         &state.worktrees_dir,
     );
-    // Use the stale-recovery wrapper so MCP clients heal automatically when an
-    // orphaned worktree directory is sitting where the new one should land.
-    // Off-loaded onto spawn_blocking because git worktree add can take seconds.
+    // `create_workspace` picks the mechanism and degrades rather than failing;
+    // for the worktree path it still goes through the stale-recovery wrapper, so
+    // MCP clients keep healing automatically when an orphaned directory is
+    // sitting where the new one should land. Off-loaded onto spawn_blocking
+    // because a clone or a `git worktree add` can take seconds.
     let config_bg = config.clone();
     let worktrees_dir_bg = worktrees_dir.clone();
     let result = match tokio::task::spawn_blocking(move || {
-        crate::worktree::create_worktree_with_stale_recovery(
+        crate::worktree::create_workspace(
             &worktrees_dir_bg,
             &config_bg,
             base_ref.as_deref(),
+            mode,
+            dirty,
         )
     })
     .await
@@ -148,10 +165,14 @@ pub(super) async fn create_worktree_shared(
         }
     };
     match result {
-        Ok(wt) => {
-            let wt_path = wt.path.to_string_lossy().to_string();
-            let branch_name = wt.branch.clone().unwrap_or_default();
-            let workspace_id = crate::worktree::workspace_id_of_worktree(&branch_name);
+        Ok(workspace) => {
+            let wt_path = workspace.path.to_string_lossy().to_string();
+            let branch_name = workspace.branch.clone();
+            let workspace_id = workspace.workspace_id.clone();
+            // Built before the setup script runs: the payload describes what the
+            // workspace ARRIVED with, and a script that installs something does
+            // not change what was already warm.
+            let instructions = workspace.instruction_payload();
             state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
                 repo_path: base_repo.clone(),
                 workspace_id: workspace_id.clone(),
@@ -186,8 +207,18 @@ pub(super) async fn create_worktree_shared(
                 }
             }
             Ok(CreatedWorktree {
-                worktree: wt,
+                worktree: crate::state::WorktreeInfo {
+                    name: workspace
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| branch_name.clone()),
+                    path: workspace.path,
+                    branch: Some(branch_name.clone()),
+                    base_repo: std::path::PathBuf::from(&base_repo),
+                },
                 path: wt_path,
+                instructions,
                 workspace_id,
                 branch: branch_name,
                 setup_script,
