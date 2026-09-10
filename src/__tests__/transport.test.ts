@@ -885,9 +885,11 @@ describe("transport", () => {
 			expect(result.transform?.(null)).toBeNull();
 		});
 
-		it("maps check_worktree_dirty to GET", () => {
-			const result = mapCommandToHttp("check_worktree_dirty", { repoPath: "/r", branchName: "feat" });
-			expect(result.path).toBe("/repo/worktree-dirty?repoPath=%2Fr&branchName=feat");
+		// Addressed by workspace id, not branch: two workspaces may share a branch,
+		// and this answer gates an irreversible cleanup (#726-5ac7).
+		it("maps check_worktree_dirty to GET keyed by workspace id", () => {
+			const result = mapCommandToHttp("check_worktree_dirty", { repoPath: "/r", workspaceId: "feat~a1b2c3d4" });
+			expect(result.path).toBe("/repo/worktree-dirty?repoPath=%2Fr&workspaceId=feat~a1b2c3d4");
 		});
 
 		it("maps list_base_ref_options to GET", () => {
@@ -933,14 +935,22 @@ describe("transport", () => {
 		});
 
 		it("maps delete_local_branch to POST", () => {
+			// Two identifiers, two fields: the branch is the ref to delete, the
+			// workspace is the checkout to dispose of (#726-5ac7).
 			const result = mapCommandToHttp("delete_local_branch", {
 				repoPath: "/r",
 				branchName: "feat",
+				workspaceId: "feat~a1b2c3d4",
 				keepWorktree: true,
 			});
 			expect(result.method).toBe("POST");
 			expect(result.path).toBe("/repo/delete-local-branch");
-			expect(result.body).toEqual({ repoPath: "/r", branchName: "feat", keepWorktree: true });
+			expect(result.body).toEqual({
+				repoPath: "/r",
+				branchName: "feat",
+				workspaceId: "feat~a1b2c3d4",
+				keepWorktree: true,
+			});
 		});
 
 		it("maps update_from_base to POST", () => {
@@ -1006,27 +1016,27 @@ describe("transport", () => {
 			// so the confirmation override has to reach the backend on both transports.
 			const guarded = mapCommandToHttp("finalize_merged_worktree", {
 				repoPath: "/r",
-				branchName: "feat",
+				workspaceId: "feat~a1b2c3d4",
 				action: "archive",
 			});
 			expect(guarded.method).toBe("POST");
 			expect(guarded.path).toBe("/worktrees/finalize");
 			expect(guarded.body).toEqual({
 				repoPath: "/r",
-				branchName: "feat",
+				workspaceId: "feat~a1b2c3d4",
 				action: "archive",
 				force: undefined,
 			});
 
 			const forced = mapCommandToHttp("finalize_merged_worktree", {
 				repoPath: "/r",
-				branchName: "feat",
+				workspaceId: "feat~a1b2c3d4",
 				action: "archive",
 				force: true,
 			});
 			expect(forced.body).toEqual({
 				repoPath: "/r",
-				branchName: "feat",
+				workspaceId: "feat~a1b2c3d4",
 				action: "archive",
 				force: true,
 			});

@@ -18,7 +18,7 @@ interface RepositoryRefreshCoordinatorDeps {
 	repo: {
 		getInfo: (path: string) => Promise<{ branch: string; is_git_repo: boolean }>;
 		getRepoStructure: (repoPath: string) => Promise<{
-			worktree_paths: Record<string, string>;
+			worktree_paths: Record<string, import("../useRepository").WorkspaceWorktree>;
 			merged_branches: string[];
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
@@ -29,7 +29,7 @@ interface RepositoryRefreshCoordinatorDeps {
 		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
 		finalizeMergedWorktree: (
 			repoPath: string,
-			branchName: string,
+			workspaceId: string,
 			action: "archive" | "delete",
 		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
 	};
@@ -230,9 +230,9 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		if (active && !(active in worktreePaths)) {
 			const activePath = currentRepo.workspaces[active]?.worktreePath;
 			if (activePath) {
-				for (const [wtBranch, wtPath] of Object.entries(worktreePaths)) {
-					if (wtPath === activePath) {
-						activeBranchReplacement = wtBranch;
+				for (const [wtId, wt] of Object.entries(worktreePaths)) {
+					if (wt.path === activePath) {
+						activeBranchReplacement = wtId;
 						break;
 					}
 				}
@@ -327,31 +327,35 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				// were in-flight. Don't resurrect it via stale worktreePaths data.
 				const liveRepo = repositoriesStore.get(repoPath);
 				// Create new worktree branches first so mergeBranchState has a target
-				for (const [branchName, wtPath] of Object.entries(worktreePaths)) {
-					if (priorBranchKeys.has(branchName) && !liveRepo?.workspaces[branchName]) {
-						appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${branchName}"`, {
+				for (const [workspaceId, wt] of Object.entries(worktreePaths)) {
+					if (priorBranchKeys.has(workspaceId) && !liveRepo?.workspaces[workspaceId]) {
+						appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${workspaceId}"`, {
 							repoPath,
-							worktreePath: wtPath,
+							worktreePath: wt.path,
 						});
 						continue;
 					}
+					// `mergedSet` holds BRANCH names, so it is queried with the
+					// record's branch — never the key, which is a workspace id and
+					// only equals the branch under the identity migration.
 					const update: Partial<import("../../stores/repositories").WorkspaceState> = {
-						worktreePath: wtPath,
-						isMerged: mergedSet.has(branchName),
+						worktreePath: wt.path,
+						branchName: wt.branch,
+						isMerged: mergedSet.has(wt.branch),
 					};
 					// Branch finished background preparation — clear placeholder state
 					// and queue the deferred setupNewWorktree (setup script, initial
 					// terminal, runScript) for after the batch commits.
-					if (liveRepo?.workspaces[branchName]?.isPreparing) {
+					if (liveRepo?.workspaces[workspaceId]?.isPreparing) {
 						update.isPreparing = false;
-						const k = pendingKey(repoPath, branchName);
+						const k = pendingKey(repoPath, workspaceId);
 						const pend = pendingCreations.get(k);
 						if (pend) {
 							pendingCreations.delete(k);
 							drainedPendings.push(pend);
 						}
 					}
-					repositoriesStore.setBranch(repoPath, branchName, update);
+					repositoriesStore.setBranch(repoPath, workspaceId, update);
 				}
 				// Migrate terminal state from stale activeBranch to its replacement
 				if (active && activeBranchReplacement && toRemove.includes(active)) {
@@ -561,7 +565,9 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		let archived = 0;
 		let kept = 0;
 		const results = await Promise.allSettled(
-			mergedLinkedBranches.map((branch) => deps.repo.finalizeMergedWorktree(repoPath, branch.branchName, "archive")),
+			// By workspaceId, never branchName: with two workspaces on one branch the
+			// branch cannot say which checkout to archive (#726-5ac7).
+			mergedLinkedBranches.map((ws) => deps.repo.finalizeMergedWorktree(repoPath, ws.workspaceId, "archive")),
 		);
 		results.forEach((result, i) => {
 			const name = mergedLinkedBranches[i].branchName;

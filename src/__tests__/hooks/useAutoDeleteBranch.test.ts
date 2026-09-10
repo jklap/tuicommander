@@ -122,6 +122,7 @@ describe("useAutoDeleteBranch", () => {
 			expect(mockInvoke).toHaveBeenCalledWith("delete_local_branch", {
 				repoPath: "/repo1",
 				branchName: "feature/x",
+				workspaceId: "feature/x",
 			});
 		});
 
@@ -153,6 +154,7 @@ describe("useAutoDeleteBranch", () => {
 		expect(mockInvoke).toHaveBeenCalledWith("delete_local_branch", {
 			repoPath: "/repo1",
 			branchName: "feature/x",
+			workspaceId: "feature/x",
 		});
 		dispose?.();
 	});
@@ -176,6 +178,7 @@ describe("useAutoDeleteBranch", () => {
 		expect(mockInvoke).toHaveBeenCalledWith("delete_local_branch", {
 			repoPath: "/repo1",
 			branchName: "feature/x",
+			workspaceId: "feature/x",
 		});
 		dispose?.();
 	});

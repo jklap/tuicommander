@@ -401,8 +401,10 @@ pub(super) struct FsTransferPathsRequest {
 pub(super) struct FinalizeMergeRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
-    #[serde(rename = "branchName")]
-    pub branch_name: String,
+    /// Checkout to archive or delete. The merge already happened, so no branch
+    /// is needed here — only which workspace to dispose of (#726-5ac7).
+    #[serde(rename = "workspaceId")]
+    pub workspace_id: String,
     /// "archive" or "delete"
     pub action: String,
     /// Skip the pre-flight guard that refuses to destroy a dirty worktree.
@@ -442,6 +444,8 @@ pub(super) struct MergeArchiveRequest {
     pub repo_path: String,
     #[serde(rename = "branchName")]
     pub branch_name: String,
+    #[serde(rename = "workspaceId")]
+    pub workspace_id: String,
     #[serde(rename = "targetBranch")]
     pub target_branch: String,
     /// "archive", "delete", or "ask"
@@ -865,8 +869,8 @@ pub(super) struct GitBranchBaseQuery {
 pub(super) struct GitWorktreeDirtyQuery {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
-    #[serde(rename = "branchName")]
-    pub branch_name: String,
+    #[serde(rename = "workspaceId")]
+    pub workspace_id: String,
 }
 
 #[derive(Deserialize)]
@@ -911,6 +915,10 @@ pub(super) struct GitDeleteLocalBranchRequest {
     pub repo_path: String,
     #[serde(rename = "branchName")]
     pub branch_name: String,
+    /// Checkout holding the ref. Distinct from `branch_name`: the branch is what
+    /// gets deleted, the workspace is what gets disposed of (#726-5ac7).
+    #[serde(rename = "workspaceId")]
+    pub workspace_id: String,
     #[serde(rename = "keepWorktree")]
     pub keep_worktree: Option<bool>,
 }

@@ -832,7 +832,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(worktree_routes::run_setup_script_http),
         )
         .route(
-            "/worktrees/{branch}",
+            "/worktrees/{workspace_id}",
             delete(worktree_routes::remove_worktree_http),
         )
         // File operations
@@ -4152,8 +4152,10 @@ mod tests {
         );
     }
 
+    /// Removal is addressed by workspace id, not branch: two workspaces may sit
+    /// on one branch, so a branch cannot name which one to remove (#726-5ac7).
     #[tokio::test]
-    async fn test_repo_worktree_remove_missing_branch() {
+    async fn test_repo_worktree_remove_missing_workspace_id() {
         let state = test_state();
         let result = call_mcp_tool(
             &state,
@@ -4168,7 +4170,31 @@ mod tests {
             result["error"]
                 .as_str()
                 .unwrap()
-                .contains("requires 'branch'")
+                .contains("requires 'workspace_id'")
+        );
+    }
+
+    /// A branch name is not a substitute for the id. Passing only `branch` must
+    /// still be refused, otherwise the old caller keeps working by accident and
+    /// silently removes whichever workspace git listed first.
+    #[tokio::test]
+    async fn test_repo_worktree_remove_rejects_branch_instead_of_workspace_id() {
+        let state = test_state();
+        let result = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": "/tmp/test-repo",
+                "branch": "feat-x"
+            }),
+        )
+        .await;
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'workspace_id'")
         );
     }
 
@@ -4749,7 +4775,7 @@ mod tests {
     /// shapes here. A GET falls through to the SPA catch-all, which answers 404
     /// for an API prefix; any other method hits that same GET-only catch-all and
     /// answers 405 — and where a same-prefix route with another method absorbs the
-    /// path (`/worktrees/{branch}` is DELETE) the 405 comes from there instead.
+    /// path (`/worktrees/{workspace_id}` is DELETE) the 405 comes from there instead.
     /// Asserting only `!= 404` would therefore pass on every missing POST route.
     #[cfg(feature = "desktop")]
     #[tokio::test]

@@ -876,16 +876,16 @@ GET  /repo/gutter-changes?path=&file=&scope=      -> GutterChange[]
 GET  /repo/branches-detail?path=                  -> BranchDetail[] (cached)
 GET  /repo/recent-branches?path=&limit=           -> string[]
 GET  /repo/branch-base?path=&branchName=          -> string | null
-GET  /repo/worktree-dirty?repoPath=&branchName=   -> bool
+GET  /repo/worktree-dirty?repoPath=&workspaceId=  -> bool
 GET  /repo/base-ref-options?repoPath=             -> BaseRefOption[]
 GET  /repo/commit-graph?path=&count=              -> GraphNode[]
 POST /repo/clone-branch-name   { sourceBranch, existingNames }   -> string
 POST /repo/create-branch       { path, name, startPoint?, checkout }       -> { ok: true }
 POST /repo/delete-branch       { path, name, force }                        -> DeleteBranchResult
-POST /repo/delete-local-branch { repoPath, branchName, keepWorktree? }      -> { ok: true }
+POST /repo/delete-local-branch { repoPath, branchName, workspaceId, keepWorktree? } -> { ok: true }
 POST /repo/update-from-base    { path, branchName, strategy? }              -> string
 POST /repo/switch-branch       { repoPath, branchName, force, stash }       -> SwitchBranchResult
-POST /repo/merge-archive-worktree { repoPath, branchName, targetBranch, afterMerge, force? } -> MergeArchiveResult
+POST /repo/merge-archive-worktree { repoPath, branchName, workspaceId, targetBranch, afterMerge, force? } -> MergeArchiveResult
 ```
 
 Powers the Git panel's Branches tab, commit graph, and editor gutter in
@@ -1851,7 +1851,13 @@ Returns the base directory where worktrees are created.
 GET /worktrees/paths?path=/path/to/repo
 ```
 
-Returns `{ "branch-name": "/worktree/path", ... }`.
+Returns `{ "<workspace-id>": { "branch": "feature-x", "path": "/worktree/path" }, ... }`.
+
+Keyed by opaque workspace id, never by branch — two workspaces may sit on one
+branch, so a branch-keyed map collapses them and a client asking for one gets the
+other's directory (#726-5ac7). For a git worktree the id **is** the branch (the
+identity migration), so nothing persisted moves; only a COW clone carries a
+minted id. Nothing may parse the id back into a branch: read the `branch` field.
 
 ### Generate Worktree Name
 
@@ -1870,10 +1876,11 @@ Returns a unique worktree name.
 POST /worktrees/finalize
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "branchName": "feature-x", "action": "archive", "force": false }
+{ "repoPath": "/path/to/repo", "workspaceId": "feature-x", "action": "archive", "force": false }
 ```
 
-Finalizes a merged worktree branch. `action` must be `"archive"` (moves to archive directory) or `"delete"` (removes worktree and branch).
+Finalizes a merged worktree, addressed by workspace id. The merge already
+happened, so no branch is needed here — only which checkout to dispose of. `action` must be `"archive"` (moves to archive directory) or `"delete"` (removes worktree and branch).
 For `action: "delete"`, the response includes `branch_delete_warning` when the worktree was removed but safe branch deletion failed, for example because the branch has unmerged commits.
 
 `force` (optional, default `false`) skips the dirty-worktree gate. Both actions end in `git worktree remove --force`, so a worktree that is **not known to be clean** comes back as `{ "action": "needs_confirmation", "merged": true }` without touching anything — ask the user, then re-send with `"force": true`. A dirty check that fails to run blocks the same way (`worktree_dirty` stays `false`, because git never reported "dirty"). This route shares `finalize_merged_worktree_impl` with the Tauri command, so both transports pass the identical gate.
@@ -1894,13 +1901,15 @@ exit code plus captured output. `cwd` accepts `~`. A `cwd` that does not exist i
 ### Remove Worktree
 
 ```
-DELETE /worktrees/:branch?repoPath=/path&deleteBranch=true
+DELETE /worktrees/:workspaceId?repoPath=/path&deleteBranch=true
 ```
 
 Query parameters:
 - `repoPath` (required) -- base repository path
 - `deleteBranch` (optional, default `true`) -- when `true`, also deletes the local git branch
 - `force` (optional, default `false`) -- when `true`, uses forced worktree removal and forced branch deletion
+
+The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 
 Returns `{ "ok": true, "branch_delete_warning": null }` on full success. When `deleteBranch=true` and `git branch -d` refuses to delete the branch after the worktree is removed, the request still succeeds with `branch_delete_warning` set so clients can report the partial outcome.
 

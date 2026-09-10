@@ -142,6 +142,7 @@ describe("executeCleanup", () => {
 		expect(mockInvoke).toHaveBeenCalledWith("delete_local_branch", {
 			repoPath: "/repo",
 			branchName: "feature/login",
+			workspaceId: "feature/login",
 			keepWorktree: false,
 		});
 		// closeTerminals was called before delete
@@ -308,7 +309,7 @@ describe("executeCleanup", () => {
 		// must not ask a second time and fail the step.
 		expect(mockInvoke).toHaveBeenCalledWith("finalize_merged_worktree", {
 			repoPath: "/repo",
-			branchName: "feature/login",
+			workspaceId: "feature/login",
 			action: "archive",
 			force: true,
 		});
@@ -329,7 +330,7 @@ describe("executeCleanup", () => {
 
 		expect(mockInvoke).toHaveBeenCalledWith("finalize_merged_worktree", {
 			repoPath: "/repo",
-			branchName: "feature/login",
+			workspaceId: "feature/login",
 			action: "delete",
 			force: true,
 		});
@@ -375,6 +376,7 @@ describe("executeCleanup", () => {
 		expect(mockInvoke).toHaveBeenCalledWith("delete_local_branch", {
 			repoPath: "/repo",
 			branchName: "feature/login",
+			workspaceId: "feature/login",
 			keepWorktree: true,
 		});
 	});

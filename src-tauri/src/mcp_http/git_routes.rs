@@ -515,10 +515,10 @@ pub(super) async fn check_worktree_dirty_http(Query(q): Query<GitWorktreeDirtyQu
     }
     let GitWorktreeDirtyQuery {
         repo_path,
-        branch_name,
+        workspace_id,
     } = q;
     match tokio::task::spawn_blocking(move || {
-        crate::worktree::check_worktree_dirty(repo_path, branch_name)
+        crate::worktree::check_worktree_dirty(repo_path, workspace_id)
     })
     .await
     {
@@ -611,12 +611,14 @@ pub(super) async fn delete_local_branch_http(
     let GitDeleteLocalBranchRequest {
         repo_path,
         branch_name,
+        workspace_id,
         keep_worktree,
     } = body;
     let res = tokio::task::spawn_blocking(move || {
         crate::worktree::delete_local_branch_impl(
             &repo_path,
             &branch_name,
+            &workspace_id,
             keep_worktree.unwrap_or(false),
         )?;
         state.invalidate_repo_caches(&repo_path);

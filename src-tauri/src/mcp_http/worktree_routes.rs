@@ -208,7 +208,7 @@ pub(super) async fn create_worktree_shared(
 
 pub(super) async fn remove_worktree_http(
     State(state): State<Arc<AppState>>,
-    Path(branch): Path<String>,
+    Path(workspace_id): Path<String>,
     Query(q): Query<RemoveWorktreeQuery>,
 ) -> Response {
     if let Err(e) = validate_repo_path(&q.repo_path) {
@@ -217,13 +217,19 @@ pub(super) async fn remove_worktree_http(
     let repo_path = q.repo_path.clone();
     let delete_branch = q.delete_branch.unwrap_or(true);
     let force = q.force.unwrap_or(false);
-    let branch_for_event = branch.clone();
+    let id_for_event = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::remove_worktree_by_branch(&repo_path, &branch, delete_branch, None, force)
+        crate::worktree::remove_worktree_by_workspace_id(
+            &repo_path,
+            &workspace_id,
+            delete_branch,
+            None,
+            force,
+        )
     })
     .await;
     if matches!(result, Ok(Ok(_))) {
-        state.notify_worktree_removed(&q.repo_path, &branch_for_event);
+        state.notify_worktree_removed(&q.repo_path, &id_for_event);
     }
     match result {
         Ok(Ok(outcome)) => (
@@ -366,7 +372,7 @@ pub(super) async fn finalize_merged_worktree_http(
     }
     let FinalizeMergeRequest {
         repo_path,
-        branch_name,
+        workspace_id,
         action,
         force,
     } = body;
@@ -376,7 +382,7 @@ pub(super) async fn finalize_merged_worktree_http(
         crate::worktree::finalize_merged_worktree_impl(
             &state,
             repo_path,
-            branch_name,
+            workspace_id,
             action,
             force.unwrap_or(false),
         )
@@ -421,6 +427,7 @@ pub(super) async fn merge_and_archive_worktree_http(
     let MergeArchiveRequest {
         repo_path,
         branch_name,
+        workspace_id,
         target_branch,
         after_merge,
         force,
@@ -430,6 +437,7 @@ pub(super) async fn merge_and_archive_worktree_http(
             &state,
             repo_path,
             branch_name,
+            workspace_id,
             target_branch,
             after_merge,
             force.unwrap_or(false),

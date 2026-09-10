@@ -23,6 +23,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 		mergeAndArchiveWorktree: (
 			repoPath: string,
 			branchName: string,
+			workspaceId: string,
 			targetBranch: string,
 			afterMerge: string,
 			force?: boolean,
@@ -35,7 +36,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 		}>;
 		finalizeMergedWorktree: (
 			repoPath: string,
-			branchName: string,
+			workspaceId: string,
 			action: "archive" | "delete",
 			force?: boolean,
 		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
@@ -286,7 +287,8 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 
 		let worktreeDirty = false;
 		try {
-			worktreeDirty = await invoke<boolean>("check_worktree_dirty", { repoPath, branchName });
+			// `branchName` is the store key, i.e. the workspace id (identity migration).
+			worktreeDirty = await invoke<boolean>("check_worktree_dirty", { repoPath, workspaceId: branchName });
 		} catch (err) {
 			appLogger.warn("git", `Could not check the ${branchName} worktree, assuming dirty`, err);
 			worktreeDirty = true;
@@ -314,7 +316,10 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		targetBranch: string,
 		afterMerge: string,
 	) => {
-		let result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, targetBranch, afterMerge);
+		// Identity migration: the store key IS the branch for a git worktree, so the
+		// same string serves as both until #728-bc76 keys the frontend by id and
+		// reads the branch off the workspace record.
+		let result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, branchName, targetBranch, afterMerge);
 
 		// The backend refused: the worktree is not known to be clean, so archiving or
 		// deleting it would make the row vanish and take that uncommitted work with
@@ -325,7 +330,14 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				deps.setStatusInfo(`Left ${branchName} alone — its worktree still has uncommitted work`);
 				return;
 			}
-			result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, targetBranch, afterMerge, true);
+			result = await deps.repo.mergeAndArchiveWorktree(
+				repoPath,
+				branchName,
+				branchName,
+				targetBranch,
+				afterMerge,
+				true,
+			);
 		}
 
 		// Merge succeeded — close terminals now (not before, to avoid orphaning the branch on failure)
