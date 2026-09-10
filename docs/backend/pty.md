@@ -355,6 +355,31 @@ Shells that emit OSC 7 (`\x1b]7;file://hostname/path\x07`) report the current wo
 4. **Restart recovery:** The persisted cwd is used during session restore so reopened terminals start in the correct directory.
 5. **Worktree reassignment:** When the cwd changes to a path inside a different worktree, the terminal tab is reassigned to the corresponding branch in the sidebar.
 
+## Terminal Pixel-Size Reporting
+
+Prerequisite plumbing for inline-image protocol support (iTerm2 OSC 1337,
+Kitty graphics — see the color-tools implementation plan). Several
+image-preview tools (mpv, blackcat, broot, image.nvim, snacks.nvim) need a
+real cell pixel size before they'll attempt to display anything:
+
+- **`resize_pty`** accepts optional `cell_width_px`/`cell_height_px` —
+  the frontend's real **device-pixel** (CSS × `devicePixelRatio`) cell size,
+  computed from `CellMetrics.scaledCellWidth`/`scaledCellHeight`
+  (`canvasTerminalUtils.ts`). These become `PtySize`'s `pixel_width`/
+  `pixel_height` (`rows`/`cols` × cell size) on the next `TIOCSWINSZ`, so
+  `TIOCGWINSZ`'s `ws_xpixel`/`ws_ypixel` are never zero once a frontend has
+  attached. A non-zero spawn-time default (`DEFAULT_CELL_{WIDTH,HEIGHT}_PX`,
+  `terminal_grid.rs`) covers the brief window before the first resize.
+- **`CSI 14 t`** (`text_area_size_pixels`) and **`CSI 16 t`** (cell size in
+  pixels, new) both reply from the same shared `WindowSize` the resize above
+  updates — `terminal_grid.rs`'s `TerminalGrid::set_cell_pixel_size`/
+  `cell_pixel_size`, read by `TermEventCollector::send_event` when it
+  receives `Event::TextAreaSizeRequest`/`Event::CellSizeRequest`.
+- **XTVERSION** (`CSI > q`) replies `ghostty` — the same identity
+  `inject_unix_terminal_env` already advertises via `TERM_PROGRAM`/
+  `KITTY_WINDOW_ID` for the kitty keyboard protocol allow-list. timg and
+  snacks.nvim both gate Kitty-graphics support on this exact string.
+
 ## Shell Environment Variables
 
 `build_shell_command()` sets these environment variables for spawned PTY sessions:

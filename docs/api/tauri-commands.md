@@ -14,7 +14,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `clear_queued_agent_commands` | `session_id` | `usize` | Drop every queued command; returns how many |
 | `list_queued_agent_commands` | `session_id` | `[{ id, text }]` | The queued user commands in delivery order; peer messages excluded |
 | `remove_queued_agent_command` | `session_id, command_id` | `bool` | Drop one queued command by id; false when it already drained |
-| `resize_pty` | `session_id, rows, cols` | `()` | Resize PTY; alternate-screen resizes preserve primary-log continuity |
+| `resize_pty` | `session_id, rows, cols, cell_width_px?, cell_height_px?` | `()` | Resize PTY; alternate-screen resizes preserve primary-log continuity. `cell_width_px`/`cell_height_px` are the frontend's real **device-pixel** (CSS × devicePixelRatio) cell size, backing `TIOCGWINSZ`'s `ws_xpixel`/`ws_ypixel` and `CSI 14 t`/`CSI 16 t` replies; optional so an older client sending only rows/cols still works |
 | `pause_pty` | `session_id` | `()` | Pause reader thread |
 | `resume_pty` | `session_id` | `()` | Resume reader thread |
 | `close_pty` | `session_id, cleanup_worktree` | `()` | Close PTY session |
@@ -39,6 +39,8 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `ack_terminal_frame` | `session_id, epoch: u64, received: u64` | `()` | Report the total number of frames this client has received. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
 | `unsubscribe_terminal_grid` | `session_id, epoch: u64` | `()` | Tear down the grid channel, gate and pending scroll. A non-matching epoch is ignored: a remount subscribes before the outgoing instance unsubscribes, and honouring the stale call would blank a mounted terminal. Browser parity: closing the WS |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
+| `terminal_image_ref_at` | `session_id, row, col` | `Result<Option<(u32, u32, u16, u16)>, String>` (image_id, placement_id, tile_col, tile_row) | Inline-image tile at a viewport position, if any (color-tools plan). Mirrors `terminal_hyperlink_at`; populated by the OSC 1337 / Kitty graphics protocol handlers. Browser parity: `GET /sessions/:id/terminal/image-ref` |
+| `terminal_image_bytes` | `session_id, image_id` | `Result<Response, String>` (packed bytes) | Raw bytes of a previously transmitted inline image, by id; empty if unknown or already evicted (no cell references it any more — eviction is ordinary `Arc` refcounting on `CellExtra.image`, not a cache policy). Browser parity: `GET /sessions/:id/terminal/image` (`application/octet-stream`) |
 
 Every terminal grid **read** — the two rows above plus `terminal_get_block_rows`,
 `terminal_scroll_info`, `terminal_search`, `terminal_search_buffer`,

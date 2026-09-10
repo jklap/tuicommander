@@ -8916,8 +8916,8 @@ pub(crate) async fn create_pty(
         PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width: cols.saturating_mul(crate::terminal_grid::DEFAULT_CELL_WIDTH_PX),
+            pixel_height: rows.saturating_mul(crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX),
         },
         move || {
             let mut cmd = build_shell_command(&spawn_shell);
@@ -9072,8 +9072,8 @@ pub(crate) async fn spawn_session_for_agent(
         PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width: cols.saturating_mul(crate::terminal_grid::DEFAULT_CELL_WIDTH_PX),
+            pixel_height: rows.saturating_mul(crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX),
         },
         move || {
             let mut cmd = build_shell_command(&spawn_shell);
@@ -9220,8 +9220,8 @@ pub(crate) async fn create_pty_with_worktree(
         PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width: cols.saturating_mul(crate::terminal_grid::DEFAULT_CELL_WIDTH_PX),
+            pixel_height: rows.saturating_mul(crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX),
         },
         move || {
             let mut cmd = build_shell_command(&spawn_shell);
@@ -9661,11 +9661,22 @@ pub(crate) async fn resize_session_off_thread(
     session_id: String,
     rows: u16,
     cols: u16,
+    cell_width_px: Option<u16>,
+    cell_height_px: Option<u16>,
 ) -> Result<Option<Vec<u8>>, String> {
     let state = Arc::clone(state);
-    tokio::task::spawn_blocking(move || resize_session_core(&state, &session_id, rows, cols))
-        .await
-        .map_err(|e| format!("resize failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        resize_session_core(
+            &state,
+            &session_id,
+            rows,
+            cols,
+            cell_width_px,
+            cell_height_px,
+        )
+    })
+    .await
+    .map_err(|e| format!("resize failed: {e}"))?
 }
 
 pub(crate) fn resize_session_core(
@@ -9673,6 +9684,8 @@ pub(crate) fn resize_session_core(
     session_id: &str,
     rows: u16,
     cols: u16,
+    cell_width_px: Option<u16>,
+    cell_height_px: Option<u16>,
 ) -> Result<Option<Vec<u8>>, String> {
     if rows == 0 || cols == 0 {
         return Err("Invalid dimensions: rows and cols must be > 0".to_string());
@@ -9680,6 +9693,15 @@ pub(crate) fn resize_session_core(
     #[cfg(test)]
     {
         RESIZE_THREADS.insert(session_id.to_string(), std::thread::current().id());
+    }
+    // Update cell pixel metrics unconditionally, ahead of the no-op dimension
+    // guard below — a `resize_pty` call carrying only new device-pixel cell
+    // metrics (e.g. a DPR change with no row/col change) still lands them for
+    // future CSI 14t/16t replies, even on a call that no-ops for TIOCSWINSZ.
+    if let (Some(w), Some(h)) = (cell_width_px, cell_height_px)
+        && let Some(vt_log) = state.vt_log_buffers.get(session_id)
+    {
+        vt_log.lock().set_cell_pixel_size(w, h);
     }
     // Serialize the whole grid+PTY resize for this session under one lock so two
     // concurrent differing resizes (Tauri `resize_pty` + HTTP route) cannot interleave
@@ -9743,14 +9765,21 @@ pub(crate) fn resize_session_core(
         .sessions
         .get(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
+    let (cell_w, cell_h) = match state.vt_log_buffers.get(session_id) {
+        Some(vt_log) => vt_log.lock().cell_pixel_size(),
+        None => (
+            crate::terminal_grid::DEFAULT_CELL_WIDTH_PX,
+            crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX,
+        ),
+    };
     entry
         .lock()
         .master
         .resize(PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width: cols.saturating_mul(cell_w),
+            pixel_height: rows.saturating_mul(cell_h),
         })
         .map_err(|e| format!("Failed to resize PTY: {e}"))?;
     // Record the dims only now that they've reached the PTY, still under `applied`, so
@@ -9770,9 +9799,19 @@ pub(crate) async fn resize_pty(
     session_id: String,
     rows: u16,
     cols: u16,
+    cell_width_px: Option<u16>,
+    cell_height_px: Option<u16>,
 ) -> Result<(), String> {
     let state = Arc::clone(&state);
-    let resize_frame = resize_session_off_thread(&state, session_id.clone(), rows, cols).await?;
+    let resize_frame = resize_session_off_thread(
+        &state,
+        session_id.clone(),
+        rows,
+        cols,
+        cell_width_px,
+        cell_height_px,
+    )
+    .await?;
     // Flush the post-resize frame so the viewport repaints without waiting for the
     // next PTY data event (fixes blank screen after zoom on static content).
     if let Some(frame) = resize_frame {
@@ -12006,6 +12045,41 @@ pub(crate) async fn terminal_hyperlink_span(
         vt.grid_hyperlink_span(row, col)
     })
     .await
+}
+
+/// Inline-image tile at a viewport position, if any: `(image_id, placement_id,
+/// tile_col, tile_row)`. Mirrors `terminal_hyperlink_at` exactly (color-tools
+/// plan, Phase 1) — Phases 2/3's OSC 1337 / Kitty dispatch handlers are what
+/// actually populate any cell this can find.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn terminal_image_ref_at(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    row: usize,
+    col: usize,
+) -> Result<Option<(u32, u32, u16, u16)>, String> {
+    vt_read(&state, session_id, move |vt| vt.grid_image_ref_at(row, col)).await
+}
+
+/// Fetch a previously transmitted inline image's raw bytes by id.
+///
+/// Returns `tauri::ipc::Response` for the same reason `terminal_styled_rows`
+/// does — an image can be a multi-KB/MB payload, and a bare `Vec<u8>` would
+/// cross the IPC boundary as a JSON array of decimal numbers.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn terminal_image_bytes(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    image_id: u32,
+) -> Result<tauri::ipc::Response, String> {
+    let bytes = vt_read(&state, session_id, move |vt| {
+        vt.grid_image_bytes(image_id).map(|b| b.to_vec())
+    })
+    .await?
+    .unwrap_or_default();
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[cfg(feature = "desktop")]
@@ -22555,7 +22629,7 @@ mod tests {
         let caller = std::thread::current().id();
         // The session has no PTY, so this ends in "Session not found" — after the
         // grid reflow, which is precisely the work that must not run here.
-        let _ = resize_session_off_thread(&state, sid.to_string(), 40, 120).await;
+        let _ = resize_session_off_thread(&state, sid.to_string(), 40, 120, None, None).await;
 
         assert!(resize_thread(sid).is_some(), "the reflow never ran at all");
         assert_ne!(
@@ -22570,8 +22644,8 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         // rows==0 / cols==0 are rejected before any lock, grid, or PTY work — the
         // (0,0) pair is reserved as the "never applied" sentinel inside the lock.
-        assert!(resize_session_core(&state, "s", 0, 80).is_err());
-        assert!(resize_session_core(&state, "s", 24, 0).is_err());
+        assert!(resize_session_core(&state, "s", 0, 80, None, None).is_err());
+        assert!(resize_session_core(&state, "s", 24, 0, None, None).is_err());
         // A rejected resize must not even create a resize_locks entry.
         assert!(!state.resize_locks.contains_key("s"));
     }
@@ -22586,7 +22660,10 @@ mod tests {
         // Same dims → no-op returning None WITHOUT touching the (absent) session.
         // Without the guard this would fall through to sessions.get and fail with
         // "Session not found", so Ok(None) proves the guard short-circuited first.
-        assert_eq!(resize_session_core(&state, "s", 24, 80), Ok(None));
+        assert_eq!(
+            resize_session_core(&state, "s", 24, 80, None, None),
+            Ok(None)
+        );
     }
 
     #[test]
@@ -22597,7 +22674,10 @@ mod tests {
         seed_vt_grid(&state, "s", 24, 80);
         // A first resize matching only the startup dims must seed *applied from
         // the live grid and then no-op — no gratuitous SIGWINCH, no session touch.
-        assert_eq!(resize_session_core(&state, "s", 24, 80), Ok(None));
+        assert_eq!(
+            resize_session_core(&state, "s", 24, 80, None, None),
+            Ok(None)
+        );
         // The seed must have populated resize_locks with the live grid dims.
         assert_eq!(
             *state.resize_locks.get("s").unwrap().lock(),
@@ -22662,12 +22742,12 @@ mod tests {
             let (s1, b1) = (Arc::clone(&state), Arc::clone(&barrier));
             let t1 = std::thread::spawn(move || {
                 b1.wait();
-                let _ = resize_session_core(&s1, sid, A.0, A.1);
+                let _ = resize_session_core(&s1, sid, A.0, A.1, None, None);
             });
             let (s2, b2) = (Arc::clone(&state), Arc::clone(&barrier));
             let t2 = std::thread::spawn(move || {
                 b2.wait();
-                let _ = resize_session_core(&s2, sid, B.0, B.1);
+                let _ = resize_session_core(&s2, sid, B.0, B.1, None, None);
             });
             t1.join().unwrap();
             t2.join().unwrap();

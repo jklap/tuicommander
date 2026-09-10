@@ -4526,6 +4526,16 @@ impl VtLogBuffer {
         self.grid.scrollback_count()
     }
 
+    /// Update the cell pixel size backing `CSI 14 t`/`CSI 16 t` replies.
+    pub(crate) fn set_cell_pixel_size(&mut self, cell_width: u16, cell_height: u16) {
+        self.grid.set_cell_pixel_size(cell_width, cell_height);
+    }
+
+    /// Current cell pixel size (device pixels).
+    pub(crate) fn cell_pixel_size(&self) -> (u16, u16) {
+        self.grid.cell_pixel_size()
+    }
+
     // --- Search delegate ---
 
     pub(crate) fn grid_search(&self, query: &str) -> Vec<crate::terminal_grid::SearchMatch> {
@@ -4595,6 +4605,18 @@ impl VtLogBuffer {
         col: usize,
     ) -> Option<(usize, usize, String)> {
         self.grid.hyperlink_span(row, col)
+    }
+
+    /// `(image_id, placement_id, tile_col, tile_row)` for the inline-image
+    /// tile shown at a viewport position, if any.
+    pub(crate) fn grid_image_ref_at(&self, row: usize, col: usize) -> Option<(u32, u32, u16, u16)> {
+        self.grid.image_ref_at(row, col)
+    }
+
+    /// Bytes for a previously transmitted image, by id. `None` if unknown or
+    /// already evicted (no cell references it any more).
+    pub(crate) fn grid_image_bytes(&self, image_id: u32) -> Option<Arc<[u8]>> {
+        self.grid.image_bytes(image_id)
     }
 
     // --- private helpers ---

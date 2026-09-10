@@ -240,7 +240,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: `/sessions/${args.sessionId}/resize`,
-			body: { rows: args.rows, cols: args.cols },
+			body: {
+				rows: args.rows,
+				cols: args.cols,
+				cell_width_px: args.cellWidthPx,
+				cell_height_px: args.cellHeightPx,
+			},
 		}),
 	},
 	pause_pty: {
@@ -414,6 +419,20 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/sessions/${args.sessionId}/terminal/hyperlink-span?row=${args.row}&col=${args.col}`,
 			// Option<(start,end,url)> -> [start,end,url] | null; pass null through the empty-body guard.
 			transform: (data) => data ?? null,
+		}),
+	},
+	terminal_image_ref_at: {
+		map: (args) => ({
+			method: "GET",
+			path: `/sessions/${args.sessionId}/terminal/image-ref?row=${args.row}&col=${args.col}`,
+			// Option<(imageId,placementId,tileCol,tileRow)> -> [...] | null.
+			transform: (data) => data ?? null,
+		}),
+	},
+	terminal_image_bytes: {
+		map: (args) => ({
+			method: "GET",
+			path: `/sessions/${args.sessionId}/terminal/image?id=${args.imageId}`,
 		}),
 	},
 	terminal_get_selection_text: {

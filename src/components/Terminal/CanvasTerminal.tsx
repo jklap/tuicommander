@@ -635,7 +635,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			clearDetectedLinks();
 			fullRepaintNeeded = true;
 			lastDisplayOffset = -1;
-			invokeRef("resize_pty", { sessionId: props.sessionId, rows, cols }).catch(ipcErr("resize_pty"));
+			invokeRef("resize_pty", {
+				sessionId: props.sessionId,
+				rows,
+				cols,
+				// Device pixels (already dpr-scaled), matching what kitty/iTerm2
+				// themselves report via TIOCGWINSZ — retina-aware image tools
+				// (mpv, blackcat) expect this, not CSS pixels.
+				cellWidthPx: Math.round(m.scaledCellWidth),
+				cellHeightPx: Math.round(m.scaledCellHeight),
+			}).catch(ipcErr("resize_pty"));
 		}
 
 		if (currentFrame) {

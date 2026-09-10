@@ -1,4 +1,4 @@
-use alacritty_terminal::event::{Event, EventListener};
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::grid::{Dimensions, ReflowMode};
 use alacritty_terminal::index::{Column, Line, Point};
@@ -10,6 +10,15 @@ use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, Named
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Spawn-time fallback cell pixel metrics, used only until the frontend's
+/// first `resize_pty` call reports the real (device-pixel) values. Roughly a
+/// 14px monospace font at 1x scale — plausible enough that a tool probing
+/// `TIOCGWINSZ`/`CSI 14 t`/`CSI 16 t` in the brief spawn-to-first-resize
+/// window sees *a* reasonable cell size rather than zero (color-tools plan,
+/// Phase 1: "The PTY reports zero pixel size").
+pub(crate) const DEFAULT_CELL_WIDTH_PX: u16 = 9;
+pub(crate) const DEFAULT_CELL_HEIGHT_PX: u16 = 18;
 
 /// Terminal event captured from alacritty for forwarding to PTY/frontend.
 #[derive(Debug, Clone)]
@@ -44,6 +53,12 @@ pub enum TermEvent {
 pub(crate) struct TermEventCollector {
     bell: Arc<AtomicBool>,
     events: Arc<Mutex<Vec<TermEvent>>>,
+    /// Shared with `TerminalGrid` so `resize`/`set_cell_pixel_size` can update
+    /// it independently of event dispatch. `num_lines`/`num_cols` mirror the
+    /// live grid size; `cell_width`/`cell_height` come from the frontend's
+    /// `resize_pty` (device pixels) once one arrives, defaulting to
+    /// `DEFAULT_CELL_{WIDTH,HEIGHT}_PX` until then.
+    window_size_px: Arc<Mutex<WindowSize>>,
 }
 
 impl EventListener for TermEventCollector {
@@ -116,9 +131,18 @@ impl EventListener for TermEventCollector {
             Event::OpenUrl(url) => {
                 self.events.lock().unwrap().push(TermEvent::OpenUrl(url));
             }
+            Event::TextAreaSizeRequest(cb) => {
+                let window_size = *self.window_size_px.lock().unwrap();
+                let reply = cb(window_size);
+                self.events.lock().unwrap().push(TermEvent::PtyWrite(reply));
+            }
+            Event::CellSizeRequest(cb) => {
+                let window_size = *self.window_size_px.lock().unwrap();
+                let reply = cb(window_size);
+                self.events.lock().unwrap().push(TermEvent::PtyWrite(reply));
+            }
             Event::ClipboardLoad(..)
             | Event::ColorRequest(..)
-            | Event::TextAreaSizeRequest(..)
             | Event::Wakeup
             | Event::Exit
             | Event::ChildExit(_) => {}
@@ -496,6 +520,15 @@ pub struct TerminalGrid {
     last_frame_frame_flags: Option<u8>,
     bell_flag: Arc<AtomicBool>,
     events: Arc<Mutex<Vec<TermEvent>>>,
+    /// Backs `CSI 14 t`/`CSI 16 t` replies. Shared with the `TermEventCollector`
+    /// so a resize (which knows the new grid dims) and `set_cell_pixel_size`
+    /// (which knows the frontend's real device-pixel cell size) can each update
+    /// their half independently of event dispatch.
+    window_size_px: Arc<Mutex<WindowSize>>,
+    /// Per-session inline-image store (color-tools plan). Populated by
+    /// Phase 2/3's OSC 1337 / Kitty graphics dispatch handlers; empty and
+    /// inert until then.
+    image_store: crate::terminal_images::ImageStore,
     /// When true, column resizes reflow scrollback history while leaving the
     /// visible screen untouched. Preserves TUI cursor positioning on screen
     /// while keeping scrollback readable across resize cycles.
@@ -532,9 +565,16 @@ impl TerminalGrid {
         };
         let bell_flag = Arc::new(AtomicBool::new(false));
         let events = Arc::new(Mutex::new(Vec::new()));
+        let window_size_px = Arc::new(Mutex::new(WindowSize {
+            num_lines: rows,
+            num_cols: cols,
+            cell_width: DEFAULT_CELL_WIDTH_PX,
+            cell_height: DEFAULT_CELL_HEIGHT_PX,
+        }));
         let listener = TermEventCollector {
             bell: bell_flag.clone(),
             events: events.clone(),
+            window_size_px: window_size_px.clone(),
         };
         let term = Term::new(config, &size, listener);
         Self {
@@ -554,8 +594,105 @@ impl TerminalGrid {
             last_frame_frame_flags: None,
             bell_flag,
             events,
+            window_size_px,
+            image_store: crate::terminal_images::ImageStore::new(),
             reflow_history: true,
         }
+    }
+
+    /// Store a newly transmitted inline image, or refuse if it would exceed
+    /// this session's live-byte cap. See `terminal_images::ImageStore::store`.
+    ///
+    /// The write side of the image-plumbing seam: real callers land in
+    /// Phase 2 (OSC 1337) and Phase 3 (Kitty graphics) dispatch handlers.
+    /// Exercised today by `image_ref_store_read_and_clear_on_overwrite`.
+    #[allow(dead_code)]
+    pub fn store_image(
+        &mut self,
+        bytes: Arc<[u8]>,
+        mime: String,
+        intrinsic_width: u32,
+        intrinsic_height: u32,
+    ) -> Result<
+        Arc<alacritty_terminal::term::cell::ImageData>,
+        crate::terminal_images::ImageStoreError,
+    > {
+        self.image_store
+            .store(bytes, mime, intrinsic_width, intrinsic_height)
+    }
+
+    /// Fetch a previously stored image's bytes by id, for the
+    /// `terminal_image_bytes` transport surface. `None` if unknown or already
+    /// evicted (no cell references it any more).
+    pub fn image_bytes(&self, image_id: u32) -> Option<Arc<[u8]>> {
+        self.image_store.bytes(image_id)
+    }
+
+    /// The inline-image tile shown at a given viewport position, if any:
+    /// `(image_id, placement_id, tile_col, tile_row)`. Mirrors `hyperlink_at`'s
+    /// viewport addressing exactly.
+    pub fn image_ref_at(&self, row: usize, col: usize) -> Option<(u32, u32, u16, u16)> {
+        let grid = self.term.grid();
+        let display_offset = grid.display_offset();
+        let line = Line(row as i32 - display_offset as i32);
+        if col >= grid.columns() || line < grid.topmost_line() || line > grid.bottommost_line() {
+            return None;
+        }
+        let cell = &grid[line][Column(col)];
+        cell.image_ref()
+            .map(|r| (r.image.image_id, r.placement_id, r.tile_col, r.tile_row))
+    }
+
+    /// Attach an image tile reference directly to the cell at a viewport
+    /// position. The seam Phase 2/3's OSC 1337 / Kitty dispatch handlers use
+    /// once they've computed a placement's footprint; exposed at the
+    /// `TerminalGrid` level (rather than only reachable via escape-sequence
+    /// processing) so tests can exercise it without a full protocol
+    /// round-trip. Returns `false` if the position is out of bounds.
+    ///
+    /// Real callers land in Phase 2/3's dispatch handlers, same as
+    /// `store_image` above.
+    #[allow(dead_code)]
+    pub fn set_image_ref_at(
+        &mut self,
+        row: usize,
+        col: usize,
+        image: Arc<alacritty_terminal::term::cell::ImageData>,
+        placement_id: u32,
+        tile_col: u16,
+        tile_row: u16,
+    ) -> bool {
+        let display_offset = self.term.grid().display_offset();
+        let line = Line(row as i32 - display_offset as i32);
+        let grid = self.term.grid();
+        if col >= grid.columns() || line < grid.topmost_line() || line > grid.bottommost_line() {
+            return false;
+        }
+        let cell_ref = alacritty_terminal::term::cell::ImageCellRef::new(
+            image,
+            placement_id,
+            tile_col,
+            tile_row,
+        );
+        self.term.grid_mut()[line][Column(col)].set_image_ref(Some(cell_ref));
+        true
+    }
+
+    /// Update the cell pixel size backing `CSI 14 t`/`CSI 16 t` replies, from
+    /// the frontend's real (device-pixel) font metrics. Leaves `num_lines`/
+    /// `num_cols` untouched — those are kept in sync by `resize`.
+    pub fn set_cell_pixel_size(&mut self, cell_width: u16, cell_height: u16) {
+        let mut ws = self.window_size_px.lock().unwrap();
+        ws.cell_width = cell_width;
+        ws.cell_height = cell_height;
+    }
+
+    /// Current cell pixel size (device pixels), for computing `PtySize`'s
+    /// `pixel_width`/`pixel_height` (`rows * cell_height`, `cols * cell_width`)
+    /// on resize.
+    pub fn cell_pixel_size(&self) -> (u16, u16) {
+        let ws = self.window_size_px.lock().unwrap();
+        (ws.cell_width, ws.cell_height)
     }
 
     /// Feed raw PTY bytes into the terminal emulator.
@@ -938,6 +1075,9 @@ impl TerminalGrid {
         self.term.resize_reflow(size, mode);
         self.prev_rows.clear();
         self.term.mark_fully_damaged();
+        let mut ws = self.window_size_px.lock().unwrap();
+        ws.num_lines = rows;
+        ws.num_cols = cols;
     }
 
     /// Override ANSI colors 0-15 with theme values.
@@ -4645,25 +4785,120 @@ mod tests {
         );
     }
 
-    /// Characterization test (color-tools plan, Phase 0): `CSI 14 t`
-    /// (`text_area_size_pixels`) is parsed and sends `Event::TextAreaSizeRequest`,
-    /// but that event is currently in the ignore arm of `TermEventCollector::send_event`
-    /// (see the `Event::TextAreaSizeRequest(..)` match arm above), so nothing is ever
-    /// written back to the PTY. This locks in *today's* silent-drop behavior before
-    /// Phase 1 flips it to answer with a real `WindowSize`. When Phase 1 lands, this
-    /// test's assertion inverts: `drain_pty_write_events()` should then be non-empty
-    /// and contain a `\x1b[4;<h>;<w>t` reply.
+    /// End-to-end exercise of the `CellExtra.image` plumbing added ahead of
+    /// Phase 2/3's protocol parsing (color-tools plan, Phase 1, item 4):
+    /// store an image, attach a tile reference to a cell, read it back both
+    /// as a ref and as bytes, then confirm overwriting the cell clears the
+    /// ref and (once nothing else references the image) frees its bytes —
+    /// the same clear-on-overwrite mechanism `hyperlink` already has, now
+    /// proven for `image` specifically rather than assumed by analogy.
     #[test]
-    fn csi_14t_text_area_size_pixels_currently_produces_no_reply() {
+    fn image_ref_store_read_and_clear_on_overwrite() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        let data = grid
+            .store_image(
+                Arc::from(vec![1u8, 2, 3, 4]),
+                "image/png".to_string(),
+                10,
+                10,
+            )
+            .expect("under cap");
+        let image_id = data.image_id;
+
+        assert!(grid.set_image_ref_at(0, 0, data, 1, 0, 0));
+        assert_eq!(grid.image_ref_at(0, 0), Some((image_id, 1, 0, 0)));
+        assert_eq!(
+            grid.image_bytes(image_id).as_deref(),
+            Some(&[1u8, 2, 3, 4][..])
+        );
+
+        // Out-of-bounds attachment must fail cleanly, not panic.
+        let data2 = grid
+            .store_image(Arc::from(vec![9u8]), "image/png".to_string(), 1, 1)
+            .unwrap();
+        assert!(!grid.set_image_ref_at(999, 999, data2, 1, 0, 0));
+
+        // Overwriting the cell with a plain character clears the ref — same
+        // mechanism as the hyperlink test above (`write_at_cursor` replacing
+        // the whole `extra`) — and since that was the only reference to the
+        // first image, its bytes are now unreachable.
+        grid.process(b"\x1b[1;1HY");
+        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert_eq!(
+            grid.image_bytes(image_id),
+            None,
+            "no cell references this image any more; its bytes must be gone"
+        );
+    }
+
+    /// `CSI 14 t` (`text_area_size_pixels`) reports the text area size in
+    /// pixels: `num_lines * cell_height` and `num_cols * cell_width`, using the
+    /// default cell pixel metrics until a real `resize_pty` call reports the
+    /// frontend's actual device-pixel cell size (color-tools plan, Phase 1 —
+    /// this test previously asserted the *pre-Phase-1* no-reply behavior).
+    #[test]
+    fn csi_14t_text_area_size_pixels_reports_default_metrics() {
         let mut grid = TerminalGrid::new(24, 80, 0);
         grid.process(b"\x1b[14t");
         let replies = grid.drain_pty_write_events();
-        assert!(
-            replies.is_empty(),
-            "CSI 14t should not (yet) produce a PtyWrite reply — got: {replies:?}. \
-             If this now fails because Phase 1 implemented the reply, update this \
-             test to assert the real WindowSize-based reply instead of no reply."
+        assert_eq!(replies.len(), 1);
+        let expected_height = 24 * DEFAULT_CELL_HEIGHT_PX;
+        let expected_width = 80 * DEFAULT_CELL_WIDTH_PX;
+        assert_eq!(
+            replies[0],
+            format!("\x1b[4;{expected_height};{expected_width}t")
         );
+    }
+
+    /// `CSI 14 t` reflects a real `set_cell_pixel_size` update — the actual
+    /// path a `resize_pty` call from the frontend takes.
+    #[test]
+    fn csi_14t_text_area_size_pixels_reflects_real_cell_metrics() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.set_cell_pixel_size(10, 22);
+        grid.process(b"\x1b[14t");
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(replies, vec!["\x1b[4;528;800t".to_string()]);
+    }
+
+    /// `CSI 16 t` reports the pixel size of a single cell — `CSI 6 ; height ;
+    /// width t` (color-tools plan, Phase 1, prerequisite #3).
+    #[test]
+    fn csi_16t_cell_size_pixels_reports_current_metrics() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.set_cell_pixel_size(10, 22);
+        grid.process(b"\x1b[16t");
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(replies, vec!["\x1b[6;22;10t".to_string()]);
+    }
+
+    /// A resize must keep `num_lines`/`num_cols` (used by `CSI 14 t`) in sync
+    /// with the live grid, independent of `set_cell_pixel_size`.
+    #[test]
+    fn resize_updates_csi_14t_text_area_dims() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.resize(30, 100);
+        grid.process(b"\x1b[14t");
+        let replies = grid.drain_pty_write_events();
+        let expected_height = 30 * DEFAULT_CELL_HEIGHT_PX;
+        let expected_width = 100 * DEFAULT_CELL_WIDTH_PX;
+        assert_eq!(
+            replies,
+            vec![format!("\x1b[4;{expected_height};{expected_width}t")]
+        );
+    }
+
+    /// XTVERSION (`CSI > q`) replies with a DCS naming us as "ghostty" — the
+    /// same identity `inject_unix_terminal_env` already advertises via
+    /// `TERM_PROGRAM`/`KITTY_WINDOW_ID` for unrelated (keyboard-protocol)
+    /// reasons. timg and snacks.nvim both gate Kitty-graphics support on this
+    /// exact string (color-tools plan, Phase 1, prerequisite #5).
+    #[test]
+    fn xtversion_reports_ghostty() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b[>q");
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(replies, vec!["\x1bP>|ghostty 3.0.0\x1b\\".to_string()]);
     }
 
     #[test]

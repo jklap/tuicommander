@@ -76,6 +76,13 @@ pub(super) struct EnqueueCommandRequest {
 pub(super) struct ResizeRequest {
     pub rows: u16,
     pub cols: u16,
+    /// Device-pixel cell size, backing `CSI 14 t`/`CSI 16 t` replies and
+    /// `PtySize`'s `pixel_width`/`pixel_height`. Optional so older clients
+    /// that only send rows/cols keep working unchanged.
+    #[serde(default)]
+    pub cell_width_px: Option<u16>,
+    #[serde(default)]
+    pub cell_height_px: Option<u16>,
 }
 
 #[derive(Deserialize)]
@@ -808,6 +815,11 @@ pub(super) struct TerminalStyledRowsQuery {
 pub(super) struct TerminalCellQuery {
     pub row: usize,
     pub col: usize,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalImageQuery {
+    pub id: u32,
 }
 
 #[derive(Deserialize)]

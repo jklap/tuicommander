@@ -359,6 +359,22 @@ describe("transport", () => {
 			expect(result.body).toEqual({ rows: 40, cols: 120 });
 		});
 
+		it("maps resize_pty's device-pixel cell metrics to snake_case body fields", () => {
+			const result = mapCommandToHttp("resize_pty", {
+				sessionId: "abc",
+				rows: 40,
+				cols: 120,
+				cellWidthPx: 18,
+				cellHeightPx: 36,
+			});
+			expect(result.body).toEqual({
+				rows: 40,
+				cols: 120,
+				cell_width_px: 18,
+				cell_height_px: 36,
+			});
+		});
+
 		it("maps pause_pty to POST /sessions/{id}/pause", () => {
 			const result = mapCommandToHttp("pause_pty", { sessionId: "abc" });
 			expect(result.method).toBe("POST");

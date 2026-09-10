@@ -117,6 +117,83 @@ impl HyperlinkInner {
     }
 }
 
+/// Shared, immutable data for one transmitted inline image (iTerm2 OSC 1337 /
+/// Kitty graphics protocol — color-tools plan). Every [`ImageCellRef`] that
+/// shows one of this image's tiles holds a direct, strong `Arc` clone: once no
+/// cell (main screen or scrollback) references it any more, the last `Arc`
+/// drops and the bytes are freed automatically — the same reason [`Hyperlink`]
+/// stores its data behind an `Arc` rather than a lookup key. This crate only
+/// stores the decoded-header bytes and dimensions; protocol parsing and
+/// per-session bookkeeping (transmission caps, placement geometry) belong to
+/// the embedding application, not this vendored terminal-emulation crate.
+pub struct ImageData {
+    /// Identifies this image within the emulator that created it. Not
+    /// necessarily unique across sessions/restarts — callers that need a
+    /// globally stable identity should key on it plus their own session id.
+    pub image_id: u32,
+    /// Original file bytes (PNG/GIF/etc.), or raw pixel data for Kitty's
+    /// `f=24`/`f=32` formats — never decoded/rasterized by this crate.
+    pub bytes: Arc<[u8]>,
+    /// A short label for the encoding, e.g. `"image/png"` or `"raw-rgb"`.
+    pub mime: String,
+    pub intrinsic_width: u32,
+    pub intrinsic_height: u32,
+}
+
+impl std::fmt::Debug for ImageData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Hand-written so a Cell/Row Debug dump never spews a multi-MB byte
+        // array — only its length.
+        f.debug_struct("ImageData")
+            .field("image_id", &self.image_id)
+            .field("mime", &self.mime)
+            .field("intrinsic_width", &self.intrinsic_width)
+            .field("intrinsic_height", &self.intrinsic_height)
+            .field("bytes_len", &self.bytes.len())
+            .finish()
+    }
+}
+
+impl PartialEq for ImageData {
+    /// `image_id` is the protocol-level identity of an image; two `ImageData`
+    /// values are the same image iff they share it. Deliberately not a
+    /// byte-for-byte comparison, which would be O(image size) on every
+    /// `Cell`/`CellExtra` equality check.
+    fn eq(&self, other: &Self) -> bool {
+        self.image_id == other.image_id
+    }
+}
+impl Eq for ImageData {}
+
+/// A per-cell reference into one tile of an [`ImageData`], analogous to
+/// [`Hyperlink`]. Attached to [`CellExtra::image`] by the OSC 1337 / Kitty
+/// graphics protocol handlers — clearing or overwriting the cell (an ordinary
+/// character print, `Cell::reset`, scrollback eviction) drops this the same
+/// way it already drops a `Hyperlink`, via `write_at_cursor` replacing the
+/// cell's whole `extra` rather than any image-specific cleanup code.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageCellRef {
+    pub image: Arc<ImageData>,
+    /// Which placement this cell belongs to (an image can be placed more than
+    /// once, e.g. Kitty's `a=p`). Placement geometry (screen anchor, z-index)
+    /// is the embedding application's bookkeeping, not stored here.
+    pub placement_id: u32,
+    /// This cell's position within the placement's cell-space footprint.
+    pub tile_col: u16,
+    pub tile_row: u16,
+}
+
+impl ImageCellRef {
+    pub fn new(image: Arc<ImageData>, placement_id: u32, tile_col: u16, tile_row: u16) -> Self {
+        Self {
+            image,
+            placement_id,
+            tile_col,
+            tile_row,
+        }
+    }
+}
+
 /// Trait for determining if a reset should be performed.
 pub trait ResetDiscriminant<T> {
     /// Value based on which equality for the reset will be determined.
@@ -160,6 +237,11 @@ pub struct CellExtra {
     zerowidth: Vec<char>,
     underline_color: Option<Color>,
     hyperlink: Option<Hyperlink>,
+    /// Never persisted: images are in-memory and session-scoped by design
+    /// (color-tools plan), and `ImageData` can carry multi-megabyte payloads
+    /// that have no business in a serialized `Cell`/`CellExtra` dump.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    image: Option<ImageCellRef>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -217,10 +299,9 @@ impl Cell {
     pub fn set_underline_color(&mut self, color: Option<Color>) {
         // If we reset color and we don't have zerowidth we should drop extra storage.
         if color.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.hyperlink.is_none())
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty() && extra.hyperlink.is_none() && extra.image.is_none()
+            })
         {
             self.extra = None;
         } else {
@@ -238,10 +319,11 @@ impl Cell {
     /// Set hyperlink.
     pub fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
         let should_drop = hyperlink.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.underline_color.is_none());
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty()
+                    && extra.underline_color.is_none()
+                    && extra.image.is_none()
+            });
 
         if should_drop {
             self.extra = None;
@@ -255,6 +337,33 @@ impl Cell {
     #[inline]
     pub fn hyperlink(&self) -> Option<Hyperlink> {
         self.extra.as_ref()?.hyperlink.clone()
+    }
+
+    /// Set the inline-image tile this cell shows (color-tools plan). Mirrors
+    /// `set_hyperlink` exactly, including the drop-extra-storage-when-empty
+    /// behavior that gives image refs the same clear-on-overwrite semantics
+    /// hyperlinks already have via `write_at_cursor` replacing the whole
+    /// `extra`.
+    pub fn set_image_ref(&mut self, image: Option<ImageCellRef>) {
+        let should_drop = image.is_none()
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty()
+                    && extra.underline_color.is_none()
+                    && extra.hyperlink.is_none()
+            });
+
+        if should_drop {
+            self.extra = None;
+        } else {
+            let extra = self.extra.get_or_insert(Default::default());
+            Arc::make_mut(extra).image = image;
+        }
+    }
+
+    /// Inline-image tile reference stored in this cell, if any.
+    #[inline]
+    pub fn image_ref(&self) -> Option<ImageCellRef> {
+        self.extra.as_ref()?.image.clone()
     }
 
     /// The blank a scroll-fill or an erase (EL/ED/ECH/DCH/ICH) writes.
