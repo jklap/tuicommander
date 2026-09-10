@@ -409,6 +409,105 @@ pub(crate) fn create_worktree_with_stale_recovery(
     }
 }
 
+/// A workspace, however it was built.
+///
+/// One type for both mechanisms on purpose: the caller asked for a workspace,
+/// and everything downstream — the sidebar row, publish, remove — needs to know
+/// which one it got rather than infer it from the directory's shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CreatedWorkspace {
+    pub(crate) path: PathBuf,
+    pub(crate) branch: String,
+    pub(crate) kind: crate::cow::WorkspaceKind,
+    /// Set only when `mode=auto` asked for COW and could not have it. Carries
+    /// the check that said no, because "you got a linked worktree" without a
+    /// reason is indistinguishable from "you asked for one".
+    pub(crate) degraded_reason: Option<String>,
+    /// Repo shapes the guards noticed. Empty for a linked worktree: the guards
+    /// are about cloning, and a worktree is not a clone.
+    pub(crate) warnings: Vec<String>,
+    /// Paths the parent's working tree carried over. Always 0 for a linked
+    /// worktree, which starts from a clean checkout of the branch.
+    pub(crate) carried_over: usize,
+}
+
+/// Create the workspace `mode` asks for, degrading rather than failing.
+///
+/// The one entry point that knows both mechanisms exist. Both derive the same
+/// destination from `worktrees_dir` + the sanitized task name, so a caller
+/// cannot end up with a COW clone and a worktree in different places depending
+/// on which path ran.
+///
+/// Reached from a transport in #734-ca73 (MCP and HTTP `worktree_create` gain
+/// `mode` and `dirty`) and from the UI in #735-55d7. Until then the existing
+/// creation path still calls `create_worktree_with_stale_recovery` directly,
+/// which is what this wraps for `mode=worktree` — there is one implementation
+/// of each mechanism, not two.
+#[allow(dead_code)]
+pub(crate) fn create_workspace(
+    worktrees_dir: &Path,
+    config: &WorktreeConfig,
+    base_ref: Option<&str>,
+    mode: crate::cow::WorkspaceMode,
+    dirty: crate::cow::DirtyPolicy,
+) -> Result<CreatedWorkspace, String> {
+    create_workspace_with(
+        worktrees_dir,
+        config,
+        base_ref,
+        mode,
+        dirty,
+        crate::cow::probe_cow_support,
+    )
+}
+
+/// [`create_workspace`] with the COW probe injected, so a test can force the
+/// degrade without a second filesystem to fail against.
+#[allow(dead_code)]
+pub(crate) fn create_workspace_with(
+    worktrees_dir: &Path,
+    config: &WorktreeConfig,
+    base_ref: Option<&str>,
+    mode: crate::cow::WorkspaceMode,
+    dirty: crate::cow::DirtyPolicy,
+    probe: impl Fn(&Path, &Path) -> crate::cow::CowSupport,
+) -> Result<CreatedWorkspace, String> {
+    let src = PathBuf::from(&config.base_repo);
+    let dest = worktrees_dir.join(sanitize_name(&config.task_name));
+    let branch = config
+        .branch
+        .clone()
+        .unwrap_or_else(|| sanitize_name(&config.task_name));
+
+    match crate::cow::choose_mechanism_with(&src, &dest, mode, probe)? {
+        crate::cow::Mechanism::Cow(guards) => {
+            let workspace = crate::cow::create_cow_workspace(&src, &dest, &branch, dirty, &guards)?;
+            Ok(CreatedWorkspace {
+                path: workspace.path,
+                branch: workspace.branch,
+                kind: crate::cow::WorkspaceKind::Cow,
+                degraded_reason: None,
+                warnings: workspace.warnings,
+                carried_over: workspace.carried_over,
+            })
+        }
+        crate::cow::Mechanism::Worktree { degraded_reason } => {
+            let worktree = create_worktree_with_stale_recovery(worktrees_dir, config, base_ref)?;
+            Ok(CreatedWorkspace {
+                path: worktree.path,
+                branch: worktree.branch.unwrap_or(branch),
+                kind: crate::cow::WorkspaceKind::Worktree,
+                degraded_reason,
+                warnings: Vec::new(),
+                // A linked worktree is a fresh checkout of the branch: the
+                // parent's uncommitted work stays in the parent, which is the
+                // isolation difference the caller has to be told about.
+                carried_over: 0,
+            })
+        }
+    }
+}
+
 pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
     let wt_path_str = worktree.path.to_string_lossy().to_string();
     tracing::info!(
@@ -4853,5 +4952,300 @@ branch refs/heads/feat
             "origin/remote-only should be in refs, got: {:?}",
             names
         );
+    }
+
+    // ── create_workspace: one caller, two mechanisms ─────────────────────
+
+    use crate::cow::{CowSupport, DirtyPolicy, WorkspaceKind, WorkspaceMode};
+
+    /// A repo and a workspaces directory that is its SIBLING, which is what the
+    /// default storage strategy produces (`<repo>__wt/`). `setup_test_repo`
+    /// makes the temp dir itself the repo, so a workspaces dir under it is
+    /// inside the source — the one shape the containment guard refuses, and the
+    /// subject of its own test below rather than an accident in every other.
+    fn workspace_fixture() -> (TempDir, PathBuf, PathBuf) {
+        let temp = TempDir::new().expect("temp dir");
+        let repo = temp.path().join("repo");
+        let workspaces = temp.path().join("repo__wt");
+        fs::create_dir_all(&repo).expect("repo dir");
+
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            git_cmd(&repo).args(args).run().expect("git setup");
+        }
+        fs::write(repo.join("README.md"), "# Test").expect("write");
+        git_cmd(&repo).args(["add", "."]).run().expect("add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "initial"])
+            .run()
+            .expect("commit");
+
+        (temp, repo, workspaces)
+    }
+
+    fn workspace_config(repo: &Path, task: &str) -> WorktreeConfig {
+        WorktreeConfig {
+            task_name: task.to_string(),
+            base_repo: repo.to_string_lossy().to_string(),
+            branch: Some(task.to_string()),
+            create_branch: true,
+        }
+    }
+
+    /// A probe that always refuses, standing in for a destination on another
+    /// volume, a filesystem without reflink, or Windows. Injected because the
+    /// alternative is a test that needs a second filesystem to be honest.
+    fn probe_unavailable(_: &Path, _: &Path) -> CowSupport {
+        CowSupport::Unsupported("no reflink support on this pair of paths".to_string())
+    }
+
+    #[test]
+    fn auto_produces_a_cow_workspace_where_copy_on_write_works() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-cow"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("auto creates a workspace");
+
+        assert_eq!(created.kind, WorkspaceKind::Cow);
+        assert_eq!(
+            created.degraded_reason, None,
+            "nothing degraded, so nothing to explain"
+        );
+        // An independent repository: its .git is a directory, not a pointer file.
+        assert!(created.path.join(".git").is_dir());
+    }
+
+    /// The degrade is the whole point of `auto`: the caller asked for a
+    /// workspace, and a linked worktree is one.
+    #[test]
+    fn auto_degrades_to_a_working_linked_worktree_and_says_why() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let created = create_workspace_with(
+            &workspaces,
+            &workspace_config(&repo, "feature-degraded"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+            probe_unavailable,
+        )
+        .expect("auto must degrade, not fail");
+
+        assert_eq!(created.kind, WorkspaceKind::Worktree);
+        assert!(
+            created
+                .degraded_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("reflink"),
+            "the reason must name what was unavailable: {:?}",
+            created.degraded_reason
+        );
+
+        // And it is a real, usable worktree — a linked one, so .git is a file.
+        assert!(created.path.join(".git").is_file());
+        let head = git_cmd(&created.path)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .run()
+            .expect("rev-parse")
+            .stdout;
+        assert_eq!(head.trim(), "feature-degraded");
+    }
+
+    #[test]
+    fn mode_cow_fails_loudly_naming_the_check_that_said_no() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let err = create_workspace_with(
+            &workspaces,
+            &workspace_config(&repo, "feature-strict"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+            probe_unavailable,
+        )
+        .expect_err("mode=cow must not silently give a worktree");
+
+        assert!(
+            err.contains("reflink"),
+            "the failure must name the check: {err}"
+        );
+        assert!(
+            !workspaces.join("feature-strict").exists(),
+            "a refused creation left a directory behind"
+        );
+    }
+
+    /// A guard refusal reaches `mode=cow` as its own reason, not as a generic
+    /// "unavailable" — the caller can act on "finish your rebase".
+    #[test]
+    fn mode_cow_reports_a_guard_refusal_rather_than_the_probe() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join(".git").join("MERGE_HEAD"), "deadbeef").expect("marker");
+
+        let err = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-midmerge"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect_err("a repo mid-merge cannot be cloned");
+
+        assert!(err.contains("MERGE_HEAD"), "{err}");
+    }
+
+    #[test]
+    fn mode_worktree_forces_a_worktree_even_where_cow_works() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-forced"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("worktree mode always works");
+
+        assert_eq!(created.kind, WorkspaceKind::Worktree);
+        assert_eq!(
+            created.degraded_reason, None,
+            "asking for a worktree is a choice, not a degradation — reporting a reason would be a lie"
+        );
+        assert!(created.path.join(".git").is_file());
+    }
+
+    /// `mode=worktree` must not inherit the clone guards: they are about whether
+    /// a repo can be COPIED, and a linked worktree never had that constraint.
+    #[test]
+    fn mode_worktree_is_not_blocked_by_a_guard_that_only_applies_to_cloning() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join(".git").join("MERGE_HEAD"), "deadbeef").expect("marker");
+
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-anyway"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("a clone guard must not block a worktree");
+
+        assert_eq!(created.kind, WorkspaceKind::Worktree);
+    }
+
+    /// The real cross-volume degrade, against a real second volume.
+    ///
+    /// Ignored by default because it needs one, and mounting a disk image is
+    /// not something a test suite should do on every run. To drive it:
+    ///
+    /// ```sh
+    /// hdiutil create -size 64m -fs APFS -volname TuicCow -type SPARSE /tmp/tuiccow
+    /// hdiutil attach /tmp/tuiccow.sparseimage
+    /// TUIC_COW_CROSS_VOLUME_DEST=/Volumes/TuicCow \
+    ///   cargo nextest run --lib -E 'test(cross_volume)' --run-ignored all
+    /// hdiutil detach /Volumes/TuicCow
+    /// ```
+    ///
+    /// Everything below it is the injected-probe version, which is what keeps
+    /// the behaviour covered on every run.
+    #[test]
+    #[ignore = "needs a second volume; see the doc comment for the hdiutil recipe"]
+    fn auto_degrades_across_a_real_volume_boundary() {
+        let Ok(other_volume) = std::env::var("TUIC_COW_CROSS_VOLUME_DEST") else {
+            panic!("set TUIC_COW_CROSS_VOLUME_DEST to a directory on another volume");
+        };
+        let (_temp, repo, _sibling) = workspace_fixture();
+        let workspaces = PathBuf::from(other_volume).join("tuic-cow-test");
+        let _ = fs::remove_dir_all(&workspaces);
+
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-cross-volume"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("auto must degrade across a volume boundary, not fail");
+
+        assert_eq!(created.kind, WorkspaceKind::Worktree);
+        assert!(
+            created
+                .degraded_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("volume"),
+            "{:?}",
+            created.degraded_reason
+        );
+        let _ = fs::remove_dir_all(&workspaces);
+    }
+
+    /// The `InsideRepo` and `ClaudeCodeDefault` storage strategies put the new
+    /// directory UNDER the repo, where a recursive copy would walk into its own
+    /// destination. Those users keep working — with a linked worktree, and a
+    /// reason that names the containment rather than blaming the filesystem.
+    #[test]
+    fn a_workspaces_directory_inside_the_repo_degrades_instead_of_failing() {
+        let (_temp, repo, _sibling) = workspace_fixture();
+        let inside = repo.join("worktrees");
+
+        let created = create_workspace(
+            &inside,
+            &workspace_config(&repo, "feature-inside"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("must degrade, not fail");
+
+        assert_eq!(created.kind, WorkspaceKind::Worktree);
+        assert!(
+            created
+                .degraded_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("inside the source repository"),
+            "{:?}",
+            created.degraded_reason
+        );
+    }
+
+    /// The two mechanisms differ in exactly the way the caller has to be told
+    /// about: a clone carries the parent's work in progress, a worktree does not.
+    #[test]
+    fn only_the_cow_path_carries_the_parents_uncommitted_work() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join("README.md"), "# Test\nin progress\n").expect("dirty");
+
+        let cloned = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "carries"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow");
+        let linked = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "does-not-carry"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("worktree");
+
+        assert_eq!(cloned.carried_over, 1);
+        assert_eq!(linked.carried_over, 0);
     }
 }
