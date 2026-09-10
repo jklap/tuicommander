@@ -96,6 +96,10 @@ const BROWSER_ACTION_PREFIXES = [
 	"move-to-worktree:",
 	"smart:",
 	"plugin-action:",
+	// Settings itself is allowlisted above ("toggle-settings") and works in
+	// browser mode, so the individual settings-search deep-link actions
+	// (settingsSearchIndex.ts) do too — same openSettings()/SettingsPanel path.
+	"setting:",
 ];
 
 export function isBrowserCommandPaletteAction(action: ActionEntry): boolean {

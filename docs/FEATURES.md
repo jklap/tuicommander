@@ -1237,6 +1237,12 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 
 ## 11. Settings
 
+- Reopening Settings returns to the last-selected tab for the rest of the app
+  session (session-only, not persisted across restarts).
+- Search box above the tab list finds an individual static setting across
+  global tabs and jumps to it; the same settings are searchable from the
+  Command Palette under "Settings" (`src/components/SettingsPanel/settingsSearchIndex.ts`).
+
 ### 11.1 General
 - Language, Default IDE
 - Window: restore size and position on launch (desktop app only, default on)

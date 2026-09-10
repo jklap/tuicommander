@@ -36,6 +36,12 @@ interface UIStoreState {
 	 *  toolbar filter icon next to the sidebar collapse button. */
 	repoFilterActiveOnly: boolean;
 
+	/** Nav key of the Settings pane the user last selected (e.g. "agents",
+	 *  "repo:/path/to/repo"). Session-only (not persisted) — read by
+	 *  SettingsPanel to reopen on the same pane within the app's lifetime;
+	 *  resets to null on restart. */
+	lastSettingsTab: string | null;
+
 	// Sidebar width
 	sidebarWidth: number;
 
@@ -101,6 +107,7 @@ function createUIStore() {
 		sidebarVisible: true,
 		focusMode: false,
 		repoFilterActiveOnly: false,
+		lastSettingsTab: null,
 		sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
 		markdownPanelVisible: false,
 		notesPanelVisible: false,
@@ -444,6 +451,11 @@ function createUIStore() {
 
 		setRepoFilterActiveOnly(active: boolean): void {
 			setState("repoFilterActiveOnly", active);
+		},
+
+		// Last-selected Settings pane (session-only, not persisted)
+		setLastSettingsTab(tab: string | null): void {
+			setState("lastSettingsTab", tab);
 		},
 
 		setSidebarVisible(visible: boolean): void {

@@ -2,6 +2,7 @@ import { type Component, createSignal, For, onCleanup, onMount, Show } from "sol
 import { invoke, listen } from "../../../invoke";
 import { appLogger } from "../../../stores/appLogger";
 import { toastsStore } from "../../../stores/toasts";
+import { settingSlugId } from "../SettingFields";
 import s from "../Settings.module.css";
 
 type ReasoningEffort = "auto" | "off" | "low" | "medium" | "high";
@@ -230,7 +231,7 @@ export const AiChatTab: Component = () => {
 			{/* ── Parameters ── */}
 			<h3>Parameters</h3>
 
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId("Temperature")}>
 				<label>Temperature</label>
 				<div class={s.slider}>
 					<input
@@ -249,7 +250,7 @@ export const AiChatTab: Component = () => {
 				<p class={s.hint}>Controls randomness of responses (0.0 = deterministic, 1.0 = creative)</p>
 			</div>
 
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId("Extended thinking")}>
 				<label>Extended thinking</label>
 				<select
 					value={reasoningEffort()}

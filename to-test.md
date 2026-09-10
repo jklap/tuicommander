@@ -149,6 +149,41 @@ jsdom's synthetic events only approximate.
 - [ ] Repeat both checks on a path/URL long enough to soft-wrap across two
   terminal rows.
 
+## Settings search — Command Palette entries + cross-theme/keyboard pass (2026-09-10, frontend only — HMR)
+
+New feature: a search box in the Settings panel (`settingsSearchIndex.ts` +
+`SettingsShell`/`SettingsPanel`) finds an individual setting and jumps to it
+with a highlight flash, and the same settings appear as Command Palette
+actions (category "Settings") via a new `openSettings` callback. The
+in-Settings flow (type a query → click a result → tab switches, scrolls to
+and highlights the control, query clears) was verified live against a real
+running build with `agent-browser` screenshots — that part is done. Not yet
+verified:
+
+- [ ] Open the Command Palette (`Cmd+P`), type a setting's name (e.g. "copy
+  on select"), confirm a "... (Terminal settings)"-style action appears
+  under the "Settings" category, and selecting it opens Settings on the
+  right tab, scrolled to and highlighting the right control. **This
+  genuinely needs a human on the real desktop app** — Command Palette is
+  `<Show when={isTauri()}>` (see AGENTS.md's "Web-UI testing" section), so
+  it never renders in browser mode at all, and there's no MCP path to a
+  worktree's own test-instance window either (the `tuicommander` MCP tools
+  only reach the orchestrator instance, which runs different code — see
+  AGENTS.md's "Test instance vs orchestrator instance"). Only unit-tested so
+  far: `useCommandPaletteActions.test.ts` asserts the action is generated
+  and calls `openSettings` with the right args, and the receiving side of
+  `openSettings` — the same `initialSection` scroll/highlight path — was
+  separately verified live in browser mode, but the two were never
+  exercised together end-to-end.
+- [ ] Search box + result cards in a light theme (only vscode-dark was
+  screenshotted) — confirm the highlight flash and result-card colors read
+  correctly, not just in dark themes.
+- [ ] Keyboard-only pass: Tab into the search box, type a query, Tab through
+  the result buttons, Enter/Space to select one — confirm focus outlines are
+  visible and a result activates without a mouse. The results list has no
+  arrow-key navigation today (unlike the Command Palette's own list) — note
+  whether that's worth adding as a follow-up, not a blocker.
+
 ## Gutter-hover "pointer" cursor no longer freezes over a mouse-tracking app's prompt (2026-09-08, frontend only — HMR)
 
 Reported: after the command-block gutter widened and gained a hover cursor

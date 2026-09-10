@@ -16,7 +16,7 @@ import type { IssueFilterMode } from "../../../types";
 import { cx } from "../../../utils";
 import { writeClipboard } from "../../../utils/clipboard";
 import { handleOpenUrl } from "../../../utils/openUrl";
-import { SettingSelect, SettingToggle } from "../SettingFields";
+import { SettingSelect, SettingToggle, settingSlugId } from "../SettingFields";
 import s from "../Settings.module.css";
 import g from "./GitHubTab.module.css";
 
@@ -629,7 +629,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>File Handling Defaults</label>
-					<div class={s.toggle}>
+					<div class={s.toggle} id={settingSlugId("Copy ignored files")}>
 						<input
 							type="checkbox"
 							checked={repoDefaultsStore.state.copyIgnoredFiles}
@@ -637,7 +637,7 @@ export const GitHubTab: Component = () => {
 						/>
 						<span>Copy ignored files</span>
 					</div>
-					<div class={s.toggle}>
+					<div class={s.toggle} id={settingSlugId("Copy untracked files")}>
 						<input
 							type="checkbox"
 							checked={repoDefaultsStore.state.copyUntrackedFiles}
@@ -647,7 +647,7 @@ export const GitHubTab: Component = () => {
 					</div>
 				</div>
 
-				<div class={s.group}>
+				<div class={s.group} id={settingSlugId("Default Setup Script")}>
 					<label>Default Setup Script</label>
 					<textarea
 						value={repoDefaultsStore.state.setupScript}
@@ -658,7 +658,7 @@ export const GitHubTab: Component = () => {
 					<p class={s.hint}>Shell script run when creating a new worktree</p>
 				</div>
 
-				<div class={s.group}>
+				<div class={s.group} id={settingSlugId("Default Run Script")}>
 					<label>Default Run Script</label>
 					<textarea
 						value={repoDefaultsStore.state.runScript}
@@ -669,7 +669,7 @@ export const GitHubTab: Component = () => {
 					<p class={s.hint}>Shell script run when launching the worktree</p>
 				</div>
 
-				<div class={s.group}>
+				<div class={s.group} id={settingSlugId("Default Archive Script")}>
 					<label>Default Archive Script</label>
 					<textarea
 						value={repoDefaultsStore.state.archiveScript}

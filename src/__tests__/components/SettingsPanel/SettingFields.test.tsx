@@ -5,6 +5,7 @@ import {
 	SettingSelect,
 	SettingSlider,
 	SettingToggle,
+	settingSlugId,
 } from "../../../components/SettingsPanel/SettingFields";
 
 /**
@@ -17,7 +18,23 @@ import {
  * has exactly one caller in the whole app (`NotificationsTab.tsx`'s sound
  * preview) and had no coverage of its own at all.
  */
+describe("settingSlugId", () => {
+	it("slugifies a label into a stable, DOM-safe id", () => {
+		expect(settingSlugId("Copy on select")).toBe("setting-copy-on-select");
+		expect(settingSlugId("Allow OSC 52 clipboard writes")).toBe("setting-allow-osc-52-clipboard-writes");
+	});
+
+	it("strips punctuation and collapses runs of separators", () => {
+		expect(settingSlugId("Enable IPv6 (dual-stack)")).toBe("setting-enable-ipv6-dual-stack");
+	});
+});
+
 describe("SettingToggle", () => {
+	it("stamps a stable id derived from its label on the wrapper div", () => {
+		const { container } = render(() => <SettingToggle checked={true} onChange={() => {}} label="Copy on select" />);
+		expect(container.querySelector("#setting-copy-on-select")).toBeTruthy();
+	});
+
 	it("renders its label and hint, and reflects the checked prop", () => {
 		const { getByText, container } = render(() => (
 			<SettingToggle checked={true} onChange={() => {}} label="Enable thing" hint="Explains the thing" />
@@ -46,6 +63,13 @@ describe("SettingSelect", () => {
 		{ value: "a", label: "Option A" },
 		{ value: "b", label: "Option B" },
 	];
+
+	it("stamps a stable id derived from its label on the wrapper div", () => {
+		const { container } = render(() => (
+			<SettingSelect label="Pick one" value="a" onChange={() => {}} options={options} />
+		));
+		expect(container.querySelector("#setting-pick-one")).toBeTruthy();
+	});
 
 	it("renders every option and the current value", () => {
 		const { container } = render(() => (

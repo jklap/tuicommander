@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
@@ -15,6 +15,7 @@ import { DictationSettings } from "./DictationSettings";
 import s from "./Settings.module.css";
 import type { SettingsShellTab } from "./SettingsShell";
 import { SettingsShell } from "./SettingsShell";
+import { type SettingsSearchResult, searchSettings } from "./settingsSearchIndex";
 import {
 	AgentsTab,
 	AiChatTab,
@@ -72,6 +73,32 @@ function defaultTab(ctx: SettingsContext): string {
 	return "general";
 }
 
+const SearchResultsList: Component<{
+	results: SettingsSearchResult[];
+	onSelect: (result: SettingsSearchResult) => void;
+}> = (props) => (
+	<div class={s.searchResults}>
+		<Show
+			when={props.results.length > 0}
+			fallback={<div class={s.searchEmpty}>{t("settings.search.empty", "No matching settings")}</div>}
+		>
+			<For each={props.results}>
+				{(result) => (
+					<button type="button" class={s.searchResultItem} onClick={() => props.onSelect(result)}>
+						<div class={s.searchResultBreadcrumb}>
+							{result.tabLabel} › {result.section}
+						</div>
+						<div class={s.searchResultLabel}>{result.label}</div>
+						<Show when={result.hint}>
+							<div class={s.searchResultHint}>{result.hint}</div>
+						</Show>
+					</button>
+				)}
+			</For>
+		</Show>
+	</div>
+);
+
 /** Build the full nav from global sections + configured repos */
 function buildNavItems(): SettingsShellTab[] {
 	// All repos, including those nested in groups — grouped repos live in
@@ -96,26 +123,93 @@ function buildNavItems(): SettingsShellTab[] {
 
 export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const ctx = () => props.context ?? { kind: "global" as const };
-	const [activeTab, setActiveTab] = createSignal(props.initialTab ?? defaultTab(ctx()));
+
+	// Memoized: buildNavItems() rebuilds the whole repo list (colors, display
+	// names) and is read from both resolveInitialTab() and the JSX below —
+	// without this it reran twice per reactive pass for no reason.
+	const navItems = createMemo(buildNavItems);
+
+	// Pane to open on: an explicit deep link wins, then an explicit repo context
+	// (e.g. the git panel's "Repo Settings" action) jumps to that repo's tab,
+	// otherwise fall back to the pane the user last selected this session —
+	// provided it's still a real nav entry (a remembered repo tab whose repo
+	// was removed, or "ai-chat"/"dictation" while unavailable, must not stick).
+	const resolveInitialTab = (): string => {
+		if (props.initialTab) return props.initialTab;
+		if (ctx().kind === "repo") return defaultTab(ctx());
+		const remembered = uiStore.state.lastSettingsTab;
+		if (remembered && navItems().some((item) => item.key === remembered)) {
+			return remembered;
+		}
+		return defaultTab(ctx());
+	};
+
+	const [activeTab, setActiveTab] = createSignal(resolveInitialTab());
 
 	// Reset active tab when context changes or panel opens
 	createEffect(() => {
 		if (props.visible) {
-			setActiveTab(props.initialTab ?? defaultTab(ctx()));
+			setActiveTab(resolveInitialTab());
 		}
 	});
+
+	/** Nav click handler: switches the pane, remembers it for next time, and
+	 *  leaves search mode (a direct nav click means "never mind the search"). */
+	const handleTabChange = (tab: string) => {
+		setActiveTab(tab);
+		uiStore.setLastSettingsTab(tab);
+		setSearchQuery("");
+	};
+
+	// Cross-pane settings search (the nav search box). Selecting a result
+	// switches tab and queues a scroll+highlight for its control, once that
+	// tab's content has actually mounted (see pendingJumpId effect below).
+	const [searchQuery, setSearchQuery] = createSignal("");
+	const searchResults = () => searchSettings(searchQuery());
+	const [pendingJumpId, setPendingJumpId] = createSignal<string | null>(null);
+
+	const selectSearchResult = (result: SettingsSearchResult) => {
+		handleTabChange(result.tab);
+		setPendingJumpId(result.controlId);
+	};
+
+	/** Scroll a control into view after the frame that mounts its tab's content,
+	 *  optionally flashing the search-highlight animation on it. Shared by both
+	 *  jump paths below — they differ only in scroll alignment and whether to
+	 *  highlight, which had nearly drifted apart before being unified here. */
+	const jumpToElement = (id: string | undefined, opts: { block: ScrollLogicalPosition; highlight?: boolean }) => {
+		if (!id) return;
+		const frame = requestAnimationFrame(() => {
+			const el = document.getElementById(id);
+			el?.scrollIntoView({ block: opts.block, behavior: "smooth" });
+			if (opts.highlight && el) {
+				el.classList.remove(s.searchHighlight);
+				// Force a reflow so re-adding the class restarts the animation
+				// even if the same control was just jumped to a moment ago.
+				void el.offsetWidth;
+				el.classList.add(s.searchHighlight);
+			}
+		});
+		onCleanup(() => cancelAnimationFrame(frame));
+	};
 
 	// A deep link (the MCP popup's "Manage in Settings") opens a long tab where
 	// the block it promised sits below the fold. Scroll to it, after the frame
 	// that inserts the tab content into the document.
 	createEffect(() => {
 		if (!props.visible) return;
-		const section = props.initialSection;
-		if (!section) return;
-		const frame = requestAnimationFrame(() => {
-			document.getElementById(section)?.scrollIntoView({ block: "start", behavior: "smooth" });
-		});
-		onCleanup(() => cancelAnimationFrame(frame));
+		jumpToElement(props.initialSection, { block: "start" });
+	});
+
+	// A settings-search selection made while the panel is already open — same
+	// scroll mechanism as above, but re-triggerable (a prop only fires once
+	// per value change; this is driven by our own signal instead) and it also
+	// flashes the matched control so it's findable at a glance.
+	createEffect(() => {
+		const id = pendingJumpId();
+		if (!id) return;
+		jumpToElement(id, { block: "center", highlight: true });
+		setPendingJumpId(null);
 	});
 
 	// Auto-reset to general when the current tab vanishes (e.g. AI Chat flag
@@ -124,7 +218,10 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	// highlight. (#1376-7333)
 	createEffect(() => {
 		if (activeTab() === "ai-chat" && !settingsStore.isAiChatEnabled()) {
-			setActiveTab("general");
+			// handleTabChange, not a raw setActiveTab: also updates lastSettingsTab,
+			// so a stale "ai-chat" can't resurface if the flag gets re-enabled
+			// before Settings is reopened (#1376-7333 follow-up, 2026-09-10 review).
+			handleTabChange("general");
 		}
 	});
 
@@ -187,83 +284,90 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			visible={props.visible}
 			onClose={props.onClose}
 			title={t("settings.title", "Settings")}
-			tabs={buildNavItems()}
+			tabs={navItems()}
 			activeTab={activeTab()}
-			onTabChange={setActiveTab}
+			onTabChange={handleTabChange}
 			navWidth={uiStore.state.settingsNavWidth}
 			onNavWidthChange={uiStore.setSettingsNavWidth}
 			onNavWidthPersist={uiStore.persistUIPrefs}
+			searchQuery={searchQuery()}
+			onSearchQueryChange={setSearchQuery}
 			footer={footer()}
 		>
-			{/* Repo settings (shown when a repo nav item is active) */}
-			<Show when={activeRepoPath()} keyed>
-				{(path) => {
-					const settings = repoSettings(path);
-					const onUpdate = updateRepoSetting(path);
-					return (
-						<>
-							<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-							<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-							<Show when={isTauri()}>
-								<div class={s.section}>
-									<h3>{t("settings.copyToProject.heading", "Share with Team")}</h3>
-									<p class={s.hint}>
-										{t(
-											"settings.copyToProject.hint",
-											"Write this repo's worktree/branch settings to a .tuic.json in the project root. Commit it so teammates inherit the same defaults. Scripts are never exported.",
-										)}
-									</p>
-									<div class={s.actions}>
-										<button onClick={() => copyToProject(path)}>
-											{t("settings.copyToProject.button", "Copy settings to .tuic.json")}
-										</button>
+			<Show
+				when={!searchQuery().trim()}
+				fallback={<SearchResultsList results={searchResults()} onSelect={selectSearchResult} />}
+			>
+				{/* Repo settings (shown when a repo nav item is active) */}
+				<Show when={activeRepoPath()} keyed>
+					{(path) => {
+						const settings = repoSettings(path);
+						const onUpdate = updateRepoSetting(path);
+						return (
+							<>
+								<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								<Show when={isTauri()}>
+									<div class={s.section}>
+										<h3>{t("settings.copyToProject.heading", "Share with Team")}</h3>
+										<p class={s.hint}>
+											{t(
+												"settings.copyToProject.hint",
+												"Write this repo's worktree/branch settings to a .tuic.json in the project root. Commit it so teammates inherit the same defaults. Scripts are never exported.",
+											)}
+										</p>
+										<div class={s.actions}>
+											<button onClick={() => copyToProject(path)}>
+												{t("settings.copyToProject.button", "Copy settings to .tuic.json")}
+											</button>
+										</div>
 									</div>
-								</div>
-							</Show>
-						</>
-					);
-				}}
-			</Show>
+								</Show>
+							</>
+						);
+					}}
+				</Show>
 
-			{/* Global sections */}
-			<Show when={activeTab() === "general"}>
-				<GeneralTab />
-			</Show>
-			<Show when={activeTab() === "appearance"}>
-				<AppearanceTab />
-			</Show>
-			<Show when={activeTab() === "terminal"}>
-				<TerminalTab />
-			</Show>
-			<Show when={activeTab() === "selection"}>
-				<SelectionTab />
-			</Show>
-			<Show when={activeTab() === "notifications"}>
-				<NotificationsTab />
-			</Show>
-			<Show when={activeTab() === "dictation"}>
-				<DictationSettings />
-			</Show>
-			<Show when={activeTab() === "github"}>
-				<GitHubTab />
-			</Show>
-			<Show when={activeTab() === "services"}>
-				<ServicesTab />
-			</Show>
-			<Show when={activeTab() === "plugins"}>
-				<PluginsTab onClose={props.onClose} />
-			</Show>
-			<Show when={activeTab() === "smart-prompts"}>
-				<SmartPromptsTab />
-			</Show>
-			<Show when={activeTab() === "providers"}>
-				<ProvidersTab />
-			</Show>
-			<Show when={activeTab() === "agents"}>
-				<AgentsTab connectionId={activeConnectionId()} />
-			</Show>
-			<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
-				<AiChatTab />
+				{/* Global sections */}
+				<Show when={activeTab() === "general"}>
+					<GeneralTab />
+				</Show>
+				<Show when={activeTab() === "appearance"}>
+					<AppearanceTab />
+				</Show>
+				<Show when={activeTab() === "terminal"}>
+					<TerminalTab />
+				</Show>
+				<Show when={activeTab() === "selection"}>
+					<SelectionTab />
+				</Show>
+				<Show when={activeTab() === "notifications"}>
+					<NotificationsTab />
+				</Show>
+				<Show when={activeTab() === "dictation"}>
+					<DictationSettings />
+				</Show>
+				<Show when={activeTab() === "github"}>
+					<GitHubTab />
+				</Show>
+				<Show when={activeTab() === "services"}>
+					<ServicesTab />
+				</Show>
+				<Show when={activeTab() === "plugins"}>
+					<PluginsTab onClose={props.onClose} />
+				</Show>
+				<Show when={activeTab() === "smart-prompts"}>
+					<SmartPromptsTab />
+				</Show>
+				<Show when={activeTab() === "providers"}>
+					<ProvidersTab />
+				</Show>
+				<Show when={activeTab() === "agents"}>
+					<AgentsTab connectionId={activeConnectionId()} />
+				</Show>
+				<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
+					<AiChatTab />
+				</Show>
 			</Show>
 		</SettingsShell>
 	);

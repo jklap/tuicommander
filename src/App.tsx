@@ -798,6 +798,7 @@ const App: Component = () => {
 		gitOps,
 		splitPanes,
 		executeSmartPrompt: smartPrompts.executeSmartPrompt,
+		openSettings,
 	});
 
 	useShortcutRegistration(shortcutHandlers);

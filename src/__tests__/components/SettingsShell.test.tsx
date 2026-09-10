@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { SettingsShell } from "../../components/SettingsPanel/SettingsShell";
 
 describe("SettingsShell", () => {
@@ -247,5 +248,63 @@ describe("SettingsShell", () => {
 			</SettingsShell>
 		));
 		expect(container.querySelector(".navResizeHandle")).not.toBeNull();
+	});
+
+	describe("search box", () => {
+		it("is omitted entirely when onSearchQueryChange is not given", () => {
+			const { container } = render(() => (
+				<SettingsShell {...defaultProps}>
+					<p>content</p>
+				</SettingsShell>
+			));
+			expect(container.querySelector(".searchInput")).toBeNull();
+		});
+
+		it("renders and reflects searchQuery when onSearchQueryChange is given", () => {
+			const { container } = render(() => (
+				<SettingsShell {...defaultProps} searchQuery="foo" onSearchQueryChange={vi.fn()}>
+					<p>content</p>
+				</SettingsShell>
+			));
+			const input = container.querySelector(".searchInput") as HTMLInputElement;
+			expect(input).not.toBeNull();
+			expect(input.value).toBe("foo");
+		});
+
+		it("calls onSearchQueryChange as the user types", () => {
+			const onSearchQueryChange = vi.fn();
+			const { container } = render(() => (
+				<SettingsShell {...defaultProps} searchQuery="" onSearchQueryChange={onSearchQueryChange}>
+					<p>content</p>
+				</SettingsShell>
+			));
+			const input = container.querySelector(".searchInput") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "shell" } });
+			expect(onSearchQueryChange).toHaveBeenCalledWith("shell");
+		});
+
+		it("shows a clear button only when the query is non-empty", () => {
+			const [query, setQuery] = createSignal("");
+			const { container } = render(() => (
+				<SettingsShell {...defaultProps} searchQuery={query()} onSearchQueryChange={vi.fn()}>
+					<p>content</p>
+				</SettingsShell>
+			));
+			expect(container.querySelector(".searchClear")).toBeNull();
+
+			setQuery("shell");
+			expect(container.querySelector(".searchClear")).not.toBeNull();
+		});
+
+		it("the clear button calls onSearchQueryChange with an empty string", () => {
+			const onSearchQueryChange = vi.fn();
+			const { container } = render(() => (
+				<SettingsShell {...defaultProps} searchQuery="shell" onSearchQueryChange={onSearchQueryChange}>
+					<p>content</p>
+				</SettingsShell>
+			));
+			fireEvent.click(container.querySelector(".searchClear") as HTMLButtonElement);
+			expect(onSearchQueryChange).toHaveBeenCalledWith("");
+		});
 	});
 });

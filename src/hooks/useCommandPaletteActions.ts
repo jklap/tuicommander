@@ -1,5 +1,6 @@
 import { type Accessor, createMemo } from "solid-js";
 import { type ActionEntry, getActionEntries, SMART_PROMPTS_CATEGORY } from "../actions/actionRegistry";
+import { SETTINGS_SEARCH_CATEGORY, SETTINGS_SEARCH_RESULTS } from "../components/SettingsPanel/settingsSearchIndex";
 import { appLogger } from "../stores/appLogger";
 import { commandPaletteStore } from "../stores/commandPalette";
 import { contextMenuActionsStore } from "../stores/contextMenuActionsStore";
@@ -17,10 +18,25 @@ interface CommandPaletteActionOptions {
 	gitOps: ReturnType<typeof useGitOperations>;
 	splitPanes: ReturnType<typeof useSplitPanes>;
 	executeSmartPrompt: (prompt: SavedPrompt) => Promise<unknown>;
+	/** Opens Settings, optionally deep-linked to a tab + a specific control's DOM id. */
+	openSettings: (tab: string, section?: string) => void;
 }
 
 /** Builds the command palette's static registry plus reactive repository, plugin, terminal, and prompt actions. */
 export function useCommandPaletteActions(options: CommandPaletteActionOptions): Accessor<ActionEntry[]> {
+	// Built once per hook call, not per memo recompute: SETTINGS_SEARCH_RESULTS
+	// is a fixed, module-level array and `options` (captured in each entry's
+	// `execute`) is the same object for the lifetime of this hook call, so
+	// rebuilding these ~80 entries on every unrelated repo/plugin/prompt change
+	// would just be wasted allocation.
+	const settingsEntries: ActionEntry[] = SETTINGS_SEARCH_RESULTS.map((setting) => ({
+		id: `setting:${setting.tab}:${setting.controlId}`,
+		label: `${setting.label} (${setting.tabLabel} settings)`,
+		category: SETTINGS_SEARCH_CATEGORY,
+		keybinding: "",
+		execute: () => options.openSettings(setting.tab, setting.controlId),
+	}));
+
 	return createMemo(() => {
 		const entries = getActionEntries(options.shortcutHandlers);
 		const repos = Object.values(repositoriesStore.state.repositories);
@@ -172,6 +188,11 @@ export function useCommandPaletteActions(options: CommandPaletteActionOptions): 
 				},
 			});
 		}
+
+		// Individual settings (from settingsSearchIndex.ts) — searchable from
+		// anywhere via the palette, not just inside an already-open Settings
+		// panel. Selecting one opens Settings deep-linked to that control.
+		entries.push(...settingsEntries);
 
 		return entries;
 	});

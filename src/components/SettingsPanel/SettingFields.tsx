@@ -1,6 +1,26 @@
 import { type Component, For, type JSX, Show } from "solid-js";
 import s from "./Settings.module.css";
 
+/** Stable DOM id for a setting's wrapper `<div class={s.group}>`, derived from
+ *  its label — used by SettingsPanel's search feature (`settingsSearchIndex.ts`)
+ *  to scrollIntoView + highlight the matched control. Must stay in sync with
+ *  that file, which computes the same id to build its search corpus.
+ *
+ *  Labels are unique within a single rendered tab in practice, EXCEPT rows
+ *  inside a `<For>` over a dynamic list (per-agent, per-account, per-provider,
+ *  …) — those repeat the same label per row, so this deliberately produces
+ *  duplicate ids there. That's a latent, harmless HTML-validity nit: nothing
+ *  calls `getElementById` against those rows (the search index only indexes
+ *  static, non-looped settings), so no lookup ever resolves to the wrong one.
+ */
+export function settingSlugId(label: string): string {
+	const slug = label
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return `setting-${slug}`;
+}
+
 export const SettingToggle: Component<{
 	checked: boolean;
 	onChange: (checked: boolean) => void;
@@ -8,7 +28,7 @@ export const SettingToggle: Component<{
 	hint?: string;
 	hintStyle?: JSX.CSSProperties;
 }> = (props) => (
-	<div class={s.group}>
+	<div class={s.group} id={settingSlugId(props.label)}>
 		<div class={s.toggle}>
 			<input type="checkbox" checked={props.checked} onChange={(e) => props.onChange(e.currentTarget.checked)} />
 			<span>{props.label}</span>
@@ -29,7 +49,7 @@ export const SettingSelect: Component<{
 	hint?: string;
 	hintStyle?: JSX.CSSProperties;
 }> = (props) => (
-	<div class={s.group}>
+	<div class={s.group} id={settingSlugId(props.label)}>
 		<label>{props.label}</label>
 		<select value={props.value} onChange={(e) => props.onChange(e.currentTarget.value)}>
 			<For each={props.options}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
@@ -55,7 +75,7 @@ export const SettingSlider: Component<{
 	formatValue?: (value: number) => string;
 	hint?: string;
 }> = (props) => (
-	<div class={s.group}>
+	<div class={s.group} id={settingSlugId(props.label)}>
 		<label>{props.label}</label>
 		<div class={s.slider}>
 			<input
@@ -83,7 +103,7 @@ export const SettingInput: Component<{
 	hint?: string;
 	type?: "text" | "password" | "number";
 }> = (props) => (
-	<div class={s.group}>
+	<div class={s.group} id={settingSlugId(props.label)}>
 		<label>{props.label}</label>
 		<input
 			type={props.type ?? "text"}

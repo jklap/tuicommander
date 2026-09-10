@@ -1,61 +1,79 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 
-vi.mock("../../stores/settings", () => ({
-	settingsStore: {
-		state: {
-			ide: "vscode",
-			font: "JetBrains Mono",
-			defaultFontSize: 12,
-			fontWeight: 400,
-			cursorStyle: "bar",
-			theme: "vscode-dark",
-			confirmBeforeQuit: true,
-			confirmBeforeClosingTab: true,
-			copyOnSelect: true,
-			osc52Clipboard: true,
-			osc1337FocusAttention: true,
-			showLastPrompt: true,
-			linkActivation: "click",
-			doubleClickAction: "smart",
-			wordSelectionMode: "characters",
-			wordSeparators: " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\",
-			wordSelectionRegex: "",
-			smartSelectionRules: [],
-			blockTimestampMode: "modifier",
-			showBlockMarks: true,
-			showPromptMarks: true,
-			blockFoldingEnabled: true,
-			shell: "",
-		},
-		setShell: vi.fn(),
-		setIde: vi.fn(),
-		setFont: vi.fn(),
-		setDefaultFontSize: vi.fn(),
-		setFontWeight: vi.fn(),
-		setCursorStyle: vi.fn(),
-		setConfirmBeforeQuit: vi.fn(),
-		setConfirmBeforeClosingTab: vi.fn(),
-		setCopyOnSelect: vi.fn(),
-		setOsc52Clipboard: vi.fn(),
-		setOsc1337FocusAttention: vi.fn(),
-		setShowLastPrompt: vi.fn(),
-		setLinkActivation: vi.fn(),
-		setDoubleClickAction: vi.fn(),
-		setWordSelectionMode: vi.fn(),
-		setWordSeparators: vi.fn(),
-		setWordSelectionRegex: vi.fn(),
-		setSmartSelectionRules: vi.fn(),
-		setBlockTimestampMode: vi.fn(),
-		setShowBlockMarks: vi.fn(),
-		setShowPromptMarks: vi.fn(),
-		setBlockFoldingEnabled: vi.fn(),
-		isAiChatEnabled: vi.fn().mockReturnValue(false),
-	},
-	IDE_NAMES: { vscode: "VS Code", cursor: "Cursor" },
-	FONT_FAMILIES: { "JetBrains Mono": "JetBrains Mono", "Fira Code": "Fira Code" },
+// A real solid-js signal (created inside the factory via a dynamic import, not
+// the top-level one above — see mdkb memory "solid signal in a vi.mock factory
+// dual-instance gotcha") so the ai-chat-auto-reset effect's `createEffect`
+// actually tracks it and re-runs when a test flips it, the same as it would
+// against the real store's reactive state.
+const aiChatEnabledBox = vi.hoisted(() => ({
+	get: (): boolean => false,
+	set: (_v: boolean) => {},
 }));
+
+vi.mock("../../stores/settings", async () => {
+	const { createSignal: createSignalInFactory } = await import("solid-js");
+	const [enabled, setEnabled] = createSignalInFactory(false);
+	aiChatEnabledBox.get = enabled;
+	aiChatEnabledBox.set = setEnabled;
+
+	return {
+		settingsStore: {
+			state: {
+				ide: "vscode",
+				font: "JetBrains Mono",
+				defaultFontSize: 12,
+				fontWeight: 400,
+				cursorStyle: "bar",
+				theme: "vscode-dark",
+				confirmBeforeQuit: true,
+				confirmBeforeClosingTab: true,
+				copyOnSelect: true,
+				osc52Clipboard: true,
+				osc1337FocusAttention: true,
+				showLastPrompt: true,
+				linkActivation: "click",
+				doubleClickAction: "smart",
+				wordSelectionMode: "characters",
+				wordSeparators: " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\",
+				wordSelectionRegex: "",
+				smartSelectionRules: [],
+				blockTimestampMode: "modifier",
+				showBlockMarks: true,
+				showPromptMarks: true,
+				blockFoldingEnabled: true,
+				shell: "",
+			},
+			setShell: vi.fn(),
+			setIde: vi.fn(),
+			setFont: vi.fn(),
+			setDefaultFontSize: vi.fn(),
+			setFontWeight: vi.fn(),
+			setCursorStyle: vi.fn(),
+			setConfirmBeforeQuit: vi.fn(),
+			setConfirmBeforeClosingTab: vi.fn(),
+			setCopyOnSelect: vi.fn(),
+			setOsc52Clipboard: vi.fn(),
+			setOsc1337FocusAttention: vi.fn(),
+			setShowLastPrompt: vi.fn(),
+			setLinkActivation: vi.fn(),
+			setDoubleClickAction: vi.fn(),
+			setWordSelectionMode: vi.fn(),
+			setWordSeparators: vi.fn(),
+			setWordSelectionRegex: vi.fn(),
+			setSmartSelectionRules: vi.fn(),
+			setBlockTimestampMode: vi.fn(),
+			setShowBlockMarks: vi.fn(),
+			setShowPromptMarks: vi.fn(),
+			setBlockFoldingEnabled: vi.fn(),
+			isAiChatEnabled: () => aiChatEnabledBox.get(),
+		},
+		IDE_NAMES: { vscode: "VS Code", cursor: "Cursor" },
+		FONT_FAMILIES: { "JetBrains Mono": "JetBrains Mono", "Fira Code": "Fira Code" },
+	};
+});
 
 vi.mock("../../stores/notifications", () => ({
 	notificationsStore: {
@@ -80,14 +98,21 @@ vi.mock("../../stores/notifications", () => ({
 	},
 }));
 
-vi.mock("../../stores/ui", () => ({
-	uiStore: {
-		state: {
-			settingsNavWidth: 180,
+vi.mock("../../stores/ui", () => {
+	const state: { settingsNavWidth: number; lastSettingsTab: string | null } = {
+		settingsNavWidth: 180,
+		lastSettingsTab: null,
+	};
+	return {
+		uiStore: {
+			state,
+			setSettingsNavWidth: vi.fn(),
+			setLastSettingsTab: vi.fn((tab: string | null) => {
+				state.lastSettingsTab = tab;
+			}),
 		},
-		setSettingsNavWidth: vi.fn(),
-	},
-}));
+	};
+});
 
 vi.mock("../../stores/repositories", () => {
 	const repositories = {
@@ -124,10 +149,13 @@ vi.mock("../../stores/repoSettings", () => ({
 }));
 
 import { SettingsPanel } from "../../components/SettingsPanel/SettingsPanel";
+import { uiStore } from "../../stores/ui";
 
 describe("SettingsPanel", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		uiStore.state.lastSettingsTab = null;
+		aiChatEnabledBox.set(false);
 	});
 
 	it("does not render when visible=false", () => {
@@ -281,5 +309,150 @@ describe("SettingsPanel", () => {
 			<SettingsPanel visible={true} onClose={() => {}} context={{ kind: "repo", repoPath: "/repo/alpha" }} />
 		));
 		expect(container.querySelector(".footerReset")).not.toBeNull();
+	});
+
+	it("remembers the last selected pane across a close+reopen", () => {
+		const [visible, setVisible] = createSignal(true);
+		const { container } = render(() => <SettingsPanel visible={visible()} onClose={() => {}} />);
+
+		const navItems = () => container.querySelectorAll(".navItem");
+		const notificationsItem = Array.from(navItems()).find((n) => n.textContent === "Notifications")!;
+		fireEvent.click(notificationsItem);
+		expect(container.querySelector(".navItem.active")!.textContent).toBe("Notifications");
+
+		// Close and reopen the panel (props.visible false -> true) without an
+		// explicit initialTab/context — it should land back on Notifications
+		// instead of resetting to General.
+		setVisible(false);
+		setVisible(true);
+		expect(container.querySelector(".navItem.active")!.textContent).toBe("Notifications");
+	});
+
+	it("an explicit repo context still wins over a remembered global pane", () => {
+		uiStore.state.lastSettingsTab = "notifications";
+		const { container } = render(() => (
+			<SettingsPanel visible={true} onClose={() => {}} context={{ kind: "repo", repoPath: "/repo/alpha" }} />
+		));
+		const activeItem = container.querySelector(".navItem.active");
+		expect(activeItem!.textContent).toBe("Alpha");
+	});
+
+	it("ignores a remembered pane that no longer exists in the nav", () => {
+		uiStore.state.lastSettingsTab = "repo:/repo/gone";
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		const activeItem = container.querySelector(".navItem.active");
+		expect(activeItem!.textContent).toBe("General");
+	});
+
+	describe("settings search", () => {
+		it("typing a query replaces the tab content with matching results", () => {
+			const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+			const input = container.querySelector(".searchInput") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "copy on select" } });
+
+			expect(container.querySelector(".searchResults")).not.toBeNull();
+			expect(container.textContent).toContain("Copy on select");
+			// The General tab's own content (still the active nav item) must not
+			// render underneath the results.
+			expect(container.textContent).not.toContain("Power Management");
+		});
+
+		it("shows an empty state when nothing matches", () => {
+			const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+			const input = container.querySelector(".searchInput") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "zzzznonexistentzzzz" } });
+			expect(container.querySelector(".searchEmpty")).not.toBeNull();
+		});
+
+		it("selecting a result switches tab, clears the query, and remembers the pane", () => {
+			const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+			const input = container.querySelector(".searchInput") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "copy on select" } });
+
+			const result = container.querySelector(".searchResultItem") as HTMLButtonElement;
+			expect(result).toBeTruthy();
+			fireEvent.click(result);
+
+			expect((container.querySelector(".searchInput") as HTMLInputElement).value).toBe("");
+			expect(container.querySelector(".navItem.active")!.textContent).toBe("Terminal");
+			expect(uiStore.setLastSettingsTab).toHaveBeenCalledWith("terminal");
+		});
+
+		it("clicking a nav item directly clears an active search query", () => {
+			const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+			const input = container.querySelector(".searchInput") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "copy on select" } });
+			expect(container.querySelector(".searchResults")).not.toBeNull();
+
+			const navItems = container.querySelectorAll(".navItem");
+			const notificationsItem = Array.from(navItems).find((n) => n.textContent === "Notifications")!;
+			fireEvent.click(notificationsItem);
+
+			expect((container.querySelector(".searchInput") as HTMLInputElement).value).toBe("");
+			expect(container.querySelector(".searchResults")).toBeNull();
+		});
+
+		it("the clear button empties the query", () => {
+			const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+			const input = container.querySelector(".searchInput") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "copy on select" } });
+			const clearBtn = container.querySelector(".searchClear") as HTMLButtonElement;
+			expect(clearBtn).toBeTruthy();
+			fireEvent.click(clearBtn);
+			expect((container.querySelector(".searchInput") as HTMLInputElement).value).toBe("");
+			expect(container.querySelector(".searchResults")).toBeNull();
+		});
+
+		it("whitespace-only input is treated the same as an empty query", () => {
+			const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+			const input = container.querySelector(".searchInput") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "    " } });
+			// Trimmed to empty, so this must NOT enter search mode — the active
+			// tab's own content stays visible, consistent with searchSettings()
+			// itself also treating a whitespace-only query as empty.
+			expect(container.querySelector(".searchResults")).toBeNull();
+			expect(container.querySelector(".navItem.active")!.textContent).toBe("General");
+		});
+
+		it("hides repo settings content while searching, from a repo nav context", () => {
+			const { container } = render(() => (
+				<SettingsPanel visible={true} onClose={() => {}} context={{ kind: "repo", repoPath: "/repo/alpha" }} />
+			));
+			// Sanity: repo content is shown before any search.
+			expect(container.querySelector(".section h3")!.textContent).toBe("Repository");
+
+			const input = container.querySelector(".searchInput") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "copy on select" } });
+			expect(container.textContent).not.toContain("Repository");
+			expect(container.querySelector(".searchResults")).not.toBeNull();
+
+			// Clearing the query restores the repo content underneath.
+			fireEvent.input(input, { target: { value: "" } });
+			expect(container.querySelector(".section h3")!.textContent).toBe("Repository");
+		});
+	});
+
+	describe("AI Chat tab auto-reset (#1376-7333)", () => {
+		it("falling back to General also updates lastSettingsTab, not just the visible tab", () => {
+			aiChatEnabledBox.set(true);
+			const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+
+			const navItems = () => container.querySelectorAll(".navItem");
+			const aiChatItem = Array.from(navItems()).find((n) => n.textContent === "AI Chat")!;
+			fireEvent.click(aiChatItem);
+			expect(container.querySelector(".navItem.active")!.textContent).toBe("AI Chat");
+			expect(uiStore.setLastSettingsTab).toHaveBeenCalledWith("ai-chat");
+
+			// The experimental flag flips off while AI Chat is still the active tab.
+			aiChatEnabledBox.set(false);
+
+			expect(container.querySelector(".navItem.active")!.textContent).toBe("General");
+			// The bug this guards: without this, lastSettingsTab stays "ai-chat" —
+			// invisible today (resolveInitialTab validates against buildNavItems,
+			// which drops "ai-chat" while disabled) but resurfaces the moment AI
+			// Chat is re-enabled before Settings is reopened.
+			expect(uiStore.setLastSettingsTab).toHaveBeenCalledWith("general");
+			expect(uiStore.state.lastSettingsTab).toBe("general");
+		});
 	});
 });

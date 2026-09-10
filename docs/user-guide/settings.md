@@ -1,6 +1,16 @@
 # Settings
 
-Open settings with `Cmd+,`. Settings are organized into tabs.
+Open settings with `Cmd+,`. Settings are organized into tabs. Reopening
+Settings returns you to whichever tab you last had open, for the rest of the
+app session (not persisted across restarts).
+
+**Search:** the search box above the tab list finds an individual setting
+across every tab — type a few words and pick a result to jump straight to it
+(the setting briefly flashes so it's easy to spot). Settings also appear in
+the Command Palette (`Cmd+P`) under the "Settings" category, so you can
+jump to one without opening the Settings panel first. Coverage is currently
+the static, non-per-item settings on each global tab (per-repo settings and
+per-agent/per-account/per-provider/per-prompt rows aren't indexed).
 
 ## General Tab
 

@@ -7,7 +7,7 @@ import { dictationStore, WHISPER_LANGUAGES } from "../../stores/dictation";
 import { cx } from "../../utils";
 import { KeyComboCapture } from "../shared/KeyComboCapture";
 import d from "./DictationSettings.module.css";
-import { SettingSlider } from "./SettingFields";
+import { SettingSlider, settingSlugId } from "./SettingFields";
 import s from "./Settings.module.css";
 
 /** Single model row in the model selector list */
@@ -153,7 +153,7 @@ export const DictationSettings: Component = () => {
 			<h3>{t("dictation.title", "Dictation Settings")}</h3>
 
 			{/* Enable toggle */}
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId(t("dictation.enableLabel", "Enable Dictation"))}>
 				<label>{t("dictation.enableLabel", "Enable Dictation")}</label>
 				<div class={s.toggle}>
 					<input
@@ -166,7 +166,7 @@ export const DictationSettings: Component = () => {
 			</div>
 
 			{/* Model selector */}
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId(t("dictation.modelLabel", "Whisper Model"))}>
 				<label>{t("dictation.modelLabel", "Whisper Model")}</label>
 				<p class={s.hint} style={{ "margin-bottom": "8px" }}>
 					{t("dictation.modelHint", "Choose a model. Larger models are more accurate but slower.")}
@@ -177,7 +177,7 @@ export const DictationSettings: Component = () => {
 			</div>
 
 			{/* Hotkey */}
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId(t("dictation.hotkeyLabel", "Hotkey"))}>
 				<label>{t("dictation.hotkeyLabel", "Hotkey")}</label>
 				<div class={d.hotkeyRow}>
 					<KeyComboCapture
@@ -211,7 +211,7 @@ export const DictationSettings: Component = () => {
 			/>
 
 			{/* Auto-send */}
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId(t("dictation.autoSendLabel", "Auto-send"))}>
 				<label>{t("dictation.autoSendLabel", "Auto-send")}</label>
 				<div class={s.toggle}>
 					<input
@@ -224,7 +224,7 @@ export const DictationSettings: Component = () => {
 			</div>
 
 			{/* Language */}
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId(t("dictation.languageLabel", "Language"))}>
 				<label>{t("dictation.languageLabel", "Language")}</label>
 				<select
 					value={dictationStore.state.language}
@@ -238,7 +238,7 @@ export const DictationSettings: Component = () => {
 			</div>
 
 			{/* Audio devices */}
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId(t("dictation.microphoneLabel", "Microphone"))}>
 				<label>{t("dictation.microphoneLabel", "Microphone")}</label>
 				<Show
 					when={dictationStore.state.devices.length > 0}
@@ -278,7 +278,7 @@ export const DictationSettings: Component = () => {
 			</div>
 
 			{/* Correction map */}
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId(t("dictation.correctionsLabel", "Auto-Corrections"))}>
 				<label>{t("dictation.correctionsLabel", "Auto-Corrections")}</label>
 				<p class={s.hint} style={{ "margin-bottom": "8px" }}>
 					{t("dictation.correctionsHint", "Automatically replace dictation output. Useful for technical terms.")}

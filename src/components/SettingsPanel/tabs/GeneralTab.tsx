@@ -8,7 +8,7 @@ import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
 import { randomId } from "../../../utils/randomId";
-import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
+import { SettingSelect, SettingSlider, SettingToggle, settingSlugId } from "../SettingFields";
 import s from "../Settings.module.css";
 
 interface CliStatus {
@@ -537,7 +537,7 @@ export const GeneralTab: Component = () => {
 
 			<h3>{t("general.heading.experimental", "Experimental Features")}</h3>
 
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId(t("general.toggle.experimentalFeatures", "Enable experimental features"))}>
 				<p class={s.warning}>
 					{t("general.hint.experimentalWarning", "These features are under active development and may be unstable.")}
 				</p>

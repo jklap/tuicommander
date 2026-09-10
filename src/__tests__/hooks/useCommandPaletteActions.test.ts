@@ -94,6 +94,7 @@ describe("useCommandPaletteActions", () => {
 				gitOps: gitOps as never,
 				splitPanes: { resetLayout: vi.fn() } as never,
 				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+				openSettings: vi.fn(),
 			});
 		});
 
@@ -130,6 +131,7 @@ describe("useCommandPaletteActions", () => {
 				gitOps: gitOps as never,
 				splitPanes: { resetLayout: vi.fn() } as never,
 				executeSmartPrompt,
+				openSettings: vi.fn(),
 			});
 		});
 
@@ -151,5 +153,26 @@ describe("useCommandPaletteActions", () => {
 		expect(gitOps.moveTerminalToWorktree).toHaveBeenCalledWith("term-1", "/wt");
 		expect(executeSmartPrompt).toHaveBeenCalledWith(mockPrompt);
 		expect(pluginAction).toHaveBeenCalledWith({ sessionId: "session-1", repoPath: null });
+	});
+
+	it("exposes every static setting as a palette action that deep-links into Settings", () => {
+		const openSettings = vi.fn();
+		let actions: ReturnType<typeof useCommandPaletteActions> | undefined;
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			actions = useCommandPaletteActions({
+				shortcutHandlers: {} as never,
+				gitOps: { getWorktreeTargets: vi.fn(() => []) } as never,
+				splitPanes: { resetLayout: vi.fn() } as never,
+				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+				openSettings,
+			});
+		});
+
+		const shellAction = actions?.().find((a) => a.id === "setting:terminal:setting-shell");
+		expect(shellAction).toBeTruthy();
+		expect(shellAction?.category).toBe("Settings");
+		shellAction?.execute();
+		expect(openSettings).toHaveBeenCalledWith("terminal", "setting-shell");
 	});
 });

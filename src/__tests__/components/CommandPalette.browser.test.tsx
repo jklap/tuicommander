@@ -103,6 +103,15 @@ describe("CommandPalette browser mode", () => {
 		expect(container.textContent).not.toContain("Future native action");
 	});
 
+	// Settings itself (`toggle-settings`) is browser-allowlisted, so the
+	// dynamic per-setting deep-link actions from settingsSearchIndex.ts (id
+	// prefix `setting:`) must be too — same openSettings()/SettingsPanel path,
+	// which isn't Tauri-gated.
+	it("allowlists the dynamic settings-search actions for browser mode", () => {
+		const settingAction = action("setting:terminal:setting-shell", "Shell (Terminal settings)");
+		expect(isBrowserCommandPaletteAction(settingAction)).toBe(true);
+	});
+
 	it("keeps the complete desktop action list when browser mode is off", () => {
 		const nativeDialog = action("open-file", "Open file");
 		const { container } = render(() => <CommandPalette actions={[nativeDialog]} />);

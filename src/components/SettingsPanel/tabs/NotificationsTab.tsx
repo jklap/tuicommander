@@ -5,7 +5,7 @@ import type { NotificationSound } from "../../../notifications";
 import { appLogger } from "../../../stores/appLogger";
 import { notificationsStore } from "../../../stores/notifications";
 import { isTauri } from "../../../transport";
-import { SettingSlider, SettingToggle } from "../SettingFields";
+import { SettingSlider, SettingToggle, settingSlugId } from "../SettingFields";
 import s from "../Settings.module.css";
 
 interface AudioOutputDevice {
@@ -149,7 +149,7 @@ export const NotificationsTab: Component = () => {
 				/>
 
 				<Show when={isTauri()}>
-					<div class={s.group}>
+					<div class={s.group} id={settingSlugId(t("notifications.label.audioDevice", "Audio Output Device"))}>
 						<label>{t("notifications.label.audioDevice", "Audio Output Device")}</label>
 						<p class={s.hint}>
 							{t("notifications.hint.audioDevice", "Choose which speaker or output to use for notification sounds")}
@@ -233,7 +233,10 @@ export const NotificationsTab: Component = () => {
 					</For>
 				</div>
 
-				<div class={s.group}>
+				<div
+					class={s.group}
+					id={settingSlugId(t("notifications.label.silenceRemoteCompletions", "Silence completions from MCP sessions"))}
+				>
 					<label>{t("notifications.label.orchestration", "Orchestration")}</label>
 					<div class={s.toggle}>
 						<input
@@ -260,7 +263,7 @@ export const NotificationsTab: Component = () => {
 
 			{/* Outside the audio Show on purpose — the bell is visual, so the setting
 			    must stay reachable on a machine with no audio output. */}
-			<div class={s.group}>
+			<div class={s.group} id={settingSlugId(t("notifications.toggle.toastsInBell", "Keep toasts in the bell"))}>
 				<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
 				<div class={s.toggle}>
 					<input

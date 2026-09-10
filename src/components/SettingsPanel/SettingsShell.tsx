@@ -27,6 +27,9 @@ export interface SettingsShellProps {
 	onNavWidthChange?: (width: number) => void;
 	/** Called once on mouseup after nav resize drag (persist to disk) */
 	onNavWidthPersist?: () => void;
+	/** Search box above the nav list. Omit to hide the search box entirely. */
+	searchQuery?: string;
+	onSearchQueryChange?: (query: string) => void;
 	footer?: JSX.Element;
 	children: JSX.Element;
 }
@@ -88,6 +91,27 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 					{/* Body: nav sidebar + scrollable content */}
 					<div class={s.body}>
 						<nav class={s.nav} style={{ width: `${navWidth()}px` }}>
+							<Show when={props.onSearchQueryChange}>
+								<div class={s.searchBox}>
+									<input
+										type="text"
+										class={s.searchInput}
+										placeholder="Search settings…"
+										value={props.searchQuery ?? ""}
+										onInput={(e) => props.onSearchQueryChange?.(e.currentTarget.value)}
+									/>
+									<Show when={props.searchQuery}>
+										<button
+											type="button"
+											class={s.searchClear}
+											aria-label="Clear search"
+											onClick={() => props.onSearchQueryChange?.("")}
+										>
+											&times;
+										</button>
+									</Show>
+								</div>
+							</Show>
 							<For each={props.tabs}>
 								{(tab) =>
 									tab.key === "__sep__" ? (
