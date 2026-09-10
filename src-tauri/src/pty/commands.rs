@@ -30,8 +30,8 @@ pub(crate) async fn create_pty(
         PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width: cols.saturating_mul(crate::terminal_grid::DEFAULT_CELL_WIDTH_PX),
+            pixel_height: rows.saturating_mul(crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX),
         },
         move || {
             let mut cmd = build_shell_command(&spawn_shell);
@@ -213,8 +213,8 @@ pub(crate) async fn create_pty_with_worktree(
         PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width: cols.saturating_mul(crate::terminal_grid::DEFAULT_CELL_WIDTH_PX),
+            pixel_height: rows.saturating_mul(crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX),
         },
         move || {
             let mut cmd = build_shell_command(&spawn_shell);
@@ -463,9 +463,19 @@ pub(crate) async fn resize_pty(
     session_id: String,
     rows: u16,
     cols: u16,
+    cell_width_px: Option<u16>,
+    cell_height_px: Option<u16>,
 ) -> Result<(), String> {
     let state = Arc::clone(&state);
-    let resize_frame = resize_session_off_thread(&state, session_id.clone(), rows, cols).await?;
+    let resize_frame = resize_session_off_thread(
+        &state,
+        session_id.clone(),
+        rows,
+        cols,
+        cell_width_px,
+        cell_height_px,
+    )
+    .await?;
     // Flush the post-resize frame so the viewport repaints without waiting for the
     // next PTY data event (fixes blank screen after zoom on static content).
     if let Some(frame) = resize_frame {
@@ -1215,6 +1225,41 @@ pub(crate) async fn terminal_get_cursor_line(
     session_id: String,
 ) -> Result<String, String> {
     vt_read(&state, session_id, |vt| vt.grid_get_cursor_line()).await
+}
+
+/// Inline-image tile at a viewport position, if any: `(image_id, placement_id,
+/// tile_col, tile_row)`. Mirrors `terminal_hyperlink_at` exactly (color-tools
+/// plan, Phase 1) — Phases 2/3's OSC 1337 / Kitty dispatch handlers are what
+/// actually populate any cell this can find.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn terminal_image_ref_at(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    row: usize,
+    col: usize,
+) -> Result<Option<(u32, u32, u16, u16)>, String> {
+    vt_read(&state, session_id, move |vt| vt.grid_image_ref_at(row, col)).await
+}
+
+/// Fetch a previously transmitted inline image's raw bytes by id.
+///
+/// Returns `tauri::ipc::Response` for the same reason `terminal_styled_rows`
+/// does — an image can be a multi-KB/MB payload, and a bare `Vec<u8>` would
+/// cross the IPC boundary as a JSON array of decimal numbers.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn terminal_image_bytes(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    image_id: u32,
+) -> Result<tauri::ipc::Response, String> {
+    let bytes = vt_read(&state, session_id, move |vt| {
+        vt.grid_image_bytes(image_id).map(|b| b.to_vec())
+    })
+    .await?
+    .unwrap_or_default();
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[cfg(feature = "desktop")]

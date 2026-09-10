@@ -118,6 +118,12 @@ pub(crate) mod tasks;
 pub(crate) mod terminal_grid;
 #[cfg(test)]
 pub(crate) mod test_support;
+// Storage seam for the color-tools inline-image plan; Phase 2 (OSC 1337) and
+// Phase 3 (Kitty graphics) are the real callers of `ImageStore::store`. Fully
+// covered by its own unit tests (including the refcount-eviction property the
+// whole design exists for) in the meantime.
+#[allow(dead_code)]
+pub(crate) mod terminal_images;
 pub(crate) mod text_rank;
 pub(crate) mod themes;
 pub(crate) mod tool_search;
@@ -2424,6 +2430,8 @@ pub fn run() {
             pty::terminal_get_cursor_line,
             pty::terminal_hyperlink_at,
             pty::terminal_hyperlink_span,
+            pty::terminal_image_ref_at,
+            pty::terminal_image_bytes,
             pty::set_session_visible,
             pty::set_session_name,
             pty::set_session_accent_color,

@@ -2655,6 +2655,33 @@ impl<T: EventListener> Handler for Term<T> {
             })));
     }
 
+    /// XTVERSION (`CSI > q`) — report a terminal name/version string. Reply as
+    /// `ghostty`, matching this app's own `TERM_PROGRAM`/`KITTY_WINDOW_ID`
+    /// advertisement (`inject_unix_terminal_env`, `pty.rs`) rather than
+    /// asserting a new identity: several tools (timg, snacks.nvim) map
+    /// "ghostty" to Kitty-graphics support, which is what those existing env
+    /// vars already imply.
+    #[inline]
+    fn report_xtversion(&mut self) {
+        let text = "\x1bP>|ghostty 3.0.0\x1b\\".to_string();
+        self.event_proxy.send_event(Event::PtyWrite(text));
+    }
+
+    /// `CSI 16 t` — report the pixel size of a single cell. Several inline-image
+    /// tools (timg, broot, yazi) fall back to this when `TIOCGWINSZ`'s
+    /// `ws_xpixel`/`ws_ypixel` come back zero. Reply format is `CSI 6 ; height ;
+    /// width t` (xterm/kitty convention — height first, then width).
+    #[inline]
+    fn cell_size_pixels(&mut self) {
+        self.event_proxy
+            .send_event(Event::CellSizeRequest(Arc::new(move |window_size| {
+                format!(
+                    "\x1b[6;{};{}t",
+                    window_size.cell_height, window_size.cell_width
+                )
+            })));
+    }
+
     #[inline]
     fn text_area_size_chars(&mut self) {
         let text = format!("\x1b[8;{};{}t", self.screen_lines(), self.columns());
