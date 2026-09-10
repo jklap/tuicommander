@@ -2922,6 +2922,8 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::terminal_get_lines,
             pty::terminal_get_cursor_line,
             pty::terminal_hyperlink_span,
+            pty::terminal_image_ref_at,
+            pty::terminal_image_bytes,
             pty::set_session_visible,
             pty::set_session_name,
             ai_chat_selection::ai_chat_selection,

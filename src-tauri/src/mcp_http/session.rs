@@ -553,6 +553,8 @@ pub(super) async fn resize_session(
         body.rows,
         body.cols,
         "http",
+        body.cell_width_px,
+        body.cell_height_px,
     )
     .await
     {
@@ -2683,6 +2685,45 @@ pub(super) async fn terminal_get_cursor_line(
     match crate::pty::vt_try_read(&state, session_id, |vt| vt.grid_get_cursor_line()).await {
         Ok(Some(text)) => Json(serde_json::json!({"text": text})).into_response(),
         Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
+}
+
+/// Inline-image tile at a viewport position, if any. Mirrors
+/// `terminal_hyperlink_span` exactly (color-tools plan, Phase 1): answers null
+/// for a gone session rather than 404, and serializes the
+/// `Option<(image_id, placement_id, tile_col, tile_row)>` tuple as-is (a JSON
+/// array or null) rather than a named object, so the IPC and HTTP transports
+/// carry the identical shape with no `transform` needed on the client side.
+pub(super) async fn terminal_image_ref_at(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<super::types::TerminalCellQuery>,
+) -> impl IntoResponse {
+    let image_ref = crate::pty::vt_read(&state, session_id, move |vt| {
+        vt.grid_image_ref_at(query.row, query.col)
+    })
+    .await;
+    match image_ref {
+        Ok(image_ref) => Json(serde_json::json!(image_ref)).into_response(),
+        Err(e) => read_failed_response(&e),
+    }
+}
+
+/// Fetch a previously transmitted inline image's raw bytes by id. Same
+/// octet-stream shape as `terminal_styled_rows`.
+pub(super) async fn terminal_image_bytes(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<super::types::TerminalImageQuery>,
+) -> axum::response::Response {
+    match crate::pty::vt_read(&state, session_id, move |vt| {
+        vt.grid_image_bytes(query.id).map(|b| b.to_vec())
+    })
+    .await
+    {
+        Ok(Some(bytes)) => styled_rows_response(bytes).into_response(),
+        Ok(None) => not_found_response().into_response(),
         Err(e) => read_failed_response(&e),
     }
 }
@@ -5282,9 +5323,17 @@ mod tests {
             148,
             "registration must preserve the requested width"
         );
-        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148, "test")
-            .await
-            .expect("same-size resize");
+        crate::pty::resize_session_off_thread(
+            &state,
+            session_id.clone(),
+            24,
+            148,
+            "test",
+            None,
+            None,
+        )
+        .await
+        .expect("same-size resize");
         assert_eq!(
             state
                 .grid
