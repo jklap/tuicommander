@@ -3864,10 +3864,20 @@ pub(crate) async fn resize_session_off_thread(
     rows: u16,
     cols: u16,
     origin: &'static str,
+    cell_width_px: Option<u16>,
+    cell_height_px: Option<u16>,
 ) -> Result<Option<crate::grid_gate::GridFrame>, String> {
     let state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
-        resize_session_core(&state, &session_id, rows, cols, origin)
+        resize_session_core(
+            &state,
+            &session_id,
+            rows,
+            cols,
+            origin,
+            cell_width_px,
+            cell_height_px,
+        )
     })
     .await
     .map_err(|e| format!("resize failed: {e}"))?
@@ -3882,6 +3892,8 @@ pub(crate) fn resize_session_core(
     rows: u16,
     cols: u16,
     origin: &'static str,
+    cell_width_px: Option<u16>,
+    cell_height_px: Option<u16>,
 ) -> Result<Option<crate::grid_gate::GridFrame>, String> {
     if rows == 0 || cols == 0 {
         return Err("Invalid dimensions: rows and cols must be > 0".to_string());
@@ -3889,6 +3901,15 @@ pub(crate) fn resize_session_core(
     #[cfg(test)]
     {
         RESIZE_THREADS.insert(session_id.to_string(), std::thread::current().id());
+    }
+    // Update cell pixel metrics unconditionally, ahead of the no-op dimension
+    // guard below — a `resize_pty` call carrying only new device-pixel cell
+    // metrics (e.g. a DPR change with no row/col change) still lands them for
+    // future CSI 14t/16t replies, even on a call that no-ops for TIOCSWINSZ.
+    if let (Some(w), Some(h)) = (cell_width_px, cell_height_px)
+        && let Some(vt_log) = state.grid.vt_log_buffers.get(session_id)
+    {
+        vt_log.lock().set_cell_pixel_size(w, h);
     }
     // Serialize the whole grid+PTY resize for this session under one lock so two
     // concurrent differing resizes (Tauri `resize_pty` + HTTP route) cannot interleave
@@ -3962,14 +3983,21 @@ pub(crate) fn resize_session_core(
         .sessions
         .get(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
+    let (cell_w, cell_h) = match state.grid.vt_log_buffers.get(session_id) {
+        Some(vt_log) => vt_log.lock().cell_pixel_size(),
+        None => (
+            crate::terminal_grid::DEFAULT_CELL_WIDTH_PX,
+            crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX,
+        ),
+    };
     let session = entry.lock();
     session
         .master
         .resize(PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width: cols.saturating_mul(cell_w),
+            pixel_height: rows.saturating_mul(cell_h),
         })
         .map_err(|e| format!("Failed to resize PTY: {e}"))?;
     // TIOCGWINSZ on the master reads the same winsize the child reads.

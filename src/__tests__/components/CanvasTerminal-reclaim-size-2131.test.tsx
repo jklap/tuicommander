@@ -79,6 +79,7 @@ it("re-sends its own size on focus and on input once another viewer changed the 
 	const view = render(() => <CanvasTerminal sessionId="reclaim-2131" terminalId={terminalId} />);
 	try {
 		await waitFor(() => expect(resizes()).toHaveLength(1));
+		// The reclaim re-sends rows/cols only; omitted cell-pixel metrics keep the backend's current ones.
 		const mine = resizes()[0] as { rows: number; cols: number };
 		expect(mine).not.toMatchObject(FOREIGN);
 		await waitFor(() => expect(transport.sink).not.toBeNull());
@@ -89,7 +90,7 @@ it("re-sends its own size on focus and on input once another viewer changed the 
 		const input = view.container.querySelector("textarea, input") as HTMLElement;
 		fireEvent.focus(input);
 		await waitFor(() => expect(resizes()).toHaveLength(2));
-		expect(resizes()[1]).toMatchObject({ sessionId: "reclaim-2131", ...mine });
+		expect(resizes()[1]).toMatchObject({ sessionId: "reclaim-2131", rows: mine.rows, cols: mine.cols });
 
 		// Typing before the new frame arrives must not send one request per key.
 		fireEvent.keyDown(input, { key: "a" });

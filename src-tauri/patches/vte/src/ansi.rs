@@ -694,6 +694,14 @@ pub trait Handler {
     /// Report text area size in pixels.
     fn text_area_size_pixels(&mut self) {}
 
+    /// Report cell size in pixels (`CSI 16 t`).
+    fn cell_size_pixels(&mut self) {}
+
+    /// Report terminal name/version (XTVERSION, `CSI > q`). Several image-preview
+    /// tools (timg, snacks.nvim, yazi) send this and string-match the terminal
+    /// name in the reply to decide which graphics protocol to use.
+    fn report_xtversion(&mut self) {}
+
     /// Report text area size in characters.
     fn text_area_size_chars(&mut self) {}
 
@@ -1837,6 +1845,7 @@ where
                 let mode = next_param_or(0);
                 handler.report_private_mode(PrivateMode::new(mode));
             },
+            ('q', [b'>']) => handler.report_xtversion(),
             ('q', [b' ']) => {
                 // DECSCUSR (CSI Ps SP q) -- Set Cursor Style.
                 let cursor_style_id = next_param_or(0);
@@ -1867,6 +1876,7 @@ where
             ('T', []) => handler.scroll_down(next_param_or(1) as usize),
             ('t', []) => match next_param_or(1) as usize {
                 14 => handler.text_area_size_pixels(),
+                16 => handler.cell_size_pixels(),
                 18 => handler.text_area_size_chars(),
                 22 => handler.push_title(),
                 23 => handler.pop_title(),
@@ -2183,9 +2193,14 @@ mod tests {
         capture_started: Option<String>,
         capture_ended: bool,
         open_url_payloads: Vec<Vec<u8>>,
+        printed: Vec<char>,
     }
 
     impl Handler for MockHandler {
+        fn input(&mut self, c: char) {
+            self.printed.push(c);
+        }
+
         fn terminal_attribute(&mut self, attr: Attr) {
             self.attr = Some(attr);
         }
@@ -2265,6 +2280,7 @@ mod tests {
                 capture_started: None,
                 capture_ended: false,
                 open_url_payloads: Vec::new(),
+                printed: Vec::new(),
             }
         }
     }
@@ -2492,6 +2508,65 @@ mod tests {
 
         let expected: Vec<usize> = (0..256).collect();
         assert_eq!(handler.reset_colors, expected);
+    }
+
+    /// An OSC code this parser does not recognize (`osc_dispatch`'s `unhandled()`
+    /// fallthrough) must not leak its payload bytes into `print()`, and must not
+    /// corrupt parser state such that the *next* sequence in the same stream is
+    /// misparsed. Phase 0 characterization test — see color-tools plan's Phase 0.
+    #[test]
+    fn unknown_osc_ignored_without_corrupting_state_or_leaking_to_print() {
+        // OSC 9999 (unrecognized) immediately followed by a real OSC 104 reset
+        // and a printable character, all in one stream.
+        let bytes: &[u8] = b"\x1b]9999;this is not a real osc\x1b\\\x1b]104;2;\x1b\\A";
+
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+
+        parser.advance(&mut handler, bytes);
+
+        assert!(
+            handler.printed.is_empty() || handler.printed == vec!['A'],
+            "unknown OSC payload must never reach print(): {:?}",
+            handler.printed
+        );
+        assert_eq!(
+            handler.reset_colors,
+            vec![2],
+            "parser must resync and dispatch the OSC 104 that follows an unknown OSC"
+        );
+    }
+
+    /// APC (`ESC _ ... ESC \`), PM (`ESC ^ ... ESC \`) and SOS (`ESC X ... ESC \`)
+    /// strings are currently swallowed with no callback at all (there is no
+    /// `apc_dispatch` on `Perform` in this fork). Confirms that swallowing is
+    /// total: none of the string body — including bytes that look like OSC/CSI
+    /// syntax — reaches `print()`, and the parser resyncs cleanly on the sequence
+    /// that follows. This is the containment property Kitty's graphics protocol
+    /// (an APC sequence) currently benefits from by accident; Phase 3 changes it
+    /// intentionally via a new `apc_dispatch`, so this test locks in the *current*
+    /// behavior first.
+    #[test]
+    fn apc_pm_sos_strings_are_fully_swallowed_without_leaking_to_print() {
+        for introducer in [b'_', b'^', b'X'] {
+            let mut bytes: Vec<u8> = vec![0x1b, introducer];
+            bytes.extend_from_slice(b"Gi=1,a=t,f=24;not-real-payload\x07also not real");
+            bytes.extend_from_slice(&[0x1b, b'\\']);
+            bytes.push(b'A');
+
+            let mut parser = Processor::<TestSyncHandler>::new();
+            let mut handler = MockHandler::default();
+
+            parser.advance(&mut handler, &bytes);
+
+            assert_eq!(
+                handler.printed,
+                vec!['A'],
+                "introducer {:?}: string body must be fully swallowed, only the \
+                 trailing 'A' should print",
+                introducer as char
+            );
+        }
     }
 
     #[test]
