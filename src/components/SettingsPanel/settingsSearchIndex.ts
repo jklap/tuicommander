@@ -88,6 +88,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "general", section: "TUIC CLI", sectionKey: "general.heading.cli", platform: "desktop" },
 	{
 		tab: "general",
+		section: "Finder Integration",
+		sectionKey: "general.heading.finderService",
+		platform: "desktop",
+	},
+	{
+		tab: "general",
 		section: "Code Intelligence",
 		sectionKey: "general.heading.codeIntelligence",
 		platform: "desktop",
