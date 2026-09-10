@@ -153,6 +153,15 @@ how it renders and whether it interrupts anything.
   **Switch**: the tab moves to the new branch and `cd`s into the worktree.
 - [ ] Repeat with a *running agent* as the active tab: the worktree opens in its
   own terminal and the agent's tab stays on its branch and CWD.
+- [ ] **Rust change — needs `make dev` restart** (#734-ca73). COW workspaces
+  are reachable from MCP: `repo action=worktree_create` now takes
+  `mode: auto|cow|worktree` and `dirty: inherit|clean_untracked|clean`, and its
+  response carries an `instructions` payload. Against a real repo on APFS, ask
+  for `mode=cow` and read the response as a model would: it must name the
+  workspace id, say the commits exist only there, and list the warm artifacts
+  with sizes. Then `mode=worktree` on the same repo: the payload must say refs
+  are shared and mention no publishing. Time the `cow` creation — the PoC
+  measured 26 s on this repo, and the `du` calls should add ~1 s, not 7.
 - [ ] **Rust change — needs `make dev` restart** (#728-bc76). `create_worktree`
   now returns `workspace_id`, and the frontend keys the new sidebar row by it.
   Against an unrestarted backend that field is `undefined`, so the row lands

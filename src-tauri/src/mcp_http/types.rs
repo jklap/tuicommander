@@ -190,6 +190,15 @@ pub(super) struct CreateWorktreeRequest {
     pub branch_name: String,
     /// Optional start point (commit/branch). Defaults to HEAD when omitted.
     pub base_ref: Option<String>,
+    /// `auto` (default) takes a copy-on-write clone where it works and a linked
+    /// worktree otherwise; `cow` and `worktree` force one. The caller asks for a
+    /// workspace, so the default is the one that always produces one.
+    #[serde(default)]
+    pub mode: crate::cow::WorkspaceMode,
+    /// What to do with the parent's uncommitted work. `inherit` (default) is
+    /// free; `clean` is measured at 15 MB -> 113 MB on a real repo.
+    #[serde(default)]
+    pub dirty: crate::cow::DirtyPolicy,
 }
 
 #[derive(Deserialize)]
