@@ -146,6 +146,259 @@ armed at once.
 - [ ] Fire a watcher until `max_fires`, restart the app, and confirm the rule comes
   back as `exhausted` in the Watcher Manager — the deferred write must land.
 
+## Finder Service ad-hoc code signing fix (2026-09-14, **Rust change — needs `make dev` restart or a real reinstall**)
+
+Boss reported the "New TUICommander Tab Here" Finder Service failing with
+"The Service cannot be run because it is not configured correctly." Root
+cause confirmed empirically: the installed `~/Library/Services/New
+TUICommander Tab Here.workflow` had **no code signature at all**
+(`codesign -dv` → "code object is not signed at all"), and Gatekeeper
+assessments are enabled (`spctl --status`) — the documented failure mode for
+third-party Automator "Run Shell Script" Services. `finder_service.rs`'s
+`install_into` now ad-hoc signs the bundle after copying it
+(`/usr/bin/codesign --force --deep --sign -`), best-effort so it never fails
+the install if `codesign` is unavailable. A follow-up `/code-review` pass
+caught two real gaps in the first version, both fixed: it used a bare
+`codesign` (PATH-dependent) instead of the absolute path the sibling `pbs`
+call in this file already uses; and a signing failure was only a separate,
+easy-to-miss warning log, now surfaced in the same log line as "Finder
+Service installed" (`signed: false`). The review also suggested dropping
+`--deep` per Apple's TN2206 guidance — tested against a fresh copy of the
+real bundle and found this actually breaks signing outright (`codesign`
+refuses `Contents/document.wflow` as an unsigned "subcomponent" without it),
+so `--deep` was kept; see AGENTS.md's Finder Service section for the
+verified reason.
+
+Manually reinstalling a freshly ad-hoc-signed copy on Boss's machine did not
+error and `codesign -dv` now shows `Signature=adhoc`. `spctl -a -t execute`
+still reports "rejected" for the signed copy, but that assessment type is for
+Mach-O executables — a `.workflow` bundle has none, so it's unclear whether
+that's meaningful for the real Finder→Services-menu dispatch path. **Needs a
+real right-click-in-Finder test** to confirm the dialog is actually gone —
+uninstall + reinstall via the app's Settings UI (or `make dev` + a fresh
+"Install Finder Service" click) after the rebuild, then right-click a folder
+in Finder and pick "New TUICommander Tab Here."
+
+**Separately, `tuic open-here`/any `tuic://` deep link fired while the app is
+already running currently does nothing visible** — confirmed unrelated to
+this fix and unrelated to frontend/Rust deep-link code (`open -a <exact
+running app bundle path> 'tuic://...'` delivers and logs correctly instantly;
+bare `open 'tuic://...'` — what `tuic open-here` actually calls — never
+reaches the app at all). Root cause: **two copies of TUICommander.app are
+registered under the same bundle id `com.tuic.commander`** on this machine —
+`/Applications/TUICommander.app` (v1.7.4-nightly, Aug 13) and the running dev
+build under `src-tauri/target/release/bundle/macos/` (v1.7.6-nightly) — so
+macOS Launch Services' `tuic://` scheme resolution is ambiguous/stale. This
+is an install-hygiene issue on Boss's machine, not a code bug — needs the
+stale `/Applications` copy removed or replaced and Launch Services refreshed
+before `tuic open-here` will work again. Not fixed as part of this session
+(touching `/Applications` needs Boss's own OK).
+
+Settings > Notifications: each event's row gains a `<select>` next to its
+enable checkbox — Default, another event's tone borrowed as a preset (Chime /
+Arpeggio / Low Tone / Double-Tap / Pluck / Callback), or "Custom file…"
+(desktop only). Rust changes: `notification_sound.rs` (`resolve_sequence`,
+`open_custom_sound`, rodio `Decoder`/`amplify`), `config.rs`
+(`NotificationSoundChoices`/`SoundChoice`), Cargo.toml (`rodio` gained `wav`,
+`mp3`, `vorbis`, `flac` decoder features). Sequencing/decoding/config
+round-trip/merge logic is unit-tested (Rust + vitest) — what's NOT
+machine-verifiable:
+
+- [ ] Pick a real `.wav`/`.mp3`/`.ogg`/`.flac` file via "Custom file…" for at
+      least two different events and confirm it actually plays through Test —
+      and sounds like the chosen file, not a built-in tone.
+- [ ] Pick a preset borrowed from another event (e.g. set "Warning" to
+      "Callback") and confirm Test plays that OTHER event's tone, not
+      Warning's own.
+- [ ] Point a sound at a file, then delete/rename the file on disk and hit
+      Test again — should silently fall back to the default tone (a warning is
+      logged, not surfaced in the UI) rather than staying silent or erroring.
+- [ ] Confirm the native file picker itself opens (Tauri dialog, not a stub)
+      and that canceling it leaves the dropdown showing the previous choice,
+      not stuck on "Custom file…" with nothing set.
+- [ ] Reset Defaults clears every custom file / borrowed preset back to
+      Default across all six events.
+- [ ] Browser/PWA mode (`:9876` in a real browser, not the desktop app):
+      confirm a borrowed preset still plays the right Web Audio tone, and that
+      picking "Custom file…" is not offered at all (no filesystem access
+      there).
+
+**Also fixed as part of this pass:** in-app toasts (`toastsStore.add(..., sound=true)` —
+failed stage/unstage/discard/merge in the Git panel, plugin `tuic.toast()`, etc.)
+used to play a separate hardcoded synth with no connection to these settings.
+They now route through `notificationManager.playInfo/playWarning/playError()`
+matched by toast level. Unit-tested (spy assertions on the right method being
+called), but the actual audible result needs a real check:
+- [ ] Disable the "Error" sound in Settings > Notifications, then trigger a
+      failed git operation (e.g. discard a file that's locked/in-use) — should
+      stay silent. Re-enable it and confirm the beep returns.
+- [ ] Set a custom file or borrowed preset for "Warning", then trigger a
+      warning-level toast (e.g. "Path does not exist" from a shortcut) —
+      should play that chosen sound, not the old fixed double-beep.
+
+## Ghost/stale terminal ids inflating the removal dialog + sidebar dot, chevron auto-spawn (2026-09-10, frontend only — no rebuild/restart needed)
+
+Fixes three related sidebar/worktree-removal bugs Boss reported live:
+
+1. **"N terminal(s) attached" removal dialog inflated by exited terminals,
+   some showing `terminal — —`.** `branchActivitySummary`'s `isBusy`
+   (`activitySnapshot.ts`) used to count ANY attached id — including an
+   agent-owned terminal/session that exited on its own (rather than the user
+   closing its tab), both the in-process agent-exit path (`Terminal.tsx`) and
+   the remote/tmux-swarm-shim sub-pane path (`useAppInit.ts`'s
+   `session-closed` listener, the one behind the `(9s)`/`(30s)` auto-close
+   countdown tab names) — as "busy" forever. It now excludes ids it can see
+   have `shellState === "exited"`, so the busy-dialog (with its scary
+   terminal list) simply doesn't appear once every attached terminal has
+   exited; the plain confirm is used instead. **`branch.terminals` itself is
+   deliberately left untouched** — an earlier version of this fix tried
+   pruning the array directly on exit, but an independent code review caught
+   that this broke worktree teardown (`closeTerminalsForBranch` iterates
+   `branch.terminals` to close every terminal, including exited ones, before
+   a merge/archive/removal — a pruned id was silently never closed) and the
+   sidebar's own expandable tab list (which also renders straight from
+   `branch.terminals`). See AGENTS.md's "`branch.terminals` Membership Must
+   Never Be Pruned On Terminal Exit" for the full writeup — don't re-attempt
+   array pruning if this class of bug resurfaces.
+2. **A present-but-exited terminal showed the confusing generic `"—"`
+   label** (same as a genuinely-missing/unknown id) in the removal dialog's
+   terminal list. `branchActivitySummary` now labels it `"Exited"` instead —
+   scoped locally to this function, not by changing the shared
+   `terminalStatusLabel`/`effectiveActivityState` used by the Activity
+   Dashboard (which has its own existing, tested `"—"`-for-exited contract,
+   deliberately left alone).
+3. **Sidebar dot stayed green for a branch with zero *live* open
+   terminals.** `RepoSection.tsx`'s `BranchIcon` only checked
+   `branch.terminals.length > 0`, never whether those ids were actually
+   still live. A new `hasLiveTerminals()` mirrors the same "present +
+   `shellState !== 'exited'`" logic as `isBusy` above (array membership
+   itself still untouched).
+4. **Clicking the expand chevron sometimes spawned a new terminal.** The
+   chevron had no click handler of its own — it bubbled into the row's
+   `onClick`, which always calls `onSelect()`, and first-ever branch
+   selection in a session auto-spawns a terminal if none exists. The chevron
+   now has its own handler (`stopPropagation`, toggles the list only).
+
+Covered by unit tests (`activitySnapshot.test.ts`, `useAppInit.test.ts`,
+`Sidebar.test.tsx`, `WorktreeManager.test.tsx`) that render real DOM and fire
+real click events / exercise the real store functions, including a
+regression guard that `branch.terminals` is NOT pruned on exit (the
+mistake the code review caught). A full end-to-end live repro (spawn an
+agent sub-pane, kill it, watch the sidebar dot and the removal dialog
+settle) wasn't done: this test instance shares Boss's real config/MCP-
+registration state with the running app (see "Test instance vs orchestrator
+instance" above), and reproducing the ghost-terminal state needs actually
+spawning + abruptly killing an agent, which felt too risky to do against
+live sidebar/repo state. Frontend-only change — no Rust rebuild, picks up on
+a plain browser reload once `pnpm build` (or `make dev`) rebuilds `dist/`.
+
+- [ ] Spawn an agent-owned terminal (or a tmux-swarm-shim sub-pane) on some
+  branch, then kill the agent process directly (not via the tab's close
+  button). Confirm: the tab lingers with a grey "exited" state/countdown as
+  before, the sidebar dot for that branch goes idle (not green) once it's the
+  only terminal on the branch, and opening the worktree-removal dialog for
+  that branch does NOT show the busy/attached-terminals confirmation (plain
+  confirm only) — but the exited tab is STILL visible/reachable in the
+  sidebar's own expandable tab list (chevron), and merging/archiving or
+  removing that worktree still actually closes that tab rather than leaving
+  it dangling.
+- [ ] With `tabTreeEnabled` on and a branch that has >1 terminal (chevron
+  visible), click only the chevron (not the branch name). Confirm the tab
+  list toggles open/closed and NO new terminal is created — repeat on a
+  branch that has never been selected this session (freshly restored, before
+  any click) to hit the specific auto-spawn-on-first-select path.
+
+## LastPromptBar / agent idle-threshold lingers after an agent exits back to a plain shell (2026-09-10, backend — needs `make dev` restart)
+
+Bug: after exiting an agent (e.g. `claude` → `/exit` or Ctrl+D) back to a plain
+shell in the same tab, the "Context" bar (`LastPromptBar`, showing
+`Intent: … · Assignment: … · Prompt: …`) stayed visible for a few extra
+seconds instead of disappearing immediately. Root cause:
+`session_states.agent_type` (`get_session_foreground_process`, `pty.rs`) was
+sticky *forever* once any agent had run in a session — by design, to survive
+transient unrecognized grandchildren (`git`/`sed`/`rg`) spawned by a live
+agent — but nothing ever cleared it back to `None` when the foreground
+process was *confirmably* a plain shell again. That kept
+`should_transition_idle_with_hook` selecting the longer `AGENT_IDLE_MS`
+(2500ms) threshold instead of `SHELL_IDLE_MS` (500ms) for a tab that no longer
+had an agent running, delaying the backend's `shell-state: idle` emission —
+the only signal `useAgentPolling.ts`'s `detectAgentForTerminal` accepts to
+clear the frontend's `agentType` (and therefore the `LastPromptBar`/gate in
+`Terminal.tsx`).
+
+Fix, in four parts (`clear_agent_type_on_confirmed_shell` in `pty.rs` is the
+single shared clearing routine all of them funnel through):
+
+1. **Confirmed-shell clear.** `get_session_foreground_process_impl` clears the
+   sticky mirror when the foreground is a *confirmed* shell match (`fg_is_shell`)
+   rather than merely "unrecognized" — this is not the flaky case the
+   stickiness was meant to protect. A first version had a real regression,
+   caught by code review: clearing unconditionally on any confirmed-shell
+   foreground could race `Terminal.tsx`'s pending-init-command flow and
+   permanently wipe a run-config preset for a custom/unrecognized agent
+   launcher (`PtyConfig::agent_type`), since the tab's very first
+   `shell-state: idle` event fires before the init command has even executed.
+   Fixed by adding `SessionState.agent_seen_running` (`state.rs`): the clear
+   now only fires once the session has actually observed a real (recognized
+   or not) non-shell foreground at least once, not merely on a preset that
+   hasn't launched yet.
+2. **HTTP/remote parity.** `mcp_http/session.rs`'s `get_foreground_process`
+   previously re-derived the detected name independently and never touched
+   `session_states` at all — a browser/PWA/remote client's idle-threshold
+   selection never reflected reality. It now calls the same
+   `get_session_foreground_process_impl` the desktop IPC command uses.
+3. **Non-exhaustive shell list.** The static `SHELLS` list can never cover
+   every login shell (xonsh, elvish, ion, murex, …). The confirmed-shell match
+   now *also* checks the session's own recorded `PtySession.shell` basename
+   (set from `resolve_shell()` at PTY creation) — any shell TUIC actually
+   launched clears correctly, not just ones on the static list.
+4. **Multi-hop launcher false positive.** The ambiguous fallback path
+   (unrecognized non-shell, resolved only via the preset) couldn't distinguish
+   "the preset's own launcher" from "an intermediate wrapper hop" (`direnv
+   exec`, a non-`exec`'d wrapper script) — a wrapper failing before the real
+   target ran could still confirm-then-strand the preset. Now requires the
+   ambiguous foreground to persist across `AGENT_SEEN_RUNNING_CONFIRM_MS`
+   (1000ms) before confirming; a direct `classify_agent` match has no such
+   ambiguity and still confirms immediately.
+5. **Fast, event-driven path.** All of the above only clear on the *next*
+   `get_session_foreground_process` poll (busy-debounce or the 30s fallback).
+   `transition_explicit_shell_state_with_hook` now also calls
+   `clear_agent_type_on_confirmed_shell` directly on OSC 133's own prompt
+   marker (`'A'`, `hook_state = false`) — it can only fire once the real shell
+   redraws its prompt, so it's an immediate, reliable "agent has genuinely
+   exited" signal. Deliberately **not** extended to the OSC 7770
+   (`hook_state = true`) path: a hook-instrumented agent's own `state=idle`
+   means it finished this turn and is waiting for the next prompt while the
+   SAME process stays alive — clearing there would wipe `agent_type` on every
+   ordinary turn boundary, not just on exit. See `agent-signal-architecture.html`'s
+   2026-09-10 Incident Log entry (main checkout `plans/`) for the full writeup.
+
+Covered by 8 Rust unit tests across `pty.rs` and `mcp_http/session.rs`, each
+spawning real PTY child processes or driving the shell-state machinery
+directly — no manual repro needed to prove the backend logic, but the
+end-to-end UI timing still needs a human check:
+
+- [ ] Restart `make dev` to pick up the Rust change. Open a terminal tab, run
+  `claude`, let it start, then exit it (`/exit` or Ctrl+D) back to the shell
+  prompt. The "Context" bar at the top of the pane should disappear
+  essentially instantly (OSC 133 path) rather than after any visible delay.
+- [ ] Re-run the same check for another supported agent (e.g. `codex` or
+  `gemini`) to confirm this isn't claude-specific.
+- [ ] Start an agent, let it spawn a real subprocess momentarily (e.g. ask it
+  to run `git status`), and confirm the Context bar does NOT flicker off
+  during that subprocess call — only a genuine exit back to the shell should
+  clear it (this is what one of the unit tests guards at the code level, but
+  a live screen check is cheap insurance).
+- [ ] Launch a session from a run config using a custom/unrecognized launcher
+  alias (a wrapper script or symlink `classify_agent` won't name-match) and
+  confirm the Context bar/intent-parsing still activates normally on first
+  launch — this is the exact scenario the regression above would have broken
+  (the preset getting wiped before the launcher even ran).
+- [ ] Hit `GET http://127.0.0.1:9877/sessions/{id}/foreground` (the `:9877`
+  test instance's HTTP API) on a session before and after exiting an agent in
+  it, confirming the returned `agent` name — and, indirectly via the
+  idle-threshold behavior, the mirror — updates over HTTP too, not just IPC.
+
 ## Worktree file sync: copy/symlink ignored/untracked/explicit files into new worktrees (2026-09-10, backend — needs `make dev` restart)
 
 `copy_ignored_files`/`copy_untracked_files` were previously fully plumbed
@@ -4770,3 +5023,45 @@ sentinel) once this research window closes.
 - [ ] With `RUST_LOG` elevated per above, confirm the new debug log lines actually appear in
   `GET /logs` during a real session — spot-check at least the `state.rs` generic awaiting-diff
   line and the `pty.rs` shell-state-edge lines.
+
+## macOS Finder Service — "New TUICommander Tab Here" (2026-09-10, **Rust change — needs `make dev` restart or a packaged build**)
+
+New feature: right-click a folder (or file) in Finder → a terminal pane opens there, filed under
+the right repo group via a 3-rung placement ladder (owning repo → active repo → ask the user).
+Ships as a hand-authored Automator `.workflow` bundle (`src-tauri/services/`), verified functionally
+via `automator -i <path> "services/New TUICommander Tab Here.workflow"` for a single item, a
+multi-item selection, and a plain file — but **never through a real Finder right-click**, which
+needs a packaged/installed build for Launch Services to pick up the bundle from
+`~/Library/Services/`. See `docs/user-guide/finder-integration.md` and `FEATURES.md` §17.4.2 for
+the intended behavior.
+
+- [ ] Install from Settings → General → Finder Integration on a packaged build (or accept the
+  first-run prompt), then right-click a folder in Finder — confirm "New TUICommander Tab Here"
+  appears in the menu and opens a pane with that folder as cwd.
+- [ ] Right-click a **file** — confirm the pane opens at the file's parent directory, not the file
+  itself.
+- [ ] Right-click a folder inside a repo you've already registered (repo root, and separately a
+  linked worktree) — confirm the pane is filed under that repo/branch in the sidebar, with cwd
+  equal to the exact folder clicked (not the repo root) when clicking a nested subfolder.
+- [ ] Right-click a folder outside every registered repo while a repo is active — confirm the pane
+  is filed under the active repo.
+- [ ] Right-click a folder outside every registered repo with **no** active repo — confirm the
+  "Open terminal in which repo?" picker appears, and each of its four outcomes works: choosing an
+  existing repo, "Add this folder as a repository", "Open unattached terminal", and Cancel/Escape.
+- [ ] Select 3 folders and invoke the service — confirm 3 panes open. Select more than 5 — confirm
+  only the first 5 open.
+- [ ] Quit TUICommander entirely, then invoke the service from Finder — confirm it launches the
+  app and still opens the pane once ready.
+- [ ] Remove the integration from Settings → General → Finder Integration → Remove — confirm the
+  Finder menu item disappears (may need a moment for `pbs -flush` to take effect).
+- [ ] Confirm the first-run prompt never reappears after being dismissed (accept or decline), and
+  that Settings always reflects the true installed/not-installed state.
+- [ ] **[VISUAL]** No screenshots were taken during implementation — both new visual pieces
+  (`RepoPickerDialog`, and the Settings → General → Finder Integration section) are gated behind
+  `isTauri()`/a real deep link, which browser-mode can't reach without either risking the URL
+  scheme resolving to Boss's live orchestrator instance instead of a test build, or standing up a
+  second debug instance unnecessarily for what's fundamentally a CSS check. Both reuse existing,
+  already-shipped CSS (the shared `dialog.module.css` shell; GeneralTab's existing CLI-section
+  classes) with only new page-specific styling in `RepoPickerDialog.module.css` genuinely
+  unverified visually. While doing the real Finder round-trip above, screenshot the picker dialog
+  and the Settings section and save them to `.screenshots/finder-service/` in the main checkout.

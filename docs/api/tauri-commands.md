@@ -690,3 +690,20 @@ can choose what the host runs.
 
 Errors are an `AcpClientError` — `code`, `message`, `connectionId`,
 `sessionId`, `operation`, `retryable` — identical on both transports.
+
+## macOS Finder Service (`finder_service.rs`)
+
+Desktop-only (`INTENTIONALLY_UNMAPPED` in `src/transport.ts` — no HTTP equivalent; installing a
+local Finder menu item is meaningless for a browser/remote client). See
+[Finder integration](../user-guide/finder-integration.md) for the user-facing behavior and section
+17.4.2 of `FEATURES.md` for the placement ladder.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `get_finder_service_status` | -- | `{ installed: bool, prompt_dismissed: bool }` | Whether the "New TUICommander Tab Here" bundle is installed in `~/Library/Services/`, and whether the first-run prompt has already been dismissed |
+| `install_finder_service` | -- | `Result<(), String>` | Copy the bundled `.workflow` into `~/Library/Services/`, ad-hoc code-sign it (best-effort — a signing failure doesn't fail the install), and flush the Services menu cache (`pbs -flush`) |
+| `uninstall_finder_service` | -- | `Result<(), String>` | Remove the bundle from `~/Library/Services/`, if present (no-op success if already absent) |
+| `dismiss_finder_service_prompt` | -- | `()` | Persist that the first-run prompt was dismissed, so it is never shown again |
+
+Non-macOS builds: `get_finder_service_status` reports `installed: false`; `install_finder_service`
+returns an error; `uninstall_finder_service`/`dismiss_finder_service_prompt` are no-ops.
