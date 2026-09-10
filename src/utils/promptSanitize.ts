@@ -16,7 +16,8 @@ export interface SanitizeResult {
  * JSON — backend storage (`prompt-library.json`, which a local MCP client can write arbitrary
  * `id`/fields into) or an imported export file from another machine.
  *
- * An invalid `executionMode` is reset to `"inject"`, an invalid `injectTarget` or
+ * An invalid `executionMode` is reset to `"inject"`, an invalid `injectTarget` (anything other
+ * than `"terminal"`, `"compose"`, or `"auto"`) or
  * `preferredAgent` is stripped, a non-array `placement` is dropped, and the legacy
  * `tab-context` placement name is migrated to `terminal-context`.
  *
@@ -36,7 +37,12 @@ export function sanitizePrompt(full: SavedPrompt): SanitizeResult {
 		warnings.push(`Prompt "${full.id}" has invalid executionMode "${full.executionMode}", resetting to inject`);
 		full.executionMode = "inject";
 	}
-	if (full.injectTarget && full.injectTarget !== "terminal" && full.injectTarget !== "compose") {
+	if (
+		full.injectTarget &&
+		full.injectTarget !== "terminal" &&
+		full.injectTarget !== "compose" &&
+		full.injectTarget !== "auto"
+	) {
 		warnings.push(`Prompt "${full.id}" has invalid injectTarget "${full.injectTarget}", removing`);
 		full.injectTarget = undefined;
 	}
