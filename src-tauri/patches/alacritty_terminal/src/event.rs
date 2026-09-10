@@ -171,8 +171,14 @@ pub trait EventListener {
     /// return a handle to it, or `None` if refused (e.g. over a per-session
     /// byte cap). Default refuses everything — only a listener that actually
     /// owns image storage (the app's `TermEventCollector`) can accept one.
+    ///
+    /// `client_id`: iTerm2 has no client-chosen image identity, so its
+    /// caller passes `None` and gets an auto-allocated id back. Kitty's `i=`
+    /// is client-chosen and later referenced by `a=p`/`a=d`, so its caller
+    /// passes `Some(id)`.
     fn store_image(
         &self,
+        _client_id: Option<u32>,
         _bytes: Arc<[u8]>,
         _mime: String,
         _intrinsic_width: u32,
@@ -180,6 +186,22 @@ pub trait EventListener {
     ) -> Option<Arc<crate::term::cell::ImageData>> {
         None
     }
+
+    /// Look up a previously stored image by id (Kitty `a=p`: place an
+    /// already-transmitted image). `None` if unknown or evicted. Default
+    /// matches `store_image`'s default of "no storage backing this
+    /// listener."
+    fn image_by_id(&self, _image_id: u32) -> Option<Arc<crate::term::cell::ImageData>> {
+        None
+    }
+
+    /// Forget an image id (Kitty `a=d`) so `image_by_id`/`store_image`'s
+    /// underlying lookup no longer finds it. Does not affect any cell
+    /// already showing it — see `terminal_images::ImageStore::forget`.
+    fn forget_image(&self, _image_id: u32) {}
+
+    /// Forget every image (Kitty `a=d,d=a`/`d=A`).
+    fn forget_all_images(&self) {}
 }
 
 /// Null sink for events.
