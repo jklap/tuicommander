@@ -1683,6 +1683,8 @@ describe("transport", () => {
 				"get_tailscale_status",
 				"mcp_oauth_callback",
 				"install_cli",
+				"get_finder_service_status",
+				"install_finder_service",
 				"set_last_seen_version",
 				"install_mdkb",
 				"subscribe_terminal_grid",

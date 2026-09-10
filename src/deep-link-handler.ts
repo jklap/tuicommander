@@ -1,9 +1,18 @@
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import type { RepoChoice } from "./hooks/useRepoPickerDialog";
 import { invoke } from "./invoke";
 import { appLogger } from "./stores/appLogger";
 import { pluginStore } from "./stores/pluginStore";
-import { repositoriesStore } from "./stores/repositories";
+import { placementBranchFor, repositoriesStore } from "./stores/repositories";
+import { resolvePlacementForCwd } from "./stores/terminalPlacement";
 import { isTauri } from "./transport";
+
+/** Bound on how many panes one `tuic://open-terminal` invocation can open.
+ *  The `tuic open-here` CLI already caps at the same number before firing the
+ *  deep link, but this URL can be fired directly (bypassing the CLI), so the
+ *  cap is enforced here too — defense in depth against a crafted link fanning
+ *  out an unbounded number of PTY spawns. */
+const MAX_OPEN_TERMINAL_PATHS = 5;
 
 /** Callbacks provided by App.tsx to control UI navigation */
 export interface DeepLinkCallbacks {
@@ -15,6 +24,72 @@ export interface DeepLinkCallbacks {
 	/** Add a not-yet-known repo by path and make it active (same flow as the
 	 *  sidebar's "Add Repository"). Used by `tuic <dir>`. */
 	openRepoPath: (path: string) => Promise<void>;
+	/** Ask which repo a Finder-invoked path (`tuic://open-terminal`) that
+	 *  matched no repo and no active repo should open under. `null` = cancel. */
+	chooseRepoForPath: (path: string) => Promise<RepoChoice | null>;
+	/** Create+attach a terminal at `repoPath`/`branchName`, with `cwd`
+	 *  overriding the branch's own worktree path. Mirrors
+	 *  `createBranchSelectionCoordinator`'s `handleAddTerminalToBranch`. */
+	handleAddTerminalToBranch: (repoPath: string, branchName: string, cwd?: string) => Promise<string | undefined>;
+	/** Open a plain terminal at `cwd` with no repo/branch association. */
+	openUnattachedTerminal: (cwd: string) => Promise<void>;
+	/** Clear a terminal's recorded owner (`repoPath: null`) after it has
+	 *  already been filed under a branch for display. Used only for the
+	 *  `isGuess` placement rung — see `resolvePlacementForCwd`'s doc comment:
+	 *  a guessed placement must never be recorded as real ownership, or
+	 *  `reclaimParkedTerminal` stops reconsidering it on a later `cd`. */
+	markTerminalPlacementAsGuess: (terminalId: string) => void;
+}
+
+/**
+ * Where a single Finder-invoked path should open, and what to do about it.
+ * `resolvePlacementForCwd` already covers the first two rungs of the ladder
+ * (owning repo, then active repo); this only runs when that returns `null`,
+ * i.e. the third rung — ask the user.
+ */
+async function openTerminalAtPath(path: string, callbacks: DeepLinkCallbacks): Promise<void> {
+	const placement = resolvePlacementForCwd(path);
+	if (placement) {
+		const id = await callbacks.handleAddTerminalToBranch(placement.repoPath, placement.branchName, path);
+		// isGuess means nothing actually claims this cwd — the active repo only
+		// lent it a slot to render in. Filing it under that branch is still
+		// correct (it needs to be visible somewhere), but recording repoPath as
+		// that guessed repo would be a lie: it would stop reclaimParkedTerminal
+		// from reconsidering this tab the next time its owner can be resolved.
+		if (placement.isGuess && id) {
+			callbacks.markTerminalPlacementAsGuess(id);
+		}
+		return;
+	}
+
+	const choice = await callbacks.chooseRepoForPath(path);
+	if (!choice) return;
+
+	switch (choice.kind) {
+		case "repo": {
+			// The user picked an existing repo, not a specific branch — resolve one
+			// the same way a root-checkout match would (activeBranch, then whichever
+			// branch records the repo root as its worktree). A registered repo with
+			// no resolvable branch at all is a defensive edge case, not an expected
+			// one: every repo-registration path seeds at least one branch.
+			const branchName = placementBranchFor({ repoPath: choice.repoPath, branchName: null });
+			if (branchName) {
+				await callbacks.handleAddTerminalToBranch(choice.repoPath, branchName, path);
+			} else {
+				await callbacks.openUnattachedTerminal(path);
+			}
+			break;
+		}
+		case "register":
+			// Registers the exact clicked path as a new repo root, which also
+			// auto-spawns its first terminal there (`addRepoByPath`) — no separate
+			// handleAddTerminalToBranch call needed.
+			await callbacks.openRepoPath(path);
+			break;
+		case "unattached":
+			await callbacks.openUnattachedTerminal(path);
+			break;
+	}
 }
 
 /** Parse a tuic:// URL into a command, path segments, and parameters */
@@ -117,6 +192,25 @@ export async function handleDeepLink(urlString: string, callbacks: DeepLinkCallb
 			);
 			if (!proceed) return;
 			await callbacks.openRepoPath(path);
+			break;
+		}
+
+		case "open-terminal": {
+			const rawPaths = params.getAll("path");
+			if (rawPaths.length === 0) {
+				appLogger.warn("app", "Deep link open-terminal: missing path parameter");
+				return;
+			}
+			const paths = rawPaths.slice(0, MAX_OPEN_TERMINAL_PATHS);
+			if (rawPaths.length > paths.length) {
+				appLogger.warn(
+					"app",
+					`Deep link open-terminal: ${rawPaths.length} paths given, opening only the first ${MAX_OPEN_TERMINAL_PATHS}`,
+				);
+			}
+			for (const path of paths) {
+				await openTerminalAtPath(path, callbacks);
+			}
 			break;
 		}
 

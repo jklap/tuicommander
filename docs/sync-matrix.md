@@ -475,6 +475,24 @@ When adding or changing `tuic://` schemes:
 | `docs/FEATURES.md` | Section 17.4 (Deep Links) |
 | `docs/plugins.md` | If affecting plugin contentUri format |
 
+### macOS Finder Service ("New TUICommander Tab Here")
+When changing the Finder Service bundle, the `tuic open-here` CLI subcommand, the
+`tuic://open-terminal` deep link, or the repo-placement ladder it resolves through:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/services/New TUICommander Tab Here.workflow/` | The hand-authored Automator bundle — re-verify with `automator -i <path> "services/New TUICommander Tab Here.workflow"` after any change |
+| `src-tauri/src/finder_service.rs` | Install/uninstall/status commands |
+| `src-tauri/crates/tuic-cli/src/main.rs` | `cmd_open_here`, `resolve_open_here_paths`, `build_open_terminal_url` |
+| `src/deep-link-handler.ts` | `open-terminal` case, `openTerminalAtPath` |
+| `src/stores/terminalPlacement.ts` | `resolvePlacementForCwd` — the ladder itself |
+| `src/components/RepoPickerDialog/`, `src/hooks/useRepoPickerDialog.ts` | The "ask the user" rung |
+| `docs/FEATURES.md` | Section 17.4 (Deep Links) + Finder integration entry |
+| `docs/api/tauri-commands.md` | The four `finder_service` commands |
+| `docs/user-guide/finder-integration.md` | User-facing behavior of the placement ladder |
+| `docs/user-guide/cli.md` | `tuic open-here` |
+| `docs/user-guide/settings.md` | Settings → General install/uninstall control |
+
 ### Documentation Site (mdBook + Pagefind)
 When adding, renaming or moving a docs page:
 

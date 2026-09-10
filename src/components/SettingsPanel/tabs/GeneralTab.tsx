@@ -1,6 +1,7 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
+import { isMacOS } from "../../../platform";
 import { appLogger } from "../../../stores/appLogger";
 import type { CustomLauncher, IdeType, UpdateChannel } from "../../../stores/settings";
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
@@ -18,6 +19,11 @@ interface CliStatus {
 	prompt_dismissed: boolean;
 }
 
+interface FinderServiceStatus {
+	installed: boolean;
+	prompt_dismissed: boolean;
+}
+
 interface MdkbStatus {
 	available: boolean;
 	connected: boolean;
@@ -28,6 +34,8 @@ interface MdkbStatus {
 export const GeneralTab: Component = () => {
 	const [cliStatus, setCliStatus] = createSignal<CliStatus | null>(null);
 	const [cliInstalling, setCliInstalling] = createSignal(false);
+	const [finderServiceStatus, setFinderServiceStatus] = createSignal<FinderServiceStatus | null>(null);
+	const [finderServiceInstalling, setFinderServiceInstalling] = createSignal(false);
 	const [mdkbStatus, setMdkbStatus] = createSignal<MdkbStatus | null>(null);
 	const [mdkbInstalling, setMdkbInstalling] = createSignal(false);
 	const [mdkbError, setMdkbError] = createSignal<string | null>(null);
@@ -39,6 +47,16 @@ export const GeneralTab: Component = () => {
 			setCliStatus(status);
 		} catch (err) {
 			appLogger.error("app", "Failed to get CLI status", err);
+		}
+	};
+
+	const refreshFinderServiceStatus = async () => {
+		if (!isTauri() || !isMacOS()) return;
+		try {
+			const status = await invoke<FinderServiceStatus>("get_finder_service_status");
+			setFinderServiceStatus(status);
+		} catch (err) {
+			appLogger.error("app", "Failed to get Finder service status", err);
 		}
 	};
 
@@ -54,6 +72,7 @@ export const GeneralTab: Component = () => {
 
 	onMount(() => {
 		refreshCliStatus();
+		refreshFinderServiceStatus();
 		refreshMdkbStatus();
 	});
 
@@ -75,6 +94,27 @@ export const GeneralTab: Component = () => {
 			await refreshCliStatus();
 		} catch (err) {
 			appLogger.error("app", "Failed to uninstall CLI", err);
+		}
+	};
+
+	const handleInstallFinderService = async () => {
+		setFinderServiceInstalling(true);
+		try {
+			await invoke("install_finder_service");
+			await refreshFinderServiceStatus();
+		} catch (err) {
+			appLogger.error("app", "Failed to install Finder service", err);
+		} finally {
+			setFinderServiceInstalling(false);
+		}
+	};
+
+	const handleUninstallFinderService = async () => {
+		try {
+			await invoke("uninstall_finder_service");
+			await refreshFinderServiceStatus();
+		} catch (err) {
+			appLogger.error("app", "Failed to uninstall Finder service", err);
 		}
 	};
 
@@ -182,6 +222,56 @@ export const GeneralTab: Component = () => {
 							</Show>
 							<button class={s.testBtn} onClick={handleUninstallCli}>
 								{t("general.btn.uninstallCli", "Uninstall")}
+							</button>
+						</div>
+					</Show>
+				</div>
+			</Show>
+
+			<Show when={isTauri() && isMacOS() && finderServiceStatus()}>
+				<h3>
+					{t("general.heading.finderService", "Finder Integration")}
+					<span class={s.infoBadge}>
+						?
+						<span class={s.infoBadgeTip}>
+							{t(
+								"general.hint.finderServiceInfo",
+								'Adds a "New TUICommander Tab Here" item to the Finder right-click menu for any folder or file. TUICommander opens the pane in whichever repo owns that folder, falls back to the repo you\'re currently working in, or asks you which one.',
+							)}
+						</span>
+					</span>
+				</h3>
+
+				<div class={s.group}>
+					<Show
+						when={finderServiceStatus()!.installed}
+						fallback={
+							<>
+								<p class={s.hint}>
+									{t(
+										"general.hint.finderServiceNotInstalled",
+										'Add "New TUICommander Tab Here" to the Finder right-click menu.',
+									)}
+								</p>
+								<button
+									class={s.testBtn}
+									onClick={handleInstallFinderService}
+									disabled={finderServiceInstalling()}
+									style={{ "margin-top": "8px" }}
+								>
+									{finderServiceInstalling()
+										? t("general.btn.installing", "Installing...")
+										: t("general.btn.installFinderService", "Add Finder Integration")}
+								</button>
+							</>
+						}
+					>
+						<p class={s.hint} style={{ color: "var(--success)" }}>
+							{t("general.hint.finderServiceInstalled", "Installed — look for it in Finder's right-click menu.")}
+						</p>
+						<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
+							<button class={s.testBtn} onClick={handleUninstallFinderService}>
+								{t("general.btn.uninstallFinderService", "Remove")}
 							</button>
 						</div>
 					</Show>

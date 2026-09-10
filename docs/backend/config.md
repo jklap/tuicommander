@@ -685,6 +685,17 @@ Persistent cache for incremental JSONL parsing of Claude session transcripts. St
 
 This is an internal cache file, not user-editable. It is automatically pruned when projects or session files are deleted.
 
+## First-Run Prompt Markers
+
+Small empty-content marker files in `config_dir()` record that a one-time startup prompt was
+already shown/dismissed, so it never repeats. Existence alone is the signal — content is unused.
+
+| File | Module | Set by |
+|------|--------|--------|
+| `.cli-prompt-dismissed` | `tuic_cli.rs` | `dismiss_cli_prompt` — the "Install tuic CLI?" prompt |
+| `.finder-service-prompt-dismissed` | `finder_service.rs` (macOS only) | `dismiss_finder_service_prompt` — the "Add Finder integration?" prompt |
+| `.whats-new-seen` | `tuic_cli.rs` | `set_last_seen_version` — tracks the last version whose "What's New" was shown |
+
 ## Repo-Local Config (`.tuic.json`)
 
 **Module:** `src-tauri/src/config.rs`

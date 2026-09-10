@@ -7,6 +7,7 @@ import { PanelOrchestrator } from "./components/PanelOrchestrator";
 import type { CleanupStep, StepId, StepStatus } from "./components/PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { PromptDrawer } from "./components/PromptDrawer";
 import { PromptOverlay } from "./components/PromptOverlay";
+import { RepoPickerDialog } from "./components/RepoPickerDialog/RepoPickerDialog";
 import type { SettingsContext } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
@@ -68,6 +69,7 @@ import { usePluginRuntime } from "./hooks/usePluginRuntime";
 import { usePty } from "./hooks/usePty";
 import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useQuickSwitcherVisibility } from "./hooks/useQuickSwitcherVisibility";
+import { useRepoPickerDialog } from "./hooks/useRepoPickerDialog";
 import { useRepository } from "./hooks/useRepository";
 import { useShortcutRegistration } from "./hooks/useShortcutRegistration";
 import { useSmartPrompts } from "./hooks/useSmartPrompts";
@@ -121,7 +123,9 @@ import { worktreeManagerStore } from "./stores/worktreeManager";
 import { isTauri } from "./transport";
 import { openFileAction } from "./utils/filePreview";
 import { navigateToTerminal } from "./utils/navigateToTerminal";
-import { initPaneTabAssignment } from "./utils/paneTabAssign";
+import { assignTabToActiveGroup, initPaneTabAssignment } from "./utils/paneTabAssign";
+import { pathBasename } from "./utils/pathUtils";
+import { randomId } from "./utils/randomId";
 import { getShellFamily, sendCommand } from "./utils/sendCommand";
 
 const getDefaultFontSize = () => settingsStore.state.defaultFontSize;
@@ -267,6 +271,36 @@ const App: Component = () => {
 	const pty = usePty();
 	const repo = useRepository();
 	const dialogs = useConfirmDialog();
+	const repoPicker = useRepoPickerDialog();
+
+	/** Create a terminal at `cwd` with no repo/branch association — the
+	 *  RepoPickerDialog's "open unattached" escape hatch, and the fallback when
+	 *  a user-chosen repo has no branch to resolve (see `openTerminalAtPath`
+	 *  in deep-link-handler.ts). `repoPath` defaults to null on `add()`, which
+	 *  is what makes an unattached tab render as "unscoped, visible everywhere"
+	 *  (see `branchKeyFor`, stores/repositories.ts) instead of invisible.
+	 *
+	 *  Mirrors the two guards every other terminal-creation path applies
+	 *  (`handleAddTerminalToBranch`, `createNewTerminal`): the session-count
+	 *  cap, and docking into the active split-pane group when one exists. */
+	const openUnattachedTerminal = async (cwd: string) => {
+		const canSpawn = await pty.canSpawn();
+		if (!canSpawn) {
+			setStatusInfo("Max sessions reached (50)");
+			return;
+		}
+		const id = terminalsStore.add({
+			sessionId: null,
+			fontSize: getDefaultFontSize(),
+			name: pathBasename(cwd) || "Terminal",
+			cwd,
+			awaitingInput: null,
+			tuicSession: randomId(""),
+		});
+		terminalsStore.setActive(id);
+		assignTabToActiveGroup(id, "terminal");
+		requestAnimationFrame(() => terminalsStore.get(id)?.ref?.focus());
+	};
 
 	const [showProcessManager, setShowProcessManager] = createSignal(false);
 	const [showGenerators, setShowGenerators] = createSignal(false);
@@ -450,6 +484,10 @@ const App: Component = () => {
 		openSettings,
 		openRepoPath: gitOps.addRepoByPath,
 		confirm: (options) => dialogs.confirm(options),
+		chooseRepoForPath: repoPicker.chooseRepoForPath,
+		handleAddTerminalToBranch: gitOps.handleAddTerminalToBranch,
+		openUnattachedTerminal,
+		markTerminalPlacementAsGuess: (terminalId) => terminalsStore.setRepoPath(terminalId, null),
 	});
 
 	useAppearanceSync();
@@ -1032,6 +1070,19 @@ const App: Component = () => {
 
 			{/* MCP servers popup (per-repo) */}
 			<McpPopup onOpenSettings={openSettings} />
+
+			{/* "Which repo?" picker for a Finder-invoked path the placement ladder
+			    (owning repo → active repo) could not place. Same convention as
+			    ConfirmDialog: `visible` alone gates rendering, no wrapping <Show>. */}
+			<RepoPickerDialog
+				visible={repoPicker.dialogState() !== null}
+				path={repoPicker.dialogState()?.path ?? ""}
+				repos={repoPicker.dialogState()?.repos ?? []}
+				onChooseRepo={repoPicker.handleChooseRepo}
+				onRegister={repoPicker.handleRegister}
+				onUnattached={repoPicker.handleUnattached}
+				onClose={repoPicker.handleClose}
+			/>
 
 			{/* Error log panel */}
 			<Suspense>

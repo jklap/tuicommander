@@ -2794,3 +2794,45 @@ sentinel) once this research window closes.
 - [ ] With `RUST_LOG` elevated per above, confirm the new debug log lines actually appear in
   `GET /logs` during a real session — spot-check at least the `state.rs` generic awaiting-diff
   line and the `pty.rs` shell-state-edge lines.
+
+## macOS Finder Service — "New TUICommander Tab Here" (2026-09-10, **Rust change — needs `make dev` restart or a packaged build**)
+
+New feature: right-click a folder (or file) in Finder → a terminal pane opens there, filed under
+the right repo group via a 3-rung placement ladder (owning repo → active repo → ask the user).
+Ships as a hand-authored Automator `.workflow` bundle (`src-tauri/services/`), verified functionally
+via `automator -i <path> "services/New TUICommander Tab Here.workflow"` for a single item, a
+multi-item selection, and a plain file — but **never through a real Finder right-click**, which
+needs a packaged/installed build for Launch Services to pick up the bundle from
+`~/Library/Services/`. See `docs/user-guide/finder-integration.md` and `FEATURES.md` §17.4.2 for
+the intended behavior.
+
+- [ ] Install from Settings → General → Finder Integration on a packaged build (or accept the
+  first-run prompt), then right-click a folder in Finder — confirm "New TUICommander Tab Here"
+  appears in the menu and opens a pane with that folder as cwd.
+- [ ] Right-click a **file** — confirm the pane opens at the file's parent directory, not the file
+  itself.
+- [ ] Right-click a folder inside a repo you've already registered (repo root, and separately a
+  linked worktree) — confirm the pane is filed under that repo/branch in the sidebar, with cwd
+  equal to the exact folder clicked (not the repo root) when clicking a nested subfolder.
+- [ ] Right-click a folder outside every registered repo while a repo is active — confirm the pane
+  is filed under the active repo.
+- [ ] Right-click a folder outside every registered repo with **no** active repo — confirm the
+  "Open terminal in which repo?" picker appears, and each of its four outcomes works: choosing an
+  existing repo, "Add this folder as a repository", "Open unattached terminal", and Cancel/Escape.
+- [ ] Select 3 folders and invoke the service — confirm 3 panes open. Select more than 5 — confirm
+  only the first 5 open.
+- [ ] Quit TUICommander entirely, then invoke the service from Finder — confirm it launches the
+  app and still opens the pane once ready.
+- [ ] Remove the integration from Settings → General → Finder Integration → Remove — confirm the
+  Finder menu item disappears (may need a moment for `pbs -flush` to take effect).
+- [ ] Confirm the first-run prompt never reappears after being dismissed (accept or decline), and
+  that Settings always reflects the true installed/not-installed state.
+- [ ] **[VISUAL]** No screenshots were taken during implementation — both new visual pieces
+  (`RepoPickerDialog`, and the Settings → General → Finder Integration section) are gated behind
+  `isTauri()`/a real deep link, which browser-mode can't reach without either risking the URL
+  scheme resolving to Boss's live orchestrator instance instead of a test build, or standing up a
+  second debug instance unnecessarily for what's fundamentally a CSS check. Both reuse existing,
+  already-shipped CSS (the shared `dialog.module.css` shell; GeneralTab's existing CLI-section
+  classes) with only new page-specific styling in `RepoPickerDialog.module.css` genuinely
+  unverified visually. While doing the real Finder round-trip above, screenshot the picker dialog
+  and the Settings section and save them to `.screenshots/finder-service/` in the main checkout.

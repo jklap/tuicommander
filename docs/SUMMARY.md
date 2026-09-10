@@ -38,6 +38,7 @@
 ## Extensibility
 
 - [CLI Companion (tuic)](./user-guide/cli.md)
+- [Finder Integration (macOS)](./user-guide/finder-integration.md)
 - [Plugins](./user-guide/plugins.md)
 - [MCP Proxy Hub](./user-guide/mcp-proxy.md)
 - [Remote Access](./user-guide/remote-access.md)

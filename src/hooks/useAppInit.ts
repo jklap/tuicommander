@@ -11,9 +11,10 @@ import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repoSettingsStore } from "../stores/repoSettings";
-import { placementBranchFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
+import { repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
+import { resolvePlacementForOwner } from "../stores/terminalPlacement";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
@@ -184,66 +185,65 @@ function assignSessionToRepoBranch(
 	// branch arrays are a display index; this field is the truth, and it is what
 	// lets reconcileTerminalOwnership move a wrongly-placed tab home later. `null`
 	// means "no registered repo owns this cwd" — an honest unknown, not a guess.
+	// (Deliberately NOT `placement.repoPath` below: when placement is a guess,
+	// that repoPath is only a parking spot, never the recorded owner.)
 	terminalsStore.setRepoPath(terminalId, owner?.repoPath ?? null);
 
-	if (owner) {
-		const branchName = placementBranchFor(owner);
-		if (branchName) {
-			repositoriesStore.addTerminalToBranch(owner.repoPath, branchName, terminalId);
-			return;
-		}
+	const placement = resolvePlacementForOwner(owner);
+	if (!placement) {
+		appLogger.error("app", `Session ${sessionId}: no repo/branch to assign tab to — tab will be invisible`);
+		return;
 	}
 
-	// No owner. The tab still needs somewhere to render or the user cannot even see
+	if (!placement.isGuess) {
+		repositoriesStore.addTerminalToBranch(placement.repoPath, placement.branchName, terminalId);
+		return;
+	}
+
+	// A guess: the tab still needs somewhere to render or the user cannot even see
 	// that it exists, so the active repo lends it a slot — but `repoPath` above is
 	// null, so this is marked as the guess it is and reconcileTerminalOwnership
 	// re-homes it the moment the real repo is registered.
-	const fallbackRepo = repositoriesStore.state.activeRepoPath;
-	const fallbackState = fallbackRepo ? repositoriesStore.get(fallbackRepo) : undefined;
-	const fallbackBranch = fallbackState?.activeBranch;
-	if (fallbackRepo && fallbackBranch) {
-		// Which repo the user would have to register to fix this. Without it the
-		// warning named only the symptom, and a tab from an unregistered repo landed
-		// silently in whichever repo happened to have focus — indistinguishable, to
-		// the user, from the app filing it in the wrong place.
-		const unregisteredRoot = unregisteredRepoRootFor(cwd);
-		appLogger.warn(
-			"app",
-			`Session ${sessionId}: cwd "${cwd ?? "(null)"}" is owned by no registered repo${
-				unregisteredRoot ? ` — register "${unregisteredRoot}" to give it a home` : ""
-			} — parking the tab in the active repo until one claims it`,
-		);
-		if (unregisteredRoot) {
-			// Repeats collapse: `hasVisible` dedups on title+message, so reconnecting
-			// twenty sessions from one unregistered repo raises one toast, not twenty.
-			//
-			// The button closes the loop the message opens: naming the directory still left
-			// the user to find it in the sidebar and add it by hand. Registration runs ONLY
-			// from this click — the user picked the moment, so the setActive() inside
-			// addRepoByPath is a repo switch they asked for, not one a background reconnect
-			// imposed (b7e6c360). addRepoByPath ends in reconcileTerminalOwnership(), which
-			// is what walks the parked tab home once the repo exists.
-			toastsStore.add(
-				"Tab parked in the wrong repo",
-				`Nothing claims "${unregisteredRoot}". Register it and the tab moves home by itself.`,
-				"warn",
-				false,
-				{
-					label: "Register",
-					onClick: () => {
-						void registerRepo(unregisteredRoot).catch((err) =>
-							appLogger.error("app", `Failed to register "${unregisteredRoot}" from the parked-tab toast`, err),
-						);
-					},
+
+	// Which repo the user would have to register to fix this. Without it the
+	// warning named only the symptom, and a tab from an unregistered repo landed
+	// silently in whichever repo happened to have focus — indistinguishable, to
+	// the user, from the app filing it in the wrong place.
+	const unregisteredRoot = unregisteredRepoRootFor(cwd);
+	appLogger.warn(
+		"app",
+		`Session ${sessionId}: cwd "${cwd ?? "(null)"}" is owned by no registered repo${
+			unregisteredRoot ? ` — register "${unregisteredRoot}" to give it a home` : ""
+		} — parking the tab in the active repo until one claims it`,
+	);
+	if (unregisteredRoot) {
+		// Repeats collapse: `hasVisible` dedups on title+message, so reconnecting
+		// twenty sessions from one unregistered repo raises one toast, not twenty.
+		//
+		// The button closes the loop the message opens: naming the directory still left
+		// the user to find it in the sidebar and add it by hand. Registration runs ONLY
+		// from this click — the user picked the moment, so the setActive() inside
+		// addRepoByPath is a repo switch they asked for, not one a background reconnect
+		// imposed (b7e6c360). addRepoByPath ends in reconcileTerminalOwnership(), which
+		// is what walks the parked tab home once the repo exists.
+		toastsStore.add(
+			"Tab parked in the wrong repo",
+			`Nothing claims "${unregisteredRoot}". Register it and the tab moves home by itself.`,
+			"warn",
+			false,
+			{
+				label: "Register",
+				onClick: () => {
+					void registerRepo(unregisteredRoot).catch((err) =>
+						appLogger.error("app", `Failed to register "${unregisteredRoot}" from the parked-tab toast`, err),
+					);
 				},
-				undefined,
-				fallbackRepo,
-			);
-		}
-		repositoriesStore.addTerminalToBranch(fallbackRepo, fallbackBranch, terminalId);
-	} else {
-		appLogger.error("app", `Session ${sessionId}: no repo/branch to assign tab to — tab will be invisible`);
+			},
+			undefined,
+			placement.repoPath,
+		);
 	}
+	repositoriesStore.addTerminalToBranch(placement.repoPath, placement.branchName, terminalId);
 }
 
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */

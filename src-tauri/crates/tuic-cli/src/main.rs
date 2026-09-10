@@ -41,6 +41,15 @@ pub(crate) enum Command {
         #[arg(short = 'g', long = "goto")]
         goto: Option<String>,
     },
+    /// Open a new terminal pane at each path (Finder "Open Here" service).
+    ///
+    /// Distinct from `Open`, which means "open as a repo": this always spawns
+    /// a plain terminal, and a file argument resolves to its parent directory.
+    OpenHere {
+        /// Paths to open (files resolve to their parent directory)
+        #[arg(required = true)]
+        paths: Vec<String>,
+    },
     /// Show a diff between two files
     Diff {
         /// First file
@@ -228,6 +237,7 @@ fn main() {
 pub(crate) fn dispatch(cmd: Command) -> Result<(), String> {
     match cmd {
         Command::Open { path, wait, goto } => cmd_open(path, wait, goto),
+        Command::OpenHere { paths } => cmd_open_here(&paths),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
         Command::Ls { json } => cmd_ls(json),
         Command::New { name, repo } => cmd_new(name.as_deref(), repo.as_deref()).map(|_| ()),
@@ -304,6 +314,69 @@ fn cmd_open(path: Option<String>, _wait: bool, goto: Option<String>) -> Result<(
 
     // TODO: --wait support via polling session state
     Ok(())
+}
+
+/// Bound on how many panes one `open-here` invocation can spawn — a large
+/// Finder selection (or a crafted deep link) should not fan out unbounded PTY
+/// spawns. The frontend deep-link handler enforces the same cap independently,
+/// since a `tuic://open-terminal` URL can be fired directly without going
+/// through this CLI at all.
+const MAX_OPEN_HERE_PATHS: usize = 5;
+
+fn cmd_open_here(paths: &[String]) -> Result<(), String> {
+    let resolved = resolve_open_here_paths(paths);
+    if resolved.is_empty() {
+        return Err("None of the given paths could be opened".to_string());
+    }
+
+    ipc::ensure_running().map_err(|e| e.to_string())?;
+    open_deep_link(&build_open_terminal_url(&resolved)).map_err(|e| e.to_string())?;
+    eprintln!("Opening {} terminal(s)", resolved.len());
+    Ok(())
+}
+
+/// Resolve each raw CLI argument to an absolute directory. A file resolves to
+/// its parent directory; a path that does not exist is dropped (warned on
+/// stderr). The result is capped at [`MAX_OPEN_HERE_PATHS`] (also warned).
+///
+/// Pure aside from the `fs::metadata`/`parent()` filesystem reads — kept
+/// separate from `cmd_open_here` so the cap/drop logic is exercised directly.
+fn resolve_open_here_paths(raw: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in raw {
+        let absolute = resolve_path(p);
+        match std::fs::metadata(&absolute) {
+            Ok(meta) if meta.is_dir() => out.push(absolute),
+            Ok(_) => match std::path::Path::new(&absolute).parent() {
+                Some(parent) => out.push(parent.to_string_lossy().to_string()),
+                None => {
+                    eprintln!("tuic open-here: skipping {absolute} (file has no parent directory)")
+                }
+            },
+            Err(_) => eprintln!("tuic open-here: skipping {absolute} (does not exist)"),
+        }
+    }
+
+    if out.len() > MAX_OPEN_HERE_PATHS {
+        eprintln!(
+            "tuic open-here: {} paths given, opening only the first {MAX_OPEN_HERE_PATHS}",
+            out.len()
+        );
+        out.truncate(MAX_OPEN_HERE_PATHS);
+    }
+    out
+}
+
+/// Build the `tuic://open-terminal` deep link for already-resolved absolute
+/// directory paths — one URL with a repeated `path` param, so the app opens
+/// every pane from a single launch attempt with deterministic ordering.
+/// Pure and unit-tested directly; no filesystem access.
+fn build_open_terminal_url(dirs: &[String]) -> String {
+    let params: Vec<String> = dirs
+        .iter()
+        .map(|d| format!("path={}", urlencod(d)))
+        .collect();
+    format!("tuic://open-terminal?{}", params.join("&"))
 }
 
 fn cmd_diff(file_a: &str, file_b: &str) -> Result<(), String> {
@@ -1144,6 +1217,12 @@ pub(crate) fn urlencod(s: &str) -> String {
         .replace('?', "%3F")
         .replace('&', "%26")
         .replace('=', "%3D")
+        // Per the WHATWG URLSearchParams spec (what `deep-link-handler.ts`'s
+        // `new URL(...).searchParams` parses with), a literal `+` in a query
+        // string decodes to a space. Escaping it here is what keeps a path
+        // like "/Users/x/C++Projects" round-tripping intact instead of
+        // silently corrupting to "/Users/x/C  Projects" on the other end.
+        .replace('+', "%2B")
 }
 
 pub(crate) fn open_deep_link(url: &str) -> std::io::Result<()> {
@@ -1200,9 +1279,9 @@ fn remove_with_elevation(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_send_parts, capture_query, is_tmux_invocation, looks_like_uuid, match_session,
-        resolve_path, session_status, short_id, short_repo, strip_verbatim, translate_keys,
-        truncate,
+        MAX_OPEN_HERE_PATHS, agent_send_parts, build_open_terminal_url, capture_query,
+        is_tmux_invocation, looks_like_uuid, match_session, resolve_open_here_paths, resolve_path,
+        session_status, short_id, short_repo, strip_verbatim, translate_keys, truncate, urlencod,
     };
     use serde_json::json;
 
@@ -1514,5 +1593,110 @@ mod tests {
         let sessions = vec![session("11111111-1111-1111-1111-111111111111", Some("a"))];
         let err = match_session(&sessions, "").unwrap_err();
         assert!(err.contains("missing -t"), "got: {err}");
+    }
+
+    // -----------------------------------------------------------------------
+    // open-here: resolve_open_here_paths / build_open_terminal_url
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_open_terminal_url_encodes_and_repeats_the_path_param() {
+        let url = build_open_terminal_url(&["/Gits/alpha".to_string(), "/tmp/a b".to_string()]);
+        assert_eq!(url, "tuic://open-terminal?path=/Gits/alpha&path=/tmp/a%20b");
+    }
+
+    #[test]
+    fn build_open_terminal_url_single_path() {
+        let url = build_open_terminal_url(&["/repo".to_string()]);
+        assert_eq!(url, "tuic://open-terminal?path=/repo");
+    }
+
+    #[test]
+    fn urlencod_escapes_plus_so_it_never_reads_back_as_a_space() {
+        // URLSearchParams (what the frontend parses query strings with) decodes
+        // a literal `+` to a space — this is the char every other case in this
+        // helper already covers with the same "would be misparsed" rationale.
+        assert_eq!(urlencod("C++Projects"), "C%2B%2BProjects");
+    }
+
+    #[test]
+    fn build_open_terminal_url_escapes_a_plus_in_the_path() {
+        let url = build_open_terminal_url(&["/Users/x/C++Projects".to_string()]);
+        assert_eq!(url, "tuic://open-terminal?path=/Users/x/C%2B%2BProjects");
+    }
+
+    #[test]
+    fn resolve_open_here_paths_passes_through_an_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolved = resolve_open_here_paths(&[dir.path().to_string_lossy().to_string()]);
+        assert_eq!(resolved, vec![resolve_path(&dir.path().to_string_lossy())]);
+    }
+
+    #[test]
+    fn resolve_open_here_paths_resolves_a_file_to_its_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.txt");
+        std::fs::write(&file, b"hi").unwrap();
+
+        let resolved = resolve_open_here_paths(&[file.to_string_lossy().to_string()]);
+        assert_eq!(resolved, vec![resolve_path(&dir.path().to_string_lossy())]);
+    }
+
+    #[test]
+    fn resolve_open_here_paths_drops_nonexistent_paths() {
+        let resolved = resolve_open_here_paths(&["/definitely/not/here/at/all".to_string()]);
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn resolve_open_here_paths_drops_only_the_nonexistent_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolved = resolve_open_here_paths(&[
+            "/definitely/not/here/at/all".to_string(),
+            dir.path().to_string_lossy().to_string(),
+        ]);
+        assert_eq!(resolved, vec![resolve_path(&dir.path().to_string_lossy())]);
+    }
+
+    #[test]
+    fn resolve_open_here_paths_caps_at_max_open_here_paths() {
+        let dirs: Vec<_> = (0..MAX_OPEN_HERE_PATHS + 3)
+            .map(|_| tempfile::tempdir().unwrap())
+            .collect();
+        let raw: Vec<String> = dirs
+            .iter()
+            .map(|d| d.path().to_string_lossy().to_string())
+            .collect();
+
+        let resolved = resolve_open_here_paths(&raw);
+        assert_eq!(resolved.len(), MAX_OPEN_HERE_PATHS);
+        // The first MAX_OPEN_HERE_PATHS survive, in order — nothing reordered.
+        let expected: Vec<String> = raw
+            .iter()
+            .take(MAX_OPEN_HERE_PATHS)
+            .map(|p| resolve_path(p))
+            .collect();
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn resolve_open_here_paths_at_exactly_the_cap_is_not_truncated() {
+        // Boundary: MAX_OPEN_HERE_PATHS itself must survive whole — only
+        // strictly *more* than the cap gets truncated.
+        let dirs: Vec<_> = (0..MAX_OPEN_HERE_PATHS)
+            .map(|_| tempfile::tempdir().unwrap())
+            .collect();
+        let raw: Vec<String> = dirs
+            .iter()
+            .map(|d| d.path().to_string_lossy().to_string())
+            .collect();
+
+        let resolved = resolve_open_here_paths(&raw);
+        assert_eq!(resolved.len(), MAX_OPEN_HERE_PATHS);
+    }
+
+    #[test]
+    fn resolve_open_here_paths_empty_input_is_empty_output() {
+        assert!(resolve_open_here_paths(&[]).is_empty());
     }
 }

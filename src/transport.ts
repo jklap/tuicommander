@@ -1957,6 +1957,13 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"uninstall_cli",
 	"dismiss_cli_prompt",
 	"get_cli_status",
+	// Finder Service (macOS "New TUICommander Tab Here") install/management —
+	// registers a local Finder right-click menu item. Meaningless for a
+	// browser/remote client, which has no local Finder to register one for.
+	"get_finder_service_status",
+	"install_finder_service",
+	"uninstall_finder_service",
+	"dismiss_finder_service_prompt",
 	// App version bookkeeping — desktop updater state.
 	"get_last_seen_version",
 	"set_last_seen_version",

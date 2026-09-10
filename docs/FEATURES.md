@@ -1687,6 +1687,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 ### 17.4 Deep Links (`tuic://`)
 - `tuic://install-plugin?url=https://...` — Download and install plugin (HTTPS only, confirmation dialog)
 - `tuic://open-repo?path=/path` — Activate a repo already in the sidebar; a folder that is not in it yet is added after one confirmation (this is what `tuic <dir>` sends)
+- `tuic://open-terminal?path=/path&path=/path2...` — Open a new terminal pane at each given path (a file resolves to its parent directory), capped at 5 paths per invocation. This is what the macOS Finder "New TUICommander Tab Here" service and `tuic open-here` send. No confirmation dialog — see [17.4.2](#1742-finder-service-macos-new-tuicommander-tab-here) for the placement logic and why this one is unconfirmed by design
 - `tuic://settings?tab=plugins` — Open Settings to specific tab
 - `tuic://open/<path>` — Open markdown file in tab (iframe SDK only, path validated against repos)
 - Focused absolute `tuic://open`/`tuic://edit` targets switch to their owning registered repository so the native file tab remains visible; background opens preserve the current repository
@@ -1710,6 +1711,19 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - `<a href="tuic://open/...">` and `<a href="tuic://terminal?repo=...">` links intercepted automatically
 - `data-pinned` attribute on links sets pinned flag
 - Interactive test page: `docs/examples/sdk-test.html` (see `docs/tuic-sdk.md` for launch instructions)
+
+### 17.4.2 Finder Service (macOS, "New TUICommander Tab Here")
+- Right-click a folder (or a file — its parent directory is used) in Finder and choose **New TUICommander Tab Here** to open a terminal pane there
+- Ships as a hand-authored Automator `.workflow` bundle (`src-tauri/services/`) installed into `~/Library/Services/` — no native `NSServices`/Cocoa code, no install step beyond copying the bundle
+- Install/uninstall from **Settings → General → Finder Integration**, or accept the one-time first-run prompt (never repeated once dismissed, mirrors the `tuic` CLI install prompt)
+- Chain: Finder → the bundle's shell action → `tuic open-here <paths...>` → launches TUICommander if it isn't running → `tuic://open-terminal` deep link
+- **Which repo the new pane opens in** (`resolvePlacementForCwd`, `src/stores/terminalPlacement.ts`):
+  1. the path is inside a registered repo or one of its linked worktrees → opens there, on that repo's branch
+  2. otherwise, the repo you're currently active in → opens there
+  3. otherwise, a picker dialog asks: pick a registered repo, register the clicked folder as a new repo, or open an unattached terminal
+- The new pane's cwd is always the exact folder clicked, even when it's nested inside a repo — never the repo root
+- A selection of multiple items opens one pane per item, capped at 5
+- Rust: `src-tauri/src/finder_service.rs` (install/uninstall/status), `src-tauri/crates/tuic-cli/src/main.rs` (`open-here` subcommand). Frontend: `src/deep-link-handler.ts` (`open-terminal` case), `src/components/RepoPickerDialog/`
 
 ### 17.5 Built-in Plugins
 - **Plan Tracker** — Detects Claude Code plan files from structured events

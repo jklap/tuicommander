@@ -5,6 +5,7 @@ const {
 	mockGetVersion,
 	mockInitApp,
 	mockInvoke,
+	mockIsMacOS,
 	mockIsTauri,
 	mockLogger,
 	mockRegistryFetch,
@@ -15,6 +16,7 @@ const {
 	mockGetVersion: vi.fn(),
 	mockInitApp: vi.fn(),
 	mockInvoke: vi.fn(),
+	mockIsMacOS: { value: true },
 	mockIsTauri: { value: true },
 	mockLogger: { debug: vi.fn(), error: vi.fn() },
 	mockRegistryFetch: vi.fn(),
@@ -31,7 +33,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("../../deep-link-handler", () => ({ initDeepLinkHandler: mockDeepLink }));
 vi.mock("../../invoke", () => ({ invoke: mockInvoke }));
-vi.mock("../../platform", () => ({ applyPlatformClass: vi.fn(() => "macos") }));
+vi.mock("../../platform", () => ({ applyPlatformClass: vi.fn(() => "macos"), isMacOS: () => mockIsMacOS.value }));
 vi.mock("../../transport", () => ({ isTauri: () => mockIsTauri.value }));
 vi.mock("../../hooks/useAppInit", () => ({ initApp: mockInitApp }));
 vi.mock("../../hooks/useAutoFetch", () => ({ startAutoFetch: vi.fn() }));
@@ -69,6 +71,10 @@ function makeOptions(overrides: Partial<AppBootstrapOptions> = {}): AppBootstrap
 		openSettings: vi.fn(),
 		openRepoPath: vi.fn().mockResolvedValue(undefined),
 		confirm: vi.fn().mockResolvedValue(false),
+		chooseRepoForPath: vi.fn().mockResolvedValue(null),
+		handleAddTerminalToBranch: vi.fn().mockResolvedValue(undefined),
+		openUnattachedTerminal: vi.fn(),
+		markTerminalPlacementAsGuess: vi.fn(),
 		...overrides,
 	};
 }
@@ -90,6 +96,7 @@ describe("runAppBootstrap", () => {
 			return Promise.resolve(undefined);
 		});
 		mockIsTauri.value = true;
+		mockIsMacOS.value = true;
 		mockLogger.debug.mockClear();
 		mockLogger.error.mockClear();
 		mockRegistryFetch.mockReset().mockResolvedValue(undefined);
@@ -145,6 +152,54 @@ describe("runAppBootstrap", () => {
 		expect(mockInvoke).toHaveBeenCalledWith("dismiss_cli_prompt");
 	});
 
+	it("offers and installs the Finder service only for a first-run macOS user", async () => {
+		mockInvoke.mockImplementation((command: string) => {
+			if (command === "get_last_seen_version") return Promise.resolve("2.0.0");
+			if (command === "get_cli_status") return Promise.resolve({ installed: true, prompt_dismissed: true });
+			if (command === "get_finder_service_status")
+				return Promise.resolve({ installed: false, prompt_dismissed: false });
+			return Promise.resolve(undefined);
+		});
+		const confirm = vi.fn().mockResolvedValue(true);
+
+		await runAppBootstrap(makeOptions({ confirm }));
+		await flushPromises();
+
+		expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: "Add Finder integration?", kind: "info" }));
+		expect(mockInvoke).toHaveBeenCalledWith("install_finder_service");
+		expect(mockInvoke).toHaveBeenCalledWith("dismiss_finder_service_prompt");
+	});
+
+	it("never offers the Finder service on a non-macOS platform, even natively", async () => {
+		mockIsMacOS.value = false;
+		mockInvoke.mockImplementation((command: string) => {
+			if (command === "get_finder_service_status")
+				return Promise.resolve({ installed: false, prompt_dismissed: false });
+			return Promise.resolve(undefined);
+		});
+		const confirm = vi.fn().mockResolvedValue(true);
+
+		await runAppBootstrap(makeOptions({ confirm }));
+		await flushPromises();
+
+		expect(mockInvoke).not.toHaveBeenCalledWith("get_finder_service_status");
+		expect(confirm).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Add Finder integration?" }));
+	});
+
+	it("does not offer the Finder service again once already installed or dismissed", async () => {
+		mockInvoke.mockImplementation((command: string) => {
+			if (command === "get_finder_service_status") return Promise.resolve({ installed: true, prompt_dismissed: false });
+			return Promise.resolve(undefined);
+		});
+		const confirm = vi.fn().mockResolvedValue(true);
+
+		await runAppBootstrap(makeOptions({ confirm }));
+		await flushPromises();
+
+		expect(confirm).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Add Finder integration?" }));
+		expect(mockInvoke).not.toHaveBeenCalledWith("install_finder_service");
+	});
+
 	it("reports fatal initialization failures but still installs recovery integrations", async () => {
 		mockInitApp.mockRejectedValue(new Error("boom"));
 		const splash = document.createElement("div");
@@ -169,6 +224,7 @@ describe("runAppBootstrap", () => {
 
 		expect(mockGetVersion).not.toHaveBeenCalled();
 		expect(mockInvoke).not.toHaveBeenCalledWith("get_cli_status");
+		expect(mockInvoke).not.toHaveBeenCalledWith("get_finder_service_status");
 		expect(options.setWhatsNewVersion).not.toHaveBeenCalled();
 		expect(mockDeepLink).toHaveBeenCalledOnce();
 	});

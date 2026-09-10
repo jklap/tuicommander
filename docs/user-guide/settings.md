@@ -15,6 +15,7 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 | **Prevent sleep when busy** | Keep machine awake while agents are working |
 | **Auto-check for updates** | Check for new versions on startup |
 | **Auto-show PR popover** | Automatically display PR details when switching branches. Only shows for OPEN pull requests — CLOSED PRs are hidden, and MERGED PRs fade after 5 minutes of user activity. |
+| **Finder Integration** (macOS only) | Add/remove the "New TUICommander Tab Here" Finder right-click item — see [Finder integration](finder-integration.md) |
 | **Repository defaults** | Base branch, file handling, setup/run scripts applied to new repos |
 | **Experimental Features** | Master toggle for experimental features. When enabled, shows sub-toggles: **AI Chat** (AI Chat panel, shortcuts, command palette entry), **Scroll History** (scrollback overlay with search when scrolling up in agent mode). |
 

@@ -30,7 +30,7 @@ interface BranchSelectionCoordinatorDeps {
 export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinatorDeps) {
 	let branchSelectQueue: Promise<void> = Promise.resolve();
 
-	const handleAddTerminalToBranch = async (repoPath: string, branchName: string) => {
+	const handleAddTerminalToBranch = async (repoPath: string, branchName: string, cwdOverride?: string) => {
 		const canSpawn = await deps.pty.canSpawn();
 		if (!canSpawn) {
 			deps.setStatusInfo("Max sessions reached (50)");
@@ -52,7 +52,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			sessionId: null,
 			fontSize: deps.getDefaultFontSize(),
 			name: tabName,
-			cwd: branch?.worktreePath || null,
+			cwd: cwdOverride || branch?.worktreePath || null,
 			awaitingInput: null,
 			// No prefix: tuicSession must stay a bare canonical UUID for the
 			// backend's `is_valid_uuid` prompt-injection guard.

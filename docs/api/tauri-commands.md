@@ -621,3 +621,20 @@ Smart Prompts "API" execution mode — direct LLM calls for prompt-based automat
 | `delete_llm_api_key` | -- | `()` | Remove the LLM API key from the OS keyring |
 | `execute_api_prompt` | `system_prompt, content, timeout_ms?` | `String` | Execute a direct LLM call using the configured provider/model. Returns the model's response text. |
 | `test_llm_api` | -- | `String` | Validate connection to the configured LLM endpoint (sends a test prompt) |
+
+## macOS Finder Service (`finder_service.rs`)
+
+Desktop-only (`INTENTIONALLY_UNMAPPED` in `src/transport.ts` — no HTTP equivalent; installing a
+local Finder menu item is meaningless for a browser/remote client). See
+[Finder integration](../user-guide/finder-integration.md) for the user-facing behavior and section
+17.4.2 of `FEATURES.md` for the placement ladder.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `get_finder_service_status` | -- | `{ installed: bool, prompt_dismissed: bool }` | Whether the "New TUICommander Tab Here" bundle is installed in `~/Library/Services/`, and whether the first-run prompt has already been dismissed |
+| `install_finder_service` | -- | `Result<(), String>` | Copy the bundled `.workflow` into `~/Library/Services/` and flush the Services menu cache (`pbs -flush`) |
+| `uninstall_finder_service` | -- | `Result<(), String>` | Remove the bundle from `~/Library/Services/`, if present (no-op success if already absent) |
+| `dismiss_finder_service_prompt` | -- | `()` | Persist that the first-run prompt was dismissed, so it is never shown again |
+
+Non-macOS builds: `get_finder_service_status` reports `installed: false`; `install_finder_service`
+returns an error; `uninstall_finder_service`/`dismiss_finder_service_prompt` are no-ops.

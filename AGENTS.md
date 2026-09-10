@@ -180,6 +180,38 @@ Targets macOS, Windows, Linux. Use Cmd/Ctrl abstractions, Tauri cross-platform p
 
 **Terminal keydown vs. global shortcuts:** `keyToSequence()` (`src/components/Terminal/terminalInput.ts`) excludes `metaKey` but not `ctrlKey` from its printable-character PTY-forwarding fallback — so a global shortcut whose Windows/Linux form uses Ctrl+&lt;printable&gt; (macOS form: Cmd+&lt;printable&gt;) will be silently swallowed and typed into the terminal instead of bubbling to the document-level shortcut listener, unless the terminal's keydown handler explicitly bails out first (see `isGlobalShortcutPassthrough`, `terminalInput.ts`). When adding or rebinding a global shortcut that uses Ctrl/Cmd + a printable key, verify the Windows/Linux (Ctrl) form is special-cased the same way.
 
+## macOS Finder Service ("New TUICommander Tab Here")
+
+Right-click a folder/file in Finder → a terminal pane opens there via a placement ladder (owning
+repo/worktree → active repo → ask the user). Chain: Finder → the bundle's shell action → `tuic
+open-here <paths...>` → `tuic://open-terminal` deep link. See `docs/user-guide/finder-integration.md`
+and `FEATURES.md` §17.4.2 for user-facing behavior; `docs/sync-matrix.md`'s matching row for what to
+update when touching it.
+
+**The Service bundle (`src-tauri/services/*.workflow/`) is a hand-authored Automator document, not
+Automator-generated — verify any change to it with the `automator` CLI, not just `plutil -lint`.**
+`plutil -lint` only proves the plist is well-formed XML; it says nothing about whether Automator's
+runtime will actually execute the workflow. The `automator` CLI (ships with macOS) runs a `.workflow`
+bundle directly and is the fastest way to prove a change actually works, fully scriptable, no Finder
+GUI or right-click needed:
+```bash
+# single item
+automator -i /path/to/folder "src-tauri/services/New TUICommander Tab Here.workflow"
+# multiple items (the -i flag only takes one; use -i - with newline-separated stdin for a selection)
+printf '%s\n%s\n' /path/one /path/two | automator -i - "src-tauri/services/New TUICommander Tab Here.workflow"
+```
+This is how the shipped bundle was actually verified (single item, multi-item selection, and a plain
+file) before being committed — not just plist-linted. Reuse this technique for any future Automator
+Service/Quick Action work in this repo rather than reasoning about the `.wflow` schema from memory.
+
+**`tuic://open-terminal` deliberately has no confirmation dialog**, unlike `open-repo`'s unknown-path
+branch. This was a considered decision, not an oversight — do not "fix" it by adding one. Rationale:
+spawning a pane starts an idle shell and executes nothing; `tuic new` already has zero confirmation
+for the same reason; and both the CLI and the frontend deep-link handler independently cap at 5 panes
+per invocation, so a crafted/repeated link can't fan out unboundedly. The one outcome that DOES mutate
+persistent state — registering a new repo — is only reachable through an explicit click on the
+picker dialog's "Add this folder as a repository" button; that click is the confirmation.
+
 ## Global Focus/Keyboard Handlers Must Check `anyModalOpen()`
 
 `useKeyboardRedirect.ts` (forwards printable keys to the active terminal

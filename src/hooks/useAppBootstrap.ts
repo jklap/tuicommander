@@ -1,9 +1,9 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onMount } from "solid-js";
-import { initDeepLinkHandler } from "../deep-link-handler";
+import { type DeepLinkCallbacks, initDeepLinkHandler } from "../deep-link-handler";
 import { invoke } from "../invoke";
-import { applyPlatformClass } from "../platform";
+import { applyPlatformClass, isMacOS } from "../platform";
 import { activityStore } from "../stores/activityStore";
 import { agentConfigsStore } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
@@ -46,6 +46,15 @@ export type AppBootstrapOptions = InitOptions & {
 		cancelLabel?: string;
 		kind: "info" | "warning";
 	}) => Promise<boolean>;
+	/** Ask the user which repo a Finder-invoked path should open under, when
+	 *  the placement ladder found nothing — `tuic://open-terminal`. */
+	chooseRepoForPath: DeepLinkCallbacks["chooseRepoForPath"];
+	/** Create+attach a terminal, with an explicit cwd override — same
+	 *  coordinator function the branch-selection UI itself calls. */
+	handleAddTerminalToBranch: DeepLinkCallbacks["handleAddTerminalToBranch"];
+	/** Open a plain terminal with no repo/branch association. */
+	openUnattachedTerminal: DeepLinkCallbacks["openUnattachedTerminal"];
+	markTerminalPlacementAsGuess: DeepLinkCallbacks["markTerminalPlacementAsGuess"];
 };
 
 async function hydrateStores(): Promise<void> {
@@ -119,6 +128,38 @@ function offerCliInstall(confirm: AppBootstrapOptions["confirm"]): void {
 		.catch((error) => appLogger.debug("app", "get_cli_status failed, skipping CLI prompt", { error: String(error) }));
 }
 
+/** Offer the macOS Finder "New TUICommander Tab Here" service, mirroring
+ *  `offerCliInstall` above — a one-time startup prompt, never repeated once
+ *  dismissed (accepted or declined), with install/uninstall also available
+ *  any time from Settings → General. */
+function offerFinderServiceInstall(confirm: AppBootstrapOptions["confirm"]): void {
+	if (!isTauri() || !isMacOS()) return;
+	invoke<{ installed: boolean; prompt_dismissed: boolean }>("get_finder_service_status")
+		.then(async (status) => {
+			if (status.installed || status.prompt_dismissed) return;
+			const confirmed = await confirm({
+				title: "Add Finder integration?",
+				message:
+					'Right-click a folder in Finder and choose "New TUICommander Tab Here" to open ' +
+					"a terminal there — TUICommander opens the pane in whichever repo owns that folder, " +
+					"the repo you're currently working in, or asks you which one.\n\n" +
+					"You can always add or remove this later from Settings.",
+				kind: "info",
+			});
+			if (confirmed) {
+				invoke("install_finder_service").catch((error) =>
+					appLogger.error("app", "Finder service install failed", error),
+				);
+			}
+			invoke("dismiss_finder_service_prompt").catch(() => {});
+		})
+		.catch((error) =>
+			appLogger.debug("app", "get_finder_service_status failed, skipping Finder service prompt", {
+				error: String(error),
+			}),
+		);
+}
+
 /** Initializes the main window and starts post-hydration native integrations. */
 export async function runAppBootstrap(options: AppBootstrapOptions): Promise<void> {
 	const {
@@ -128,6 +169,10 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 		openSettings,
 		openRepoPath,
 		confirm,
+		chooseRepoForPath,
+		handleAddTerminalToBranch,
+		openUnattachedTerminal,
+		markTerminalPlacementAsGuess,
 		...initOptions
 	} = options;
 
@@ -164,11 +209,16 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 	checkForUpdates();
 	checkWhatsNew(setWhatsNewVersion);
 	offerCliInstall(confirm);
+	offerFinderServiceInstall(confirm);
 	initDeepLinkHandler({
 		openSettings,
 		confirm: (title, message) => confirm({ title, message, kind: "warning" }),
 		onInstallError: (message) => appLogger.error("plugin", message),
 		openRepoPath,
+		chooseRepoForPath,
+		handleAddTerminalToBranch,
+		openUnattachedTerminal,
+		markTerminalPlacementAsGuess,
 	});
 }
 

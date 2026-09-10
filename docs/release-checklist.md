@@ -8,6 +8,11 @@ When Boss asks to tag a release:
 4. **Tag** with `git tag vX.Y.Z`
 5. **GitHub release** — create via `gh release create vX.Y.Z --generate-notes`
 6. **Milestone** — close the matching milestone if one exists, create the next one
+7. **macOS Finder Service** — after a packaged `.dmg`/`.app` build, confirm the "New TUICommander
+   Tab Here" Finder integration still installs and works: install it from Settings → General,
+   right-click a folder in Finder, and confirm the pane opens. The bundle is hand-authored
+   (`src-tauri/services/`), not machine-generated, so a packaging change (resource paths,
+   `externalBin` layout) can silently break it without any build error.
 
 ## GitHub Issue Management
 

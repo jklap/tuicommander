@@ -41,6 +41,20 @@ tuic diff old.rs new.rs
 
 A directory is treated as a **repo**, not as a terminal: it lands in the sidebar and becomes the active repo. A folder TUICommander does not know yet is confirmed once in the app before it is added — after that, `tuic .` activates it silently. Use `tuic new` when what you want is a shell.
 
+### Opening a plain terminal at a path
+
+```bash
+# Open a new terminal pane at this exact folder (files resolve to their parent directory)
+tuic open-here /path/to/folder
+
+# Multiple paths — one pane each, capped at 5
+tuic open-here /path/one /path/two
+```
+
+Unlike `tuic <dir>`, this never touches the sidebar's repo list — it just opens a terminal, filed
+under whichever repo owns the path (see [Finder Integration](finder-integration.md) for the
+placement rules). This is what the macOS Finder "New TUICommander Tab Here" service runs.
+
 ### Using as $EDITOR
 
 ```bash

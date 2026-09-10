@@ -84,6 +84,43 @@ describe("createBranchSelectionCoordinator", () => {
 		}
 	});
 
+	it("uses branch.worktreePath as cwd when no override is given (regression)", async () => {
+		await testInScope(async () => {
+			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+			repositoriesStore.setBranch("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+
+			const id = await makeCoordinator().handleAddTerminalToBranch("/Gits/alpha", "main");
+
+			expect(terminalsStore.get(id!)?.cwd).toBe("/Gits/alpha");
+		});
+	});
+
+	it("uses the override cwd instead of branch.worktreePath when given", async () => {
+		await testInScope(async () => {
+			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+			repositoriesStore.setBranch("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+
+			const id = await makeCoordinator().handleAddTerminalToBranch("/Gits/alpha", "main", "/Gits/alpha/packages/app");
+
+			expect(terminalsStore.get(id!)?.cwd).toBe("/Gits/alpha/packages/app");
+		});
+	});
+
+	it("does not change branch association or repoPath when a cwd override is given", async () => {
+		await testInScope(async () => {
+			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+			repositoriesStore.setBranch("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+
+			const id = await makeCoordinator().handleAddTerminalToBranch("/Gits/alpha", "main", "/Gits/alpha/packages/app");
+
+			expect(terminalsStore.get(id!)?.repoPath).toBe("/Gits/alpha");
+			expect(repositoriesStore.findOwnerForTerminal(id!)).toEqual({
+				repoPath: "/Gits/alpha",
+				branchName: "main",
+			});
+		});
+	});
+
 	it("does not create a terminal when the spawn budget is exhausted", async () => {
 		await testInScope(async () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
