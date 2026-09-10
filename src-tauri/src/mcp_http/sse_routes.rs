@@ -289,6 +289,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyTitle { .. } => "pty-title",
         AppEvent::PtyOsc133 { .. } => "pty-osc133",
         AppEvent::PtyCwd { .. } => "pty-cwd",
+        AppEvent::PtyOpenUrl { .. } => "pty-open-url",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
         AppEvent::ChatViewChanged { .. } => "chat-view-changed",
@@ -411,6 +412,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::PtyCwd { session_id, cwd } => {
             serde_json::json!({ "session_id": session_id, "cwd": cwd })
+        }
+        AppEvent::PtyOpenUrl { session_id, url } => {
+            serde_json::json!({ "session_id": session_id, "url": url })
         }
         AppEvent::PluginWatcherLines { session_id, lines } => {
             serde_json::json!({ "session_id": session_id, "lines": lines })

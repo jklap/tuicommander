@@ -479,3 +479,12 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 When old output leaves the scrollback, command boundaries and prompt ticks stay attached to their retained output. Ticks for discarded prompts disappear; answers-only history keeps the retained question and answer association.
 
 Terminal stream reconnect notices use the current terminal name when available and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice. Closing the terminal removes its notice, and late subscription failures cannot publish a notice after closure.
+
+### OSC 1337 Commands
+
+A subset of the proprietary OSC 1337 escape codes is recognized, for compatibility with scripts and tools that emit them:
+
+- **`CursorShape`** and **`ClearScrollback`** — change the cursor shape or clear scrollback history, same as their xterm/CSI equivalents.
+- **`Copy`** and **`CopyToClipboard`…`EndCopy`** — write to the system clipboard, gated by the same Settings > Terminal > "Allow OSC 52 clipboard writes" toggle as OSC 52.
+- **`StealFocus`** (bring the window to the front) and **`RequestAttention`** (bounce the dock icon) — gated by Settings > Terminal > "Allow terminal focus/attention requests" (default on). Disable this if a script or log ever spams either.
+- **`OpenURL`** — always shows a confirmation dialog naming the URL before opening it (the same dialog `ui action=confirm` MCP requests use, so any connected client — desktop, browser, or the mobile app — can answer it), and only ever opens `http://`, `https://`, or `mailto:` links.
