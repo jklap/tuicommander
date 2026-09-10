@@ -2774,6 +2774,15 @@ fn validate_paths_within_repo(repo_path: &Path, files: &[String]) -> Result<(), 
     Ok(())
 }
 
+/// Wrap a failed git-command error with a stale-lock diagnosis when one
+/// explains it (naming the lock file and its age), falling back to the
+/// original `context: {e}` message otherwise. See
+/// [`crate::git_locks::describe_stale_lock`] — detection is read-only, so
+/// this only ever makes a failure *more* specific, never invents a cause.
+fn diagnose_git_failure(repo_path: &Path, context: &str, e: impl std::fmt::Display) -> String {
+    crate::git_locks::describe_stale_lock(repo_path).unwrap_or_else(|| format!("{context}: {e}"))
+}
+
 /// Stage files (`git add -- <files>`).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_stage_files(path: String, files: Vec<String>) -> Result<(), String> {
@@ -2787,7 +2796,7 @@ pub(crate) async fn git_stage_files(path: String, files: Vec<String>) -> Result<
         git_cmd(&repo_path)
             .args(&args_str)
             .run()
-            .map_err(|e| format!("git add failed: {e}"))?;
+            .map_err(|e| diagnose_git_failure(&repo_path, "git add failed", e))?;
         Ok(())
     })
     .await
@@ -2810,7 +2819,7 @@ pub(crate) async fn git_unstage_files(path: String, files: Vec<String>) -> Resul
         git_cmd(&repo_path)
             .args(&args_str)
             .run()
-            .map_err(|e| format!("git restore --staged failed: {e}"))?;
+            .map_err(|e| diagnose_git_failure(&repo_path, "git restore --staged failed", e))?;
         Ok(())
     })
     .await
@@ -2831,7 +2840,7 @@ pub(crate) async fn git_discard_files(path: String, files: Vec<String>) -> Resul
         git_cmd(&repo_path)
             .args(&args_str)
             .run()
-            .map_err(|e| format!("git restore failed: {e}"))?;
+            .map_err(|e| diagnose_git_failure(&repo_path, "git restore failed", e))?;
         Ok(())
     })
     .await
@@ -2936,7 +2945,7 @@ pub(crate) async fn git_commit(
         git_cmd(&repo_path)
             .args(&args_str)
             .run()
-            .map_err(|e| format!("git commit failed: {e}"))?;
+            .map_err(|e| diagnose_git_failure(&repo_path, "git commit failed", e))?;
 
         let hash_out = git_cmd(&repo_path)
             .args(["rev-parse", "HEAD"])
@@ -3142,7 +3151,7 @@ pub(crate) async fn git_stash_apply(path: String, stash_ref: String) -> Result<(
         git_cmd(&repo_path)
             .args(["stash", "apply", &stash_ref])
             .run()
-            .map_err(|e| format!("git stash apply failed: {e}"))?;
+            .map_err(|e| diagnose_git_failure(&repo_path, "git stash apply failed", e))?;
         Ok(())
     })
     .await
@@ -3160,7 +3169,7 @@ pub(crate) async fn git_stash_pop(path: String, stash_ref: String) -> Result<(),
         git_cmd(&repo_path)
             .args(["stash", "pop", &stash_ref])
             .run()
-            .map_err(|e| format!("git stash pop failed: {e}"))?;
+            .map_err(|e| diagnose_git_failure(&repo_path, "git stash pop failed", e))?;
         Ok(())
     })
     .await
