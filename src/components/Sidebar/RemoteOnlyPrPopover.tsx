@@ -64,12 +64,12 @@ export const RemoteOnlyPrPopover: Component<{
 		const ctx = cleanupCtx();
 		if (!ctx) return true; // remote-only: user is not on merged branch
 		const repo = repositoriesStore.get(props.repoPath);
-		return repo?.activeBranch === ctx.baseBranch;
+		return repo?.activeWorkspaceId === ctx.baseBranch;
 	};
 
 	const closeTerminalsForBranch = async (repoPath: string, branchName: string) => {
 		const repo = repositoriesStore.get(repoPath);
-		const branch = repo?.branches[branchName];
+		const branch = repo?.workspaces[branchName];
 		if (branch) {
 			for (const termId of branch.terminals) {
 				try {

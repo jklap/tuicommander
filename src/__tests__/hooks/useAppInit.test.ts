@@ -11,6 +11,7 @@ vi.mock("../../transport", async (importOriginal) => ({
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
+import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
@@ -112,8 +113,8 @@ describe("initApp", () => {
 		const targetRepo = "/repos/aicheck";
 		for (const path of [sourceRepo, targetRepo]) {
 			repositoriesStore.add({ path, displayName: path.split("/").pop()! });
-			repositoriesStore.setBranch(path, "main", { name: "main", worktreePath: path });
-			repositoriesStore.setActiveBranch(path, "main");
+			repositoriesStore.setBranch(path, "main", { branchName: "main", worktreePath: path });
+			repositoriesStore.setActiveWorkspace(path, "main");
 		}
 		repositoriesStore.setActive(sourceRepo);
 
@@ -160,8 +161,8 @@ describe("initApp", () => {
 		const targetRepo = "/repos/aicheck";
 		for (const path of [sourceRepo, targetRepo]) {
 			repositoriesStore.add({ path, displayName: path.split("/").pop()! });
-			repositoriesStore.setBranch(path, "main", { name: "main", worktreePath: path });
-			repositoriesStore.setActiveBranch(path, "main");
+			repositoriesStore.setBranch(path, "main", { branchName: "main", worktreePath: path });
+			repositoriesStore.setActiveWorkspace(path, "main");
 		}
 		repositoriesStore.setActive(sourceRepo);
 
@@ -305,7 +306,7 @@ describe("initApp", () => {
 
 		await initApp(deps);
 
-		const branch = repositoriesStore.get("/repo")?.branches["main"];
+		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 		expect(branch?.terminals.length).toBe(1);
 	});
 
@@ -322,7 +323,7 @@ describe("initApp", () => {
 
 		await initApp(deps);
 
-		const branch = repositoriesStore.get("/repo")?.branches["main"];
+		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 		expect(branch?.terminals).toHaveLength(1);
 		expect(terminalsStore.get(branch!.terminals[0])?.sessionId).toBe("sess-nested");
 	});
@@ -333,7 +334,7 @@ describe("initApp", () => {
 		repositoriesStore.setBranch("/repo", "embedded", { worktreePath: "/repo/packages/app/" });
 		repositoriesStore.add({ path: "/repo/packages/app", displayName: "Nested" });
 		repositoriesStore.setBranch("/repo/packages/app", "main", { worktreePath: null });
-		repositoriesStore.setActiveBranch("/repo/packages/app", "main");
+		repositoriesStore.setActiveWorkspace("/repo/packages/app", "main");
 
 		const deps = createMockDeps({
 			pty: {
@@ -346,9 +347,9 @@ describe("initApp", () => {
 
 		await initApp(deps);
 
-		expect(repositoriesStore.get("/repo")?.branches["main"].terminals).toHaveLength(0);
-		expect(repositoriesStore.get("/repo")?.branches["embedded"].terminals).toHaveLength(0);
-		const nestedBranch = repositoriesStore.get("/repo/packages/app")?.branches["main"];
+		expect(repositoriesStore.get("/repo")?.workspaces["main"].terminals).toHaveLength(0);
+		expect(repositoriesStore.get("/repo")?.workspaces["embedded"].terminals).toHaveLength(0);
+		const nestedBranch = repositoriesStore.get("/repo/packages/app")?.workspaces["main"];
 		expect(nestedBranch?.terminals).toHaveLength(1);
 		expect(terminalsStore.get(nestedBranch!.terminals[0])?.sessionId).toBe("sess-nested-repo");
 	});
@@ -371,8 +372,8 @@ describe("initApp", () => {
 
 		await initApp(deps);
 
-		expect(repositoriesStore.get("/external")?.branches["main"].terminals).toHaveLength(0);
-		const feature = repositoriesStore.get("/repo")?.branches["feature"];
+		expect(repositoriesStore.get("/external")?.workspaces["main"].terminals).toHaveLength(0);
+		const feature = repositoriesStore.get("/repo")?.workspaces["feature"];
 		expect(feature?.terminals).toHaveLength(1);
 		expect(terminalsStore.get(feature!.terminals[0])?.sessionId).toBe("sess-external-worktree");
 	});
@@ -380,7 +381,7 @@ describe("initApp", () => {
 	it("deduplicates a session-created event while the surviving-session list is pending", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActiveWorkspace("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
 		let sessionCreated:
@@ -428,7 +429,7 @@ describe("initApp", () => {
 		]);
 		await initializing;
 
-		const branch = repositoriesStore.get("/repo")?.branches["main"];
+		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 		expect(terminalsStore.getCount()).toBe(1);
 		expect(branch?.terminals).toHaveLength(1);
 		expect(new Set(branch?.terminals).size).toBe(1);
@@ -442,7 +443,7 @@ describe("initApp", () => {
 	it("does not overwrite a newer shell event while reconciling a deduplicated surviving session", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActiveWorkspace("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
 		let sessionCreated:
@@ -506,7 +507,7 @@ describe("initApp", () => {
 	it("applies a surviving shell snapshot newer than a pre-request shell event", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActiveWorkspace("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
 		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
@@ -542,7 +543,7 @@ describe("initApp", () => {
 	it("restores active repo/branch and eagerly calls handleBranchSelect", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActiveWorkspace("/repo", "main");
 
 		const deps = createMockDeps();
 		await initApp(deps);
@@ -611,14 +612,14 @@ describe("initApp", () => {
 
 		await initApp(deps);
 
-		const branch = repositoriesStore.get("/repo")?.branches["feature"];
+		const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 		expect(branch?.terminals.length).toBe(1);
 	});
 
 	it("restores active branch with surviving sessions", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActiveWorkspace("/repo", "main");
 
 		// Add a terminal that will be cleared and re-adopted
 		const deps = createMockDeps({
@@ -637,10 +638,15 @@ describe("initApp", () => {
 		expect(ids.length).toBe(1);
 	});
 
-	it("assigns an unmatched surviving session to the active branch without replacement", async () => {
+	// The active repo must NOT lend a slot to a session it does not own. Doing that
+	// made an unowned tab's home depend on which repo happened to have focus when
+	// the session arrived, so two sessions from one unregistered repo landed under
+	// two different repos. It goes to the Global Workspace instead — the same place
+	// every time, regardless of where the user is standing.
+	it("parks an unmatched surviving session in the Global Workspace, not the active branch", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActiveWorkspace("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
 		const deps = createMockDeps({
@@ -652,11 +658,60 @@ describe("initApp", () => {
 
 		await initApp(deps);
 
-		const branch = repositoriesStore.get("/repo")?.branches["main"];
-		expect(branch?.terminals).toHaveLength(1);
-		expect(terminalsStore.get(branch!.terminals[0])?.sessionId).toBe("sess-1");
+		expect(repositoriesStore.get("/repo")?.workspaces["main"].terminals).toHaveLength(0);
 		expect(terminalsStore.getCount()).toBe(1);
-		expect(deps.handleBranchSelect).not.toHaveBeenCalled();
+
+		const termId = terminalsStore.getIds()[0];
+		expect(terminalsStore.get(termId)?.sessionId).toBe("sess-1");
+		// `repoPath: null` is the parked marker reconcile later keys off.
+		expect(terminalsStore.get(termId)?.repoPath).toBeNull();
+		expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).toContain(termId);
+
+		// Consequence worth stating: the active branch is now genuinely empty, so
+		// init opens a terminal for it. The borrowed tab used to satisfy "this
+		// branch has a terminal" and suppress that — a foreign session standing in
+		// for the user's own. One extra terminal is the price of not lying about
+		// ownership.
+		expect(deps.handleBranchSelect).toHaveBeenCalledWith("/repo", "main");
+	});
+
+	// Where the user stands must not change where the tab lands. Same unregistered
+	// repo, two sessions, two different active repos at adoption time.
+	it("parks two sessions from one unregistered repo together, whatever repo has focus", async () => {
+		repositoriesStore.add({ path: "/repo-a", displayName: "A" });
+		repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+		repositoriesStore.setActiveWorkspace("/repo-a", "main");
+		repositoriesStore.add({ path: "/repo-b", displayName: "B" });
+		repositoriesStore.setBranch("/repo-b", "main", { worktreePath: "/repo-b" });
+		repositoriesStore.setActiveWorkspace("/repo-b", "main");
+		repositoriesStore.setActive("/repo-a");
+
+		await initApp(
+			createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-1", cwd: "/unmapped/wt-one" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			}),
+		);
+
+		repositoriesStore.setActive("/repo-b");
+
+		await initApp(
+			createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([
+						{ session_id: "sess-1", cwd: "/unmapped/wt-one" },
+						{ session_id: "sess-2", cwd: "/unmapped/wt-two" },
+					]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			}),
+		);
+
+		expect(repositoriesStore.get("/repo-a")?.workspaces["main"].terminals).toHaveLength(0);
+		expect(repositoriesStore.get("/repo-b")?.workspaces["main"].terminals).toHaveLength(0);
+		expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).toHaveLength(2);
 	});
 
 	describe("parked-tab toast registration", () => {
@@ -668,7 +723,7 @@ describe("initApp", () => {
 		function parkedSessionDeps(): AppInitDeps {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.setActive("/repo");
 			return createMockDeps({
 				pty: {
@@ -679,7 +734,7 @@ describe("initApp", () => {
 		}
 
 		function parkedToast() {
-			return toastsStore.toasts.find((toast) => toast.title === "Tab parked in the wrong repo");
+			return toastsStore.toasts.find((toast) => toast.title === "Tab parked outside your repos");
 		}
 
 		it("offers a register action naming the deduced repo root", async () => {
@@ -702,8 +757,8 @@ describe("initApp", () => {
 			expect(parkedToast()).toBeDefined();
 			expect(deps.registerRepo).not.toHaveBeenCalled();
 			expect(repositoriesStore.getPaths()).not.toContain(DEDUCED_ROOT);
-			// The tab is still parked in the focused repo, and the focus is untouched.
-			expect(repositoriesStore.get("/repo")?.branches["main"].terminals).toHaveLength(1);
+			// The focused repo did not lend it a slot, and the focus is untouched.
+			expect(repositoriesStore.get("/repo")?.workspaces["main"].terminals).toHaveLength(0);
 			expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
 		});
 
@@ -749,7 +804,7 @@ describe("initApp", () => {
 		// Trigger beforeunload to snapshot
 		window.dispatchEvent(new Event("beforeunload"));
 
-		const branch = repositoriesStore.get("/repo")?.branches["main"];
+		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 		expect(branch?.savedTerminals?.length).toBe(1);
 		expect(branch?.savedTerminals?.[0].agentSessionId).toBe("abc-123-uuid");
 	});
@@ -769,7 +824,7 @@ describe("initApp", () => {
 
 		window.dispatchEvent(new Event("beforeunload"));
 
-		const branch = repositoriesStore.get("/repo")?.branches["main"];
+		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 		expect(branch?.savedTerminals?.length).toBe(1);
 		expect(branch?.savedTerminals?.[0].agentSessionId).toBeNull();
 	});
@@ -1086,7 +1141,7 @@ describe("initApp", () => {
 			const { getHeadChanged } = captureRepoAndHeadChanged();
 			repositoriesStore.add({ path: "/my/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/my/repo", "main", { worktreePath: null });
-			repositoriesStore.setActiveBranch("/my/repo", "main");
+			repositoriesStore.setActiveWorkspace("/my/repo", "main");
 
 			const deps = createMockDeps();
 			await initApp(deps);
@@ -1105,7 +1160,7 @@ describe("initApp", () => {
 			const { getRepoChanged, getHeadChanged } = captureRepoAndHeadChanged();
 			repositoriesStore.add({ path: "/my/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/my/repo", "main", { worktreePath: null });
-			repositoriesStore.setActiveBranch("/my/repo", "main");
+			repositoriesStore.setActiveWorkspace("/my/repo", "main");
 			const deps = createMockDeps();
 			await initApp(deps);
 
@@ -1179,7 +1234,7 @@ describe("initApp", () => {
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setBranch("/repo", "develop", { worktreePath: null });
-			repositoriesStore.setActiveBranch("/repo", "develop");
+			repositoriesStore.setActiveWorkspace("/repo", "develop");
 			repositoriesStore.addTerminalToBranch("/repo", "develop", "term-1");
 
 			await initApp(deps);
@@ -1187,12 +1242,12 @@ describe("initApp", () => {
 			getCallback()!({ payload: { repo_path: "/repo", branch: "ACME-00106/feature" } });
 
 			// Old branch gone, new branch has it
-			expect(repositoriesStore.get("/repo")?.branches["develop"]).toBeUndefined();
-			expect(repositoriesStore.get("/repo")?.branches["ACME-00106/feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["develop"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["ACME-00106/feature"]).toBeDefined();
 			// Terminals carry over
-			expect(repositoriesStore.get("/repo")?.branches["ACME-00106/feature"]?.terminals).toContain("term-1");
+			expect(repositoriesStore.get("/repo")?.workspaces["ACME-00106/feature"]?.terminals).toContain("term-1");
 			// Active branch updated
-			expect(repositoriesStore.get("/repo")?.activeBranch).toBe("ACME-00106/feature");
+			expect(repositoriesStore.get("/repo")?.activeWorkspaceId).toBe("ACME-00106/feature");
 		});
 
 		it("creates new branch entry when old branch is a worktree (worktreePath set)", async () => {
@@ -1200,17 +1255,17 @@ describe("initApp", () => {
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setBranch("/repo", "wt-branch", { worktreePath: "/repo/.worktrees/wt-branch" });
-			repositoriesStore.setActiveBranch("/repo", "wt-branch");
+			repositoriesStore.setActiveWorkspace("/repo", "wt-branch");
 
 			await initApp(deps);
 
 			getCallback()!({ payload: { repo_path: "/repo", branch: "new-branch" } });
 
 			// Old worktree branch preserved
-			expect(repositoriesStore.get("/repo")?.branches["wt-branch"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["wt-branch"]).toBeDefined();
 			// New branch created
-			expect(repositoriesStore.get("/repo")?.branches["new-branch"]).toBeDefined();
-			expect(repositoriesStore.get("/repo")?.activeBranch).toBe("new-branch");
+			expect(repositoriesStore.get("/repo")?.workspaces["new-branch"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.activeWorkspaceId).toBe("new-branch");
 		});
 
 		it("sets activeBranch when target branch already exists in store", async () => {
@@ -1219,15 +1274,15 @@ describe("initApp", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: null });
 			repositoriesStore.setBranch("/repo", "feature", { worktreePath: null });
-			repositoriesStore.setActiveBranch("/repo", "feature");
+			repositoriesStore.setActiveWorkspace("/repo", "feature");
 
 			await initApp(deps);
 
 			getCallback()!({ payload: { repo_path: "/repo", branch: "main" } });
 
 			// Both branches still exist (feature kept, main was pre-existing)
-			expect(repositoriesStore.get("/repo")?.branches["main"]).toBeDefined();
-			expect(repositoriesStore.get("/repo")?.activeBranch).toBe("main");
+			expect(repositoriesStore.get("/repo")?.workspaces["main"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.activeWorkspaceId).toBe("main");
 		});
 
 		it("does nothing when branch has not changed", async () => {
@@ -1235,15 +1290,15 @@ describe("initApp", () => {
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: null });
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			await initApp(deps);
 
 			getCallback()!({ payload: { repo_path: "/repo", branch: "main" } });
 
 			// Store unchanged
-			expect(Object.keys(repositoriesStore.get("/repo")?.branches ?? {})).toEqual(["main"]);
-			expect(repositoriesStore.get("/repo")?.activeBranch).toBe("main");
+			expect(Object.keys(repositoriesStore.get("/repo")?.workspaces ?? {})).toEqual(["main"]);
+			expect(repositoriesStore.get("/repo")?.activeWorkspaceId).toBe("main");
 		});
 
 		it("moves terminals when new branch already exists in store (race with refreshAllBranchStats)", async () => {
@@ -1251,7 +1306,7 @@ describe("initApp", () => {
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setBranch("/repo", "wip/global-config", { worktreePath: null });
-			repositoriesStore.setActiveBranch("/repo", "wip/global-config");
+			repositoriesStore.setActiveWorkspace("/repo", "wip/global-config");
 			repositoriesStore.addTerminalToBranch("/repo", "wip/global-config", "term-1");
 			repositoriesStore.addTerminalToBranch("/repo", "wip/global-config", "term-2");
 
@@ -1263,12 +1318,16 @@ describe("initApp", () => {
 			getCallback()!({ payload: { repo_path: "/repo", branch: "wip/memory-system-improvements" } });
 
 			// Terminals moved to new branch
-			expect(repositoriesStore.get("/repo")?.branches["wip/memory-system-improvements"]?.terminals).toContain("term-1");
-			expect(repositoriesStore.get("/repo")?.branches["wip/memory-system-improvements"]?.terminals).toContain("term-2");
+			expect(repositoriesStore.get("/repo")?.workspaces["wip/memory-system-improvements"]?.terminals).toContain(
+				"term-1",
+			);
+			expect(repositoriesStore.get("/repo")?.workspaces["wip/memory-system-improvements"]?.terminals).toContain(
+				"term-2",
+			);
 			// Old branch entry removed after merge
-			expect(repositoriesStore.get("/repo")?.branches["wip/global-config"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["wip/global-config"]).toBeUndefined();
 			// Active branch updated
-			expect(repositoriesStore.get("/repo")?.activeBranch).toBe("wip/memory-system-improvements");
+			expect(repositoriesStore.get("/repo")?.activeWorkspaceId).toBe("wip/memory-system-improvements");
 		});
 
 		it("renames branch entry when old branch is main worktree (worktreePath === repoPath)", async () => {
@@ -1276,7 +1335,7 @@ describe("initApp", () => {
 			const deps = createMockDeps();
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setActiveBranch("/repo", "main");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.addTerminalToBranch("/repo", "main", "term-1");
 
 			await initApp(deps);
@@ -1284,14 +1343,14 @@ describe("initApp", () => {
 			getCallback()!({ payload: { repo_path: "/repo", branch: "feat/incremental-reindex" } });
 
 			// Old branch gone — renamed, not duplicated
-			expect(repositoriesStore.get("/repo")?.branches["main"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["main"]).toBeUndefined();
 			// New branch exists with terminals carried over
-			expect(repositoriesStore.get("/repo")?.branches["feat/incremental-reindex"]).toBeDefined();
-			expect(repositoriesStore.get("/repo")?.branches["feat/incremental-reindex"]?.terminals).toContain("term-1");
+			expect(repositoriesStore.get("/repo")?.workspaces["feat/incremental-reindex"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feat/incremental-reindex"]?.terminals).toContain("term-1");
 			// Active branch updated
-			expect(repositoriesStore.get("/repo")?.activeBranch).toBe("feat/incremental-reindex");
+			expect(repositoriesStore.get("/repo")?.activeWorkspaceId).toBe("feat/incremental-reindex");
 			// Should NOT create a phantom entry — only one branch in sidebar
-			expect(Object.keys(repositoriesStore.get("/repo")?.branches ?? {})).toEqual(["feat/incremental-reindex"]);
+			expect(Object.keys(repositoriesStore.get("/repo")?.workspaces ?? {})).toEqual(["feat/incremental-reindex"]);
 		});
 
 		it("does nothing when repo is not found", async () => {

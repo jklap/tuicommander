@@ -59,9 +59,9 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		batch(() => {
 			// Migrate all terminals to a shell branch
 			const allTerminals: string[] = [];
-			for (const branch of Object.values(currentRepo.branches)) {
+			for (const branch of Object.values(currentRepo.workspaces)) {
 				allTerminals.push(...branch.terminals);
-				repositoriesStore.removeBranch(repoPath, branch.name);
+				repositoriesStore.removeBranch(repoPath, branch.branchName);
 			}
 			repositoriesStore.setIsGitRepo(repoPath, false);
 			const shellBranch = "shell";
@@ -73,7 +73,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			for (const termId of allTerminals) {
 				repositoriesStore.addTerminalToBranch(repoPath, shellBranch, termId);
 			}
-			repositoriesStore.setActiveBranch(repoPath, shellBranch);
+			repositoriesStore.setActiveWorkspace(repoPath, shellBranch);
 		});
 	};
 
@@ -142,7 +142,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		if (!repo) return;
 		// Snapshot branch keys before any await so we can detect user-triggered
 		// removals that happen while async ops are in-flight (race condition guard).
-		const priorBranchKeys = new Set(Object.keys(repo.branches));
+		const priorBranchKeys = new Set(Object.keys(repo.workspaces));
 		// Non-git directories: check if they became a git repo
 		if (repo.isGitRepo === false) {
 			try {
@@ -156,10 +156,10 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					batch(() => {
 						const carriedTerminals: string[] = [];
 						let carriedActive: string | null = null;
-						for (const branch of Object.values(repo.branches)) {
+						for (const branch of Object.values(repo.workspaces)) {
 							carriedTerminals.push(...branch.terminals);
 							if (branch.lastActiveTerminal) carriedActive = branch.lastActiveTerminal;
-							repositoriesStore.removeBranch(repoPath, branch.name);
+							repositoriesStore.removeBranch(repoPath, branch.branchName);
 						}
 						repositoriesStore.setIsGitRepo(repoPath, true);
 						repositoriesStore.setBranch(repoPath, info.branch, {
@@ -171,7 +171,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 						for (const tid of carriedTerminals) {
 							repositoriesStore.addTerminalToBranch(repoPath, info.branch, tid);
 						}
-						repositoriesStore.setActiveBranch(repoPath, info.branch);
+						repositoriesStore.setActiveWorkspace(repoPath, info.branch);
 					});
 					// Restart the repo watcher so it registers the now-present .git
 					// sub-watches (HEAD/refs/worktrees). On macOS/Windows the recursive
@@ -213,7 +213,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			}
 			// Still a git repo but no worktrees returned — skip to avoid
 			// destroying existing branch state on a transient error.
-			if (Object.keys(currentRepo.branches).length > 0) return;
+			if (Object.keys(currentRepo.workspaces).length > 0) return;
 		}
 
 		// Compute the target set of branches to keep, then apply all
@@ -226,9 +226,9 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		// If activeBranch is no longer a worktree, find its replacement:
 		// the worktree branch that occupies the same path (HEAD moved).
 		let activeBranchReplacement: string | null = null;
-		const active = currentRepo.activeBranch;
+		const active = currentRepo.activeWorkspaceId;
 		if (active && !(active in worktreePaths)) {
-			const activePath = currentRepo.branches[active]?.worktreePath;
+			const activePath = currentRepo.workspaces[active]?.worktreePath;
 			if (activePath) {
 				for (const [wtBranch, wtPath] of Object.entries(worktreePaths)) {
 					if (wtPath === activePath) {
@@ -239,7 +239,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			}
 		}
 
-		for (const branchName of Object.keys(currentRepo.branches)) {
+		for (const branchName of Object.keys(currentRepo.workspaces)) {
 			if (!(branchName in worktreePaths)) {
 				// Skip branches that a concurrent/recent refresh already handled.
 				// The store removal may not have settled yet (batch scheduled), so
@@ -267,7 +267,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				// is the main repo checkout (HEAD switched away). If the worktree
 				// directory was deleted externally, close the orphaned terminals
 				// so the stale branch can be cleaned up.
-				const branchState = currentRepo.branches[branchName];
+				const branchState = currentRepo.workspaces[branchName];
 				const hasLiveTerminals = branchState?.terminals.some((id) => storeIds.has(id));
 				if (hasLiveTerminals) {
 					const isLinkedWorktree = branchState.worktreePath && branchState.worktreePath !== repoPath;
@@ -300,7 +300,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			appLogger.info("terminal", `refreshAllBranchStats removing branches from ${repoPath}`, {
 				toRemove,
 				worktreePathKeys: Object.keys(worktreePaths),
-				existingBranches: Object.keys(currentRepo.branches),
+				existingBranches: Object.keys(currentRepo.workspaces),
 			});
 		}
 
@@ -328,21 +328,21 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				const liveRepo = repositoriesStore.get(repoPath);
 				// Create new worktree branches first so mergeBranchState has a target
 				for (const [branchName, wtPath] of Object.entries(worktreePaths)) {
-					if (priorBranchKeys.has(branchName) && !liveRepo?.branches[branchName]) {
+					if (priorBranchKeys.has(branchName) && !liveRepo?.workspaces[branchName]) {
 						appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${branchName}"`, {
 							repoPath,
 							worktreePath: wtPath,
 						});
 						continue;
 					}
-					const update: Partial<import("../../stores/repositories").BranchState> = {
+					const update: Partial<import("../../stores/repositories").WorkspaceState> = {
 						worktreePath: wtPath,
 						isMerged: mergedSet.has(branchName),
 					};
 					// Branch finished background preparation — clear placeholder state
 					// and queue the deferred setupNewWorktree (setup script, initial
 					// terminal, runScript) for after the batch commits.
-					if (liveRepo?.branches[branchName]?.isPreparing) {
+					if (liveRepo?.workspaces[branchName]?.isPreparing) {
 						update.isPreparing = false;
 						const k = pendingKey(repoPath, branchName);
 						const pend = pendingCreations.get(k);
@@ -356,7 +356,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				// Migrate terminal state from stale activeBranch to its replacement
 				if (active && activeBranchReplacement && toRemove.includes(active)) {
 					repositoriesStore.mergeBranchState(repoPath, active, activeBranchReplacement);
-					repositoriesStore.setActiveBranch(repoPath, activeBranchReplacement);
+					repositoriesStore.setActiveWorkspace(repoPath, activeBranchReplacement);
 				}
 				for (const branchName of toRemove) {
 					repositoriesStore.removeBranch(repoPath, branchName);
@@ -386,7 +386,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		if (!updatedRepo) return;
 
 		// Side effects that only need structure data — run before Phase 2
-		await handleAutoArchiveMerged(repoPath, updatedRepo.branches);
+		await handleAutoArchiveMerged(repoPath, updatedRepo.workspaces);
 		await handleOrphanCleanup(repoPath);
 
 		// === PHASE 2: Stats (slow) ===
@@ -401,16 +401,16 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			// Freeze-investigation: same body-vs-flush split for the stats batch.
 			timeBatch(`git.statsBatch:${repoPath}`, (markBodyEnd) =>
 				batch(() => {
-					for (const branch of Object.values(currentRepoForStats.branches)) {
+					for (const branch of Object.values(currentRepoForStats.workspaces)) {
 						if (!branch.worktreePath) continue;
 						const ds = stats.diff_stats[branch.worktreePath];
 						if (ds) {
-							repositoriesStore.updateBranchStats(repoPath, branch.name, ds.additions, ds.deletions);
+							repositoriesStore.updateBranchStats(repoPath, branch.branchName, ds.additions, ds.deletions);
 						}
-						const ts = stats.last_commit_ts?.[branch.name];
+						const ts = stats.last_commit_ts?.[branch.branchName];
 						if (ts !== undefined) {
 							// Rust emits Unix seconds (%ct); JS Date.now() uses milliseconds
-							repositoriesStore.setBranch(repoPath, branch.name, {
+							repositoriesStore.setBranch(repoPath, branch.branchName, {
 								lastCommitTs: ts !== null ? ts * 1000 : null,
 							});
 						}
@@ -550,7 +550,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	};
 
 	/** Archive all merged linked worktrees when the autoArchiveMerged setting is enabled. */
-	const handleAutoArchiveMerged = async (repoPath: string, branches: RepositoryState["branches"]) => {
+	const handleAutoArchiveMerged = async (repoPath: string, branches: RepositoryState["workspaces"]) => {
 		if (!repoSettingsStore.getEffective(repoPath)?.autoArchiveMerged) return;
 
 		const mergedLinkedBranches = Object.values(branches).filter(
@@ -561,10 +561,10 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		let archived = 0;
 		let kept = 0;
 		const results = await Promise.allSettled(
-			mergedLinkedBranches.map((branch) => deps.repo.finalizeMergedWorktree(repoPath, branch.name, "archive")),
+			mergedLinkedBranches.map((branch) => deps.repo.finalizeMergedWorktree(repoPath, branch.branchName, "archive")),
 		);
 		results.forEach((result, i) => {
-			const name = mergedLinkedBranches[i].name;
+			const name = mergedLinkedBranches[i].branchName;
 			if (result.status === "rejected") {
 				appLogger.warn("git", `Failed to auto-archive merged worktree for "${name}"`, result.reason);
 				return;

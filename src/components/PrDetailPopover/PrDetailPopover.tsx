@@ -84,7 +84,7 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		if (!p || p.state === "merged" || p.state === "closed") return null;
 
 		const repo = repositoriesStore.get(props.repoPath);
-		const branch = repo?.branches[props.branch];
+		const branch = repo?.workspaces[props.branch];
 		if (!branch?.terminals?.length) return null;
 
 		// Find first terminal with a detected agent
@@ -118,20 +118,20 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		const ctx = cleanupCtx();
 		if (!ctx) return false;
 		const repo = repositoriesStore.get(props.repoPath);
-		return repo?.activeBranch === ctx.baseBranch;
+		return repo?.activeWorkspaceId === ctx.baseBranch;
 	};
 
 	const hasTerminals = () => {
 		const ctx = cleanupCtx();
 		if (!ctx) return false;
 		const repo = repositoriesStore.get(props.repoPath);
-		const branch = repo?.branches[ctx.branchName];
+		const branch = repo?.workspaces[ctx.branchName];
 		return (branch?.terminals?.length ?? 0) > 0;
 	};
 
 	const closeTerminalsForBranch = async (repoPath: string, branchName: string) => {
 		const repo = repositoriesStore.get(repoPath);
-		const branch = repo?.branches[branchName];
+		const branch = repo?.workspaces[branchName];
 		if (branch) {
 			for (const termId of branch.terminals) {
 				try {

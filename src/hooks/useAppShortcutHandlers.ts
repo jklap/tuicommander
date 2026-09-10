@@ -143,7 +143,7 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			if (!globalWorkspaceStore.hasPromoted()) return;
 			const repoPath = repositoriesStore.state.activeRepoPath;
 			const repo = repoPath ? repositoriesStore.state.repositories[repoPath] : null;
-			const key = repoPath && repo?.activeBranch ? paneLayoutKey(repoPath, repo.activeBranch) : undefined;
+			const key = repoPath && repo?.activeWorkspaceId ? paneLayoutKey(repoPath, repo.activeWorkspaceId) : undefined;
 			if (globalWorkspaceStore.isActive()) globalWorkspaceStore.deactivate(key);
 			else globalWorkspaceStore.activate(key);
 		},

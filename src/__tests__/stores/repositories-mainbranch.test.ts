@@ -29,7 +29,7 @@ describe("setBranch isMain defaulting", () => {
 
 			for (const name of ["main", "master", "develop", "development", "dev"]) {
 				store.setBranch("/repo", name);
-				expect(store.get("/repo")!.branches[name].isMain).toBe(true);
+				expect(store.get("/repo")!.workspaces[name].isMain).toBe(true);
 			}
 		});
 	});
@@ -40,7 +40,7 @@ describe("setBranch isMain defaulting", () => {
 
 			for (const name of ["Main", "MASTER", "Develop", "DEVELOPMENT", "DEV"]) {
 				store.setBranch("/repo", name);
-				expect(store.get("/repo")!.branches[name].isMain).toBe(true);
+				expect(store.get("/repo")!.workspaces[name].isMain).toBe(true);
 			}
 		});
 	});
@@ -51,7 +51,7 @@ describe("setBranch isMain defaulting", () => {
 
 			for (const name of ["feature/foo", "feature/main", "bugfix/master-fix"]) {
 				store.setBranch("/repo", name);
-				expect(store.get("/repo")!.branches[name].isMain).toBe(false);
+				expect(store.get("/repo")!.workspaces[name].isMain).toBe(false);
 			}
 		});
 	});
@@ -62,7 +62,7 @@ describe("setBranch isMain defaulting", () => {
 
 			for (const name of ["staging", "release/1.0", "hotfix/urgent"]) {
 				store.setBranch("/repo", name);
-				expect(store.get("/repo")!.branches[name].isMain).toBe(false);
+				expect(store.get("/repo")!.workspaces[name].isMain).toBe(false);
 			}
 		});
 	});
@@ -73,11 +73,11 @@ describe("setBranch isMain defaulting", () => {
 
 			// Override: feature branch marked as main by backend
 			store.setBranch("/repo", "feature/custom", { isMain: true });
-			expect(store.get("/repo")!.branches["feature/custom"].isMain).toBe(true);
+			expect(store.get("/repo")!.workspaces["feature/custom"].isMain).toBe(true);
 
 			// Override: main branch explicitly marked not-main
 			store.setBranch("/repo", "main", { isMain: false });
-			expect(store.get("/repo")!.branches["main"].isMain).toBe(false);
+			expect(store.get("/repo")!.workspaces["main"].isMain).toBe(false);
 		});
 	});
 });

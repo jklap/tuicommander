@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { BranchState, RepositoryState } from "../../stores/repositories";
+import type { RepositoryState, WorkspaceState } from "../../stores/repositories";
 import { resolveRepoOwnerIn, unregisteredRepoRootFor } from "../../utils/repoOwnership";
 
 /**
@@ -12,9 +12,13 @@ import { resolveRepoOwnerIn, unregisteredRepoRootFor } from "../../utils/repoOwn
  * The cases below are the ones that actually differed between those seven copies.
  */
 
-function branch(name: string, worktreePath: string | null, isMain = false): BranchState {
+function branch(name: string, worktreePath: string | null, isMain = false): WorkspaceState {
 	return {
-		name,
+		// Pre-COW records key themselves by branch name, so the id is the name.
+		workspaceId: name,
+		branchName: name,
+		kind: isMain ? "main" : "worktree",
+		parentRepoPath: null,
 		isMain,
 		worktreePath,
 		terminals: [],
@@ -27,7 +31,7 @@ function branch(name: string, worktreePath: string | null, isMain = false): Bran
 	};
 }
 
-function repo(path: string, branches: BranchState[], activeBranch: string | null = null): RepositoryState {
+function repo(path: string, branches: WorkspaceState[], activeWorkspaceId: string | null = null): RepositoryState {
 	return {
 		path,
 		displayName: path.split("/").pop() ?? path,
@@ -35,8 +39,8 @@ function repo(path: string, branches: BranchState[], activeBranch: string | null
 		expanded: true,
 		collapsed: false,
 		parked: false,
-		branches: Object.fromEntries(branches.map((b) => [b.name, b])),
-		activeBranch,
+		workspaces: Object.fromEntries(branches.map((b) => [b.workspaceId, b])),
+		activeWorkspaceId,
 	};
 }
 

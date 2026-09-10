@@ -51,8 +51,8 @@ describe("pruneRemovedWorktree", () => {
 
 			await prune(REPO, "feat-a", closeTerminals);
 
-			expect(store.get(REPO)!.branches["feat-a"]).toBeUndefined();
-			expect(store.get(REPO)!.branches.main).toBeDefined();
+			expect(store.get(REPO)!.workspaces["feat-a"]).toBeUndefined();
+			expect(store.get(REPO)!.workspaces.main).toBeDefined();
 			// No terminals attached → nothing to close.
 			expect(closeTerminals).not.toHaveBeenCalled();
 		});
@@ -67,14 +67,14 @@ describe("pruneRemovedWorktree", () => {
 			const closeTerminals = vi.fn().mockImplementation(async () => {
 				// The row must still exist while its terminals are being closed,
 				// otherwise the close path can't resolve the branch.
-				order.push(store.get(REPO)!.branches["feat-a"] ? "row-present" : "row-gone");
+				order.push(store.get(REPO)!.workspaces["feat-a"] ? "row-present" : "row-gone");
 			});
 
 			await prune(REPO, "feat-a", closeTerminals);
 
 			expect(closeTerminals).toHaveBeenCalledWith(REPO, "feat-a");
 			expect(order).toEqual(["row-present"]);
-			expect(store.get(REPO)!.branches["feat-a"]).toBeUndefined();
+			expect(store.get(REPO)!.workspaces["feat-a"]).toBeUndefined();
 		});
 	});
 
@@ -85,7 +85,7 @@ describe("pruneRemovedWorktree", () => {
 
 			await prune(REPO, "main", closeTerminals);
 
-			expect(store.get(REPO)!.branches.main).toBeDefined();
+			expect(store.get(REPO)!.workspaces.main).toBeDefined();
 			expect(closeTerminals).not.toHaveBeenCalled();
 		});
 	});
@@ -98,7 +98,7 @@ describe("pruneRemovedWorktree", () => {
 			await prune(REPO, "feat-a", closeTerminals);
 			await prune(REPO, "feat-a", closeTerminals);
 
-			expect(store.get(REPO)!.branches["feat-a"]).toBeUndefined();
+			expect(store.get(REPO)!.workspaces["feat-a"]).toBeUndefined();
 			expect(closeTerminals).toHaveBeenCalledTimes(0);
 		});
 	});
@@ -111,7 +111,7 @@ describe("pruneRemovedWorktree", () => {
 			await prune("/not/open", "feat-a", closeTerminals);
 			await prune(REPO, "never-existed", closeTerminals);
 
-			expect(Object.keys(store.get(REPO)!.branches).sort()).toEqual(["feat-a", "main"]);
+			expect(Object.keys(store.get(REPO)!.workspaces).sort()).toEqual(["feat-a", "main"]);
 			expect(closeTerminals).not.toHaveBeenCalled();
 		});
 	});
@@ -119,12 +119,12 @@ describe("pruneRemovedWorktree", () => {
 	it("clears activeBranch when the removed worktree was the active one", async () => {
 		await testInScopeAsync(async () => {
 			seedRepo();
-			store.setActiveBranch(REPO, "feat-a");
+			store.setActiveWorkspace(REPO, "feat-a");
 			const closeTerminals = vi.fn().mockResolvedValue(undefined);
 
 			await prune(REPO, "feat-a", closeTerminals);
 
-			expect(store.get(REPO)!.activeBranch).toBe("main");
+			expect(store.get(REPO)!.activeWorkspaceId).toBe("main");
 		});
 	});
 });

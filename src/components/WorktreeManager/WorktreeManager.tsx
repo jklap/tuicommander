@@ -117,7 +117,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 		const rows: WorktreeRow[] = [];
 
 		for (const repo of repos) {
-			for (const [branchName, branch] of Object.entries(repo.branches)) {
+			for (const [branchName, branch] of Object.entries(repo.workspaces)) {
 				if (!branch.worktreePath) continue;
 				rows.push({
 					id: `${repo.path}::${branchName}`,

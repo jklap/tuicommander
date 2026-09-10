@@ -37,7 +37,7 @@ const CI_CLASSES: Record<string, string> = {
 
 /** Inline toggle for CI auto-heal per branch */
 const CiAutoHealToggle: Component<{ repoPath: string; branch: string }> = (props) => {
-	const healState = () => repositoriesStore.state.repositories[props.repoPath]?.branches[props.branch]?.ciAutoHeal;
+	const healState = () => repositoriesStore.state.repositories[props.repoPath]?.workspaces[props.branch]?.ciAutoHeal;
 	const enabled = () => healState()?.enabled ?? false;
 	const healing = () => healState()?.healing ?? false;
 	const attempts = () => healState()?.attempts ?? 0;
@@ -188,7 +188,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	/** Local worktree path for this PR's head branch, if one exists (e.g. after
 	 *  conflict-assist created it). Drives the Push button's visibility. */
 	const conflictWorktreePath = () =>
-		repositoriesStore.state.repositories[props.repoPath]?.branches[props.branch]?.worktreePath ?? null;
+		repositoriesStore.state.repositories[props.repoPath]?.workspaces[props.branch]?.worktreePath ?? null;
 
 	function handlePush() {
 		const wt = conflictWorktreePath();

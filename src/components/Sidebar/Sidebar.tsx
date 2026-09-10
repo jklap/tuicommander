@@ -72,7 +72,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	// Repo filter lives in uiStore (session-only). When active, only repos with at
 	// least one open terminal are shown. The toggle is the toolbar filter icon next
 	// to the sidebar collapse button; here we only read + render the filtered list.
-	const repoIsActive = (repo: RepositoryState) => Object.values(repo.branches).some((b) => b.terminals.length > 0);
+	const repoIsActive = (repo: RepositoryState) => Object.values(repo.workspaces).some((b) => b.terminals.length > 0);
 
 	// Layout after applying the repo filter. In "active" mode, empty groups are
 	// dropped entirely so no orphaned group header is left behind.
@@ -160,18 +160,18 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 		// Don't override manually-triggered popovers (e.g. badge click on non-active repo)
 		if (prDetailIsManual()) return;
 		const active = repositoriesStore.getActive();
-		if (!active?.activeBranch) {
+		if (!active?.activeWorkspaceId) {
 			queueMicrotask(() => setPrDetailTarget(null));
 			return;
 		}
-		const prStatus = githubStore.getPrStatus(active.path, active.activeBranch);
+		const prStatus = githubStore.getPrStatus(active.path, active.activeWorkspaceId);
 		const prState = prStatus?.state?.toUpperCase();
 		// `!prStatus.is_draft` treats undefined as "not draft", matching the GraphQL
 		// path which always sets the field. If the REST fallback ever ships with
 		// is_draft missing, a draft would auto-open the detail panel — upgrade to
 		// `prStatus.is_draft === false` then.
 		if (prStatus && prState !== "CLOSED" && prState !== "MERGED" && !prStatus.is_draft) {
-			const target = { repoPath: active.path, branch: active.activeBranch };
+			const target = { repoPath: active.path, branch: active.activeWorkspaceId };
 			queueMicrotask(() => setPrDetailTarget(target));
 		} else {
 			const current = prDetailTarget();
@@ -180,7 +180,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 			// the same branch (PR just merged/closed), keep the popover alive — user
 			// may be mid-merge or interacting with the cleanup dialog. Destroying the
 			// popover kills cleanupCtx and aborts post-merge operations.
-			if (current.branch !== active.activeBranch) {
+			if (current.branch !== active.activeWorkspaceId) {
 				queueMicrotask(() => setPrDetailTarget(null));
 			}
 		}
@@ -240,14 +240,14 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 			for (const repo of entry.repos) {
 				if (!repo.expanded || repo.collapsed) continue;
 				starts[repo.path] = counter;
-				counter += Object.keys(repo.branches).length;
+				counter += Object.keys(repo.workspaces).length;
 			}
 		}
 		// Then ungrouped — skip collapsed/non-expanded repos
 		for (const repo of layout.ungrouped) {
 			if (!repo.expanded || repo.collapsed) continue;
 			starts[repo.path] = counter;
-			counter += Object.keys(repo.branches).length;
+			counter += Object.keys(repo.workspaces).length;
 		}
 		return starts;
 	});
@@ -630,7 +630,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 						setParkedPopoverVisible(false);
 						repositoriesStore.setActive(repoPath);
 						const repo = repositoriesStore.get(repoPath);
-						const branch = repo?.activeBranch || Object.keys(repo?.branches ?? {})[0];
+						const branch = repo?.activeWorkspaceId || Object.keys(repo?.workspaces ?? {})[0];
 						if (branch) props.onBranchSelect(repoPath, branch);
 					}}
 				/>

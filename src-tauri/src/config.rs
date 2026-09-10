@@ -754,6 +754,14 @@ pub(crate) struct AppConfig {
     /// Content index pre-warm strategy: "active_and_switch" (default), "active_only", "all_sequential"
     #[serde(default = "default_index_strategy")]
     pub(crate) index_strategy: String,
+    /// Total heap the BM25 content indices may hold, in MB, before the least
+    /// recently used are dropped (`content_index::enforce_memory_budget`).
+    ///
+    /// Configurable rather than a constant because the Rust backend does not
+    /// hot-reload: retuning a constant would cost the user every live PTY
+    /// session, while this is read from the in-memory config on every build.
+    #[serde(default = "default_index_memory_budget_mb")]
+    pub(crate) index_memory_budget_mb: usize,
     /// Minutes of idle + unfocused before SIGSTOP on process group. 0 = disabled.
     #[serde(default = "default_standby_timeout")]
     pub(crate) standby_timeout_minutes: u16,
@@ -805,6 +813,15 @@ fn default_session_token_duration_secs() -> u64 {
 
 fn default_index_strategy() -> String {
     "active_and_switch".to_string()
+}
+
+/// 1 GB. Measured on this workload: an ordinary repo indexes to 60-100 MB, so
+/// this holds 10-15 of them resident and only starts evicting for an outlier —
+/// a 645 MB working tree indexed to 1.9 GB on its own. Set low enough to bound
+/// the process well under the 4 GB memory tripwire in `cpu_watchdog`, high
+/// enough that a normal day of switching repos never pays for a rebuild.
+fn default_index_memory_budget_mb() -> usize {
+    1024
 }
 
 fn default_standby_timeout() -> u16 {
@@ -900,6 +917,7 @@ impl Default for AppConfig {
             block_folding_enabled: true,
             ai_terminal_mcp_enabled: false,
             index_strategy: default_index_strategy(),
+            index_memory_budget_mb: default_index_memory_budget_mb(),
             standby_timeout_minutes: default_standby_timeout(),
             custom_launchers: Vec::new(),
             inline_blame_enabled: true,
@@ -2727,14 +2745,26 @@ const DERIVED_BRANCH_FIELDS: [&str; 5] = [
     "lastCommitTs",
 ];
 
+/// Both keys a repository record can hold its entries under.
+///
+/// `workspaces` is what every client writes once the identity migration has run;
+/// `branches` is what a document written before workspaces existed still holds,
+/// and it survives on disk until that repo's first save. Both are stripped, so
+/// the comparison behaves identically on either side of the migration — a
+/// document is only ever under one of them, so this is one path, not two.
+const REPOSITORY_ENTRY_KEYS: [&str; 2] = ["workspaces", "branches"];
+
 /// A repository record with `DERIVED_BRANCH_FIELDS` removed, for the conflict
-/// comparison only. Records without branches come back unchanged, so this is
+/// comparison only. Records without entries come back unchanged, so this is
 /// safe to apply to any repo record shape.
 fn repository_intent_view(value: &Option<serde_json::Value>) -> Option<serde_json::Value> {
     let mut record = value.clone()?;
-    if let Some(branches) = record.get_mut("branches").and_then(|b| b.as_object_mut()) {
-        for branch in branches.values_mut() {
-            if let Some(fields) = branch.as_object_mut() {
+    for key in REPOSITORY_ENTRY_KEYS {
+        let Some(entries) = record.get_mut(key).and_then(|b| b.as_object_mut()) else {
+            continue;
+        };
+        for entry in entries.values_mut() {
+            if let Some(fields) = entry.as_object_mut() {
                 for name in DERIVED_BRANCH_FIELDS {
                     fields.remove(name);
                 }
@@ -3631,6 +3661,7 @@ mod tests {
             scrollback_reflow: true,
             ai_terminal_mcp_enabled: false,
             index_strategy: "active_and_switch".to_string(),
+            index_memory_budget_mb: default_index_memory_budget_mb(),
             cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
             // All three default to true, so `false` is the only value that can
@@ -5918,13 +5949,27 @@ mod tests {
     /// a builder for "the same record with these fields overridden" — the shape
     /// every derived-field test needs on both sides of a mutation.
     fn seed_repo_with_diffstat(additions: i64, display_name: &str) -> serde_json::Value {
+        seed_repo_with_diffstat_keyed("branches", additions, display_name)
+    }
+
+    /// The same record under either entry key. `branches` is what a document
+    /// written before workspaces existed holds; `workspaces` is what every client
+    /// writes after the identity migration. Both must be stripped of their derived
+    /// fields, or the drift storm this whole mechanism exists to prevent comes back
+    /// the moment a user's config is migrated.
+    fn seed_repo_with_diffstat_keyed(
+        entries_key: &str,
+        additions: i64,
+        display_name: &str,
+    ) -> serde_json::Value {
         serde_json::json!({
             "path": "/ego",
             "displayName": display_name,
             "activeBranch": "master",
-            "branches": {
+            entries_key: {
                 "master": {
-                    "name": "master",
+                    "workspaceId": "master",
+                    "branchName": "master",
                     "additions": additions,
                     "deletions": 2787,
                     "isMerged": false,
@@ -5934,6 +5979,89 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_drifted_diffstat_under_the_workspaces_key_does_not_block_an_intent_change() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/ego": seed_repo_with_diffstat_keyed("workspaces", 357, "ego")},
+            "repoOrder": ["/ego"], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{
+                "id": "/ego",
+                "before": seed_repo_with_diffstat_keyed("workspaces", 331, "ego"),
+                "after": seed_repo_with_diffstat_keyed("workspaces", 331, "Ego renamed")
+            }],
+            "groups": []
+        }))
+        .expect("a stale diffstat must not reject a rename under the workspaces key");
+
+        assert_eq!(
+            load_repositories()["repos"]["/ego"]["displayName"],
+            "Ego renamed"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_competing_edit_under_the_workspaces_key_still_conflicts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/ego": seed_repo_with_diffstat_keyed("workspaces", 331, "Renamed elsewhere")},
+            "repoOrder": ["/ego"], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        let error = save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{
+                "id": "/ego",
+                "before": seed_repo_with_diffstat_keyed("workspaces", 331, "ego"),
+                "after": seed_repo_with_diffstat_keyed("workspaces", 331, "Renamed here")
+            }],
+            "groups": []
+        }))
+        .expect_err("stripping derived fields must not swallow a real competing edit");
+        assert!(error.contains("repository '/ego'"), "{error}");
+    }
+
+    /// The one save that crosses the migration: disk still holds `branches`, the
+    /// client's baseline is the document it read from disk, and the record it
+    /// writes back is workspace-keyed. Reject this and a user who upgrades can
+    /// never save again.
+    #[test]
+    #[serial_test::serial]
+    fn the_save_that_migrates_branches_to_workspaces_is_accepted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/ego": seed_repo_with_diffstat_keyed("branches", 331, "ego")},
+            "repoOrder": ["/ego"], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        save_repositories(serde_json::json!({
+            "mutationVersion": 1,
+            "repos": [{
+                "id": "/ego",
+                "before": seed_repo_with_diffstat_keyed("branches", 331, "ego"),
+                "after": seed_repo_with_diffstat_keyed("workspaces", 331, "ego")
+            }],
+            "groups": []
+        }))
+        .expect("the migrating save must be accepted");
+
+        let saved = load_repositories();
+        assert!(saved["repos"]["/ego"]["workspaces"].is_object(), "{saved}");
+        assert!(saved["repos"]["/ego"]["branches"].is_null(), "{saved}");
     }
 
     #[test]

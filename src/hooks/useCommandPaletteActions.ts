@@ -34,7 +34,7 @@ export function useCommandPaletteActions(options: CommandPaletteActionOptions): 
 				keybinding: "",
 				execute: () => {
 					repositoriesStore.setActive(repo.path);
-					const branch = repo.activeBranch || Object.keys(repo.branches)[0];
+					const branch = repo.activeWorkspaceId || Object.keys(repo.workspaces)[0];
 					if (branch) void options.gitOps.handleBranchSelect(repo.path, branch);
 				},
 			});
@@ -50,7 +50,7 @@ export function useCommandPaletteActions(options: CommandPaletteActionOptions): 
 				execute: () => {
 					repositoriesStore.setPark(repo.path, false);
 					repositoriesStore.setActive(repo.path);
-					const branch = repo.activeBranch || Object.keys(repo.branches)[0];
+					const branch = repo.activeWorkspaceId || Object.keys(repo.workspaces)[0];
 					if (branch) void options.gitOps.handleBranchSelect(repo.path, branch);
 				},
 			});

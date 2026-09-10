@@ -49,7 +49,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		};
 
 		const repoState = repositoriesStore.get(repoPath);
-		const branch = repoState?.branches[branchName];
+		const branch = repoState?.workspaces[branchName];
 		if (!branch?.worktreePath) {
 			deps.setStatusInfo(`Cannot remove ${branchName}: not a worktree`);
 			clearLock();

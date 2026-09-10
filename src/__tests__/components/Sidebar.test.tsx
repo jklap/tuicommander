@@ -162,10 +162,10 @@ function makeRepo(overrides: Record<string, unknown> = {}) {
 		initials: "RO",
 		expanded: true,
 		collapsed: false,
-		activeBranch: "main",
-		branches: {
+		activeWorkspaceId: "main",
+		workspaces: {
 			main: {
-				name: "main",
+				branchName: "main",
 				isMain: true,
 				worktreePath: null,
 				terminals: [],
@@ -307,10 +307,17 @@ describe("Sidebar", () => {
 		it("shows SVG icons for main and feature branches", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: ["t1"], additions: 0, deletions: 0 },
+					workspaces: {
+						main: {
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
 						"feature/x": {
-							name: "feature/x",
+							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
 							terminals: ["t2"],
@@ -335,18 +342,18 @@ describe("Sidebar", () => {
 		it("sorts branches with main first", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						"feature/z": {
-							name: "feature/z",
+							branchName: "feature/z",
 							isMain: false,
 							worktreePath: null,
 							terminals: [],
 							additions: 0,
 							deletions: 0,
 						},
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/a": {
-							name: "feature/a",
+							branchName: "feature/a",
 							isMain: false,
 							worktreePath: null,
 							terminals: [],
@@ -367,10 +374,10 @@ describe("Sidebar", () => {
 		it("sorts merged PR branches to bottom", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/active": {
-							name: "feature/active",
+							branchName: "feature/active",
 							isMain: false,
 							worktreePath: null,
 							terminals: [],
@@ -378,7 +385,7 @@ describe("Sidebar", () => {
 							deletions: 0,
 						},
 						"feature/merged": {
-							name: "feature/merged",
+							branchName: "feature/merged",
 							isMain: false,
 							worktreePath: null,
 							terminals: [],
@@ -386,7 +393,7 @@ describe("Sidebar", () => {
 							deletions: 0,
 						},
 						"feature/closed": {
-							name: "feature/closed",
+							branchName: "feature/closed",
 							isMain: false,
 							worktreePath: null,
 							terminals: [],
@@ -445,10 +452,10 @@ describe("Sidebar", () => {
 		it("feature branch has remove button that calls onRemoveBranch", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/x": {
-							name: "feature/x",
+							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
 							terminals: [],
@@ -469,10 +476,10 @@ describe("Sidebar", () => {
 		it("non-main branch without worktreePath has no remove button", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/y": {
-							name: "feature/y",
+							branchName: "feature/y",
 							isMain: false,
 							worktreePath: null,
 							terminals: [],
@@ -495,9 +502,9 @@ describe("Sidebar", () => {
 			// × wrongly appears on the main checkout when worktrees exist.
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						"POC-00001-merge-blades": {
-							name: "POC-00001-merge-blades",
+							branchName: "POC-00001-merge-blades",
 							isMain: false,
 							worktreePath: "/repo1",
 							terminals: [],
@@ -505,7 +512,7 @@ describe("Sidebar", () => {
 							deletions: 0,
 						},
 						"feature/x": {
-							name: "feature/x",
+							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
 							terminals: [],
@@ -535,10 +542,10 @@ describe("Sidebar", () => {
 			const onRenameBranch = vi.fn();
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/x": {
-							name: "feature/x",
+							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
 							terminals: [],
@@ -704,10 +711,10 @@ describe("Sidebar", () => {
 		it("branch Copy Path item exposes the full path as a native tooltip", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/x": {
-							name: "feature/x",
+							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/feature-x",
 							terminals: [],
@@ -740,7 +747,7 @@ describe("Sidebar", () => {
 
 		it("shows 'No branches loaded' when repo has no branches", () => {
 			setRepos({
-				"/repo1": makeRepo({ branches: {} }),
+				"/repo1": makeRepo({ workspaces: {} }),
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const empty = container.querySelector(".repoEmpty");
@@ -937,8 +944,8 @@ describe("Sidebar", () => {
 		it("shows StatsBadge with additions and deletions", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 10, deletions: 5 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 10, deletions: 5 },
 					},
 				}),
 			});
@@ -954,8 +961,8 @@ describe("Sidebar", () => {
 		it("does not show StatsBadge when both additions and deletions are 0", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 					},
 				}),
 			});
@@ -967,8 +974,8 @@ describe("Sidebar", () => {
 		it("shows StatsBadge when only additions > 0", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 5, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 5, deletions: 0 },
 					},
 				}),
 			});
@@ -980,8 +987,8 @@ describe("Sidebar", () => {
 		it("shows StatsBadge when only deletions > 0", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 3 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 3 },
 					},
 				}),
 			});
@@ -993,8 +1000,8 @@ describe("Sidebar", () => {
 		it("shows PrStateBadge when GitHub store has PR data for branch", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 					},
 				}),
 			});
@@ -1014,8 +1021,8 @@ describe("Sidebar", () => {
 		it("shows Merged label and class when PR state is MERGED", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 					},
 				}),
 			});
@@ -1030,8 +1037,8 @@ describe("Sidebar", () => {
 		it("hides PR badge immediately for CLOSED PR", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 					},
 				}),
 			});
@@ -1044,8 +1051,8 @@ describe("Sidebar", () => {
 		it("shows Draft label and class when PR is a draft", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 					},
 				}),
 			});
@@ -1066,8 +1073,8 @@ describe("Sidebar", () => {
 		it("shows open class with PR number when state is OPEN with no special conditions", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 					},
 				}),
 			});
@@ -1084,8 +1091,15 @@ describe("Sidebar", () => {
 		it("does not add hasActivity class (activity flag no longer drives sidebar)", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: ["t1"], additions: 0, deletions: 0 },
+					workspaces: {
+						main: {
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
 					},
 				}),
 			});
@@ -1113,10 +1127,17 @@ describe("Sidebar", () => {
 		it("renders a chevron only when the branch has more than one terminal", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: ["t1"], additions: 0, deletions: 0 },
+					workspaces: {
+						main: {
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
 						"feature/x": {
-							name: "feature/x",
+							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
 							terminals: ["t2", "t3"],
@@ -1140,9 +1161,9 @@ describe("Sidebar", () => {
 			}));
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						main: {
-							name: "main",
+							branchName: "main",
 							isMain: true,
 							worktreePath: null,
 							terminals: ["t1", "t2"],
@@ -1166,9 +1187,9 @@ describe("Sidebar", () => {
 			}));
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						main: {
-							name: "main",
+							branchName: "main",
 							isMain: true,
 							worktreePath: null,
 							terminals: ["t1"],
@@ -1187,10 +1208,10 @@ describe("Sidebar", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
-						activeBranch: "main",
-						branches: {
+						activeWorkspaceId: "main",
+						workspaces: {
 							main: {
-								name: "main",
+								branchName: "main",
 								isMain: true,
 								worktreePath: null,
 								terminals: ["t1", "t2"],
@@ -1216,11 +1237,18 @@ describe("Sidebar", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
-						activeBranch: "main",
-						branches: {
-							main: { name: "main", isMain: true, worktreePath: null, terminals: ["t1"], additions: 0, deletions: 0 },
+						activeWorkspaceId: "main",
+						workspaces: {
+							main: {
+								branchName: "main",
+								isMain: true,
+								worktreePath: null,
+								terminals: ["t1"],
+								additions: 0,
+								deletions: 0,
+							},
 							"feature/x": {
-								name: "feature/x",
+								branchName: "feature/x",
 								isMain: false,
 								worktreePath: "/wt/x",
 								terminals: ["t2", "t3"],
@@ -1245,9 +1273,16 @@ describe("Sidebar", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
-						activeBranch: "main",
-						branches: {
-							main: { name: "main", isMain: true, worktreePath: null, terminals: ["t1"], additions: 0, deletions: 0 },
+						activeWorkspaceId: "main",
+						workspaces: {
+							main: {
+								branchName: "main",
+								isMain: true,
+								worktreePath: null,
+								terminals: ["t1"],
+								additions: 0,
+								deletions: 0,
+							},
 						},
 					}),
 				},
@@ -1275,9 +1310,9 @@ describe("Sidebar", () => {
 		it("renders no chevron even when a branch has more than one terminal", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						"feature/x": {
-							name: "feature/x",
+							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
 							terminals: ["t2", "t3"],
@@ -1300,9 +1335,9 @@ describe("Sidebar", () => {
 			}));
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						main: {
-							name: "main",
+							branchName: "main",
 							isMain: true,
 							worktreePath: null,
 							terminals: ["t1", "t2"],
@@ -1321,10 +1356,10 @@ describe("Sidebar", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
-						activeBranch: "main",
-						branches: {
+						activeWorkspaceId: "main",
+						workspaces: {
 							main: {
-								name: "main",
+								branchName: "main",
 								isMain: true,
 								worktreePath: null,
 								terminals: ["t1", "t2"],
@@ -1397,9 +1432,9 @@ describe("Sidebar", () => {
 
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						main: {
-							name: "main",
+							branchName: "main",
 							isMain: true,
 							worktreePath: "/path/to/repo",
 							terminals: [],
@@ -1431,8 +1466,8 @@ describe("Sidebar", () => {
 		it("context menu Copy Path is disabled when no worktreePath", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 					},
 				}),
 			});
@@ -1449,10 +1484,10 @@ describe("Sidebar", () => {
 		it("does not show Delete Worktree for non-main branch without worktreePath", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/y": {
-							name: "feature/y",
+							branchName: "feature/y",
 							isMain: false,
 							worktreePath: null,
 							terminals: [],
@@ -1477,10 +1512,10 @@ describe("Sidebar", () => {
 		it("shows Delete Worktree option for non-main branch context menu", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/x": {
-							name: "feature/x",
+							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
 							terminals: [],
@@ -1887,10 +1922,10 @@ describe("Sidebar", () => {
 						path: "/repo2",
 						displayName: "Repo Two",
 						initials: "RT",
-						branches: {
-							main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+						workspaces: {
+							main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 							feature: {
-								name: "feature",
+								branchName: "feature",
 								isMain: false,
 								worktreePath: "/repo2-wt",
 								terminals: [],
@@ -1903,7 +1938,7 @@ describe("Sidebar", () => {
 				"/repo1",
 			);
 
-			mockGetActive.mockReturnValue({ path: "/repo1", activeBranch: "main" });
+			mockGetActive.mockReturnValue({ path: "/repo1", activeWorkspaceId: "main" });
 
 			// PR data only for /repo2/feature
 			mockGetPrStatus.mockImplementation((...args: unknown[]) => {
@@ -1936,7 +1971,7 @@ describe("Sidebar", () => {
 		});
 
 		it("auto-shows PrDetailPopover when active branch has an open PR", async () => {
-			mockGetActive.mockReturnValue({ path: "/repo1", activeBranch: "main" });
+			mockGetActive.mockReturnValue({ path: "/repo1", activeWorkspaceId: "main" });
 			mockGetPrStatus.mockImplementation((...args: unknown[]) => {
 				if (args[0] === "/repo1" && args[1] === "main") {
 					return { state: "OPEN", number: 7, title: "Auto PR", url: "https://example.com" };
@@ -1963,10 +1998,10 @@ describe("Sidebar", () => {
 						path: "/repo2",
 						displayName: "Repo Two",
 						initials: "RT",
-						branches: {
-							main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+						workspaces: {
+							main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 							feature: {
-								name: "feature",
+								branchName: "feature",
 								isMain: false,
 								worktreePath: "/repo2-wt",
 								terminals: [],
@@ -1979,7 +2014,7 @@ describe("Sidebar", () => {
 				"/repo1",
 			);
 
-			mockGetActive.mockReturnValue({ path: "/repo1", activeBranch: "main" });
+			mockGetActive.mockReturnValue({ path: "/repo1", activeWorkspaceId: "main" });
 			mockGetPrStatus.mockImplementation((...args: unknown[]) => {
 				if (args[0] === "/repo2" && args[1] === "feature") {
 					return {
@@ -2006,18 +2041,18 @@ describe("Sidebar", () => {
 			expect(popover!.getAttribute("data-repo")).toBe("/repo2");
 
 			// Simulate branch switch on the active repo — manual popover must survive
-			mockGetActive.mockReturnValue({ path: "/repo1", activeBranch: "develop" });
+			mockGetActive.mockReturnValue({ path: "/repo1", activeWorkspaceId: "develop" });
 			setRepos(
 				{
-					"/repo1": makeRepo({ path: "/repo1", activeBranch: "develop" }),
+					"/repo1": makeRepo({ path: "/repo1", activeWorkspaceId: "develop" }),
 					"/repo2": makeRepo({
 						path: "/repo2",
 						displayName: "Repo Two",
 						initials: "RT",
-						branches: {
-							main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+						workspaces: {
+							main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 							feature: {
-								name: "feature",
+								branchName: "feature",
 								isMain: false,
 								worktreePath: "/repo2-wt",
 								terminals: [],

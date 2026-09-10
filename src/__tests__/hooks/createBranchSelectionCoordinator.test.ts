@@ -43,7 +43,7 @@ describe("createBranchSelectionCoordinator", () => {
 		await testInScope(async () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setBranch("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
-			repositoriesStore.setActiveBranch("/Gits/alpha", "main");
+			repositoriesStore.setActiveWorkspace("/Gits/alpha", "main");
 
 			const id = await makeCoordinator().handleAddTerminalToBranch("/Gits/alpha", "main");
 

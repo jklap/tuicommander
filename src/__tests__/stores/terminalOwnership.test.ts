@@ -9,6 +9,11 @@ describe("reconcileTerminalOwnership", () => {
 	let reclaimParked: typeof import("../../stores/terminalOwnership").reclaimParkedTerminal;
 	let repositoriesStore: typeof import("../../stores/repositories").repositoriesStore;
 	let terminalsStore: typeof import("../../stores/terminals").terminalsStore;
+	// Loaded here, not statically: `vi.resetModules()` above means a top-level
+	// import would be a DIFFERENT module instance than the one terminalOwnership
+	// holds, so unpromote would be asserted against an empty bystander store.
+	let globalWorkspaceStore: typeof import("../../stores/globalWorkspace").globalWorkspaceStore;
+	let MANUAL_SCOPE: typeof import("../../stores/globalWorkspace").MANUAL_SCOPE;
 
 	beforeEach(async () => {
 		vi.resetModules();
@@ -18,6 +23,9 @@ describe("reconcileTerminalOwnership", () => {
 		reclaimParked = (await import("../../stores/terminalOwnership")).reclaimParkedTerminal;
 		repositoriesStore = (await import("../../stores/repositories")).repositoriesStore;
 		terminalsStore = (await import("../../stores/terminals")).terminalsStore;
+		const gw = await import("../../stores/globalWorkspace");
+		globalWorkspaceStore = gw.globalWorkspaceStore;
+		MANUAL_SCOPE = gw.MANUAL_SCOPE;
 		repositoriesStore._testSetHydrated(true);
 	});
 
@@ -29,7 +37,7 @@ describe("reconcileTerminalOwnership", () => {
 	const addRepoWithBranch = (path: string, branch: string, worktreePath = path) => {
 		repositoriesStore.add({ path, displayName: path });
 		repositoriesStore.setBranch(path, branch, { worktreePath });
-		repositoriesStore.setActiveBranch(path, branch);
+		repositoriesStore.setActiveWorkspace(path, branch);
 	};
 
 	it("re-homes a parked terminal once the repo owning its cwd is registered", () => {
@@ -49,7 +57,40 @@ describe("reconcileTerminalOwnership", () => {
 				repoPath: "/Gits/gate-os",
 				branchName: "trunk",
 			});
-			expect(repositoriesStore.get("/Gits/alpha")?.branches.main.terminals).not.toContain(id);
+			expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main.terminals).not.toContain(id);
+		});
+	});
+
+	it("takes a re-homed terminal out of the Global Workspace", () => {
+		testInScope(() => {
+			addRepoWithBranch("/Gits/alpha", "main");
+			const id = terminalsStore.add(makeTerminal({ cwd: "/Gits/gate-os/src" }));
+			terminalsStore.setRepoPath(id, null);
+			globalWorkspaceStore.promote(id, MANUAL_SCOPE);
+
+			addRepoWithBranch("/Gits/gate-os", "trunk");
+			reconcile();
+
+			expect(terminalsStore.get(id)?.repoPath).toBe("/Gits/gate-os");
+			expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).not.toContain(id);
+		});
+	});
+
+	// The mirror failure: a tab the user promoted BY HAND is promoted AND owned.
+	// Reconcile runs on every repo add, worktree change and cwd report, so keying
+	// the unpromote on "is it promoted" instead of "was it parked" would empty the
+	// user's Global Workspace behind their back.
+	it("leaves a hand-promoted, properly owned terminal in the Global Workspace", () => {
+		testInScope(() => {
+			addRepoWithBranch("/Gits/alpha", "main");
+			const id = terminalsStore.add(makeTerminal({ cwd: "/Gits/alpha/src" }));
+			repositoriesStore.addTerminalToBranch("/Gits/alpha", "main", id);
+			terminalsStore.setRepoPath(id, "/Gits/alpha");
+			globalWorkspaceStore.promote(id, MANUAL_SCOPE);
+
+			reconcile();
+
+			expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).toContain(id);
 		});
 	});
 
@@ -80,7 +121,7 @@ describe("reconcileTerminalOwnership", () => {
 				repoPath: "/Gits/alpha",
 				branchName: "main",
 			});
-			expect(repositoriesStore.get("/Gits/alpha")?.branches.main.terminals).toEqual([id]);
+			expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main.terminals).toEqual([id]);
 		});
 	});
 
@@ -149,7 +190,7 @@ describe("reconcileTerminalOwnership", () => {
 				branchName: "trunk",
 			});
 			// No stale id left behind in the repo it came from.
-			expect(repositoriesStore.get("/Gits/alpha")?.branches.main.terminals).not.toContain(id);
+			expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main.terminals).not.toContain(id);
 		});
 	});
 
@@ -195,7 +236,7 @@ describe("reconcileTerminalOwnership", () => {
 					branchName: "main",
 				});
 				// Still listed where the user opened it, so the tab stays in the strip.
-				expect(repositoriesStore.get("/Gits/alpha")?.branches.main.terminals).toContain(id);
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main.terminals).toContain(id);
 			});
 		});
 
@@ -229,7 +270,7 @@ describe("reconcileTerminalOwnership", () => {
 
 				expect(terminalsStore.get(id)?.repoPath).toBeNull();
 				// Moving it nowhere would only make it invisible.
-				expect(repositoriesStore.get("/Gits/alpha")?.branches.main.terminals).toContain(id);
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main.terminals).toContain(id);
 			});
 		});
 

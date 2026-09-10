@@ -198,7 +198,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		const confirmed = await deps.dialogs.confirmRemoveRepo(repoState.displayName);
 		if (!confirmed) return;
 
-		for (const branch of Object.values(repoState.branches)) {
+		for (const branch of Object.values(repoState.workspaces)) {
 			for (const termId of branch.terminals) {
 				await deps.closeTerminal(termId, true);
 			}
@@ -293,14 +293,14 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 	const activeWorktreePath = () => {
 		const activeRepo = repositoriesStore.getActive();
-		if (!activeRepo?.activeBranch) return undefined;
-		return activeRepo.branches[activeRepo.activeBranch]?.worktreePath || activeRepo.path;
+		if (!activeRepo?.activeWorkspaceId) return undefined;
+		return activeRepo.workspaces[activeRepo.activeWorkspaceId]?.worktreePath || activeRepo.path;
 	};
 
 	const activeRunCommand = () => {
 		const activeRepo = repositoriesStore.getActive();
-		if (!activeRepo?.activeBranch) return undefined;
-		return activeRepo.branches[activeRepo.activeBranch]?.runCommand;
+		if (!activeRepo?.activeWorkspaceId) return undefined;
+		return activeRepo.workspaces[activeRepo.activeWorkspaceId]?.runCommand;
 	};
 
 	/** Add a repo by path and make it active. Shared by the sidebar picker and
@@ -314,8 +314,8 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			for (const repoPath of repositoriesStore.getPaths()) {
 				const repoState = repositoriesStore.get(repoPath);
 				if (repoState) {
-					for (const branch of Object.values(repoState.branches)) {
-						branchTerminalMap[`${repoPath}:${branch.name}`] = branch.terminals;
+					for (const branch of Object.values(repoState.workspaces)) {
+						branchTerminalMap[`${repoPath}:${branch.branchName}`] = branch.terminals;
 					}
 				}
 			}
@@ -334,7 +334,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 			if (info.branch) {
 				repositoriesStore.setBranch(info.path, info.branch, { worktreePath: info.path });
-				repositoriesStore.setActiveBranch(info.path, info.branch);
+				repositoriesStore.setActiveWorkspace(info.path, info.branch);
 				await handleAddTerminalToBranch(info.path, info.branch);
 			} else if (!info.is_git_repo) {
 				// Non-git directory: create a shell entry so the user can open terminals
@@ -344,7 +344,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 					isMain: true,
 					isShell: true,
 				});
-				repositoriesStore.setActiveBranch(info.path, shellBranch);
+				repositoriesStore.setActiveWorkspace(info.path, shellBranch);
 				await handleAddTerminalToBranch(info.path, shellBranch);
 			}
 
@@ -415,7 +415,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 			if (info.branch) {
 				repositoriesStore.setBranch(info.path, info.branch, { worktreePath: info.path });
-				repositoriesStore.setActiveBranch(info.path, info.branch);
+				repositoriesStore.setActiveWorkspace(info.path, info.branch);
 				await handleAddTerminalToBranch(info.path, info.branch);
 			} else if (!info.is_git_repo) {
 				const shellBranch = "shell";
@@ -424,7 +424,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 					isMain: true,
 					isShell: true,
 				});
-				repositoriesStore.setActiveBranch(info.path, shellBranch);
+				repositoriesStore.setActiveWorkspace(info.path, shellBranch);
 				await handleAddTerminalToBranch(info.path, shellBranch);
 			}
 
@@ -494,7 +494,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				// prefer the branch that owns the active terminal — it reflects the partially-processed
 				// head-changed state more accurately than insertion-order iteration.
 				if (activeTerminalId) {
-					const ownerEntry = Object.entries(repo.branches).find(
+					const ownerEntry = Object.entries(repo.workspaces).find(
 						([, b]) => b.worktreePath === activeCwd && b.terminals.includes(activeTerminalId),
 					);
 					if (ownerEntry) {
@@ -504,9 +504,9 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				}
 
 				// Linked worktree: unique worktreePath per branch, unambiguous match
-				const match = Object.values(repo.branches).find((b) => b.worktreePath && b.worktreePath === activeCwd);
+				const match = Object.values(repo.workspaces).find((b) => b.worktreePath && b.worktreePath === activeCwd);
 				if (match) {
-					await handleAddTerminalToBranch(repoPath, match.name);
+					await handleAddTerminalToBranch(repoPath, match.branchName);
 					return;
 				}
 			}
@@ -514,8 +514,8 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 		// Fall back to store's active branch (no active terminal or no CWD match)
 		const activeRepo = repositoriesStore.getActive();
-		if (activeRepo?.activeBranch) {
-			await handleAddTerminalToBranch(activeRepo.path, activeRepo.activeBranch);
+		if (activeRepo?.activeWorkspaceId) {
+			await handleAddTerminalToBranch(activeRepo.path, activeRepo.activeWorkspaceId);
 		} else {
 			await deps.createNewTerminal();
 		}
@@ -532,9 +532,9 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 	const executeRunCommand = async (command: string) => {
 		const activeRepo = repositoriesStore.getActive();
-		if (!activeRepo?.activeBranch) return;
+		if (!activeRepo?.activeWorkspaceId) return;
 
-		repositoriesStore.setRunCommand(activeRepo.path, activeRepo.activeBranch, command);
+		repositoriesStore.setRunCommand(activeRepo.path, activeRepo.activeWorkspaceId, command);
 
 		const canSpawn = await deps.pty.canSpawn();
 		if (!canSpawn) {
@@ -542,7 +542,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			return;
 		}
 
-		const branch = activeRepo.branches[activeRepo.activeBranch];
+		const branch = activeRepo.workspaces[activeRepo.activeWorkspaceId];
 		const cwd = branch?.worktreePath || activeRepo.path;
 		const maxNameLen = deps.getMaxTabNameLength();
 		const tabName = command.length > maxNameLen ? command.slice(0, maxNameLen) + "..." : command;
@@ -556,7 +556,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		});
 
 		terminalsStore.setActive(id);
-		repositoriesStore.addTerminalToBranch(activeRepo.path, activeRepo.activeBranch, id);
+		repositoriesStore.addTerminalToBranch(activeRepo.path, activeRepo.activeWorkspaceId, id);
 
 		let waitAttempts = 0;
 		const waitForSession = setInterval(async () => {
@@ -641,14 +641,16 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		repositoriesStore.setBranch(repoPath, newBranch, { worktreePath: repoPath });
 
 		// Find all branches on the main worktree that aren't the new branch
-		const stale = Object.values(repo.branches).filter((b) => b.worktreePath === repoPath && b.name !== newBranch);
+		const stale = Object.values(repo.workspaces).filter(
+			(b) => b.worktreePath === repoPath && b.branchName !== newBranch,
+		);
 
 		batch(() => {
 			for (const branch of stale) {
-				repositoriesStore.mergeBranchState(repoPath, branch.name, newBranch);
-				repositoriesStore.removeBranch(repoPath, branch.name);
+				repositoriesStore.mergeBranchState(repoPath, branch.branchName, newBranch);
+				repositoriesStore.removeBranch(repoPath, branch.branchName);
 			}
-			repositoriesStore.setActiveBranch(repoPath, newBranch);
+			repositoriesStore.setActiveWorkspace(repoPath, newBranch);
 		});
 	};
 
@@ -658,7 +660,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		if (!repo) return;
 
 		// Pre-flight: check for busy terminals on the main worktree
-		const mainWorktreeBranches = Object.values(repo.branches).filter((b) => b.worktreePath === repoPath);
+		const mainWorktreeBranches = Object.values(repo.workspaces).filter((b) => b.worktreePath === repoPath);
 		for (const branch of mainWorktreeBranches) {
 			for (const termId of branch.terminals) {
 				const term = terminalsStore.get(termId);

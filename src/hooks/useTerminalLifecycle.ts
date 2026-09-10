@@ -117,8 +117,8 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 		} else {
 			// No more tabs of this type — return to last terminal on active branch (never pick orphans)
 			const activeRepo = repositoriesStore.getActive();
-			const branchTerminals = activeRepo?.activeBranch
-				? (activeRepo.branches[activeRepo.activeBranch]?.terminals ?? [])
+			const branchTerminals = activeRepo?.activeWorkspaceId
+				? (activeRepo.workspaces[activeRepo.activeWorkspaceId]?.terminals ?? [])
 				: [];
 			const nextTerminal = branchTerminals.length > 0 ? branchTerminals[branchTerminals.length - 1] : null;
 			if (nextTerminal) {
@@ -222,8 +222,8 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 		// sets activeId AND calls ref.focus() (terminalsStore.remove sets activeId to null).
 		// Only select terminals from the same branch to avoid cross-repo activation.
 		if (wasActive) {
-			const branchTerminals = activeRepo?.activeBranch
-				? (activeRepo.branches[activeRepo.activeBranch]?.terminals ?? [])
+			const branchTerminals = activeRepo?.activeWorkspaceId
+				? (activeRepo.workspaces[activeRepo.activeWorkspaceId]?.terminals ?? [])
 				: [];
 			const nextId = survivorId ?? (branchTerminals.length > 0 ? branchTerminals[branchTerminals.length - 1] : null);
 			if (nextId) {

@@ -89,7 +89,7 @@ export async function pruneRemovedWorktree(
 	branchName: string,
 	closeTerminalsForBranch: (repoPath: string, branchName: string) => Promise<void>,
 ): Promise<void> {
-	const branch = repositoriesStore.get(repoPath)?.branches[branchName];
+	const branch = repositoriesStore.get(repoPath)?.workspaces[branchName];
 	if (!branch) return;
 	if (branch.worktreePath === repoPath) return;
 

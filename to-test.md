@@ -1280,3 +1280,114 @@ Needs a `make dev` restart — these are Rust changes and `make dev` runs
    If `accounted_bytes` tracks the footprint, the named structure is the leak.
    If the footprint climbs far above `accounted_bytes`, the growth is outside
    `AppState` and the next suspect is the wry event-loop message queue.
+
+## Workspace identity migration (725-b343) — needs a `make dev` restart
+
+The repositories store is now keyed `workspaces: Record<WorkspaceId, WorkspaceState>`
+instead of `branches: Record<string, BranchState>`, and `activeBranch` is now
+`activeWorkspaceId`. Migration is an identity function (`workspaceId = branchName`),
+so no persisted key moves — but it runs against Boss's real `repositories.json` on
+first start, and `config.rs` changed, so **none of this is live until the Rust
+backend restarts**.
+
+**Restarted 2026-09-09 16:59. Items 1-3 verified against the live
+`~/Library/Application Support/com.tuic.commander/repositories.json`; item 4 was
+unverifiable as written and is corrected below.**
+
+1. [x] **Nothing is lost on first start.** _(37 repos migrated, 0 integrity
+   problems: every `activeWorkspaceId` indexes its own map — no dangling pointer —
+   and for every entry `workspaceId == branchName == key`, which is what an
+   identity migration must produce. 36 workspaces still carry their
+   `savedTerminals` / `runCommand` / `ciAutoHeal`. Branch names containing a slash
+   survived as keys unaltered (`feat/ai-fingerprint-coverage`,
+   `POC-0001/fingerprint-native-12`) — sanitization applies only to newly minted
+   ids, never to a migrated key.)_
+2. [x] **The migrated record persists.** _(All 37 repos carry `workspaces` and
+   `activeWorkspaceId`; `branches` and `activeBranch` appear on none of them.)_
+3. [x] **No conflict storm.** _(`GET /logs?limit=2000` since the restart: zero
+   `repository configuration conflict` and zero `Repository changes were not
+   saved` at any level. The only repo-related warning is an unrelated GitHub
+   404 cooldown. Re-check after a longer multi-window session — this is a
+   fresh-boot buffer, not a full day's evidence.)_
+4. [ ] **The plugin contract keeps returning a branch name, not an id.** Corrected:
+   the original wording said to open "a plugin that renders the current branch",
+   and no such plugin exists — `activeBranch` appears in exactly two places in the
+   whole plugin surface, the `RepoSnapshot` declaration (`src/plugins/types.ts:166`)
+   and the registry that fills it (`src/plugins/pluginRegistry.ts:366`, reading
+   `workspace?.branchName ?? null`, not the map key). No shipped plugin consumes it
+   today. Nothing to look at by eye; the obligation is that the FIRST plugin to read
+   it gets a branch name once a COW workspace's id stops containing one, which is
+   covered when `kind: "cow"` entries actually exist.
+
+## Content-index memory bound, incremental update and snapshots (2026-09-10) — **Rust, needs a `make dev` restart**
+
+Background: since `412dc849` (2026-09-06) every repo switch warmed an index and
+nothing ever released one, so the backend reached 40.7 GB across seven indices.
+Three changes ship together — a memory bound with LRU eviction, an incremental
+update that touches only the files that moved, and an on-disk snapshot so an
+evicted repo reloads instead of rebuilding.
+
+1. [ ] **The bound actually bounds.** With `index_memory_budget_mb` at its default
+   `1024`, switch across ten or more registered repos, then read `GET :9876/logs`
+   for `content index evicted to stay within the memory budget`. The backend's RSS
+   must settle near the budget instead of climbing with every repo visited — check
+   it in Activity Monitor or the in-app memory report, not by eye on the log alone.
+2. [ ] **Eviction is invisible to a search.** Right after an eviction line names a
+   repo, run a cross-repo content search for a string only in that repo. The result
+   must arrive (the repo is rebuilt or restored on demand) and must never be a stale
+   hit from before the eviction.
+3. [ ] **An edit costs a file, not a corpus.** In a large repo already indexed, edit
+   one file and wait past the 60-second rebuild cooldown. The log must show
+   `content index updated incrementally` with a small `files=` count — not
+   `content index rebuilt`. Then search for a word only in the edit: it must be
+   found. This is the whole point of the change; a `content index rebuilt` here
+   means the incremental path declined and the reason is worth reading.
+4. [ ] **A big change still rebuilds.** Switch branches in a large repo (a checkout
+   rewrites far more than a quarter of the corpus). The log must show
+   `content index rebuilt`, and a search for a string introduced by the new branch
+   must find it. Falling back here is correct, not a regression: the embedder's
+   average document length is refitted only by a full build.
+5. [ ] **Coming back to an evicted repo is cheap.** After a repo is evicted, switch
+   back to it and read the log: `content index restored from snapshot`, and the
+   restore must be visibly faster than the original `content index built` for the
+   same repo. Check `<data_dir>/content-index/` holds one `.idx` per evicted repo
+   and that the directory does not grow without bound across a long session.
+6. [ ] [HUMAN] **A snapshot never serves stale content.** Evict a repo, then modify
+   and delete files in it from outside the app, then switch back. The restored index
+   must reflect the current working tree — the deleted file must not appear in a
+   search and the modified file's new text must be findable. The snapshot is always
+   validated against disk before use, and this is the check that it is.
+
+## Unowned PTY tabs park in the Global Workspace (2026-09-10)
+
+A session whose cwd belongs to no registered repo used to borrow a slot from the
+ACTIVE repo, so its home depended on where you were standing: the two gate-os
+worktree sessions landed under `brainstorming` and `tuicommander` respectively.
+They now go to the Global Workspace instead, and leave it the moment a repo claims
+the cwd. Frontend only — Vite HMR picks up the code, but the placement decision
+runs during session adoption, so **reload the WebView** to see it applied to the
+sessions already running.
+
+1. [ ] **An unowned session lands in the Global Workspace, not the visible repo.**
+   With `gate-os` still unregistered, reload the WebView while a gate-os session is
+   alive. The tab must NOT appear in the tab strip of whatever repo is focused, and
+   the "Global Workspace" entry must appear in the sidebar with a count that
+   includes it. Click it: the terminal renders and is still attached to its PTY.
+2. [ ] **Standing somewhere else changes nothing.** Switch to a different repo and
+   reload again. The tab must land in the Global Workspace both times — the two
+   gate-os sessions must end up TOGETHER, which is the whole bug.
+3. [ ] **Register walks it home.** Click Register on the "Tab parked outside your
+   repos" toast. The tab must move out of the Global Workspace and into `gate-os`
+   under its worktree's branch, and the Global Workspace count must drop.
+4. [ ] **One toast, not one per repo you visit.** The toast previously carried the
+   active repo as its scope, which defeated the dedup: walking to another repo
+   raised the same warning again there. With several unowned sessions from one repo,
+   exactly one toast must be present, and moving between repos must not raise more.
+5. [ ] [HUMAN] **A hand-promoted tab is not evicted.** Promote a normal, properly
+   owned terminal to the Global Workspace by hand, then trigger a reconcile (add or
+   remove a repo, or `cd` the terminal). It must STAY promoted — the unpromote is
+   keyed on "was parked", not on "is promoted", and this is the check that it is.
+6. [ ] **The active branch gets its own terminal now.** Where a borrowed tab used to
+   satisfy "this branch has a terminal" and suppress it, an empty active branch now
+   opens one of its own. Confirm this is the behaviour you want and not one extra
+   terminal per launch that annoys you.

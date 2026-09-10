@@ -53,7 +53,7 @@ export interface TerminalData {
 	 * The registered repo that owns this terminal, resolved from `cwd`.
 	 *
 	 * The sidebar renders a terminal by its membership in
-	 * `repos[X].branches[Y].terminals[]`, which made that array the ONLY record of
+	 * `repos[X].workspaces[Y].terminals[]`, which made that array the ONLY record of
 	 * a terminal's repo — so a wrong placement was unrecoverable and a dangling id
 	 * could never be reconciled. This field is the record; the arrays are a display
 	 * index derived from it.

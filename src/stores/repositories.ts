@@ -8,13 +8,19 @@ import { markPerf } from "../utils/perfTrace";
 import { type RepoOwner, resolveRepoOwnerIn } from "../utils/repoOwnership";
 import { appLogger } from "./appLogger";
 import { makeBranchKey } from "./tabManager";
+import {
+	migrateActiveWorkspaceId,
+	migrateRepoWorkspaces,
+	type WorkspaceId,
+	type WorkspaceState,
+} from "./workspaceIdentity";
 
 const LEGACY_STORAGE_KEY = "tui-commander-repos";
 
 /** Returns paths of repos that have at least one active terminal. */
 function getHotRepoPaths(repositories: Record<string, RepositoryState>): string[] {
 	return Object.entries(repositories)
-		.filter(([, repo]) => Object.values(repo.branches).some((b) => b.terminals.length > 0))
+		.filter(([, repo]) => Object.values(repo.workspaces).some((b) => b.terminals.length > 0))
 		.map(([path]) => path);
 }
 
@@ -24,40 +30,21 @@ function syncHotRepos(repositories: Record<string, RepositoryState>): void {
 	);
 }
 
-/** Branch with its terminals */
-export interface BranchState {
-	name: string;
-	isMain: boolean; // true for main/master/develop
-	isShell?: boolean; // true for non-git directory shell entries
-	isPreparing?: boolean; // true while stale worktree is being cleaned up and recreated in background
-	isRemoving?: boolean; // true while worktree removal is in progress
-	worktreePath: string | null; // Path to worktree directory (null for main branch)
-	terminals: string[]; // terminal IDs belonging to this branch
-	hadTerminals: boolean; // true once a terminal has been created — suppresses auto-spawn after close-all
-	lastActiveTerminal: string | null; // last active terminal ID when leaving this branch
-	additions: number;
-	deletions: number;
-	isMerged: boolean; // true when branch is fully merged into the repo's main branch
-	lastCommitTs: number | null; // Unix timestamp of last commit on this branch
-	runCommand?: string; // Saved run command for this branch
-	savedTerminals?: SavedTerminal[]; // Persisted terminal metadata for session restore
-	/** CI auto-heal: when enabled, CI failures trigger automatic agent fix cycles */
-	ciAutoHeal?: { enabled: boolean; attempts: number; lastRunId?: number; healing?: boolean };
-	/** Whether the terminal tab list is expanded under this branch row */
-	tabsExpanded?: boolean;
-}
+export type { WorkspaceId, WorkspaceKind, WorkspaceState } from "./workspaceIdentity";
 
-/** Repository with branches */
+/** Repository with workspaces */
 export interface RepositoryState {
 	path: string;
 	displayName: string;
 	initials: string;
 	isGitRepo?: boolean; // false for plain directories (defaults to true for backward compat)
-	expanded: boolean; // Whether branches are expanded/collapsed
+	expanded: boolean; // Whether workspaces are expanded/collapsed
 	collapsed: boolean; // Whether entire repo is collapsed to icon only
 	parked: boolean; // Whether repo is hidden from sidebar (recallable via popover)
-	branches: Record<string, BranchState>;
-	activeBranch: string | null;
+	workspaces: Record<WorkspaceId, WorkspaceState>;
+	/** Which workspace is on screen. Indexes `workspaces`, so it is an id — read
+	 *  `workspaces[activeWorkspaceId].branchName` when you want the branch. */
+	activeWorkspaceId: WorkspaceId | null;
 	/** Which remote connection this repo belongs to (undefined = local) */
 	connectionId?: string;
 }
@@ -166,17 +153,17 @@ function snapshotFromLoaded(value: Partial<RepositorySnapshot> | null | undefine
 /** One repository as it goes to disk: the fields that live only in this window's
  *  memory are stripped, so two clients holding the same document agree on it. */
 function serializableRepo(repo: RepositoryState): RepositoryState {
-	const branches: Record<string, BranchState> = {};
-	for (const [name, branch] of Object.entries(repo.branches)) {
-		const persisted: BranchState = { ...branch, terminals: [] };
+	const workspaces: Record<string, WorkspaceState> = {};
+	for (const [name, branch] of Object.entries(repo.workspaces)) {
+		const persisted: WorkspaceState = { ...branch, terminals: [] };
 		// `healing` is a transient runtime flag; never persist it (a crash mid-heal
 		// would otherwise leave the toggle showing "Healing" forever after reload).
 		if (persisted.ciAutoHeal?.healing) {
 			persisted.ciAutoHeal = { ...persisted.ciAutoHeal, healing: false };
 		}
-		branches[name] = persisted;
+		workspaces[name] = persisted;
 	}
-	return { ...repo, branches };
+	return { ...repo, workspaces };
 }
 
 /**
@@ -187,6 +174,12 @@ function serializableRepo(repo: RepositoryState): RepositoryState {
  * wrote, and the fields defaulted here are read as always-present. The `agentType`
  * scrub is the sharp one — an unknown name throws inside a render no ErrorBoundary
  * covers.
+ *
+ * This is also the single seam the `branches` → `workspaces` migration runs on.
+ * Both the hydrate path and every adopted record pass through here, and
+ * `repositoryIntentView` normalises the on-disk baseline the same way — so a
+ * document still holding the old key compares equal to its migrated self and the
+ * compare-and-swap does not read the migration as a competing edit.
  */
 function normalizeLoadedRepo(repo: RepositoryState): void {
 	if (repo.collapsed === undefined) repo.collapsed = false;
@@ -194,7 +187,11 @@ function normalizeLoadedRepo(repo: RepositoryState): void {
 	if (repo.parked === undefined) repo.parked = false;
 	// Migration: remove legacy showAllBranches field
 	delete (repo as unknown as Record<string, unknown>).showAllBranches;
-	for (const branch of Object.values(repo.branches)) {
+	repo.activeWorkspaceId = migrateActiveWorkspaceId(repo);
+	repo.workspaces = migrateRepoWorkspaces(repo);
+	delete (repo as unknown as Record<string, unknown>).branches;
+	delete (repo as unknown as Record<string, unknown>).activeBranch;
+	for (const branch of Object.values(repo.workspaces)) {
 		branch.terminals = [];
 		// Reset hadTerminals on startup: the flag only suppresses auto-spawn
 		// within a session (after user closes all terminals). Across restarts,
@@ -246,10 +243,10 @@ function jsonEqual(left: unknown, right: unknown): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** The branches of `repo` this window still has an open terminal in. */
+/** The workspaces of `repo` this window still has an open terminal in. */
 function liveBranchNames(repo: RepositoryState | undefined): string[] {
 	if (!repo) return [];
-	return Object.entries(repo.branches)
+	return Object.entries(repo.workspaces)
 		.filter(([, branch]) => branch.terminals.length > 0)
 		.map(([name]) => name);
 }
@@ -292,8 +289,8 @@ function repositoryIntentView(record: RepositoryState | null): unknown {
 	if (!record) return null;
 	const view = cloneJson(record);
 	normalizeLoadedRepo(view);
-	const branches = (view as unknown as { branches: Record<string, Record<string, unknown>> }).branches;
-	for (const branch of Object.values(branches)) {
+	const workspaces = (view as unknown as { workspaces: Record<string, Record<string, unknown>> }).workspaces;
+	for (const branch of Object.values(workspaces)) {
 		for (const field of DERIVED_BRANCH_FIELDS) delete branch[field];
 	}
 	return view;
@@ -306,14 +303,14 @@ function repositoryIntentView(record: RepositoryState | null): unknown {
 function withLiveBranchFields(fresh: RepositoryState, live: RepositoryState | undefined): RepositoryState {
 	const incoming = cloneJson(fresh);
 	if (!live) return incoming;
-	const branches: Record<string, BranchState> = {};
-	for (const [name, branch] of Object.entries(incoming.branches)) {
-		const liveBranch = live.branches[name];
+	const workspaces: Record<string, WorkspaceState> = {};
+	for (const [name, branch] of Object.entries(incoming.workspaces)) {
+		const liveBranch = live.workspaces[name];
 		if (!liveBranch) {
-			branches[name] = branch;
+			workspaces[name] = branch;
 			continue;
 		}
-		branches[name] = {
+		workspaces[name] = {
 			...branch,
 			terminals: [...liveBranch.terminals],
 			hadTerminals: liveBranch.hadTerminals,
@@ -330,12 +327,12 @@ function withLiveBranchFields(fresh: RepositoryState, live: RepositoryState | un
 	}
 	// The repo-level live-terminal rule, at branch granularity: a branch another
 	// client deleted while this window still has a pane open in it stays. Dropping it
-	// leaves the pane running with nothing in `branches` owning it — invisible to the
+	// leaves the pane running with nothing in `workspaces` owning it — invisible to the
 	// tab strip, and unreachable through `findOwnerForTerminal`.
 	for (const name of liveBranchNames(live)) {
-		if (!branches[name]) branches[name] = cloneJson(live.branches[name]);
+		if (!workspaces[name]) workspaces[name] = cloneJson(live.workspaces[name]);
 	}
-	return { ...incoming, branches };
+	return { ...incoming, workspaces };
 }
 
 function keyedMutations<T extends RepositoryState | RepoGroup>(
@@ -588,7 +585,7 @@ function createRepositoriesStore() {
 		branchSwitching: false,
 	});
 
-	// Inverse index: terminal ID → repo path (O(1) lookup instead of O(repos*branches*terminals)).
+	// Inverse index: terminal ID → repo path (O(1) lookup instead of O(repos*workspaces*terminals)).
 	// Maps termId→repoPath only (NOT branchName). renameBranch and mergeBranchState don't update
 	// this map because they never change the repoPath — terminals stay in the same repo.
 	const terminalToRepo = new Map<string, string>();
@@ -607,7 +604,7 @@ function createRepositoriesStore() {
 		// Clear inverse index entries for all terminals in this repo
 		const repo = state.repositories[path];
 		if (repo) {
-			for (const branch of Object.values(repo.branches)) {
+			for (const branch of Object.values(repo.workspaces)) {
 				for (const termId of branch.terminals) {
 					terminalToRepo.delete(termId);
 				}
@@ -901,8 +898,8 @@ function createRepositoriesStore() {
 				expanded: true,
 				collapsed: false,
 				parked: false,
-				branches: {},
-				activeBranch: null,
+				workspaces: {},
+				activeWorkspaceId: null,
 				connectionId: repo.connectionId,
 			});
 			if (!state.repoOrder.includes(repo.path)) {
@@ -961,15 +958,15 @@ function createRepositoriesStore() {
 
 		/** Toggle branch terminal tab list expanded state */
 		toggleBranchTabsExpanded(repoPath: string, branchName: string): void {
-			if (!state.repositories[repoPath]?.branches[branchName]) return;
-			setState("repositories", repoPath, "branches", branchName, "tabsExpanded", (e) => !e);
+			if (!state.repositories[repoPath]?.workspaces[branchName]) return;
+			setState("repositories", repoPath, "workspaces", branchName, "tabsExpanded", (e) => !e);
 			save();
 		},
 
 		/** Set branch terminal tab list expanded state explicitly */
 		setBranchTabsExpanded(repoPath: string, branchName: string, expanded: boolean): void {
-			if (!state.repositories[repoPath]?.branches[branchName]) return;
-			setState("repositories", repoPath, "branches", branchName, "tabsExpanded", expanded);
+			if (!state.repositories[repoPath]?.workspaces[branchName]) return;
+			setState("repositories", repoPath, "workspaces", branchName, "tabsExpanded", expanded);
 			save();
 		},
 
@@ -980,16 +977,21 @@ function createRepositoriesStore() {
 		},
 
 		/** Add or update a branch */
-		setBranch(repoPath: string, branchName: string, data?: Partial<BranchState>): void {
-			const existing = state.repositories[repoPath]?.branches[branchName];
+		setBranch(repoPath: string, branchName: string, data?: Partial<WorkspaceState>): void {
+			const existing = state.repositories[repoPath]?.workspaces[branchName];
 			if (existing) {
-				setState("repositories", repoPath, "branches", branchName, (prev) => ({
+				setState("repositories", repoPath, "workspaces", branchName, (prev) => ({
 					...prev,
 					...data,
 				}));
 			} else {
-				setState("repositories", repoPath, "branches", branchName, {
-					name: branchName,
+				setState("repositories", repoPath, "workspaces", branchName, {
+					// The key IS the id until a second workspace exists on this branch
+					// (#728-bc76 gives callers their own id to pass in).
+					workspaceId: branchName,
+					branchName,
+					kind: isMainBranch(branchName) ? "main" : "worktree",
+					parentRepoPath: null,
 					isMain: isMainBranch(branchName),
 					worktreePath: null,
 					terminals: [],
@@ -1007,22 +1009,22 @@ function createRepositoriesStore() {
 		},
 
 		/** Set active branch for a repo */
-		setActiveBranch(repoPath: string, branchName: string | null): void {
-			setState("repositories", repoPath, "activeBranch", branchName);
+		setActiveWorkspace(repoPath: string, branchName: string | null): void {
+			setState("repositories", repoPath, "activeWorkspaceId", branchName);
 		},
 
 		/** Add terminal to branch */
 		addTerminalToBranch(repoPath: string, branchName: string, terminalId: string): void {
-			const branch = state.repositories[repoPath]?.branches[branchName];
+			const branch = state.repositories[repoPath]?.workspaces[branchName];
 			if (branch && !branch.terminals.includes(terminalId)) {
 				appLogger.info("terminal", `addTerminalToBranch ${branchName} += ${terminalId}`, {
 					before: [...branch.terminals],
 				});
 				terminalToRepo.set(terminalId, repoPath);
 				batch(() => {
-					setState("repositories", repoPath, "branches", branchName, "terminals", (t) => [...t, terminalId]);
+					setState("repositories", repoPath, "workspaces", branchName, "terminals", (t) => [...t, terminalId]);
 					if (!branch.hadTerminals) {
-						setState("repositories", repoPath, "branches", branchName, "hadTerminals", true);
+						setState("repositories", repoPath, "workspaces", branchName, "hadTerminals", true);
 					}
 				});
 				save();
@@ -1032,20 +1034,20 @@ function createRepositoriesStore() {
 
 		/** Remove terminal from branch */
 		removeTerminalFromBranch(repoPath: string, branchName: string, terminalId: string): void {
-			const branch = state.repositories[repoPath]?.branches[branchName];
+			const branch = state.repositories[repoPath]?.workspaces[branchName];
 			appLogger.info("terminal", `removeTerminalFromBranch ${branchName} -= ${terminalId}`, {
 				before: branch?.terminals ? [...branch.terminals] : [],
 			});
 			terminalToRepo.delete(terminalId);
 			batch(() => {
-				setState("repositories", repoPath, "branches", branchName, "terminals", (t) =>
+				setState("repositories", repoPath, "workspaces", branchName, "terminals", (t) =>
 					t.filter((id) => id !== terminalId),
 				);
 				// When last terminal is removed, clear stale savedTerminals so the periodic
 				// snapshot doesn't resurrect closed tabs on next branch click.
-				const updated = state.repositories[repoPath]?.branches[branchName];
+				const updated = state.repositories[repoPath]?.workspaces[branchName];
 				if (updated && updated.terminals.length === 0 && updated.savedTerminals && updated.savedTerminals.length > 0) {
-					setState("repositories", repoPath, "branches", branchName, "savedTerminals", []);
+					setState("repositories", repoPath, "workspaces", branchName, "savedTerminals", []);
 				}
 			});
 			save();
@@ -1054,24 +1056,24 @@ function createRepositoriesStore() {
 
 		/** Set run command for a branch */
 		setRunCommand(repoPath: string, branchName: string, command: string | undefined): void {
-			const branch = state.repositories[repoPath]?.branches[branchName];
+			const branch = state.repositories[repoPath]?.workspaces[branchName];
 			if (branch) {
-				setState("repositories", repoPath, "branches", branchName, "runCommand", command);
+				setState("repositories", repoPath, "workspaces", branchName, "runCommand", command);
 				save();
 			}
 		},
 
 		/** Update CI auto-heal state for a branch */
-		setCiAutoHeal(repoPath: string, branchName: string, value: BranchState["ciAutoHeal"]): void {
-			if (!state.repositories[repoPath]?.branches[branchName]) return;
-			setState("repositories", repoPath, "branches", branchName, "ciAutoHeal", value);
+		setCiAutoHeal(repoPath: string, branchName: string, value: WorkspaceState["ciAutoHeal"]): void {
+			if (!state.repositories[repoPath]?.workspaces[branchName]) return;
+			setState("repositories", repoPath, "workspaces", branchName, "ciAutoHeal", value);
 			save();
 		},
 
 		/** Update branch stats (additions/deletions) — only if branch already exists */
 		updateBranchStats(repoPath: string, branchName: string, additions: number, deletions: number): void {
-			if (!state.repositories[repoPath]?.branches[branchName]) return;
-			setState("repositories", repoPath, "branches", branchName, { additions, deletions });
+			if (!state.repositories[repoPath]?.workspaces[branchName]) return;
+			setState("repositories", repoPath, "workspaces", branchName, { additions, deletions });
 		},
 
 		/** Remove a branch from a repository */
@@ -1079,7 +1081,7 @@ function createRepositoriesStore() {
 			const repo = state.repositories[repoPath];
 			if (!repo) return;
 
-			const branch = repo.branches[branchName];
+			const branch = repo.workspaces[branchName];
 			if (branch) {
 				appLogger.debug("terminal", `removeBranch "${branchName}" from ${repoPath}`, {
 					terminals: branch.terminals,
@@ -1101,12 +1103,12 @@ function createRepositoriesStore() {
 					if (!r) return;
 
 					// Delete the branch
-					delete r.branches[branchName];
+					delete r.workspaces[branchName];
 
 					// Clear active branch if it was removed
-					if (r.activeBranch === branchName) {
-						const remainingBranches = Object.keys(r.branches);
-						r.activeBranch = remainingBranches[0] || null;
+					if (r.activeWorkspaceId === branchName) {
+						const remainingBranches = Object.keys(r.workspaces);
+						r.activeWorkspaceId = remainingBranches[0] || null;
 					}
 				}),
 			);
@@ -1116,7 +1118,7 @@ function createRepositoriesStore() {
 		/** Rename a branch in a repository */
 		renameBranch(repoPath: string, oldName: string, newName: string): void {
 			const repo = state.repositories[repoPath];
-			if (!repo?.branches[oldName]) return;
+			if (!repo?.workspaces[oldName]) return;
 
 			setState(
 				produce((s) => {
@@ -1124,22 +1126,22 @@ function createRepositoriesStore() {
 					if (!r) return;
 
 					// Get the old branch data
-					const oldBranch = r.branches[oldName];
+					const oldBranch = r.workspaces[oldName];
 					if (!oldBranch) return;
 
 					// Create new branch entry with updated name
-					r.branches[newName] = {
+					r.workspaces[newName] = {
 						...oldBranch,
-						name: newName,
+						branchName: newName,
 						isMain: isMainBranch(newName),
 					};
 
 					// Delete the old branch entry
-					delete r.branches[oldName];
+					delete r.workspaces[oldName];
 
 					// Update active branch if it was renamed
-					if (r.activeBranch === oldName) {
-						r.activeBranch = newName;
+					if (r.activeWorkspaceId === oldName) {
+						r.activeWorkspaceId = newName;
 					}
 				}),
 			);
@@ -1151,14 +1153,14 @@ function createRepositoriesStore() {
 		 *  to target, keeping the target's worktreePath and other git-derived fields. */
 		mergeBranchState(repoPath: string, sourceName: string, targetName: string): void {
 			const repo = state.repositories[repoPath];
-			if (!repo?.branches[sourceName] || !repo.branches[targetName]) return;
+			if (!repo?.workspaces[sourceName] || !repo.workspaces[targetName]) return;
 
 			setState(
 				produce((s) => {
 					const r = s.repositories[repoPath];
 					if (!r) return;
-					const src = r.branches[sourceName];
-					const tgt = r.branches[targetName];
+					const src = r.workspaces[sourceName];
+					const tgt = r.workspaces[targetName];
 					if (!src || !tgt) return;
 
 					// Transfer terminals
@@ -1280,7 +1282,7 @@ function createRepositoriesStore() {
 
 		/** Reorder terminals within the active branch */
 		reorderTerminals(repoPath: string, branchName: string, fromIndex: number, toIndex: number): void {
-			setState("repositories", repoPath, "branches", branchName, "terminals", (terminals) => {
+			setState("repositories", repoPath, "workspaces", branchName, "terminals", (terminals) => {
 				const result = [...terminals];
 				const [moved] = result.splice(fromIndex, 1);
 				result.splice(toIndex, 0, moved);
@@ -1295,13 +1297,13 @@ function createRepositoriesStore() {
 		},
 
 		/** Reverse-lookup: find repo path + branch name owning a terminal.
-		 *  Uses O(1) repo lookup via inverse index, then scans branches (typically 1-5). */
+		 *  Uses O(1) repo lookup via inverse index, then scans workspaces (typically 1-5). */
 		findOwnerForTerminal(termId: string): { repoPath: string; branchName: string } | null {
 			const repoPath = terminalToRepo.get(termId);
 			if (!repoPath) return null;
 			const repo = state.repositories[repoPath];
 			if (!repo) return null;
-			for (const [name, branch] of Object.entries(repo.branches)) {
+			for (const [name, branch] of Object.entries(repo.workspaces)) {
 				if (branch.terminals.includes(termId)) return { repoPath, branchName: name };
 			}
 			return null;
@@ -1317,19 +1319,19 @@ function createRepositoriesStore() {
 		/** Get terminals for current active branch */
 		getActiveTerminals(): string[] {
 			const repo = actions.getActive();
-			if (!repo?.activeBranch) return [];
-			return repo.branches[repo.activeBranch]?.terminals || [];
+			if (!repo?.activeWorkspaceId) return [];
+			return repo.workspaces[repo.activeWorkspaceId]?.terminals || [];
 		},
 
 		/** Snapshot terminal metadata into each branch for persistence (called at quit time) */
 		snapshotTerminals(snapshots: Map<string, Map<string, SavedTerminal[]>>): void {
 			setState(
 				produce((s) => {
-					for (const [repoPath, branches] of snapshots) {
+					for (const [repoPath, workspaces] of snapshots) {
 						const repo = s.repositories[repoPath];
 						if (!repo) continue;
-						for (const [branchName, terminals] of branches) {
-							const branch = repo.branches[branchName];
+						for (const [branchName, terminals] of workspaces) {
+							const branch = repo.workspaces[branchName];
 							if (!branch) continue;
 							branch.savedTerminals = terminals;
 						}
@@ -1340,12 +1342,12 @@ function createRepositoriesStore() {
 			saveNow();
 		},
 
-		/** Clear savedTerminals from all branches (consume-once after restore) */
+		/** Clear savedTerminals from all workspaces (consume-once after restore) */
 		clearSavedTerminals(): void {
 			setState(
 				produce((s) => {
 					for (const repo of Object.values(s.repositories)) {
-						for (const branch of Object.values(repo.branches)) {
+						for (const branch of Object.values(repo.workspaces)) {
 							branch.savedTerminals = [];
 						}
 					}
@@ -1643,13 +1645,13 @@ registerDebugSnapshot("repositories", () => {
 				path,
 				{
 					displayName: r.displayName,
-					activeBranch: r.activeBranch,
+					activeWorkspaceId: r.activeWorkspaceId,
 					expanded: r.expanded,
 					collapsed: r.collapsed,
 					parked: r.parked,
 					isGitRepo: r.isGitRepo,
-					branches: Object.fromEntries(
-						Object.entries(r.branches).map(([name, b]) => [
+					workspaces: Object.fromEntries(
+						Object.entries(r.workspaces).map(([name, b]) => [
 							name,
 							{
 								isMain: b.isMain,
@@ -1681,8 +1683,8 @@ export function currentBranchKey(): string | undefined {
 export function branchKeyFor(repoPath: string | null | undefined): string | undefined {
 	if (!repoPath) return undefined;
 	const repo = repositoriesStore.state.repositories[repoPath];
-	if (!repo?.activeBranch) return undefined;
-	return makeBranchKey(repoPath, repo.activeBranch);
+	if (!repo?.activeWorkspaceId) return undefined;
+	return makeBranchKey(repoPath, repo.activeWorkspaceId);
 }
 
 /** Resolve which registered repo owns `path`. Returns null when none does — callers
@@ -1720,7 +1722,7 @@ export function locateFile(absolutePath: string): FileLocation {
 
 	// A linked worktree is the filesystem root for I/O; the repo root is not.
 	const worktreePath = owner.branchName
-		? repositoriesStore.state.repositories[owner.repoPath]?.branches[owner.branchName]?.worktreePath
+		? repositoriesStore.state.repositories[owner.repoPath]?.workspaces[owner.branchName]?.worktreePath
 		: null;
 	const fsRoot = worktreePath || owner.repoPath;
 	const filePath = pathStartsWith(absolutePath, fsRoot)
@@ -1736,18 +1738,18 @@ export function locateFile(absolutePath: string): FileLocation {
  * ROOT names none — what is checked out there moves under the user's feet — so it
  * resolves late, here:
  *
- *  1. `activeBranch`, the branch the repo is on right now;
+ *  1. `activeWorkspaceId`, the branch the repo is on right now;
  *  2. failing that, whichever branch records the repo root as its worktree.
  *
- * Step 2 is not redundant. A repo discovered before its branches were scanned has
- * `activeBranch: null` while already knowing its root checkout, and stopping at
+ * Step 2 is not redundant. A repo discovered before its workspaces were scanned has
+ * `activeWorkspaceId: null` while already knowing its root checkout, and stopping at
  * step 1 left every session in it unplaced — invisible tabs, not misfiled ones.
  */
 export function placementBranchFor(owner: RepoOwner): string | null {
 	if (owner.branchName) return owner.branchName;
 	const repo = repositoriesStore.state.repositories[owner.repoPath];
 	if (!repo) return null;
-	if (repo.activeBranch) return repo.activeBranch;
-	const atRoot = Object.values(repo.branches).find((branch) => branch.worktreePath === owner.repoPath);
-	return atRoot?.name ?? null;
+	if (repo.activeWorkspaceId) return repo.activeWorkspaceId;
+	const atRoot = Object.values(repo.workspaces).find((branch) => branch.worktreePath === owner.repoPath);
+	return atRoot?.branchName ?? null;
 }

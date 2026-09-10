@@ -734,7 +734,7 @@ const App: Component = () => {
 		},
 		onMergeAndArchive: (repoPath, branchName) => {
 			const repoState = repositoriesStore.get(repoPath);
-			const mainBranch = repoState ? Object.values(repoState.branches).find((b) => b.isMain)?.name : undefined;
+			const mainBranch = repoState ? Object.values(repoState.workspaces).find((b) => b.isMain)?.branchName : undefined;
 			if (!mainBranch) {
 				setStatusInfo("Cannot merge: no main branch found");
 				return;
@@ -811,8 +811,8 @@ const App: Component = () => {
 				runCommand={gitOps.activeRunCommand()}
 				onBranchClick={() => {
 					const activeRepo = repositoriesStore.getActive();
-					if (activeRepo?.activeBranch) {
-						gitOps.handleOpenRenameBranchDialog(activeRepo.path, activeRepo.activeBranch);
+					if (activeRepo?.activeWorkspaceId) {
+						gitOps.handleOpenRenameBranchDialog(activeRepo.path, activeRepo.activeWorkspaceId);
 						setRenameBranchDialogVisible(true);
 					}
 				}}
@@ -845,7 +845,9 @@ const App: Component = () => {
 					onCreateWorktreeFromBranch={gitOps.handleCreateWorktreeFromBranch}
 					onMergeAndArchive={(repoPath, branchName) => {
 						const repoState = repositoriesStore.get(repoPath);
-						const mainBranch = repoState ? Object.values(repoState.branches).find((b) => b.isMain)?.name : undefined;
+						const mainBranch = repoState
+							? Object.values(repoState.workspaces).find((b) => b.isMain)?.branchName
+							: undefined;
 						if (!mainBranch) {
 							setStatusInfo("Cannot merge: no main branch found");
 							return;
@@ -896,8 +898,8 @@ const App: Component = () => {
 							onSplitHorizontal={() => splitPanes.handleSplit("horizontal")}
 							onReorder={(from, to) => {
 								const activeRepo = repositoriesStore.getActive();
-								if (activeRepo?.activeBranch) {
-									repositoriesStore.reorderTerminals(activeRepo.path, activeRepo.activeBranch, from, to);
+								if (activeRepo?.activeWorkspaceId) {
+									repositoriesStore.reorderTerminals(activeRepo.path, activeRepo.activeWorkspaceId, from, to);
 								}
 							}}
 							onDetachTab={handleDetachTab}
@@ -992,7 +994,7 @@ const App: Component = () => {
 				onSelect={(repoPath, branchName) => {
 					// If the branch exists in the store (has a worktree), just switch UI view.
 					// Otherwise it's a regular branch needing a real git checkout.
-					const branch = repositoriesStore.get(repoPath)?.branches[branchName];
+					const branch = repositoriesStore.get(repoPath)?.workspaces[branchName];
 					if (branch) {
 						gitOps.handleBranchSelect(repoPath, branchName);
 					} else {

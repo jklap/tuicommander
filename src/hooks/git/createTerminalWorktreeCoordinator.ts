@@ -66,7 +66,7 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 			repositoriesStore.addTerminalToBranch(target.repoPath, target.branchName, terminalId);
 
 			if (terminalsStore.state.activeId === terminalId) {
-				repositoriesStore.setActiveBranch(target.repoPath, target.branchName);
+				repositoriesStore.setActiveWorkspace(target.repoPath, target.branchName);
 				deps.setCurrentBranch(target.branchName);
 				if (target.repoPath !== currentRepoPath) {
 					repositoriesStore.setActive(target.repoPath);
@@ -106,7 +106,7 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 		const currentBranchName = repositoriesStore.findOwnerForTerminal(terminalId)?.branchName ?? null;
 
 		const targets: Array<{ branchName: string; path: string }> = [];
-		for (const [branchName, branch] of Object.entries(repo.branches)) {
+		for (const [branchName, branch] of Object.entries(repo.workspaces)) {
 			if (branchName === currentBranchName) continue;
 			const worktreePath = branch.worktreePath ?? (branch.isMain ? repoPath : null);
 			if (worktreePath) targets.push({ branchName, path: worktreePath });
