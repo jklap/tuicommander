@@ -694,6 +694,14 @@ pub trait Handler {
     /// Report text area size in pixels.
     fn text_area_size_pixels(&mut self) {}
 
+    /// Report cell size in pixels (`CSI 16 t`).
+    fn cell_size_pixels(&mut self) {}
+
+    /// Report terminal name/version (XTVERSION, `CSI > q`). Several image-preview
+    /// tools (timg, snacks.nvim, yazi) send this and string-match the terminal
+    /// name in the reply to decide which graphics protocol to use.
+    fn report_xtversion(&mut self) {}
+
     /// Report text area size in characters.
     fn text_area_size_chars(&mut self) {}
 
@@ -1837,6 +1845,7 @@ where
                 let mode = next_param_or(0);
                 handler.report_private_mode(PrivateMode::new(mode));
             },
+            ('q', [b'>']) => handler.report_xtversion(),
             ('q', [b' ']) => {
                 // DECSCUSR (CSI Ps SP q) -- Set Cursor Style.
                 let cursor_style_id = next_param_or(0);
@@ -1867,6 +1876,7 @@ where
             ('T', []) => handler.scroll_down(next_param_or(1) as usize),
             ('t', []) => match next_param_or(1) as usize {
                 14 => handler.text_area_size_pixels(),
+                16 => handler.cell_size_pixels(),
                 18 => handler.text_area_size_chars(),
                 22 => handler.push_title(),
                 23 => handler.pop_title(),
