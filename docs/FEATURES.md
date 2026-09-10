@@ -1139,8 +1139,8 @@ AI automation layer with 29 built-in context-aware prompts. Each prompt includes
 - Prompt rows show inline badges: execution mode (inject/shell/headless/api), built-in, placement tags
 - Prompts are context-aware: 31 variables auto-resolved from git, GitHub, and terminal state
 - **Variable Input Dialog**: unresolved variables show a compact form with variable name + description before execution
-- **Edit Prompt dialog**: full editor with name, description, content textarea, variable insertion dropdown (grouped by Git/GitHub/Terminal with descriptions), placement checkboxes, execution mode, auto-execute, and keyboard shortcut capture
-- **Inject target**: when a prompt is not submitted immediately, the target selects the review surface: the **Compose box** (default) or editable text in the **Terminal**
+- **Edit Prompt dialog**: full editor with name, description, content textarea, variable insertion dropdown (grouped by Git/GitHub/Terminal with descriptions), placement checkboxes (user-friendly labels with a hover description of where each one surfaces), execution mode, target, auto-execute, and keyboard shortcut capture. The Prompt Library drawer's own edit form and Settings > Smart Prompts both expose the same fields
+- **Inject target**: when a prompt is not submitted immediately, the target selects the review surface: **Auto** (default) — the Compose box if one is already open, otherwise the terminal input — **Compose box** (always), or **Terminal** (always)
 - **Auto-execute**: when enabled, a prompt submits exactly once through agent-aware `sendCommand`, regardless of its review target. When disabled, it remains editable. Explicit **Insert** and **Insert & Run** actions override the saved setting.
 - **API execution mode**: calls LLM providers directly via HTTP API (genai crate) without terminal or agent CLI. Per-prompt system prompt field. Output routed via the same outputTarget options (clipboard, commit-message, toast, panel). Tauri-only (PWA shows "requires desktop app")
 - **LLM API config** (Settings > Agents): global provider/model/API key for all API-mode prompts. Supports OpenAI, Anthropic, Gemini, OpenRouter, Ollama, and any OpenAI-compatible endpoint via custom base URL. API key stored in OS keyring. Test button validates connection
@@ -1197,7 +1197,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 
 ### 10.8 Execution Modes
 
-- **Inject** (default): routes the resolved prompt text to the active terminal. **Auto-execute** decides whether the action submits. Submissions are idle-gated (configurable via `requiresIdle`) and use agent-aware Enter semantics. Review-only actions are not idle-gated; the **Target** sub-option places their editable text in the Compose box (default) or directly in the terminal input. If the Compose box is unavailable, the terminal input is the fallback.
+- **Inject** (default): routes the resolved prompt text to the active terminal. **Auto-execute** decides whether the action submits. Submissions are idle-gated (configurable via `requiresIdle`) and use agent-aware Enter semantics. Review-only actions are not idle-gated; the **Target** sub-option places their editable text in the Compose box or directly in the terminal input — **Auto** (default) picks whichever the Compose box's current open/closed state calls for, **Compose box** always opens it, **Terminal** always uses the terminal input. If the Compose box is unavailable (browser/PWA), the terminal input is the fallback regardless of Target.
 - **Shell script**: executes the prompt content directly as a shell script via `execute_shell_script` Tauri command. No agent involved — runs content as-is via `sh -c` (macOS/Linux) or `cmd /C` (Windows) in the repo directory. Output routed via `outputTarget`. 60-second timeout cap. No prerequisites (no terminal, agent, or API config needed)
 - **Headless**: runs a one-shot subprocess via `execute_headless_prompt` Tauri command. Requires a per-agent headless template configured in Settings → Agents (e.g. `claude -p "{prompt}"`). Output routed to clipboard or toast depending on `outputTarget`. Falls back to inject in PWA mode. 5-minute timeout cap
 
@@ -1208,15 +1208,18 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 | **Toolbar dropdown** | All enabled prompts with `toolbar` placement | `Cmd+Shift+K` or lightning bolt button |
 | **Git Panel — Changes tab** | SmartButtonStrip with `git-changes` placement | Inline buttons above changed files |
 | **PR Detail Popover** | SmartButtonStrip with `pr-popover` placement | Inline buttons in PR detail view |
-| **Command Palette** | All prompts with `Smart:` prefix | `Cmd+P` then type "Smart" |
+| **Command Palette** | Prompts with `command-palette` placement, prefixed `Smart:` — every built-in ships with this placement enabled by default | `Cmd+P` then the "Prompts" scope chip, or type "Smart" |
 | **Branch context menu** | Prompts with `git-branches` placement | Right-click branch in Branches tab |
 
 ### 10.10 Smart Prompts Management (Cmd+Shift+K Drawer)
 
 - All prompt management consolidated in the Cmd+Shift+K drawer (Settings tab removed)
+- The search field keeps keyboard focus at all times; `Tab`/`Shift+Tab` cycle the category chips (All/Custom/Recent/Favorites) instead of moving focus, wrapping at either end — mirrors the Command Palette's scope-chip cycling
+- The footer shows key-hint chips (`↑↓` navigate, `↵` insert, `⌘E` edit, `⌘F` favorite, `esc` close, `⇥` category), styled like the Command Palette's own footer
 - Enable/disable individual prompts via toggle button on each row
-- Edit prompt: opens modal with name, description, content, variable dropdown, placement, execution mode, auto-execute, keyboard shortcut
-- A normal click or Enter follows the saved auto-execute setting; double-click and **Insert & Run** force one submission, while **Insert** always keeps the result editable
+- Edit prompt: opens modal with name, description, content, variable dropdown, placement (with user-friendly labels and a hover description of where each surfaces), execution mode, target, auto-execute, keyboard shortcut
+- A normal click, double-click, or Enter on a Shell/Headless/API-mode prompt runs it directly (there is no review state for these modes); for Inject-mode prompts a normal click or Enter follows the saved auto-execute setting, while double-click and **Insert & Run** force one submission and **Insert** always keeps the result editable
+- The drawer is registered with the app's central modal stack, so Escape closes it without also reaching the terminal underneath, and keystrokes are never redirected into the active terminal while it's open
 - Variable insertion dropdown below content textarea: grouped by Git/GitHub/Terminal, click to insert `{variable}` at cursor
 - Create custom smart prompts with `+ New Prompt` button
 - Built-in prompts show a "Reset to Default" button when content is overridden

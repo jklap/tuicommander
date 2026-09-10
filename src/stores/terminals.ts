@@ -200,6 +200,8 @@ export interface TerminalRef {
 	closeSearch: () => void;
 	toggleCompose: () => void;
 	openComposeWithText: (text: string) => void;
+	/** Whether the Compose panel is currently open for this terminal */
+	isComposeOpen: () => boolean;
 	/** Search the terminal buffer for a query string (case-insensitive) */
 	searchBuffer: (query: string) => TerminalMatch[] | Promise<TerminalMatch[]>;
 	/** Scroll to an absolute buffer line index (centered in viewport) */

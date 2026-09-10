@@ -40,6 +40,13 @@ describe("sanitizePrompt", () => {
 		expect(warnings.some((w) => w.includes("invalid injectTarget"))).toBe(true);
 	});
 
+	it('accepts "auto" as a valid injectTarget', () => {
+		const prompt = makePrompt({ injectTarget: "auto" });
+		const { prompt: result, warnings } = sanitizePrompt(prompt);
+		expect(result.injectTarget).toBe("auto");
+		expect(warnings).toEqual([]);
+	});
+
 	it("strips an unknown preferredAgent", () => {
 		// biome-ignore lint/suspicious/noExplicitAny: deliberately invalid input under test
 		const prompt = makePrompt({ preferredAgent: "not-a-real-agent" as any });

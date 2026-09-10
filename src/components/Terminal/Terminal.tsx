@@ -1060,6 +1060,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			setPendingComposeText(text);
 			setComposeOpen(true);
 		},
+		isComposeOpen: () => composeOpen(),
 		searchBuffer: (query: string) => {
 			if (!sessionId) return [];
 			type RustMatch = { line_index: number; line_text: string; match_start: number; match_end: number };

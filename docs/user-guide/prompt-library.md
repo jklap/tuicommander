@@ -24,11 +24,15 @@ Use the category tabs to narrow the list:
 
 ## Keyboard Navigation
 
+The search field always keeps keyboard focus while the drawer is open — `Tab`
+never leaves it.
+
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Move selection up/down |
 | `Enter` | Run the selected prompt using its Auto-execute setting |
 | Double-click | Insert and submit exactly once |
+| `Tab` / `Shift+Tab` | Cycle the category chips (All → Custom → Recent → Favorites), wrapping at either end, without leaving the search field |
 | `Ctrl+N` / `Cmd+N` | Create a new prompt |
 | `Ctrl+E` / `Cmd+E` | Edit the selected prompt |
 | `Ctrl+F` / `Cmd+F` | Toggle favorite on the selected prompt |
@@ -98,11 +102,31 @@ Click the **star icon** on any prompt row to toggle its favorite status. Favorit
 
 The **Recent** tab shows the last 10 prompts you sent, in order of use. Recency is also used to sort the **All** view — most recently used prompts appear first.
 
-## Sending to Terminal
+## Sending to Terminal or Compose
 
-Selecting a prompt (click or Enter) writes its content to the currently active terminal. Auto-execute submits it immediately; otherwise the text remains editable. If the prompt has variables, the variable dialog appears first and its **Insert** or **Insert & Run** choice takes precedence.
+Selecting a prompt (click or Enter) writes its content either to the **Compose
+box** or directly into the **terminal input**, depending on the prompt's
+**Target** setting (edit the prompt to change it):
 
-The drawer closes automatically after a successful injection and focus returns to the terminal.
+- **Auto** (default) — fills the Compose box if it's already open; otherwise
+  goes straight to the terminal input. This avoids popping Compose open just
+  to hold text you didn't ask to review.
+- **Compose box** — always opens Compose and fills it, regardless of whether
+  it was already open.
+- **Terminal** — always writes to the terminal input.
+
+Auto-execute submits the result immediately once it reaches its destination;
+otherwise the text remains editable. If the prompt has variables, the
+variable dialog appears first and its **Insert** or **Insert & Run** choice
+takes precedence over the saved Auto-execute setting.
+
+Shell script, Headless, and API prompts ignore Target/Auto-execute entirely —
+selecting one from the drawer runs it the same way it would run from the
+toolbar or Command Palette (see [Execution
+Modes](smart-prompts.md#execution-modes)).
+
+The drawer closes automatically after a successful injection or execution,
+and focus returns to the terminal.
 
 ---
 

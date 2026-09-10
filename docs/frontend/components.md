@@ -155,11 +155,24 @@ Terminal tab management.
 
 ### PromptDrawer (`PromptDrawer/`)
 
-Creates, edits, and executes custom and built-in Smart Prompts. A normal click or
-keyboard Enter follows the prompt's `autoExecute` value. Double-click and
-**Insert & Run** explicitly submit once; **Insert** explicitly keeps the resolved
-text editable. The drawer delays a single pointer click until the double-click
-window closes so one gesture cannot trigger both delivery paths.
+Creates, edits, and executes custom and built-in Smart Prompts. A Shell/Headless/API-mode
+prompt dispatches through `useSmartPrompts().executeSmartPrompt` on a single invocation
+(click, double-click, or Enter — there is no review state for these modes); a failure shows
+a toast via `friendlyError` (`hooks/useSmartPrompts.ts`), the same wording `SmartButtonStrip`
+uses. For an Inject-mode prompt, a normal click or keyboard Enter follows the prompt's
+`autoExecute` value; double-click and **Insert & Run** explicitly submit once; **Insert**
+explicitly keeps the resolved text editable. The drawer delays a single pointer click until
+the double-click window closes so one gesture cannot trigger both delivery paths. Where the
+text lands is resolved by `resolveInjectTarget` (`hooks/useSmartPrompts.ts`): an unset or
+`"auto"` `injectTarget` fills the Compose box only if one is already open (via
+`TerminalRef.isComposeOpen()`), otherwise it goes to the terminal input. The search input
+keeps keyboard focus at all times; `Tab`/`Shift+Tab` cycle the category chips instead of
+moving focus (refocusing Search explicitly, regardless of which element had focus), and the
+dialog registers with `stores/modalStack` so Escape doesn't reach the terminal underneath.
+Because that registration's capture-phase listener always wins the race against the drawer's
+own keydown handler, Escape is handled entirely by the registered callback, which closes the
+innermost open layer first (Variable Input dialog, then the Prompt Editor, then the drawer
+itself) rather than always closing everything at once.
 
 ### SettingsPanel (`SettingsPanel/`)
 

@@ -102,6 +102,21 @@ previously-built worktree but fail in a fresh one:
    `golden_wire_output` empty-output failure mode reappears afterward, in a worktree that had
    already passed this gate once before the `rustup update`. Same fix: `cargo build --package
    tuic-hook` (from `src-tauri/`), then re-run.
+
+   **Also confirmed on a fresh worktree's very first full `check-gate.sh` run (2026-09-10):**
+   an explicit `cargo build --package tuic-hook` right before `check-gate.sh` (per steps 1-3
+   above) is not sufficient insurance — `check-gate.sh`'s own defensive rebuild step reported
+   the binary up to date (correct, real size confirmed via `ls -la` immediately before), but by
+   the time `cargo nextest run --workspace` actually executed the `golden_wire_output` tests
+   later in the same run, `target/debug/tuic-hook` had gone back to 0 bytes again — most likely
+   a from-scratch, fully-parallel workspace build racing `tuic-hook`'s own link step against the
+   `tuicommander` test binary's build. `cargo build --package tuic-hook` a second time
+   afterward, then re-running `cargo nextest run` (whether the full `--workspace` or scoped to
+   `-p tuicommander agent_hook::tests::golden_wire_output`), passed cleanly and stayed real
+   across repeated `ls -la` checks with no further intervening build. If `check-gate.sh` fails
+   only on `agent_hook::tests::golden_wire_output::*` on a worktree's first-ever run, don't
+   spend time root-causing the race further — rebuild `tuic-hook` and re-run the whole gate
+   once; a second clean pass is expected and confirms it wasn't a real regression.
 4. **If you later run `make dev`/`pnpm build:sidecar` in the same fresh worktree, the step-2
    placeholders can leave `tuic-bridge` and `tuic-hook` permanently broken instead of getting
    replaced by a real build** — this also snapped the `tuicommander` MCP connection for a

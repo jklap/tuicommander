@@ -17,6 +17,22 @@ export interface SmartPromptResult {
 	output?: string;
 }
 
+/** Translate a failed SmartPromptResult into a user-friendly message — shared by
+ *  every surface that shows execution failures to the user (SmartButtonStrip's
+ *  onError, PromptDrawer's toast) so the wording never drifts between them. */
+export function friendlyError(result: { reason?: string; output?: string }, promptName: string): string {
+	if (result.reason === "unresolved_variables" && result.output) {
+		try {
+			const vars = JSON.parse(result.output) as string[];
+			if (vars.includes("staged_diff")) return "Stage some files first — no staged changes to analyze";
+			return `Missing context: ${vars.join(", ")}`;
+		} catch {
+			/* fall through */
+		}
+	}
+	return result.reason ?? `"${promptName}" failed`;
+}
+
 /**
  * Minimal shell-word splitter for headless templates.
  * Respects single and double quotes; backslash escapes the next char (outside single quotes).
@@ -86,14 +102,30 @@ interface ResolvedAgent {
 	isApi: boolean;
 }
 
+/** Resolve where an inject-mode prompt's text goes: the Compose box for review,
+ *  or straight to the terminal input. An explicit `injectTarget` always wins;
+ *  "auto" (and unset, its equivalent) adapts to whether Compose happens to be
+ *  open right now — reviewing in an already-open Compose panel makes sense,
+ *  but popping one open just to hold text the user didn't ask to review does
+ *  not, so a closed Compose panel routes to the terminal instead. */
+export function resolveInjectTarget(prompt: SavedPrompt, composeIsOpen: boolean): "compose" | "terminal" {
+	const target = prompt.injectTarget ?? "auto";
+	if (target === "auto") return composeIsOpen ? "compose" : "terminal";
+	return target;
+}
+
 /** Resolve whether an inject-mode prompt submits after insertion.
  *
  * Explicit UI actions win: Insert always withholds Enter, while Insert & Run
  * and double-click always submit. Otherwise the persisted autoExecute flag is
- * authoritative. Prompts created before that flag existed retain the legacy
- * target default: terminal submits, compose remains editable. */
-export function shouldSubmitInjectPrompt(prompt: SavedPrompt, submitOverride?: boolean): boolean {
-	return submitOverride ?? prompt.autoExecute ?? (prompt.injectTarget ?? "compose") === "terminal";
+ * authoritative. Absent that, submission follows the resolved target: terminal
+ * submits, compose remains editable. */
+export function shouldSubmitInjectPrompt(
+	prompt: SavedPrompt,
+	composeIsOpen: boolean,
+	submitOverride?: boolean,
+): boolean {
+	return submitOverride ?? prompt.autoExecute ?? resolveInjectTarget(prompt, composeIsOpen) === "terminal";
 }
 
 function resolveHeadlessAgent(prompt: SavedPrompt): ResolvedAgent {
@@ -182,9 +214,10 @@ export function useSmartPrompts() {
 		const active = terminalsStore.getActive();
 		if (!active?.sessionId) return { ok: false, reason: "No active terminal" };
 		if (!active.agentType) return { ok: false, reason: "No agent detected in terminal" };
+		const composeIsOpen = active.ref?.isComposeOpen?.() ?? false;
 		// Idle only matters when this action will submit. Review-only insertions do
 		// not steer the active turn, regardless of their preferred UI target.
-		if (shouldSubmitInjectPrompt(prompt) && prompt.requiresIdle !== false) {
+		if (shouldSubmitInjectPrompt(prompt, composeIsOpen) && prompt.requiresIdle !== false) {
 			const busy = terminalsStore.isBusy(active.id);
 			if (busy) return { ok: false, reason: "Agent is busy" };
 		}
@@ -272,8 +305,9 @@ export function useSmartPrompts() {
 		if (!active?.sessionId) return { ok: false, reason: "No active terminal" };
 
 		try {
-			const target = prompt.injectTarget ?? "compose";
-			const submit = shouldSubmitInjectPrompt(prompt, submitOverride);
+			const composeIsOpen = active.ref?.isComposeOpen?.() ?? false;
+			const target = resolveInjectTarget(prompt, composeIsOpen);
+			const submit = shouldSubmitInjectPrompt(prompt, composeIsOpen, submitOverride);
 			if (!submit && target === "compose" && active.ref?.openComposeWithText) {
 				// Fill the compose box; the user reviews and sends.
 				active.ref.openComposeWithText(content);

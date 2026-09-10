@@ -87,6 +87,42 @@ MCP/HTTP parity — none of which the settings-UI check above exercises.
   the MCP/HTTP path (`create_worktree_shared`) resolves the same effective
   settings as the desktop path without any frontend involvement.
 
+## Prompt Library dialog: Tab-cycle categories, adaptive Compose/terminal routing, Command Palette Prompts chip (2026-09-10, frontend only — HMR)
+
+Fixed: the Command Palette's "Prompts" scope chip was always empty (no
+built-in ever declared the `command-palette` placement — now all do, with a
+`builtInVersion`-gated migration for existing installs); the Prompt Library
+dialog's Tab key moved focus through Search and the category buttons instead
+of cycling the category chips; picking a prompt always force-opened the
+Compose box even when closed (now adaptive — "Auto" fills an already-open
+Compose box, else goes to the terminal); Shell/Headless/API-mode prompts
+picked from the dialog were injected as raw unresolved text instead of
+actually running. All covered by new/updated component and store tests
+(`PromptDrawer.test.tsx`, `useSmartPrompts.test.ts`, `promptLibrary.test.ts`,
+`smartPromptsBuiltIn.test.ts`) plus a live browser-mode visual check of the
+shared Placement/Target editor UI via Settings → Smart Prompts (no live
+Tauri backend was available in that check, so the palette/execution fixes
+below were never exercised against a real backend, and the dialog's own
+keyboard shortcut couldn't be triggered through browser automation — both
+need a human with the real desktop app).
+
+- [ ] Open the Prompt Library dialog (`Cmd+Shift+K`). Confirm the caret never
+  leaves the Search field: press `Tab` repeatedly and confirm it cycles
+  All → Custom → Recent → Favorites → All (wrapping), with `Shift+Tab` going
+  backward, while the search input stays focused throughout.
+- [ ] Open the Command Palette (`Cmd+P`) and select the **Prompts** scope
+  chip — confirm the full list of built-in Smart Prompts now appears
+  (previously empty on a fresh install).
+- [ ] With the Compose panel closed, pick an inject-mode prompt with an
+  unset/"Auto" Target from the Prompt Library dialog: text should go straight
+  to the terminal input, not pop Compose open. Open Compose first, then pick
+  the same prompt again: this time it should fill the already-open Compose
+  box.
+- [ ] Pick (single-click) a Shell-mode or Headless-mode built-in prompt (e.g.
+  "Fix Lint Issues") from the Prompt Library dialog and confirm it actually
+  runs (shell script executes / headless subprocess launches) instead of
+  inserting its raw prompt text into the terminal.
+
 ## Gutter-hover "pointer" cursor no longer freezes over a mouse-tracking app's prompt (2026-09-08, frontend only — HMR)
 
 Reported: after the command-block gutter widened and gained a hover cursor

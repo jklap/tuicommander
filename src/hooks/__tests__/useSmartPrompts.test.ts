@@ -83,7 +83,7 @@ import { appLogger } from "../../stores/appLogger";
 import { promptLibraryStore, type SavedPrompt } from "../../stores/promptLibrary";
 import { providerRegistryStore } from "../../stores/providerRegistry";
 import { terminalsStore } from "../../stores/terminals";
-import { useSmartPrompts } from "../useSmartPrompts";
+import { resolveInjectTarget, shouldSubmitInjectPrompt, useSmartPrompts } from "../useSmartPrompts";
 
 const mockedGetHeadlessAgent = vi.mocked(agentConfigsStore.getHeadlessAgent);
 const mockedGetHeadlessTemplate = vi.mocked(agentConfigsStore.getHeadlessTemplate);
@@ -122,6 +122,56 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.clearAllMocks();
+});
+
+describe("resolveInjectTarget", () => {
+	it("resolves an unset target to compose when Compose is open", () => {
+		expect(resolveInjectTarget(makePrompt({ injectTarget: undefined }), true)).toBe("compose");
+	});
+
+	it("resolves an unset target to terminal when Compose is closed", () => {
+		expect(resolveInjectTarget(makePrompt({ injectTarget: undefined }), false)).toBe("terminal");
+	});
+
+	it('resolves "auto" the same as unset', () => {
+		expect(resolveInjectTarget(makePrompt({ injectTarget: "auto" }), true)).toBe("compose");
+		expect(resolveInjectTarget(makePrompt({ injectTarget: "auto" }), false)).toBe("terminal");
+	});
+
+	it("an explicit compose target always wins, regardless of whether Compose is open", () => {
+		expect(resolveInjectTarget(makePrompt({ injectTarget: "compose" }), false)).toBe("compose");
+		expect(resolveInjectTarget(makePrompt({ injectTarget: "compose" }), true)).toBe("compose");
+	});
+
+	it("an explicit terminal target always wins, regardless of whether Compose is open", () => {
+		expect(resolveInjectTarget(makePrompt({ injectTarget: "terminal" }), false)).toBe("terminal");
+		expect(resolveInjectTarget(makePrompt({ injectTarget: "terminal" }), true)).toBe("terminal");
+	});
+});
+
+describe("shouldSubmitInjectPrompt", () => {
+	it("an explicit submitOverride wins over everything else", () => {
+		expect(shouldSubmitInjectPrompt(makePrompt({ autoExecute: false, injectTarget: "compose" }), true, true)).toBe(
+			true,
+		);
+		expect(shouldSubmitInjectPrompt(makePrompt({ autoExecute: true, injectTarget: "terminal" }), false, false)).toBe(
+			false,
+		);
+	});
+
+	it("autoExecute wins over the resolved target when no override is given", () => {
+		expect(shouldSubmitInjectPrompt(makePrompt({ autoExecute: true, injectTarget: "compose" }), false)).toBe(true);
+		expect(shouldSubmitInjectPrompt(makePrompt({ autoExecute: false, injectTarget: "terminal" }), false)).toBe(false);
+	});
+
+	it("falls back to the resolved target when autoExecute is unset", () => {
+		expect(shouldSubmitInjectPrompt(makePrompt({ autoExecute: undefined, injectTarget: "terminal" }), false)).toBe(
+			true,
+		);
+		expect(shouldSubmitInjectPrompt(makePrompt({ autoExecute: undefined, injectTarget: "compose" }), false)).toBe(
+			false,
+		);
+	});
 });
 
 describe("resolveHeadlessAgent — preferred='api'", () => {
@@ -227,13 +277,26 @@ describe("canExecuteInject — idle gate by inject target", () => {
 		mockedGetActive.mockReturnValue(ACTIVE);
 	});
 
-	it("compose target (default) is not gated by a busy agent", () => {
+	it("unset target (auto) with Compose closed resolves to terminal and is gated by a busy agent", () => {
 		mockedIsBusy.mockReturnValue(true);
+		// ACTIVE has no ref, so isComposeOpen() is unavailable → composeIsOpen defaults to false.
 		const { canExecute } = useSmartPrompts();
-		// injectTarget unset → defaults to "compose"
+		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: undefined }));
+		expect(result.ok).toBe(false);
+		expect(result.reason).toBe("Agent is busy");
+	});
+
+	it("unset target (auto) with Compose already open resolves to compose and is not gated", () => {
+		mockedIsBusy.mockReturnValue(true);
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			ref: { isComposeOpen: () => true },
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: undefined }));
 		expect(result.ok).toBe(true);
-		// Idle was never consulted for compose
 		expect(mockedIsBusy).not.toHaveBeenCalled();
 	});
 
@@ -290,12 +353,12 @@ describe("executeInject — routing by inject target", () => {
 	const PROCESSED = "PROCESSED CONTENT";
 
 	/** Active terminal with an optional compose-box ref. */
-	const activeWith = (openComposeWithText?: (t: string) => void) =>
+	const activeWith = (openComposeWithText?: (t: string) => void, isComposeOpen = false) =>
 		({
 			id: "t1",
 			sessionId: "s1",
 			agentType: "claude",
-			ref: openComposeWithText ? { openComposeWithText } : undefined,
+			ref: openComposeWithText ? { openComposeWithText, isComposeOpen: () => isComposeOpen } : undefined,
 		}) as unknown as ReturnType<typeof terminalsStore.getActive>;
 
 	beforeEach(() => {
@@ -318,9 +381,9 @@ describe("executeInject — routing by inject target", () => {
 		expect(ptyMocks.write).not.toHaveBeenCalled();
 	});
 
-	it("autoExecute=true submits even when the legacy inject target defaults to compose", async () => {
+	it("autoExecute=true submits even when the unset (auto) inject target would otherwise resolve to compose", async () => {
 		const openCompose = vi.fn();
-		mockedGetActive.mockReturnValue(activeWith(openCompose));
+		mockedGetActive.mockReturnValue(activeWith(openCompose, true));
 		const { executeSmartPrompt } = useSmartPrompts();
 
 		const res = await executeSmartPrompt(
@@ -332,6 +395,54 @@ describe("executeInject — routing by inject target", () => {
 		expect(ptyMocks.sendCommand).toHaveBeenCalledOnce();
 		expect(ptyMocks.sendCommand).toHaveBeenCalledWith("s1", PROCESSED, "claude", true);
 		expect(ptyMocks.write).not.toHaveBeenCalled();
+	});
+
+	it("auto target (unset) with Compose closed routes to the terminal", async () => {
+		const openCompose = vi.fn();
+		mockedGetActive.mockReturnValue(activeWith(openCompose, false));
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ executionMode: "inject", injectTarget: undefined }));
+
+		expect(res.ok).toBe(true);
+		expect(openCompose).not.toHaveBeenCalled();
+		expect(ptyMocks.sendCommand).toHaveBeenCalledWith("s1", PROCESSED, "claude", true);
+	});
+
+	it("auto target (unset) with Compose already open fills the compose box", async () => {
+		const openCompose = vi.fn();
+		mockedGetActive.mockReturnValue(activeWith(openCompose, true));
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ executionMode: "inject", injectTarget: undefined }));
+
+		expect(res.ok).toBe(true);
+		expect(openCompose).toHaveBeenCalledWith(PROCESSED);
+		expect(ptyMocks.sendCommand).not.toHaveBeenCalled();
+	});
+
+	it("explicit compose target always fills the compose box regardless of isComposeOpen", async () => {
+		const openCompose = vi.fn();
+		mockedGetActive.mockReturnValue(activeWith(openCompose, false));
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ executionMode: "inject", injectTarget: "compose" }));
+
+		expect(res.ok).toBe(true);
+		expect(openCompose).toHaveBeenCalledWith(PROCESSED);
+		expect(ptyMocks.sendCommand).not.toHaveBeenCalled();
+	});
+
+	it("explicit terminal target always sends to the agent regardless of isComposeOpen", async () => {
+		const openCompose = vi.fn();
+		mockedGetActive.mockReturnValue(activeWith(openCompose, true));
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ executionMode: "inject", injectTarget: "terminal" }));
+
+		expect(res.ok).toBe(true);
+		expect(openCompose).not.toHaveBeenCalled();
+		expect(ptyMocks.sendCommand).toHaveBeenCalledWith("s1", PROCESSED, "claude", true);
 	});
 
 	it("terminal target sends straight to the agent via sendCommand", async () => {

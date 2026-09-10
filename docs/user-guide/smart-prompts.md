@@ -24,7 +24,10 @@ Click a PR badge in the sidebar to open the popover. The SmartButtonStrip shows 
 
 ### Command Palette
 
-Open with **Cmd+P** and type "Smart" to see all smart prompts prefixed with "Smart:".
+Open with **Cmd+P** and select the **Prompts** scope chip (or type "Smart") to see
+every enabled smart prompt, prefixed with "Smart:". Every built-in prompt is
+Command Palette-invocable by default — untick its "Command Palette" placement
+in **Settings > Smart Prompts** to remove it from this scope.
 
 ### Branch Context Menu
 
@@ -49,7 +52,12 @@ Open **Settings > Smart Prompts** to manage prompts:
 - **Enable/disable** individual prompts (disabled prompts are hidden from all UI surfaces)
 - **Edit** prompt content — built-in prompts show a "Reset to default" button to revert your changes
 - **Create** your own smart prompts with the same placement options and variable system
-- **View** each prompt's placement (toolbar, git-changes, pr-popover, git-branches) and execution mode
+- **View** each prompt's placement — Toolbar menu, Git panel Changes/Branches tabs, PR view,
+  GitHub issue view, terminal right-click menu, Command Palette, and file right-click menu — and
+  execution mode. Hover a placement checkbox for a description of where it surfaces
+- For Inject-mode prompts, choose a **Target**: **Auto** (default) reviews in an already-open
+  Compose box, otherwise sends straight to the terminal; **Compose box** always opens Compose;
+  **Terminal** always sends to the agent
 
 ## Import & Export
 
@@ -139,7 +147,9 @@ When a prompt contains variables that cannot be auto-resolved, a **Variable Inpu
 
 ### Inject Mode (Default)
 
-The resolved prompt is inserted into the active terminal. With **Auto-execute** enabled, TUICommander submits it exactly once through the agent-aware command path and checks that the agent is idle first (configurable per prompt). With Auto-execute disabled, the text remains editable in the Compose box or terminal input and is not idle-gated. If the Compose box is unavailable, the terminal input is used without pressing Enter.
+The resolved prompt is inserted into the active terminal. With **Auto-execute** enabled, TUICommander submits it exactly once through the agent-aware command path and checks that the agent is idle first (configurable per prompt). With Auto-execute disabled, the text remains editable and is not idle-gated.
+
+Where the text lands depends on the prompt's **Target** setting: **Auto** (the default) reviews in the Compose box when one is already open, otherwise goes straight to the terminal input — this avoids popping Compose open just to hold text you didn't ask to review. **Compose box** always opens Compose; if it's unavailable (browser/PWA mode), the terminal input is used instead, without pressing Enter. **Terminal** always writes to the terminal input.
 
 An explicit **Insert** action always keeps the text editable. **Insert & Run** and double-click always submit once, regardless of the saved Auto-execute setting.
 

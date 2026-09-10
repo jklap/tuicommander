@@ -49,9 +49,10 @@ export interface SavedPrompt {
 	icon?: string;
 	executionMode?: "inject" | "headless" | "api" | "shell";
 	/** Where inject-mode prompts write: "compose" fills the input box for the user
-	 *  to review (no idle gate); "terminal" sends straight to the agent (idle-gated).
-	 *  Defaults to "compose" when unset. */
-	injectTarget?: "terminal" | "compose";
+	 *  to review (no idle gate); "terminal" sends straight to the agent (idle-gated);
+	 *  "auto" (and unset, its equivalent) adapts to whether Compose happens to already
+	 *  be open — see `resolveInjectTarget` in `hooks/useSmartPrompts.ts`. */
+	injectTarget?: "terminal" | "compose" | "auto";
 	preferredAgent?: import("../agents").AgentType;
 	outputTarget?: "clipboard" | "commit-message" | "toast" | "panel";
 	systemPrompt?: string;
@@ -167,12 +168,24 @@ function createPromptLibraryStore() {
 						// Unmodified built-in: refresh metadata from the new built-in definition
 						// (version, category, tags) but keep user-owned flags. Without this, the
 						// user's "disabled" toggle resets to the built-in default on every launch.
+						//
+						// Placement is a partial exception: a version bump to the built-in's own
+						// placement defaults (e.g. adding "command-palette" to every built-in,
+						// builtInVersion 3 -> 4) overrides the stored placement for a prompt whose
+						// content the user never touched — otherwise a placement added to defaults
+						// after install never reaches existing users, since this branch already
+						// requires "unmodified content" and would keep serving the stale array
+						// forever. This does mean a placement-only customization on an
+						// otherwise-untouched built-in (e.g. unchecking "toolbar") is lost the next
+						// time builtInVersion advances — an accepted, narrow tradeoff of the same
+						// kind any builtInVersion bump already implies.
+						const placementIsStale = (existing.builtInVersion ?? 0) < (builtin.builtInVersion ?? 0);
 						merged[builtin.id] = {
 							...builtin,
 							content: existing.content,
 							enabled: existing.enabled,
 							shortcut: existing.shortcut,
-							placement: existing.placement,
+							placement: placementIsStale ? builtin.placement : existing.placement,
 							autoExecute: existing.autoExecute,
 							executionMode: existing.executionMode,
 							injectTarget: existing.injectTarget,
