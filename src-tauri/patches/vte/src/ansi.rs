@@ -702,6 +702,20 @@ pub trait Handler {
     /// name in the reply to decide which graphics protocol to use.
     fn report_xtversion(&mut self) {}
 
+    /// iTerm2 inline image, single-shot form: `OSC 1337 ; File=<args>:<base64> ST`.
+    /// `args` is the already-rejoined, still-unparsed `;`-separated key=value
+    /// list (before the `:`); `payload` is the still-base64-encoded bytes.
+    fn osc_1337_file(&mut self, _args: &str, _payload: &[u8]) {}
+
+    /// iTerm2 inline image, multipart start: `OSC 1337 ; MultipartFile=<args> ST`.
+    fn osc_1337_multipart_file(&mut self, _args: &str) {}
+
+    /// iTerm2 inline image, multipart chunk: `OSC 1337 ; FilePart=<base64> ST`.
+    fn osc_1337_file_part(&mut self, _payload: &[u8]) {}
+
+    /// iTerm2 inline image, multipart end: `OSC 1337 ; FileEnd ST`.
+    fn osc_1337_file_end(&mut self) {}
+
     /// Report text area size in characters.
     fn text_area_size_chars(&mut self) {}
 
@@ -1603,57 +1617,96 @@ where
                 }
             },
 
-            // iTerm2 proprietary commands. `params[1]` is the whole
-            // `Key` or `Key=value` body — none of the values below can
-            // legally contain a literal `;` (numeric, base64, or the fixed
-            // set of named-pasteboard/attention tokens), so it is never split
-            // across further `params` entries.
-            b"1337" if params.len() >= 2 => {
-                let body = params[1];
-                let (key, value) = match body.iter().position(|&b| b == b'=') {
-                    Some(pos) => (&body[..pos], Some(&body[pos + 1..])),
-                    None => (body, None),
-                };
-                match (key, value) {
-                    // CursorShape=[N]: 0=block, 1=beam, 2=underline. Reuses
-                    // the same handler as OSC 50's `CursorShape=` variant.
-                    (b"CursorShape", Some(v)) if !v.is_empty() => {
-                        let shape = match v[0] {
-                            b'0' => CursorShape::Block,
-                            b'1' => CursorShape::Beam,
-                            b'2' => CursorShape::Underline,
-                            _ => return unhandled(params),
-                        };
-                        self.handler.set_cursor_shape(shape);
-                    },
-                    (b"StealFocus", None) => self.handler.request_focus(),
-                    (b"ClearScrollback", None) => {
-                        self.handler.clear_screen(ClearMode::Saved);
-                    },
-                    // CopyToClipboard=[name] ... EndCopy: capture verbatim
-                    // output until EndCopy, then flush to the clipboard. The
-                    // named-pasteboard hint ("rule"/"find"/"font"/"") is
-                    // accepted but not distinguished — everything lands on
-                    // the general clipboard.
-                    (b"CopyToClipboard", Some(name)) => {
-                        self.handler.start_clipboard_capture(&String::from_utf8_lossy(name));
-                    },
-                    (b"CopyToClipboard", None) => self.handler.start_clipboard_capture(""),
-                    (b"EndCopy", None) => self.handler.end_clipboard_capture(),
-                    // Copy=:<base64>: a single-shot equivalent of OSC 52's
-                    // clipboard store, just under the 1337 namespace.
-                    (b"Copy", Some(v)) => {
-                        let payload = v.strip_prefix(b":").unwrap_or(v);
-                        self.handler.clipboard_store(b'c', payload);
-                    },
-                    (b"RequestAttention", Some(v)) => {
-                        self.handler.request_attention(&String::from_utf8_lossy(v));
-                    },
-                    (b"OpenURL", Some(v)) => {
-                        let payload = v.strip_prefix(b":").unwrap_or(v);
-                        self.handler.open_url(payload);
-                    },
-                    _ => unhandled(params),
+            // Both iTerm2 inline images (File=/MultipartFile=/FilePart=/
+            // FileEnd, color-tools plan Phase 2) and the other iTerm2
+            // proprietary commands (CursorShape=, StealFocus,
+            // ClearScrollback, CopyToClipboard=/EndCopy, Copy=:,
+            // RequestAttention=, OpenURL=) live under this one OSC ps.
+            // iTerm2's own `;`-separated argument syntax (File='s
+            // width=/height=/etc, one `;` per key) rides inside vte's
+            // generic OSC-parameter splitting, which has no notion of
+            // iTerm2 semantics and just splits on every `;` in the sequence
+            // — so params[1..] is always rejoined with `;` first, before
+            // ANY of the prefix checks below run. None of the non-image
+            // commands' own values can legally contain a literal `;`
+            // (numeric, base64, or a fixed token set), so rejoining is safe
+            // for them too, not just for File=.
+            b"1337" => {
+                if params.len() < 2 {
+                    unhandled(params);
+                    return;
+                }
+                let mut joined = params[1].to_vec();
+                for p in &params[2..] {
+                    joined.push(b';');
+                    joined.extend_from_slice(p);
+                }
+                if let Some(rest) = joined.strip_prefix(b"File=") {
+                    match rest.iter().position(|&b| b == b':') {
+                        Some(colon) => {
+                            let args = str::from_utf8(&rest[..colon]).unwrap_or("");
+                            let payload = &rest[colon + 1..];
+                            self.handler.osc_1337_file(args, payload);
+                        },
+                        None => unhandled(params),
+                    }
+                } else if let Some(args) = joined.strip_prefix(b"MultipartFile=") {
+                    let args = str::from_utf8(args).unwrap_or("");
+                    self.handler.osc_1337_multipart_file(args);
+                } else if let Some(payload) = joined.strip_prefix(b"FilePart=") {
+                    self.handler.osc_1337_file_part(payload);
+                } else if joined == b"FileEnd" {
+                    self.handler.osc_1337_file_end();
+                } else {
+                    let body = joined.as_slice();
+                    let (key, value) = match body.iter().position(|&b| b == b'=') {
+                        Some(pos) => (&body[..pos], Some(&body[pos + 1..])),
+                        None => (body, None),
+                    };
+                    match (key, value) {
+                        // CursorShape=[N]: 0=block, 1=beam, 2=underline.
+                        // Reuses the same handler as OSC 50's `CursorShape=`
+                        // variant.
+                        (b"CursorShape", Some(v)) if !v.is_empty() => {
+                            let shape = match v[0] {
+                                b'0' => CursorShape::Block,
+                                b'1' => CursorShape::Beam,
+                                b'2' => CursorShape::Underline,
+                                _ => return unhandled(params),
+                            };
+                            self.handler.set_cursor_shape(shape);
+                        },
+                        (b"StealFocus", None) => self.handler.request_focus(),
+                        (b"ClearScrollback", None) => {
+                            self.handler.clear_screen(ClearMode::Saved);
+                        },
+                        // CopyToClipboard=[name] ... EndCopy: capture
+                        // verbatim output until EndCopy, then flush to the
+                        // clipboard. The named-pasteboard hint
+                        // ("rule"/"find"/"font"/"") is accepted but not
+                        // distinguished — everything lands on the general
+                        // clipboard.
+                        (b"CopyToClipboard", Some(name)) => {
+                            self.handler.start_clipboard_capture(&String::from_utf8_lossy(name));
+                        },
+                        (b"CopyToClipboard", None) => self.handler.start_clipboard_capture(""),
+                        (b"EndCopy", None) => self.handler.end_clipboard_capture(),
+                        // Copy=:<base64>: a single-shot equivalent of OSC
+                        // 52's clipboard store, just under the 1337
+                        // namespace.
+                        (b"Copy", Some(v)) => {
+                            let payload = v.strip_prefix(b":").unwrap_or(v);
+                            self.handler.clipboard_store(b'c', payload);
+                        },
+                        (b"RequestAttention", Some(v)) => {
+                            self.handler.request_attention(&String::from_utf8_lossy(v));
+                        },
+                        (b"OpenURL", Some(v)) => {
+                            let payload = v.strip_prefix(b":").unwrap_or(v);
+                            self.handler.open_url(payload);
+                        },
+                        _ => unhandled(params),
+                    }
                 }
             },
 
