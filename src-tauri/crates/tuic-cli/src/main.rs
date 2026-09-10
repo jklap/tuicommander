@@ -7,6 +7,7 @@
 //! When invoked as `tmux` (via symlink), enters tmux-compatibility mode
 //! and translates tmux commands to TUIC equivalents.
 
+mod imgcat;
 mod ipc;
 mod mcp;
 mod tmux;
@@ -149,6 +150,46 @@ pub(crate) enum Command {
         /// Session ID or name
         target: String,
     },
+    /// Display an image inline (iTerm2 OSC 1337 protocol; color-tools plan).
+    /// Clean-room reimplementation of iTerm2's `imgcat` — works in any
+    /// terminal that understands the protocol, not only TUICommander.
+    Imgcat {
+        /// Image file(s) to display; reads stdin if none given
+        paths: Vec<String>,
+        /// Width: cells, `Npx`, `N%`, or `auto`
+        #[arg(short = 'W', long)]
+        width: Option<String>,
+        /// Height: cells, `Npx`, `N%`, or `auto`
+        #[arg(short = 'H', long)]
+        height: Option<String>,
+        /// Preserve aspect ratio when scaling (default; explicit for parity
+        /// with the real script's flag)
+        #[arg(short = 'r', long = "preserve-aspect-ratio")]
+        preserve_aspect_ratio: bool,
+        /// Stretch to fill both width and height, ignoring aspect ratio
+        #[arg(short = 's', long)]
+        stretch: bool,
+        /// Print the filename after displaying (default)
+        #[arg(short = 'p', long)]
+        print: bool,
+        /// Suppress printing the filename after displaying
+        #[arg(short = 'n', long)]
+        no_print: bool,
+    },
+    /// List a directory with inline image thumbnails (iTerm2 OSC 1337
+    /// protocol; color-tools plan). Clean-room reimplementation of iTerm2's
+    /// `imgls`.
+    Imgls {
+        /// Directory or file(s) to list; defaults to the current directory
+        paths: Vec<String>,
+    },
+    /// Print a full-width horizontal divider image (iTerm2 OSC 1337
+    /// protocol; color-tools plan). Clean-room reimplementation of
+    /// iTerm2's `divider` test script.
+    Divider {
+        /// Image file to stretch across the divider
+        path: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -260,6 +301,25 @@ pub(crate) fn dispatch(cmd: Command) -> Result<(), String> {
         Command::Alias { remove } => cmd_alias(remove),
         Command::Pause { target } => cmd_pause(&target),
         Command::Resume { target } => cmd_resume(&target),
+        Command::Imgcat {
+            paths,
+            width,
+            height,
+            preserve_aspect_ratio,
+            print,
+            no_print,
+            stretch,
+        } => cmd_imgcat(
+            &paths,
+            width,
+            height,
+            preserve_aspect_ratio,
+            stretch,
+            print,
+            no_print,
+        ),
+        Command::Imgls { paths } => cmd_imgls(&paths),
+        Command::Divider { path } => cmd_divider(&path),
     }
 }
 
@@ -994,6 +1054,127 @@ fn cmd_resume(target: &str) -> Result<(), String> {
     if !resp.is_success() {
         return Err(format!("Failed to resume: {}", resp.body));
     }
+    Ok(())
+}
+
+/// Display one or more images inline via the iTerm2 OSC 1337 protocol. Does
+/// not talk to a running TUICommander instance — like the real `imgcat`,
+/// this just writes an escape sequence to stdout and works in any terminal
+/// that understands the protocol.
+fn cmd_imgcat(
+    paths: &[String],
+    width: Option<String>,
+    height: Option<String>,
+    preserve_aspect_ratio: bool,
+    stretch: bool,
+    print: bool,
+    no_print: bool,
+) -> Result<(), String> {
+    let term = std::env::var("TERM").unwrap_or_default();
+    // Default is to preserve aspect ratio unless -s/--stretch was given.
+    let preserve = preserve_aspect_ratio || !stretch;
+    // Default is to print the filename unless -n/--no-print was given.
+    let should_print_name = print || !no_print;
+
+    let targets: Vec<Option<String>> = if paths.is_empty() {
+        vec![None] // stdin
+    } else {
+        paths.iter().map(|p| Some(p.clone())).collect()
+    };
+
+    for target in targets {
+        let (bytes, name) = match &target {
+            Some(path) => {
+                let bytes = std::fs::read(path).map_err(|e| format!("Cannot read {path}: {e}"))?;
+                (bytes, Some(path.clone()))
+            }
+            None => {
+                use std::io::Read;
+                let mut bytes = Vec::new();
+                std::io::stdin()
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| format!("Cannot read stdin: {e}"))?;
+                (bytes, None)
+            }
+        };
+
+        let args = imgcat::FileArgs {
+            name: name.clone(),
+            size: Some(bytes.len()),
+            width: width.clone(),
+            height: height.clone(),
+            preserve_aspect_ratio: preserve,
+            inline: true,
+        };
+        let sequence = imgcat::build_file_sequence(&args, &bytes);
+        print!("{}", imgcat::wrap_for_passthrough(&term, &sequence));
+        println!();
+        if should_print_name && let Some(name) = &name {
+            println!("{name}");
+        }
+    }
+    Ok(())
+}
+
+/// List a directory (or the given paths) with inline image thumbnails.
+/// Simplified relative to the real `imgls`: no external tool
+/// (`sips`/`mdls`/`exiftool`) fallback chain for exact pixel dimensions —
+/// just the thumbnail and filename, in directory order.
+fn cmd_imgls(paths: &[String]) -> Result<(), String> {
+    let term = std::env::var("TERM").unwrap_or_default();
+    let targets: Vec<String> = if paths.is_empty() {
+        vec![".".to_string()]
+    } else {
+        paths.to_vec()
+    };
+
+    for target in &targets {
+        let entries: Vec<std::path::PathBuf> = if std::path::Path::new(target).is_dir() {
+            let mut entries: Vec<_> = std::fs::read_dir(target)
+                .map_err(|e| format!("Cannot read {target}: {e}"))?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.is_file())
+                .collect();
+            entries.sort();
+            entries
+        } else {
+            vec![std::path::PathBuf::from(target)]
+        };
+
+        for path in entries {
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue; // skip unreadable entries rather than aborting the listing
+            };
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let args = imgcat::FileArgs {
+                name: Some(name.clone()),
+                size: Some(bytes.len()),
+                width: Some("4".to_string()),
+                height: Some("2".to_string()),
+                preserve_aspect_ratio: true,
+                inline: true,
+            };
+            let sequence = imgcat::build_file_sequence(&args, &bytes);
+            print!("{}", imgcat::wrap_for_passthrough(&term, &sequence));
+            println!(" {name}");
+        }
+    }
+    Ok(())
+}
+
+/// Print a full-width horizontal divider stretched from the given image.
+/// Verbatim behavior of the real `divider` test script — not a box-drawing
+/// helper, an inline-image call with fixed args (`width=100%;height=1;
+/// preserveAspectRatio=0`).
+fn cmd_divider(path: &str) -> Result<(), String> {
+    let term = std::env::var("TERM").unwrap_or_default();
+    let bytes = std::fs::read(path).map_err(|e| format!("Cannot read {path}: {e}"))?;
+    let sequence = imgcat::build_divider_sequence(&bytes);
+    print!("{}", imgcat::wrap_for_passthrough(&term, &sequence));
     Ok(())
 }
 

@@ -3259,3 +3259,17 @@ section needs a human running the rebuilt app, not just re-running tests.
   print, so images from these specific tools/paths will not display even once the frontend
   renderer lands. Needs its own follow-up implementing the diacritic decode table against a
   canonical reference (not attempted here — see `kitty.rs`'s module doc comment for why).
+- [ ] `tuic imgcat`/`imgls`/`divider` (color-tools plan, Phase 4, `crates/tuic-cli/src/imgcat.rs`):
+  unit-tested (sequence construction, tmux passthrough wrapping) and proven end-to-end against our
+  own OSC 1337 parser (`real_tuic_divider_cli_output_displays_through_our_own_parser` in
+  `terminal_grid.rs`, using bytes actually captured from the compiled binary), but never run against
+  a real terminal/human eyeball. After a `make dev` rebuild (these are plain binary changes, not
+  requiring the Rust-hot-reload workaround since they're a separate sidecar binary, but still worth
+  confirming against a fresh build), verify: `imgcat` against a real PNG/JPEG, `imgls` against a
+  directory with several images, `divider` producing a visible full-width bar, and the tmux
+  passthrough path (`TERM=tmux-256color tuic imgcat ...` inside a real tmux pane).
+- [ ] `imgcat`/`imgls`/`divider` are not yet wired onto each PTY session's `PATH` as shims (the
+  plan's "Phase 4: PATH shims" item) — right now they're only reachable as `tuic imgcat`/etc., not
+  as bare `imgcat`/`imgls`/`divider` commands the way a user coming from iTerm2 would expect.
+  Deferred: needs a small addition to `inject_unix_terminal_env` (`pty.rs`) to prepend a bin
+  directory of shim scripts/symlinks to each spawned PTY's `PATH`.

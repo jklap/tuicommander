@@ -241,6 +241,36 @@ generation kept) and, best-effort, to the running instance's own logs via `POST 
 works when TUICommander isn't running. Disable with `TUIC_TMUX_LOG=0`; set `TUIC_TMUX_LOG=stderr`
 to also mirror every line to stderr.
 
+## Inline Images
+
+Clean-room reimplementations of iTerm2's `imgcat`/`imgls`/`divider` utility
+scripts (color-tools plan, Phase 4) — iTerm2's own scripts are GPLv2 and
+can't be vendored into this Apache-2.0 repo, so these are independent
+implementations of the same observable behavior, verified against the real
+scripts' text. They print an OSC 1337 escape sequence to stdout and don't
+talk to a running TUICommander instance — they work in any terminal that
+understands the protocol, including this one (see `docs/backend/pty.md`'s
+"iTerm2 Inline Images" section for what the terminal side supports).
+
+```bash
+# Display an image inline
+tuic imgcat photo.png
+tuic imgcat -W 40 -H 20 photo.png       # explicit size in cells
+tuic imgcat -W 50% screenshot.png       # percent of the viewport
+cat photo.png | tuic imgcat             # reads stdin if no path given
+
+# List a directory with inline thumbnails
+tuic imgls
+tuic imgls ~/Pictures
+
+# Print a full-width horizontal divider stretched from an image
+tuic divider ~/.config/tuic/divider.png
+```
+
+**Not implemented**: the frontend doesn't render inline images yet (see
+`to-test.md`), so these currently produce correct escape sequences that no
+part of this app's UI paints to the screen.
+
 ## System Commands
 
 ```bash
