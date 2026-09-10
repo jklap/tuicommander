@@ -51,4 +51,31 @@ describe("findBlockAtViewport", () => {
 	it("returns undefined for an empty blocks array", () => {
 		expect(findBlockAtViewport([], 15, 5)).toBeUndefined();
 	});
+
+	describe("halfViewportRows=0 (the exact call the gutter click makes)", () => {
+		// Issue #3 regression: a zsh precmd cycle emits D (close) then A/B (open) on
+		// the SAME buffer line, so a block's endLine is numerically equal to the next
+		// block's promptLine (see terminals.ts handleOsc133 and shell_integration.rs's
+		// doc comment). CanvasTerminal's gutter mousedown handler calls
+		// `findBlockAtViewport(allBlocks, absRow, 0)` with no prior coverage at this
+		// exact halfViewportRows=0 boundary shape — the blind spot that let the bug ship.
+
+		it("at the exact boundary row, resolves to the NEWER block (starting there), not the older one ending there", () => {
+			// blocks[0] ends at 10, blocks[1] starts at 10 — the shared boundary row.
+			expect(findBlockAtViewport(blocks, 10, 0)).toBe(blocks[1]);
+		});
+
+		it("resolves to the block a click lands inside, off the boundary", () => {
+			expect(findBlockAtViewport(blocks, 12, 0)).toBe(blocks[1]);
+			expect(findBlockAtViewport(blocks, 5, 0)).toBe(blocks[0]);
+		});
+
+		it("resolves the second boundary (10 -> 25) the same way", () => {
+			expect(findBlockAtViewport(blocks, 25, 0)).toBe(blocks[2]);
+		});
+
+		it("the still-open block matches any row at or past its promptLine", () => {
+			expect(findBlockAtViewport(blocks, 30, 0)).toBe(blocks[2]);
+		});
+	});
 });
