@@ -66,7 +66,7 @@ never all expert: in basic mode it would show an empty page.
 |------|-----------------|
 | General | Auto-Standby Timeout, Content Indexing, Update Channel |
 | Notifications | Master Volume, Audio Output Device |
-| Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Block folding, Show scrollbar marks, Reflow scrollback on resize |
+| Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Allow terminal focus/attention requests, Block folding, Show scrollbar marks, Reflow scrollback on resize |
 | Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup and safe cleanup countdown, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
 | Agents | Collect project progress (global); per agent: Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
@@ -199,6 +199,7 @@ playback also uses the selected output device.
 | **Cursor Style** | — | Bar, Block, or Underline |
 | **Copy on select** | On | Auto-copy terminal selection to clipboard. When text is selected in the terminal, it is immediately copied. A "Copied to clipboard" confirmation appears in the status bar. |
 | **Allow OSC 52 clipboard writes** | On | Let terminal programs set the system clipboard via the OSC 52 escape sequence (used by tmux, vim, ssh yank-over-SSH, etc.). Because OSC 52 is honored from anywhere in the byte stream, a displayed file or log can also overwrite the clipboard — so a non-blocking "Clipboard updated" notice appears on every successful write (a failed write logs quietly instead). Disable to ignore OSC 52 entirely. |
+| **Allow terminal focus/attention requests** | On | Let terminal programs bring the window to the front (iTerm2 `StealFocus`) or bounce the dock icon (`RequestAttention`) via OSC 1337. Disable if a script or log spams either. |
 | **Open links on** | Click | How links (URLs, file paths) in terminal output activate. **Click** opens on a plain click. **⌘Click**/**Ctrl+Click** hides the underline until Cmd (macOS) or Ctrl (Windows/Linux) is held, then opens on modifier+click. **Never** disables click-to-open entirely — right-click still offers Open/Copy link. |
 | **Show block timestamps** | Hold Ctrl+Cmd | When each command block is labelled at the right edge with how long ago it started: **Never**, only while **Ctrl+Cmd** is held, or **Always**. |
 | **Block folding** | On | Let the Toggle Block Fold shortcut (Cmd/Ctrl+Shift+.), its command-palette entry and the fold chevron on a block's header row in the gutter collapse a command block's output (clicking elsewhere in the block's gutter selects its output for copying). Blocks already folded stay collapsed when this is off. |

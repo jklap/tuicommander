@@ -248,6 +248,22 @@ describe("TerminalTab placement", () => {
 		expect(mockInvoke).toHaveBeenCalledWith("clear_saved_scrollback", {});
 	});
 
+	it("persists the OSC 1337 focus/attention toggle under osc1337_focus_attention", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ osc1337_focus_attention: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const toggle = toggleByLabel(container, "Allow terminal focus/attention requests");
+		expect(toggle.checked).toBe(false);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggle, { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.osc1337FocusAttention).toBe(true);
+		expect(savedConfigs().at(-1)?.osc1337_focus_attention).toBe(true);
+	});
+
 	describe("modifier-symbol-dependent label/hint text", () => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
 

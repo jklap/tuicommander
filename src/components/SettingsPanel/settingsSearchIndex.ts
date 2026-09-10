@@ -223,6 +223,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.osc52_clipboard",
 	},
+	{
+		tab: "terminal",
+		section: "Terminal",
+		label: "Allow terminal focus/attention requests",
+		labelKey: "general.toggle.osc1337FocusAttention",
+		expert: true,
+		configKey: "app.osc1337_focus_attention",
+	},
 	{ tab: "terminal", section: "Terminal", label: "Open links on", labelKey: "terminal.label.linkActivation" },
 	{
 		tab: "terminal",
