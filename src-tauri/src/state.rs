@@ -4627,13 +4627,19 @@ impl VtLogBuffer {
 
     // --- private helpers ---
 
-    /// Roughly how much heap this buffer holds, for `memory_report`: the
-    /// captured log lines plus the terminal grid behind them. Walks the log
-    /// once, which is fine on demand and is why the report is not on the
-    /// diagnostics tick.
-    pub fn approx_bytes(&self) -> usize {
-        let log: usize = self
-            .log
+    /// Roughly how much heap the captured log lines hold, for `memory_report`.
+    ///
+    /// Reported apart from [`Self::grid_bytes`] because the two are bounded by
+    /// different things and only one of them can run away. The line *count* is
+    /// capped at `VT_LOG_BUFFER_CAPACITY`, but a span's text is whatever the
+    /// PTY emitted — 10,000 lines of a multi-megabyte JSON blob is 10,000 lines
+    /// and gigabytes. Summed together with the grid, a climb here is
+    /// indistinguishable from a terminal simply filling its scrollback.
+    ///
+    /// Walks the log once, which is fine on demand and is why the report is not
+    /// on the diagnostics tick.
+    pub fn log_bytes(&self) -> usize {
+        self.log
             .iter()
             .map(|line| {
                 line.spans
@@ -4641,8 +4647,15 @@ impl VtLogBuffer {
                     .map(|s| s.text.len() + std::mem::size_of::<LogSpan>())
                     .sum::<usize>()
             })
-            .sum();
-        log + self.grid.approx_bytes()
+            .sum()
+    }
+
+    /// Roughly how much heap the terminal grid behind this buffer holds.
+    ///
+    /// Hard-bounded: `GRID_SCROLLBACK` rows × columns × one `Cell`. A session
+    /// that fills its scrollback reaches this ceiling and stops.
+    pub fn grid_bytes(&self) -> usize {
+        self.grid.approx_bytes()
     }
 
     fn push_log_line(&mut self, line: LogLine) {
