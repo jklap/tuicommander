@@ -9723,6 +9723,7 @@ name = "tuic-terminal"
 version = "2.0.0-beta.1"
 dependencies = [
  "alacritty_terminal",
+ "base64 0.22.1",
  "dirs",
  "lazy_static",
  "parking_lot",
