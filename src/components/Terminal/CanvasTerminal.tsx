@@ -45,6 +45,7 @@ import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } fr
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
+import { buildScrollbarMarksHtml } from "./scrollbarMarks";
 import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./suggestOverlay";
 import {
 	altSequenceFromCode,
@@ -53,7 +54,6 @@ import {
 	keyToSequence,
 	shouldReportMouseUp,
 } from "./terminalInput";
-import { buildScrollbarMarksHtml } from "./scrollbarMarks";
 import { cssColorToRgb, publishTerminalPalette } from "./terminalPalette";
 import { retryUntilMeasured, SIZE_RETRY_MAX_FRAMES } from "./visibilityLifecycle";
 
