@@ -825,6 +825,15 @@
   color: var(--fg-muted);
   font-family: var(--font-ui);
   margin-left: auto;
+  /* This span REPLACES .branchActions in flow when the quick switcher arms, so it
+     owns that element's height budget too. .branchActions is display:flex around
+     20px buttons; its max-width:0 clips it horizontally but never shortens it, so
+     the row is 28px until it goes display:none. A bare 12px span is a ~14px line
+     box, the row drops to the 26px min-height, and every branch row in the sidebar
+     shrinks 2px the instant the hint appears. Match the 20px instead. */
+  display: flex;
+  align-items: center;
+  min-height: 20px;
 }
 
 /* ── Global Workspace Entry ── */
