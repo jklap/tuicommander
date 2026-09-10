@@ -58,6 +58,36 @@ impl PendingInjection {
 // AppEvent — unified event bus for all backend events
 // ---------------------------------------------------------------------------
 
+/// Wire payload of `worktree-created`, on both transports.
+///
+/// The workspace is named by its id; `branch` rides along for display only. A
+/// consumer that wants the branch reads this field — it must never parse the id
+/// back into one, because a COW clone's id is minted and shares nothing with its
+/// branch (see `worktree::workspace_id_of_worktree`).
+///
+/// Typed rather than a hand-written `json!` at each emit site: the desktop
+/// `emit` and the SSE arm serialize this same struct, so the two transports
+/// cannot spell a field differently.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct WorktreeCreatedPayload {
+    pub(crate) repo_path: String,
+    pub(crate) workspace_id: String,
+    pub(crate) branch: String,
+    pub(crate) worktree_path: String,
+}
+
+/// Wire payload of `worktree-removed`, on both transports.
+///
+/// `branch` must be captured *before* the checkout is disposed of — the id stops
+/// resolving the moment the worktree is gone, so a consumer cannot look it up
+/// and neither can this event.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct WorktreeRemovedPayload {
+    pub(crate) repo_path: String,
+    pub(crate) workspace_id: String,
+    pub(crate) branch: String,
+}
+
 /// Events broadcast to SSE/WebSocket consumers via `tokio::sync::broadcast`.
 /// All event producers (PTY reader, watchers, session lifecycle, plugins) send
 /// to this channel. Consumers: SSE endpoint, WebSocket multiplexer, session
@@ -218,18 +248,11 @@ pub enum AppEvent {
     DirChanged { dir_path: String },
     /// A worktree was created via MCP — frontend may offer to switch to it
     #[serde(rename = "worktree-created")]
-    WorktreeCreated {
-        repo_path: String,
-        branch: String,
-        worktree_path: String,
-    },
+    WorktreeCreated(WorktreeCreatedPayload),
     /// A worktree was removed (UI, MCP, HTTP, or merge&archive) — frontend must
     /// drop its sidebar row and close any terminal still living in it.
     #[serde(rename = "worktree-removed")]
-    WorktreeRemoved {
-        repo_path: String,
-        workspace_id: String,
-    },
+    WorktreeRemoved(WorktreeRemovedPayload),
     /// A peer agent registered for inter-agent messaging
     #[serde(rename = "peer-registered")]
     PeerRegistered { tuic_session: String, name: String },
@@ -3375,19 +3398,30 @@ impl AppState {
     ///
     /// Caches are invalidated first, so any refresh the event triggers reads
     /// post-removal worktree state.
-    pub(crate) fn notify_worktree_removed(&self, repo_path: &str, workspace_id: &str) {
-        self.invalidate_repo_caches(repo_path);
-        let _ = self.event_bus.send(AppEvent::WorktreeRemoved {
-            repo_path: repo_path.to_string(),
-            workspace_id: workspace_id.to_string(),
-        });
+    pub(crate) fn notify_worktree_removed(&self, payload: WorktreeRemovedPayload) {
+        self.invalidate_repo_caches(&payload.repo_path);
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
-            let _ = app.emit(
-                "worktree-removed",
-                serde_json::json!({ "repo_path": repo_path, "workspace_id": workspace_id }),
-            );
+            let _ = app.emit("worktree-removed", &payload);
         }
+        let _ = self.event_bus.send(AppEvent::WorktreeRemoved(payload));
+    }
+
+    /// Announce a newly created workspace, so the frontend can offer to switch
+    /// to it.
+    ///
+    /// The mirror of `notify_worktree_removed`, and it exists for the same
+    /// reason: creation used to emit the bus event and the desktop event by hand
+    /// at each producer (the HTTP/MCP route and the session-with-worktree route),
+    /// which is two implementations of one transition — one of them could forget
+    /// the cache invalidation, mint a different id, or fire at a different moment.
+    pub(crate) fn notify_worktree_created(&self, payload: WorktreeCreatedPayload) {
+        self.invalidate_repo_caches(&payload.repo_path);
+        #[cfg(feature = "desktop")]
+        if let Some(ref app) = *self.app_handle.read() {
+            let _ = app.emit("worktree-created", &payload);
+        }
+        let _ = self.event_bus.send(AppEvent::WorktreeCreated(payload));
     }
 
     /// Announce that `repositories.json` was written, so every other client
@@ -4770,6 +4804,99 @@ pub(crate) mod tests_support {
         // Skip disk I/O for claude_usage in tests
         state.claude_usage_cache = parking_lot::Mutex::new(std::collections::HashMap::new());
         state
+    }
+}
+
+#[cfg(test)]
+mod worktree_event_payloads {
+    use super::*;
+
+    /// A branch that is NOT the id. Every assertion below uses this pair, because
+    /// with `workspace_id == branch` — which is what a linked worktree has — a
+    /// payload that quietly reported the branch under both names would pass.
+    fn created() -> WorktreeCreatedPayload {
+        WorktreeCreatedPayload {
+            repo_path: "/repo".to_string(),
+            workspace_id: "feature-x~a1b2c3d4".to_string(),
+            branch: "feature/x".to_string(),
+            worktree_path: "/repo__wt/feature-x".to_string(),
+        }
+    }
+
+    fn removed() -> WorktreeRemovedPayload {
+        WorktreeRemovedPayload {
+            repo_path: "/repo".to_string(),
+            workspace_id: "feature-x~a1b2c3d4".to_string(),
+            branch: "feature/x".to_string(),
+        }
+    }
+
+    /// The wire contract, spelled out. This is the load-bearing assertion: the
+    /// two transports now serialize one struct, so comparing them to each other
+    /// can no longer catch a rename — comparing both to a literal can.
+    #[test]
+    fn the_created_payload_spells_its_wire_fields() {
+        assert_eq!(
+            serde_json::to_value(created()).unwrap(),
+            serde_json::json!({
+                "repo_path": "/repo",
+                "workspace_id": "feature-x~a1b2c3d4",
+                "branch": "feature/x",
+                "worktree_path": "/repo__wt/feature-x",
+            })
+        );
+    }
+
+    #[test]
+    fn the_removed_payload_spells_its_wire_fields() {
+        assert_eq!(
+            serde_json::to_value(removed()).unwrap(),
+            serde_json::json!({
+                "repo_path": "/repo",
+                "workspace_id": "feature-x~a1b2c3d4",
+                "branch": "feature/x",
+            })
+        );
+    }
+
+    /// The desktop Tauri payload and the SSE payload are the SAME object for the
+    /// same event — the frontend store reads one field name on both transports.
+    #[test]
+    fn the_tauri_payload_and_the_sse_payload_agree() {
+        assert_eq!(
+            serde_json::to_value(created()).unwrap(),
+            crate::mcp_http::sse_routes::event_payload_for_test(&AppEvent::WorktreeCreated(
+                created()
+            )),
+        );
+        assert_eq!(
+            serde_json::to_value(removed()).unwrap(),
+            crate::mcp_http::sse_routes::event_payload_for_test(&AppEvent::WorktreeRemoved(
+                removed()
+            )),
+        );
+    }
+
+    /// The event names are the strings the frontend narrows on. A rename here is
+    /// a silent no-op at every listener, so it is asserted rather than reviewed.
+    #[test]
+    fn the_event_names_are_the_kebab_case_ones_the_frontend_listens_for() {
+        let created_event = serde_json::to_value(AppEvent::WorktreeCreated(created())).unwrap();
+        let removed_event = serde_json::to_value(AppEvent::WorktreeRemoved(removed())).unwrap();
+        assert_eq!(
+            created_event["event"],
+            serde_json::json!("worktree-created")
+        );
+        assert_eq!(
+            removed_event["event"],
+            serde_json::json!("worktree-removed")
+        );
+        // The tagged form nests the very same payload under `payload`, so a
+        // WebSocket consumer of the bus and an SSE consumer see one shape.
+        assert_eq!(
+            created_event["payload"],
+            serde_json::to_value(created()).unwrap()
+        );
     }
 }
 

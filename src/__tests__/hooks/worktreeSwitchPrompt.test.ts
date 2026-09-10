@@ -54,7 +54,13 @@ describe("switchToCreatedWorktree", () => {
 			const terminalId = seedActiveTerminal("codex");
 			const handleBranchSelect = vi.fn().mockResolvedValue(undefined);
 
-			await switchToCreatedWorktree({ handleBranchSelect, closeTerminalsForBranch: vi.fn() }, REPO, BRANCH, WORKTREE);
+			await switchToCreatedWorktree(
+				{ handleBranchSelect, closeTerminalsForBranch: vi.fn() },
+				REPO,
+				BRANCH,
+				BRANCH,
+				WORKTREE,
+			);
 
 			expect(handleBranchSelect).toHaveBeenCalledWith(REPO, BRANCH);
 			expect(repositoriesStore.get(REPO)!.workspaces.main.terminals).toContain(terminalId);
@@ -68,7 +74,13 @@ describe("switchToCreatedWorktree", () => {
 			const terminalId = seedActiveTerminal(null);
 			const handleBranchSelect = vi.fn().mockResolvedValue(undefined);
 
-			await switchToCreatedWorktree({ handleBranchSelect, closeTerminalsForBranch: vi.fn() }, REPO, BRANCH, WORKTREE);
+			await switchToCreatedWorktree(
+				{ handleBranchSelect, closeTerminalsForBranch: vi.fn() },
+				REPO,
+				BRANCH,
+				BRANCH,
+				WORKTREE,
+			);
 
 			expect(handleBranchSelect).toHaveBeenCalledWith(REPO, BRANCH);
 			expect(repositoriesStore.get(REPO)!.workspaces.main.terminals).not.toContain(terminalId);
@@ -92,7 +104,13 @@ describe("switchToCreatedWorktree", () => {
 			mockInvoke.mockClear();
 			const handleBranchSelect = vi.fn().mockResolvedValue(undefined);
 
-			await switchToCreatedWorktree({ handleBranchSelect, closeTerminalsForBranch: vi.fn() }, REPO, BRANCH, WORKTREE);
+			await switchToCreatedWorktree(
+				{ handleBranchSelect, closeTerminalsForBranch: vi.fn() },
+				REPO,
+				BRANCH,
+				BRANCH,
+				WORKTREE,
+			);
 
 			// The agent is the active tab now, so nothing moves and no cd is written —
 			// even though a movable shell was active when the worktree was created.
@@ -137,13 +155,17 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 		vi.useRealTimers();
 	});
 
-	async function emitCreated(handleBranchSelect = vi.fn().mockResolvedValue(undefined)) {
+	async function emitCreated(
+		handleBranchSelect = vi.fn().mockResolvedValue(undefined),
+		workspaceId = BRANCH,
+		branch = BRANCH,
+	) {
 		repositoriesStore.add({ path: REPO, displayName: "repo" });
 		repositoriesStore.setBranch(REPO, "main", { worktreePath: REPO, isMain: true });
 		useWorktreeSwitchPrompt({ handleBranchSelect, closeTerminalsForBranch: vi.fn() });
 		await Promise.resolve();
 		handlers.get("worktree-created")?.({
-			payload: { repo_path: REPO, branch: BRANCH, worktree_path: WORKTREE },
+			payload: { repo_path: REPO, workspace_id: workspaceId, branch, worktree_path: WORKTREE },
 		});
 		return handleBranchSelect;
 	}
@@ -181,6 +203,22 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 			await Promise.resolve();
 
 			expect(handleBranchSelect).toHaveBeenCalledWith(REPO, BRANCH);
+		});
+	});
+
+	// The whole point of carrying both fields: the row is filed under the id the
+	// backend minted, while every string the user reads is the branch. With
+	// `workspace_id === branch` — which is what a linked worktree has — a hook
+	// that quietly keyed by `branch` would pass every other test in this file.
+	it("files the row under the workspace id and labels it with the branch", async () => {
+		await testInScopeAsync(async () => {
+			await emitCreated(vi.fn().mockResolvedValue(undefined), "feature~a1b2c3d4", "feature/x");
+
+			const workspaces = repositoriesStore.get(REPO)!.workspaces;
+			expect(workspaces["feature~a1b2c3d4"]?.worktreePath).toBe(WORKTREE);
+			expect(workspaces["feature~a1b2c3d4"]?.branchName).toBe("feature/x");
+			expect(workspaces["feature/x"]).toBeUndefined();
+			expect(toastsStore.toasts.some((t) => t.title === 'Worktree "feature/x" created')).toBe(true);
 		});
 	});
 

@@ -3253,6 +3253,10 @@ async fn handle_worktree(
                     let branch_name = created.branch;
                     let mut response = serde_json::json!({
                         "worktree_path": &wt_path,
+                        // The id `action=worktree_remove` asks for. Without it the
+                        // model had to assume the branch was the id, which holds
+                        // for a linked worktree and not for a COW clone.
+                        "workspace_id": &created.workspace_id,
                         "branch": &branch_name,
                     });
                     // Optionally spawn a PTY session in the new worktree
@@ -3314,7 +3318,11 @@ async fn handle_worktree(
                 false,
             ) {
                 Ok(outcome) => {
-                    state.notify_worktree_removed(&path, &workspace_id);
+                    state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                        repo_path: path.clone(),
+                        workspace_id: workspace_id.clone(),
+                        branch: outcome.branch,
+                    });
                     worktree_remove_success_response(outcome.branch_delete_warning)
                 }
                 Err(e) => serde_json::json!({"error": e}),

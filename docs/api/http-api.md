@@ -1837,6 +1837,31 @@ Content-Type: application/json
 `base_repo` must be an absolute, normalized path. The route rejects invalid paths
 before invoking git, matching MCP `repo action=worktree_create` validation.
 
+`201` returns:
+
+```json
+{
+  "name": "feature-x",
+  "path": "/path__wt/feature-x",
+  "workspace_id": "feature-x",
+  "branch": "feature-x",
+  "base_repo": "/path"
+}
+```
+
+`workspace_id` is how every later call addresses this workspace — `DELETE
+/worktrees/:workspaceId`, `POST /worktrees/finalize`,
+`GET /repo/worktree-dirty`, MCP `action=worktree_remove`. Read it from the
+response; do not assume it equals `branch`. It does for a linked worktree (the
+identity migration) and will not for a COW clone. MCP
+`repo action=worktree_create` returns the same two fields.
+
+Creation announces itself on both transports as `worktree-created`
+(`{ repo_path, workspace_id, branch, worktree_path }`) and removal as
+`worktree-removed` (`{ repo_path, workspace_id, branch }`) — the desktop Tauri
+event and the `/events` SSE frame serialize the same struct, so the field names
+are identical by construction. Payload table: `docs/sync-matrix.md`.
+
 ### Worktrees Base Directory
 
 ```

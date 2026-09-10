@@ -415,19 +415,11 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::DirChanged { dir_path } => {
             serde_json::json!({ "dir_path": dir_path })
         }
-        AppEvent::WorktreeCreated {
-            repo_path,
-            branch,
-            worktree_path,
-        } => {
-            serde_json::json!({ "repo_path": repo_path, "branch": branch, "worktree_path": worktree_path })
-        }
-        AppEvent::WorktreeRemoved {
-            repo_path,
-            workspace_id,
-        } => {
-            serde_json::json!({ "repo_path": repo_path, "workspace_id": workspace_id })
-        }
+        // Forwarded whole, like `AcpNotice`: the desktop `emit` in
+        // `notify_worktree_created`/`notify_worktree_removed` serializes this
+        // same struct, so the two transports cannot spell a field differently.
+        AppEvent::WorktreeCreated(payload) => serde_json::json!(payload),
+        AppEvent::WorktreeRemoved(payload) => serde_json::json!(payload),
         AppEvent::PeerRegistered { tuic_session, name } => {
             serde_json::json!({ "tuic_session": tuic_session, "name": name })
         }

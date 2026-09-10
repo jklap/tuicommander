@@ -4,8 +4,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
-#[cfg(feature = "desktop")]
-use tauri::Emitter;
 
 use super::types::*;
 use super::{err_500, json_result, validate_repo_path};
@@ -13,6 +11,10 @@ use super::{err_500, json_result, validate_repo_path};
 pub(super) struct CreatedWorktree {
     pub worktree: crate::state::WorktreeInfo,
     pub path: String,
+    /// The id the caller must use to address this workspace afterwards — removal,
+    /// dirtiness and finalize all take an id. Reported rather than left implicit:
+    /// a caller cannot re-derive it, because for a COW clone it is not the branch.
+    pub workspace_id: String,
     pub branch: String,
     pub setup_script: Option<serde_json::Value>,
     pub setup_script_error: Option<serde_json::Value>,
@@ -87,6 +89,10 @@ pub(super) async fn create_worktree_http(
     let mut response = serde_json::json!({
         "name": created.worktree.name,
         "path": &created.path,
+        // How the caller addresses this workspace from here on. `branch` is what
+        // is checked out; the two match for a linked worktree and will not for a
+        // COW clone, so both are reported.
+        "workspace_id": &created.workspace_id,
         "branch": created.worktree.branch,
         "base_repo": created.worktree.base_repo.to_string_lossy(),
     });
@@ -143,27 +149,15 @@ pub(super) async fn create_worktree_shared(
     };
     match result {
         Ok(wt) => {
-            state.invalidate_repo_caches(&base_repo);
             let wt_path = wt.path.to_string_lossy().to_string();
             let branch_name = wt.branch.clone().unwrap_or_default();
-            let _ = state
-                .event_bus
-                .send(crate::state::AppEvent::WorktreeCreated {
-                    repo_path: base_repo.clone(),
-                    branch: branch_name.clone(),
-                    worktree_path: wt_path.clone(),
-                });
-            #[cfg(feature = "desktop")]
-            if let Some(handle) = state.app_handle.read().as_ref() {
-                let _ = handle.emit(
-                    "worktree-created",
-                    serde_json::json!({
-                        "repo_path": &base_repo,
-                        "branch": &branch_name,
-                        "worktree_path": &wt_path,
-                    }),
-                );
-            }
+            let workspace_id = crate::worktree::workspace_id_of_worktree(&branch_name);
+            state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
+                repo_path: base_repo.clone(),
+                workspace_id: workspace_id.clone(),
+                branch: branch_name.clone(),
+                worktree_path: wt_path.clone(),
+            });
             let mut setup_script = None;
             let mut setup_script_error = None;
             let repo_for_script = base_repo.clone();
@@ -194,6 +188,7 @@ pub(super) async fn create_worktree_shared(
             Ok(CreatedWorktree {
                 worktree: wt,
                 path: wt_path,
+                workspace_id,
                 branch: branch_name,
                 setup_script,
                 setup_script_error,
@@ -228,8 +223,14 @@ pub(super) async fn remove_worktree_http(
         )
     })
     .await;
-    if matches!(result, Ok(Ok(_))) {
-        state.notify_worktree_removed(&q.repo_path, &id_for_event);
+    // The branch comes off the outcome: it was read from the record before the
+    // checkout was removed, and nothing can resolve the id afterwards.
+    if let Ok(Ok(ref outcome)) = result {
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: q.repo_path.clone(),
+            workspace_id: id_for_event,
+            branch: outcome.branch.clone(),
+        });
     }
     match result {
         Ok(Ok(outcome)) => (

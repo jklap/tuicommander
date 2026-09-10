@@ -983,28 +983,15 @@ pub(super) async fn create_session_with_worktree(
     };
 
     let base_repo = wt_config.base_repo.clone();
-    state.invalidate_repo_caches(&base_repo);
     let worktree_path_str = worktree.path.to_string_lossy().to_string();
     let worktree_branch = worktree.branch.clone();
     let branch_name = worktree_branch.clone().unwrap_or_default();
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::WorktreeCreated {
-            repo_path: base_repo.clone(),
-            branch: branch_name.clone(),
-            worktree_path: worktree_path_str.clone(),
-        });
-    #[cfg(feature = "desktop")]
-    if let Some(handle) = state.app_handle.read().as_ref() {
-        let _ = handle.emit(
-            "worktree-created",
-            serde_json::json!({
-                "repo_path": &base_repo,
-                "branch": &branch_name,
-                "worktree_path": &worktree_path_str,
-            }),
-        );
-    }
+    state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
+        repo_path: base_repo.clone(),
+        workspace_id: crate::worktree::workspace_id_of_worktree(&branch_name),
+        branch: branch_name.clone(),
+        worktree_path: worktree_path_str.clone(),
+    });
 
     let rows = body.config.rows.unwrap_or(24);
     let cols = body.config.cols.unwrap_or(80);

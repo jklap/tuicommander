@@ -153,6 +153,14 @@ how it renders and whether it interrupts anything.
   **Switch**: the tab moves to the new branch and `cd`s into the worktree.
 - [ ] Repeat with a *running agent* as the active tab: the worktree opens in its
   own terminal and the agent's tab stays on its branch and CWD.
+- [ ] **Rust change — needs `make dev` restart** (#727-2085). Both worktree
+  events now carry `workspace_id` *and* `branch`, and creation goes through the
+  new `notify_worktree_created`. On an unrestarted backend the frontend reads
+  `workspace_id: undefined`, so the sidebar row lands under the key `"undefined"`
+  and the prune drops nothing — the failure is silent. After a restart: MCP
+  `repo worktree_create` returns a `workspace_id`, the row appears under the
+  branch, and `repo worktree_remove` with that id removes both the directory and
+  the row.
 
 ## An agent quoting a menu footer stops flagging itself as awaiting (2026-08-30, **Rust change — needs `make dev` restart**)
 
