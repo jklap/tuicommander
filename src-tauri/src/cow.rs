@@ -953,6 +953,82 @@ fn validate_branch_name(branch: &str) -> Result<(), String> {
         .map_err(|_| format!("'{branch}' is not a valid branch name"))
 }
 
+/// The ref namespace a COW workspace mirrors its parent's branches into, so
+/// "reachable from the parent" is a local question.
+const PARENT_MIRROR_GLOB: &str = "refs/parent";
+
+/// How many commits exist ONLY in this workspace.
+///
+/// Counts what is reachable from HEAD and from no remote and no mirrored parent
+/// ref. That is the number a removal would destroy — a linked worktree has no
+/// equivalent, because its objects live in the parent and survive the
+/// directory.
+///
+/// The parent mirror is refreshed first, so a commit published a moment ago
+/// does not still read as unpublished. A failure to refresh is deliberately
+/// non-fatal: the count then errs high, which refuses a removal that might
+/// have been safe rather than allowing one that is not.
+pub(crate) fn unpublished_commit_count(record: &CowRecord) -> Result<usize, String> {
+    let _ = git_cmd(&record.path)
+        .args(["fetch", "-q", "parent", "+refs/heads/*:refs/parent/*"])
+        .run();
+
+    let out = git_cmd(&record.path)
+        .args([
+            "rev-list",
+            "--count",
+            "HEAD",
+            "--not",
+            "--glob=refs/remotes",
+            &format!("--glob={PARENT_MIRROR_GLOB}"),
+        ])
+        .run()
+        .map_err(|e| format!("could not count unpublished commits: {e}"))?;
+
+    out.stdout
+        .trim()
+        .parse()
+        .map_err(|e| format!("could not read the unpublished commit count: {e}"))
+}
+
+/// Delete a COW workspace, refusing while it holds commits that exist nowhere
+/// else.
+///
+/// Removal here is an `rm -rf` of an independent repository. Every unpublished
+/// commit lives ONLY in it — a failure mode a linked worktree does not have,
+/// because its objects are in the parent and outlive the directory. So the
+/// count is a gate, not a warning.
+pub(crate) fn remove_cow_workspace(record: &CowRecord, force: bool) -> Result<usize, String> {
+    if !record.path.exists() {
+        // Already gone. Idempotent on purpose: the caller's next step is to drop
+        // the row, and refusing here would strand it forever.
+        return Ok(0);
+    }
+    if !cow_record_is_live(record) {
+        return Err(format!(
+            "'{}' does not look like a COW workspace any more (no .git directory) — \
+             refusing to delete a directory this record may no longer describe",
+            record.path.display()
+        ));
+    }
+
+    let unpublished = unpublished_commit_count(record)?;
+    if unpublished > 0 && !force {
+        return Err(format!(
+            "{unpublished} commit{} in '{}' exist{} only there: this is an independent clone, so \
+             removing it destroys them for good. Publish first, or remove with force to lose them.",
+            if unpublished == 1 { "" } else { "s" },
+            record.workspace_id,
+            if unpublished == 1 { "s" } else { "" },
+        ));
+    }
+
+    std::fs::remove_dir_all(&record.path)
+        .map_err(|e| format!("could not remove '{}': {e}", record.path.display()))?;
+
+    Ok(unpublished)
+}
+
 /// Delete an inherited stale lock — inside the COPY, never in the source.
 ///
 /// The invariant this makes mechanical: [`GuardReport::stale_lock`] is relative,
@@ -1932,6 +2008,117 @@ mod tests {
 
         let err = publish_cow_workspace(&record).expect_err("must not pretend to publish");
         assert!(err.contains("gone"), "{err}");
+    }
+
+    // ── removal ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn removal_refuses_while_commits_exist_only_in_the_workspace() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 2);
+
+        let err = remove_cow_workspace(&record, false).expect_err("must refuse");
+
+        assert!(err.contains('2'), "the refusal must name the count: {err}");
+        assert!(
+            err.contains("Publish first"),
+            "the refusal must name the way out: {err}"
+        );
+        assert!(record.path.exists(), "the workspace was deleted anyway");
+    }
+
+    #[test]
+    fn removal_proceeds_once_the_commits_are_published() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 1);
+        assert_eq!(unpublished_commit_count(&record).expect("count"), 1);
+
+        publish_cow_workspace(&record).expect("publish");
+        assert_eq!(
+            unpublished_commit_count(&record).expect("count"),
+            0,
+            "a published commit must stop counting as unpublished"
+        );
+
+        remove_cow_workspace(&record, false).expect("removes without a prompt");
+        assert!(!record.path.exists());
+    }
+
+    #[test]
+    fn a_workspace_with_no_commits_of_its_own_removes_without_a_prompt() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 0);
+
+        assert_eq!(unpublished_commit_count(&record).expect("count"), 0);
+        remove_cow_workspace(&record, false).expect("removes");
+        assert!(!record.path.exists());
+    }
+
+    #[test]
+    fn force_removes_a_workspace_that_would_otherwise_be_refused() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 1);
+        remove_cow_workspace(&record, false).expect_err("refuses without force");
+
+        let lost = remove_cow_workspace(&record, true).expect("force removes");
+
+        assert_eq!(lost, 1, "force must report what it destroyed");
+        assert!(!record.path.exists());
+    }
+
+    /// Two workspaces on one branch: removing one must not touch the other's
+    /// directory. They are separate repositories, and the removal is addressed
+    /// by id.
+    #[test]
+    fn removing_one_workspace_leaves_its_same_branch_sibling_on_disk() {
+        let (temp, repo, _dest_parent) = setup();
+        git_cmd(&repo)
+            .args(["branch", "shared"])
+            .run()
+            .expect("branch");
+        let first = published_fixture(&temp, &repo, "shared", 0);
+        let second = CowRecord {
+            workspace_id: "shared~bbbb2222".to_string(),
+            ..published_fixture(&temp, &repo, "shared-second", 0)
+        };
+
+        remove_cow_workspace(&first, false).expect("removes");
+
+        assert!(!first.path.exists());
+        assert!(
+            second.path.exists(),
+            "the sibling workspace was deleted too"
+        );
+        assert!(
+            second.path.join(".git").is_dir(),
+            "the sibling is still a repository"
+        );
+    }
+
+    #[test]
+    fn a_directory_that_is_no_longer_a_repository_is_not_deleted_blindly() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 0);
+        // Whatever is at that path now, it is not the workspace this record
+        // described — the realistic cause being a user who moved or replaced it.
+        fs::remove_dir_all(record.path.join(".git")).expect("remove gitdir");
+        fs::write(record.path.join("something-else.txt"), "not ours\n").expect("write");
+
+        let err = remove_cow_workspace(&record, false).expect_err("must refuse");
+
+        assert!(err.contains("no .git directory"), "{err}");
+        assert!(record.path.join("something-else.txt").exists());
+    }
+
+    #[test]
+    fn removing_an_already_gone_workspace_is_not_an_error() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 0);
+        fs::remove_dir_all(&record.path).expect("remove");
+
+        // Idempotent: the caller's next step is to drop the row, and refusing
+        // here would strand it forever.
+        assert_eq!(remove_cow_workspace(&record, false).expect("no error"), 0);
     }
 
     // ── reading COW records out of the persisted document ────────────────
