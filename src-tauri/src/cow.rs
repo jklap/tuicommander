@@ -19,10 +19,9 @@
 //! disk and 26 s for the clone. The rules below are the ones that PoC proved
 //! load-bearing, not a precautionary list.
 
-// The caller of this module is `mode=auto` in #731-ee0b, which picks between a
-// COW clone and a linked worktree. Split that way on purpose: the probe, the
-// guards and the clone are each testable without the policy that chooses
-// between them. Remove this attribute with that story.
+// `worktree::create_workspace` composes everything below; its own caller is a
+// transport in #734-ca73 and the UI in #735-55d7. Until one of them lands the
+// whole chain is unreachable from `main`. Remove this attribute with them.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -296,6 +295,96 @@ fn check_creation_guards_inner(
         warnings: collect_warnings(src, &git_path),
         stale_lock,
     })
+}
+
+/// Which mechanism the caller is asking for.
+///
+/// The caller asks for a WORKSPACE, not a mechanism — so `Auto` is the default
+/// and the other two exist for callers who have a reason to care.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkspaceMode {
+    /// COW when the filesystem and the repo shape allow it, a linked worktree
+    /// otherwise — reporting which path it took and why.
+    #[default]
+    Auto,
+    /// COW or nothing. Fails naming the check that said no, because a caller
+    /// asking for `cow` specifically wants the isolation, and a silent
+    /// worktree would give it completely different semantics.
+    Cow,
+    /// The old behaviour, even where COW is available.
+    Worktree,
+}
+
+/// Which mechanism a workspace actually got. Persisted on the workspace record
+/// so downstream lifecycle code — publish, remove — never has to guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkspaceKind {
+    Cow,
+    Worktree,
+}
+
+/// The decision, with everything the chosen path needs to proceed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Mechanism {
+    /// Guards passed and the probe said yes; the report travels because the
+    /// clone needs its stale-lock entry and the caller needs its warnings.
+    Cow(GuardReport),
+    /// A linked worktree. `degraded_reason` is `Some` only when the caller
+    /// asked for `Auto` and COW was unavailable — `mode=worktree` is a choice,
+    /// not a degradation, and reporting it as one would be a lie.
+    Worktree { degraded_reason: Option<String> },
+}
+
+/// Decide how to build the workspace `mode` asks for.
+///
+/// The guards run for `Auto` and `Cow` only: they are about whether this repo
+/// can be CLONED, and a linked worktree is not a clone. Refusing `mode=worktree`
+/// because the source repo has an unfinished rebase would block the one
+/// mechanism that never had that constraint.
+pub(crate) fn choose_mechanism(
+    src: &Path,
+    dest: &Path,
+    mode: WorkspaceMode,
+) -> Result<Mechanism, String> {
+    choose_mechanism_with(src, dest, mode, probe_cow_support)
+}
+
+/// [`choose_mechanism`] with the probe injected, so a test can force the
+/// degrade without needing a second filesystem to fail against.
+pub(crate) fn choose_mechanism_with(
+    src: &Path,
+    dest: &Path,
+    mode: WorkspaceMode,
+    probe: impl Fn(&Path, &Path) -> CowSupport,
+) -> Result<Mechanism, String> {
+    if mode == WorkspaceMode::Worktree {
+        return Ok(Mechanism::Worktree {
+            degraded_reason: None,
+        });
+    }
+
+    let dest_parent = dest.parent().unwrap_or(dest);
+    let refusal = match check_creation_guards(src, dest) {
+        Ok(guards) => match probe(src, dest_parent) {
+            CowSupport::Supported => return Ok(Mechanism::Cow(guards)),
+            CowSupport::Unsupported(reason) => reason,
+        },
+        Err(reason) => reason,
+    };
+
+    match mode {
+        // Loud, naming the check that said no.
+        WorkspaceMode::Cow => Err(format!(
+            "a copy-on-write workspace was requested but is not available here: {refusal}"
+        )),
+        // The caller asked for a workspace, and a linked worktree is one — with
+        // different isolation semantics, which is why the reason travels with it.
+        _ => Ok(Mechanism::Worktree {
+            degraded_reason: Some(refusal),
+        }),
+    }
 }
 
 /// What to do with the parent's uncommitted work. Three states, three prices,
