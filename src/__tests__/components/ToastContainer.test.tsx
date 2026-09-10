@@ -53,13 +53,13 @@ describe("ToastContainer", () => {
 
 	it("takes the repo and the tab strip along when the speaker is in another repo", () => {
 		repositoriesStore.add({ path: "/here", displayName: "Here" });
-		repositoriesStore.setBranch("/here", "main", { worktreePath: "/here" });
+		repositoriesStore.setWorkspace("/here", "main", { worktreePath: "/here" });
 		repositoriesStore.add({ path: "/there", displayName: "There" });
-		repositoriesStore.setBranch("/there", "feature", { worktreePath: "/there" });
+		repositoriesStore.setWorkspace("/there", "feature", { worktreePath: "/there" });
 		const here = addTerminal("session-here");
 		const there = addTerminal("session-there");
-		repositoriesStore.addTerminalToBranch("/here", "main", here);
-		repositoriesStore.addTerminalToBranch("/there", "feature", there);
+		repositoriesStore.addTerminalToWorkspace("/here", "main", here);
+		repositoriesStore.addTerminalToWorkspace("/there", "feature", there);
 		repositoriesStore.setActive("/here");
 		terminalsStore.setActive(here);
 
@@ -85,9 +85,9 @@ describe("ToastContainer", () => {
 
 	it("falls back to the speaking terminal's repo when the origin resolved to none", () => {
 		repositoriesStore.add({ path: "/Gits/personal/mdkb", displayName: "Mdkb" });
-		repositoriesStore.setBranch("/Gits/personal/mdkb", "main", { worktreePath: "/Gits/personal/mdkb" });
+		repositoriesStore.setWorkspace("/Gits/personal/mdkb", "main", { worktreePath: "/Gits/personal/mdkb" });
 		const speaker = addTerminal("session-speaker");
-		repositoriesStore.addTerminalToBranch("/Gits/personal/mdkb", "main", speaker);
+		repositoriesStore.addTerminalToWorkspace("/Gits/personal/mdkb", "main", speaker);
 
 		toastsStore.add("built", "ok", "info", false, undefined, undefined, undefined, "session-speaker");
 		render(() => <ToastContainer />);

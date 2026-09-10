@@ -59,7 +59,14 @@ export interface GitOperationsDeps {
 			branchName: string,
 			createBranch?: boolean,
 			baseRef?: string,
-		) => Promise<{ status: "ok" | "pending"; name: string; path: string; branch: string; base_repo: string }>;
+		) => Promise<{
+			status: "ok" | "pending";
+			name: string;
+			path: string;
+			workspace_id: string;
+			branch: string;
+			base_repo: string;
+		}>;
 		renameBranch: (repoPath: string, oldName: string, newName: string) => Promise<void>;
 		createBranch: (repoPath: string, name: string, startPoint: string | null, checkout: boolean) => Promise<void>;
 		generateWorktreeName: (existingNames: string[]) => Promise<string>;
@@ -162,6 +169,9 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	/** Pending merge context — set when afterMerge=ask; cleared once the user picks or skips cleanup */
 	const [mergePendingCtx, setMergePendingCtx] = createSignal<{
 		repoPath: string;
+		/** The row being cleaned up. */
+		workspaceId: string;
+		/** The ref being merged and deleted — a different object from the row. */
 		branchName: string;
 		baseBranch: string;
 		/** Base repo has uncommitted changes — the "Switch to base" step stashes them. */
@@ -183,14 +193,15 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		pendingKey,
 	});
 
-	const { handleAddTerminalToBranch, handleBranchSelect, handleBranchSelectInner } = createBranchSelectionCoordinator({
-		repo: deps.repo,
-		pty: deps.pty,
-		setStatusInfo: deps.setStatusInfo,
-		getDefaultFontSize: deps.getDefaultFontSize,
-		setCurrentRepoPath,
-		setCurrentBranch,
-	});
+	const { handleAddTerminalToWorkspace, handleBranchSelect, handleBranchSelectInner } =
+		createBranchSelectionCoordinator({
+			repo: deps.repo,
+			pty: deps.pty,
+			setStatusInfo: deps.setStatusInfo,
+			getDefaultFontSize: deps.getDefaultFontSize,
+			setCurrentRepoPath,
+			setCurrentBranch,
+		});
 
 	const handleRemoveRepo = async (repoPath: string) => {
 		const repoState = repositoriesStore.get(repoPath);
@@ -241,7 +252,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		}
 	};
 
-	const { handleRemoveBranch } = createWorktreeRemovalCoordinator({
+	const { handleRemoveWorkspace } = createWorktreeRemovalCoordinator({
 		repo: deps.repo,
 		dialogs: deps.dialogs,
 		closeTerminal: deps.closeTerminal,
@@ -265,7 +276,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		// Throw on failure so the dialog can surface the error inline.
 		await deps.repo.createBranch(target.repoPath, name, target.startPoint, checkout);
 
-		repositoriesStore.setBranch(target.repoPath, name, {});
+		repositoriesStore.setWorkspace(target.repoPath, name, {});
 		if (checkout) setCurrentBranch(name);
 		deps.setStatusInfo(`Created branch ${name}${checkout ? " (checked out)" : ""}`);
 		void refreshAllBranchStats();
@@ -334,19 +345,19 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			});
 
 			if (info.branch) {
-				repositoriesStore.setBranch(info.path, info.branch, { worktreePath: info.path });
+				repositoriesStore.setWorkspace(info.path, info.branch, { worktreePath: info.path });
 				repositoriesStore.setActiveWorkspace(info.path, info.branch);
-				await handleAddTerminalToBranch(info.path, info.branch);
+				await handleAddTerminalToWorkspace(info.path, info.branch);
 			} else if (!info.is_git_repo) {
 				// Non-git directory: create a shell entry so the user can open terminals
 				const shellBranch = "shell";
-				repositoriesStore.setBranch(info.path, shellBranch, {
+				repositoriesStore.setWorkspace(info.path, shellBranch, {
 					worktreePath: info.path,
 					isMain: true,
 					isShell: true,
 				});
 				repositoriesStore.setActiveWorkspace(info.path, shellBranch);
-				await handleAddTerminalToBranch(info.path, shellBranch);
+				await handleAddTerminalToWorkspace(info.path, shellBranch);
 			}
 
 			repositoriesStore.setActive(info.path);
@@ -415,18 +426,18 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			});
 
 			if (info.branch) {
-				repositoriesStore.setBranch(info.path, info.branch, { worktreePath: info.path });
+				repositoriesStore.setWorkspace(info.path, info.branch, { worktreePath: info.path });
 				repositoriesStore.setActiveWorkspace(info.path, info.branch);
-				await handleAddTerminalToBranch(info.path, info.branch);
+				await handleAddTerminalToWorkspace(info.path, info.branch);
 			} else if (!info.is_git_repo) {
 				const shellBranch = "shell";
-				repositoriesStore.setBranch(info.path, shellBranch, {
+				repositoriesStore.setWorkspace(info.path, shellBranch, {
 					worktreePath: info.path,
 					isMain: true,
 					isShell: true,
 				});
 				repositoriesStore.setActiveWorkspace(info.path, shellBranch);
-				await handleAddTerminalToBranch(info.path, shellBranch);
+				await handleAddTerminalToWorkspace(info.path, shellBranch);
 			}
 
 			reconcileTerminalOwnership();
@@ -450,7 +461,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			pendingCreations,
 			pendingKey,
 			markRecentlyCreated,
-			handleAddTerminalToBranch,
+			handleAddTerminalToWorkspace,
 		});
 
 	const {
@@ -499,7 +510,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 						([, b]) => b.worktreePath === activeCwd && b.terminals.includes(activeTerminalId),
 					);
 					if (ownerEntry) {
-						await handleAddTerminalToBranch(repoPath, ownerEntry[0]);
+						await handleAddTerminalToWorkspace(repoPath, ownerEntry[0]);
 						return;
 					}
 				}
@@ -507,7 +518,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				// Linked worktree: unique worktreePath per branch, unambiguous match
 				const match = Object.values(repo.workspaces).find((b) => b.worktreePath && b.worktreePath === activeCwd);
 				if (match) {
-					await handleAddTerminalToBranch(repoPath, match.branchName);
+					await handleAddTerminalToWorkspace(repoPath, match.branchName);
 					return;
 				}
 			}
@@ -516,7 +527,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		// Fall back to store's active branch (no active terminal or no CWD match)
 		const activeRepo = repositoriesStore.getActive();
 		if (activeRepo?.activeWorkspaceId) {
-			await handleAddTerminalToBranch(activeRepo.path, activeRepo.activeWorkspaceId);
+			await handleAddTerminalToWorkspace(activeRepo.path, activeRepo.activeWorkspaceId);
 		} else {
 			await deps.createNewTerminal();
 		}
@@ -557,7 +568,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		});
 
 		terminalsStore.setActive(id);
-		repositoriesStore.addTerminalToBranch(activeRepo.path, activeRepo.activeWorkspaceId, id);
+		repositoriesStore.addTerminalToWorkspace(activeRepo.path, activeRepo.activeWorkspaceId, id);
 
 		let waitAttempts = 0;
 		const waitForSession = setInterval(async () => {
@@ -639,7 +650,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		if (!repo) return;
 
 		// Ensure the target branch entry exists
-		repositoriesStore.setBranch(repoPath, newBranch, { worktreePath: repoPath });
+		repositoriesStore.setWorkspace(repoPath, newBranch, { worktreePath: repoPath });
 
 		// Find all branches on the main worktree that aren't the new branch
 		const stale = Object.values(repo.workspaces).filter(
@@ -648,8 +659,8 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 		batch(() => {
 			for (const branch of stale) {
-				repositoriesStore.mergeBranchState(repoPath, branch.branchName, newBranch);
-				repositoriesStore.removeBranch(repoPath, branch.branchName);
+				repositoriesStore.mergeWorkspaceState(repoPath, branch.branchName, newBranch);
+				repositoriesStore.removeWorkspace(repoPath, branch.branchName);
 			}
 			repositoriesStore.setActiveWorkspace(repoPath, newBranch);
 		});
@@ -756,7 +767,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		const { repoPath, branch, reason } = payload;
 		appLogger.error("git", `Worktree creation failed`, payload);
 		pendingCreations.delete(pendingKey(repoPath, branch));
-		repositoriesStore.removeBranch(repoPath, branch);
+		repositoriesStore.removeWorkspace(repoPath, branch);
 		setCreatingWorktreeRepos((prev) => {
 			const next = new Set(prev);
 			next.delete(repoPath);
@@ -776,9 +787,9 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setBranchToRename,
 		refreshAllBranchStats: refreshAllBranchStatsAndLists,
 		handleBranchSelect,
-		handleAddTerminalToBranch,
+		handleAddTerminalToWorkspace,
 		handleRemoveRepo,
-		handleRemoveBranch,
+		handleRemoveWorkspace,
 		handleOpenRenameBranchDialog,
 		handleRenameBranch,
 		branchToCreate,
@@ -820,7 +831,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		moveTerminalToWorktree,
 		/** Create a new terminal for the branch and queue the review command */
 		handleReviewPr: async (repoPath: string, branchName: string, command: string) => {
-			const termId = await handleAddTerminalToBranch(repoPath, branchName);
+			const termId = await handleAddTerminalToWorkspace(repoPath, branchName);
 			if (termId) {
 				terminalsStore.update(termId, { pendingInitCommand: command });
 			}

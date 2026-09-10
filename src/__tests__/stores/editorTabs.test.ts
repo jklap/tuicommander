@@ -225,10 +225,25 @@ describe("editorTabsStore", () => {
 
 		it("tab opened with worktree path as repoPath is invisible (the bug)", () => {
 			testInScope(() => {
-				editorTabsStore.add(WORKTREE, "src/main.ts");
-				const visible = editorTabsStore.getVisibleIds(BRANCH_KEY);
+				const wrong = editorTabsStore.add(WORKTREE, "src/main.ts");
+				// Take activeId off it: getVisibleIds exempts the active tab, so leaving
+				// it active would answer this with the exemption instead of the scoping
+				// rule under test. The exemption is asserted separately below.
+				editorTabsStore.add(REPO, "other.ts", undefined, { fsRoot: WORKTREE });
+
 				// Worktree path doesn't match canonical repo in branchKey → filtered out
-				expect(visible).toHaveLength(0);
+				expect(editorTabsStore.getVisibleIds(BRANCH_KEY)).not.toContain(wrong);
+			});
+		});
+
+		// The mis-scoped tab above is still wrong — it just no longer renders as a
+		// pane with no tab above it. Whatever the user is looking at keeps a tab it
+		// can be named and closed by, even when its repoPath resolves nowhere.
+		it("still shows the mis-scoped tab while it is the one being viewed", () => {
+			testInScope(() => {
+				const wrong = editorTabsStore.add(WORKTREE, "src/main.ts");
+				expect(editorTabsStore.state.activeId).toBe(wrong);
+				expect(editorTabsStore.getVisibleIds(BRANCH_KEY)).toContain(wrong);
 			});
 		});
 

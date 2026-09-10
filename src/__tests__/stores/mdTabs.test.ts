@@ -501,7 +501,7 @@ describe("mdTabsStore", () => {
 		/** Register a repo with one branch checked out, so branchKeyFor() can answer. */
 		const addRepoWithBranch = (path: string, branch: string) => {
 			repositoriesStore.add({ path, displayName: path });
-			repositoriesStore.setBranch(path, branch, { worktreePath: path });
+			repositoriesStore.setWorkspace(path, branch, { worktreePath: path });
 			repositoriesStore.setActiveWorkspace(path, branch);
 		};
 

@@ -402,10 +402,10 @@ describe("useTerminalLifecycle", () => {
 		it("restores terminal focus when closing last diff tab", async () => {
 			const termId = terminalsStore.add(makeTerminal({ name: "T1", sessionId: "s1" }));
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
-			repositoriesStore.addTerminalToBranch("/repo", "main", termId);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", termId);
 
 			diffTabsStore.add("/repo", "file.ts", "M");
 			const diffId = diffTabsStore.getIds()[0];
@@ -421,10 +421,10 @@ describe("useTerminalLifecycle", () => {
 		it("restores terminal focus when closing last editor tab", async () => {
 			const termId = terminalsStore.add(makeTerminal({ name: "T1", sessionId: "s1" }));
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
-			repositoriesStore.addTerminalToBranch("/repo", "main", termId);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", termId);
 
 			editorTabsStore.add("/repo/file.ts", "file.ts");
 			const editId = editorTabsStore.getIds()[0];
@@ -494,7 +494,7 @@ describe("useTerminalLifecycle", () => {
 			// Repo context is required: diff tabs are repo-scoped, and sibling selection
 			// only considers tabs visible for the current branch key.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
@@ -512,8 +512,8 @@ describe("useTerminalLifecycle", () => {
 
 		it("does not activate a branch-hidden md tab when closing the last visible one (ghost tab)", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
@@ -561,14 +561,14 @@ describe("useTerminalLifecycle", () => {
 		it("navigates to next tab", () => {
 			// Set up repo with branch and terminals
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
 			terminalsStore.setActive(id1);
 
 			lifecycle.navigateTab("next");
@@ -577,14 +577,14 @@ describe("useTerminalLifecycle", () => {
 
 		it("wraps around from last to first", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
 			terminalsStore.setActive(id2);
 
 			lifecycle.navigateTab("next");
@@ -593,14 +593,14 @@ describe("useTerminalLifecycle", () => {
 
 		it("excludes non-terminal tabs by default (terminals only)", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
 
 			// Opening a diff tab makes it active and deactivates terminals
 			diffTabsStore.add("/repo", "/repo/file.ts", "M");
@@ -614,14 +614,14 @@ describe("useTerminalLifecycle", () => {
 
 		it("includes diff tabs in the cycle when tabCyclingAllTypes is enabled", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
 
 			const diffId = diffTabsStore.add("/repo", "/repo/file.ts", "M");
 			expect(diffTabsStore.state.activeId).toBe(diffId);
@@ -712,16 +712,16 @@ describe("useTerminalLifecycle", () => {
 	describe("closeOtherTabs", () => {
 		it("closes all terminal tabs except the kept one", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
 			const id3 = terminalsStore.add(makeTerminal({ name: "T3" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id3);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id3);
 
 			await lifecycle.closeOtherTabs(id2);
 			expect(terminalsStore.get(id1)).toBeUndefined();
@@ -755,16 +755,16 @@ describe("useTerminalLifecycle", () => {
 	describe("closeTabsToRight", () => {
 		it("closes terminal tabs to the right", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
 			const id3 = terminalsStore.add(makeTerminal({ name: "T3" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id3);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id3);
 
 			await lifecycle.closeTabsToRight(id1);
 
@@ -917,19 +917,19 @@ describe("useTerminalLifecycle", () => {
 		it("blocks activation of a terminal belonging to another repo/branch", () => {
 			// Set up two repos with terminals on different branches
 			repositoriesStore.add({ path: "/repo-a", displayName: "Repo A" });
-			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 			repositoriesStore.setActive("/repo-a");
 			repositoriesStore.setActiveWorkspace("/repo-a", "main");
 
 			repositoriesStore.add({ path: "/repo-b", displayName: "Repo B" });
-			repositoriesStore.setBranch("/repo-b", "develop", { worktreePath: "/repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "develop", { worktreePath: "/repo-b" });
 
 			const termA = terminalsStore.add(makeTerminal({ name: "A1", cwd: "/repo-a" }));
-			repositoriesStore.addTerminalToBranch("/repo-a", "main", termA);
+			repositoriesStore.addTerminalToWorkspace("/repo-a", "main", termA);
 			terminalsStore.setActive(termA);
 
 			const termB = terminalsStore.add(makeTerminal({ name: "B1", cwd: "/repo-b" }));
-			repositoriesStore.addTerminalToBranch("/repo-b", "develop", termB);
+			repositoriesStore.addTerminalToWorkspace("/repo-b", "develop", termB);
 
 			// Attempt to focus the terminal from repo B while repo A is active
 			lifecycle.handleTerminalFocus(termB);
@@ -949,17 +949,17 @@ describe("useTerminalLifecycle", () => {
 
 		it("blocks focus for same-repo different-branch terminal", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo-feat" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo-feat" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const termMain = terminalsStore.add(makeTerminal({ name: "Main", cwd: "/repo" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", termMain);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", termMain);
 			terminalsStore.setActive(termMain);
 
 			const termFeature = terminalsStore.add(makeTerminal({ name: "Feature", cwd: "/repo-feat" }));
-			repositoriesStore.addTerminalToBranch("/repo", "feature", termFeature);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", termFeature);
 
 			lifecycle.handleTerminalFocus(termFeature);
 
@@ -971,14 +971,14 @@ describe("useTerminalLifecycle", () => {
 	describe("closeTerminal (branch tracking)", () => {
 		it("removes terminal from active branch and activates last remaining", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
 			terminalsStore.setActive(id1);
 
 			await lifecycle.closeTerminal(id1, true);
@@ -992,19 +992,19 @@ describe("useTerminalLifecycle", () => {
 		it("sets activeId to null when closing last terminal on a branch (not cross-repo)", async () => {
 			// Set up two repos, each with terminals on their own branches
 			repositoriesStore.add({ path: "/repo-a", displayName: "Repo A" });
-			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
 			repositoriesStore.setActive("/repo-a");
 			repositoriesStore.setActiveWorkspace("/repo-a", "main");
 
 			repositoriesStore.add({ path: "/repo-b", displayName: "Repo B" });
-			repositoriesStore.setBranch("/repo-b", "develop", { worktreePath: "/repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "develop", { worktreePath: "/repo-b" });
 
 			const termA = terminalsStore.add(makeTerminal({ name: "A1", cwd: "/repo-a" }));
-			repositoriesStore.addTerminalToBranch("/repo-a", "main", termA);
+			repositoriesStore.addTerminalToWorkspace("/repo-a", "main", termA);
 			terminalsStore.setActive(termA);
 
 			const termB = terminalsStore.add(makeTerminal({ name: "B1", cwd: "/repo-b" }));
-			repositoriesStore.addTerminalToBranch("/repo-b", "develop", termB);
+			repositoriesStore.addTerminalToWorkspace("/repo-b", "develop", termB);
 
 			// Close repo A's only terminal — should NOT fall back to repo B's terminal
 			await lifecycle.closeTerminal(termA, true);
@@ -1015,17 +1015,17 @@ describe("useTerminalLifecycle", () => {
 		it("does not activate cross-repo terminal when closing last branch terminal", async () => {
 			// Same repo, different branches
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo-feat" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo-feat" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const termMain = terminalsStore.add(makeTerminal({ name: "Main", cwd: "/repo" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", termMain);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", termMain);
 			terminalsStore.setActive(termMain);
 
 			const termFeature = terminalsStore.add(makeTerminal({ name: "Feature", cwd: "/repo-feat" }));
-			repositoriesStore.addTerminalToBranch("/repo", "feature", termFeature);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", termFeature);
 
 			// Close the only terminal on main — should NOT fall back to feature branch's terminal
 			await lifecycle.closeTerminal(termMain, true);
@@ -1037,14 +1037,14 @@ describe("useTerminalLifecycle", () => {
 	describe("navigateTab (prev direction)", () => {
 		it("navigates to previous tab", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
 			terminalsStore.setActive(id2);
 
 			lifecycle.navigateTab("prev");
@@ -1053,14 +1053,14 @@ describe("useTerminalLifecycle", () => {
 
 		it("wraps around from first to last", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "main", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
 			terminalsStore.setActive(id1);
 
 			lifecycle.navigateTab("prev");
@@ -1069,12 +1069,12 @@ describe("useTerminalLifecycle", () => {
 
 		it("does nothing with single terminal", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
 			repositoriesStore.setActiveWorkspace("/repo", "main");
 
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
-			repositoriesStore.addTerminalToBranch("/repo", "main", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
 			terminalsStore.setActive(id1);
 
 			lifecycle.navigateTab("prev");

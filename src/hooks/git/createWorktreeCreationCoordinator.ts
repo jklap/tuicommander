@@ -43,9 +43,9 @@ interface WorktreeCreationCoordinatorDeps {
 	worktreeDialogState: Accessor<WorktreeDialogState | null>;
 	setWorktreeDialogState: Setter<WorktreeDialogState | null>;
 	pendingCreations: Map<string, PendingCreation>;
-	pendingKey: (repoPath: string, branchName: string) => string;
-	markRecentlyCreated: (repoPath: string, branchName: string) => void;
-	handleAddTerminalToBranch: (repoPath: string, branchName: string) => Promise<string | undefined>;
+	pendingKey: (repoPath: string, workspaceId: string) => string;
+	markRecentlyCreated: (repoPath: string, workspaceId: string) => void;
+	handleAddTerminalToWorkspace: (repoPath: string, workspaceId: string) => Promise<string | undefined>;
 }
 
 /** Owns worktree creation, pending recreation handoff, setup, and initial terminal seeding. */
@@ -58,7 +58,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		pendingCreations,
 		pendingKey,
 		markRecentlyCreated,
-		handleAddTerminalToBranch,
+		handleAddTerminalToWorkspace,
 	} = deps;
 
 	const handleAddWorktree = async (repoPath: string) => {
@@ -109,13 +109,18 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 	/** Shared post-creation setup: run scripts, open terminal, fetch stats */
 	const setupNewWorktree = async (
 		repoPath: string,
-		result: { name: string; path: string; branch: string; base_repo: string },
+		result: { name: string; path: string; workspace_id: string; branch: string; base_repo: string },
 		displayName: string,
 		agentSeed?: AgentSeed,
 	) => {
-		markRecentlyCreated(repoPath, result.branch);
-		repositoriesStore.setBranch(repoPath, result.branch, { worktreePath: result.path });
-		repositoriesStore.setActiveWorkspace(repoPath, result.branch);
+		// Keyed by the id the backend minted and reported; `branch` is what the row
+		// displays. The two match for a linked worktree and will not for a COW clone.
+		markRecentlyCreated(repoPath, result.workspace_id);
+		repositoriesStore.setWorkspace(repoPath, result.workspace_id, {
+			branchName: result.branch,
+			worktreePath: result.path,
+		});
+		repositoriesStore.setActiveWorkspace(repoPath, result.workspace_id);
 
 		const effective = repoSettingsStore.getEffective(repoPath);
 		if (effective?.setupScript) {
@@ -132,7 +137,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 			}
 		}
 
-		const termId = await handleAddTerminalToBranch(repoPath, result.branch);
+		const termId = await handleAddTerminalToWorkspace(repoPath, result.workspace_id);
 
 		// Seed must be applied HERE (synchronously after terminal creation, before
 		// the getDiffStats await below) — Terminal.tsx reads agentType/pendingInitCommand
@@ -153,7 +158,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 
 		try {
 			const stats = await deps.repo.getDiffStats(result.path);
-			repositoriesStore.updateBranchStats(repoPath, result.branch, stats.additions, stats.deletions);
+			repositoriesStore.updateWorkspaceStats(repoPath, result.workspace_id, stats.additions, stats.deletions);
 		} catch (err) {
 			appLogger.debug("git", `getDiffStats failed for ${result.branch}`, err);
 		}
@@ -186,14 +191,15 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				// Stale directory being cleaned up in background — show placeholder
 				// and defer setupNewWorktree until the recreate completes (drained
 				// in refreshAllBranchStats when isPreparing clears).
-				markRecentlyCreated(repoPath, result.branch);
-				repositoriesStore.setBranch(repoPath, result.branch, {
+				markRecentlyCreated(repoPath, result.workspace_id);
+				repositoriesStore.setWorkspace(repoPath, result.workspace_id, {
+					branchName: result.branch,
 					worktreePath: result.path,
 					isPreparing: true,
 				});
-				repositoriesStore.setActiveWorkspace(repoPath, result.branch);
+				repositoriesStore.setActiveWorkspace(repoPath, result.workspace_id);
 				deps.setStatusInfo(`Preparing worktree ${options.branchName}...`);
-				pendingCreations.set(pendingKey(repoPath, result.branch), {
+				pendingCreations.set(pendingKey(repoPath, result.workspace_id), {
 					repoPath,
 					displayName: options.branchName,
 					result,
@@ -240,14 +246,15 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				// the worktree files don't exist yet (setup script would race against
 				// the background `rm -rf` + recreate). Setup runs after recreate
 				// completes, via drainPendingCreation.
-				markRecentlyCreated(repoPath, result.branch);
-				repositoriesStore.setBranch(repoPath, result.branch, {
+				markRecentlyCreated(repoPath, result.workspace_id);
+				repositoriesStore.setWorkspace(repoPath, result.workspace_id, {
+					branchName: result.branch,
 					worktreePath: result.path,
 					isPreparing: true,
 				});
-				repositoriesStore.setActiveWorkspace(repoPath, result.branch);
+				repositoriesStore.setActiveWorkspace(repoPath, result.workspace_id);
 				deps.setStatusInfo(`Preparing worktree ${cloneName}...`);
-				pendingCreations.set(pendingKey(repoPath, result.branch), {
+				pendingCreations.set(pendingKey(repoPath, result.workspace_id), {
 					repoPath,
 					displayName: cloneName,
 					result,

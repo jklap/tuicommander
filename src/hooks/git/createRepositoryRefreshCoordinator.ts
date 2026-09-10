@@ -10,7 +10,7 @@ import type { AgentSeed } from "./agentSeed";
 export interface PendingCreation {
 	repoPath: string;
 	displayName: string;
-	result: { name: string; path: string; branch: string; base_repo: string };
+	result: { name: string; path: string; workspace_id: string; branch: string; base_repo: string };
 	agentSeed?: AgentSeed;
 }
 
@@ -47,7 +47,7 @@ interface RepositoryRefreshCoordinatorDeps {
 	setCreatingWorktreeRepos: Setter<Set<string>>;
 	setStatusInfo: (message: string) => void;
 	pendingCreations: Map<string, PendingCreation>;
-	pendingKey: (repoPath: string, branchName: string) => string;
+	pendingKey: (repoPath: string, workspaceId: string) => string;
 }
 
 /** Owns two-phase repository refresh, stale-write guards, cleanup, and creation grace. */
@@ -57,21 +57,23 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	/** Transition a repo from git to shell mode (e.g. .git was removed) */
 	const transitionToShell = (repoPath: string, currentRepo: RepositoryState) => {
 		batch(() => {
-			// Migrate all terminals to a shell branch
+			// Migrate all terminals to a shell branch. Removal is by KEY: a record's
+			// `branchName` is not necessarily its key, and removing by the wrong one
+			// leaves the row behind with its terminals already re-homed.
 			const allTerminals: string[] = [];
-			for (const branch of Object.values(currentRepo.workspaces)) {
-				allTerminals.push(...branch.terminals);
-				repositoriesStore.removeBranch(repoPath, branch.branchName);
+			for (const [workspaceId, workspace] of Object.entries(currentRepo.workspaces)) {
+				allTerminals.push(...workspace.terminals);
+				repositoriesStore.removeWorkspace(repoPath, workspaceId);
 			}
 			repositoriesStore.setIsGitRepo(repoPath, false);
 			const shellBranch = "shell";
-			repositoriesStore.setBranch(repoPath, shellBranch, {
+			repositoriesStore.setWorkspace(repoPath, shellBranch, {
 				worktreePath: repoPath,
 				isMain: true,
 				isShell: true,
 			});
 			for (const termId of allTerminals) {
-				repositoriesStore.addTerminalToBranch(repoPath, shellBranch, termId);
+				repositoriesStore.addTerminalToWorkspace(repoPath, shellBranch, termId);
 			}
 			repositoriesStore.setActiveWorkspace(repoPath, shellBranch);
 		});
@@ -156,20 +158,20 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					batch(() => {
 						const carriedTerminals: string[] = [];
 						let carriedActive: string | null = null;
-						for (const branch of Object.values(repo.workspaces)) {
-							carriedTerminals.push(...branch.terminals);
-							if (branch.lastActiveTerminal) carriedActive = branch.lastActiveTerminal;
-							repositoriesStore.removeBranch(repoPath, branch.branchName);
+						for (const [workspaceId, workspace] of Object.entries(repo.workspaces)) {
+							carriedTerminals.push(...workspace.terminals);
+							if (workspace.lastActiveTerminal) carriedActive = workspace.lastActiveTerminal;
+							repositoriesStore.removeWorkspace(repoPath, workspaceId);
 						}
 						repositoriesStore.setIsGitRepo(repoPath, true);
-						repositoriesStore.setBranch(repoPath, info.branch, {
+						repositoriesStore.setWorkspace(repoPath, info.branch, {
 							worktreePath: repoPath,
 							lastActiveTerminal: carriedActive,
 						});
-						// addTerminalToBranch (not setBranch terminals) keeps the
+						// addTerminalToWorkspace (not setWorkspace terminals) keeps the
 						// terminalToRepo inverse index consistent.
 						for (const tid of carriedTerminals) {
-							repositoriesStore.addTerminalToBranch(repoPath, info.branch, tid);
+							repositoriesStore.addTerminalToWorkspace(repoPath, info.branch, tid);
 						}
 						repositoriesStore.setActiveWorkspace(repoPath, info.branch);
 					});
@@ -239,7 +241,13 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			}
 		}
 
-		for (const branchName of Object.keys(currentRepo.workspaces)) {
+		for (const [branchName, workspace] of Object.entries(currentRepo.workspaces)) {
+			// A COW workspace is an independent clone: `git worktree list` in the
+			// parent has never heard of it, so its absence from `worktreePaths` says
+			// nothing at all. Reading that absence as "removed externally" would make
+			// every refresh close its terminals and delete the row — the one prune
+			// this loop must not perform.
+			if (workspace.kind === "cow") continue;
 			if (!(branchName in worktreePaths)) {
 				// Skip branches that a concurrent/recent refresh already handled.
 				// The store removal may not have settled yet (batch scheduled), so
@@ -326,7 +334,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				// but is now gone from the live store, the user deleted it while we
 				// were in-flight. Don't resurrect it via stale worktreePaths data.
 				const liveRepo = repositoriesStore.get(repoPath);
-				// Create new worktree branches first so mergeBranchState has a target
+				// Create new worktree branches first so mergeWorkspaceState has a target
 				for (const [workspaceId, wt] of Object.entries(worktreePaths)) {
 					if (priorBranchKeys.has(workspaceId) && !liveRepo?.workspaces[workspaceId]) {
 						appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${workspaceId}"`, {
@@ -355,15 +363,15 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 							drainedPendings.push(pend);
 						}
 					}
-					repositoriesStore.setBranch(repoPath, workspaceId, update);
+					repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 				}
 				// Migrate terminal state from stale activeBranch to its replacement
 				if (active && activeBranchReplacement && toRemove.includes(active)) {
-					repositoriesStore.mergeBranchState(repoPath, active, activeBranchReplacement);
+					repositoriesStore.mergeWorkspaceState(repoPath, active, activeBranchReplacement);
 					repositoriesStore.setActiveWorkspace(repoPath, activeBranchReplacement);
 				}
 				for (const branchName of toRemove) {
-					repositoriesStore.removeBranch(repoPath, branchName);
+					repositoriesStore.removeWorkspace(repoPath, branchName);
 				}
 				markBodyEnd();
 			}),
@@ -405,16 +413,22 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			// Freeze-investigation: same body-vs-flush split for the stats batch.
 			timeBatch(`git.statsBatch:${repoPath}`, (markBodyEnd) =>
 				batch(() => {
-					for (const branch of Object.values(currentRepoForStats.workspaces)) {
-						if (!branch.worktreePath) continue;
-						const ds = stats.diff_stats[branch.worktreePath];
+					// Two keys are in play and they are not interchangeable: the git
+					// answers are looked up by DIRECTORY (diff stats) and by BRANCH
+					// (last commit — two workspaces on one branch do share a tip), while
+					// every store write is addressed by the workspace KEY. Writing by
+					// `workspace.branchName` is what puts a COW clone's stats on its
+					// same-branch sibling: no call fails, the wrong row just changes.
+					for (const [workspaceId, workspace] of Object.entries(currentRepoForStats.workspaces)) {
+						if (!workspace.worktreePath) continue;
+						const ds = stats.diff_stats[workspace.worktreePath];
 						if (ds) {
-							repositoriesStore.updateBranchStats(repoPath, branch.branchName, ds.additions, ds.deletions);
+							repositoriesStore.updateWorkspaceStats(repoPath, workspaceId, ds.additions, ds.deletions);
 						}
-						const ts = stats.last_commit_ts?.[branch.branchName];
+						const ts = stats.last_commit_ts?.[workspace.branchName];
 						if (ts !== undefined) {
 							// Rust emits Unix seconds (%ct); JS Date.now() uses milliseconds
-							repositoriesStore.setBranch(repoPath, branch.branchName, {
+							repositoriesStore.setWorkspace(repoPath, workspaceId, {
 								lastCommitTs: ts !== null ? ts * 1000 : null,
 							});
 						}

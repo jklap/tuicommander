@@ -133,6 +133,23 @@ function cloneJson<T>(value: T): T {
 	return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/**
+ * The fields a partial update actually names. `undefined` means "leave it
+ * alone", never "blank it".
+ *
+ * A caller that reads a field off a payload which changed shape writes
+ * `undefined` without noticing, and a spread puts that over a required field.
+ * This is how `branchName` disappeared from 31 of 38 repos on disk: `make dev`
+ * never restarts the Rust side, so a running backend still answered
+ * `worktree_paths` as branch → path while the reloaded frontend read
+ * `wt.branch` off a string. Every refresh then blanked the field, and every
+ * save persisted it. The skew is the caller's bug; letting it reach disk was
+ * this store's.
+ */
+function definedFields<T extends object>(data: T): Partial<T> {
+	return Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined)) as Partial<T>;
+}
+
 function emptyRepositorySnapshot(): RepositorySnapshot {
 	return { repos: {}, repoOrder: [], activeRepoPath: null, groups: {}, groupOrder: [] };
 }
@@ -278,7 +295,7 @@ const DERIVED_BRANCH_FIELDS = [
 /**
  * What this window *meant* a record to say, for comparison only.
  *
- * Two differences must not read as an edit. `updateBranchStats` moves a diffstat
+ * Two differences must not read as an edit. `updateWorkspaceStats` moves a diffstat
  * without saving, so a repo under active work drifts from its own baseline every few
  * seconds — comparing whole records would refuse every remote change for exactly the
  * repos the user is working in. And the baseline is the document as it came off disk,
@@ -586,7 +603,7 @@ function createRepositoriesStore() {
 	});
 
 	// Inverse index: terminal ID → repo path (O(1) lookup instead of O(repos*workspaces*terminals)).
-	// Maps termId→repoPath only (NOT branchName). renameBranch and mergeBranchState don't update
+	// Maps termId→repoPath only (NOT branchName). renameBranch and mergeWorkspaceState don't update
 	// this map because they never change the repoPath — terminals stay in the same repo.
 	const terminalToRepo = new Map<string, string>();
 
@@ -957,16 +974,16 @@ function createRepositoriesStore() {
 		},
 
 		/** Toggle branch terminal tab list expanded state */
-		toggleBranchTabsExpanded(repoPath: string, branchName: string): void {
-			if (!state.repositories[repoPath]?.workspaces[branchName]) return;
-			setState("repositories", repoPath, "workspaces", branchName, "tabsExpanded", (e) => !e);
+		toggleWorkspaceTabsExpanded(repoPath: string, workspaceId: string): void {
+			if (!state.repositories[repoPath]?.workspaces[workspaceId]) return;
+			setState("repositories", repoPath, "workspaces", workspaceId, "tabsExpanded", (e) => !e);
 			save();
 		},
 
 		/** Set branch terminal tab list expanded state explicitly */
-		setBranchTabsExpanded(repoPath: string, branchName: string, expanded: boolean): void {
-			if (!state.repositories[repoPath]?.workspaces[branchName]) return;
-			setState("repositories", repoPath, "workspaces", branchName, "tabsExpanded", expanded);
+		setWorkspaceTabsExpanded(repoPath: string, workspaceId: string, expanded: boolean): void {
+			if (!state.repositories[repoPath]?.workspaces[workspaceId]) return;
+			setState("repositories", repoPath, "workspaces", workspaceId, "tabsExpanded", expanded);
 			save();
 		},
 
@@ -976,19 +993,32 @@ function createRepositoriesStore() {
 			save();
 		},
 
-		/** Add or update a branch */
-		setBranch(repoPath: string, branchName: string, data?: Partial<WorkspaceState>): void {
-			const existing = state.repositories[repoPath]?.workspaces[branchName];
+		/**
+		 * Add or update one workspace, addressed by its id.
+		 *
+		 * The second argument is the map KEY, never a branch to look up. For
+		 * everything that exists today the two are the same string — the identity
+		 * migration minted `workspaceId = branchName` so nothing persisted moved —
+		 * and that is exactly why the parameter is named for the key: a caller
+		 * holding a branch off git output and a caller holding an id off a
+		 * workspace record are indistinguishable at the call site otherwise, and
+		 * only the second one stays correct once a COW clone carries a minted id.
+		 *
+		 * `branchName` in `data` is what is checked out. Absent, it defaults to the
+		 * id, which is right for every row created from a branch.
+		 */
+		setWorkspace(repoPath: string, workspaceId: string, data?: Partial<WorkspaceState>): void {
+			const existing = state.repositories[repoPath]?.workspaces[workspaceId];
+			const patch = data ? definedFields(data) : {};
 			if (existing) {
-				setState("repositories", repoPath, "workspaces", branchName, (prev) => ({
+				setState("repositories", repoPath, "workspaces", workspaceId, (prev) => ({
 					...prev,
-					...data,
+					...patch,
 				}));
 			} else {
-				setState("repositories", repoPath, "workspaces", branchName, {
-					// The key IS the id until a second workspace exists on this branch
-					// (#728-bc76 gives callers their own id to pass in).
-					workspaceId: branchName,
+				const branchName = patch.branchName ?? workspaceId;
+				setState("repositories", repoPath, "workspaces", workspaceId, {
+					workspaceId,
 					branchName,
 					kind: isMainBranch(branchName) ? "main" : "worktree",
 					parentRepoPath: null,
@@ -1002,29 +1032,29 @@ function createRepositoriesStore() {
 					deletions: 0,
 					isMerged: false,
 					lastCommitTs: null,
-					...data,
+					...patch,
 				});
 			}
 			save();
 		},
 
 		/** Set active branch for a repo */
-		setActiveWorkspace(repoPath: string, branchName: string | null): void {
-			setState("repositories", repoPath, "activeWorkspaceId", branchName);
+		setActiveWorkspace(repoPath: string, workspaceId: string | null): void {
+			setState("repositories", repoPath, "activeWorkspaceId", workspaceId);
 		},
 
 		/** Add terminal to branch */
-		addTerminalToBranch(repoPath: string, branchName: string, terminalId: string): void {
-			const branch = state.repositories[repoPath]?.workspaces[branchName];
+		addTerminalToWorkspace(repoPath: string, workspaceId: string, terminalId: string): void {
+			const branch = state.repositories[repoPath]?.workspaces[workspaceId];
 			if (branch && !branch.terminals.includes(terminalId)) {
-				appLogger.info("terminal", `addTerminalToBranch ${branchName} += ${terminalId}`, {
+				appLogger.info("terminal", `addTerminalToWorkspace ${workspaceId} += ${terminalId}`, {
 					before: [...branch.terminals],
 				});
 				terminalToRepo.set(terminalId, repoPath);
 				batch(() => {
-					setState("repositories", repoPath, "workspaces", branchName, "terminals", (t) => [...t, terminalId]);
+					setState("repositories", repoPath, "workspaces", workspaceId, "terminals", (t) => [...t, terminalId]);
 					if (!branch.hadTerminals) {
-						setState("repositories", repoPath, "workspaces", branchName, "hadTerminals", true);
+						setState("repositories", repoPath, "workspaces", workspaceId, "hadTerminals", true);
 					}
 				});
 				save();
@@ -1033,21 +1063,21 @@ function createRepositoriesStore() {
 		},
 
 		/** Remove terminal from branch */
-		removeTerminalFromBranch(repoPath: string, branchName: string, terminalId: string): void {
-			const branch = state.repositories[repoPath]?.workspaces[branchName];
-			appLogger.info("terminal", `removeTerminalFromBranch ${branchName} -= ${terminalId}`, {
+		removeTerminalFromWorkspace(repoPath: string, workspaceId: string, terminalId: string): void {
+			const branch = state.repositories[repoPath]?.workspaces[workspaceId];
+			appLogger.info("terminal", `removeTerminalFromWorkspace ${workspaceId} -= ${terminalId}`, {
 				before: branch?.terminals ? [...branch.terminals] : [],
 			});
 			terminalToRepo.delete(terminalId);
 			batch(() => {
-				setState("repositories", repoPath, "workspaces", branchName, "terminals", (t) =>
+				setState("repositories", repoPath, "workspaces", workspaceId, "terminals", (t) =>
 					t.filter((id) => id !== terminalId),
 				);
 				// When last terminal is removed, clear stale savedTerminals so the periodic
 				// snapshot doesn't resurrect closed tabs on next branch click.
-				const updated = state.repositories[repoPath]?.workspaces[branchName];
+				const updated = state.repositories[repoPath]?.workspaces[workspaceId];
 				if (updated && updated.terminals.length === 0 && updated.savedTerminals && updated.savedTerminals.length > 0) {
-					setState("repositories", repoPath, "workspaces", branchName, "savedTerminals", []);
+					setState("repositories", repoPath, "workspaces", workspaceId, "savedTerminals", []);
 				}
 			});
 			save();
@@ -1055,35 +1085,35 @@ function createRepositoriesStore() {
 		},
 
 		/** Set run command for a branch */
-		setRunCommand(repoPath: string, branchName: string, command: string | undefined): void {
-			const branch = state.repositories[repoPath]?.workspaces[branchName];
+		setRunCommand(repoPath: string, workspaceId: string, command: string | undefined): void {
+			const branch = state.repositories[repoPath]?.workspaces[workspaceId];
 			if (branch) {
-				setState("repositories", repoPath, "workspaces", branchName, "runCommand", command);
+				setState("repositories", repoPath, "workspaces", workspaceId, "runCommand", command);
 				save();
 			}
 		},
 
 		/** Update CI auto-heal state for a branch */
-		setCiAutoHeal(repoPath: string, branchName: string, value: WorkspaceState["ciAutoHeal"]): void {
-			if (!state.repositories[repoPath]?.workspaces[branchName]) return;
-			setState("repositories", repoPath, "workspaces", branchName, "ciAutoHeal", value);
+		setCiAutoHeal(repoPath: string, workspaceId: string, value: WorkspaceState["ciAutoHeal"]): void {
+			if (!state.repositories[repoPath]?.workspaces[workspaceId]) return;
+			setState("repositories", repoPath, "workspaces", workspaceId, "ciAutoHeal", value);
 			save();
 		},
 
 		/** Update branch stats (additions/deletions) — only if branch already exists */
-		updateBranchStats(repoPath: string, branchName: string, additions: number, deletions: number): void {
-			if (!state.repositories[repoPath]?.workspaces[branchName]) return;
-			setState("repositories", repoPath, "workspaces", branchName, { additions, deletions });
+		updateWorkspaceStats(repoPath: string, workspaceId: string, additions: number, deletions: number): void {
+			if (!state.repositories[repoPath]?.workspaces[workspaceId]) return;
+			setState("repositories", repoPath, "workspaces", workspaceId, { additions, deletions });
 		},
 
-		/** Remove a branch from a repository */
-		removeBranch(repoPath: string, branchName: string): void {
+		/** Remove one workspace, addressed by its id. */
+		removeWorkspace(repoPath: string, workspaceId: string): void {
 			const repo = state.repositories[repoPath];
 			if (!repo) return;
 
-			const branch = repo.workspaces[branchName];
+			const branch = repo.workspaces[workspaceId];
 			if (branch) {
-				appLogger.debug("terminal", `removeBranch "${branchName}" from ${repoPath}`, {
+				appLogger.debug("terminal", `removeWorkspace "${workspaceId}" from ${repoPath}`, {
 					terminals: branch.terminals,
 					hadTerminals: branch.hadTerminals,
 					savedTerminals: branch.savedTerminals?.length ?? 0,
@@ -1103,10 +1133,10 @@ function createRepositoriesStore() {
 					if (!r) return;
 
 					// Delete the branch
-					delete r.workspaces[branchName];
+					delete r.workspaces[workspaceId];
 
 					// Clear active branch if it was removed
-					if (r.activeWorkspaceId === branchName) {
+					if (r.activeWorkspaceId === workspaceId) {
 						const remainingBranches = Object.keys(r.workspaces);
 						r.activeWorkspaceId = remainingBranches[0] || null;
 					}
@@ -1115,7 +1145,23 @@ function createRepositoriesStore() {
 			save();
 		},
 
-		/** Rename a branch in a repository */
+		/**
+		 * A branch was renamed: follow it.
+		 *
+		 * Both arguments are branch names, and for a branch-derived id they are
+		 * also the old and new map key — which is why this moves the record. The
+		 * `workspaceId` field has to move WITH the key: the record used to be
+		 * spread through unchanged, so after a rename the map key was the new name
+		 * while `workspaceId` still held the old one, and every consumer that
+		 * reads `ws.workspaceId` then addressed a key that no longer existed.
+		 *
+		 * DEFERRED (2026-09-10) — a COW workspace's id is minted and must NOT move
+		 * when its branch is renamed; only its `branchName` should change, and a
+		 * rename should reach EVERY workspace on that branch rather than one. No
+		 * COW workspace can exist yet (the registry arrives with #729-983e), and
+		 * guessing the shape now would mean writing the fan-out with nothing to
+		 * test it against.
+		 */
 		renameBranch(repoPath: string, oldName: string, newName: string): void {
 			const repo = state.repositories[repoPath];
 			if (!repo?.workspaces[oldName]) return;
@@ -1132,6 +1178,7 @@ function createRepositoriesStore() {
 					// Create new branch entry with updated name
 					r.workspaces[newName] = {
 						...oldBranch,
+						workspaceId: newName,
 						branchName: newName,
 						isMain: isMainBranch(newName),
 					};
@@ -1148,19 +1195,20 @@ function createRepositoriesStore() {
 			save();
 		},
 
-		/** Merge terminal state from one branch into another (for main checkout rename race).
+		/** Merge terminal state from one workspace into another, both addressed by id
+		 *  (for the main-checkout rename race).
 		 *  Moves terminals, savedTerminals, hadTerminals, lastActiveTerminal from source
 		 *  to target, keeping the target's worktreePath and other git-derived fields. */
-		mergeBranchState(repoPath: string, sourceName: string, targetName: string): void {
+		mergeWorkspaceState(repoPath: string, sourceId: string, targetId: string): void {
 			const repo = state.repositories[repoPath];
-			if (!repo?.workspaces[sourceName] || !repo.workspaces[targetName]) return;
+			if (!repo?.workspaces[sourceId] || !repo.workspaces[targetId]) return;
 
 			setState(
 				produce((s) => {
 					const r = s.repositories[repoPath];
 					if (!r) return;
-					const src = r.workspaces[sourceName];
-					const tgt = r.workspaces[targetName];
+					const src = r.workspaces[sourceId];
+					const tgt = r.workspaces[targetId];
 					if (!src || !tgt) return;
 
 					// Transfer terminals
@@ -1199,6 +1247,47 @@ function createRepositoriesStore() {
 		/** Get repository by path */
 		get(path: string): RepositoryState | undefined {
 			return state.repositories[path];
+		},
+
+		/** One workspace by its id. The only supported way to reach a record: a
+		 *  branch cannot name a row once two workspaces share one. */
+		getWorkspace(repoPath: string, workspaceId: string): WorkspaceState | undefined {
+			return state.repositories[repoPath]?.workspaces[workspaceId];
+		},
+
+		/**
+		 * The branch a workspace has checked out.
+		 *
+		 * The legitimate direction: id -> branch is a lookup, branch -> id is a
+		 * guess. Callers that hold an id and need a git ref (a merge subject, a PR
+		 * lookup, a label) come through here rather than reusing the id as a name.
+		 * Falls back to the id, which is what it equals for everything a linked
+		 * worktree ever created.
+		 */
+		branchNameFor(repoPath: string, workspaceId: string): string {
+			return state.repositories[repoPath]?.workspaces[workspaceId]?.branchName ?? workspaceId;
+		},
+
+		/**
+		 * The workspace on `branchName` — the ONE place allowed to go from a branch
+		 * to an id, and only for callers whose input genuinely is a branch and
+		 * nothing else: a GitHub PR names its head branch, never a directory.
+		 *
+		 * DEFERRED (2026-09-11) — with two workspaces on one branch this returns the
+		 * first and there is no better answer available at these call sites: a PR
+		 * merge knows which ref landed, not which of two checkouts the user meant.
+		 * Resolving it needs the PR-cleanup flows to carry a workspace from the row
+		 * the user clicked, which is a UI change, not a lookup change. Until then
+		 * this is a documented single seam instead of the same guess inlined at four
+		 * call sites.
+		 */
+		workspaceIdOnBranch(repoPath: string, branchName: string): string | null {
+			const workspaces = state.repositories[repoPath]?.workspaces;
+			if (!workspaces) return null;
+			for (const [workspaceId, workspace] of Object.entries(workspaces)) {
+				if (workspace.branchName === branchName) return workspaceId;
+			}
+			return null;
 		},
 
 		/** True unless the repo is a registered plain directory. Unknown paths
@@ -1281,8 +1370,8 @@ function createRepositoriesStore() {
 		},
 
 		/** Reorder terminals within the active branch */
-		reorderTerminals(repoPath: string, branchName: string, fromIndex: number, toIndex: number): void {
-			setState("repositories", repoPath, "workspaces", branchName, "terminals", (terminals) => {
+		reorderTerminals(repoPath: string, workspaceId: string, fromIndex: number, toIndex: number): void {
+			setState("repositories", repoPath, "workspaces", workspaceId, "terminals", (terminals) => {
 				const result = [...terminals];
 				const [moved] = result.splice(fromIndex, 1);
 				result.splice(toIndex, 0, moved);
@@ -1296,15 +1385,19 @@ function createRepositoriesStore() {
 			return terminalToRepo.get(termId) ?? null;
 		},
 
-		/** Reverse-lookup: find repo path + branch name owning a terminal.
-		 *  Uses O(1) repo lookup via inverse index, then scans workspaces (typically 1-5). */
-		findOwnerForTerminal(termId: string): { repoPath: string; branchName: string } | null {
+		/** Reverse-lookup: which repo and WORKSPACE own a terminal.
+		 *  O(1) repo lookup via the inverse index, then a scan of that repo's
+		 *  workspaces (typically 1-5). Returns the map key, so a caller can feed it
+		 *  straight back into any id-taking method — the previous name for this
+		 *  field said `branchName` while already holding the key, which is how a
+		 *  branch reached call sites that needed an id. */
+		findOwnerForTerminal(termId: string): { repoPath: string; workspaceId: string } | null {
 			const repoPath = terminalToRepo.get(termId);
 			if (!repoPath) return null;
 			const repo = state.repositories[repoPath];
 			if (!repo) return null;
-			for (const [name, branch] of Object.entries(repo.workspaces)) {
-				if (branch.terminals.includes(termId)) return { repoPath, branchName: name };
+			for (const [workspaceId, workspace] of Object.entries(repo.workspaces)) {
+				if (workspace.terminals.includes(termId)) return { repoPath, workspaceId };
 			}
 			return null;
 		},
@@ -1721,8 +1814,8 @@ export function locateFile(absolutePath: string): FileLocation {
 	if (!owner) return { repoPath: "", fsRoot: "", filePath: absolutePath };
 
 	// A linked worktree is the filesystem root for I/O; the repo root is not.
-	const worktreePath = owner.branchName
-		? repositoriesStore.state.repositories[owner.repoPath]?.workspaces[owner.branchName]?.worktreePath
+	const worktreePath = owner.workspaceId
+		? repositoriesStore.state.repositories[owner.repoPath]?.workspaces[owner.workspaceId]?.worktreePath
 		: null;
 	const fsRoot = worktreePath || owner.repoPath;
 	const filePath = pathStartsWith(absolutePath, fsRoot)
@@ -1732,24 +1825,26 @@ export function locateFile(absolutePath: string): FileLocation {
 }
 
 /**
- * The branch a terminal owned by `owner` should be filed under.
+ * The workspace a terminal owned by `owner` should be filed under.
  *
- * A linked worktree names its own branch and is used as-is. A match at the repo
- * ROOT names none — what is checked out there moves under the user's feet — so it
- * resolves late, here:
+ * A linked worktree directory names its own workspace and is used as-is. A match
+ * at the repo ROOT names none — what is checked out there moves under the user's
+ * feet — so it resolves late, here:
  *
- *  1. `activeWorkspaceId`, the branch the repo is on right now;
- *  2. failing that, whichever branch records the repo root as its worktree.
+ *  1. `activeWorkspaceId`, the workspace the repo is on right now;
+ *  2. failing that, whichever workspace records the repo root as its worktree.
  *
  * Step 2 is not redundant. A repo discovered before its workspaces were scanned has
  * `activeWorkspaceId: null` while already knowing its root checkout, and stopping at
  * step 1 left every session in it unplaced — invisible tabs, not misfiled ones.
+ * It returns that workspace's KEY, not its `branchName`: the caller feeds the
+ * answer straight into `addTerminalToWorkspace`.
  */
-export function placementBranchFor(owner: RepoOwner): string | null {
-	if (owner.branchName) return owner.branchName;
+export function placementWorkspaceFor(owner: RepoOwner): string | null {
+	if (owner.workspaceId) return owner.workspaceId;
 	const repo = repositoriesStore.state.repositories[owner.repoPath];
 	if (!repo) return null;
 	if (repo.activeWorkspaceId) return repo.activeWorkspaceId;
-	const atRoot = Object.values(repo.workspaces).find((branch) => branch.worktreePath === owner.repoPath);
-	return atRoot?.branchName ?? null;
+	const atRoot = Object.entries(repo.workspaces).find(([, ws]) => ws.worktreePath === owner.repoPath);
+	return atRoot?.[0] ?? null;
 }

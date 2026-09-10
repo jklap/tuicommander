@@ -154,25 +154,45 @@ interface WorkspaceState {
 | `setActive(path)` | Set active repository |
 | `toggleExpanded(path)` | Toggle branch list visibility |
 | `toggleCollapsed(path)` | Toggle icon-only mode |
-| `setBranch(repoPath, branchName, data)` | Add/update branch |
-| `setActiveBranch(repoPath, branchName)` | Set active branch |
-| `addTerminalToBranch(repoPath, branchName, terminalId)` | Link terminal |
-| `removeTerminalFromBranch(repoPath, branchName, terminalId)` | Unlink terminal |
-| `setRunCommand(repoPath, branchName, command)` | Save run command |
-| `updateBranchStats(repoPath, branchName, additions, deletions)` | Update diff stats |
-| `removeBranch(repoPath, branchName)` | Remove branch |
-| `renameBranch(repoPath, oldName, newName)` | Rename branch |
-| `reorderTerminals(repoPath, branchName, fromIndex, toIndex)` | Reorder tabs |
+Every method below that takes a `workspaceId` takes the **map key**, never a branch
+to look up. The two are the same string for everything a linked worktree ever
+created — the identity migration minted `workspaceId = branchName` so nothing
+persisted moved — which is exactly why the parameter is named for the key: a caller
+holding a branch off git output and a caller holding an id off a workspace record
+are indistinguishable at the call site otherwise, and only the second stays correct
+once a COW clone carries a minted id (#728-bc76).
+
+| Method | Description |
+|--------|-------------|
+| `setWorkspace(repoPath, workspaceId, data)` | Add/update one workspace. `data.branchName` defaults to the id |
+| `setActiveWorkspace(repoPath, workspaceId)` | Set the active workspace |
+| `addTerminalToWorkspace(repoPath, workspaceId, terminalId)` | Link terminal |
+| `removeTerminalFromWorkspace(repoPath, workspaceId, terminalId)` | Unlink terminal |
+| `setRunCommand(repoPath, workspaceId, command)` | Save run command |
+| `updateWorkspaceStats(repoPath, workspaceId, additions, deletions)` | Update diff stats |
+| `removeWorkspace(repoPath, workspaceId)` | Remove one workspace |
+| `renameBranch(repoPath, oldName, newName)` | A branch was renamed — moves the record AND its `workspaceId`, since a branch-derived id is the key |
+| `mergeWorkspaceState(repoPath, sourceId, targetId)` | Move terminals/saved tabs between workspaces |
+| `reorderTerminals(repoPath, workspaceId, fromIndex, toIndex)` | Reorder tabs |
 
 ### Queries
 
 | Method | Description |
 |--------|-------------|
 | `get(path)` | Get repository by path |
+| `getWorkspace(repoPath, workspaceId)` | One workspace record — the only supported way to reach one |
+| `branchNameFor(repoPath, workspaceId)` | The branch that workspace has checked out. `id → branch` is a lookup; `branch → id` is a guess, so there is no inverse |
+| `findOwnerForTerminal(termId)` | `{ repoPath, workspaceId }` for a terminal |
 | `getActive()` | Get active repository |
 | `getPaths()` | Get all repository paths |
-| `getActiveTerminals()` | Get terminal IDs for active branch |
+| `getActiveTerminals()` | Get terminal IDs for the active workspace |
 | `isEmpty()` | Check if no repositories |
+
+`resolveRepoOwner(path)` (same module) answers `{ repoPath, workspaceId | null }`:
+a path resolves to a workspace **id** because two workspaces may share a branch but
+cannot share a directory. `null` means the match was at the repo root, whose
+checkout changes under the user's feet — resolve it late through
+`activeWorkspaceId`, or via `placementWorkspaceFor(owner)`.
 
 ---
 

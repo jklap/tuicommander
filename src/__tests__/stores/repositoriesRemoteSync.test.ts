@@ -206,7 +206,7 @@ describe("repositoriesStore remote sync", () => {
 
 		await testInScopeAsync(async () => {
 			await store.hydrate();
-			store.addTerminalToBranch("/repo", "main", "term-1");
+			store.addTerminalToWorkspace("/repo", "main", "term-1");
 			await vi.advanceTimersByTimeAsync(500);
 
 			// Tab placement is memory-only: disk never carries it, so an adoption that
@@ -232,7 +232,7 @@ describe("repositoriesStore remote sync", () => {
 
 		await testInScopeAsync(async () => {
 			await store.hydrate();
-			store.addTerminalToBranch("/repo", "main", "term-1");
+			store.addTerminalToWorkspace("/repo", "main", "term-1");
 			await vi.advanceTimersByTimeAsync(500);
 
 			setDisk({ repos: {}, repoOrder: [] });
@@ -260,7 +260,7 @@ describe("repositoriesStore remote sync", () => {
 
 		await testInScopeAsync(async () => {
 			await store.hydrate();
-			store.addTerminalToBranch("/repo", "feature", "term-1");
+			store.addTerminalToWorkspace("/repo", "feature", "term-1");
 			await vi.advanceTimersByTimeAsync(500);
 
 			// Another client archived the worktree. The repo record stays, so the
@@ -285,10 +285,10 @@ describe("repositoriesStore remote sync", () => {
 		await testInScopeAsync(async () => {
 			await store.hydrate();
 
-			// `updateBranchStats` never saves, so a repo under active work drifts from its
+			// `updateWorkspaceStats` never saves, so a repo under active work drifts from its
 			// own baseline every few seconds. Reading that as an edit would refuse every
 			// remote change for exactly the repos the user is working in.
-			store.updateBranchStats("/repo", "main", 42, 7);
+			store.updateWorkspaceStats("/repo", "main", 42, 7);
 
 			setDisk({
 				repos: { "/repo": repoRecord("/repo", "Renamed", { main: branchRecord("main") }) },

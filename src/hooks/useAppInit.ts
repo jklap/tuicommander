@@ -11,7 +11,7 @@ import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repoSettingsStore } from "../stores/repoSettings";
-import { placementBranchFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
+import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
@@ -187,9 +187,9 @@ function assignSessionToRepoBranch(
 	terminalsStore.setRepoPath(terminalId, owner?.repoPath ?? null);
 
 	if (owner) {
-		const branchName = placementBranchFor(owner);
+		const branchName = placementWorkspaceFor(owner);
 		if (branchName) {
-			repositoriesStore.addTerminalToBranch(owner.repoPath, branchName, terminalId);
+			repositoriesStore.addTerminalToWorkspace(owner.repoPath, branchName, terminalId);
 			return;
 		}
 	}
@@ -364,6 +364,11 @@ export async function initApp(deps: AppInitDeps) {
 			(oldBranchState.worktreePath === null || oldBranchState.worktreePath === repo_path);
 
 		if (isMainCheckout) {
+			// Keyed by `branch` on purpose: HEAD moved, and a row created from a
+			// branch has that branch as its id — this is the identity migration's
+			// minting rule, the same one `workspace_id_of_worktree` applies in Rust.
+			// The lookups below therefore ask "is a row already keyed by this
+			// branch", which is exactly the question a rename has to answer.
 			// Main checkout (not a worktree): rename the single branch entry so
 			// terminals, savedTerminals, hadTerminals etc. carry over seamlessly.
 			if (!repo.workspaces[branch]) {
@@ -372,14 +377,14 @@ export async function initApp(deps: AppInitDeps) {
 			} else {
 				// Race: refreshAllBranchStats already created the new branch entry.
 				// Merge terminal state from old → new, then remove the old entry.
-				repositoriesStore.mergeBranchState(repo_path, oldBranch, branch);
-				repositoriesStore.removeBranch(repo_path, oldBranch);
+				repositoriesStore.mergeWorkspaceState(repo_path, oldBranch, branch);
+				repositoriesStore.removeWorkspace(repo_path, oldBranch);
 				repositoriesStore.setActiveWorkspace(repo_path, branch);
 			}
 		} else {
 			// Worktree branch — just ensure target exists and activate it.
 			if (!repo.workspaces[branch]) {
-				repositoriesStore.setBranch(repo_path, branch, { branchName: branch });
+				repositoriesStore.setWorkspace(repo_path, branch, { branchName: branch });
 			}
 			repositoriesStore.setActiveWorkspace(repo_path, branch);
 		}
@@ -791,7 +796,7 @@ export async function initApp(deps: AppInitDeps) {
 		const repo = repositoriesStore.get(repoPath);
 		if (repo && repo.isGitRepo === false && Object.keys(repo.workspaces).length === 0) {
 			const shellBranch = "shell";
-			repositoriesStore.setBranch(repoPath, shellBranch, {
+			repositoriesStore.setWorkspace(repoPath, shellBranch, {
 				worktreePath: repoPath,
 				isMain: true,
 				isShell: true,

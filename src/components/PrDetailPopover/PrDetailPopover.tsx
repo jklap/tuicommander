@@ -84,7 +84,8 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		if (!p || p.state === "merged" || p.state === "closed") return null;
 
 		const repo = repositoriesStore.get(props.repoPath);
-		const branch = repo?.workspaces[props.branch];
+		const workspaceId = repositoriesStore.workspaceIdOnBranch(props.repoPath, props.branch);
+		const branch = workspaceId ? repo?.workspaces[workspaceId] : undefined;
 		if (!branch?.terminals?.length) return null;
 
 		// Find first terminal with a detected agent
@@ -125,13 +126,17 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		const ctx = cleanupCtx();
 		if (!ctx) return false;
 		const repo = repositoriesStore.get(props.repoPath);
-		const branch = repo?.workspaces[ctx.branchName];
+		// The dialog context holds a branch (it came from a PR); the row it belongs
+		// to comes from the single branch->id seam.
+		const workspaceId = repositoriesStore.workspaceIdOnBranch(props.repoPath, ctx.branchName);
+		const branch = workspaceId ? repo?.workspaces[workspaceId] : undefined;
 		return (branch?.terminals?.length ?? 0) > 0;
 	};
 
-	const closeTerminalsForBranch = async (repoPath: string, branchName: string) => {
+	/** Called by `executeCleanup`, which passes the workspace id it was given. */
+	const closeTerminalsForBranch = async (repoPath: string, workspaceId: string) => {
 		const repo = repositoriesStore.get(repoPath);
-		const branch = repo?.workspaces[branchName];
+		const branch = repo?.workspaces[workspaceId];
 		if (branch) {
 			for (const termId of branch.terminals) {
 				try {
@@ -153,6 +158,10 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 
 		await executeCleanup({
 			repoPath: props.repoPath,
+			// A PR names its head branch, so the workspace is resolved through the
+			// single documented branch->id seam; the id addresses the row and the
+			// checkout, the branch stays the ref to delete.
+			workspaceId: repositoriesStore.workspaceIdOnBranch(props.repoPath, ctx.branchName) ?? ctx.branchName,
 			branchName: ctx.branchName,
 			baseBranch: ctx.baseBranch,
 			steps: steps.map((s) => ({ id: s.id, checked: s.checked })),

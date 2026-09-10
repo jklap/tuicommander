@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { generateWorkspaceId, migrateActiveWorkspaceId, migrateRepoWorkspaces } from "../../stores/workspaceIdentity";
+import type { SavedTerminal } from "../../types";
+import { compareBranches } from "../../utils/branchSort";
 
 /**
  * A record in the exact shape `repositories.json` holds today, captured from a
@@ -100,6 +102,46 @@ describe("workspace identity migration", () => {
 		expect(workspaces["POC-000006"].isMerged).toBe(true);
 	});
 
+	/**
+	 * The one thing a key migration can break irrecoverably: a terminal filed
+	 * under a key that no longer exists is invisible and unclosable — the tab is
+	 * gone from the strip while its PTY is still running.
+	 *
+	 * Nothing is RE-bound here, and that is the point: because the migration is
+	 * the identity function, no terminal ever has to move. This test exists to
+	 * fail the day someone makes ids opaque for existing rows too.
+	 */
+	it("orphans no terminal — every terminal list stays under the key that held it", () => {
+		const legacy = legacyRepoRecord();
+		// The fixture is a captured JSON document, so TypeScript infers `never[]`
+		// for its empty terminal arrays. This view is what the document actually
+		// holds, not a widening of the migration's own input type.
+		const branches = legacy.branches as unknown as Record<
+			string,
+			{ terminals: string[]; savedTerminals?: SavedTerminal[] }
+		>;
+		branches.main.terminals = ["term-1", "term-2"];
+		branches["feat/shared-identity"].terminals = ["term-3"];
+
+		const before = Object.fromEntries(
+			Object.entries(branches).map(([key, b]) => [key, [...b.terminals, ...(b.savedTerminals ?? [])]]),
+		);
+
+		const after = Object.fromEntries(
+			Object.entries(migrateRepoWorkspaces(legacy)).map(([key, w]) => [
+				key,
+				[...w.terminals, ...(w.savedTerminals ?? [])],
+			]),
+		);
+
+		// Key-for-key equal: nothing moved, nothing was dropped, and no list ended
+		// up under a key the store does not hold. `savedTerminals` rides along
+		// because restore reads it — and it carries no terminal id of its own, so a
+		// list left under a dead key could not be found by any other means.
+		expect(after).toEqual(before);
+		expect(after.main).toHaveLength(3); // two live + one saved
+	});
+
 	it("does not mutate the record it was given", () => {
 		const legacy = legacyRepoRecord();
 		const before = JSON.stringify(legacy);
@@ -122,6 +164,113 @@ describe("workspace identity migration", () => {
 		const once = migrateRepoWorkspaces(legacyRepoRecord());
 		const twice = migrateRepoWorkspaces({ workspaces: once });
 		expect(twice).toEqual(once);
+	});
+
+	/**
+	 * Captured from a live `repositories.json` (31 of 38 repos in this shape): a
+	 * build that shipped a partial version of this migration wrote `workspaces`
+	 * entries holding `workspaceId`, `kind` and `parentRepoPath` but neither
+	 * `branchName` nor `worktreePath`.
+	 *
+	 * Those records skipped the repair on every later load, and the missing
+	 * `branchName` made `compareBranches` throw inside the sidebar's sort memo —
+	 * which Solid turned into an undefined memo and a whole-app crash at
+	 * `sortedBranches().length`, a reader that names nothing about the cause.
+	 */
+	function partiallyMigratedRecord() {
+		return {
+			workspaces: {
+				master: {
+					workspaceId: "master",
+					kind: "main" as const,
+					parentRepoPath: null,
+					isMain: true,
+					terminals: [],
+					hadTerminals: true,
+					lastActiveTerminal: "term-69",
+					additions: 0,
+					deletions: 422,
+					isMerged: false,
+					lastCommitTs: 1788776823000,
+					tabsExpanded: false,
+				},
+				"POC-00004-no-containers": {
+					workspaceId: "POC-00004-no-containers",
+					kind: "worktree" as const,
+					parentRepoPath: null,
+					isMain: false,
+					terminals: [],
+					hadTerminals: false,
+					lastActiveTerminal: null,
+					additions: 0,
+					deletions: 0,
+					isMerged: false,
+					lastCommitTs: null,
+				},
+				"feat/ai-fingerprint-coverage": {
+					workspaceId: "feat/ai-fingerprint-coverage",
+					kind: "worktree" as const,
+					parentRepoPath: null,
+					isMain: false,
+					terminals: [],
+					hadTerminals: false,
+					lastActiveTerminal: null,
+					additions: 0,
+					deletions: 0,
+					isMerged: false,
+					lastCommitTs: null,
+				},
+			},
+		};
+	}
+
+	it("fills the identity fields a partially migrated record never got", () => {
+		const workspaces = migrateRepoWorkspaces(partiallyMigratedRecord());
+
+		expect(workspaces.master.branchName).toBe("master");
+		expect(workspaces.master.worktreePath).toBeNull();
+		expect(workspaces.master.workspaceId).toBe("master");
+	});
+
+	it("keeps a repaired record sortable — the crash was a throw inside the sort", () => {
+		const workspaces = migrateRepoWorkspaces(partiallyMigratedRecord());
+
+		// Two non-main workspaces: only this pair reaches the `localeCompare` that
+		// threw. A sort that stops at the isMain check proves nothing.
+		const [first, second] = Object.values(workspaces).filter((w) => !w.isMain);
+		expect(() => compareBranches(first, second, undefined, undefined)).not.toThrow();
+
+		const sorted = Object.values(workspaces).sort((a, b) => compareBranches(a, b, undefined, undefined));
+		expect(sorted[0].branchName).toBe("master");
+	});
+
+	it("never overwrites an id or branch a record already carries", () => {
+		// A COW workspace's branch is not its key; repairing must not flatten it.
+		const cow = {
+			workspaces: {
+				"main~a1b2c3d4": {
+					workspaceId: "main~a1b2c3d4",
+					branchName: "main",
+					kind: "cow" as const,
+					parentRepoPath: "/Users/x/Gits/acme",
+					worktreePath: "/Users/x/Gits/acme__cow/main",
+					isMain: true,
+					terminals: [],
+					hadTerminals: false,
+					lastActiveTerminal: null,
+					additions: 0,
+					deletions: 0,
+					isMerged: false,
+					lastCommitTs: null,
+				},
+			},
+		};
+
+		const workspace = migrateRepoWorkspaces(cow)["main~a1b2c3d4"];
+		expect(workspace.branchName).toBe("main");
+		expect(workspace.kind).toBe("cow");
+		expect(workspace.parentRepoPath).toBe("/Users/x/Gits/acme");
+		expect(workspace.worktreePath).toBe("/Users/x/Gits/acme__cow/main");
 	});
 
 	it("returns an empty map for a repo that has no entries at all", () => {

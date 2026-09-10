@@ -79,8 +79,8 @@ vi.mock("../../stores/repositories", () => ({
 		isGroupFullyParked: vi.fn(() => false),
 		get: vi.fn(() => undefined),
 		setActive: vi.fn(),
-		toggleBranchTabsExpanded: mockToggleBranchTabsExpanded,
-		setBranchTabsExpanded: mockSetBranchTabsExpanded,
+		toggleWorkspaceTabsExpanded: mockToggleBranchTabsExpanded,
+		setWorkspaceTabsExpanded: mockSetBranchTabsExpanded,
 	},
 }));
 
@@ -165,6 +165,7 @@ function makeRepo(overrides: Record<string, unknown> = {}) {
 		activeWorkspaceId: "main",
 		workspaces: {
 			main: {
+				workspaceId: "main",
 				branchName: "main",
 				isMain: true,
 				worktreePath: null,
@@ -304,11 +305,66 @@ describe("Sidebar", () => {
 			expect(branchName!.textContent).toBe("main");
 		});
 
+		// Two workspaces on one branch is the shape COW clones exist for. They are
+		// two rows, and the branch name alone cannot tell them apart — the row that
+		// the user removes must be the row they meant.
+		it("renders two same-branch workspaces as two rows, disambiguated by directory", () => {
+			const onBranchSelect = vi.fn();
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: "/repo1",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
+						"feat~aaaa1111": {
+							workspaceId: "feat~aaaa1111",
+							branchName: "feat",
+							isMain: false,
+							worktreePath: "/repo1__cow/feat-one",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
+						"feat~bbbb2222": {
+							workspaceId: "feat~bbbb2222",
+							branchName: "feat",
+							isMain: false,
+							worktreePath: "/repo1__cow/feat-two",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} onBranchSelect={onBranchSelect} />);
+
+			const names = [...container.querySelectorAll(".branchName")].map((n) => n.textContent);
+			expect(names).toEqual(["main", "feat", "feat"]);
+
+			// Each of the two carries the directory that tells it from its sibling;
+			// `main` is unique on its branch and stays unadorned.
+			const subLabels = [...container.querySelectorAll("[class*=subLabel]")].map((n) => n.textContent);
+			expect(subLabels.sort()).toEqual(["feat-one", "feat-two"]);
+
+			// And clicking one selects THAT workspace, by id.
+			const rows = container.querySelectorAll(".branchItem");
+			(rows[1] as HTMLElement).click();
+			expect(onBranchSelect).toHaveBeenCalledExactlyOnceWith("/repo1", "feat~aaaa1111");
+		});
+
 		it("shows SVG icons for main and feature branches", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
 						main: {
+							workspaceId: "main",
 							branchName: "main",
 							isMain: true,
 							worktreePath: null,
@@ -317,6 +373,7 @@ describe("Sidebar", () => {
 							deletions: 0,
 						},
 						"feature/x": {
+							workspaceId: "feature/x",
 							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
@@ -344,6 +401,7 @@ describe("Sidebar", () => {
 				"/repo1": makeRepo({
 					workspaces: {
 						"feature/z": {
+							workspaceId: "feature/z",
 							branchName: "feature/z",
 							isMain: false,
 							worktreePath: null,
@@ -353,6 +411,7 @@ describe("Sidebar", () => {
 						},
 						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/a": {
+							workspaceId: "feature/a",
 							branchName: "feature/a",
 							isMain: false,
 							worktreePath: null,
@@ -377,6 +436,7 @@ describe("Sidebar", () => {
 					workspaces: {
 						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/active": {
+							workspaceId: "feature/active",
 							branchName: "feature/active",
 							isMain: false,
 							worktreePath: null,
@@ -385,6 +445,7 @@ describe("Sidebar", () => {
 							deletions: 0,
 						},
 						"feature/merged": {
+							workspaceId: "feature/merged",
 							branchName: "feature/merged",
 							isMain: false,
 							worktreePath: null,
@@ -393,6 +454,7 @@ describe("Sidebar", () => {
 							deletions: 0,
 						},
 						"feature/closed": {
+							workspaceId: "feature/closed",
 							branchName: "feature/closed",
 							isMain: false,
 							worktreePath: null,
@@ -455,6 +517,7 @@ describe("Sidebar", () => {
 					workspaces: {
 						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/x": {
+							workspaceId: "feature/x",
 							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
@@ -479,6 +542,7 @@ describe("Sidebar", () => {
 					workspaces: {
 						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/y": {
+							workspaceId: "feature/y",
 							branchName: "feature/y",
 							isMain: false,
 							worktreePath: null,
@@ -504,6 +568,7 @@ describe("Sidebar", () => {
 				"/repo1": makeRepo({
 					workspaces: {
 						"POC-00001-merge-blades": {
+							workspaceId: "POC-00001-merge-blades",
 							branchName: "POC-00001-merge-blades",
 							isMain: false,
 							worktreePath: "/repo1",
@@ -512,6 +577,7 @@ describe("Sidebar", () => {
 							deletions: 0,
 						},
 						"feature/x": {
+							workspaceId: "feature/x",
 							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
@@ -545,6 +611,7 @@ describe("Sidebar", () => {
 					workspaces: {
 						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/x": {
+							workspaceId: "feature/x",
 							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
@@ -714,6 +781,7 @@ describe("Sidebar", () => {
 					workspaces: {
 						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/x": {
+							workspaceId: "feature/x",
 							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/feature-x",
@@ -1093,6 +1161,7 @@ describe("Sidebar", () => {
 				"/repo1": makeRepo({
 					workspaces: {
 						main: {
+							workspaceId: "main",
 							branchName: "main",
 							isMain: true,
 							worktreePath: null,
@@ -1129,6 +1198,7 @@ describe("Sidebar", () => {
 				"/repo1": makeRepo({
 					workspaces: {
 						main: {
+							workspaceId: "main",
 							branchName: "main",
 							isMain: true,
 							worktreePath: null,
@@ -1137,6 +1207,7 @@ describe("Sidebar", () => {
 							deletions: 0,
 						},
 						"feature/x": {
+							workspaceId: "feature/x",
 							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
@@ -1163,6 +1234,7 @@ describe("Sidebar", () => {
 				"/repo1": makeRepo({
 					workspaces: {
 						main: {
+							workspaceId: "main",
 							branchName: "main",
 							isMain: true,
 							worktreePath: null,
@@ -1189,6 +1261,7 @@ describe("Sidebar", () => {
 				"/repo1": makeRepo({
 					workspaces: {
 						main: {
+							workspaceId: "main",
 							branchName: "main",
 							isMain: true,
 							worktreePath: null,
@@ -1211,6 +1284,7 @@ describe("Sidebar", () => {
 						activeWorkspaceId: "main",
 						workspaces: {
 							main: {
+								workspaceId: "main",
 								branchName: "main",
 								isMain: true,
 								worktreePath: null,
@@ -1240,6 +1314,7 @@ describe("Sidebar", () => {
 						activeWorkspaceId: "main",
 						workspaces: {
 							main: {
+								workspaceId: "main",
 								branchName: "main",
 								isMain: true,
 								worktreePath: null,
@@ -1248,6 +1323,7 @@ describe("Sidebar", () => {
 								deletions: 0,
 							},
 							"feature/x": {
+								workspaceId: "feature/x",
 								branchName: "feature/x",
 								isMain: false,
 								worktreePath: "/wt/x",
@@ -1276,6 +1352,7 @@ describe("Sidebar", () => {
 						activeWorkspaceId: "main",
 						workspaces: {
 							main: {
+								workspaceId: "main",
 								branchName: "main",
 								isMain: true,
 								worktreePath: null,
@@ -1312,6 +1389,7 @@ describe("Sidebar", () => {
 				"/repo1": makeRepo({
 					workspaces: {
 						"feature/x": {
+							workspaceId: "feature/x",
 							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
@@ -1337,6 +1415,7 @@ describe("Sidebar", () => {
 				"/repo1": makeRepo({
 					workspaces: {
 						main: {
+							workspaceId: "main",
 							branchName: "main",
 							isMain: true,
 							worktreePath: null,
@@ -1359,6 +1438,7 @@ describe("Sidebar", () => {
 						activeWorkspaceId: "main",
 						workspaces: {
 							main: {
+								workspaceId: "main",
 								branchName: "main",
 								isMain: true,
 								worktreePath: null,
@@ -1434,6 +1514,7 @@ describe("Sidebar", () => {
 				"/repo1": makeRepo({
 					workspaces: {
 						main: {
+							workspaceId: "main",
 							branchName: "main",
 							isMain: true,
 							worktreePath: "/path/to/repo",
@@ -1487,6 +1568,7 @@ describe("Sidebar", () => {
 					workspaces: {
 						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/y": {
+							workspaceId: "feature/y",
 							branchName: "feature/y",
 							isMain: false,
 							worktreePath: null,
@@ -1515,6 +1597,7 @@ describe("Sidebar", () => {
 					workspaces: {
 						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 						"feature/x": {
+							workspaceId: "feature/x",
 							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
@@ -1925,6 +2008,7 @@ describe("Sidebar", () => {
 						workspaces: {
 							main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 							feature: {
+								workspaceId: "feature",
 								branchName: "feature",
 								isMain: false,
 								worktreePath: "/repo2-wt",
@@ -2001,6 +2085,7 @@ describe("Sidebar", () => {
 						workspaces: {
 							main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 							feature: {
+								workspaceId: "feature",
 								branchName: "feature",
 								isMain: false,
 								worktreePath: "/repo2-wt",
@@ -2052,6 +2137,7 @@ describe("Sidebar", () => {
 						workspaces: {
 							main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
 							feature: {
+								workspaceId: "feature",
 								branchName: "feature",
 								isMain: false,
 								worktreePath: "/repo2-wt",

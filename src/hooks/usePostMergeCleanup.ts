@@ -5,13 +5,17 @@ import { repositoriesStore } from "../stores/repositories";
 
 export interface CleanupConfig {
 	repoPath: string;
+	/** The workspace being cleaned up — the row to drop, the checkout to dispose
+	 *  of. Distinct from `branchName` below, which is the ref to delete: an
+	 *  operation touching two different objects takes two parameters (#726-5ac7). */
+	workspaceId: string;
 	branchName: string;
 	baseBranch: string;
 	steps: { id: StepId; checked: boolean }[];
 	onStepStart: (id: StepId) => void;
 	onStepDone: (id: StepId, result: "success" | "error", error?: string) => void;
 	onStepNote?: (id: StepId, note: string) => void;
-	closeTerminalsForBranch: (repoPath: string, branchName: string) => Promise<void>;
+	closeTerminalsForBranch: (repoPath: string, workspaceId: string) => Promise<void>;
 	/** When set, the "worktree" step calls finalize_merged_worktree with this action */
 	worktreeAction?: "archive" | "delete";
 	/** When true, pop the stash after switching branches */
@@ -20,7 +24,7 @@ export interface CleanupConfig {
 
 /** Execute post-merge cleanup steps sequentially via Rust backend commands. */
 export async function executeCleanup(config: CleanupConfig): Promise<void> {
-	const { repoPath, branchName, baseBranch, steps, onStepStart, onStepDone } = config;
+	const { repoPath, workspaceId, branchName, baseBranch, steps, onStepStart, onStepDone } = config;
 	let didDeleteLocal = false;
 	let hadError = false;
 
@@ -45,11 +49,12 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 					// uncommitted-work warning under this very step (worktreeDirty)
 					// before the user checks it and presses Execute. Without it the
 					// backend guard would bounce the step back as an opaque failure.
-					// `branchName` is the store key, i.e. the workspace id under the
-					// identity migration; #728-bc76 renames it at the source.
+					// Addressed by workspace id: the checkout to dispose of is the row
+					// the user is cleaning up, which a branch cannot name once two
+					// workspaces share one.
 					await invoke("finalize_merged_worktree", {
 						repoPath,
-						workspaceId: branchName,
+						workspaceId,
 						action: config.worktreeAction,
 						force: true,
 					});
@@ -80,12 +85,12 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 					break;
 
 				case "delete-local":
-					await config.closeTerminalsForBranch(repoPath, branchName);
+					await config.closeTerminalsForBranch(repoPath, workspaceId);
 					try {
 						await invoke("delete_local_branch", {
 							repoPath,
 							branchName,
-							workspaceId: branchName,
+							workspaceId,
 							keepWorktree,
 						});
 					} catch (e) {
@@ -133,7 +138,7 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 
 	// Update frontend state
 	if (didDeleteLocal) {
-		repositoriesStore.removeBranch(repoPath, branchName);
+		repositoriesStore.removeWorkspace(repoPath, workspaceId);
 	}
 	repositoriesStore.bumpGitRevision(repoPath);
 }

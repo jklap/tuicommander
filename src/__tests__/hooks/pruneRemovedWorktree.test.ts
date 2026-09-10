@@ -40,8 +40,8 @@ describe("pruneRemovedWorktree", () => {
 
 	const seedRepo = (): void => {
 		store.add({ path: REPO, displayName: "repo" });
-		store.setBranch(REPO, "main", { worktreePath: REPO, isMain: true });
-		store.setBranch(REPO, "feat-a", { worktreePath: WT });
+		store.setWorkspace(REPO, "main", { worktreePath: REPO, isMain: true });
+		store.setWorkspace(REPO, "feat-a", { worktreePath: WT });
 	};
 
 	it("removes the branch row for a removed linked worktree", async () => {
@@ -61,8 +61,8 @@ describe("pruneRemovedWorktree", () => {
 	it("closes the terminals still living in the removed worktree first", async () => {
 		await testInScopeAsync(async () => {
 			seedRepo();
-			store.addTerminalToBranch(REPO, "feat-a", "term-1");
-			store.addTerminalToBranch(REPO, "feat-a", "term-2");
+			store.addTerminalToWorkspace(REPO, "feat-a", "term-1");
+			store.addTerminalToWorkspace(REPO, "feat-a", "term-2");
 			const order: string[] = [];
 			const closeTerminals = vi.fn().mockImplementation(async () => {
 				// The row must still exist while its terminals are being closed,
@@ -113,6 +113,38 @@ describe("pruneRemovedWorktree", () => {
 
 			expect(Object.keys(store.get(REPO)!.workspaces).sort()).toEqual(["feat-a", "main"]);
 			expect(closeTerminals).not.toHaveBeenCalled();
+		});
+	});
+
+	// The removal event names ONE workspace. Two workspaces can sit on one branch
+	// (that is the point of a COW clone), so a prune that resolved anything by
+	// branch would take the sibling's terminals down with it — and the sibling is
+	// a live agent in a different directory.
+	it("leaves a same-branch sibling and its terminals untouched", async () => {
+		await testInScopeAsync(async () => {
+			store.add({ path: REPO, displayName: "repo" });
+			store.setWorkspace(REPO, "main", { worktreePath: REPO, isMain: true });
+			store.setWorkspace(REPO, "feat~aaaa1111", {
+				branchName: "feat",
+				worktreePath: "/repo__cow/feat-1",
+				kind: "cow",
+			});
+			store.setWorkspace(REPO, "feat~bbbb2222", {
+				branchName: "feat",
+				worktreePath: "/repo__cow/feat-2",
+				kind: "cow",
+			});
+			store.addTerminalToWorkspace(REPO, "feat~aaaa1111", "term-doomed");
+			store.addTerminalToWorkspace(REPO, "feat~bbbb2222", "term-survivor");
+			const closeTerminals = vi.fn().mockResolvedValue(undefined);
+
+			await prune(REPO, "feat~aaaa1111", closeTerminals);
+
+			expect(closeTerminals).toHaveBeenCalledExactlyOnceWith(REPO, "feat~aaaa1111");
+			expect(store.get(REPO)!.workspaces["feat~aaaa1111"]).toBeUndefined();
+			const survivor = store.get(REPO)!.workspaces["feat~bbbb2222"];
+			expect(survivor?.terminals).toEqual(["term-survivor"]);
+			expect(survivor?.branchName).toBe("feat");
 		});
 	});
 

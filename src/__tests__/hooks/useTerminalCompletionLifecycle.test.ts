@@ -227,8 +227,8 @@ describe("useIdleTriage", () => {
 
 	const configureRepo = (terminalId: string) => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-		repositoriesStore.addTerminalToBranch("/repo", "main", terminalId);
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.addTerminalToWorkspace("/repo", "main", terminalId);
 	};
 
 	it("runs triage for an agent repository when the visible feature is enabled", async () => {

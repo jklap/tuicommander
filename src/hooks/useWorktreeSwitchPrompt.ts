@@ -69,9 +69,9 @@ export async function switchToCreatedWorktree(
 
 		batch(() => {
 			if (currentMapping) {
-				repositoriesStore.removeTerminalFromBranch(currentMapping.repoPath, currentMapping.branchName, terminalId);
+				repositoriesStore.removeTerminalFromWorkspace(currentMapping.repoPath, currentMapping.workspaceId, terminalId);
 			}
-			repositoriesStore.addTerminalToBranch(repoPath, workspaceId, terminalId);
+			repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, terminalId);
 		});
 
 		await invoke("write_pty", {
@@ -107,7 +107,7 @@ export async function pruneRemovedWorktree(
 	if (workspace.terminals.length > 0) {
 		await closeTerminalsForBranch(repoPath, workspaceId);
 	}
-	repositoriesStore.removeBranch(repoPath, workspaceId);
+	repositoriesStore.removeWorkspace(repoPath, workspaceId);
 	appLogger.info("git", `Worktree removed — pruned sidebar row "${workspaceId}"`, { repoPath });
 }
 
@@ -145,14 +145,14 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		};
 		// Register the branch in the store immediately so the sidebar shows the new
 		// worktree right away — independent of whether the user accepts the switch
-		// prompt below. Mirrors the in-app create path (setupNewWorktree → setBranch).
+		// prompt below. Mirrors the in-app create path (setupNewWorktree → setWorkspace).
 		// Guarded on repo existence so we don't create a half-formed repo entry for a
 		// worktree on a repo that isn't open in the sidebar.
 		if (repositoriesStore.get(repo_path)) {
 			// Keyed by the id the backend minted; the branch travels as data. The
 			// two are the same string for a linked worktree and will not be for a
 			// COW clone, so the key must come off `workspace_id`.
-			repositoriesStore.setBranch(repo_path, workspace_id, { branchName: branch, worktreePath: worktree_path });
+			repositoriesStore.setWorkspace(repo_path, workspace_id, { branchName: branch, worktreePath: worktree_path });
 		}
 		const label = worktreeLabel(worktree_path);
 		activityStore.addItem({

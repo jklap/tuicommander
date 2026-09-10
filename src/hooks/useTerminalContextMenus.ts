@@ -85,7 +85,7 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 			const config = AGENTS[agent.type];
 			const runConfigs = agentConfigsStore.getRunConfigs(agent.type);
 			const launchAgent = async (command: string) => {
-				const termId = await options.gitOps.handleAddTerminalToBranch(repoPath, branchName);
+				const termId = await options.gitOps.handleAddTerminalToWorkspace(repoPath, branchName);
 				if (!termId) return;
 				const term = terminalsStore.get(termId);
 				const agentSessionId = agent.type === "claude" ? null : (term?.tuicSession ?? null);

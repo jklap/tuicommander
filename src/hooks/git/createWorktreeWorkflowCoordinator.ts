@@ -50,6 +50,9 @@ interface WorktreeWorkflowCoordinatorDeps {
 	setCreatingWorktreeRepos: Setter<Set<string>>;
 	setMergePendingCtx: Setter<{
 		repoPath: string;
+		/** The row being cleaned up. */
+		workspaceId: string;
+		/** The ref being merged and deleted — a different object from the row. */
 		branchName: string;
 		baseBranch: string;
 		hasDirtyFiles: boolean;
@@ -105,7 +108,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				// Stale directory being cleaned in background — show placeholder and
 				// defer setupNewWorktree (with the seed) until the recreate completes.
 				markRecentlyCreated(repoPath, result.branch);
-				repositoriesStore.setBranch(repoPath, result.branch, {
+				repositoriesStore.setWorkspace(repoPath, result.branch, {
 					worktreePath: result.path,
 					isPreparing: true,
 				});
@@ -168,7 +171,17 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 
 			await setupNewWorktree(
 				repoPath,
-				{ name: result.branch, path: result.worktree_path, branch: result.branch, base_repo: repoPath },
+				{
+					name: result.branch,
+					path: result.worktree_path,
+					// `start_conflict_assist` creates a linked worktree, whose id is its
+					// branch by the identity migration. It is spelled out here rather
+					// than left to `setupNewWorktree` so the id has exactly one source
+					// per creation path.
+					workspace_id: result.branch,
+					branch: result.branch,
+					base_repo: repoPath,
+				},
 				result.branch,
 				buildAgentSeed(result.prompt),
 			);
@@ -197,10 +210,10 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		}
 	};
 
-	/** Close all terminals belonging to a branch. */
-	const closeTerminalsForBranch = async (repoPath: string, branchName: string) => {
+	/** Close every terminal filed under one workspace. */
+	const closeTerminalsForBranch = async (repoPath: string, workspaceId: string) => {
 		const repoState = repositoriesStore.get(repoPath);
-		const branch = repoState?.workspaces[branchName];
+		const branch = repoState?.workspaces[workspaceId];
 		if (branch) {
 			for (const termId of branch.terminals) {
 				await deps.closeTerminal(termId, true);
@@ -208,12 +221,17 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		}
 	};
 
+	/** Merge one workspace's branch into `targetBranch`, then dispose of that
+	 *  workspace. Two objects, two identifiers: `workspaceId` is the row and the
+	 *  checkout, and the branch it has checked out — read off the record — is the
+	 *  merge subject, the PR key and the ref to delete. */
 	const handleMergeAndArchive = async (
 		repoPath: string,
-		branchName: string,
+		workspaceId: string,
 		targetBranch: string,
 		afterMerge: string,
 	) => {
+		const branchName = repositoriesStore.branchNameFor(repoPath, workspaceId);
 		try {
 			deps.setStatusInfo(`Merging ${branchName} into ${targetBranch}...`);
 
@@ -231,30 +249,30 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 					}
 					// Other GitHub API failures — fall back to local git merge
 					appLogger.warn("git", `GitHub API merge failed, falling back to local git merge: ${githubErr}`);
-					await mergeLocalAndFinalize(repoPath, branchName, targetBranch, afterMerge);
+					await mergeLocalAndFinalize(repoPath, workspaceId, targetBranch, afterMerge);
 					return;
 				}
 				// GitHub merge succeeded — close terminals and finalize the worktree locally
-				await closeTerminalsForBranch(repoPath, branchName);
+				await closeTerminalsForBranch(repoPath, workspaceId);
 				if (afterMerge === "ask") {
 					deps.setStatusInfo(`Merged ${branchName} via GitHub — choose what to do with the worktree`);
-					await openCleanupDialog(repoPath, branchName, targetBranch);
+					await openCleanupDialog(repoPath, workspaceId, targetBranch);
 					return;
 				}
 				const action = afterMerge as "archive" | "delete";
-				if (!(await finalizeWithConfirmation(repoPath, branchName, action))) {
+				if (!(await finalizeWithConfirmation(repoPath, workspaceId, action))) {
 					deps.setStatusInfo(`Merged ${branchName} via GitHub — worktree kept`);
 					await refreshAllBranchStats();
 					return;
 				}
 				deps.setStatusInfo(`Merged ${branchName} via GitHub (${action === "archive" ? "archived" : "deleted"})`);
-				repositoriesStore.removeBranch(repoPath, branchName);
+				repositoriesStore.removeWorkspace(repoPath, workspaceId);
 				await refreshAllBranchStats();
 				return;
 			}
 
 			// No open PR — local git merge
-			await mergeLocalAndFinalize(repoPath, branchName, targetBranch, afterMerge);
+			await mergeLocalAndFinalize(repoPath, workspaceId, targetBranch, afterMerge);
 		} catch (err) {
 			if (isMergeMethodNotAllowed(err)) {
 				throw err;
@@ -272,7 +290,8 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 	 *    step ends in `git worktree remove --force` and would take it for good.
 	 *  Either check failing is reported as dirty: an unanswered question must not
 	 *  read as "nothing to lose" when it gates a destructive step. */
-	const openCleanupDialog = async (repoPath: string, branchName: string, baseBranch: string) => {
+	const openCleanupDialog = async (repoPath: string, workspaceId: string, baseBranch: string) => {
+		const branchName = repositoriesStore.branchNameFor(repoPath, workspaceId);
 		let hasDirtyFiles = false;
 		try {
 			const status = await invoke<{ stdout: string }>("run_git_command", {
@@ -287,39 +306,41 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 
 		let worktreeDirty = false;
 		try {
-			// `branchName` is the store key, i.e. the workspace id (identity migration).
-			worktreeDirty = await invoke<boolean>("check_worktree_dirty", { repoPath, workspaceId: branchName });
+			worktreeDirty = await invoke<boolean>("check_worktree_dirty", { repoPath, workspaceId });
 		} catch (err) {
 			appLogger.warn("git", `Could not check the ${branchName} worktree, assuming dirty`, err);
 			worktreeDirty = true;
 		}
 
-		setMergePendingCtx({ repoPath, branchName, baseBranch, hasDirtyFiles, worktreeDirty });
+		setMergePendingCtx({ repoPath, workspaceId, branchName, baseBranch, hasDirtyFiles, worktreeDirty });
 	};
 
 	/** Archive/delete a merged worktree, asking first when the backend refuses.
 	 *  Returns false when the user declined and the worktree is still on disk. */
-	const finalizeWithConfirmation = async (repoPath: string, branchName: string, action: "archive" | "delete") => {
-		const result = await deps.repo.finalizeMergedWorktree(repoPath, branchName, action);
+	const finalizeWithConfirmation = async (repoPath: string, workspaceId: string, action: "archive" | "delete") => {
+		const result = await deps.repo.finalizeMergedWorktree(repoPath, workspaceId, action);
 		if (result.action !== "needs_confirmation") return true;
 
 		// The merge already landed; only the cleanup stopped. Nothing is lost yet.
+		// The dialog names the branch, because that is what the user recognises.
+		const branchName = repositoriesStore.branchNameFor(repoPath, workspaceId);
 		if (!(await deps.confirmDirtyWorktreeCleanup(branchName, action, 0))) return false;
-		await deps.repo.finalizeMergedWorktree(repoPath, branchName, action, true);
+		await deps.repo.finalizeMergedWorktree(repoPath, workspaceId, action, true);
 		return true;
 	};
 
 	/** Local git merge path: checkout target, merge, then archive/delete/ask. */
 	const mergeLocalAndFinalize = async (
 		repoPath: string,
-		branchName: string,
+		workspaceId: string,
 		targetBranch: string,
 		afterMerge: string,
 	) => {
-		// Identity migration: the store key IS the branch for a git worktree, so the
-		// same string serves as both until #728-bc76 keys the frontend by id and
-		// reads the branch off the workspace record.
-		let result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, branchName, targetBranch, afterMerge);
+		// Two parameters because two objects: the branch is the merge subject, the id
+		// is the checkout to dispose of afterwards. The backend refuses when they
+		// disagree rather than guessing which one the caller meant.
+		const branchName = repositoriesStore.branchNameFor(repoPath, workspaceId);
+		let result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, workspaceId, targetBranch, afterMerge);
 
 		// The backend refused: the worktree is not known to be clean, so archiving or
 		// deleting it would make the row vanish and take that uncommitted work with
@@ -333,7 +354,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 			result = await deps.repo.mergeAndArchiveWorktree(
 				repoPath,
 				branchName,
-				branchName,
+				workspaceId,
 				targetBranch,
 				afterMerge,
 				true,
@@ -341,12 +362,12 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		}
 
 		// Merge succeeded — close terminals now (not before, to avoid orphaning the branch on failure)
-		await closeTerminalsForBranch(repoPath, branchName);
+		await closeTerminalsForBranch(repoPath, workspaceId);
 
 		if (result.action === "pending") {
 			// "ask" mode — merge succeeded, user must choose what to do with the worktree
 			deps.setStatusInfo(`Merged ${branchName} into ${targetBranch} — choose what to do with the worktree`);
-			await openCleanupDialog(repoPath, branchName, targetBranch);
+			await openCleanupDialog(repoPath, workspaceId, targetBranch);
 			// Branch stays in sidebar until the user decides via cleanup dialog
 			return;
 		}
@@ -358,8 +379,8 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		const carried = ahead === 0 ? "nothing to merge" : `${ahead} commit${ahead === 1 ? "" : "s"}`;
 		deps.setStatusInfo(`${branchName} → ${targetBranch}: ${carried} (${result.action})`);
 
-		// Remove branch from sidebar
-		repositoriesStore.removeBranch(repoPath, branchName);
+		// Drop the row from the sidebar
+		repositoriesStore.removeWorkspace(repoPath, workspaceId);
 
 		// Refresh to pick up updated branch stats
 		await refreshAllBranchStats();

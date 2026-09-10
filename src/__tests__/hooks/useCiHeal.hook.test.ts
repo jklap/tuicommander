@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // + buildCiFixPrompt purity is covered separately in useCiHeal.test.ts.)
 const h = vi.hoisted(() => {
 	const repoState = {
-		repositories: {} as Record<string, { workspaces: Record<string, { ciAutoHeal?: unknown; terminals: string[] }> }>,
+		repositories: {} as Record<
+			string,
+			{ workspaces: Record<string, { branchName?: string; ciAutoHeal?: unknown; terminals: string[] }> }
+		>,
 	};
 	return {
 		repoState,
@@ -28,6 +31,16 @@ vi.mock("../../stores/repositories", () => ({
 			return h.repoState;
 		},
 		setCiAutoHeal: h.setCiAutoHeal,
+		// CI names a branch; the healer resolves the row through this seam. Mocked
+		// with the real scan so a fixture keyed by an id that is NOT the branch
+		// still finds its row — which is the case this indirection exists for.
+		workspaceIdOnBranch: (repoPath: string, branchName: string) => {
+			const workspaces = h.repoState.repositories[repoPath]?.workspaces ?? {};
+			for (const [workspaceId, workspace] of Object.entries(workspaces)) {
+				if ((workspace.branchName ?? workspaceId) === branchName) return workspaceId;
+			}
+			return null;
+		},
 	},
 }));
 vi.mock("../../stores/github", () => ({

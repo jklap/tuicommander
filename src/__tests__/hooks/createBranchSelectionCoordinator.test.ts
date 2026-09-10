@@ -42,16 +42,16 @@ describe("createBranchSelectionCoordinator", () => {
 	it("records the owning repo on a terminal it adds to a branch", async () => {
 		await testInScope(async () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-			repositoriesStore.setBranch("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
 			repositoriesStore.setActiveWorkspace("/Gits/alpha", "main");
 
-			const id = await makeCoordinator().handleAddTerminalToBranch("/Gits/alpha", "main");
+			const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main");
 
 			expect(id).toBeTruthy();
 			expect(terminalsStore.get(id!)?.repoPath).toBe("/Gits/alpha");
 			expect(repositoriesStore.findOwnerForTerminal(id!)).toEqual({
 				repoPath: "/Gits/alpha",
-				branchName: "main",
+				workspaceId: "main",
 			});
 		});
 	});
@@ -59,7 +59,7 @@ describe("createBranchSelectionCoordinator", () => {
 	it("does not create a terminal when the spawn budget is exhausted", async () => {
 		await testInScope(async () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-			repositoriesStore.setBranch("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
 
 			const messages: string[] = [];
 			const coordinator = createBranchSelectionCoordinator({
@@ -71,7 +71,7 @@ describe("createBranchSelectionCoordinator", () => {
 				setCurrentBranch: (() => {}) as never,
 			});
 
-			expect(await coordinator.handleAddTerminalToBranch("/Gits/alpha", "main")).toBeUndefined();
+			expect(await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main")).toBeUndefined();
 			expect(terminalsStore.getIds()).toHaveLength(0);
 			expect(messages).toEqual(["Max sessions reached (50)"]);
 		});
