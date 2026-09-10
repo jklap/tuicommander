@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 #[cfg(feature = "desktop")]
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::input_line_buffer::{InputAction, InputLineBuffer};
@@ -5504,6 +5504,11 @@ struct ChunkProcessor {
     /// the snapshot reuses the row `String` allocations instead of allocating
     /// one per visible row on every chunk that moved anything.
     screen_buf: Vec<String>,
+    /// URLs from OSC 1337 `OpenURL` seen during the current `process_chunk`
+    /// call, drained by the caller (which holds an owned `Arc<AppState>`,
+    /// needed to spawn the confirm-then-open background task — `process_chunk`
+    /// itself only has `&AppState`).
+    pending_open_urls: Vec<String>,
 }
 
 impl ChunkProcessor {
@@ -5530,6 +5535,7 @@ impl ChunkProcessor {
             last_agent_block_line: None,
             title_awaiting: false,
             screen_buf: Vec::new(),
+            pending_open_urls: Vec::new(),
         }
     }
 
@@ -6195,6 +6201,42 @@ impl ChunkProcessor {
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-clipboard-store-{session_id}"), &text);
                         }
+                    }
+                    TermEvent::RequestFocus => {
+                        if state.config.read().osc1337_focus_attention {
+                            #[cfg(feature = "desktop")]
+                            if let Some(a) = state.app_handle.read().as_ref()
+                                && let Some(window) = a.get_webview_window("main")
+                            {
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                    TermEvent::RequestAttention(value) => {
+                        if state.config.read().osc1337_focus_attention
+                            && let Some(level) = attention_level_for_value(&value)
+                        {
+                            #[cfg(feature = "desktop")]
+                            if let Some(a) = state.app_handle.read().as_ref()
+                                && let Some(window) = a.get_webview_window("main")
+                            {
+                                let attention = match level {
+                                    AttentionLevel::Cancel => None,
+                                    AttentionLevel::Informational => {
+                                        Some(tauri::UserAttentionType::Informational)
+                                    }
+                                    AttentionLevel::Critical => {
+                                        Some(tauri::UserAttentionType::Critical)
+                                    }
+                                };
+                                let _ = window.request_user_attention(attention);
+                            }
+                        }
+                    }
+                    TermEvent::OpenUrl(url) => {
+                        self.pending_open_urls.push(url);
                     }
                     TermEvent::Osc133 {
                         command,
@@ -9487,6 +9529,59 @@ pub(crate) fn record_submitted_line(
     }
 }
 
+/// The window-attention action an OSC 1337 `RequestAttention` value maps to.
+/// Kept independent of `tauri::UserAttentionType` (which does not exist at
+/// all without the `desktop` feature — `tauri` itself is an optional,
+/// desktop-only dependency) so the mapping stays a pure, always-compiled,
+/// unit-testable function; the caller converts to the real Tauri type only
+/// inside its own `#[cfg(feature = "desktop")]` block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttentionLevel {
+    /// "no" — cancel a pending attention request.
+    Cancel,
+    /// "once" — a single bounce.
+    Informational,
+    /// "yes" (bounce until focused) or "fireworks" (macOS-only cursor
+    /// animation, with no direct Tauri equivalent — mapped to the same
+    /// continuous-bounce behavior as "yes").
+    Critical,
+}
+
+/// Maps an OSC 1337 `RequestAttention` value to the action to take. `None`
+/// means "do nothing" — only reachable if a value slips through that
+/// `Term::request_attention` (the alacritty patch) did not already validate
+/// to one of "yes"/"once"/"no"/"fireworks".
+fn attention_level_for_value(value: &str) -> Option<AttentionLevel> {
+    match value {
+        "no" => Some(AttentionLevel::Cancel),
+        "once" => Some(AttentionLevel::Informational),
+        "yes" | "fireworks" => Some(AttentionLevel::Critical),
+        _ => None,
+    }
+}
+
+/// Confirm an OSC 1337 `OpenURL` request with the human, then — only if they
+/// say yes — tell every client to actually open it (`handleOpenUrl` on the
+/// frontend). Runs on the async runtime via `async_rt.spawn` in
+/// `spawn_reader_thread`, never awaited inline on the blocking PTY reader
+/// thread: the confirm can wait on a human for up to the confirm timeout.
+async fn confirm_and_notify_open_url(state: Arc<AppState>, session_id: String, url: String) {
+    let confirmed = crate::mcp_http::confirm_open_url(&state, &session_id, &url).await;
+    if !confirmed {
+        return;
+    }
+    #[cfg(feature = "desktop")]
+    if let Some(a) = state.app_handle.read().as_ref() {
+        let _ = a.emit(
+            "pty-open-url",
+            serde_json::json!({ "session_id": session_id, "url": url }),
+        );
+    }
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::PtyOpenUrl { session_id, url });
+}
+
 pub(crate) fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
     paused: Arc<AtomicBool>,
@@ -9512,6 +9607,21 @@ pub(crate) fn spawn_reader_thread(
         session_id.clone(),
         state.clone(),
     );
+
+    // A `tokio::runtime::Handle` the reader thread below (a plain
+    // `std::thread::spawn`, not a tokio task) can use to dispatch the async
+    // OSC 1337 `OpenURL` confirm-then-notify flow — see `confirm_and_notify_open_url`.
+    // Mirrors `dir_watcher::start_watching`'s identical desktop/headless split.
+    let async_rt = {
+        #[cfg(feature = "desktop")]
+        {
+            tauri::async_runtime::handle().inner().clone()
+        }
+        #[cfg(not(feature = "desktop"))]
+        {
+            tokio::runtime::Handle::current()
+        }
+    };
 
     // Frame ticker: decouples PTY read() from frame serialization.
     // Reader sets dirty flag; ticker serializes+sends at fixed interval.
@@ -9907,7 +10017,22 @@ pub(crate) fn spawn_reader_thread(
 
                         process_kitty_actions(&kitty_actions, &session_id, &state);
 
-                        if processor.process_chunk(&data, &silence, &session_id, &state)
+                        let chunk_processed =
+                            processor.process_chunk(&data, &silence, &session_id, &state);
+                        // Drained regardless of whether process_chunk returned data to
+                        // render — an OpenURL sequence carries no visible output of its
+                        // own. Each confirm-then-notify flow can block on a human answer
+                        // for up to OPEN_URL_CONFIRM_TIMEOUT, so it must run on the async
+                        // runtime, not this blocking reader thread.
+                        for url in processor.pending_open_urls.drain(..) {
+                            async_rt.spawn(confirm_and_notify_open_url(
+                                state.clone(),
+                                session_id.clone(),
+                                url,
+                            ));
+                        }
+
+                        if chunk_processed
                             && let Some(xterm_data) = processor.transform_xterm(&data)
                         {
                             let clamped_data = xterm_data;

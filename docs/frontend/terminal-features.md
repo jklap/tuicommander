@@ -117,6 +117,12 @@ How a detected link (URL, file path, `file://`, or OSC 8 hyperlink) opens is con
 - **⌘Click / Ctrl+Click** — the underline is hidden until Cmd (macOS) or Ctrl (Windows/Linux) is held; holding it reveals the underline and pointer cursor, and modifier+click opens the link.
 - **Never** — click never opens a link; right-click's Open/Copy-link menu is the only way to activate one.
 
+### OSC 1337 iTerm2 Commands
+Backend-parsed (see `docs/backend/alacritty-integration.md`'s OSC 1337 section for the full per-command table); the frontend's role is limited to three of them:
+- **`StealFocus`/`RequestAttention`** — no frontend involvement (`pty.rs` calls the Tauri window APIs directly), gated by `osc1337_focus_attention` (default: on).
+- **`OpenURL`** — the backend raises a confirm request over the same wire `ui action=confirm` MCP requests use; `McpConfirmHost.tsx` renders it with no OSC-1337-specific frontend code. Only once confirmed does the backend emit `pty-open-url`, picked up globally by `PtyOpenUrlHost`/`stores/ptyOpenUrl.ts` → `handleOpenUrl` (the same allowlisted opener as URL Click, below).
+- **`Copy`/`CopyToClipboard`+`EndCopy`** — reuse the existing OSC 52 `pty-clipboard-store-{session_id}` event and `handleOsc52ClipboardStore` path; no separate frontend handling.
+
 ### Smart Selection
 Double-click word selection is configurable and rule-driven, mirroring iTerm2's Smart Selection. Configurable via the **Smart Selection** settings tab (see [Settings — Smart Selection Tab](../user-guide/settings.md#smart-selection-tab)).
 

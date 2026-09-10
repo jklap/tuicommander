@@ -420,13 +420,6 @@ export const TerminalTab: Component = () => {
 			/>
 
 			<SettingToggle
-				checked={settingsStore.state.showLastPrompt}
-				onChange={(v) => settingsStore.setShowLastPrompt(v)}
-				label="Show agent context bar"
-				hint="Display the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent"
-			/>
-
-			<SettingToggle
 				checked={settingsStore.state.showBlockTimestamps}
 				onChange={(v) => settingsStore.setShowBlockTimestamps(v)}
 				label={t("general.toggle.showBlockTimestamps", "Show block timestamps")}
@@ -463,6 +456,16 @@ export const TerminalTab: Component = () => {
 				hint={t(
 					"general.hint.scrollbackReflow",
 					"Re-wrap scrollback history when the terminal changes width, so old output stays readable after a side panel opens. Turn it off to leave history lines as they were written and truncate them instead. The visible screen is never reflowed either way.",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.osc1337FocusAttention}
+				onChange={(v) => settingsStore.setOsc1337FocusAttention(v)}
+				label={t("general.toggle.osc1337FocusAttention", "Allow terminal focus/attention requests")}
+				hint={t(
+					"general.hint.osc1337FocusAttention",
+					"Let terminal programs bring the window to the front or bounce the dock icon (OSC 1337 StealFocus/RequestAttention). Disable if a script or log spams either.",
 				)}
 			/>
 

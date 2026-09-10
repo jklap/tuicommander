@@ -395,6 +395,11 @@ pub struct Term<T> {
 
     /// Config directly for the terminal.
     config: Config,
+
+    /// iTerm2 OSC 1337 `CopyToClipboard`/`EndCopy` in-progress capture buffer.
+    /// `Some` while capturing; the accumulated text is flushed to the
+    /// clipboard (as `Event::ClipboardStore`) when `EndCopy` arrives.
+    clipboard_capture: Option<String>,
 }
 
 /// Configuration options for the [`Term`].
@@ -527,6 +532,7 @@ impl<T> Term<T> {
             selection: Default::default(),
             title: Default::default(),
             mode: Default::default(),
+            clipboard_capture: None,
         }
     }
 
@@ -1332,6 +1338,16 @@ impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
     #[inline(never)]
     fn input(&mut self, c: char) {
+        // Mirror printed characters into an active OSC 1337
+        // `CopyToClipboard`/`EndCopy` capture. Only covers printable input
+        // and the linefeeds added in `linefeed()` below — cursor-positioning
+        // sequences between the markers are not replayed into the capture,
+        // which is fine for the common "wrap a snippet of text" use case this
+        // targets.
+        if let Some(buf) = self.clipboard_capture.as_mut() {
+            buf.push(c);
+        }
+
         // Number of cells the char will occupy.
         let width = match c.width() {
             Some(width) => width,
@@ -1759,6 +1775,10 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn linefeed(&mut self) {
         trace!("Linefeed");
+
+        if let Some(buf) = self.clipboard_capture.as_mut() {
+            buf.push('\n');
+        }
 
         // An explicit LF means the current line ends here — clear any stale
         // WRAPLINE flag and reflow_wrap so grow_columns won't merge the next
@@ -2203,6 +2223,7 @@ impl<T: EventListener> Handler for Term<T> {
         self.title_stack = Vec::new();
         self.title = None;
         self.selection = None;
+        self.clipboard_capture = None;
         self.vi_mode_cursor = Default::default();
         self.keyboard_mode_stack = Default::default();
         self.inactive_keyboard_mode_stack = Default::default();
@@ -2675,6 +2696,56 @@ impl<T: EventListener> Handler for Term<T> {
             line,
         });
     }
+
+    #[inline]
+    fn request_focus(&mut self) {
+        trace!("Requesting focus (OSC 1337 StealFocus)");
+        self.event_proxy.send_event(Event::RequestFocus);
+    }
+
+    #[inline]
+    fn request_attention(&mut self, value: &str) {
+        trace!("Requesting attention (OSC 1337 RequestAttention={value})");
+        if matches!(value, "yes" | "once" | "no" | "fireworks") {
+            self.event_proxy
+                .send_event(Event::RequestAttention(value.to_owned()));
+        } else {
+            debug!("[osc 1337] unrecognized RequestAttention value: {value:?}");
+        }
+    }
+
+    #[inline]
+    fn start_clipboard_capture(&mut self, name: &str) {
+        trace!("Starting OSC 1337 clipboard capture (name={name:?})");
+        // Gated by the same permission as OSC 52's clipboard store — this is
+        // the same clipboard-write privilege via a different escape code.
+        if !matches!(self.config.osc52, Osc52::OnlyCopy | Osc52::CopyPaste) {
+            debug!("Denied osc1337 CopyToClipboard");
+            return;
+        }
+        self.clipboard_capture = Some(String::new());
+    }
+
+    #[inline]
+    fn end_clipboard_capture(&mut self) {
+        trace!("Ending OSC 1337 clipboard capture");
+        if let Some(text) = self.clipboard_capture.take() {
+            self.event_proxy
+                .send_event(Event::ClipboardStore(ClipboardType::Clipboard, text));
+        }
+    }
+
+    #[inline]
+    fn open_url(&mut self, base64: &[u8]) {
+        if let Ok(bytes) = Base64.decode(base64) {
+            if let Ok(url) = String::from_utf8(bytes) {
+                trace!("Requesting URL open (OSC 1337 OpenURL): {url}");
+                self.event_proxy.send_event(Event::OpenUrl(url));
+                return;
+            }
+        }
+        debug!("[osc 1337] OpenURL payload is not valid base64/UTF-8");
+    }
 }
 
 /// The state of the [`Mode`] and [`PrivateMode`].
@@ -2943,6 +3014,19 @@ mod tests {
     use crate::term::cell::{Cell, Flags};
     use crate::term::test::TermSize;
     use crate::vte::ansi::{self, CharsetIndex, Handler, StandardCharset};
+
+    /// Test [`EventListener`] that records every event fired, for asserting
+    /// on the events produced by the OSC 1337 handlers below. The `Rc<RefCell<_>>`
+    /// is cloned into the `Term`'s `event_proxy` while a second handle stays
+    /// with the test to inspect what was recorded.
+    #[derive(Clone, Default)]
+    struct EventRecorder(std::rc::Rc<std::cell::RefCell<Vec<Event>>>);
+
+    impl EventListener for EventRecorder {
+        fn send_event(&self, event: Event) {
+            self.0.borrow_mut().push(event);
+        }
+    }
 
     #[test]
     fn scroll_display_page_up() {
@@ -4046,5 +4130,177 @@ mod tests {
         assert_eq!(version_number("0.1.2-dev"), 1_02);
         assert_eq!(version_number("1.2.3-dev"), 1_02_03);
         assert_eq!(version_number("999.99.99"), 9_99_99_99);
+    }
+
+    #[test]
+    fn request_focus_sends_event() {
+        let size = TermSize::new(5, 5);
+        let recorder = EventRecorder::default();
+        let mut term = Term::new(Config::default(), &size, recorder.clone());
+
+        term.request_focus();
+
+        assert!(matches!(recorder.0.borrow()[..], [Event::RequestFocus]));
+    }
+
+    #[test]
+    fn request_attention_accepts_known_values_only() {
+        let size = TermSize::new(5, 5);
+        let recorder = EventRecorder::default();
+        let mut term = Term::new(Config::default(), &size, recorder.clone());
+
+        for value in ["yes", "once", "no", "fireworks"] {
+            term.request_attention(value);
+        }
+        term.request_attention("bogus");
+
+        let events = recorder.0.borrow();
+        let seen: Vec<&str> = events
+            .iter()
+            .map(|e| match e {
+                Event::RequestAttention(v) => v.as_str(),
+                other => panic!("unexpected event: {other:?}"),
+            })
+            .collect();
+        assert_eq!(seen, ["yes", "once", "no", "fireworks"]);
+    }
+
+    #[test]
+    fn open_url_decodes_base64_and_sends_event() {
+        let size = TermSize::new(5, 5);
+        let recorder = EventRecorder::default();
+        let mut term = Term::new(Config::default(), &size, recorder.clone());
+
+        // base64("https://example.com") == "aHR0cHM6Ly9leGFtcGxlLmNvbQ=="
+        term.open_url(b"aHR0cHM6Ly9leGFtcGxlLmNvbQ==");
+
+        match &recorder.0.borrow()[..] {
+            [Event::OpenUrl(url)] => assert_eq!(url, "https://example.com"),
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_url_ignores_invalid_base64() {
+        let size = TermSize::new(5, 5);
+        let recorder = EventRecorder::default();
+        let mut term = Term::new(Config::default(), &size, recorder.clone());
+
+        term.open_url(b"not valid base64!!");
+
+        assert!(recorder.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn clipboard_capture_accumulates_input_and_linefeeds_until_end_copy() {
+        let size = TermSize::new(20, 5);
+        let recorder = EventRecorder::default();
+        let mut term = Term::new(Config::default(), &size, recorder.clone());
+
+        term.start_clipboard_capture("");
+        for c in "hi".chars() {
+            term.input(c);
+        }
+        term.linefeed();
+        for c in "there".chars() {
+            term.input(c);
+        }
+        // Nothing flushed yet.
+        assert!(recorder.0.borrow().is_empty());
+
+        term.end_clipboard_capture();
+
+        match &recorder.0.borrow()[..] {
+            [Event::ClipboardStore(ClipboardType::Clipboard, text)] => {
+                assert_eq!(text, "hi\nthere");
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clipboard_capture_with_no_input_flushes_empty_string() {
+        let size = TermSize::new(5, 5);
+        let recorder = EventRecorder::default();
+        let mut term = Term::new(Config::default(), &size, recorder.clone());
+
+        term.start_clipboard_capture("");
+        term.end_clipboard_capture();
+
+        // An empty capture still flushes an (empty) store — EndCopy without
+        // any output in between is a degenerate but valid sequence.
+        match &recorder.0.borrow()[..] {
+            [Event::ClipboardStore(ClipboardType::Clipboard, text)] => assert_eq!(text, ""),
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn end_clipboard_capture_without_start_is_a_noop() {
+        let size = TermSize::new(5, 5);
+        let recorder = EventRecorder::default();
+        let mut term = Term::new(Config::default(), &size, recorder.clone());
+
+        term.end_clipboard_capture();
+
+        assert!(recorder.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn clipboard_capture_denied_when_osc52_store_disabled() {
+        let size = TermSize::new(5, 5);
+        let recorder = EventRecorder::default();
+        let config = Config {
+            osc52: Osc52::Disabled,
+            ..Config::default()
+        };
+        let mut term = Term::new(config, &size, recorder.clone());
+
+        term.start_clipboard_capture("");
+        term.input('x');
+        term.end_clipboard_capture();
+
+        assert!(recorder.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn clipboard_capture_denied_when_osc52_only_paste() {
+        let size = TermSize::new(5, 5);
+        let recorder = EventRecorder::default();
+        let config = Config {
+            osc52: Osc52::OnlyPaste,
+            ..Config::default()
+        };
+        let mut term = Term::new(config, &size, recorder.clone());
+
+        term.start_clipboard_capture("");
+        term.input('x');
+        term.end_clipboard_capture();
+
+        assert!(recorder.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn reset_state_clears_in_progress_clipboard_capture() {
+        let size = TermSize::new(5, 5);
+        let recorder = EventRecorder::default();
+        let mut term = Term::new(Config::default(), &size, recorder.clone());
+
+        term.start_clipboard_capture("");
+        term.input('x');
+        term.reset_state();
+        term.end_clipboard_capture();
+
+        // The capture was discarded by reset_state, so EndCopy after it finds
+        // nothing to flush — reset_state itself always fires
+        // CursorBlinkingChange, so assert on the absence of ClipboardStore
+        // specifically rather than an empty recorder.
+        assert!(
+            !recorder
+                .0
+                .borrow()
+                .iter()
+                .any(|e| matches!(e, Event::ClipboardStore(..)))
+        );
     }
 }

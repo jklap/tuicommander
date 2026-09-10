@@ -17254,3 +17254,130 @@ async fn confident_awaiting_still_clears_on_a_non_edge_busy_reaffirmation() {
          how the badge stuck through full task completion on both live sessions"
     );
 }
+
+#[test]
+fn attention_level_for_value_maps_every_known_iterm2_value() {
+    assert_eq!(
+        attention_level_for_value("no"),
+        Some(AttentionLevel::Cancel)
+    );
+    assert_eq!(
+        attention_level_for_value("once"),
+        Some(AttentionLevel::Informational)
+    );
+    assert_eq!(
+        attention_level_for_value("yes"),
+        Some(AttentionLevel::Critical)
+    );
+    // "fireworks" has no direct Tauri equivalent — mapped to the same
+    // continuous-bounce behavior as "yes".
+    assert_eq!(
+        attention_level_for_value("fireworks"),
+        Some(AttentionLevel::Critical)
+    );
+}
+
+#[test]
+fn attention_level_for_value_ignores_unrecognized_values() {
+    // Unreachable in production — Term::request_attention already
+    // validates to one of the four known values — but the function must
+    // still fail safe rather than panic or guess.
+    assert_eq!(attention_level_for_value(""), None);
+    assert_eq!(attention_level_for_value("YES"), None);
+    assert_eq!(attention_level_for_value("bogus"), None);
+}
+
+#[test]
+fn test_chunk_processor_osc1337_open_url_queues_pending_url() {
+    use crate::state::VtLogBuffer;
+    use std::sync::atomic::AtomicU64;
+
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "test-cp-osc1337-open-url";
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.to_string(), silence.clone());
+    state.session_maps.shell_states.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_NULL),
+    );
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.to_string(), AtomicU64::new(0));
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut utf8_buf = Utf8ReadBuffer::new();
+    let mut esc_buf = EscapeAwareBuffer::new();
+
+    // base64("https://example.com") == "aHR0cHM6Ly9leGFtcGxlLmNvbQ=="
+    let utf8_data = utf8_buf.push(b"\x1b]1337;OpenURL=:aHR0cHM6Ly9leGFtcGxlLmNvbQ==\x07");
+    let esc_data = esc_buf.push(&utf8_data);
+    let _ = cp.process_chunk(&esc_data, &silence, sid, state.as_ref());
+
+    assert_eq!(
+        cp.pending_open_urls,
+        vec!["https://example.com".to_string()]
+    );
+}
+
+#[test]
+fn test_chunk_processor_osc1337_steal_focus_and_request_attention_do_not_panic() {
+    // No real Tauri AppHandle in a unit test — this exercises the
+    // config-gate + app_handle-is-None no-op path, and mainly guards
+    // against a panic while wiring TermEvent::RequestFocus/RequestAttention
+    // through process_chunk.
+    use crate::state::VtLogBuffer;
+    use std::sync::atomic::AtomicU64;
+
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "test-cp-osc1337-focus-attention";
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.to_string(), silence.clone());
+    state.session_maps.shell_states.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_NULL),
+    );
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+    state
+        .session_maps
+        .last_output_ms
+        .insert(sid.to_string(), AtomicU64::new(0));
+
+    let mut cp = ChunkProcessor::new(None, None);
+    let mut utf8_buf = Utf8ReadBuffer::new();
+    let mut esc_buf = EscapeAwareBuffer::new();
+    let mut feed = |cp: &mut ChunkProcessor, bytes: &[u8]| {
+        let utf8_data = utf8_buf.push(bytes);
+        let esc_data = esc_buf.push(&utf8_data);
+        let _ = cp.process_chunk(&esc_data, &silence, sid, state.as_ref());
+    };
+
+    feed(&mut cp, b"\x1b]1337;StealFocus\x07");
+    feed(&mut cp, b"\x1b]1337;RequestAttention=fireworks\x07");
+    feed(&mut cp, b"\x1b]1337;RequestAttention=no\x07");
+
+    // config gate off must also stay panic-free.
+    state.config.write().osc1337_focus_attention = false;
+    feed(&mut cp, b"\x1b]1337;StealFocus\x07");
+}
