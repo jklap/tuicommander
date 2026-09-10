@@ -1,0 +1,70 @@
+.pathLine {
+	margin: 0 0 12px;
+	font-size: var(--font-md);
+	font-family: var(--font-mono);
+	color: var(--fg-secondary);
+	word-break: break-all;
+}
+
+.repoList {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 0 0 12px;
+	max-height: 30vh;
+	overflow-y: auto;
+}
+
+.repoButton {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px;
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--fg-primary);
+	font-size: var(--font-md);
+	text-align: left;
+	cursor: pointer;
+	overflow: hidden;
+}
+
+.repoButton span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.repoButton:hover {
+	background: var(--bg-highlight);
+	border-color: var(--accent);
+}
+
+.emptyState {
+	margin: 0 0 12px;
+	font-size: var(--font-md);
+	color: var(--fg-muted);
+}
+
+.escapeHatches {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.escapeHatchButton {
+	padding: 8px 10px;
+	background: var(--bg-tertiary);
+	border: 1px dashed var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--fg-secondary);
+	font-size: var(--font-md);
+	text-align: left;
+	cursor: pointer;
+}
+
+.escapeHatchButton:hover {
+	background: var(--bg-highlight);
+	color: var(--fg-primary);
+}

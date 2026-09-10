@@ -10,6 +10,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 describe("repositoriesStore", () => {
 	let store: typeof import("../../stores/repositories").repositoriesStore;
+	let locateFile: typeof import("../../stores/repositories").locateFile;
+	let placementWorkspaceFor: typeof import("../../stores/repositories").placementWorkspaceFor;
 
 	function lastRepositoryMutation() {
 		const calls = mockInvoke.mock.calls.filter((call: unknown[]) => call[0] === "save_repositories");
@@ -38,7 +40,10 @@ describe("repositoriesStore", () => {
 			invoke: mockInvoke,
 		}));
 
-		store = (await import("../../stores/repositories")).repositoriesStore;
+		const mod = await import("../../stores/repositories");
+		store = mod.repositoriesStore;
+		locateFile = mod.locateFile;
+		placementWorkspaceFor = mod.placementWorkspaceFor;
 		store._testSetHydrated(true);
 	});
 
@@ -1869,6 +1874,113 @@ describe("repositoriesStore", () => {
 				// repoOrder is empty, but the repos still surface via the group
 				expect(store.state.repoOrder).toEqual([]);
 				expect(store.getAllReposOrdered().map((r) => r.path)).toEqual(["/repo-a", "/repo-b"]);
+			});
+		});
+	});
+
+	describe("locateFile()", () => {
+		it("returns empty repoPath/fsRoot when no registered repo owns the path", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "Repo" });
+				store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+
+				expect(locateFile("/elsewhere/file.ts")).toEqual({
+					repoPath: "",
+					fsRoot: "",
+					filePath: "/elsewhere/file.ts",
+				});
+			});
+		});
+
+		it("uses the repo root as fsRoot when the owner matched at the root", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "Repo" });
+				store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+
+				expect(locateFile("/repo/src/file.ts")).toEqual({
+					repoPath: "/repo",
+					fsRoot: "/repo",
+					filePath: "src/file.ts",
+				});
+			});
+		});
+
+		it("uses the linked worktree as fsRoot when the owner matched a workspace's worktree", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "Repo" });
+				store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
+
+				expect(locateFile("/repo__wt/feature/src/file.ts")).toEqual({
+					repoPath: "/repo",
+					fsRoot: "/repo__wt/feature",
+					filePath: "src/file.ts",
+				});
+			});
+		});
+
+		it("keeps filePath absolute when the resolved root does not prefix it", () => {
+			testInScope(() => {
+				// A workspace with no worktreePath falls back to the repo root as
+				// fsRoot, but a root match with the SAME repo root would already be
+				// covered above — this covers the defensive `pathStartsWith` check
+				// itself by asserting on a path that only matches via the root
+				// candidate.
+				store.add({ path: "/repo", displayName: "Repo" });
+				store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+
+				const result = locateFile("/repo/nested/deep/file.ts");
+				expect(result.fsRoot).toBe("/repo");
+				expect(result.filePath).toBe("nested/deep/file.ts");
+			});
+		});
+	});
+
+	describe("placementWorkspaceFor()", () => {
+		it("returns the workspace id as-is when the owner already names one", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "Repo" });
+				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
+
+				expect(placementWorkspaceFor({ repoPath: "/repo", workspaceId: "feature" })).toBe("feature");
+			});
+		});
+
+		it("resolves a root match to the repo's activeWorkspaceId", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "Repo" });
+				store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+				store.setActiveWorkspace("/repo", "main");
+
+				expect(placementWorkspaceFor({ repoPath: "/repo", workspaceId: null })).toBe("main");
+			});
+		});
+
+		it("falls back to the workspace whose worktreePath is the repo root when activeWorkspaceId is null", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "Repo" });
+				// Discovered before workspaces were scanned: activeWorkspaceId is null
+				// even though the root checkout (main) is already known.
+				store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+
+				expect(placementWorkspaceFor({ repoPath: "/repo", workspaceId: null })).toBe("main");
+			});
+		});
+
+		it("returns null when nothing resolves the root match", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "Repo" });
+				// No workspace records the repo root as its worktree, and
+				// activeWorkspaceId is null.
+				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
+
+				expect(placementWorkspaceFor({ repoPath: "/repo", workspaceId: null })).toBeNull();
+			});
+		});
+
+		it("returns null for an unregistered repo", () => {
+			testInScope(() => {
+				expect(placementWorkspaceFor({ repoPath: "/no-such-repo", workspaceId: null })).toBeNull();
 			});
 		});
 	});

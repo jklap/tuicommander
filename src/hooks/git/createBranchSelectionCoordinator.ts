@@ -32,7 +32,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 
 	/** `workspaceId` is the row the terminal joins. The branch it displays comes
 	 *  from that row's record rather than being inferred from the map key. */
-	const handleAddTerminalToWorkspace = async (repoPath: string, workspaceId: string) => {
+	const handleAddTerminalToWorkspace = async (repoPath: string, workspaceId: string, cwdOverride?: string) => {
 		const canSpawn = await deps.pty.canSpawn();
 		if (!canSpawn) {
 			deps.setStatusInfo("Max sessions reached (50)");
@@ -71,7 +71,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// `null` here is not "the default directory" — the backend spawns in the
 			// user's HOME. A workspace of this repo belongs in this repo: a linked
 			// worktree has its own path, everything else is the repo checkout.
-			cwd: branch?.worktreePath || repoPath,
+			cwd: cwdOverride || branch?.worktreePath || repoPath,
 			awaitingInput: null,
 			// No prefix: tuicSession must stay a bare canonical UUID for the
 			// backend's `is_valid_uuid` prompt-injection guard.
