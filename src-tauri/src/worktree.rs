@@ -308,11 +308,17 @@ pub(crate) fn create_worktree_internal(
                     });
                 }
                 WorktreeAddFailure::Other => {
-                    return Err(format!("Git worktree failed: git exited with: {stderr}"));
+                    return Err(crate::git_locks::describe_stale_lock(&base_repo_path)
+                        .unwrap_or_else(|| {
+                            format!("Git worktree failed: git exited with: {stderr}")
+                        }));
                 }
             }
         }
-        Err(e) => return Err(format!("Git worktree failed: {e}")),
+        Err(e) => {
+            return Err(crate::git_locks::describe_stale_lock(&base_repo_path)
+                .unwrap_or_else(|| format!("Git worktree failed: {e}")));
+        }
     }
 
     // Persist the base ref in git config for "Update from base" support
@@ -481,7 +487,8 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
         }
         Err(e) => {
             tracing::error!(source = "worktree", branch = %worktree.name, "git worktree remove FAILED: {e}");
-            return Err(format!("Git worktree remove failed: {e}"));
+            return Err(crate::git_locks::describe_stale_lock(&worktree.base_repo)
+                .unwrap_or_else(|| format!("Git worktree remove failed: {e}")));
         }
     }
 
@@ -1197,10 +1204,33 @@ pub(crate) fn operation_head_branch(worktree_path: &str) -> Option<String> {
     None
 }
 
-/// Map branch name -> worktree directory. A worktree detached by an in-progress rebase keeps its
+/// One workspace's checkout, resolved by opaque workspace id.
+///
+/// `branch` is deliberately a field and not the key. Two workspaces may sit on
+/// the same branch — that is the whole point of COW workspaces, since a clone is
+/// an independent repository and git will not object — so a map keyed on the
+/// branch collapses them into whichever was inserted last, and a caller asking
+/// for one silently gets the other's directory (#726-5ac7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkspaceWorktree {
+    /// What is checked out here. Ordinary data: never a key, never parsed out of
+    /// the id.
+    pub(crate) branch: String,
+    pub(crate) path: String,
+}
+
+/// Map workspace id -> its checkout. A worktree detached by an in-progress rebase keeps its
 /// row: its pre-rebase branch is recovered from git's own state files, so the sidebar entry
 /// survives and its terminals are not closed mid-conflict-resolution.
-fn map_worktree_branch_paths(porcelain: &str) -> HashMap<String, String> {
+///
+/// For a **git worktree** the id is the branch name, because the plan's identity
+/// migration is exactly that: existing entries keep `workspace_id = branch`, so
+/// no persisted key moves and no id is invented for data that already works.
+/// This is not a placeholder — it is the migration. A COW clone, which
+/// `git worktree list` never reports at all, carries a minted id through this
+/// same single lookup path rather than a second parallel map, which is the shape
+/// that produces races.
+fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWorktree> {
     let mut result = HashMap::new();
 
     for entry in parse_worktree_entries(porcelain) {
@@ -1212,11 +1242,31 @@ fn map_worktree_branch_paths(porcelain: &str) -> HashMap<String, String> {
         if let Some(branch) = branch
             && Path::new(&entry.path).exists()
         {
-            result.insert(branch, entry.path);
+            result.insert(
+                branch.clone(),
+                WorkspaceWorktree {
+                    branch,
+                    path: entry.path,
+                },
+            );
         }
     }
 
     result
+}
+
+/// Branch-keyed view of [`map_worktree_workspace_paths`], for call sites not yet
+/// migrated to workspace ids.
+///
+/// Lossy on purpose and only safe while every id equals its branch: two
+/// workspaces on one branch collapse here. Callers move to the id-keyed map as
+/// the rest of #726-5ac7 lands; this exists so the seam can be introduced
+/// without a 618-site rename in one commit.
+fn map_worktree_branch_paths(porcelain: &str) -> HashMap<String, String> {
+    map_worktree_workspace_paths(porcelain)
+        .into_values()
+        .map(|entry| (entry.branch, entry.path))
+        .collect()
 }
 
 /// Get worktree paths for a repo: maps branch name -> worktree directory
@@ -1630,7 +1680,10 @@ pub(crate) fn switch_branch_impl(
         let stash_out = git_cmd(&base_repo)
             .args(["stash", "push", "-m", &stash_msg])
             .run()
-            .map_err(|e| format!("Stash failed: {e}"))?;
+            .map_err(|e| {
+                crate::git_locks::describe_stale_lock(&base_repo)
+                    .unwrap_or_else(|| format!("Stash failed: {e}"))
+            })?;
 
         // "No local changes to save" means nothing was stashed
         !stash_out.stdout.contains("No local changes to save")
@@ -1648,7 +1701,10 @@ pub(crate) fn switch_branch_impl(
     git_cmd(&base_repo)
         .args(&args)
         .run()
-        .map_err(|e| format!("Checkout failed: {e}"))?;
+        .map_err(|e| {
+            crate::git_locks::describe_stale_lock(&base_repo)
+                .unwrap_or_else(|| format!("Checkout failed: {e}"))
+        })?;
 
     state.invalidate_repo_caches(&repo_path);
 
@@ -1949,7 +2005,10 @@ pub(crate) fn merge_and_archive_worktree_impl(
     git_cmd(&base_repo)
         .args(["checkout", &target_branch])
         .run()
-        .map_err(|e| format!("Failed to checkout {target_branch}: {e}"))?;
+        .map_err(|e| {
+            crate::git_locks::describe_stale_lock(&base_repo)
+                .unwrap_or_else(|| format!("Failed to checkout {target_branch}: {e}"))
+        })?;
 
     // 2. Merge the source branch
     if let Err(e) = git_cmd(&base_repo)
@@ -3478,6 +3537,57 @@ branch refs/heads/feat
         format!(
             "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n\nworktree {wt_path}\nHEAD deadbeef\ndetached\n\n"
         )
+    }
+
+    /// Two workspaces may share a branch (#726-5ac7), so a lookup keyed on the
+    /// branch cannot say WHICH one you asked for. Resolution is by opaque
+    /// workspace id, and the branch travels as a field on the value.
+    ///
+    /// For a git worktree the id IS the branch — the plan's migration is the
+    /// identity function, so nothing persisted moves. The point of the seam is
+    /// that a COW clone, which git never lists, can carry a minted id through
+    /// the same one lookup path instead of a second parallel map.
+    #[test]
+    fn workspace_paths_are_keyed_by_id_and_carry_the_branch() {
+        // A real directory: the mapper drops entries whose path no longer exists,
+        // which is the post-prune safety guard, not something to work around.
+        let dir = TempDir::new().expect("temp dir");
+        let wt = dir.path().to_string_lossy().into_owned();
+        let porcelain = format!("worktree {wt}\nHEAD abc123\nbranch refs/heads/main\n\n");
+
+        let map = super::map_worktree_workspace_paths(&porcelain);
+
+        let entry = map.get("main").expect("resolvable by workspace id");
+        assert_eq!(entry.path, wt);
+        assert_eq!(entry.branch, "main", "branch survives as data, not as the key");
+    }
+
+    /// The failure this replaces: `HashMap<branch, path>` collapses two
+    /// same-branch workspaces into whichever one was inserted last, so a caller
+    /// asking for a specific workspace silently got the other one's directory.
+    /// Keyed by id, each resolves to its own path.
+    #[test]
+    fn two_workspaces_on_one_branch_resolve_to_their_own_paths() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "feat-x".to_string(),
+            super::WorkspaceWorktree { branch: "feat-x".to_string(), path: "/repo".to_string() },
+        );
+        map.insert(
+            "feat-x~a1b2c3d4".to_string(),
+            super::WorkspaceWorktree {
+                branch: "feat-x".to_string(),
+                path: "/clones/feat-x-2".to_string(),
+            },
+        );
+
+        assert_eq!(map.get("feat-x").expect("first workspace").path, "/repo");
+        assert_eq!(
+            map.get("feat-x~a1b2c3d4").expect("second workspace").path,
+            "/clones/feat-x-2",
+            "the second workspace is not shadowed by the first"
+        );
+        assert_eq!(map.len(), 2, "same branch, two distinct entries");
     }
 
     #[test]
