@@ -306,6 +306,7 @@ Features:
 |----------|--------|
 | ↑/↓ | Navigate prompts |
 | Enter | Insert prompt |
+| Tab/Shift+Tab | Cycle category chips (search stays focused) |
 | Ctrl+N | New prompt |
 | Ctrl+E | Edit selected |
 | Ctrl+F | Toggle favorite |

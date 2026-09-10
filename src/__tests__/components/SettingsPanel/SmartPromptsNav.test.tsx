@@ -146,4 +146,60 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		fireEvent.change(checkbox!, { target: { checked: true } });
 		expect(updatePrompt).toHaveBeenCalledWith("sp-test", expect.objectContaining({ autoExecute: true }));
 	});
+
+	it("offers an Auto target option alongside Compose and Terminal, and reflects the prompt's current target", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} initialTab="smart-prompts" />);
+		const header = Array.from(container.querySelectorAll('[role="button"]')).find((el) =>
+			el.textContent?.includes("Test Smart Prompt"),
+		);
+		fireEvent.click(header!);
+
+		const targetSelect = Array.from(container.querySelectorAll("select")).find((sel) =>
+			Array.from(sel.options).some((o) => o.value === "auto"),
+		) as HTMLSelectElement | undefined;
+		expect(targetSelect).toBeTruthy();
+		expect(Array.from(targetSelect!.options).map((o) => o.value)).toEqual(["auto", "compose", "terminal"]);
+		// SMART_PROMPT fixture has injectTarget: "terminal" explicitly set.
+		expect(targetSelect!.value).toBe("terminal");
+
+		fireEvent.change(targetSelect!, { target: { value: "auto" } });
+		expect(updatePrompt).toHaveBeenCalledWith("sp-test", expect.objectContaining({ injectTarget: "auto" }));
+	});
+
+	it("shows the Auto-execute control for every inject target, not just explicit Terminal", () => {
+		// Regression: this control used to be hidden unless injectTarget was the
+		// literal "terminal", even though autoExecute is meaningful (and honored
+		// by shouldSubmitInjectPrompt) for "auto" and "compose" targets too, and
+		// the Prompt Library dialog's own editor already showed it unconditionally
+		// for any inject-mode prompt — the two editors must agree.
+		const original = SMART_PROMPT.injectTarget;
+		SMART_PROMPT.injectTarget = "auto";
+		try {
+			const { container } = render(() => (
+				<SettingsPanel visible={true} onClose={() => {}} initialTab="smart-prompts" />
+			));
+			const header = Array.from(container.querySelectorAll('[role="button"]')).find((el) =>
+				el.textContent?.includes("Test Smart Prompt"),
+			);
+			fireEvent.click(header!);
+
+			const labels = Array.from(container.querySelectorAll("label")).map((l) => l.textContent);
+			expect(labels).toContain("Auto-execute");
+		} finally {
+			SMART_PROMPT.injectTarget = original;
+		}
+	});
+
+	it("shows mapped placement labels, not raw enum values, in the Placement checkbox grid", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} initialTab="smart-prompts" />);
+		const header = Array.from(container.querySelectorAll('[role="button"]')).find((el) =>
+			el.textContent?.includes("Test Smart Prompt"),
+		);
+		fireEvent.click(header!);
+
+		const placementLabels = Array.from(container.querySelectorAll(".placementCheck span")).map((el) => el.textContent);
+		expect(placementLabels).toContain("Toolbar menu");
+		expect(placementLabels).toContain("File right-click menu");
+		expect(placementLabels).not.toContain("toolbar");
+	});
 });

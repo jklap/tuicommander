@@ -56,9 +56,16 @@ Low-level PTY session management. Wraps Tauri PTY commands.
 
 Resolves Smart Prompt variables and routes inject, shell, headless, and API
 execution. For inject mode, explicit Insert/Run choices take precedence over
-`autoExecute`; prompts without that persisted field retain their legacy target
-default. Only actions that will submit are idle-gated. PTY delivery always uses
-`usePty.sendCommand`, including review-only fallback with `submit=false`.
+`autoExecute`. `resolveInjectTarget(prompt, composeIsOpen)` (exported) resolves
+where the text goes: an explicit `"compose"`/`"terminal"` always wins; unset or
+`"auto"` (the default for new prompts) adapts to whether the Compose panel is
+currently open, via `TerminalRef.isComposeOpen()`. Only actions that will
+submit are idle-gated. PTY delivery always uses `usePty.sendCommand`, including
+review-only fallback with `submit=false`. `friendlyError(result, promptName)`
+(also exported) translates a failed `SmartPromptResult` into user-facing text
+(e.g. unresolved `staged_diff` → "Stage some files first") — shared by every
+caller that surfaces execution failures to the user (`SmartButtonStrip`,
+`PromptDrawer`).
 
 ---
 

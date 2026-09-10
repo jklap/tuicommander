@@ -1,10 +1,17 @@
 import { type Component, createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { ALL_SMART_PLACEMENTS, SMART_PLACEMENT_INFO } from "../../data/smartPlacementLabels";
 import { SMART_PROMPTS_BUILTIN, VARIABLE_DESCRIPTIONS } from "../../data/smartPromptsBuiltIn";
 import { useConfirmDialog } from "../../hooks/useConfirmDialog";
 import { usePty } from "../../hooks/usePty";
-import { shouldSubmitInjectPrompt } from "../../hooks/useSmartPrompts";
+import {
+	friendlyError,
+	resolveInjectTarget,
+	shouldSubmitInjectPrompt,
+	useSmartPrompts,
+} from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
+import { registerModal } from "../../stores/modalStack";
 import {
 	type PromptCategory,
 	promptLibraryStore,
@@ -12,6 +19,7 @@ import {
 	type SmartPlacement,
 } from "../../stores/promptLibrary";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
 import { cx } from "../../utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { KeyComboCapture } from "../shared/KeyComboCapture";
@@ -21,23 +29,15 @@ export interface PromptDrawerProps {
 	onClose?: () => void;
 }
 
-/** Category labels */
+/** Category labels, also the Tab-cycle order (matches the Command Palette's
+ *  scope-chip cycling, `commandPaletteStore.cycleScope`). */
 const CATEGORY_LABELS: Record<PromptCategory | "all", string> = {
 	all: "All",
 	custom: "Custom",
 	recent: "Recent",
 	favorite: "Favorites",
 };
-
-const ALL_PLACEMENTS: SmartPlacement[] = [
-	"toolbar",
-	"git-changes",
-	"git-branches",
-	"pr-popover",
-	"issue-popover",
-	"terminal-context",
-	"command-palette",
-];
+const CATEGORY_ORDER: Array<PromptCategory | "all"> = Object.keys(CATEGORY_LABELS) as Array<PromptCategory | "all">;
 
 /** Built-in defaults indexed by ID for quick lookup */
 const BUILTIN_BY_ID = new Map(SMART_PROMPTS_BUILTIN.map((p) => [p.id, p]));
@@ -54,6 +54,9 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 	let pendingPromptClick: ReturnType<typeof setTimeout> | null = null;
 
 	const pty = usePty();
+	const smartPrompts = useSmartPrompts();
+
+	let listRef: HTMLDivElement | undefined;
 
 	const filteredPrompts = () => promptLibraryStore.getFilteredPrompts();
 	const isOpen = () => promptLibraryStore.state.drawerOpen;
@@ -65,10 +68,32 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 	};
 	onCleanup(clearPendingPromptClick);
 
-	// Reset selection when prompts change
+	/** Move to the next/previous category chip, wrapping at either end —
+	 *  mirrors the Command Palette's `cycleScope`. */
+	const cycleCategory = (direction: 1 | -1) => {
+		const current = CATEGORY_ORDER.indexOf(promptLibraryStore.state.selectedCategory);
+		const next = (current + direction + CATEGORY_ORDER.length) % CATEGORY_ORDER.length;
+		promptLibraryStore.setSelectedCategory(CATEGORY_ORDER[next]);
+	};
+
+	// Reset selection to the top when the filtered *list itself* changes — a
+	// different category/search result, or a prompt added/removed/reordered —
+	// but not on an unrelated store write (favorite/enable toggle) that leaves
+	// this exact sequence of ids untouched. Comparing against the previous ids
+	// (not just clamping to bounds) matters when the result count coincidentally
+	// stays the same but the actual prompts shown changed, e.g. a search query
+	// edit that narrows to a different set of the same size.
+	let previousFilteredIds = "";
 	createEffect(() => {
-		filteredPrompts();
-		setSelectedIndex(0);
+		const currentIds = filteredPrompts()
+			.map((p) => p.id)
+			.join(",");
+		if (currentIds !== previousFilteredIds) {
+			previousFilteredIds = currentIds;
+			setSelectedIndex(0);
+		} else if (selectedIndex() >= filteredPrompts().length) {
+			setSelectedIndex(0);
+		}
 	});
 
 	createEffect(() => {
@@ -87,30 +112,72 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 		onCleanup(() => clearTimeout(focusTimer));
 	});
 
+	// Register with the central modal stack so Escape is captured (at document
+	// capture phase, before it can reach the terminal underneath) and so
+	// `anyModalOpen()` (checked by useKeyboardRedirect) stops printable
+	// keystrokes from being redirected into the active terminal whenever focus
+	// leaves the search input.
+	//
+	// Because the modal stack's Escape handler runs at capture phase and calls
+	// stopPropagation(), it always wins the race against this component's own
+	// bubble-phase `handleKeydown` below — so this callback is now the ONLY
+	// place Escape is handled for this dialog, not an addition to it. It must
+	// replicate the same "close the innermost open layer first" behavior
+	// `handleKeydown` used to own (variable dialog, then editor, then the
+	// drawer itself), or Escape from the sub-editor/variable dialog would jump
+	// straight to closing the whole drawer instead of backing out one level.
+	createEffect(() => {
+		if (!isOpen()) return;
+		registerModal(() => {
+			if (showVariableDialog()) {
+				setShowVariableDialog(false);
+				setPendingPrompt(null);
+				return;
+			}
+			if (showEditor()) {
+				setShowEditor(false);
+				setEditingPrompt(null);
+				return;
+			}
+			promptLibraryStore.closeDrawer();
+			props.onClose?.();
+		});
+	});
+
+	// Keep the keyboard-selected row visible when navigating with arrow keys.
+	createEffect(() => {
+		const idx = selectedIndex();
+		const row = listRef?.children[idx];
+		row?.scrollIntoView({ block: "nearest" });
+	});
+
 	// Keyboard navigation
 	createEffect(() => {
 		if (!isOpen()) return;
 
 		const handleKeydown = (e: KeyboardEvent) => {
-			if (showVariableDialog()) {
-				if (e.key === "Escape") {
-					setShowVariableDialog(false);
-					setPendingPrompt(null);
-				}
-				return;
-			}
-
-			if (showEditor()) {
-				if (e.key === "Escape") {
-					setShowEditor(false);
-					setEditingPrompt(null);
-				}
-				return;
-			}
+			// Escape is handled entirely by the modal-stack registration above —
+			// its capture-phase listener always runs first and stops propagation,
+			// so an "Escape" case here would never fire. Variable-dialog/editor
+			// sub-views still gate every other key the same way (nothing below
+			// should act while one of them covers the list).
+			if (showVariableDialog() || showEditor()) return;
 
 			const prompts = filteredPrompts();
 
 			switch (e.key) {
+				case "Tab":
+					// Keep focus in the search input — cycle the category chips instead
+					// of letting Tab walk native focus order out of the dialog. Mirrors
+					// the Command Palette's Tab/Shift+Tab scope-chip cycling. Refocus
+					// explicitly: this listener fires regardless of which element
+					// currently has focus (e.g. the "+ New Prompt" button), so without
+					// this, Tab from there would cycle the category but leave focus
+					// stuck on that button instead of returning it to Search.
+					e.preventDefault();
+					cycleCategory(e.shiftKey ? -1 : 1);
+					searchInputRef?.focus();
+					break;
 				case "ArrowDown":
 					e.preventDefault();
 					setSelectedIndex((i) => Math.min(i + 1, prompts.length - 1));
@@ -124,11 +191,6 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 					if (prompts[selectedIndex()]) {
 						injectPrompt(prompts[selectedIndex()]);
 					}
-					break;
-				case "Escape":
-					e.preventDefault();
-					promptLibraryStore.closeDrawer();
-					props.onClose?.();
 					break;
 				case "n":
 					if (e.ctrlKey || e.metaKey) {
@@ -163,6 +225,26 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 	const injectPrompt = async (prompt: SavedPrompt, submitOverride?: boolean) => {
 		if (prompt.enabled === false) return;
 
+		const mode = prompt.executionMode ?? "inject";
+		if (mode !== "inject") {
+			// Shell/headless/api prompts have no "insert then review" state — a
+			// single invocation always runs them, same as every other placement
+			// surface (toolbar dropdown, command palette, etc.), so click,
+			// double-click, and Enter all behave the same here. `executeSmartPrompt`
+			// resolves git/GitHub context variables itself; the drawer's own
+			// variable-entry dialog below is inject-mode only.
+			const result = await smartPrompts.executeSmartPrompt(prompt);
+			if (result.ok) {
+				promptLibraryStore.closeDrawer();
+				props.onClose?.();
+			} else {
+				const message = friendlyError(result, prompt.name);
+				appLogger.error("prompts", `"${prompt.name}" failed: ${message}`);
+				toastsStore.add(`"${prompt.name}" failed`, message, "error");
+			}
+			return;
+		}
+
 		const variables = await promptLibraryStore.extractVariables(prompt.content);
 
 		if (variables.length > 0) {
@@ -188,8 +270,9 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 		const content = await promptLibraryStore.processContent(prompt, variables);
 
 		try {
-			const target = prompt.injectTarget ?? "compose";
-			const submit = shouldSubmitInjectPrompt(prompt, submitOverride);
+			const composeIsOpen = activeTerminal.ref?.isComposeOpen?.() ?? false;
+			const target = resolveInjectTarget(prompt, composeIsOpen);
+			const submit = shouldSubmitInjectPrompt(prompt, composeIsOpen, submitOverride);
 			if (!submit && target === "compose" && activeTerminal.ref?.openComposeWithText) {
 				activeTerminal.ref.openComposeWithText(content);
 			} else {
@@ -285,15 +368,21 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 						</div>
 
 						{/* Categories */}
-						<div class={s.categories}>
+						<div class={s.categories} role="tablist" aria-label="Filter by category">
 							<For each={Object.entries(CATEGORY_LABELS)}>
 								{([category, label]) => (
 									<button
+										type="button"
+										role="tab"
+										aria-selected={promptLibraryStore.state.selectedCategory === category}
 										class={cx(
 											s.categoryBtn,
 											promptLibraryStore.state.selectedCategory === category && s.categoryBtnActive,
 										)}
-										onClick={() => promptLibraryStore.setSelectedCategory(category as PromptCategory | "all")}
+										onClick={() => {
+											promptLibraryStore.setSelectedCategory(category as PromptCategory | "all");
+											searchInputRef?.focus();
+										}}
 									>
 										{label}
 									</button>
@@ -302,7 +391,7 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 						</div>
 
 						{/* Prompt list */}
-						<div class={s.list}>
+						<div class={s.list} ref={listRef}>
 							<Show
 								when={filteredPrompts().length > 0}
 								fallback={
@@ -424,9 +513,26 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 						{/* Footer */}
 						<div class={s.footer}>
 							<button onClick={createNewPrompt}>{t("promptDrawer.newPrompt", "+ New Prompt")}</button>
-							<span class={s.hint}>
-								{t("promptDrawer.hint", "↑↓ Navigate • Enter Insert • Ctrl+N New • Esc Close")}
-							</span>
+							<div class={s.footerHints}>
+								<span class={s.footerHint}>
+									<kbd>↑↓</kbd> navigate
+								</span>
+								<span class={s.footerHint}>
+									<kbd>↵</kbd> insert
+								</span>
+								<span class={s.footerHint}>
+									<kbd>⌘E</kbd> edit
+								</span>
+								<span class={s.footerHint}>
+									<kbd>⌘F</kbd> favorite
+								</span>
+								<span class={s.footerHint}>
+									<kbd>esc</kbd> close
+								</span>
+								<span class={s.footerHint}>
+									<kbd>⇥</kbd> category
+								</span>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -642,6 +748,9 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 	const [shortcut, setShortcut] = createSignal(props.prompt?.shortcut || "");
 	const [placement, setPlacement] = createSignal<SmartPlacement[]>(props.prompt?.placement ?? []);
 	const [autoExecute, setAutoExecute] = createSignal(props.prompt?.autoExecute ?? false);
+	const [injectTarget, setInjectTarget] = createSignal<"auto" | "compose" | "terminal">(
+		props.prompt?.injectTarget ?? "auto",
+	);
 	const [executionMode, setExecutionMode] = createSignal<"inject" | "headless" | "api" | "shell">(
 		props.prompt?.executionMode ?? "inject",
 	);
@@ -662,6 +771,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 			setDescription(def.description ?? "");
 			setPlacement(def.placement ?? []);
 			setAutoExecute(def.autoExecute ?? false);
+			setInjectTarget(def.injectTarget ?? "auto");
 			setExecutionMode(def.executionMode ?? "inject");
 			setOutputTarget(def.outputTarget);
 			setSystemPrompt(def.systemPrompt ?? "");
@@ -702,6 +812,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 			shortcut: shortcut().trim() || undefined,
 			placement: placement().length > 0 ? placement() : undefined,
 			autoExecute: autoExecute(),
+			injectTarget: executionMode() === "inject" ? injectTarget() : undefined,
 			executionMode: executionMode(),
 			outputTarget: executionMode() !== "inject" ? outputTarget() : undefined,
 			systemPrompt: executionMode() === "api" ? systemPrompt().trim() || undefined : undefined,
@@ -768,19 +879,20 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				{/* Placement */}
 				<div class={s.editorField}>
 					<label>Placement</label>
+					<span class={s.fieldHint}>Where this prompt can be triggered from</span>
 					<div class={s.placementGrid}>
-						<For each={ALL_PLACEMENTS}>
+						<For each={ALL_SMART_PLACEMENTS}>
 							{(p) => (
-								<label class={s.placementCheck}>
+								<label class={s.placementCheck} title={SMART_PLACEMENT_INFO[p].hint}>
 									<input type="checkbox" checked={placement().includes(p)} onChange={() => handlePlacementToggle(p)} />
-									<span>{p}</span>
+									<span>{SMART_PLACEMENT_INFO[p].label}</span>
 								</label>
 							)}
 						</For>
 					</div>
 				</div>
 
-				{/* Execution Mode + Auto-execute */}
+				{/* Execution Mode + Target/Auto-execute */}
 				<div class={s.editorFieldRow}>
 					<div class={s.editorField}>
 						<label>Execution Mode</label>
@@ -804,6 +916,23 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 							<option value="api">API (LLM direct)</option>
 						</select>
 					</div>
+
+					<Show when={executionMode() === "inject"}>
+						<div class={s.editorField}>
+							<label>Target</label>
+							<select
+								value={injectTarget()}
+								onChange={(e) => {
+									const val = e.currentTarget.value;
+									if (val === "auto" || val === "compose" || val === "terminal") setInjectTarget(val);
+								}}
+							>
+								<option value="auto">Auto — Compose if open, else Terminal</option>
+								<option value="compose">Compose box (review)</option>
+								<option value="terminal">Terminal (send to agent)</option>
+							</select>
+						</div>
+					</Show>
 
 					<Show when={executionMode() === "inject"}>
 						<div class={s.editorField}>

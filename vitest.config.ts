@@ -51,7 +51,6 @@ export default defineConfig({
         "src/App.tsx",
         "src/components/Terminal/Terminal.tsx",
         "src/components/IdeLauncher/IdeLauncher.tsx",
-        "src/components/PromptDrawer/PromptDrawer.tsx",
       ],
       // These thresholds were declared at 80% but never actually enforced in CI (`pnpm
       // test:coverage` wasn't wired into any workflow), so real coverage drifted far below
