@@ -195,4 +195,42 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		}
 		expect(view.container.textContent).not.toContain("Uncheck to review");
 	});
+
+	it("offers an Auto target option alongside Compose and Terminal, and reflects the prompt's current target", () => {
+		const { container, getByRole } = render(() => (
+			<SettingsPanel visible={true} onClose={() => {}} initialTab="smart-prompts" />
+		));
+		fireEvent.click(getByRole("button", { name: "Edit Test Smart Prompt" }));
+
+		const targetSelect = Array.from(container.querySelectorAll("select")).find((sel) =>
+			Array.from(sel.options).some((o) => o.value === "auto"),
+		) as HTMLSelectElement | undefined;
+		expect(targetSelect).toBeTruthy();
+		expect(Array.from(targetSelect!.options).map((o) => o.value)).toEqual(["auto", "compose", "terminal"]);
+		// SMART_PROMPT fixture has injectTarget: "terminal" explicitly set.
+		expect(targetSelect!.value).toBe("terminal");
+
+		fireEvent.change(targetSelect!, { target: { value: "auto" } });
+		expect(updatePrompt).toHaveBeenCalledWith("sp-test", expect.objectContaining({ injectTarget: "auto" }));
+	});
+
+	it("shows the Send immediately control for the Auto target, not just explicit Terminal", () => {
+		// Regression: this control used to be hidden unless injectTarget was the
+		// literal "terminal", even though autoExecute is honored by
+		// shouldSubmitInjectPrompt for "auto" too (Compose stays review-only, per
+		// the conditional-fields test above).
+		const original = SMART_PROMPT.injectTarget;
+		SMART_PROMPT.injectTarget = "auto";
+		try {
+			const { container, getByRole } = render(() => (
+				<SettingsPanel visible={true} onClose={() => {}} initialTab="smart-prompts" />
+			));
+			fireEvent.click(getByRole("button", { name: "Edit Test Smart Prompt" }));
+
+			const labels = Array.from(container.querySelectorAll("label")).map((l) => l.textContent);
+			expect(labels).toContain("Send immediately");
+		} finally {
+			SMART_PROMPT.injectTarget = original;
+		}
+	});
 });
