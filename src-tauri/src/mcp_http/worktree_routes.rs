@@ -364,6 +364,29 @@ pub(super) async fn merge_pr_via_github_http(
     }
 }
 
+/// `POST /worktrees/publish` — the HTTP half of `publish_workspace`.
+///
+/// Shares `publish_workspace_impl` with the Tauri command, so the two-step
+/// outcome (parent, then origin) has one implementation and one shape.
+pub(super) async fn publish_workspace_http(Json(body): Json<PublishWorkspaceRequest>) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    let PublishWorkspaceRequest {
+        repo_path,
+        workspace_id,
+    } = body;
+    // Blocking: a publish runs a fetch and a push.
+    let res = tokio::task::spawn_blocking(move || {
+        crate::worktree::publish_workspace_impl(&repo_path, &workspace_id)
+    })
+    .await;
+    match res {
+        Ok(r) => json_result(r),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}
+
 pub(super) async fn finalize_merged_worktree_http(
     State(state): State<Arc<AppState>>,
     Json(body): Json<FinalizeMergeRequest>,

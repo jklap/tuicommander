@@ -311,5 +311,6 @@
 /worktrees/finalize
 /worktrees/generate-name
 /worktrees/paths
+/worktrees/publish
 /worktrees/run-script
 /worktrees/x
