@@ -1,5 +1,6 @@
 import { type Accessor, type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../../../agents";
+import { ALL_SMART_PLACEMENTS, SMART_PLACEMENT_INFO } from "../../../data/smartPlacementLabels";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
 import { useAgentDetection } from "../../../hooks/useAgentDetection";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
@@ -26,18 +27,6 @@ import { HeadlessAgentSelect } from "../HeadlessAgentSelect";
 import s from "../Settings.module.css";
 import { DangerZone, ListRow, SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import sp from "./SmartPromptsTab.module.css";
-
-// All placements for the checkbox grid
-const ALL_PLACEMENTS: SmartPlacement[] = [
-	"toolbar",
-	"git-changes",
-	"git-branches",
-	"pr-popover",
-	"issue-popover",
-	"terminal-context",
-	"command-palette",
-	"file-context",
-];
 
 // Categories extracted from smart prompt tags
 const CATEGORIES = ["git", "review", "pr", "merge", "ci", "investigation", "code", "release"] as const;
@@ -366,20 +355,20 @@ const PromptEditor: Component<{
 				</SettingRow>
 
 				{/* Placement */}
-				<SettingRow label="Placement">
+				<SettingRow label="Placement" hint="Where this prompt can be triggered from">
 					{() => (
 						<>
 							<div class={sp.placementGrid}>
-								<For each={ALL_PLACEMENTS}>
+								<For each={ALL_SMART_PLACEMENTS}>
 									{(placement) => (
-										<label class={sp.placementCheck}>
+										<label class={sp.placementCheck} title={SMART_PLACEMENT_INFO[placement].hint}>
 											<input
 												data-setting-id="prompts.prompts.{id}.text"
 												type="checkbox"
 												checked={props.prompt.placement?.includes(placement) ?? false}
 												onChange={() => handlePlacementToggle(placement)}
 											/>
-											<span>{placement}</span>
+											<span>{SMART_PLACEMENT_INFO[placement].label}</span>
 										</label>
 									)}
 								</For>
@@ -423,7 +412,7 @@ const PromptEditor: Component<{
 					<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
 						<SettingRow
 							label="Target"
-							hint="Compose fills the input for review; Terminal sends to the agent and waits for idle"
+							hint="Auto reviews in an already-open Compose box, otherwise sends to the terminal; Compose always opens for review; Terminal always sends to the agent and waits for idle"
 						>
 							{(id, descriptionId) => (
 								<div>
@@ -431,14 +420,15 @@ const PromptEditor: Component<{
 										data-setting-id="prompts.prompts.{id}.text"
 										id={id}
 										aria-describedby={descriptionId()}
-										value={props.prompt.injectTarget ?? "compose"}
+										value={props.prompt.injectTarget ?? "auto"}
 										onChange={(e) => {
 											const val = e.currentTarget.value;
-											if (val === "terminal" || val === "compose") {
+											if (val === "terminal" || val === "compose" || val === "auto") {
 												promptLibraryStore.updatePrompt(props.prompt.id, { injectTarget: val });
 											}
 										}}
 									>
+										<option value="auto">Auto — Compose if open, else Terminal</option>
 										<option value="compose">Compose box (review)</option>
 										<option value="terminal">Terminal (send to agent)</option>
 									</Select>
@@ -447,12 +437,7 @@ const PromptEditor: Component<{
 						</SettingRow>
 					</Show>
 
-					<Show
-						when={
-							(props.prompt.executionMode ?? "inject") === "inject" &&
-							(props.prompt.injectTarget ?? "compose") === "terminal"
-						}
-					>
+					<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
 						<SettingRow label="Auto-execute" hint="Uncheck to review before sending">
 							{(id, descriptionId) => (
 								<div>

@@ -1,5 +1,5 @@
 import { type Component, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { useSmartPrompts } from "../../hooks/useSmartPrompts";
+import { friendlyError, useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { appLogger } from "../../stores/appLogger";
 import { promptLibraryStore, type SavedPrompt, type SmartPlacement } from "../../stores/promptLibrary";
 import { cx } from "../../utils";
@@ -35,20 +35,6 @@ export interface SmartButtonStripProps {
 	onBusyChange?: (busy: boolean) => void;
 	/** Extra context variables to pass as manualVariables to executeSmartPrompt */
 	contextVariables?: () => Record<string, string>;
-}
-
-/** Translate internal error codes into user-friendly messages */
-function friendlyError(result: { reason?: string; output?: string }, promptName: string): string {
-	if (result.reason === "unresolved_variables" && result.output) {
-		try {
-			const vars = JSON.parse(result.output) as string[];
-			if (vars.includes("staged_diff")) return "Stage some files first — no staged changes to analyze";
-			return `Missing context: ${vars.join(", ")}`;
-		} catch {
-			/* fall through */
-		}
-	}
-	return result.reason ?? `"${promptName}" failed`;
 }
 
 export const SmartButtonStrip: Component<SmartButtonStripProps> = (props) => {
