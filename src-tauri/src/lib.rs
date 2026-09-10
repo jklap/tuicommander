@@ -38,6 +38,7 @@ pub(crate) mod generators;
 pub(crate) mod git;
 pub(crate) mod git_cli;
 pub(crate) mod git_graph;
+pub(crate) mod git_locks;
 pub(crate) mod git_reads;
 pub(crate) mod github;
 pub(crate) mod github_account;
