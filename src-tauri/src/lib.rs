@@ -25,6 +25,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+pub(crate) mod cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) mod credentials;
 #[cfg(feature = "desktop")]
