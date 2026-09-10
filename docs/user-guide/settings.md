@@ -288,6 +288,10 @@ Per-repository settings accessed via sidebar `⋯` → "Repo Settings".
 - **Base Branch** — Branch to create worktrees from (auto-detect, main, master, develop)
 - **Copy ignored files** — Copy .gitignored files to new worktrees
 - **Copy untracked files** — Copy untracked files to new worktrees
+- **Always Copy These Files/Directories** — a repo-specific list of extra paths (relative to the
+  repo root) always copied — or symlinked, to share a single copy across worktrees — into every
+  new worktree of this repo, regardless of the two toggles above. There is no global default for
+  this list; it only ever lives on the repo
 - **Prompt on create**, **Delete branch on remove**, **Auto-archive merged** — override the
   matching global worktree default for this repo (see [Worktrees](worktrees.md#worktree-settings))
 - **PR Visibility** — per-repo override of Hide Draft/Conflicting/CI-Failing PRs (see GitHub Tab
@@ -298,6 +302,11 @@ Per-repository settings accessed via sidebar `⋯` → "Repo Settings".
 Every on/off field in this list uses a three-position **On / Use global / Off** control rather
 than a plain checkbox, so "inherit the global setting" is always one of the three choices you can
 select directly — not just the state you land in until you touch the control once.
+
+Copying ignored/untracked files and the explicit list both run in the background, after the
+worktree itself is created and usable — a toast announces when the copy starts and again when it
+finishes (naming how many files were skipped, if any). This can take a while for a large ignored
+tree (e.g. `node_modules`), which is exactly why it doesn't block opening the worktree.
 
 ### Scripts Tab
 

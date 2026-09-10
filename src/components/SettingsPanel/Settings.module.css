@@ -359,6 +359,57 @@
   white-space: pre;
 }
 
+/* "Always copy these files/directories" list (RepoWorktreeTab) */
+
+.copyPathRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* `.group select { width: 100%; }` (above) targets every descendant select,
+   including `.transferSelect` reused here — without this override the mode
+   dropdown balloons to fill the row and squeezes the path input down to its
+   native min-content width instead. Compound selector for specificity, since
+   `.transferSelect` alone loses to `.group select`'s class+type combination. */
+.copyPathRow .transferSelect {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.copyPathText {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.copyPathInput {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+  height: 32px;
+  box-sizing: border-box;
+}
+
+.copyPathInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .info {
   color: var(--fg-muted);
   font-size: var(--font-sm);

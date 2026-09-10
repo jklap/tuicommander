@@ -190,6 +190,7 @@ pub(super) async fn create_worktree_shared(
                     }
                 }
             }
+            crate::worktree::spawn_worktree_file_sync(state, &base_repo, &branch_name, &wt.path);
             Ok(CreatedWorktree {
                 worktree: wt,
                 path: wt_path,

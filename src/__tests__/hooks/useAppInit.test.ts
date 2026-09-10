@@ -1679,6 +1679,102 @@ describe("initApp", () => {
 		});
 	});
 
+	describe("worktree-sync-* events (background copy of ignored/untracked/explicit files)", () => {
+		/** Capture the handler `useAppInit` registers for `eventName`, whatever
+		 *  else it also registers `listen()` for. */
+		function captureListener<T>(eventName: string) {
+			const listenMock = vi.mocked(listen);
+			let callback: ((event: { payload: T }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === eventName) {
+					callback = handler as unknown as (event: { payload: T }) => void;
+				}
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return { getCallback: () => callback };
+		}
+
+		it("shows a toast when the sync starts", async () => {
+			const { getCallback } = captureListener<{ repoPath: string; branch: string }>("worktree-sync-started");
+			const deps = createMockDeps();
+			await initApp(deps);
+			const addToast = vi.spyOn(toastsStore, "add");
+
+			getCallback()!({ payload: { repoPath: "/repo", branch: "feat-x" } });
+
+			expect(addToast).toHaveBeenCalledWith(
+				"Syncing files into feat-x…",
+				"",
+				"info",
+				false,
+				undefined,
+				undefined,
+				"/repo",
+			);
+			addToast.mockRestore();
+		});
+
+		it("shows a clean completion toast when nothing was skipped", async () => {
+			const { getCallback } = captureListener<{
+				repoPath: string;
+				branch: string;
+				copied: number;
+				total: number;
+				errors: string[];
+			}>("worktree-sync-completed");
+			const deps = createMockDeps();
+			await initApp(deps);
+			const addToast = vi.spyOn(toastsStore, "add");
+
+			getCallback()!({ payload: { repoPath: "/repo", branch: "feat-x", copied: 3, total: 3, errors: [] } });
+
+			expect(addToast).toHaveBeenCalledWith(
+				"Finished syncing feat-x",
+				"Synced 3 file(s)",
+				"info",
+				false,
+				undefined,
+				undefined,
+				"/repo",
+			);
+			addToast.mockRestore();
+		});
+
+		it("mentions skipped files in the completion toast without treating them as an error", async () => {
+			const { getCallback } = captureListener<{
+				repoPath: string;
+				branch: string;
+				copied: number;
+				total: number;
+				errors: string[];
+			}>("worktree-sync-completed");
+			const deps = createMockDeps();
+			await initApp(deps);
+			const addToast = vi.spyOn(toastsStore, "add");
+
+			getCallback()!({
+				payload: {
+					repoPath: "/repo",
+					branch: "feat-x",
+					copied: 2,
+					total: 3,
+					errors: ["missing.txt: source path does not exist"],
+				},
+			});
+
+			expect(addToast).toHaveBeenCalledWith(
+				"Finished syncing feat-x",
+				"Synced 2 of 3 files (1 skipped)",
+				"info",
+				false,
+				undefined,
+				undefined,
+				"/repo",
+			);
+			addToast.mockRestore();
+		});
+	});
+
 	describe("session-created event (agent tab activation)", () => {
 		type SessionCreatedPayload = {
 			session_id: string;

@@ -30,6 +30,166 @@ pub(crate) fn resolve_archive_script(repo_path: &str) -> Option<String> {
     None
 }
 
+/// Kick off a background copy of ignored/untracked/explicit-listed files into
+/// a freshly created worktree. Resolves the repo's effective copy settings
+/// from disk (`config::resolve_effective_copy_settings`) itself, so a
+/// worktree created from the desktop app and one created via the MCP HTTP
+/// path (no frontend in the loop) sync identically.
+///
+/// Fire-and-forget: returns immediately. A repo with both `copy_ignored`/
+/// `copy_untracked` off and an empty `copy_paths` is a no-op with **no**
+/// events at all — a plain worktree creation never shows a sync toast.
+/// Progress/completion are reported via dual-emitted (event_bus + Tauri
+/// window) `worktree-sync-*` events; see `state.rs`'s `AppEvent::WorktreeSync*`
+/// and `sse_routes.rs` for the SSE side.
+///
+/// KNOWN, ACCEPTED ORDERING GAP: this is deliberately unsequenced against the
+/// setup script (`resolve_effective_setup_script` / `run_setup_script`) —
+/// that's what "runs in the background, doesn't block worktree creation"
+/// (the explicitly requested design) means. A setup script that depends on a
+/// synced file (e.g. a `copy_paths` entry symlinking `node_modules` so `npm
+/// install` can skip, or a script reading a synced `.env`) can race ahead of
+/// the sync and run without it. Making the two wait on each other would
+/// reintroduce the blocking behavior this was built to avoid; if that
+/// tradeoff ever needs revisiting, the fix is to await this function's
+/// summary before running the setup script, not to make the sync
+/// synchronous.
+pub(crate) fn spawn_worktree_file_sync(
+    state: &Arc<AppState>,
+    base_repo: &str,
+    branch: &str,
+    dest_path: &Path,
+) {
+    let (copy_ignored, copy_untracked, copy_paths) =
+        crate::config::resolve_effective_copy_settings(base_repo);
+    if !copy_ignored && !copy_untracked && copy_paths.is_empty() {
+        return;
+    }
+
+    let state = Arc::clone(state);
+    let source = PathBuf::from(base_repo);
+    let dest = dest_path.to_path_buf();
+    let repo_path = base_repo.to_string();
+    let branch = branch.to_string();
+    let explicit = crate::worktree_sync::specs_from_copy_path_entries(&copy_paths);
+
+    tokio::spawn(async move {
+        emit_worktree_sync_started(&state, &repo_path, &branch);
+
+        let repo_path_progress = repo_path.clone();
+        let branch_progress = branch.clone();
+        let state_progress = Arc::clone(&state);
+
+        let summary = tokio::task::spawn_blocking(move || {
+            let specs = crate::worktree_sync::build_sync_specs(
+                &source,
+                copy_ignored,
+                copy_untracked,
+                &explicit,
+            );
+            // Throttled: a large ignored tree (e.g. node_modules) can be
+            // thousands of entries — emit at most ~once every 150ms, plus
+            // always on the final entry so completion isn't preceded by a
+            // stale progress count.
+            let mut last_emit = std::time::Instant::now();
+            crate::worktree_sync::sync_paths(&source, &dest, &specs, move |copied, total| {
+                let now = std::time::Instant::now();
+                if copied == total || now.duration_since(last_emit).as_millis() >= 150 {
+                    last_emit = now;
+                    emit_worktree_sync_progress(
+                        &state_progress,
+                        &repo_path_progress,
+                        &branch_progress,
+                        copied,
+                        total,
+                    );
+                }
+            })
+        })
+        .await
+        .unwrap_or_else(|e| crate::worktree_sync::SyncSummary {
+            copied: 0,
+            total: 0,
+            errors: vec![format!("sync task panicked: {e}")],
+        });
+
+        emit_worktree_sync_completed(&state, &repo_path, &branch, &summary);
+    });
+}
+
+fn emit_worktree_sync_started(state: &Arc<AppState>, repo_path: &str, branch: &str) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeSyncStarted {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-sync-started",
+            serde_json::json!({ "repoPath": repo_path, "branch": branch }),
+        );
+    }
+}
+
+fn emit_worktree_sync_progress(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    branch: &str,
+    copied: usize,
+    total: usize,
+) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeSyncProgress {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            copied,
+            total,
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-sync-progress",
+            serde_json::json!({ "repoPath": repo_path, "branch": branch, "copied": copied, "total": total }),
+        );
+    }
+}
+
+fn emit_worktree_sync_completed(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    branch: &str,
+    summary: &crate::worktree_sync::SyncSummary,
+) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeSyncCompleted {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            copied: summary.copied,
+            total: summary.total,
+            errors: summary.errors.clone(),
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-sync-completed",
+            serde_json::json!({
+                "repoPath": repo_path,
+                "branch": branch,
+                "copied": summary.copied,
+                "total": summary.total,
+                "errors": summary.errors,
+            }),
+        );
+    }
+}
+
 /// Classification of a failed `git worktree add` based on its stderr, used to
 /// decide how `create_worktree_internal` should recover.
 ///
@@ -827,6 +987,12 @@ pub(crate) async fn create_worktree(
     match first {
         Ok(worktree) => {
             state.invalidate_repo_caches(&config.base_repo);
+            spawn_worktree_file_sync(
+                &state,
+                &config.base_repo,
+                worktree.branch.as_deref().unwrap_or(&worktree.name),
+                &worktree.path,
+            );
             Ok(serde_json::json!({
                 "status": "ok",
                 "name": worktree.name,
@@ -961,7 +1127,15 @@ pub(crate) async fn create_worktree(
                 .await;
 
                 match result {
-                    Ok(Ok(_)) => emit_repo_changed(),
+                    Ok(Ok(ref wt)) => {
+                        emit_repo_changed();
+                        spawn_worktree_file_sync(
+                            &state_arc,
+                            &config_bg.base_repo,
+                            wt.branch.as_deref().unwrap_or(&branch_for_err),
+                            &wt.path,
+                        );
+                    }
                     Ok(Err(e)) => {
                         let reason = format!("recreation failed: {e}");
                         tracing::error!(source = "worktree", reason = %reason);

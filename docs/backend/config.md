@@ -408,8 +408,9 @@ Per-repository fields:
 | `path` | `String` | -- | Repository path |
 | `display_name` | `String` | -- | Display name |
 | `base_branch` | `String` | `"main"` | Base branch for worktrees |
-| `copy_ignored_files` | `bool` | `false` | Copy .gitignored files to worktree |
-| `copy_untracked_files` | `bool` | `false` | Copy untracked files to worktree |
+| `copy_ignored_files` | `Option<bool>` | `null` | Tri-state override (`null` inherits `.tuic.json`, then the global default) of whether `.gitignore`d files are copied into a new worktree |
+| `copy_untracked_files` | `Option<bool>` | `null` | Tri-state override of whether untracked (never `git add`ed) files are copied into a new worktree |
+| `copy_paths` | `Vec<CopyPathEntry>` | `[]` | Files/directories always copied (or symlinked) into every new worktree of this repo, regardless of the two toggles above. Repo-specific only — no `.tuic.json`/global tier, same as `branch_labels`. Each entry is `{ path: String, mode: CopyPathMode }` (`mode`: `"copy"` \| `"symlink"`) |
 | `setup_script` | `String` | `""` | Script to run after worktree creation |
 | `run_script` | `String` | `""` | Default run command |
 | `auto_fetch_interval_minutes` | `u32` | `0` | Auto-fetch interval in minutes (0 = disabled) |
@@ -428,6 +429,14 @@ catch-all (never re-serialized) so an unrecognized key is captured instead of va
 keys whenever `extra` is non-empty.
 
 **Commands:** `load_repo_settings()`, `save_repo_settings(config)`, `check_has_custom_settings(path)`
+
+`copy_ignored_files`/`copy_untracked_files`/`copy_paths` are resolved via
+`resolve_effective_copy_settings(repo_path)` (three-tier for the two
+booleans, repo-specific-only for `copy_paths`) and consumed by
+`worktree::spawn_worktree_file_sync`, which runs in the background after a
+worktree is actually created — see `src-tauri/src/worktree_sync.rs` for the
+copy/symlink engine and `docs/sync-matrix.md`'s event table for the
+`worktree-sync-*` events it emits.
 
 ### Repository Defaults (`repo-defaults.json`)
 
@@ -682,7 +691,7 @@ This is an internal cache file, not user-editable. It is automatically pruned wh
 
 A `.tuic.json` file in the repository root provides team-shareable settings. It is read-only from the app — teams edit it directly in their repo and commit it.
 
-**Precedence chain:** `.tuic.json` > per-repo app settings (`repo-settings.json`) > global defaults (`repo-defaults.json`)
+**Precedence chain:** per-repo app settings (`repo-settings.json`) > `.tuic.json` > global defaults (`repo-defaults.json`) — an explicit per-repo choice in the app always wins over the committed team file, which itself only fills in what neither the app setting nor the user chose. `copy_paths` has no tier here at all: it's repo-specific-only, resolved straight from `repo-settings.json` with no `.tuic.json`/global fallback (same as `branch_labels`).
 
 **Type:** `RepoLocalConfig` (all fields `Option<T>`, missing fields fall through to lower tiers)
 

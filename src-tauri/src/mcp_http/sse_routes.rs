@@ -284,6 +284,9 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::ConflictAssistStatus { .. } => "conflict-assist-status",
         AppEvent::ProposalsReady { .. } => "proposals-ready",
         AppEvent::WorktreeCreateFailed { .. } => "worktree-create-failed",
+        AppEvent::WorktreeSyncStarted { .. } => "worktree-sync-started",
+        AppEvent::WorktreeSyncProgress { .. } => "worktree-sync-progress",
+        AppEvent::WorktreeSyncCompleted { .. } => "worktree-sync-completed",
     }
 }
 
@@ -507,6 +510,34 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             // event so the same frontend `handleWorktreeCreateFailed` consumes
             // both transports unchanged.
             serde_json::json!({ "repoPath": repo_path, "branch": branch, "reason": reason })
+        }
+        AppEvent::WorktreeSyncStarted { repo_path, branch } => {
+            // camelCase keys mirror the Tauri window `worktree-sync-started`
+            // event — see `worktree::spawn_worktree_file_sync`.
+            serde_json::json!({ "repoPath": repo_path, "branch": branch })
+        }
+        AppEvent::WorktreeSyncProgress {
+            repo_path,
+            branch,
+            copied,
+            total,
+        } => {
+            serde_json::json!({ "repoPath": repo_path, "branch": branch, "copied": copied, "total": total })
+        }
+        AppEvent::WorktreeSyncCompleted {
+            repo_path,
+            branch,
+            copied,
+            total,
+            errors,
+        } => {
+            serde_json::json!({
+                "repoPath": repo_path,
+                "branch": branch,
+                "copied": copied,
+                "total": total,
+                "errors": errors,
+            })
         }
     }
 }
@@ -776,6 +807,51 @@ mod tests {
         assert_eq!(body["reason"], "recreation failed: boom");
         // No snake_case leakage that a browser handler wouldn't read.
         assert!(body.get("repo_path").is_none());
+    }
+
+    #[test]
+    fn worktree_sync_events_use_camelcase_matching_window_events() {
+        // Mirrors `worktree_create_failed_uses_camelcase_matching_window_event`:
+        // `worktree::spawn_worktree_file_sync` dual-emits all three of these on
+        // the bus (SSE) AND the Tauri window with identical camelCase keys, so
+        // a single frontend listener consumes both transports unchanged.
+        let started = AppEvent::WorktreeSyncStarted {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+        };
+        assert_eq!(event_type_name(&started), "worktree-sync-started");
+        let body = event_payload(&started);
+        assert_eq!(body["repoPath"], "/repo");
+        assert_eq!(body["branch"], "feat-x");
+        assert!(body.get("repo_path").is_none());
+
+        let progress = AppEvent::WorktreeSyncProgress {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            copied: 3,
+            total: 10,
+        };
+        assert_eq!(event_type_name(&progress), "worktree-sync-progress");
+        let body = event_payload(&progress);
+        assert_eq!(body["repoPath"], "/repo");
+        assert_eq!(body["branch"], "feat-x");
+        assert_eq!(body["copied"], 3);
+        assert_eq!(body["total"], 10);
+
+        let completed = AppEvent::WorktreeSyncCompleted {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            copied: 9,
+            total: 10,
+            errors: vec!["missing.txt: source path does not exist".into()],
+        };
+        assert_eq!(event_type_name(&completed), "worktree-sync-completed");
+        let body = event_payload(&completed);
+        assert_eq!(body["repoPath"], "/repo");
+        assert_eq!(body["branch"], "feat-x");
+        assert_eq!(body["copied"], 9);
+        assert_eq!(body["total"], 10);
+        assert_eq!(body["errors"][0], "missing.txt: source path does not exist");
     }
 
     #[test]

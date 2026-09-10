@@ -349,6 +349,40 @@ where it's missing — don't assume "I didn't touch that test" means it's safe.
 
 **A worktree with a submodule checked out is a third refusal, but a plain `--force` DOES lift it** — `fatal: working trees containing submodules cannot be moved or removed`. Confirmed empirically (git 2.55.0): `git worktree remove --force` succeeds outright here, even on an otherwise-dirty worktree, so `RemovalMode::Dirty`/`::Forced` never even hit this refusal — their first attempt already passes `--force` and succeeds directly. Only `RemovalMode::Safe` (no force) hits it. It still fires *before* git's own dirty-worktree check though, so a Safe-mode caller can't rely on git to separately report dirtiness — `remove_worktree_internal` (`worktree.rs`) replicates that check itself via `git status --porcelain --untracked-files=all` at the worktree root (which git's own default submodule-summary behavior already extends to cover uncommitted/untracked content *inside* the submodule — verified: untracked files, modified tracked files, and a diverged submodule HEAD all show up as `M <submodule-dir>`) before retrying with `--force`. `git submodule deinit --force`/`--all --force` does **not** help on its own (the gitlink stays in the index/tree — `git ls-files -s` still shows `160000 ...` after deinit — so a bare retry without `--force` still fails identically); the fix that actually works is the plain `--force` retry. This was gotten wrong once already in-session — assumed the standard "deinit then retry" workaround worked without testing the simpler "just add `--force`" case first, and only a code review caught it. Before asserting a git force flag does or doesn't lift a given refusal, verify by actually running every relevant combination — don't reason from a flag's name, from partial testing, or from what a search result suggests.
 
+## Worktree File Sync (copy_ignored_files / copy_untracked_files / copy_paths)
+
+`git worktree add` only ever checks out tracked, committed content — copying anything else
+(ignored/untracked files, or a repo's explicit `copy_paths` list) into a freshly created worktree
+is a separate step, done by `worktree_sync.rs` + `worktree::spawn_worktree_file_sync`, run in the
+background right after the worktree is created (both the desktop `create_worktree` command and the
+MCP HTTP `create_worktree_shared` path call it, resolving effective settings themselves via
+`config::resolve_effective_copy_settings` — no frontend involvement needed). Before 2026-09-10,
+`copy_ignored_files`/`copy_untracked_files` were fully plumbed through persistence, per-repo
+tri-state resolution, and the settings UI — and had **zero consumer anywhere**, so the toggles did
+nothing. Don't assume a setting that's cleanly wired through config+UI is actually doing anything —
+trace to a real consumer.
+
+**Every path this module touches must be checked against symlinks planted in `dest`, not just the
+final component.** `dest` is `git worktree add`'s checkout of whatever branch was requested — which
+can be an attacker-influenced PR `head_ref` (the same threat model as the `--` end-of-options guard
+in `create_worktree_internal`). A malicious branch can commit a directory symlink at any
+*intermediate* path component (e.g. a directory named `config`, `node_modules`, or anything matching
+this repo's own `copy_paths` entries); plain path joins and `fs::create_dir_all`/`fs::copy` follow
+symlinks in every component except the final one, so a naive "does the final destination already
+exist" check is not enough — it lets a synced file get written through the planted symlink to
+wherever the branch pointed it, using this (trusted) repo's own content. `sync_one`'s
+`first_symlinked_ancestor` check exists specifically for this — walk every intermediate component of
+`dest.join(rel)` and refuse if any of them is already a symlink, before doing anything else. Any
+future code that writes into a path freshly checked out from an untrusted branch needs the same
+intermediate-component check, not just a final-leaf existence check.
+
+An explicit `copy_paths` entry is user-authored (typed into the Settings UI only) and has
+**no `.tuic.json`/global tier** — unlike every other worktree setting — specifically so a malicious
+committed `.tuic.json` can never inject its own entries into it. `sync_one` also rejects a path of
+`.` (the repo root) or containing a `.git` component: an explicit entry copying "." would otherwise
+recursively copy the entire source repo — including its real `.git` — on top of the new worktree's
+own linked-worktree `.git` *file*, corrupting it.
+
 ## Window Geometry Restore
 
 `main` is permanently denylisted from `tauri-plugin-window-state`'s `SIZE` flag (`lib.rs`

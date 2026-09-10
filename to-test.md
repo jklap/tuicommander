@@ -30,6 +30,63 @@ no items left goes too. What stays open must carry its own stated reason.
 > WebView gets the same change over Vite HMR. If a browser check of a frontend fix
 > shows nothing, check `dist/index.html`'s mtime before blaming the code.
 
+## Worktree file sync: copy/symlink ignored/untracked/explicit files into new worktrees (2026-09-10, backend — needs `make dev` restart)
+
+`copy_ignored_files`/`copy_untracked_files` were previously fully plumbed
+through settings persistence and the UI (tri-state per-repo override with a
+global default) but had **zero consumer anywhere** — `git worktree add` only
+checks out tracked content, and nothing ever copied the ignored/untracked
+files on top of it. This adds the actual copy engine
+(`src-tauri/src/worktree_sync.rs`), wires it into worktree creation
+(`worktree::spawn_worktree_file_sync`, called from both the desktop
+`create_worktree` command and the MCP HTTP `create_worktree_shared`), and adds
+a new repo-specific "always copy these files/directories" list
+(`RepoSettings.copyPaths`, each entry copied fully or symlinked) independent
+of the two toggles. The copy runs in the background after the worktree is
+already created, with `worktree-sync-started`/`worktree-sync-completed`
+events driving a toast. Unit-tested at the engine level
+(`worktree_sync::tests`, including a security fix — a malicious branch
+planting an intermediate symlink in the new worktree can no longer redirect a
+synced write elsewhere — and a correctness fix for non-ASCII filenames) and
+the settings-resolution level (`config::tests`).
+
+**Settings UI itself already verified** (2026-09-10, via `agent-browser`
+against a `make dev` test instance on `:9877`, cleaned up afterward — no
+stray state left in the real `repo-settings.json`): the tri-state toggles
+cycle correctly, the "Always Copy These Files/Directories" list add/remove/
+mode-switch all work, and a real layout bug was caught and fixed in the
+process — `.group select`/`.group input[type="text"]`'s ambient `width:100%`
+rule was leaking into the new list row, starving the path input down to ~26px
+while the mode `<select>` ballooned to fill the row (fixed with a more
+specific `.copyPathRow .transferSelect` override in `Settings.module.css`).
+**Still unverified** is the actual worktree-creation flow below — the real
+copy/symlink happening on disk, the toast pair actually firing, and the
+MCP/HTTP parity — none of which the settings-UI check above exercises.
+
+- [ ] Restart `make dev` to pick up the Rust changes. In Settings → Repository
+  → Worktree for a real repo, turn on "Copy ignored files" and "Copy untracked
+  files" (or leave one on "Use global default" after turning the global
+  default on in Settings → Git & GitHub → Worktree Defaults). Put a real
+  ignored file (e.g. `.env`) and a real untracked file in the repo's main
+  checkout, then create a new worktree from the `+` button. A toast should
+  appear ("Syncing files into `<branch>`…") followed by a completion toast
+  ("Finished syncing `<branch>`" / "Synced N file(s)"), and both files should
+  actually exist in the new worktree's directory.
+- [ ] In the same tab, add an entry to "Always Copy These Files/Directories"
+  with mode "Copy" for some file, and a second entry with mode "Symlink" for a
+  directory (e.g. `node_modules` if present). Create another worktree: the
+  Copy entry should be a real independent file, and the Symlink entry should
+  be an actual symlink (`ls -la` shows `->`) pointing back at the source
+  repo's copy — editing through the symlink from either worktree should be
+  visible in both.
+- [ ] Turn both toggles off and leave the copy-paths list empty, then create a
+  worktree: no sync toast should appear at all (confirms the "no-op, no
+  events" fast path).
+- [ ] Create a worktree via an MCP client (`repo worktree_create`) for a repo
+  with the toggles/list configured: the same sync + toast should fire, proving
+  the MCP/HTTP path (`create_worktree_shared`) resolves the same effective
+  settings as the desktop path without any frontend involvement.
+
 ## Gutter-hover "pointer" cursor no longer freezes over a mouse-tracking app's prompt (2026-09-08, frontend only — HMR)
 
 Reported: after the command-block gutter widened and gained a hover cursor

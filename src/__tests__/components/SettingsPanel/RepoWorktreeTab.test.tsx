@@ -43,6 +43,7 @@ function makeSettings(overrides: Partial<RepoSettings> = {}): RepoSettings {
 		prHideConflicting: null,
 		prHideCiFailing: null,
 		branchLabels: {},
+		copyPaths: [],
 		...overrides,
 	};
 }
@@ -245,6 +246,119 @@ describe("RepoWorktreeTab", () => {
 		// mocked settingsStore.state: prHideDrafts=false, prHideConflicting=true
 		expect(triRowText(triGroup(container, "Hide Draft PRs"))).toContain("Use global default: Off");
 		expect(triRowText(triGroup(container, "Hide Conflicting PRs"))).toContain("Use global default: On");
+	});
+
+	describe("copyPaths list", () => {
+		it("renders each existing entry with its path and mode", () => {
+			const { getByText, container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({
+						copyPaths: [
+							{ path: ".env", mode: "copy" },
+							{ path: "node_modules", mode: "symlink" },
+						],
+					})}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			expect(getByText(".env")).toBeTruthy();
+			expect(getByText("node_modules")).toBeTruthy();
+			const modeSelects = Array.from(container.querySelectorAll("select")).filter((sel) =>
+				Array.from((sel as HTMLSelectElement).options).some((o) => o.value === "symlink"),
+			) as HTMLSelectElement[];
+			// One per existing row, plus the add-row's own mode select.
+			expect(modeSelects).toHaveLength(3);
+			expect(modeSelects[0].value).toBe("copy");
+			expect(modeSelects[1].value).toBe("symlink");
+		});
+
+		it("adds a new entry with the chosen mode and clears the draft input", () => {
+			const { getByPlaceholderText, getByText } = render(() => (
+				<RepoWorktreeTab settings={makeSettings({ copyPaths: [] })} defaults={defaults} onUpdate={onUpdate} />
+			));
+			const input = getByPlaceholderText("e.g. .env or node_modules") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: ".env" } });
+			fireEvent.click(getByText("Add"));
+
+			expect(onUpdate).toHaveBeenCalledWith("copyPaths", [{ path: ".env", mode: "copy" }]);
+			expect(input.value).toBe("");
+		});
+
+		it("adds a new entry on Enter without requiring the Add button", () => {
+			const { getByPlaceholderText } = render(() => (
+				<RepoWorktreeTab settings={makeSettings({ copyPaths: [] })} defaults={defaults} onUpdate={onUpdate} />
+			));
+			const input = getByPlaceholderText("e.g. .env or node_modules") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "config/local.json" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+
+			expect(onUpdate).toHaveBeenCalledWith("copyPaths", [{ path: "config/local.json", mode: "copy" }]);
+		});
+
+		it("does not add an entry for a blank or whitespace-only path", () => {
+			const { getByPlaceholderText, getByText } = render(() => (
+				<RepoWorktreeTab settings={makeSettings({ copyPaths: [] })} defaults={defaults} onUpdate={onUpdate} />
+			));
+			const input = getByPlaceholderText("e.g. .env or node_modules") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "   " } });
+			fireEvent.click(getByText("Add"));
+			expect(onUpdate).not.toHaveBeenCalled();
+		});
+
+		it("does not add a duplicate path", () => {
+			const { getByPlaceholderText, getByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ copyPaths: [{ path: ".env", mode: "copy" }] })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			const input = getByPlaceholderText("e.g. .env or node_modules") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: ".env" } });
+			fireEvent.click(getByText("Add"));
+			expect(onUpdate).not.toHaveBeenCalled();
+		});
+
+		it("removes an entry by path", () => {
+			const { getByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({
+						copyPaths: [
+							{ path: ".env", mode: "copy" },
+							{ path: "node_modules", mode: "symlink" },
+						],
+					})}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			fireEvent.click(getByText(".env").closest("div")!.querySelector("button")!);
+			expect(onUpdate).toHaveBeenCalledWith("copyPaths", [{ path: "node_modules", mode: "symlink" }]);
+		});
+
+		it("changes an existing entry's mode without touching other entries", () => {
+			const { container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({
+						copyPaths: [
+							{ path: ".env", mode: "copy" },
+							{ path: "node_modules", mode: "copy" },
+						],
+					})}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			const rowSelects = Array.from(container.querySelectorAll("select")).filter((sel) =>
+				Array.from((sel as HTMLSelectElement).options).some((o) => o.value === "symlink"),
+			) as HTMLSelectElement[];
+			fireEvent.change(rowSelects[0], { target: { value: "symlink" } });
+			expect(onUpdate).toHaveBeenCalledWith("copyPaths", [
+				{ path: ".env", mode: "symlink" },
+				{ path: "node_modules", mode: "copy" },
+			]);
+		});
 	});
 
 	it("hides the macOS-only Terminal section when not on macOS", () => {

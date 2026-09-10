@@ -1,5 +1,6 @@
 import { AGENT_TYPES, type AgentType } from "../agents";
 import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompletion";
+import { t } from "../i18n";
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
 import { activityStore } from "../stores/activityStore";
@@ -448,6 +449,46 @@ export async function initApp(deps: AppInitDeps) {
 	listen<{ repoPath: string; branch: string; reason: string }>("worktree-create-failed", (event) => {
 		deps.handleWorktreeCreateFailed(event.payload);
 	}).catch((err) => appLogger.error("app", "Failed to register worktree-create-failed listener", err));
+
+	// Background copy of ignored/untracked/explicit-listed files into a freshly
+	// created worktree (see `worktree_sync.rs` / `worktree::spawn_worktree_file_sync`).
+	// Only fires when the repo actually has something configured to copy.
+	listen<{ repoPath: string; branch: string }>("worktree-sync-started", (event) => {
+		const { repoPath, branch } = event.payload;
+		toastsStore.add(
+			t("worktreeSync.started.title", "Syncing files into {branch}…", { branch }),
+			"",
+			"info",
+			false,
+			undefined,
+			undefined,
+			repoPath,
+		);
+	}).catch((err) => appLogger.error("app", "Failed to register worktree-sync-started listener", err));
+
+	listen<{ repoPath: string; branch: string; copied: number; total: number; errors: string[] }>(
+		"worktree-sync-completed",
+		(event) => {
+			const { repoPath, branch, copied, total, errors } = event.payload;
+			const message =
+				errors.length > 0
+					? t("worktreeSync.completed.withSkips", "Synced {copied} of {total} files ({skipped} skipped)", {
+							copied: String(copied),
+							total: String(total),
+							skipped: String(errors.length),
+						})
+					: t("worktreeSync.completed.clean", "Synced {copied} file(s)", { copied: String(copied) });
+			toastsStore.add(
+				t("worktreeSync.completed.title", "Finished syncing {branch}", { branch }),
+				message,
+				"info",
+				false,
+				undefined,
+				undefined,
+				repoPath,
+			);
+		},
+	).catch((err) => appLogger.error("app", "Failed to register worktree-sync-completed listener", err));
 
 	// Listen for MCP toast notifications from the Rust backend
 	replaceMcpToastListener((event) => {

@@ -175,7 +175,7 @@ Tabbed settings overlay.
 - **Appearance** — Visual customization
 - **Notifications** — Sound and notification preferences
 - **Repo Scripts** — Setup script, run command per repository
-- **Repo Worktree** — Base branch, copy ignored/untracked files
+- **Repo Worktree** — Base branch, copy ignored/untracked files, always-copy files/directories list
 
 ### PrDetailPopover (`PrDetailPopover/`)
 

@@ -313,6 +313,32 @@ pub(crate) enum MergeStrategy {
     Rebase,
 }
 
+/// How a `CopyPathEntry` should land in a freshly created worktree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CopyPathMode {
+    /// Recursively copy the file/directory (symlinks inside a copied directory
+    /// are recreated pointing at the same target, not dereferenced).
+    #[default]
+    Copy,
+    /// Create a symlink in the new worktree pointing at the source repo's copy,
+    /// so both worktrees share the same file/directory on disk (e.g. a large
+    /// `node_modules`, or a `.env` meant to stay identical everywhere).
+    Symlink,
+}
+
+/// One entry in a repo's "always copy these files/directories" list
+/// (`RepoSettingsEntry::copy_paths`). `path` is relative to the repo root —
+/// deliberately named `path`/`mode` (not `filePath`/`copyMode`) so the
+/// frontend's shallow camelCase<->snake_case key conversion (`caseKeys.ts`,
+/// top-level keys only) never has to look inside this struct.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CopyPathEntry {
+    pub(crate) path: String,
+    #[serde(default)]
+    pub(crate) mode: CopyPathMode,
+}
+
 /// What to do with a worktree after its branch is merged
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1303,6 +1329,11 @@ pub(crate) struct RepoSettingsEntry {
     /// Human-readable labels for branches/worktrees, keyed by branch name
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) branch_labels: HashMap<String, String>,
+    /// Files/directories always copied (or symlinked) into every new worktree
+    /// of this repo, independent of `copy_ignored_files`/`copy_untracked_files`.
+    /// Repo-specific, not inheritable — same rationale as `branch_labels`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) copy_paths: Vec<CopyPathEntry>,
     /// Gather every worktree of this repo into one consolidated screen (#e767).
     /// Repo-specific, not inheritable: it describes how you want to look at THIS
     /// repo, and a global default would consolidate repos you never asked about.
@@ -1352,6 +1383,7 @@ impl RepoSettingsEntry {
             || self.auto_delete_on_pr_close.is_some()
             || self.mcp_upstreams.is_some()
             || !self.branch_labels.is_empty()
+            || !self.copy_paths.is_empty()
             || self.auto_consolidate_worktrees
             || self.pr_hide_drafts.is_some()
             || self.pr_hide_conflicting.is_some()
@@ -2602,6 +2634,39 @@ fn resolve_setup_script_from(
         return Some(defaults.setup_script.clone());
     }
     None
+}
+
+/// Resolve the effective (copy_ignored, copy_untracked, copy_paths) triple for
+/// a repo — the three-tier chain (per-repo app setting > `.tuic.json` > global
+/// default) already used by the frontend's `repoSettings.ts` resolvers, done
+/// here in Rust so a worktree created via the MCP HTTP path (no frontend in
+/// the loop) resolves identically to one created from the desktop app.
+/// `copy_paths` has no `.tuic.json`/global tier — repo-specific only, same as
+/// `branch_labels`.
+pub(crate) fn resolve_effective_copy_settings(repo_path: &str) -> (bool, bool, Vec<CopyPathEntry>) {
+    let settings: RepoSettingsMap = load_json_config(REPO_SETTINGS_FILE);
+    let defaults: RepoDefaultsConfig = load_json_config(REPO_DEFAULTS_FILE);
+    let local = load_repo_local_config_from_path(std::path::Path::new(repo_path));
+    resolve_copy_settings_from(&settings, &defaults, local.as_ref(), repo_path)
+}
+
+fn resolve_copy_settings_from(
+    settings: &RepoSettingsMap,
+    defaults: &RepoDefaultsConfig,
+    local: Option<&RepoLocalConfig>,
+    repo_path: &str,
+) -> (bool, bool, Vec<CopyPathEntry>) {
+    let entry = settings.repos.get(repo_path);
+    let copy_ignored = entry
+        .and_then(|e| e.copy_ignored_files)
+        .or_else(|| local.and_then(|l| l.copy_ignored_files))
+        .unwrap_or(defaults.copy_ignored_files);
+    let copy_untracked = entry
+        .and_then(|e| e.copy_untracked_files)
+        .or_else(|| local.and_then(|l| l.copy_untracked_files))
+        .unwrap_or(defaults.copy_untracked_files);
+    let copy_paths = entry.map(|e| e.copy_paths.clone()).unwrap_or_default();
+    (copy_ignored, copy_untracked, copy_paths)
 }
 
 // Repositories (opaque JSON — schema owned by frontend)
@@ -4081,6 +4146,16 @@ mod tests {
                 auto_delete_on_pr_close: None,
                 mcp_upstreams: None,
                 branch_labels: HashMap::new(),
+                copy_paths: vec![
+                    CopyPathEntry {
+                        path: ".env".to_string(),
+                        mode: CopyPathMode::Copy,
+                    },
+                    CopyPathEntry {
+                        path: "node_modules".to_string(),
+                        mode: CopyPathMode::Symlink,
+                    },
+                ],
                 pr_hide_drafts: Some(true),
                 pr_hide_conflicting: None,
                 pr_hide_ci_failing: Some(false),
@@ -4101,6 +4176,19 @@ mod tests {
         assert_eq!(entry.pr_hide_conflicting, None);
         assert_eq!(entry.pr_hide_ci_failing, Some(false));
         assert_eq!(entry.terminal_meta_hotkeys, Some(false));
+        assert_eq!(
+            entry.copy_paths,
+            vec![
+                CopyPathEntry {
+                    path: ".env".to_string(),
+                    mode: CopyPathMode::Copy,
+                },
+                CopyPathEntry {
+                    path: "node_modules".to_string(),
+                    mode: CopyPathMode::Symlink,
+                },
+            ],
+        );
     }
 
     /// Regression for the camelCase/snake_case seam bug: the frontend's
@@ -4133,6 +4221,10 @@ mod tests {
             "auto_delete_on_pr_close": "auto",
             "mcp_upstreams": ["github"],
             "branch_labels": {"main": "Trunk"},
+            "copy_paths": [
+                {"path": ".env", "mode": "copy"},
+                {"path": "node_modules", "mode": "symlink"}
+            ],
             "auto_consolidate_worktrees": true,
             "pr_hide_drafts": true,
             "pr_hide_conflicting": false,
@@ -4163,6 +4255,19 @@ mod tests {
         );
         assert_eq!(entry.mcp_upstreams, Some(vec!["github".to_string()]));
         assert_eq!(entry.branch_labels.get("main"), Some(&"Trunk".to_string()));
+        assert_eq!(
+            entry.copy_paths,
+            vec![
+                CopyPathEntry {
+                    path: ".env".to_string(),
+                    mode: CopyPathMode::Copy,
+                },
+                CopyPathEntry {
+                    path: "node_modules".to_string(),
+                    mode: CopyPathMode::Symlink,
+                },
+            ],
+        );
         assert!(entry.auto_consolidate_worktrees);
         assert_eq!(entry.pr_hide_drafts, Some(true));
         assert_eq!(entry.pr_hide_conflicting, Some(false));
@@ -4403,6 +4508,18 @@ mod tests {
     fn has_custom_settings_true_when_copy_untracked_files() {
         let entry = RepoSettingsEntry {
             copy_untracked_files: Some(true),
+            ..RepoSettingsEntry::default()
+        };
+        assert!(entry.has_custom_settings());
+    }
+
+    #[test]
+    fn has_custom_settings_true_when_copy_paths_set() {
+        let entry = RepoSettingsEntry {
+            copy_paths: vec![CopyPathEntry {
+                path: ".env".to_string(),
+                mode: CopyPathMode::Copy,
+            }],
             ..RepoSettingsEntry::default()
         };
         assert!(entry.has_custom_settings());
@@ -5370,6 +5487,103 @@ mod tests {
             resolve_setup_script_from(&settings, &defaults, "/repo"),
             Some("yarn install".to_string()),
         );
+    }
+
+    #[test]
+    fn resolve_copy_settings_per_repo_override_wins_over_defaults() {
+        let mut settings = RepoSettingsMap::default();
+        settings.repos.insert(
+            "/repo".to_string(),
+            RepoSettingsEntry {
+                copy_ignored_files: Some(true),
+                copy_untracked_files: Some(false),
+                copy_paths: vec![CopyPathEntry {
+                    path: ".env".to_string(),
+                    mode: CopyPathMode::Symlink,
+                }],
+                ..RepoSettingsEntry::default()
+            },
+        );
+        let defaults = RepoDefaultsConfig {
+            copy_ignored_files: false,
+            copy_untracked_files: true,
+            ..RepoDefaultsConfig::default()
+        };
+        let (copy_ignored, copy_untracked, copy_paths) =
+            resolve_copy_settings_from(&settings, &defaults, None, "/repo");
+        assert!(copy_ignored);
+        assert!(!copy_untracked);
+        assert_eq!(
+            copy_paths,
+            vec![CopyPathEntry {
+                path: ".env".to_string(),
+                mode: CopyPathMode::Symlink,
+            }],
+        );
+    }
+
+    #[test]
+    fn resolve_copy_settings_falls_through_to_local_config_then_defaults() {
+        let settings = RepoSettingsMap::default();
+        let defaults = RepoDefaultsConfig {
+            copy_ignored_files: false,
+            copy_untracked_files: false,
+            ..RepoDefaultsConfig::default()
+        };
+        let local = RepoLocalConfig {
+            copy_ignored_files: Some(true),
+            // copy_untracked_files left unset — must fall through to defaults.
+            ..RepoLocalConfig::default()
+        };
+        let (copy_ignored, copy_untracked, copy_paths) =
+            resolve_copy_settings_from(&settings, &defaults, Some(&local), "/repo");
+        assert!(copy_ignored, "per-repo unset, .tuic.json true should win");
+        assert!(
+            !copy_untracked,
+            ".tuic.json unset should fall through to global default"
+        );
+        assert!(
+            copy_paths.is_empty(),
+            "copy_paths has no .tuic.json/global tier"
+        );
+    }
+
+    #[test]
+    fn resolve_copy_settings_per_repo_override_beats_local_config() {
+        let mut settings = RepoSettingsMap::default();
+        settings.repos.insert(
+            "/repo".to_string(),
+            RepoSettingsEntry {
+                copy_ignored_files: Some(false),
+                ..RepoSettingsEntry::default()
+            },
+        );
+        let defaults = RepoDefaultsConfig::default();
+        let local = RepoLocalConfig {
+            copy_ignored_files: Some(true),
+            ..RepoLocalConfig::default()
+        };
+        let (copy_ignored, _, _) =
+            resolve_copy_settings_from(&settings, &defaults, Some(&local), "/repo");
+        assert!(
+            !copy_ignored,
+            "explicit per-repo Off must beat a .tuic.json On"
+        );
+    }
+
+    #[test]
+    fn resolve_copy_settings_no_config_returns_global_defaults_and_no_paths() {
+        let settings = RepoSettingsMap::default();
+        let defaults = RepoDefaultsConfig {
+            copy_ignored_files: true,
+            copy_untracked_files: true,
+            ..RepoDefaultsConfig::default()
+        };
+        let (copy_ignored, copy_untracked, copy_paths) =
+            resolve_copy_settings_from(&settings, &defaults, None, "/unknown-repo");
+        assert!(copy_ignored);
+        assert!(copy_untracked);
+        assert!(copy_paths.is_empty());
     }
 
     #[test]

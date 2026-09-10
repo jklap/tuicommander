@@ -72,6 +72,14 @@ a three-position **On / Use global / Off** control instead of a plain checkbox, 
 global setting" stays a selectable state rather than something you can only get back to by
 resetting the whole repo's overrides.
 
+A repo can also list specific files/directories (relative to its root) to **always** copy — or
+symlink, to share one copy across every worktree instead of duplicating it — into every new
+worktree, independent of the Copy ignored/untracked toggles above. This list has no global
+default; it is always repo-specific. Both the toggles and the explicit list run their copy in the
+background after the worktree is already created and open — a toast marks when the copy starts
+and when it finishes, so a large ignored tree (e.g. `node_modules`) doesn't hold up getting into
+the new worktree.
+
 ## Merge & Archive
 
 Right-click a worktree branch → **Merge & Archive** to:

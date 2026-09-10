@@ -315,6 +315,32 @@ pub enum AppEvent {
         branch: String,
         reason: String,
     },
+    /// A background copy of ignored/untracked/explicit-listed files into a
+    /// freshly created worktree has started. See `worktree_sync.rs`. Only
+    /// fired when there is actually something configured to copy — silent
+    /// otherwise, so a repo with both toggles off and no `copy_paths` never
+    /// shows a toast.
+    #[serde(rename = "worktree-sync-started")]
+    WorktreeSyncStarted { repo_path: String, branch: String },
+    /// Throttled progress for the same background copy (not on every single
+    /// file — see `worktree::spawn_worktree_file_sync`'s throttling).
+    #[serde(rename = "worktree-sync-progress")]
+    WorktreeSyncProgress {
+        repo_path: String,
+        branch: String,
+        copied: usize,
+        total: usize,
+    },
+    /// The background copy finished (successfully or with some per-path
+    /// errors — `errors` is non-fatal detail, not a failure signal on its own).
+    #[serde(rename = "worktree-sync-completed")]
+    WorktreeSyncCompleted {
+        repo_path: String,
+        branch: String,
+        copied: usize,
+        total: usize,
+        errors: Vec<String>,
+    },
 }
 
 impl AppEvent {
@@ -3845,7 +3871,10 @@ impl AppState {
             | AppEvent::ReviewProgress { .. }
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProposalsReady { .. }
-            | AppEvent::WorktreeCreateFailed { .. } => {}
+            | AppEvent::WorktreeCreateFailed { .. }
+            | AppEvent::WorktreeSyncStarted { .. }
+            | AppEvent::WorktreeSyncProgress { .. }
+            | AppEvent::WorktreeSyncCompleted { .. } => {}
         }
     }
 
