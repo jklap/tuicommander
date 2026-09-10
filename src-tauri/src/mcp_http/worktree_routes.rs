@@ -195,6 +195,7 @@ pub(super) async fn create_worktree_shared(
                     }
                 }
             }
+            crate::worktree::spawn_worktree_file_sync(state, &base_repo, &branch_name, &workspace.path);
             Ok(CreatedWorktree {
                 worktree: crate::state::WorktreeInfo {
                     name: workspace

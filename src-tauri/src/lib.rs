@@ -128,6 +128,7 @@ mod updater;
 pub(crate) mod webview_recovery;
 pub(crate) mod window_geometry;
 pub(crate) mod worktree;
+pub(crate) mod worktree_sync;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
