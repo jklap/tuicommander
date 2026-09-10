@@ -373,5 +373,68 @@ describe("promptLibraryStore", () => {
 				expect(mockInvoke).toHaveBeenCalledWith("save_prompt_library", expect.anything());
 			});
 		});
+
+		it("gives a stale unmodified built-in the new placement defaults on hydrate (builtInVersion migration)", async () => {
+			const { SMART_PROMPTS_BUILTIN } = await import("../../data/smartPromptsBuiltIn");
+			const current = SMART_PROMPTS_BUILTIN.find((p) => p.id === "smart-commit")!;
+			// Simulate a copy persisted before the "command-palette" placement was
+			// added to every built-in (builtInVersion 3 -> 4): same content (so the
+			// "unmodified built-in" branch applies), old version, old placement.
+			const stale = {
+				...current,
+				builtInVersion: 3,
+				placement: ["toolbar", "git-changes"],
+			};
+			mockInvoke.mockResolvedValueOnce({
+				prompts: [{ id: stale.id, label: stale.name, text: JSON.stringify(stale), pinned: false }],
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				const merged = store.getPrompt(stale.id);
+				expect(merged?.placement).toEqual(current.placement);
+				expect(merged?.placement).toContain("command-palette");
+				expect(merged?.builtInVersion).toBe(current.builtInVersion);
+			});
+		});
+
+		it("does not touch an already-current unmodified built-in's customized placement", async () => {
+			const { SMART_PROMPTS_BUILTIN } = await import("../../data/smartPromptsBuiltIn");
+			const current = SMART_PROMPTS_BUILTIN.find((p) => p.id === "smart-commit")!;
+			// Same content and already at the current builtInVersion: the user
+			// deliberately removed "command-palette" from this one, and a hydrate
+			// must not silently restore it.
+			const customized = {
+				...current,
+				placement: current.placement!.filter((p) => p !== "command-palette"),
+			};
+			mockInvoke.mockResolvedValueOnce({
+				prompts: [{ id: customized.id, label: customized.name, text: JSON.stringify(customized), pinned: false }],
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.getPrompt(customized.id)?.placement).toEqual(customized.placement);
+			});
+		});
+
+		it("does not touch the placement of a built-in whose content the user modified", async () => {
+			const { SMART_PROMPTS_BUILTIN } = await import("../../data/smartPromptsBuiltIn");
+			const current = SMART_PROMPTS_BUILTIN.find((p) => p.id === "smart-commit")!;
+			const modified = {
+				...current,
+				content: "My completely rewritten content",
+				builtInVersion: 3,
+				placement: ["toolbar"],
+			};
+			mockInvoke.mockResolvedValueOnce({
+				prompts: [{ id: modified.id, label: modified.name, text: JSON.stringify(modified), pinned: false }],
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.getPrompt(modified.id)?.placement).toEqual(["toolbar"]);
+			});
+		});
 	});
 });
