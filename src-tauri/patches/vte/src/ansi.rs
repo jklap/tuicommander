@@ -716,6 +716,12 @@ pub trait Handler {
     /// iTerm2 inline image, multipart end: `OSC 1337 ; FileEnd ST`.
     fn osc_1337_file_end(&mut self) {}
 
+    /// Kitty graphics protocol: one raw, entirely unparsed APC
+    /// (`ESC _ ... ST`) payload (color-tools plan, Phase 3). The
+    /// implementor parses Kitty's own `key=value,...[;<base64>]`
+    /// control-data syntax from `data`.
+    fn kitty_graphics(&mut self, _data: &[u8]) {}
+
     /// Report text area size in characters.
     fn text_area_size_chars(&mut self) {}
 
@@ -1714,6 +1720,16 @@ where
         }
     }
 
+    /// Kitty graphics protocol (color-tools plan, Phase 3): a raw APC
+    /// (`ESC _ ... ST`) payload, entirely unparsed. Forwarded verbatim to
+    /// `Handler::kitty_graphics` — unlike `osc_dispatch`, there is no
+    /// generic `;`-splitting to do here, since Kitty's own `key=value,...`
+    /// control-data syntax has nothing in common with OSC's.
+    #[inline]
+    fn apc_dispatch(&mut self, data: &[u8]) {
+        self.handler.kitty_graphics(data);
+    }
+
     #[allow(clippy::cognitive_complexity)]
     #[inline]
     fn csi_dispatch(
@@ -2247,6 +2263,7 @@ mod tests {
         capture_ended: bool,
         open_url_payloads: Vec<Vec<u8>>,
         printed: Vec<char>,
+        kitty_graphics_calls: Vec<Vec<u8>>,
     }
 
     impl Handler for MockHandler {
@@ -2314,6 +2331,10 @@ mod tests {
         fn open_url(&mut self, base64: &[u8]) {
             self.open_url_payloads.push(base64.to_vec());
         }
+
+        fn kitty_graphics(&mut self, data: &[u8]) {
+            self.kitty_graphics_calls.push(data.to_vec());
+        }
     }
 
     impl Default for MockHandler {
@@ -2334,6 +2355,7 @@ mod tests {
                 capture_ended: false,
                 open_url_payloads: Vec::new(),
                 printed: Vec::new(),
+                kitty_graphics_calls: Vec::new(),
             }
         }
     }
@@ -2591,14 +2613,17 @@ mod tests {
     }
 
     /// APC (`ESC _ ... ESC \`), PM (`ESC ^ ... ESC \`) and SOS (`ESC X ... ESC \`)
-    /// strings are currently swallowed with no callback at all (there is no
-    /// `apc_dispatch` on `Perform` in this fork). Confirms that swallowing is
-    /// total: none of the string body — including bytes that look like OSC/CSI
-    /// syntax — reaches `print()`, and the parser resyncs cleanly on the sequence
-    /// that follows. This is the containment property Kitty's graphics protocol
-    /// (an APC sequence) currently benefits from by accident; Phase 3 changes it
-    /// intentionally via a new `apc_dispatch`, so this test locks in the *current*
-    /// behavior first.
+    /// strings must never leak their body into `print()`, regardless of
+    /// whether a `Perform` implementor cares about the content. As of
+    /// Phase 3, APC is genuinely dispatched (`apc_dispatch`, see the
+    /// `apc_dispatch_receives_accumulated_bytes` test below for a handler
+    /// that actually observes it) — but `MockHandler` here doesn't override
+    /// it, so this test's `printed` assertion still holds via the trait's
+    /// no-op default, the same way it always has. PM/SOS remain fully inert
+    /// (still routed to `anywhere()`, unaffected by the APC-specific state
+    /// split). None of the string body — including bytes that look like
+    /// OSC/CSI syntax — may reach `print()`, and the parser must resync
+    /// cleanly on the sequence that follows.
     #[test]
     fn apc_pm_sos_strings_are_fully_swallowed_without_leaking_to_print() {
         for introducer in [b'_', b'^', b'X'] {
@@ -2617,6 +2642,42 @@ mod tests {
                 vec!['A'],
                 "introducer {:?}: string body must be fully swallowed, only the \
                  trailing 'A' should print",
+                introducer as char
+            );
+        }
+    }
+
+    /// Positive counterpart to the containment test above: a handler that
+    /// *does* override `kitty_graphics` must actually receive the
+    /// accumulated APC payload bytes, verbatim, with no OSC-style parsing
+    /// applied — and PM/SOS must still never reach it (they're a different
+    /// state entirely, unaffected by the APC split).
+    #[test]
+    fn apc_dispatch_receives_accumulated_bytes() {
+        let bytes: &[u8] = b"\x1b_Gi=1,a=T,f=24;aGVsbG8=\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+
+        parser.advance(&mut handler, bytes);
+
+        assert_eq!(handler.kitty_graphics_calls, vec![b"Gi=1,a=T,f=24;aGVsbG8=".to_vec()]);
+        assert!(handler.printed.is_empty());
+    }
+
+    #[test]
+    fn pm_and_sos_never_reach_kitty_graphics() {
+        for introducer in [b'^', b'X'] {
+            let mut bytes: Vec<u8> = vec![0x1b, introducer];
+            bytes.extend_from_slice(b"Gi=1,a=T,f=24;aGVsbG8=");
+            bytes.extend_from_slice(&[0x1b, b'\\']);
+
+            let mut parser = Processor::<TestSyncHandler>::new();
+            let mut handler = MockHandler::default();
+            parser.advance(&mut handler, &bytes);
+
+            assert!(
+                handler.kitty_graphics_calls.is_empty(),
+                "introducer {:?} must not reach kitty_graphics",
                 introducer as char
             );
         }
