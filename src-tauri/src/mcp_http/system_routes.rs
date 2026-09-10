@@ -30,6 +30,8 @@ pub(super) struct NotificationSoundRequest {
     pub volume: f32,
     #[serde(default)]
     pub device: Option<String>,
+    #[serde(default)]
+    pub choice: crate::notification_sound::SoundChoice,
 }
 
 /// `POST /system/notification-sound` — mirror of `play_notification_sound`.
@@ -37,7 +39,7 @@ pub(super) struct NotificationSoundRequest {
 pub(super) async fn play_notification_sound_http(
     Json(body): Json<NotificationSoundRequest>,
 ) -> impl IntoResponse {
-    crate::notification_sound::play_notification_sound(body.sound, body.volume, body.device);
+    crate::notification_sound::play_notification_sound(body.sound, body.volume, body.device, body.choice);
     Json(serde_json::Value::Null)
 }
 
