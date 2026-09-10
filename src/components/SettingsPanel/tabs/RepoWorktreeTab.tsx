@@ -1,4 +1,4 @@
-import { type Component, For, Show } from "solid-js";
+import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { isMacOS } from "../../../platform";
 import type {
@@ -9,7 +9,7 @@ import type {
 	WorktreeAfterMerge,
 	WorktreeStorage,
 } from "../../../stores/repoDefaults";
-import type { RepoSettings } from "../../../stores/repoSettings";
+import type { CopyPathEntry, RepoSettings } from "../../../stores/repoSettings";
 import { settingsStore } from "../../../stores/settings";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
@@ -37,6 +37,34 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 	const handleBaseBranchChange = (value: string) => {
 		props.onUpdate("baseBranch", value === INHERIT ? null : value);
+	};
+
+	// Draft state for the "always copy" list's add row — local to this tab,
+	// cleared once the entry is committed to props.settings.copyPaths.
+	const [newCopyPath, setNewCopyPath] = createSignal("");
+	const [newCopyMode, setNewCopyMode] = createSignal<CopyPathEntry["mode"]>("copy");
+
+	const addCopyPath = () => {
+		const path = newCopyPath().trim();
+		if (!path) return;
+		if (props.settings.copyPaths.some((e) => e.path === path)) return;
+		props.onUpdate("copyPaths", [...props.settings.copyPaths, { path, mode: newCopyMode() }]);
+		setNewCopyPath("");
+		setNewCopyMode("copy");
+	};
+
+	const removeCopyPath = (path: string) => {
+		props.onUpdate(
+			"copyPaths",
+			props.settings.copyPaths.filter((e) => e.path !== path),
+		);
+	};
+
+	const updateCopyPathMode = (path: string, mode: CopyPathEntry["mode"]) => {
+		props.onUpdate(
+			"copyPaths",
+			props.settings.copyPaths.map((e) => (e.path === path ? { ...e, mode } : e)),
+		);
 	};
 
 	return (
@@ -125,6 +153,66 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					label={t("repoWorktree.toggle.copyUntrackedFiles", "Copy untracked files")}
 					inherited={props.defaults.copyUntrackedFiles}
 				/>
+
+				<p class={s.hint}>
+					{t(
+						"repoWorktree.hint.copySync",
+						"Copying runs in the background after the worktree is created — a toast shows when it starts and finishes.",
+					)}
+				</p>
+			</div>
+
+			<div class={s.group}>
+				<label>{t("repoWorktree.label.copyPaths", "Always Copy These Files/Directories")}</label>
+				<p class={s.hint}>
+					{t(
+						"repoWorktree.hint.copyPaths",
+						"Copied (or symlinked) into every new worktree of this repo, regardless of the toggles above. Paths are relative to the repository root. Repo-specific — there is no global default for this list.",
+					)}
+				</p>
+
+				<For each={props.settings.copyPaths}>
+					{(entry) => (
+						<div class={s.copyPathRow}>
+							<span class={s.copyPathText}>{entry.path}</span>
+							<select
+								class={s.transferSelect}
+								value={entry.mode}
+								onChange={(e) => updateCopyPathMode(entry.path, e.currentTarget.value as CopyPathEntry["mode"])}
+							>
+								<option value="copy">{t("repoWorktree.copyPaths.copy", "Copy")}</option>
+								<option value="symlink">{t("repoWorktree.copyPaths.symlink", "Symlink")}</option>
+							</select>
+							<button type="button" class={s.transferBtn} onClick={() => removeCopyPath(entry.path)}>
+								{t("repoWorktree.copyPaths.remove", "Remove")}
+							</button>
+						</div>
+					)}
+				</For>
+
+				<div class={s.copyPathRow}>
+					<input
+						type="text"
+						class={s.copyPathInput}
+						value={newCopyPath()}
+						onInput={(e) => setNewCopyPath(e.currentTarget.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") addCopyPath();
+						}}
+						placeholder={t("repoWorktree.copyPaths.placeholder", "e.g. .env or node_modules")}
+					/>
+					<select
+						class={s.transferSelect}
+						value={newCopyMode()}
+						onChange={(e) => setNewCopyMode(e.currentTarget.value as CopyPathEntry["mode"])}
+					>
+						<option value="copy">{t("repoWorktree.copyPaths.copy", "Copy")}</option>
+						<option value="symlink">{t("repoWorktree.copyPaths.symlink", "Symlink")}</option>
+					</select>
+					<button type="button" class={s.transferBtn} onClick={addCopyPath} disabled={!newCopyPath().trim()}>
+						{t("repoWorktree.copyPaths.add", "Add")}
+					</button>
+				</div>
 			</div>
 
 			<h3>{t("repoWorktree.heading.worktreeSettings", "Worktree Settings")}</h3>

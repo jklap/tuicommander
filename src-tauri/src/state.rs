@@ -527,6 +527,32 @@ pub enum AppEvent {
     #[cfg(feature = "dictation")]
     #[serde(rename = "speech-utterance")]
     SpeechUtterance { payload: serde_json::Value },
+    /// A background copy of ignored/untracked/explicit-listed files into a
+    /// freshly created worktree has started. See `worktree_sync.rs`. Only
+    /// fired when there is actually something configured to copy — silent
+    /// otherwise, so a repo with both toggles off and no `copy_paths` never
+    /// shows a toast.
+    #[serde(rename = "worktree-sync-started")]
+    WorktreeSyncStarted { repo_path: String, branch: String },
+    /// Throttled progress for the same background copy (not on every single
+    /// file — see `worktree::spawn_worktree_file_sync`'s throttling).
+    #[serde(rename = "worktree-sync-progress")]
+    WorktreeSyncProgress {
+        repo_path: String,
+        branch: String,
+        copied: usize,
+        total: usize,
+    },
+    /// The background copy finished (successfully or with some per-path
+    /// errors — `errors` is non-fatal detail, not a failure signal on its own).
+    #[serde(rename = "worktree-sync-completed")]
+    WorktreeSyncCompleted {
+        repo_path: String,
+        branch: String,
+        copied: usize,
+        total: usize,
+        errors: Vec<String>,
+    },
 }
 
 /// The wire body of [`AppEvent::SessionStateChanged`], shared by the desktop
@@ -5406,7 +5432,11 @@ impl AppState {
             // A mirrored event is the far end's accumulator output. Feeding it
             // in here would build a second, local row for a session this
             // machine does not run.
-            | AppEvent::RemoteMirrored { .. } => {}
+            | AppEvent::RemoteMirrored { .. }
+            // A worktree's background file copy is repo-scoped, not a session.
+            | AppEvent::WorktreeSyncStarted { .. }
+            | AppEvent::WorktreeSyncProgress { .. }
+            | AppEvent::WorktreeSyncCompleted { .. } => {}
             // Dictation is bound to a session but says nothing about it: a
             // download belongs to the installation, and a spoken reply belongs
             // to the conversation rather than to the terminal it will reach.

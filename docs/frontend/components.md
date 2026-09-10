@@ -312,7 +312,7 @@ label row above its pages, and the configured repositories follow under
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
 - **Repositories**
   - **Repo Scripts** — Setup and run scripts, plus the optional per-repository Dev Server URL for Design Mode
-  - **Repo Worktree** — Base branch, copy ignored/untracked files
+  - **Repo Worktree** — Base branch, copy ignored/untracked files, always-copy files/directories list
 
 **Expert mode** (`ExpertSetting.tsx`, `stores/settingsExpert.ts`). The header
 carries `ExpertModeSwitch`, which flips the persisted UI pref

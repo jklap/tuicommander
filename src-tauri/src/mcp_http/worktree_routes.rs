@@ -248,6 +248,7 @@ pub(super) async fn create_worktree_shared(
                 crate::cow::warm_worktree,
             )
             .await;
+            crate::worktree::spawn_worktree_file_sync(state, &base_repo, &branch_name, &workspace.path);
             Ok(CreatedWorktree {
                 worktree: crate::state::WorktreeInfo {
                     name: workspace
