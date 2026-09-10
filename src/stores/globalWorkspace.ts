@@ -227,9 +227,18 @@ function createGlobalWorkspaceStore() {
 		/**
 		 * Promote a terminal to the global workspace.
 		 * Adds it as a tab to the active group (no auto-split).
+		 *
+		 * `scopeKey` defaults to whatever scope is current, which is right for a
+		 * user clicking promote — they mean the workspace in front of them. A
+		 * caller promoting on the user's behalf must name the scope instead:
+		 * `useWorktreeConsolidation` swaps the current scope to a repo path when
+		 * consolidation is on, so an unnamed promote would land a tab in a
+		 * different bucket depending on which repo was active — the exact
+		 * ambient-state dependency that parking an unowned tab here exists to
+		 * remove. `assignSessionToRepoBranch` passes MANUAL_SCOPE for that reason.
 		 */
-		promote(termId: string): boolean {
-			const ws = workspace();
+		promote(termId: string, scopeKey: string = scope): boolean {
+			const ws = workspace(scopeKey);
 			if (ws.promoted.has(termId)) return true;
 
 			const updated = addTerminalToLayout(ws.layout, termId);
