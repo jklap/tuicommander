@@ -28,6 +28,7 @@ use crate::vte::ansi::{
 
 pub mod cell;
 pub mod color;
+pub mod iterm2;
 pub mod search;
 
 /// Minimum number of columns.
@@ -400,6 +401,11 @@ pub struct Term<T> {
     /// `Some` while capturing; the accumulated text is flushed to the
     /// clipboard (as `Event::ClipboardStore`) when `EndCopy` arrives.
     clipboard_capture: Option<String>,
+
+    /// In-progress iTerm2 `MultipartFile=`/`FilePart=`/`FileEnd` sequence, if
+    /// any (color-tools plan, Phase 2). At most one at a time — iTerm2
+    /// doesn't define concurrent multipart transfers.
+    pending_multipart: Option<iterm2::PendingMultipart>,
 }
 
 /// Configuration options for the [`Term`].
@@ -533,6 +539,7 @@ impl<T> Term<T> {
             title: Default::default(),
             mode: Default::default(),
             clipboard_capture: None,
+            pending_multipart: None,
         }
     }
 
@@ -1331,6 +1338,107 @@ impl<T> Dimensions for Term<T> {
     #[inline]
     fn total_lines(&self) -> usize {
         self.grid.total_lines()
+    }
+}
+
+/// iTerm2 inline-images helpers (color-tools plan, Phase 2). Kept in a
+/// separate inherent impl block since a trait impl (`Handler for Term<T>`
+/// below) can only contain that trait's own methods.
+impl<T: EventListener> Term<T> {
+    /// Decode, size and display one iTerm2 `File=`/multipart-assembled
+    /// image. No-op if `inline` wasn't set (Phase 2 scope: a downloaded-not-
+    /// displayed image is a display no-op, not a write-to-disk), the base64
+    /// fails to decode, the payload is empty, or the store refuses it (over
+    /// the per-session byte cap).
+    fn osc_1337_display(&mut self, args: iterm2::FileArgs, payload_b64: &[u8]) {
+        if !args.inline {
+            return;
+        }
+        let Ok(bytes) = Base64.decode(payload_b64) else {
+            return;
+        };
+        if bytes.is_empty() {
+            return;
+        }
+
+        let mime = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+            "image/png"
+        } else if bytes.starts_with(b"GIF8") {
+            "image/gif"
+        } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            "image/jpeg"
+        } else {
+            "application/octet-stream"
+        }
+        .to_string();
+
+        let (intrinsic_width, intrinsic_height) =
+            iterm2::sniff_image_dimensions(&bytes).unwrap_or((0, 0));
+
+        let window_size = self.event_proxy.window_size();
+        let (cols, rows) = iterm2::resolve_footprint(
+            &args,
+            intrinsic_width,
+            intrinsic_height,
+            window_size.cell_width as u32,
+            window_size.cell_height as u32,
+            self.columns() as u32,
+            self.screen_lines() as u32,
+        );
+
+        let Some(image) =
+            self.event_proxy
+                .store_image(Arc::from(bytes), mime, intrinsic_width, intrinsic_height)
+        else {
+            return;
+        };
+        // iTerm2 has no explicit placement-id concept (unlike Kitty) — an
+        // image is only ever displayed once, so its own id doubles as the
+        // placement id.
+        let placement_id = image.image_id;
+        self.reserve_image_footprint(image, placement_id, cols, rows);
+    }
+
+    /// Reserve `cols x rows` cells starting at the current cursor position
+    /// for an inline image placement, attaching `image` to each reserved
+    /// cell, then advance the cursor past the reservation (one `linefeed`
+    /// per row, matching how real terminals treat an inline image as that
+    /// many lines of "content", plus a final `carriage_return`).
+    ///
+    /// Terminal-reserved-footprint path only (color-tools plan,
+    /// Architecture) — never used for Kitty's Unicode-placeholder placements
+    /// (Phase 3), which the *app* writes as ordinary characters; this method
+    /// is iTerm2-only today, but is not itself iTerm2-specific logic.
+    fn reserve_image_footprint(
+        &mut self,
+        image: Arc<cell::ImageData>,
+        placement_id: u32,
+        cols: u32,
+        rows: u32,
+    ) {
+        let start_col = self.grid.cursor.point.column.0;
+        let available_cols = self.columns().saturating_sub(start_col).max(1);
+        let footprint_cols = (cols as usize).min(available_cols);
+        let footprint_rows = rows.max(1);
+
+        for row in 0..footprint_rows {
+            if row > 0 {
+                self.linefeed();
+            }
+            let line = self.grid.cursor.point.line;
+            for col in 0..footprint_cols {
+                let column = Column(start_col + col);
+                let cell_ref = cell::ImageCellRef::new(
+                    Arc::clone(&image),
+                    placement_id,
+                    col as u16,
+                    row as u16,
+                );
+                self.grid[line][column].set_image_ref(Some(cell_ref));
+            }
+        }
+        self.linefeed();
+        self.carriage_return();
     }
 }
 
@@ -2686,6 +2794,38 @@ impl<T: EventListener> Handler for Term<T> {
     fn text_area_size_chars(&mut self) {
         let text = format!("\x1b[8;{};{}t", self.screen_lines(), self.columns());
         self.event_proxy.send_event(Event::PtyWrite(text));
+    }
+
+    fn osc_1337_file(&mut self, args: &str, payload_b64: &[u8]) {
+        let parsed = iterm2::parse_file_args(args);
+        self.osc_1337_display(parsed, payload_b64);
+    }
+
+    fn osc_1337_multipart_file(&mut self, args: &str) {
+        let parsed = iterm2::parse_file_args(args);
+        self.pending_multipart = Some(iterm2::PendingMultipart {
+            args: parsed,
+            payload_b64: Vec::new(),
+        });
+    }
+
+    fn osc_1337_file_part(&mut self, payload: &[u8]) {
+        let Some(pending) = self.pending_multipart.as_mut() else {
+            return;
+        };
+        if pending.payload_b64.len() + payload.len() > iterm2::MAX_MULTIPART_B64_BYTES {
+            // Fail closed: abort the whole transfer rather than let it keep
+            // growing unbounded.
+            self.pending_multipart = None;
+            return;
+        }
+        pending.payload_b64.extend_from_slice(payload);
+    }
+
+    fn osc_1337_file_end(&mut self) {
+        if let Some(pending) = self.pending_multipart.take() {
+            self.osc_1337_display(pending.args, &pending.payload_b64);
+        }
     }
 
     #[inline]
