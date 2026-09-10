@@ -3223,3 +3223,25 @@ cloned repo.
 - [ ] In that same repo, check out a specific commit (`git checkout <sha>`) to detach
   HEAD, then open the branch switcher again — confirm there is no phantom
   `(HEAD detached at ...`-style entry in the list.
+
+## Inline images (color-tools plan, Phases 1-2 backend)
+
+Rust changes here **require a `make dev` restart** to take effect (no hot-reload) — this whole
+section needs a human running the rebuilt app, not just re-running tests.
+
+- [ ] After a rebuild, run the real `imgcat`/`imgls`/`divider` scripts (or a hand-written OSC 1337
+  sequence) against a live `make dev` session and confirm an image visibly displays. **Backend
+  is fully implemented and unit/integration-tested (parsing, decode, footprint sizing incl.
+  `auto`/aspect-ratio, cell reservation, `CellExtra` attachment, eviction) but there is no
+  frontend renderer yet** — `terminal_image_ref_at`/`terminal_image_bytes` will return real data,
+  but nothing paints it to the canvas. This is the single largest remaining gap before the
+  feature is user-visible at all.
+- [ ] Diagnostics-ring elision (color-tools plan, Architecture: PTY flight-recorder rings must
+  not have a large image payload's base64 bytes evict their whole history) is **not implemented**.
+  A large image transmission will currently consume a large fraction of `pty_raw_rings`'
+  2 MB cap and any in-flight `.tcap` capture. Deliberately deferred rather than rushed into the
+  PTY reader thread's hot loop (AGENTS.md flags this as one of the most regression-prone spots in
+  the codebase) — needs its own careful pass with a live capture to verify, not just unit tests.
+- [ ] `CSI 14 t`/`CSI 16 t`/XTVERSION replies: confirm against a real client. `timg -pk` and
+  `broot` are the easiest first targets — `broot`'s env-based detection already matches our
+  `TERM_PROGRAM=ghostty` with zero further changes needed.

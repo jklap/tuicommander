@@ -380,6 +380,39 @@ real cell pixel size before they'll attempt to display anything:
   `KITTY_WINDOW_ID` for the kitty keyboard protocol allow-list. timg and
   snacks.nvim both gate Kitty-graphics support on this exact string.
 
+## iTerm2 Inline Images (OSC 1337)
+
+`patches/alacritty_terminal/src/term/iterm2.rs` (pure parsing/geometry —
+`parse_file_args`, `resolve_footprint`, `sniff_image_dimensions`) plus
+`term/mod.rs`'s `osc_1337_file`/`osc_1337_multipart_file`/
+`osc_1337_file_part`/`osc_1337_file_end` `Handler` methods implement
+`File=`/`MultipartFile=`/`FilePart=`/`FileEnd`:
+
+- **Dispatch**: `vte/src/ansi.rs`'s `osc_dispatch` rejoins vte's `;`-split
+  OSC params back into iTerm2's own `;`-delimited argument syntax before
+  parsing — vte has no notion of iTerm2 semantics and would otherwise split
+  `File=name;size;width;...:<base64>` apart incorrectly.
+- **Sizing**: `width=`/`height=` accept cells, `Npx`, `N%`, or `auto`
+  (resolved from the image's own intrinsic size via a minimal PNG/GIF header
+  sniff — no pixel decode, ever). One `auto` side with the other explicit
+  preserves aspect ratio against the image's real proportions, not just its
+  raw intrinsic size.
+- **Storage**: `Cell.extra.image: Option<ImageCellRef>` holds a direct
+  `Arc<ImageData>` (both in `term/cell.rs`, alongside `Hyperlink`) — eviction
+  is ordinary Rust ownership (the app-level `terminal_images::ImageStore`
+  keeps only `Weak` refs), not a cache policy. See that module's own doc
+  comment.
+- **`inline=0`** (the default when omitted) is a display no-op, not a
+  write-to-disk — the download path is out of scope for now.
+- **Known gap**: the PTY flight-recorder rings (`pty_raw_rings`,
+  `OUTPUT_RING_BUFFER_CAPACITY`) do not elide image payload bytes, so a large
+  transmission can consume a large fraction of their 2 MB cap. Deliberately
+  deferred rather than modifying the reader thread's hot loop under time
+  pressure — see `to-test.md`.
+- **Known gap**: no frontend renderer exists yet. `terminal_image_ref_at`/
+  `terminal_image_bytes` return real data once an image is transmitted, but
+  nothing paints it to the canvas.
+
 ## Shell Environment Variables
 
 `build_shell_command()` sets these environment variables for spawned PTY sessions:

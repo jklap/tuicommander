@@ -59,9 +59,32 @@ pub(crate) struct TermEventCollector {
     /// `resize_pty` (device pixels) once one arrives, defaulting to
     /// `DEFAULT_CELL_{WIDTH,HEIGHT}_PX` until then.
     window_size_px: Arc<Mutex<WindowSize>>,
+    /// Shared with `TerminalGrid` so the read-side transport commands
+    /// (`terminal_image_bytes` et al.) and the write side here (the OSC 1337
+    /// / Kitty graphics `Handler` methods, via `EventListener::store_image`)
+    /// hit the exact same store.
+    image_store: Arc<Mutex<crate::terminal_images::ImageStore>>,
 }
 
 impl EventListener for TermEventCollector {
+    fn window_size(&self) -> WindowSize {
+        *self.window_size_px.lock().unwrap()
+    }
+
+    fn store_image(
+        &self,
+        bytes: Arc<[u8]>,
+        mime: String,
+        intrinsic_width: u32,
+        intrinsic_height: u32,
+    ) -> Option<Arc<alacritty_terminal::term::cell::ImageData>> {
+        self.image_store
+            .lock()
+            .unwrap()
+            .store(bytes, mime, intrinsic_width, intrinsic_height)
+            .ok()
+    }
+
     fn send_event(&self, event: Event) {
         match event {
             Event::Bell => {
@@ -525,10 +548,11 @@ pub struct TerminalGrid {
     /// (which knows the frontend's real device-pixel cell size) can each update
     /// their half independently of event dispatch.
     window_size_px: Arc<Mutex<WindowSize>>,
-    /// Per-session inline-image store (color-tools plan). Populated by
-    /// Phase 2/3's OSC 1337 / Kitty graphics dispatch handlers; empty and
-    /// inert until then.
-    image_store: crate::terminal_images::ImageStore,
+    /// Per-session inline-image store (color-tools plan). Shared with
+    /// `TermEventCollector` (see its own field of the same name) so the OSC
+    /// 1337 / Kitty graphics `Handler` methods can register images directly,
+    /// via `EventListener::store_image`, without needing `&mut TerminalGrid`.
+    image_store: Arc<Mutex<crate::terminal_images::ImageStore>>,
     /// When true, column resizes reflow scrollback history while leaving the
     /// visible screen untouched. Preserves TUI cursor positioning on screen
     /// while keeping scrollback readable across resize cycles.
@@ -571,10 +595,12 @@ impl TerminalGrid {
             cell_width: DEFAULT_CELL_WIDTH_PX,
             cell_height: DEFAULT_CELL_HEIGHT_PX,
         }));
+        let image_store = Arc::new(Mutex::new(crate::terminal_images::ImageStore::new()));
         let listener = TermEventCollector {
             bell: bell_flag.clone(),
             events: events.clone(),
             window_size_px: window_size_px.clone(),
+            image_store: image_store.clone(),
         };
         let term = Term::new(config, &size, listener);
         Self {
@@ -595,17 +621,18 @@ impl TerminalGrid {
             bell_flag,
             events,
             window_size_px,
-            image_store: crate::terminal_images::ImageStore::new(),
+            image_store,
             reflow_history: true,
         }
     }
 
     /// Store a newly transmitted inline image, or refuse if it would exceed
     /// this session's live-byte cap. See `terminal_images::ImageStore::store`.
-    ///
-    /// The write side of the image-plumbing seam: real callers land in
-    /// Phase 2 (OSC 1337) and Phase 3 (Kitty graphics) dispatch handlers.
-    /// Exercised today by `image_ref_store_read_and_clear_on_overwrite`.
+    /// Shares the exact same store as `EventListener::store_image`, which is
+    /// what real OSC 1337 / Kitty graphics escape-sequence processing calls
+    /// through instead of this method — this one exists for tests and any
+    /// other caller that needs to register an image outside of live
+    /// escape-sequence processing.
     #[allow(dead_code)]
     pub fn store_image(
         &mut self,
@@ -618,6 +645,8 @@ impl TerminalGrid {
         crate::terminal_images::ImageStoreError,
     > {
         self.image_store
+            .lock()
+            .unwrap()
             .store(bytes, mime, intrinsic_width, intrinsic_height)
     }
 
@@ -625,7 +654,7 @@ impl TerminalGrid {
     /// `terminal_image_bytes` transport surface. `None` if unknown or already
     /// evicted (no cell references it any more).
     pub fn image_bytes(&self, image_id: u32) -> Option<Arc<[u8]>> {
-        self.image_store.bytes(image_id)
+        self.image_store.lock().unwrap().bytes(image_id)
     }
 
     /// The inline-image tile shown at a given viewport position, if any:
@@ -4829,6 +4858,125 @@ mod tests {
             None,
             "no cell references this image any more; its bytes must be gone"
         );
+    }
+
+    /// End-to-end: a real `OSC 1337 ; File=...:<base64> ST` sequence,
+    /// through the actual vte/alacritty_terminal dispatch pipeline — not
+    /// just the `TerminalGrid`-level helpers exercised above. Explicit
+    /// `width=`/`height=` in cells, matching what `divider`/`imgls` send.
+    #[test]
+    fn osc_1337_file_single_shot_reserves_and_attaches_image() {
+        use base64::Engine;
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode(b"not a real image, just bytes");
+        let seq = format!("\x1b]1337;File=width=4;height=2;inline=1:{payload}\x1b\\");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(seq.as_bytes());
+
+        // 4x2 footprint reserved starting at (0,0).
+        let (image_id, placement_id, _, _) = grid.image_ref_at(0, 0).expect("top-left tile");
+        for row in 0..2 {
+            for col in 0..4 {
+                assert_eq!(
+                    grid.image_ref_at(row, col),
+                    Some((image_id, placement_id, col as u16, row as u16)),
+                    "tile at ({row},{col})"
+                );
+            }
+        }
+        // Outside the footprint, no image ref.
+        assert_eq!(grid.image_ref_at(0, 4), None);
+        assert_eq!(grid.image_ref_at(2, 0), None);
+
+        assert_eq!(
+            grid.image_bytes(image_id).as_deref(),
+            Some(&b"not a real image, just bytes"[..])
+        );
+
+        // Cursor moved past the image (2 linefeeds + a carriage return).
+        let (_, cursor_row, cursor_col, _) = decode_header(&grid.serialize_dirty_rows());
+        assert_eq!(cursor_row, 2);
+        assert_eq!(cursor_col, 0);
+    }
+
+    /// `inline=0` (the default when omitted) must not display anything —
+    /// iTerm2's "save to downloads" path, which Phase 2 intentionally
+    /// scopes to a no-op rather than writing to disk.
+    #[test]
+    fn osc_1337_file_without_inline_is_a_display_noop() {
+        use base64::Engine;
+        let payload = base64::engine::general_purpose::STANDARD.encode(b"abc");
+        let seq = format!("\x1b]1337;File=width=4;height=2:{payload}\x1b\\");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(seq.as_bytes());
+        assert_eq!(grid.image_ref_at(0, 0), None);
+    }
+
+    /// The multipart form (`MultipartFile=`/`FilePart=`/`FileEnd`) — what
+    /// modern `imgcat` sends by default — must assemble to the same result
+    /// as an equivalent single-shot `File=`.
+    #[test]
+    fn osc_1337_multipart_file_assembles_across_file_part_chunks() {
+        use base64::Engine;
+        let full_payload =
+            base64::engine::general_purpose::STANDARD.encode(b"multipart image bytes");
+        let (part1, part2) = full_payload.split_at(full_payload.len() / 2);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b]1337;MultipartFile=width=3;height=1;inline=1\x1b\\");
+        grid.process(format!("\x1b]1337;FilePart={part1}\x1b\\").as_bytes());
+        grid.process(format!("\x1b]1337;FilePart={part2}\x1b\\").as_bytes());
+        grid.process(b"\x1b]1337;FileEnd\x1b\\");
+
+        let (image_id, ..) = grid.image_ref_at(0, 0).expect("assembled placement");
+        assert_eq!(
+            grid.image_bytes(image_id).as_deref(),
+            Some(&b"multipart image bytes"[..])
+        );
+        // 3-cell-wide, 1-row footprint as requested.
+        assert!(grid.image_ref_at(0, 2).is_some());
+        assert_eq!(grid.image_ref_at(0, 3), None);
+    }
+
+    /// An abandoned multipart transfer (no `FileEnd`) must not display
+    /// anything and must not wedge the parser for the next real sequence.
+    #[test]
+    fn osc_1337_abandoned_multipart_transfer_is_inert() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b]1337;MultipartFile=width=3;height=1;inline=1\x1b\\");
+        grid.process(b"\x1b]1337;FilePart=aGVsbG8=\x1b\\");
+        // No FileEnd. A later, unrelated write must still work normally.
+        grid.process(b"hello");
+        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert_eq!(grid.get_row_text(0).trim_end(), "hello");
+    }
+
+    /// `auto` width/height (the default when omitted, what `imgls` and bare
+    /// `imgcat` invocations rely on) must resolve from the image's own
+    /// intrinsic pixel dimensions via the current cell pixel size — proven
+    /// here with a real (tiny, valid-header) PNG through the full pipeline,
+    /// not just `iterm2::resolve_footprint`'s own isolated unit tests.
+    #[test]
+    fn osc_1337_file_auto_size_uses_real_png_header() {
+        use base64::Engine;
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[0, 0, 0, 13]); // IHDR length
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&90u32.to_be_bytes()); // width
+        png.extend_from_slice(&18u32.to_be_bytes()); // height
+        let payload = base64::engine::general_purpose::STANDARD.encode(&png);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.set_cell_pixel_size(9, 18);
+        grid.process(format!("\x1b]1337;File=inline=1:{payload}\x1b\\").as_bytes());
+
+        // 90px / 9px-per-cell = 10 cols; 18px / 18px-per-cell = 1 row.
+        assert!(
+            grid.image_ref_at(0, 9).is_some(),
+            "10th column should be reserved"
+        );
+        assert_eq!(grid.image_ref_at(0, 10), None);
+        assert_eq!(grid.image_ref_at(1, 0), None, "only 1 row expected");
     }
 
     /// `CSI 14 t` (`text_area_size_pixels`) reports the text area size in

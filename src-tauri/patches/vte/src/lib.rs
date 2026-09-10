@@ -42,8 +42,31 @@ pub mod ansi;
 pub use params::{Params, ParamsIter};
 
 const MAX_INTERMEDIATES: usize = 2;
-const MAX_OSC_PARAMS: usize = 16;
+// Raised from 16 (color-tools plan, Phase 2): OSC 1337's own `;`-separated
+// argument syntax (`File=name=...;size=...;width=...;...:<base64>`) rides
+// inside vte's generic OSC-parameter splitting, which has no notion of
+// iTerm2's semantics and just splits on every `;` in the sequence. With the
+// old ceiling, a sequence with enough arguments before the payload silently
+// dropped the payload itself (`action_osc_put_param`'s `MAX_OSC_PARAMS =>
+// return`) — a fail-open bug, not a fail-closed one. 64 comfortably covers
+// every real iTerm2 client's argument list (imgcat/imgls/divider all send
+// well under 10) while staying a fixed-size, resource-trivial array; it is a
+// generous mitigation, not a mathematical guarantee against a sequence
+// engineered with enough junk arguments to exceed it too. Capped at 32
+// (rather than higher) because `Parser` derives `Default`, and std only
+// implements `Default` for arrays up to length 32 — going higher needs a
+// hand-written `Default` impl for `Parser`, which isn't worth it for this.
+const MAX_OSC_PARAMS: usize = 32;
 const MAX_OSC_RAW: usize = 1024;
+// Only enforced under the `std` feature (see `action_osc_put`) — without
+// `std`, `osc_raw` is an `ArrayVec<u8, MAX_OSC_RAW>` and is already bounded by
+// construction. With `std` it is a plain growable `Vec<u8>`, so an
+// unterminated or runaway OSC string (an image payload included — color-tools
+// plan, Phase 2) could otherwise balloon memory without limit. 2 MiB
+// comfortably covers a base64-encoded multi-hundred-KB image (iTerm2's own
+// documented ceiling is 1 MiB per sequence) while still bounding a
+// pathological/malicious sequence.
+const MAX_OSC_RAW_STD: usize = 2 * 1024 * 1024;
 
 /// Parser for raw _VTE_ protocol which delegates actions to a [`Perform`]
 ///
@@ -548,6 +571,12 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 return;
             }
         }
+        #[cfg(feature = "std")]
+        {
+            if self.osc_raw.len() >= MAX_OSC_RAW_STD {
+                return;
+            }
+        }
         self.osc_raw.push(byte);
     }
 
@@ -1044,6 +1073,38 @@ mod tests {
 
                 #[cfg(not(feature = "std"))]
                 assert_eq!(params[1].len(), MAX_OSC_RAW - params[0].len());
+            },
+            _ => panic!("expected osc sequence"),
+        }
+    }
+
+    /// Regression test (color-tools plan, Phase 2): under `std`, `osc_raw` is
+    /// a plain `Vec<u8>` with no cap of its own — an unterminated/runaway OSC
+    /// (an oversized image payload included) could otherwise grow it without
+    /// limit. Confirms `MAX_OSC_RAW_STD` actually bounds it.
+    #[cfg(feature = "std")]
+    #[test]
+    fn osc_raw_is_capped_under_std_too() {
+        const INPUT_START: &[u8] = b"\x1b]52;s";
+        const INPUT_END: &[u8] = b"\x07";
+
+        let mut dispatcher = Dispatcher::default();
+        let mut parser = Parser::new();
+
+        parser.advance(&mut dispatcher, INPUT_START);
+        // Feed well past the cap.
+        parser.advance(&mut dispatcher, &[b'a'; MAX_OSC_RAW_STD + 1000]);
+        parser.advance(&mut dispatcher, INPUT_END);
+
+        assert_eq!(dispatcher.dispatched.len(), 1);
+        match &dispatcher.dispatched[0] {
+            Sequence::Osc(params, _) => {
+                assert_eq!(params.len(), 2);
+                assert!(
+                    params[1].len() <= MAX_OSC_RAW_STD,
+                    "osc_raw grew past its cap: {} bytes",
+                    params[1].len()
+                );
             },
             _ => panic!("expected osc sequence"),
         }
