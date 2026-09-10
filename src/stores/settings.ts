@@ -76,6 +76,7 @@ interface RustAppConfig {
 	suggest_followups: boolean;
 	copy_on_select: boolean;
 	osc52_clipboard: boolean;
+	osc1337_focus_attention: boolean;
 	show_last_prompt: boolean;
 	bell_style: string;
 	global_hotkey: string | null;
@@ -457,6 +458,7 @@ interface SettingsStoreState {
 	suggestFollowups: boolean;
 	copyOnSelect: boolean;
 	osc52Clipboard: boolean;
+	osc1337FocusAttention: boolean;
 	showLastPrompt: boolean;
 	bellStyle: "none" | "visual" | "sound" | "both";
 	globalHotkey: string | null;
@@ -525,6 +527,7 @@ function createSettingsStore() {
 		suggestFollowups: true,
 		copyOnSelect: true,
 		osc52Clipboard: true,
+		osc1337FocusAttention: true,
 		showLastPrompt: true,
 		bellStyle: "visual",
 		globalHotkey: null,
@@ -610,6 +613,7 @@ function createSettingsStore() {
 		config.suggest_followups = state.suggestFollowups;
 		config.copy_on_select = state.copyOnSelect;
 		config.osc52_clipboard = state.osc52Clipboard;
+		config.osc1337_focus_attention = state.osc1337FocusAttention;
 		config.show_last_prompt = state.showLastPrompt;
 		config.bell_style = state.bellStyle;
 		config.issue_filter = state.issueFilter;
@@ -740,6 +744,7 @@ function createSettingsStore() {
 				setState("intentTabTitle", config.intent_tab_title ?? true);
 				setState("copyOnSelect", config.copy_on_select ?? true);
 				setState("osc52Clipboard", config.osc52_clipboard ?? true);
+				setState("osc1337FocusAttention", config.osc1337_focus_attention ?? true);
 				setState("showLastPrompt", config.show_last_prompt ?? false);
 				setState("bellStyle", (config.bell_style || "visual") as SettingsStoreState["bellStyle"]);
 				setState("suggestFollowups", config.suggest_followups ?? true);
@@ -982,6 +987,12 @@ function createSettingsStore() {
 		/** Enable/disable honoring OSC 52 clipboard-write sequences from terminal output */
 		setOsc52Clipboard(enabled: boolean): void {
 			setState("osc52Clipboard", enabled);
+			save();
+		},
+
+		/** Enable/disable honoring OSC 1337 StealFocus/RequestAttention sequences from terminal output */
+		setOsc1337FocusAttention(enabled: boolean): void {
+			setState("osc1337FocusAttention", enabled);
 			save();
 		},
 

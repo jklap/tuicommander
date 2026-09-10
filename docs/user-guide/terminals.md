@@ -391,3 +391,12 @@ Enable **Save terminal scrollback** in Settings → Terminal to also see a resto
 ### OSC 8 Hyperlinks
 
 Terminal output that uses the OSC 8 standard for hyperlinks (e.g., URLs emitted by `ls --hyperlink`) is supported. Clicking an OSC 8 hyperlink opens the URL in your system browser.
+
+### iTerm2 OSC 1337 Commands
+
+A subset of iTerm2's proprietary OSC 1337 escape codes is recognized, for compatibility with scripts and tools written for iTerm2:
+
+- **`CursorShape`** and **`ClearScrollback`** — change the cursor shape or clear scrollback history, same as their xterm/CSI equivalents.
+- **`Copy`** and **`CopyToClipboard`…`EndCopy`** — write to the system clipboard, gated by the same Settings > General > Terminal > "Allow OSC 52 clipboard writes" toggle as OSC 52.
+- **`StealFocus`** (bring the window to the front) and **`RequestAttention`** (bounce the dock icon) — gated by Settings > General > Terminal > "Allow terminal focus/attention requests" (default on). Disable this if a script or log ever spams either.
+- **`OpenURL`** — always shows a confirmation dialog naming the URL before opening it (the same dialog `ui action=confirm` MCP requests use, so any connected client — desktop, browser, or the mobile app — can answer it), and only ever opens `http://`, `https://`, or `mailto:` links.

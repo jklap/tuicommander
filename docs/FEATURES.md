@@ -91,6 +91,7 @@
 - **Copy on Select** — When enabled (Settings > General > Terminal or Settings > Appearance), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar.
 - **Copy feedback (Cmd+C)** — Copying via Cmd+C shows "Copied to clipboard" in the status bar, consistent with copy-on-select and Ctrl+C paths.
 - **OSC 52 clipboard writes** — Terminal programs (tmux, vim, ssh yank) can set the system clipboard via the OSC 52 escape sequence. Because any displayed file/log can also emit it, each successful write surfaces a non-blocking "Clipboard updated by &lt;session&gt;" notice (a failed write logs quietly instead of toasting), and the behavior can be disabled entirely via Settings > General > Terminal > "Allow OSC 52 clipboard writes". Suggestion chips (OSC 7770 `suggest=`) carrying shell metacharacters are inserted without auto-Enter so a click cannot silently execute a spoofed command.
+- **iTerm2 OSC 1337 commands** — `CursorShape`, `ClearScrollback`, `Copy`/`CopyToClipboard`+`EndCopy` (clipboard writes, gated by the same OSC 52 permission), `StealFocus` (brings the window to the front), `RequestAttention` (bounces the dock icon), and `OpenURL` are all recognized. `StealFocus`/`RequestAttention` are gated by Settings > General > Terminal > "Allow terminal focus/attention requests" (default on). `OpenURL` always asks for confirmation first (the same confirm dialog `ui action=confirm` MCP requests use) before opening the URL, and only http/https/mailto schemes are ever opened.
 
 ### 1.6 Clear Terminal
 - `Cmd+L` — clears display, running processes unaffected
@@ -1249,7 +1250,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 ### 11.2 Terminal
 - Shell: custom shell override (platform default if blank)
 - Rendering: terminal font, default font size, font weight, cursor style — with a live preview
-- Behavior: copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, agent context bar, link activation mode (click/modifier/never)
+- Behavior: copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, OSC 1337 focus/attention requests (StealFocus/RequestAttention), agent context bar, link activation mode (click/modifier/never)
 - Blocks: block timestamp mode (off/hold Ctrl+Cmd/always), block boundary marks, prompt marks, block folding
 - Shell Integration: copyable bash/fish startup-file snippets for OSC 133 command-block markers (zsh is automatic, no setup)
 - Session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback

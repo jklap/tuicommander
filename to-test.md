@@ -151,6 +151,44 @@ state was simulated.
   gutter (pointer cursor) then move onto the prompt line: the cursor must
   switch back to the text-beam immediately, not after a brief pause.
 
+## iTerm2 OSC 1337 support — StealFocus/RequestAttention/OpenURL need a real window (2026-09-10, Rust-touching — needs a `make dev` restart)
+
+Added recognition for iTerm2's OSC 1337 proprietary commands: `CursorShape`,
+`ClearScrollback`, `Copy`/`CopyToClipboard`+`EndCopy`, `StealFocus`,
+`RequestAttention`, and `OpenURL`. The parsing layer (vte `osc_dispatch`),
+the alacritty `Handler` impl (including the `CopyToClipboard`/`EndCopy`
+capture-buffer state machine), and the `terminal_grid.rs`/`pty.rs` event
+pipeline are all covered by unit/integration tests that feed raw escape
+bytes through the real `Term`/`TerminalGrid` and assert on the resulting
+events (`ansi.rs`, `term/mod.rs`, `terminal_grid.rs`, `pty.rs` test modules) —
+including `confirm_open_url`'s full raise/answer/timeout flow
+(`mcp_http/mod.rs`, using `#[tokio::test(start_paused = true)]` for the
+timeout case, so it doesn't take the real 120s). None of that exercises an
+actual Tauri window, though — three things only a human at the machine can
+confirm:
+
+- [HUMAN] **StealFocus** (`\x1b]1337;StealFocus\x07`) actually unminimizes,
+  shows, and focuses the main window when sent from a background/minimized
+  app. Toggle Settings > General > Terminal > "Allow terminal focus/attention
+  requests" off first and confirm it's a no-op instead.
+- [HUMAN] **RequestAttention** (`\x1b]1337;RequestAttention=yes\x07` /
+  `=once` / `=fireworks`) actually bounces the dock icon (macOS); `=no`
+  cancels a pending bounce. `fireworks` is deliberately mapped to the same
+  continuous bounce as `yes` (Tauri has no direct equivalent) — confirm that
+  reads as reasonable rather than broken.
+- [HUMAN] **OpenURL** (`\x1b]1337;OpenURL=:$(echo -n 'https://example.com' | base64)\x07`)
+  raises the same confirm dialog `ui action=confirm` MCP requests use
+  (`McpConfirmHost`), naming the URL, and — only once confirmed — opens it in
+  the system browser. Confirm a non-http(s)/mailto scheme (there's no OSC
+  1337 way to construct one directly, but worth a sanity pass) never reaches
+  the opener. Also worth confirming from a second connected client (e.g. the
+  mobile PWA or a browser tab) that answering there dismisses the dialog
+  everywhere else — the underlying mechanism is shared with `ui
+  action=confirm` and already covered there, but this is a new caller of it.
+
+This is a Rust change — none of it takes effect in Boss's live `make dev`
+session until it's restarted.
+
 ## A backend-created worktree offers itself as a toast, not a modal (2026-08-30, frontend only — HMR)
 
 The "Switch to new worktree?" confirm was a blocking modal with a ten-second

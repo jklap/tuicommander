@@ -967,6 +967,68 @@ pub(crate) fn resolve_mcp_confirm(state: &Arc<AppState>, request_id: &str, confi
     }
 }
 
+/// How long an OSC 1337 `OpenURL` confirmation waits for a human before it
+/// gives up. Shorter than `ui(action=confirm)`'s [`CONFIRM_TIMEOUT`] in
+/// `mcp_transport.rs` — nobody answering just means the URL stays unopened,
+/// so there's no reason to leave a `confirm_responses` entry (and a dialog on
+/// every connected client) around for minutes over a low-stakes action.
+const OPEN_URL_CONFIRM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Raise a yes/no confirmation for an OSC 1337 `OpenURL` escape sequence and
+/// wait for the answer.
+///
+/// Reuses the exact same `mcp-confirm` / `mcp-confirm-resolved` wire events
+/// and `confirm_responses` map as `ui(action=confirm)` (see `handle_confirm`
+/// in `mcp_transport.rs`), so the existing `McpConfirmHost` frontend component
+/// renders this with no new frontend code, and the existing
+/// `mcp_confirm_response` command/route answers it. A "no answer" timeout is
+/// resolved through the same [`resolve_mcp_confirm`] the answer path uses,
+/// which also emits `McpConfirmResolved` to dismiss the dialog on every other
+/// connected client.
+pub(crate) async fn confirm_open_url(state: &Arc<AppState>, session_id: &str, url: &str) -> bool {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    state.confirm_responses.insert(request_id.clone(), tx);
+
+    let title = "Open URL from terminal?".to_string();
+    let message = url.to_string();
+
+    // Dual-emit, same reason as `handle_confirm`: the bus only reaches SSE
+    // clients, and there is no bus→window forwarder for the desktop WebView.
+    #[cfg(feature = "desktop")]
+    if let Some(ref app) = *state.app_handle.read() {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "mcp-confirm",
+            serde_json::json!({
+                "request_id": request_id,
+                "title": title,
+                "message": message,
+                "origin_repo_path": null,
+                "origin_session_id": session_id,
+            }),
+        );
+    }
+    let _ = state.event_bus.send(crate::state::AppEvent::McpConfirm {
+        request_id: request_id.clone(),
+        title,
+        message,
+        origin_repo_path: None,
+        origin_session_id: Some(session_id.to_string()),
+    });
+
+    match tokio::time::timeout(OPEN_URL_CONFIRM_TIMEOUT, rx).await {
+        Ok(Ok(confirmed)) => confirmed,
+        // Sender dropped without answering, or nobody answered in time. Both
+        // are "no human said yes" — the safe reading for opening a URL from
+        // untrusted terminal output.
+        _ => {
+            resolve_mcp_confirm(state, &request_id, false);
+            false
+        }
+    }
+}
+
 pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
     // When remote access is enabled, allow any origin (Basic Auth secures the endpoint).
     // Otherwise, restrict to localhost and Tauri webview origins.
@@ -5789,5 +5851,94 @@ mod tests {
         let (removed, _) = evict_peers_for_reaped_mcp_session(&state, "mcp-4");
         assert_eq!(removed, vec!["ghost".to_string()]);
         assert!(state.peer_agents.contains_key("bystander"));
+    }
+
+    // --- confirm_open_url: OSC 1337 OpenURL, reusing the mcp-confirm wire ---
+
+    /// Wait for `confirm_open_url` to publish its request, and return the id.
+    /// Mirrors `mcp_transport.rs`'s `await_pending_confirm` — duplicated
+    /// rather than shared across modules for a one-screen polling helper.
+    async fn await_pending_confirm(state: &Arc<AppState>) -> String {
+        for _ in 0..200 {
+            if let Some(entry) = state.confirm_responses.iter().next() {
+                return entry.key().clone();
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("confirm request was never registered");
+    }
+
+    #[tokio::test]
+    async fn confirm_open_url_returns_the_answer_a_client_gave() {
+        let state = test_state();
+
+        let answering = state.clone();
+        tokio::spawn(async move {
+            let id = await_pending_confirm(&answering).await;
+            resolve_mcp_confirm(&answering, &id, true);
+        });
+
+        let confirmed = confirm_open_url(&state, "s1", "https://example.com").await;
+        assert!(confirmed);
+    }
+
+    #[tokio::test]
+    async fn confirm_open_url_declines_when_the_human_says_no() {
+        let state = test_state();
+
+        let answering = state.clone();
+        tokio::spawn(async move {
+            let id = await_pending_confirm(&answering).await;
+            resolve_mcp_confirm(&answering, &id, false);
+        });
+
+        let confirmed = confirm_open_url(&state, "s1", "https://example.com").await;
+        assert!(!confirmed);
+    }
+
+    #[tokio::test]
+    async fn confirm_open_url_reaches_every_client_over_the_event_bus() {
+        let state = test_state();
+        // Subscribing before the call is what a remote SSE client does.
+        let mut rx = state.event_bus.subscribe();
+
+        let answering = state.clone();
+        tokio::spawn(async move {
+            let id = await_pending_confirm(&answering).await;
+            resolve_mcp_confirm(&answering, &id, true);
+        });
+
+        let _ = confirm_open_url(&state, "session-42", "https://example.com/path").await;
+
+        let mut saw_request = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::McpConfirm {
+                request_id,
+                message,
+                origin_session_id,
+                ..
+            } = event
+            {
+                assert_eq!(message, "https://example.com/path");
+                assert_eq!(origin_session_id, Some("session-42".to_string()));
+                saw_request = Some(request_id);
+            }
+        }
+        assert!(saw_request.is_some(), "no request reached the bus");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn confirm_open_url_gives_up_when_nobody_answers() {
+        let state = test_state();
+
+        let confirmed = confirm_open_url(&state, "s1", "https://example.com").await;
+
+        // Silence is not consent — the safe reading for opening a URL from
+        // untrusted terminal output is "no".
+        assert!(!confirmed);
+        assert!(
+            state.confirm_responses.is_empty(),
+            "an expired request must not leak its registry entry"
+        );
     }
 }

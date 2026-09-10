@@ -20,7 +20,10 @@ TUICommander uses `alacritty_terminal` 0.26.0 as its terminal emulation backend.
 | `src/term/mod.rs` | `pub fn primary_history_size()` | Returns primary-grid history even while the alternate grid is active. Durable-log resize synchronization must stay in this coordinate space; using active alternate history can suppress the first normal-shell lines after exit. |
 | `src/grid/mod.rs` | `pub fn reset_history_era()` | `clear_history()` keeps `lines_scrolled` monotonic because absolute row ids must be stable for the life of a physical line. The alternate screen is a separate content universe wiped on every enter/exit, so it gets a fresh era instead: history *and* counter reset. Frame-protocol `keyboard_flags` bit 5 marks the transition; the frontend then atomically invalidates row, scroll, selection, search, and link state. |
 | `src/grid/mod.rs` | `lines_scrolled` field + `pub fn total_scrolled()` | Monotonic count of lines ever scrolled into history (incremented in `scroll_up`). `total_scrolled() - history_size()` gives lines evicted from the top, the base for an eviction-stable absolute row coordinate. Excluded from `PartialEq`; `serde(default)` so old ref fixtures still load. |
-| `src/term/cell.rs` | `Cell::erase_blank()` widened to carry the pen's reverse-video flag (and swapped fg) into blanks, and to clear `cell_type` (the OSC 133 zone marker) rather than carrying it forward | Background-color-erase (xterm/VTE convention): `EL`/`ED`/`ECH`/`DCH`/`ICH` under a reverse pen now paint a highlighted bar instead of a plain gap, and erasing text now correctly ends whatever prompt/input/output zone it was in. `GridCell::reset` (row recycling on scroll/hard-reset) deliberately does **not** route through this — an initial version did, which leaked a highlighted line's reverse pen onto every later-recycled row; reverted to a plain blank construction. See `tuic-escape-sequences.html`'s Reverse (7) section for the full detail and the regression this two-step fix (`6dd165f5` then `47217d2c`) closed. |
+| `src/term/cell.rs` | `Cell::erase_blank()` widened to carry the pen's reverse-video flag (and swapped fg) into blanks, and to clear `cell_type` (the OSC 133 zone marker) rather than carrying it forward | Background-color-erase (xterm/VTE convention): `EL`/`ED`/`ECH`/`DCH`/`ICH` under a reverse pen now paint a highlighted bar instead of a plain gap, and erasing text now correctly ends whatever prompt/input/output zone it was in. `GridCell::reset` (row recycling on scroll/hard-reset) deliberately does **not** route through this — an initial version did, which leaked a highlighted line's reverse pen onto every later-recycled row; reverted to a plain blank construction. Closed by the two-step fix `6dd165f5` then `47217d2c`. |
+| `src/term/mod.rs` | `fn request_focus`/`request_attention`/`start_clipboard_capture`/`end_clipboard_capture`/`open_url` | iTerm2 OSC 1337 handlers — see the dedicated section below. `CursorShape`/`ClearScrollback`/`Copy` reuse the existing `set_cursor_shape`/`clear_screen`/`clipboard_store` handlers instead of adding new ones. |
+| `src/term/mod.rs` | `clipboard_capture: Option<String>` field + interception in `input()`/`linefeed()`, cleared in `reset_state()` | Backing state for OSC 1337 `CopyToClipboard`/`EndCopy`: mirrors printed characters and linefeeds into a buffer while capturing, flushed as `Event::ClipboardStore` on `EndCopy`. Gated by the same `Config.osc52` permission as OSC 52's `clipboard_store` — it is the same clipboard-write privilege via a different escape code. |
+| `src/event.rs` | `Event::RequestFocus`, `Event::RequestAttention(String)`, `Event::OpenUrl(String)` variants | Carry OSC 1337 `StealFocus`/`RequestAttention`/`OpenURL` from VTE to the application layer. |
 
 ## VTE patch (`src-tauri/patches/vte/`)
 
@@ -31,6 +34,27 @@ We also patch the `vte` crate (0.15.0) to extend the `Handler` trait:
 | `fn osc133(&mut self, command: char, params: &str)` | Shell integration markers (A/B/C/D). Routes OSC `133;X` from `osc_dispatch`. |
 | `fn osc7(&mut self, url: &str)` | Current working directory. Routes OSC `7;url` from `osc_dispatch`. |
 | `fn osc7770(&mut self, verb: &str, payload: &str)` | TUIC protocol. Routes OSC `7770;verb=payload` from `osc_dispatch`. |
+| `fn request_focus(&mut self)` | iTerm2 `StealFocus`. Routes OSC `1337;StealFocus` from `osc_dispatch`. |
+| `fn request_attention(&mut self, value: &str)` | iTerm2 `RequestAttention=<value>`. Routes OSC `1337;RequestAttention=value` from `osc_dispatch`. |
+| `fn start_clipboard_capture(&mut self, name: &str)` / `fn end_clipboard_capture(&mut self)` | iTerm2 `CopyToClipboard=<name>` … `EndCopy`. Route OSC `1337;CopyToClipboard=name` and `1337;EndCopy` from `osc_dispatch`. |
+| `fn open_url(&mut self, base64: &[u8])` | iTerm2 `OpenURL=:<base64>`. Routes OSC `1337;OpenURL=:base64` from `osc_dispatch`. |
+
+## OSC 1337 — iTerm2 Proprietary Commands
+
+**Format:** `ESC ] 1337 ; Key[=value] BEL` or `ESC ] 1337 ; Key[=value] ST`. Never written to the grid.
+
+| Key | Value | Effect |
+|-----|-------|--------|
+| `CursorShape` | `0`/`1`/`2` (block/beam/underline) | Reuses OSC 50's `set_cursor_shape` handler — same effect, different escape code. |
+| `StealFocus` | — | `Event::RequestFocus` → `pty.rs` unminimizes/shows/focuses the main window, gated by the `osc1337_focus_attention` setting. |
+| `ClearScrollback` | — | Reuses `clear_screen(ClearMode::Saved)` — same as CSI `3J`. |
+| `CopyToClipboard` | `[name]` (`""`/`"rule"`/`"find"`/`"font"` per iTerm2; the name is accepted but not distinguished — everything lands on the general clipboard) | Begins capturing subsequently printed characters and linefeeds verbatim (mirrored into a buffer alongside normal rendering — the captured text still displays on screen). Gated by the `Config.osc52` permission, same as `Copy`/OSC 52. |
+| `EndCopy` | — | Stops capturing and flushes the buffer as `Event::ClipboardStore` — the same event OSC 52's `clipboard_store` fires, so `terminal_grid.rs`/`pty.rs` need no OSC-1337-specific handling for it. |
+| `Copy` | `:<base64>` | Single-shot equivalent of OSC 52's clipboard store — reuses `clipboard_store(b'c', payload)` directly (same permission gate). |
+| `RequestAttention` | `yes`/`once`/`no`/`fireworks` | `Event::RequestAttention(String)` → `pty.rs` maps to a Tauri `UserAttentionType` (`attention_level_for_value`) and calls `request_user_attention`, gated by `osc1337_focus_attention`. `fireworks` has no direct Tauri equivalent (macOS-only cursor animation) and is mapped to the same continuous bounce as `yes`. |
+| `OpenURL` | `:<base64>` | `Event::OpenUrl(String)` (base64-decoded in `Term::open_url`) → `pty.rs` raises a human confirmation over the same `mcp-confirm`/`mcp-confirm-resolved` wire `ui(action=confirm)` uses (`confirm_open_url`, `mcp_http/mod.rs`), then — only if confirmed — dual-emits `pty-open-url`, which the frontend's `handleOpenUrl` opens (allowlisted to http/https/mailto). |
+
+Unimplemented iTerm2 1337 commands (`File=`, `SetMark`, `CurrentDir=`, `SetKeyLabel=`, `SetUserVar=`, `HighlightCursorLine=`, `ReportCellSize`, `UnicodeVersion=`, `ShellIntegrationVersion=`, …) fall through to `osc_dispatch`'s default `unhandled` branch — parsed enough to avoid corrupting the stream, but produce no effect.
 
 ## OSC 7770 — TUIC Protocol
 

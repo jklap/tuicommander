@@ -129,6 +129,7 @@ cleartext copy does not survive on disk.
 | `restore_scrollback_lines` | `u32` | `1000` | Maximum scrollback lines persisted per terminal when `restore_scrollback` is enabled |
 | `copy_on_select` | `bool` | `true` | Auto-copy terminal selection to clipboard |
 | `osc52_clipboard` | `bool` | `true` | Honor OSC 52 clipboard-write sequences from terminal output (a notice shows on each write; disable to ignore them) |
+| `osc1337_focus_attention` | `bool` | `true` | Honor OSC 1337 `StealFocus` (bring window to front) and `RequestAttention` (bounce dock icon) sequences from terminal output |
 | `show_last_prompt` | `bool` | `true` | Show last prompt overlay bar at the top of the terminal |
 | `bell_style` | `String` | `"visual"` | Terminal bell: "none", "visual", "sound", "both" |
 | `disabled_agents` | `Vec<String>` | `[]` | Agent IDs hidden from the Add menu |

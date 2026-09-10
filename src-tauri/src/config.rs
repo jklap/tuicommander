@@ -678,6 +678,12 @@ pub(crate) struct AppConfig {
     /// (the OSC 52 write executes in the renderer); stored here for persistence.
     #[serde(default = "default_true")]
     pub(crate) osc52_clipboard: bool,
+    /// Honor OSC 1337 `StealFocus` (bring the window to the front) and
+    /// `RequestAttention` (bounce the dock icon) sequences from terminal
+    /// output. Disable if a misbehaving script/log spams either. Backend-gated
+    /// (checked in `pty.rs` before acting), unlike `osc52_clipboard` above.
+    #[serde(default = "default_true")]
+    pub(crate) osc1337_focus_attention: bool,
     /// Show last prompt overlay bar at the top of the terminal
     #[serde(default = "default_true")]
     pub(crate) show_last_prompt: bool,
@@ -1007,6 +1013,7 @@ impl Default for AppConfig {
             suggest_followups: true,
             copy_on_select: true,
             osc52_clipboard: true,
+            osc1337_focus_attention: true,
             show_last_prompt: true,
             bell_style: default_bell_style(),
             global_hotkey: None,
@@ -3480,6 +3487,7 @@ mod tests {
             global_hotkey: Some("CommandOrControl+Shift+T".to_string()),
             copy_on_select: true,
             osc52_clipboard: true,
+            osc1337_focus_attention: false,
             show_last_prompt: false,
             bell_style: "visual".to_string(),
             collapse_tools: true,

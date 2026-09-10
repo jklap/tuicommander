@@ -76,6 +76,17 @@ pub enum Event {
         payload: String,
         line: usize,
     },
+
+    /// iTerm2 OSC 1337 `StealFocus` — bring the terminal application to the
+    /// foreground.
+    RequestFocus,
+
+    /// iTerm2 OSC 1337 `RequestAttention=<value>`. `value` is one of "yes",
+    /// "once", "no", or "fireworks".
+    RequestAttention(String),
+
+    /// iTerm2 OSC 1337 `OpenURL=:<base64>` — the decoded URL.
+    OpenUrl(String),
 }
 
 impl Debug for Event {
@@ -105,6 +116,9 @@ impl Debug for Event {
                 payload,
                 line,
             } => write!(f, "Tuic({verb}={payload}, line={line})"),
+            Event::RequestFocus => write!(f, "RequestFocus"),
+            Event::RequestAttention(value) => write!(f, "RequestAttention({value})"),
+            Event::OpenUrl(url) => write!(f, "OpenUrl({url})"),
         }
     }
 }

@@ -14,6 +14,7 @@ const {
 	mockSetCursorStyle,
 	mockSetCopyOnSelect,
 	mockSetOsc52Clipboard,
+	mockSetOsc1337FocusAttention,
 	mockSetShowLastPrompt,
 	mockSetLinkActivation,
 	mockSetRestoreShellTerminals,
@@ -32,6 +33,7 @@ const {
 	mockSetCursorStyle: vi.fn(),
 	mockSetCopyOnSelect: vi.fn(),
 	mockSetOsc52Clipboard: vi.fn(),
+	mockSetOsc1337FocusAttention: vi.fn(),
 	mockSetShowLastPrompt: vi.fn(),
 	mockSetLinkActivation: vi.fn(),
 	mockSetRestoreShellTerminals: vi.fn(),
@@ -53,6 +55,7 @@ vi.mock("../../../stores/settings", () => ({
 			theme: "vscode-dark",
 			copyOnSelect: true,
 			osc52Clipboard: true,
+			osc1337FocusAttention: true,
 			showLastPrompt: false,
 			linkActivation: "click",
 			blockTimestampMode: "modifier",
@@ -71,6 +74,7 @@ vi.mock("../../../stores/settings", () => ({
 		setCursorStyle: mockSetCursorStyle,
 		setCopyOnSelect: mockSetCopyOnSelect,
 		setOsc52Clipboard: mockSetOsc52Clipboard,
+		setOsc1337FocusAttention: mockSetOsc1337FocusAttention,
 		setShowLastPrompt: mockSetShowLastPrompt,
 		setLinkActivation: mockSetLinkActivation,
 		setBlockTimestampMode: mockSetBlockTimestampMode,
@@ -104,13 +108,13 @@ describe("TerminalTab", () => {
 		expect(mockSetShell).toHaveBeenCalledWith("/bin/zsh");
 	});
 
-	it("shows all eight toggles with the correct checked state", () => {
+	it("shows all nine toggles with the correct checked state", () => {
 		// showBlockTimestamps was a checkbox; it's now the blockTimestampMode
-		// <select> (see the dedicated tests below), so the count drops from 9.
+		// <select> (see the dedicated tests below), so the count drops from 10.
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = Array.from(container.querySelectorAll("input[type=checkbox]")) as HTMLInputElement[];
-		expect(checkboxes).toHaveLength(8);
-		expect(checkboxes.map((cb) => cb.checked)).toEqual([true, true, false, true, false, true, true, false]);
+		expect(checkboxes).toHaveLength(9);
+		expect(checkboxes.map((cb) => cb.checked)).toEqual([true, true, true, false, true, false, true, true, false]);
 	});
 
 	it("calls setCopyOnSelect when its toggle changes", () => {
@@ -127,10 +131,17 @@ describe("TerminalTab", () => {
 		expect(mockSetOsc52Clipboard).toHaveBeenCalledWith(false);
 	});
 
+	it("calls setOsc1337FocusAttention when its toggle changes", () => {
+		const { container } = render(() => <TerminalTab />);
+		const checkboxes = container.querySelectorAll("input[type=checkbox]");
+		fireEvent.change(checkboxes[2], { target: { checked: false } });
+		expect(mockSetOsc1337FocusAttention).toHaveBeenCalledWith(false);
+	});
+
 	it("calls setShowLastPrompt when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[2], { target: { checked: true } });
+		fireEvent.change(checkboxes[3], { target: { checked: true } });
 		expect(mockSetShowLastPrompt).toHaveBeenCalledWith(true);
 	});
 
@@ -163,35 +174,35 @@ describe("TerminalTab", () => {
 	it("calls setShowBlockMarks when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[3], { target: { checked: false } });
+		fireEvent.change(checkboxes[4], { target: { checked: false } });
 		expect(mockSetShowBlockMarks).toHaveBeenCalledWith(false);
 	});
 
 	it("calls setShowPromptMarks when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[4], { target: { checked: true } });
+		fireEvent.change(checkboxes[5], { target: { checked: true } });
 		expect(mockSetShowPromptMarks).toHaveBeenCalledWith(true);
 	});
 
 	it("calls setBlockFoldingEnabled when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[5], { target: { checked: false } });
+		fireEvent.change(checkboxes[6], { target: { checked: false } });
 		expect(mockSetBlockFoldingEnabled).toHaveBeenCalledWith(false);
 	});
 
 	it("calls setRestoreShellTerminals when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[6], { target: { checked: false } });
+		fireEvent.change(checkboxes[7], { target: { checked: false } });
 		expect(mockSetRestoreShellTerminals).toHaveBeenCalledWith(false);
 	});
 
 	it("calls setRestoreScrollback when its toggle changes", () => {
 		const { container } = render(() => <TerminalTab />);
 		const checkboxes = container.querySelectorAll("input[type=checkbox]");
-		fireEvent.change(checkboxes[7], { target: { checked: true } });
+		fireEvent.change(checkboxes[8], { target: { checked: true } });
 		expect(mockSetRestoreScrollback).toHaveBeenCalledWith(true);
 	});
 

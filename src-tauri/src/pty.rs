@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 #[cfg(feature = "desktop")]
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::input_line_buffer::{InputAction, InputLineBuffer};
@@ -4815,6 +4815,11 @@ struct ChunkProcessor {
     /// (grok, Codex, …) drives this. True while the last title signalled
     /// awaiting-approval.
     title_awaiting: bool,
+    /// URLs from OSC 1337 `OpenURL` seen during the current `process_chunk`
+    /// call, drained by the caller (which holds an owned `Arc<AppState>`,
+    /// needed to spawn the confirm-then-open background task — `process_chunk`
+    /// itself only has `&AppState`).
+    pending_open_urls: Vec<String>,
 }
 
 impl ChunkProcessor {
@@ -4840,6 +4845,7 @@ impl ChunkProcessor {
             last_session_conflict_mark: None,
             last_agent_block_line: None,
             title_awaiting: false,
+            pending_open_urls: Vec::new(),
         }
     }
 
@@ -5466,6 +5472,42 @@ impl ChunkProcessor {
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-clipboard-store-{session_id}"), &text);
                         }
+                    }
+                    TermEvent::RequestFocus => {
+                        if state.config.read().osc1337_focus_attention {
+                            #[cfg(feature = "desktop")]
+                            if let Some(a) = state.app_handle.read().as_ref()
+                                && let Some(window) = a.get_webview_window("main")
+                            {
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                    TermEvent::RequestAttention(value) => {
+                        if state.config.read().osc1337_focus_attention
+                            && let Some(level) = attention_level_for_value(&value)
+                        {
+                            #[cfg(feature = "desktop")]
+                            if let Some(a) = state.app_handle.read().as_ref()
+                                && let Some(window) = a.get_webview_window("main")
+                            {
+                                let attention = match level {
+                                    AttentionLevel::Cancel => None,
+                                    AttentionLevel::Informational => {
+                                        Some(tauri::UserAttentionType::Informational)
+                                    }
+                                    AttentionLevel::Critical => {
+                                        Some(tauri::UserAttentionType::Critical)
+                                    }
+                                };
+                                let _ = window.request_user_attention(attention);
+                            }
+                        }
+                    }
+                    TermEvent::OpenUrl(url) => {
+                        self.pending_open_urls.push(url);
                     }
                     TermEvent::Osc133 {
                         command,
@@ -8246,6 +8288,59 @@ pub(crate) fn record_submitted_line(
     }
 }
 
+/// The window-attention action an OSC 1337 `RequestAttention` value maps to.
+/// Kept independent of `tauri::UserAttentionType` (which does not exist at
+/// all without the `desktop` feature — `tauri` itself is an optional,
+/// desktop-only dependency) so the mapping stays a pure, always-compiled,
+/// unit-testable function; the caller converts to the real Tauri type only
+/// inside its own `#[cfg(feature = "desktop")]` block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttentionLevel {
+    /// "no" — cancel a pending attention request.
+    Cancel,
+    /// "once" — a single bounce.
+    Informational,
+    /// "yes" (bounce until focused) or "fireworks" (macOS-only cursor
+    /// animation, with no direct Tauri equivalent — mapped to the same
+    /// continuous-bounce behavior as "yes").
+    Critical,
+}
+
+/// Maps an OSC 1337 `RequestAttention` value to the action to take. `None`
+/// means "do nothing" — only reachable if a value slips through that
+/// `Term::request_attention` (the alacritty patch) did not already validate
+/// to one of "yes"/"once"/"no"/"fireworks".
+fn attention_level_for_value(value: &str) -> Option<AttentionLevel> {
+    match value {
+        "no" => Some(AttentionLevel::Cancel),
+        "once" => Some(AttentionLevel::Informational),
+        "yes" | "fireworks" => Some(AttentionLevel::Critical),
+        _ => None,
+    }
+}
+
+/// Confirm an OSC 1337 `OpenURL` request with the human, then — only if they
+/// say yes — tell every client to actually open it (`handleOpenUrl` on the
+/// frontend). Runs on the async runtime via `async_rt.spawn` in
+/// `spawn_reader_thread`, never awaited inline on the blocking PTY reader
+/// thread: the confirm can wait on a human for up to the confirm timeout.
+async fn confirm_and_notify_open_url(state: Arc<AppState>, session_id: String, url: String) {
+    let confirmed = crate::mcp_http::confirm_open_url(&state, &session_id, &url).await;
+    if !confirmed {
+        return;
+    }
+    #[cfg(feature = "desktop")]
+    if let Some(a) = state.app_handle.read().as_ref() {
+        let _ = a.emit(
+            "pty-open-url",
+            serde_json::json!({ "session_id": session_id, "url": url }),
+        );
+    }
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::PtyOpenUrl { session_id, url });
+}
+
 pub(crate) fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
     paused: Arc<AtomicBool>,
@@ -8270,6 +8365,21 @@ pub(crate) fn spawn_reader_thread(
         session_id.clone(),
         state.clone(),
     );
+
+    // A `tokio::runtime::Handle` the reader thread below (a plain
+    // `std::thread::spawn`, not a tokio task) can use to dispatch the async
+    // OSC 1337 `OpenURL` confirm-then-notify flow — see `confirm_and_notify_open_url`.
+    // Mirrors `dir_watcher::start_watching`'s identical desktop/headless split.
+    let async_rt = {
+        #[cfg(feature = "desktop")]
+        {
+            tauri::async_runtime::handle().inner().clone()
+        }
+        #[cfg(not(feature = "desktop"))]
+        {
+            tokio::runtime::Handle::current()
+        }
+    };
 
     // Frame ticker: decouples PTY read() from frame serialization.
     // Reader sets dirty flag; ticker serializes+sends at fixed interval.
@@ -8593,8 +8703,22 @@ pub(crate) fn spawn_reader_thread(
 
                         process_kitty_actions(&kitty_actions, &session_id, &state);
 
-                        if let Some(processed) =
-                            processor.process_chunk(&data, &silence, &session_id, &state)
+                        let chunk_result =
+                            processor.process_chunk(&data, &silence, &session_id, &state);
+                        // Drained regardless of whether process_chunk returned data to
+                        // render — an OpenURL sequence carries no visible output of its
+                        // own. Each confirm-then-notify flow can block on a human answer
+                        // for up to OPEN_URL_CONFIRM_TIMEOUT, so it must run on the async
+                        // runtime, not this blocking reader thread.
+                        for url in processor.pending_open_urls.drain(..) {
+                            async_rt.spawn(confirm_and_notify_open_url(
+                                state.clone(),
+                                session_id.clone(),
+                                url,
+                            ));
+                        }
+
+                        if let Some(processed) = chunk_result
                             && let Some(xterm_data) = processor.transform_xterm(processed)
                         {
                             let clamped_data = xterm_data;
@@ -17872,6 +17996,125 @@ mod tests {
             cp.last_choice_prompt_sig.is_none(),
             "no dedup signature should be recorded for a signal that was never detected"
         );
+    }
+
+    #[test]
+    fn attention_level_for_value_maps_every_known_iterm2_value() {
+        assert_eq!(
+            attention_level_for_value("no"),
+            Some(AttentionLevel::Cancel)
+        );
+        assert_eq!(
+            attention_level_for_value("once"),
+            Some(AttentionLevel::Informational)
+        );
+        assert_eq!(
+            attention_level_for_value("yes"),
+            Some(AttentionLevel::Critical)
+        );
+        // "fireworks" has no direct Tauri equivalent — mapped to the same
+        // continuous-bounce behavior as "yes".
+        assert_eq!(
+            attention_level_for_value("fireworks"),
+            Some(AttentionLevel::Critical)
+        );
+    }
+
+    #[test]
+    fn attention_level_for_value_ignores_unrecognized_values() {
+        // Unreachable in production — Term::request_attention already
+        // validates to one of the four known values — but the function must
+        // still fail safe rather than panic or guess.
+        assert_eq!(attention_level_for_value(""), None);
+        assert_eq!(attention_level_for_value("YES"), None);
+        assert_eq!(attention_level_for_value("bogus"), None);
+    }
+
+    #[test]
+    fn test_chunk_processor_osc1337_open_url_queues_pending_url() {
+        use crate::state::VtLogBuffer;
+        use std::sync::atomic::AtomicU64;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "test-cp-osc1337-open-url";
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+
+        let mut cp = ChunkProcessor::new(None, None);
+        let mut utf8_buf = Utf8ReadBuffer::new();
+        let mut esc_buf = EscapeAwareBuffer::new();
+
+        // base64("https://example.com") == "aHR0cHM6Ly9leGFtcGxlLmNvbQ=="
+        let utf8_data = utf8_buf.push(b"\x1b]1337;OpenURL=:aHR0cHM6Ly9leGFtcGxlLmNvbQ==\x07");
+        let esc_data = esc_buf.push(&utf8_data);
+        let _ = cp.process_chunk(&esc_data, &silence, sid, state.as_ref());
+
+        assert_eq!(
+            cp.pending_open_urls,
+            vec!["https://example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_chunk_processor_osc1337_steal_focus_and_request_attention_do_not_panic() {
+        // No real Tauri AppHandle in a unit test — this exercises the
+        // config-gate + app_handle-is-None no-op path, and mainly guards
+        // against a panic while wiring TermEvent::RequestFocus/RequestAttention
+        // through process_chunk.
+        use crate::state::VtLogBuffer;
+        use std::sync::atomic::AtomicU64;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "test-cp-osc1337-focus-attention";
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+
+        let mut cp = ChunkProcessor::new(None, None);
+        let mut utf8_buf = Utf8ReadBuffer::new();
+        let mut esc_buf = EscapeAwareBuffer::new();
+        let mut feed = |cp: &mut ChunkProcessor, bytes: &[u8]| {
+            let utf8_data = utf8_buf.push(bytes);
+            let esc_data = esc_buf.push(&utf8_data);
+            let _ = cp.process_chunk(&esc_data, &silence, sid, state.as_ref());
+        };
+
+        feed(&mut cp, b"\x1b]1337;StealFocus\x07");
+        feed(&mut cp, b"\x1b]1337;RequestAttention=fireworks\x07");
+        feed(&mut cp, b"\x1b]1337;RequestAttention=no\x07");
+
+        // config gate off must also stay panic-free.
+        state.config.write().osc1337_focus_attention = false;
+        feed(&mut cp, b"\x1b]1337;StealFocus\x07");
     }
 
     /// Every Ink menu footer is byte-identical, so a session-lifetime question

@@ -116,6 +116,12 @@ pub enum AppEvent {
     /// Working directory reported by the shell through OSC 7.
     #[serde(rename = "pty-cwd")]
     PtyCwd { session_id: String, cwd: String },
+    /// A user-confirmed OSC 1337 `OpenURL` request — the frontend should open
+    /// `url` in the browser (`handleOpenUrl`). Fires only after
+    /// `confirm_open_url` (`mcp_http::mod`) resolves `true`; a declined or
+    /// timed-out request never reaches here.
+    #[serde(rename = "pty-open-url")]
+    PtyOpenUrl { session_id: String, url: String },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
@@ -357,6 +363,7 @@ impl AppEvent {
             | AppEvent::PtyActivity { session_id }
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
+            | AppEvent::PtyOpenUrl { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
@@ -3484,7 +3491,7 @@ impl AppState {
             // signals, not session state. The cwd that state cares about is
             // written straight onto the `sessions` entry at the emit site; this
             // event exists to reach clients, not to be accumulated.
-            AppEvent::PtyOsc133 { .. } | AppEvent::PtyCwd { .. } => {}
+            AppEvent::PtyOsc133 { .. } | AppEvent::PtyCwd { .. } | AppEvent::PtyOpenUrl { .. } => {}
             AppEvent::SessionClosed { session_id, .. } => {
                 state.session_states.remove(session_id);
             }

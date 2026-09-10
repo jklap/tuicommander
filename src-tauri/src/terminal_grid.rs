@@ -31,6 +31,13 @@ pub enum TermEvent {
         payload: String,
         line: usize,
     },
+    /// iTerm2 OSC 1337 `StealFocus`.
+    RequestFocus,
+    /// iTerm2 OSC 1337 `RequestAttention=<value>`. `value` is one of "yes",
+    /// "once", "no", or "fireworks".
+    RequestAttention(String),
+    /// iTerm2 OSC 1337 `OpenURL=:<base64>` — the decoded URL.
+    OpenUrl(String),
 }
 
 #[derive(Clone)]
@@ -96,6 +103,18 @@ impl EventListener for TermEventCollector {
                     payload,
                     line,
                 });
+            }
+            Event::RequestFocus => {
+                self.events.lock().unwrap().push(TermEvent::RequestFocus);
+            }
+            Event::RequestAttention(value) => {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(TermEvent::RequestAttention(value));
+            }
+            Event::OpenUrl(url) => {
+                self.events.lock().unwrap().push(TermEvent::OpenUrl(url));
             }
             Event::ClipboardLoad(..)
             | Event::ColorRequest(..)
@@ -4714,6 +4733,129 @@ mod tests {
         assert!(row.contains("after"));
         assert!(!row.contains("7770"));
         assert!(!row.contains("state"));
+    }
+
+    #[test]
+    fn osc1337_steal_focus_event() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]1337;StealFocus\x07");
+        let events = grid.drain_events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, TermEvent::RequestFocus))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn osc1337_request_attention_event() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]1337;RequestAttention=fireworks\x07");
+        let events = grid.drain_events();
+        let attention: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::RequestAttention(_)))
+            .collect();
+        assert_eq!(attention.len(), 1);
+        match attention[0] {
+            TermEvent::RequestAttention(value) => assert_eq!(value, "fireworks"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn osc1337_open_url_event() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // base64("https://example.com") == "aHR0cHM6Ly9leGFtcGxlLmNvbQ=="
+        grid.process(b"\x1b]1337;OpenURL=:aHR0cHM6Ly9leGFtcGxlLmNvbQ==\x07");
+        let events = grid.drain_events();
+        let urls: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::OpenUrl(_)))
+            .collect();
+        assert_eq!(urls.len(), 1);
+        match urls[0] {
+            TermEvent::OpenUrl(url) => assert_eq!(url, "https://example.com"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn osc1337_copy_event() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // base64("hi") == "aGk="
+        grid.process(b"\x1b]1337;Copy=:aGk=\x07");
+        let events = grid.drain_events();
+        let stores: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::ClipboardStore(_)))
+            .collect();
+        assert_eq!(stores.len(), 1);
+        match stores[0] {
+            TermEvent::ClipboardStore(text) => assert_eq!(text, "hi"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn osc1337_copy_to_clipboard_and_end_copy_event() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]1337;CopyToClipboard=\x07hello\x1b]1337;EndCopy\x07");
+        let events = grid.drain_events();
+        let stores: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::ClipboardStore(_)))
+            .collect();
+        assert_eq!(stores.len(), 1);
+        match stores[0] {
+            TermEvent::ClipboardStore(text) => assert_eq!(text, "hello"),
+            _ => unreachable!(),
+        }
+        // The captured text is still displayed normally on screen.
+        let row = grid.get_row_text(0);
+        assert!(row.contains("hello"));
+    }
+
+    #[test]
+    fn osc1337_cursor_shape_updates_cursor_style() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]1337;CursorShape=1\x07");
+        let term = grid.term();
+        assert_eq!(term.cursor_style().shape, CursorShape::Beam);
+    }
+
+    #[test]
+    fn osc1337_clear_scrollback_clears_history() {
+        let mut grid = TerminalGrid::new(5, 80, 1000);
+        // Push well past the 5-line viewport so real scrollback accumulates.
+        for i in 0..20 {
+            grid.process(format!("line{i}\r\n").as_bytes());
+        }
+        assert!(grid.term().history_size() > 0);
+
+        grid.process(b"\x1b]1337;ClearScrollback\x07");
+        assert_eq!(grid.term().history_size(), 0);
+    }
+
+    #[test]
+    fn osc1337_not_written_to_grid() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"before\x1b]1337;StealFocus\x07after");
+        let row = grid.get_row_text(0);
+        assert!(row.contains("before"));
+        assert!(row.contains("after"));
+        assert!(!row.contains("1337"));
+        assert!(!row.contains("StealFocus"));
+    }
+
+    #[test]
+    fn osc1337_unknown_key_produces_no_events() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]1337;SetMark\x07");
+        let events = grid.drain_events();
+        assert!(events.is_empty());
     }
 
     #[test]

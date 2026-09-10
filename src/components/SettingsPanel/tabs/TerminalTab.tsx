@@ -403,6 +403,16 @@ export const TerminalTab: Component = () => {
 			/>
 
 			<SettingToggle
+				checked={settingsStore.state.osc1337FocusAttention}
+				onChange={(v) => settingsStore.setOsc1337FocusAttention(v)}
+				label={t("general.toggle.osc1337FocusAttention", "Allow terminal focus/attention requests")}
+				hint={t(
+					"general.hint.osc1337FocusAttention",
+					"Let terminal programs bring the window to the front or bounce the dock icon (OSC 1337 StealFocus/RequestAttention). Disable if a script or log spams either.",
+				)}
+			/>
+
+			<SettingToggle
 				checked={settingsStore.state.showLastPrompt}
 				onChange={(v) => settingsStore.setShowLastPrompt(v)}
 				label="Show agent context bar"
