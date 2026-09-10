@@ -217,7 +217,7 @@ describe("extendSelectionDrag", () => {
 	it("plain char mode extends only the end point", () => {
 		const result = extendSelectionDrag(
 			"char",
-			{ wordAnchor: null, lineAnchorRow: null },
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: null },
 			{ row: 5, col: 10, bounds: null, maxCol: 80 },
 			{ row: 3, col: 2 },
 		);

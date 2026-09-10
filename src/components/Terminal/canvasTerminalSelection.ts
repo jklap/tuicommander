@@ -6,8 +6,9 @@ export interface SelectionPoint {
 }
 
 /** What a drag extends by: plain cells, whole words (started by a double-click),
- *  or whole lines (started by a triple-click). */
-export type SelectionMode = "char" | "word" | "line";
+ *  whole lines (started by a triple-click), or a smart match (a double/quad-click
+ *  path/URL match, single- or multi-row — see `smartAnchor` on `DragAnchor`). */
+export type SelectionMode = "char" | "word" | "line" | "smart";
 
 /** Separator characters for word-boundary scans — mirrors the double-click word
  *  predicate that has always lived inline in CanvasTerminal's mousedown handler;
@@ -239,11 +240,19 @@ export function buildSmartSelectionWindow(
 	return { text, coords, targetOffset };
 }
 
-/** Anchor captured at mousedown for a word/line-mode drag — the edge of the original
- *  double/triple-click that must stay included no matter which way the drag goes. */
+/** Anchor captured at mousedown for a word/line/smart-mode drag — the span of the
+ *  original double/triple/quad-click that must stay included no matter which way
+ *  the drag goes. */
 export interface DragAnchor {
 	wordAnchor: { row: number; left: number; right: number } | null;
 	lineAnchorRow: number | null;
+	/** Full range of a smart match (a path/URL, single- or multi-row) — "word"
+	 *  mode's anchor union re-derives its live edge from the *plain* word
+	 *  resolver, which is narrower than a smart match at every point except its
+	 *  exact extent (punctuation like "/" splits it), so reusing "word" mode for
+	 *  a smart match would collapse it down to the sub-word under the cursor on
+	 *  the very first mousemove. "smart" mode gets its own row+col anchor instead. */
+	smartAnchor: { start: SelectionPoint; end: SelectionPoint } | null;
 }
 
 /** Live drag position, re-derived each frame by the caller (grid position, the word
@@ -255,15 +264,27 @@ export interface DragPosition {
 	maxCol: number;
 }
 
+/** Row-major point comparison: negative if `a` sits before `b`, positive if after, 0 if equal. */
+function comparePoints(a: SelectionPoint, b: SelectionPoint): number {
+	return a.row !== b.row ? a.row - b.row : a.col - b.col;
+}
+
 /**
  * Re-derives the selection start/end for a drag frame, given the mode set at mousedown
- * and its anchor. Word/line mode union the live drag boundary with whichever edge of the
- * anchor sits away from the drag direction, so the original double/triple-clicked
- * word/line stays fully included regardless of drag direction — matching double-click-drag
- * / triple-click-drag in every mainstream terminal. Falls back to plain cell-wise extension
- * for "char" mode, or when the relevant anchor is missing (e.g. a double-click that landed
- * on whitespace/punctuation never sets `wordAnchor`) — in which case `start` is left as
- * whatever was set at mousedown and only `end` moves, exactly like a plain drag.
+ * and its anchor. Word/line/smart mode union the live drag position with whichever edge
+ * of the anchor sits away from the drag direction, so the original double/triple/quad-
+ * clicked word/line/smart-match stays fully included regardless of drag direction —
+ * matching double-click-drag / triple-click-drag in every mainstream terminal, and
+ * critically, staying included even when the "drag" is really just mouse jitter during
+ * the double-click itself — a smart-selected path/URL (e.g. "/usr/local/bin/foo") used to
+ * collapse back to just the sub-word under the cursor (e.g. "local") the instant any
+ * mousemove fired before mouseup, because it reused "word" mode's anchor union, which
+ * re-derives its live edge from the *plain* word resolver — narrower than the match at
+ * every point except its exact extent, since punctuation like "/" splits it. Falls back
+ * to plain cell-wise extension for "char" mode, or when the relevant anchor is missing
+ * (e.g. a double-click that landed on whitespace/punctuation never sets `wordAnchor`) —
+ * in which case `start` is left as whatever was set at mousedown and only `end` moves,
+ * exactly like a plain drag.
  */
 export function extendSelectionDrag(
 	mode: SelectionMode,
@@ -272,10 +293,12 @@ export function extendSelectionDrag(
 	currentStart: SelectionPoint,
 ): { start: SelectionPoint; end: SelectionPoint } {
 	const { row: absRow, col } = drag;
+	// Shared by "word" and "smart" mode: the live drag position's word boundary,
+	// falling back to the raw column when the drag landed on whitespace/punctuation.
+	const dragLeft = drag.bounds?.left ?? col;
+	const dragRight = drag.bounds?.right ?? col;
 	if (mode === "word" && anchor.wordAnchor) {
 		const { wordAnchor } = anchor;
-		const dragLeft = drag.bounds?.left ?? col;
-		const dragRight = drag.bounds?.right ?? col;
 		const draggingForward = absRow > wordAnchor.row || (absRow === wordAnchor.row && dragLeft >= wordAnchor.left);
 		if (draggingForward) {
 			return { start: { row: wordAnchor.row, col: wordAnchor.left }, end: { row: absRow, col: dragRight } };
@@ -288,6 +311,24 @@ export function extendSelectionDrag(
 			return { start: { row: lineAnchorRow, col: 0 }, end: { row: absRow, col: drag.maxCol } };
 		}
 		return { start: { row: absRow, col: 0 }, end: { row: lineAnchorRow, col: drag.maxCol } };
+	}
+	if (mode === "smart" && anchor.smartAnchor) {
+		const { start: anchorStart, end: anchorEnd } = anchor.smartAnchor;
+		const dragPoint: SelectionPoint = { row: absRow, col };
+		// Drag position still inside the matched span (includes jitter with zero
+		// real displacement): keep the full match, don't re-derive anything from
+		// `drag.bounds` — this is the fix for the collapse-to-sub-word bug.
+		if (comparePoints(dragPoint, anchorStart) >= 0 && comparePoints(dragPoint, anchorEnd) <= 0) {
+			return { start: anchorStart, end: anchorEnd };
+		}
+		// Genuinely dragging past an edge: extend by whole word at the drag
+		// position, same as "word" mode, so a plain word's default catch-all
+		// smart match (see smartSelectionDefaults.ts's low-precision `\S+` rule)
+		// keeps behaving like an ordinary double-click-drag.
+		if (comparePoints(dragPoint, anchorStart) < 0) {
+			return { start: { row: absRow, col: dragLeft }, end: anchorEnd };
+		}
+		return { start: anchorStart, end: { row: absRow, col: dragRight } };
 	}
 	return { start: currentStart, end: { row: absRow, col } };
 }

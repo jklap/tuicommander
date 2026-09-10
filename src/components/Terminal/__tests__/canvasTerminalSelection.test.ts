@@ -243,7 +243,7 @@ describe("extendSelectionDrag", () => {
 	it("word mode, dragging forward: anchor's left stays the start, drag word's right is the end", () => {
 		const result = extendSelectionDrag(
 			"word",
-			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null },
+			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null, smartAnchor: null },
 			{ row: 7, col: 10, bounds: { left: 8, right: 12 }, maxCol: 79 },
 			currentStart,
 		);
@@ -253,7 +253,7 @@ describe("extendSelectionDrag", () => {
 	it("word mode, dragging backward: drag word's left is the start, anchor's right is the end", () => {
 		const result = extendSelectionDrag(
 			"word",
-			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null },
+			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null, smartAnchor: null },
 			{ row: 3, col: 1, bounds: { left: 0, right: 1 }, maxCol: 79 },
 			currentStart,
 		);
@@ -263,7 +263,7 @@ describe("extendSelectionDrag", () => {
 	it("word mode, same row with dragLeft === anchor.left, is treated as forward", () => {
 		const result = extendSelectionDrag(
 			"word",
-			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null },
+			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null, smartAnchor: null },
 			{ row: 5, col: 2, bounds: { left: 2, right: 6 }, maxCol: 79 },
 			currentStart,
 		);
@@ -273,7 +273,7 @@ describe("extendSelectionDrag", () => {
 	it("word mode over whitespace mid-drag falls back to the raw column without losing the anchor", () => {
 		const result = extendSelectionDrag(
 			"word",
-			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null },
+			{ wordAnchor: { row: 5, left: 2, right: 6 }, lineAnchorRow: null, smartAnchor: null },
 			{ row: 7, col: 20, bounds: null, maxCol: 79 },
 			currentStart,
 		);
@@ -283,7 +283,7 @@ describe("extendSelectionDrag", () => {
 	it("line mode dragging forward selects full rows from the anchor through the drag row", () => {
 		const result = extendSelectionDrag(
 			"line",
-			{ wordAnchor: null, lineAnchorRow: 4 },
+			{ wordAnchor: null, lineAnchorRow: 4, smartAnchor: null },
 			{ row: 8, col: 30, bounds: null, maxCol: 79 },
 			currentStart,
 		);
@@ -293,7 +293,7 @@ describe("extendSelectionDrag", () => {
 	it("line mode dragging backward selects full rows from the drag row through the anchor", () => {
 		const result = extendSelectionDrag(
 			"line",
-			{ wordAnchor: null, lineAnchorRow: 8 },
+			{ wordAnchor: null, lineAnchorRow: 8, smartAnchor: null },
 			{ row: 4, col: 30, bounds: null, maxCol: 79 },
 			currentStart,
 		);
@@ -303,7 +303,7 @@ describe("extendSelectionDrag", () => {
 	it("char mode extends by plain cell, leaving start untouched", () => {
 		const result = extendSelectionDrag(
 			"char",
-			{ wordAnchor: null, lineAnchorRow: null },
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: null },
 			{ row: 2, col: 9, bounds: null, maxCol: 79 },
 			{ row: 1, col: 3 },
 		);
@@ -313,7 +313,7 @@ describe("extendSelectionDrag", () => {
 	it("word mode with a null wordAnchor (double-click landed on punctuation) falls back to plain cell-wise extension", () => {
 		const result = extendSelectionDrag(
 			"word",
-			{ wordAnchor: null, lineAnchorRow: null },
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: null },
 			{ row: 2, col: 9, bounds: null, maxCol: 79 },
 			{ row: 1, col: 3 },
 		);
@@ -323,7 +323,93 @@ describe("extendSelectionDrag", () => {
 	it("line mode with a null lineAnchorRow falls back to plain cell-wise extension", () => {
 		const result = extendSelectionDrag(
 			"line",
-			{ wordAnchor: null, lineAnchorRow: null },
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: null },
+			{ row: 2, col: 9, bounds: null, maxCol: 79 },
+			{ row: 1, col: 3 },
+		);
+		expect(result).toEqual({ start: { row: 1, col: 3 }, end: { row: 2, col: 9 } });
+	});
+
+	// Regression coverage for the double-click-jitter bug: a multi-row smart match (a
+	// long path/URL wrapped across rows) used to collapse back to a single word the
+	// instant any mousemove fired before mouseup, because "char" mode carried no anchor.
+	it("smart mode, drag position still inside the matched span, keeps the full match intact", () => {
+		const result = extendSelectionDrag(
+			"smart",
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: { start: { row: 5, col: 2 }, end: { row: 6, col: 10 } } },
+			{ row: 5, col: 4, bounds: null, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 5, col: 2 }, end: { row: 6, col: 10 } });
+	});
+
+	it("smart mode, drag position exactly on the match's start (inclusive boundary), keeps the full match intact", () => {
+		const result = extendSelectionDrag(
+			"smart",
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: { start: { row: 5, col: 2 }, end: { row: 6, col: 10 } } },
+			{ row: 5, col: 2, bounds: null, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 5, col: 2 }, end: { row: 6, col: 10 } });
+	});
+
+	it("smart mode, drag position exactly on the match's end (inclusive boundary), keeps the full match intact", () => {
+		const result = extendSelectionDrag(
+			"smart",
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: { start: { row: 5, col: 2 }, end: { row: 6, col: 10 } } },
+			{ row: 6, col: 10, bounds: null, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 5, col: 2 }, end: { row: 6, col: 10 } });
+	});
+
+	it("smart mode, dragging one column past the match's end (first cell outside the boundary), extends outward", () => {
+		const result = extendSelectionDrag(
+			"smart",
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: { start: { row: 5, col: 2 }, end: { row: 6, col: 10 } } },
+			{ row: 6, col: 11, bounds: null, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 5, col: 2 }, end: { row: 6, col: 11 } });
+	});
+
+	it("smart mode, dragging past the match's end, extends end to the drag position", () => {
+		const result = extendSelectionDrag(
+			"smart",
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: { start: { row: 5, col: 2 }, end: { row: 6, col: 10 } } },
+			{ row: 7, col: 3, bounds: null, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 5, col: 2 }, end: { row: 7, col: 3 } });
+	});
+
+	it("smart mode, dragging before the match's start, extends start to the drag position", () => {
+		const result = extendSelectionDrag(
+			"smart",
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: { start: { row: 5, col: 2 }, end: { row: 6, col: 10 } } },
+			{ row: 4, col: 8, bounds: null, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 4, col: 8 }, end: { row: 6, col: 10 } });
+	});
+
+	it("smart mode, dragging past the match's end onto a later word, extends by that whole word (not just to the raw drag point)", () => {
+		// Matches "word"-mode's drag UX: a plain double-clicked word's smart match
+		// (the default catch-all `\S+` rule) dragged forward onto a later word
+		// must still pull in that whole word, not stop mid-word at the cursor.
+		const result = extendSelectionDrag(
+			"smart",
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: { start: { row: 0, col: 4 }, end: { row: 0, col: 6 } } },
+			{ row: 0, col: 13, bounds: { left: 12, right: 14 }, maxCol: 79 },
+			currentStart,
+		);
+		expect(result).toEqual({ start: { row: 0, col: 4 }, end: { row: 0, col: 14 } });
+	});
+
+	it("smart mode with a null smartAnchor falls back to plain cell-wise extension", () => {
+		const result = extendSelectionDrag(
+			"smart",
+			{ wordAnchor: null, lineAnchorRow: null, smartAnchor: null },
 			{ row: 2, col: 9, bounds: null, maxCol: 79 },
 			{ row: 1, col: 3 },
 		);
