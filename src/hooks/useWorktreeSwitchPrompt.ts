@@ -14,6 +14,11 @@ interface WorktreeSwitchDeps {
 
 interface WorktreeCreatedPayload {
 	repo_path: string;
+	/** Which workspace was born — the store key. For a linked worktree this
+	 *  equals the branch, but a COW clone's id is minted, so it is read from the
+	 *  event and never derived from `branch` (#727-2085). */
+	workspace_id: string;
+	/** Display only. */
 	branch: string;
 	worktree_path: string;
 }
@@ -23,6 +28,9 @@ interface WorktreeRemovedPayload {
 	/** Which workspace died. Not a branch: two workspaces may share one, so a
 	 *  branch cannot name the row to drop (#726-5ac7). */
 	workspace_id: string;
+	/** Display only — captured before the checkout went away, because nothing can
+	 *  resolve the id afterwards. */
+	branch: string;
 }
 
 /**
@@ -38,6 +46,7 @@ interface WorktreeRemovedPayload {
 export async function switchToCreatedWorktree(
 	deps: WorktreeSwitchDeps,
 	repoPath: string,
+	workspaceId: string,
 	branch: string,
 	worktreePath: string,
 ): Promise<void> {
@@ -62,7 +71,7 @@ export async function switchToCreatedWorktree(
 			if (currentMapping) {
 				repositoriesStore.removeTerminalFromBranch(currentMapping.repoPath, currentMapping.branchName, terminalId);
 			}
-			repositoriesStore.addTerminalToBranch(repoPath, branch, terminalId);
+			repositoriesStore.addTerminalToBranch(repoPath, workspaceId, terminalId);
 		});
 
 		await invoke("write_pty", {
@@ -128,9 +137,9 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 	let unlistenRemoved: (() => void) | null = null;
 
 	listen<WorktreeCreatedPayload>("worktree-created", (event) => {
-		const { repo_path, branch, worktree_path } = event.payload;
+		const { repo_path, workspace_id, branch, worktree_path } = event.payload;
 		const switchToWorktree = () => {
-			switchToCreatedWorktree(deps, repo_path, branch, worktree_path).catch((err) =>
+			switchToCreatedWorktree(deps, repo_path, workspace_id, branch, worktree_path).catch((err) =>
 				appLogger.warn("git", `Failed to switch to worktree "${branch}"`, err),
 			);
 		};
@@ -140,11 +149,14 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		// Guarded on repo existence so we don't create a half-formed repo entry for a
 		// worktree on a repo that isn't open in the sidebar.
 		if (repositoriesStore.get(repo_path)) {
-			repositoriesStore.setBranch(repo_path, branch, { worktreePath: worktree_path });
+			// Keyed by the id the backend minted; the branch travels as data. The
+			// two are the same string for a linked worktree and will not be for a
+			// COW clone, so the key must come off `workspace_id`.
+			repositoriesStore.setBranch(repo_path, workspace_id, { branchName: branch, worktreePath: worktree_path });
 		}
 		const label = worktreeLabel(worktree_path);
 		activityStore.addItem({
-			id: `wt-${branch}-${Date.now()}`,
+			id: `wt-${workspace_id}-${Date.now()}`,
 			pluginId: "core",
 			sectionId: "worktrees",
 			title: `Worktree: ${branch}`,

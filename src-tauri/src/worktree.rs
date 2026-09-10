@@ -982,7 +982,11 @@ pub(crate) async fn remove_worktree(
                 // rest of the persisted branch keys (#728-bc76), not here.
                 crate::config::remove_branch_label(&repo_path, &outcome.branch);
             }
-            state.notify_worktree_removed(&repo_path, &workspace_id);
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch: outcome.branch.clone(),
+            });
             Ok(outcome)
         }
         Err(e) => {
@@ -1119,7 +1123,13 @@ pub(crate) fn delete_local_branch(
         state.invalidate_repo_caches(&repo_path);
     } else {
         // The workspace's checkout went with the branch — the sidebar row must go too.
-        state.notify_worktree_removed(&repo_path, &workspace_id);
+        // `delete_local_branch_impl` refuses when the branch and the id disagree,
+        // so by here `branch_name` is this workspace's own branch.
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: repo_path.clone(),
+            workspace_id: workspace_id.clone(),
+            branch: branch_name.clone(),
+        });
     }
     Ok(())
 }
@@ -1259,6 +1269,20 @@ pub(crate) struct WorkspaceWorktree {
     pub(crate) path: String,
 }
 
+/// The workspace id a freshly created **git worktree** gets.
+///
+/// The one place allowed to produce an id from a branch, and only because the
+/// identity migration defines it that way: a linked worktree keeps
+/// `workspace_id == branch` so nothing persisted moves. Reading it in the other
+/// direction is the forbidden move — `resolve_workspace` looks an id up, it
+/// never parses one.
+///
+/// A COW clone does not come through here: it is not in `git worktree list` and
+/// its id is minted independently of its branch.
+pub(crate) fn workspace_id_of_worktree(branch: &str) -> String {
+    branch.to_string()
+}
+
 /// Map workspace id -> its checkout. A worktree detached by an in-progress rebase keeps its
 /// row: its pre-rebase branch is recovered from git's own state files, so the sidebar entry
 /// survives and its terminals are not closed mid-conflict-resolution.
@@ -1283,7 +1307,7 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
             && Path::new(&entry.path).exists()
         {
             result.insert(
-                branch.clone(),
+                workspace_id_of_worktree(&branch),
                 WorkspaceWorktree {
                     branch,
                     path: entry.path,
@@ -1972,10 +1996,20 @@ pub(crate) fn finalize_merged_worktree_impl(
 
     match action.as_str() {
         "archive" => {
+            // Read the branch off the record BEFORE the directory moves: archiving
+            // takes the worktree out of `git worktree list`, after which the id
+            // resolves to nothing and the removal event would have no branch to
+            // show. Resolution here is also still safe to fail — nothing has been
+            // mutated yet.
+            let branch = resolve_workspace(&base_repo, &workspace_id)?.branch;
             let archive_path = archive_worktree(&base_repo, &workspace_id, script.as_deref())?;
             // Archiving moves the worktree out of the repo — as far as the sidebar
             // is concerned the row is gone, same as a delete.
-            state.notify_worktree_removed(&repo_path, &workspace_id);
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch,
+            });
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "archived".to_string(),
@@ -1987,14 +2021,18 @@ pub(crate) fn finalize_merged_worktree_impl(
             })
         }
         "delete" => {
-            remove_worktree_by_workspace_id(
+            let outcome = remove_worktree_by_workspace_id(
                 &repo_path,
                 &workspace_id,
                 true,
                 script.as_deref(),
                 false,
             )?;
-            state.notify_worktree_removed(&repo_path, &workspace_id);
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch: outcome.branch,
+            });
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "deleted".to_string(),
@@ -2094,10 +2132,19 @@ pub(crate) fn merge_and_archive_worktree_impl(
     let worktree_dirty = worktree_dirty.is_dirty();
     match after_merge.as_str() {
         "archive" => {
+            // Before the move, for the same reason as in `finalize_merged_worktree_impl`:
+            // an archived worktree no longer resolves by id. `branch_name` is the
+            // merge subject the caller named, which is not necessarily what this
+            // workspace has checked out — the record is.
+            let branch = resolve_workspace(&base_repo, &workspace_id)?.branch;
             let archive_path = archive_worktree(&base_repo, &workspace_id, script.as_deref())?;
             // Archiving moves the worktree out of the repo — as far as the sidebar
             // is concerned the row is gone, same as a delete.
-            state.notify_worktree_removed(&repo_path, &workspace_id);
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch,
+            });
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "archived".to_string(),
@@ -2107,14 +2154,18 @@ pub(crate) fn merge_and_archive_worktree_impl(
             })
         }
         "delete" => {
-            remove_worktree_by_workspace_id(
+            let outcome = remove_worktree_by_workspace_id(
                 &repo_path,
                 &workspace_id,
                 true,
                 script.as_deref(),
                 false,
             )?;
-            state.notify_worktree_removed(&repo_path, &workspace_id);
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch: outcome.branch,
+            });
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "deleted".to_string(),

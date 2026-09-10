@@ -892,6 +892,29 @@ describe("transport", () => {
 			expect(result.path).toBe("/repo/worktree-dirty?repoPath=%2Fr&workspaceId=feat~a1b2c3d4");
 		});
 
+		// The one worktree command whose identifier rides in the PATH, so a
+		// regression here sends a DELETE to a URL that names the wrong workspace —
+		// or, if the id ever reverts to a branch, to whichever workspace git
+		// happens to list first (#727-2085).
+		it("maps remove_worktree to a DELETE addressed by workspace id", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "feat~a1b2c3d4",
+				deleteBranch: true,
+			});
+			expect(result.method).toBe("DELETE");
+			expect(result.path).toBe("/worktrees/feat~a1b2c3d4?repoPath=%2Fr&deleteBranch=true");
+		});
+
+		// Creation is the one command that takes a branch and no id — the id does
+		// not exist yet. It comes back in the response.
+		it("maps create_worktree to POST carrying the branch name", () => {
+			const result = mapCommandToHttp("create_worktree", { baseRepo: "/r", branchName: "feat" });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/worktrees");
+			expect(result.body).toEqual({ base_repo: "/r", branch_name: "feat" });
+		});
+
 		it("maps list_base_ref_options to GET", () => {
 			expect(mapCommandToHttp("list_base_ref_options", { repoPath: "/r" }).path).toBe(
 				"/repo/base-ref-options?repoPath=%2Fr",
