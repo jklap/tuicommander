@@ -1053,14 +1053,38 @@ pub(crate) fn remove_worktree_by_workspace_id(
     );
 
     // Resolve by id, never by branch: two workspaces may share a branch, and
-    // the branch-keyed lookup would hand us whichever git listed first.
-    let workspace = resolve_workspace(&base_repo, workspace_id).inspect_err(|_| {
+    // the branch-keyed lookup would hand us whichever git listed first. TYPED,
+    // because the two mechanisms need completely different removals and the
+    // difference is invisible from the path: `git worktree remove` on a COW
+    // clone fails with "not a working tree", which `remove_worktree_internal`
+    // treats as "already gone" and follows with an unconditional
+    // `remove_dir_all` — deleting an independent repository, and every commit
+    // that exists only in it, without ever reaching the guard below.
+    let workspace = match resolve_any_workspace(&base_repo, workspace_id).inspect_err(|_| {
         tracing::error!(
             source = "worktree",
             workspace_id = %workspace_id,
             "remove_worktree_by_workspace_id: no workspace found for id"
         );
-    })?;
+    })? {
+        ResolvedWorkspace::Worktree(worktree) => worktree,
+        ResolvedWorkspace::Cow(record) => {
+            let branch = record.branch.clone();
+            if let Some(script) = archive_script
+                && !script.is_empty()
+            {
+                run_script_in_dir(script, &record.path)
+                    .map_err(|e| format!("Archive script failed: {e}"))?;
+            }
+            crate::cow::remove_cow_workspace(&record, force)?;
+            // No branch to delete in the parent: the clone's refs were its own,
+            // and the parent's same-named branch (if any) belongs to the parent.
+            return Ok(RemoveWorktreeOutcome {
+                branch_delete_warning: None,
+                branch,
+            });
+        }
+    };
     // The branch to delete comes off the resolved record. Deriving it from the
     // id would be wrong the moment a COW workspace carries a minted id.
     let branch_name = workspace.branch.as_str();
@@ -5426,6 +5450,105 @@ branch refs/heads/feat
 
         let err = resolve_any_workspace(&repo, "contested").expect_err("must refuse");
         assert!(err.contains("refusing to guess"), "{err}");
+    }
+
+    // ── removal dispatches on the mechanism ──────────────────────────────
+
+    /// A linked worktree is removed by git, which also cleans up the admin
+    /// entry under the parent's `.git/worktrees`. An `rm -rf` of the directory
+    /// would leave that entry behind, and it BLOCKS a later checkout of the
+    /// same branch.
+    #[test]
+    fn removing_a_linked_worktree_cleans_up_the_parents_admin_entry() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "linked"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("worktree");
+        let admin = repo.join(".git").join("worktrees").join("linked");
+        assert!(admin.exists(), "the fixture must start with an admin entry");
+        let (_guard, _config) = with_repositories_document(serde_json::json!({ "repos": {} }));
+
+        remove_worktree_by_workspace_id(&repo.to_string_lossy(), "linked", true, None, false)
+            .expect("removes");
+
+        assert!(
+            !admin.exists(),
+            "the parent's worktree admin entry survived the removal"
+        );
+        assert!(!workspaces.join("linked").exists());
+    }
+
+    /// The whole reason removal resolves to a TYPE: a COW id must never reach
+    /// `git worktree remove`, whose "not a working tree" failure the removal
+    /// path treats as success before deleting the directory unconditionally.
+    #[test]
+    fn removing_a_cow_workspace_by_id_refuses_while_its_commits_are_unpublished() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "cloned"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow");
+        assert_eq!(created.kind, WorkspaceKind::Cow);
+        fs::write(created.path.join("only-here.txt"), "work\n").expect("write");
+        git_cmd(&created.path)
+            .args(["add", "."])
+            .run()
+            .expect("add");
+        git_cmd(&created.path)
+            .args(["commit", "-m", "unpublished work"])
+            .run()
+            .expect("commit");
+
+        let (_guard, _config) = with_repositories_document(serde_json::json!({
+            "repos": {
+                repo.to_string_lossy(): {
+                    "path": repo.to_string_lossy(),
+                    "workspaces": {
+                        "cloned~aaaa1111": {
+                            "branchName": "cloned",
+                            "kind": "cow",
+                            "worktreePath": created.path.to_string_lossy(),
+                            "parentRepoPath": repo.to_string_lossy(),
+                        }
+                    }
+                }
+            }
+        }));
+
+        // force defaults to false on every transport, and this is the shared
+        // entry point all three of them call.
+        let err = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "cloned~aaaa1111",
+            true,
+            None,
+            false,
+        )
+        .expect_err("must refuse");
+
+        assert!(err.contains("only there"), "{err}");
+        assert!(created.path.exists(), "the workspace was deleted anyway");
+
+        // And with force it goes, reporting the branch it was on.
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "cloned~aaaa1111",
+            true,
+            None,
+            true,
+        )
+        .expect("force removes");
+        assert_eq!(outcome.branch, "cloned");
+        assert!(!created.path.exists());
     }
 
     /// A linked worktree shares its refs with the parent, so publishing is a
