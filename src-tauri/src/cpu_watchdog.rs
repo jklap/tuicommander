@@ -596,7 +596,7 @@ mod tests {
     fn memory_falling_back_does_not_re_arm() {
         let armed = next_memory_threshold(5 * GB, MEMORY_REPORT_FLOOR).unwrap();
         assert_eq!(
-            next_memory_threshold(1 * GB, armed),
+            next_memory_threshold(GB, armed),
             None,
             "a footprint below the armed line is silent — re-arming would flap"
         );

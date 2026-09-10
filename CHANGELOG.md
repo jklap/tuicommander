@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Content search no longer grows the app until it is measured in tens of
+  gigabytes.** Every repo switched to since 1.7.5 built a BM25 index that nothing
+  ever released, so a working day across a few dozen repos left the backend
+  holding one index per repo — 40.7 GB across seven, one of them 1.9 GB on its
+  own. The resident set is now bounded by `index_memory_budget_mb` (1 GB by
+  default) and the least recently used indices are dropped when it is exceeded.
+  Never the repo that just built, never one still building, and never the only
+  one left even if it exceeds the budget on its own — dropping that would
+  silently remove content search from a real repo.
+
+- **Editing one file no longer re-reads the whole repo.** A change to indexable
+  content rebuilt the entire corpus, so a one-line edit in a 14,000-file repo
+  paid for 14,000 file reads and a complete re-embedding. Only the files whose
+  mtime or size moved are now re-read and re-embedded, and deleted files release
+  their slot for reuse. A change set past a quarter of the corpus still rebuilds
+  outright: the average document length BM25 normalises against is refitted only
+  by a full build.
+
 - **An AI agent run now survives a reload taken in the middle of it.** The saved
   conversation held the prose and nothing else, so coming back mid-iteration lost
   the tool cards, the loop state and the iteration counter — the reply was there,
@@ -18,6 +36,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   results already stored on messages.
 
 ### Added
+
+- **A repo dropped by the memory budget comes back without re-indexing it.** The
+  index is written to `<data_dir>/content-index/` on the way out and reloaded on
+  the way back in, so returning to a repo costs a stat walk instead of a full
+  walk, read and re-embedding. A snapshot is always validated against the working
+  tree before use and brought up to date through the same path a live index uses,
+  so it can never serve content that disagrees with disk; one that fails to parse
+  is discarded and the repo is rebuilt. Requires a local patch to `bm25`, which
+  keeps its document embeddings private with no way to read them back
+  (`patches/bm25`, one read-only accessor).
 
 - **Spreadsheets open as tables instead of binary noise.** The registry gains
   `xlsx-preview`, which reads `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`,

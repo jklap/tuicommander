@@ -125,6 +125,12 @@ pub(crate) fn malloc_zone_stats() -> Option<(u64, u64)> {
     None
 }
 
+/// Just the bytes half of [`malloc_zone_stats`], for callers weighing a
+/// structure across its own construction.
+pub(crate) fn malloc_bytes_in_use() -> Option<u64> {
+    malloc_zone_stats().map(|(_, bytes)| bytes)
+}
+
 /// Every structure in `AppState` that grows with sessions, clients or repos.
 ///
 /// Sorted by bytes and then by entries, so the culprit is the first row rather
@@ -134,11 +140,18 @@ pub(crate) fn maps(state: &Arc<AppState>) -> Vec<MapReport> {
     let grid = &state.grid;
 
     // Measured: these four are the only ones whose *values* can be large.
-    let vt_bytes: usize = grid
+    // The two halves of a vt log buffer are reported apart: the grid has a hard
+    // ceiling (scrollback × columns × cell), the captured log lines do not,
+    // because a span holds whatever the PTY printed. Summed, a runaway log is
+    // indistinguishable from a terminal filling its scrollback.
+    let (vt_log_bytes, vt_grid_bytes) = grid
         .vt_log_buffers
         .iter()
-        .map(|e| e.value().lock().approx_bytes())
-        .sum();
+        .map(|e| {
+            let buf = e.value().lock();
+            (buf.log_bytes(), buf.grid_bytes())
+        })
+        .fold((0, 0), |(l, g), (dl, dg)| (l + dl, g + dg));
     let raw_ring_bytes: usize = grid
         .pty_raw_rings
         .iter()
@@ -154,9 +167,23 @@ pub(crate) fn maps(state: &Arc<AppState>) -> Vec<MapReport> {
         .iter()
         .map(|e| e.value().iter().map(|m| m.content.len()).sum::<usize>())
         .sum();
+    // Measured, not counted: an index is the heaviest per-repo structure the
+    // app holds and it is released only when the repo is retired, so a session
+    // spent across many repos accumulates them. The count alone said nothing —
+    // four indices and four hundred megabytes read the same.
+    let index_bytes: usize = state
+        .content_indices
+        .iter()
+        .map(|e| e.value().read().approx_bytes())
+        .sum();
 
     let mut out = vec![
-        MapReport::measured("grid.vt_log_buffers", grid.vt_log_buffers.len(), vt_bytes),
+        MapReport::measured("grid.vt_log_lines", grid.vt_log_buffers.len(), vt_log_bytes),
+        MapReport::measured(
+            "grid.vt_log_grids",
+            grid.vt_log_buffers.len(),
+            vt_grid_bytes,
+        ),
         MapReport::measured(
             "grid.pty_raw_rings",
             grid.pty_raw_rings.len(),
@@ -173,7 +200,7 @@ pub(crate) fn maps(state: &Arc<AppState>) -> Vec<MapReport> {
         MapReport::counted("input_buffers", sm.input_buffers.len()),
         MapReport::counted("grid.channels_watch", grid.watch.len()),
         MapReport::counted("grid.gates", grid.gates.len()),
-        MapReport::counted("content_indices", state.content_indices.len()),
+        MapReport::measured("content_indices", state.content_indices.len(), index_bytes),
         MapReport::counted("repo_watchers", state.repo_watchers.len()),
         MapReport::counted("dir_watchers", state.dir_watchers.len()),
         MapReport::counted("mcp.sessions", state.mcp.sessions.len()),

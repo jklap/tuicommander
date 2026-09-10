@@ -177,6 +177,8 @@ cleartext copy does not survive on disk.
 | `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > General > Terminal |
 | `block_folding_enabled` | `bool` | `true` | Let the `block-fold-toggle` shortcut collapse a command block's output. Frontend-gated. Blocks already folded stay folded when this is off |
 | `scrollback_reflow` | `bool` | `true` | Re-wrap scrollback history on a column resize instead of truncating it. Backend-gated: `AppState::new_vt_log_buffer` applies it to a new grid and `commit_config_change` pushes a change to grids already open. Defaults `true` — including for a config.json written before the key existed — because the grid reflowed unconditionally before the flag had a consumer |
+| `index_strategy` | `String` | `"active_and_switch"` | Which repos get a BM25 content index: `"active_and_switch"` (the boot repo plus every repo switched to), `"active_only"` (boot repo only), `"all_sequential"`, `"disabled"`. Read from the in-memory config on every switch and every `RepoChanged` — never `load_app_config()`, which takes a cross-process file lock |
+| `index_memory_budget_mb` | `usize` | `1024` | Total heap the resident content indices may hold before `content_index::enforce_memory_budget` drops the least recently used. An ordinary repo indexes to 60–100 MB, so 1 GB holds 10–15 resident and only evicts for an outlier. An evicted index is snapshotted to `<data_dir>/content-index/` and reloaded on return, so eviction costs a stat walk rather than a rebuild. Configurable rather than a constant because the Rust backend does not hot-reload |
 
 **Commands:** `load_app_config()`, `save_app_config(config)`
 

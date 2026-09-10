@@ -4,6 +4,7 @@ members = [
     "crates/tuic-bridge",
     "crates/tuic-cli",
     "patches/alacritty_terminal",
+    "patches/bm25",
     "patches/vte",
 ]
 exclude = ["patches/wayland-scanner"]
@@ -292,6 +293,11 @@ windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp
 
 [patch.crates-io]
 alacritty_terminal = { path = "patches/alacritty_terminal" }
+# 2.3.2 plus one read-only accessor: `Scorer::embeddings`. Upstream can build and
+# query an index but never persist one, because the embeddings it holds are
+# private with no getter. `content_index` needs them to write a snapshot so a repo
+# evicted by the memory budget is reloaded instead of re-indexed from scratch.
+bm25 = { path = "patches/bm25" }
 vte = { path = "patches/vte" }
 # crates.io 0.31.10 pins vulnerable quick-xml 0.39. Keep that release's code
 # compatible with wayland-client/backend 0.31/0.3, while applying upstream's

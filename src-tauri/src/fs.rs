@@ -924,6 +924,10 @@ fn prepare_index_search(
     candidate_limit: usize,
 ) -> Option<IndexSearchPlan> {
     let index = index.read();
+    // The read path is what "recently used" means for the memory budget: a repo
+    // the user keeps searching must outlive one they indexed and walked away
+    // from. Recorded even when the index is not ready — the interest is real.
+    index.touch();
     index
         .is_ready()
         .then(|| index_search_plan(&index, query, candidate_limit))
