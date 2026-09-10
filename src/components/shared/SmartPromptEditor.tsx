@@ -1,5 +1,6 @@
 import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../../agents";
+import { ALL_SMART_PLACEMENTS, SMART_PLACEMENT_INFO } from "../../data/smartPlacementLabels";
 import { SMART_PROMPTS_BUILTIN } from "../../data/smartPromptsBuiltIn";
 import type { SavedPrompt, SmartPlacement } from "../../stores/promptLibrary";
 import { SectionCard, SettingRow } from "../SettingsPanel/SettingsPrimitives";
@@ -12,17 +13,6 @@ import { KeyComboCapture } from "./KeyComboCapture";
 import sp from "./SmartPromptEditor.module.css";
 
 const BUILTIN_BY_ID = new Map(SMART_PROMPTS_BUILTIN.map((prompt) => [prompt.id, prompt]));
-// All placements for the checkbox grid
-const ALL_PLACEMENTS: { value: SmartPlacement; label: string }[] = [
-	{ value: "toolbar", label: "Toolbar" },
-	{ value: "command-palette", label: "Command palette" },
-	{ value: "git-changes", label: "Git · Changes" },
-	{ value: "git-branches", label: "Git · Branches" },
-	{ value: "pr-popover", label: "PR popover" },
-	{ value: "issue-popover", label: "Issue popover" },
-	{ value: "terminal-context", label: "Terminal menu" },
-	{ value: "file-context", label: "File menu" },
-];
 
 /** Context variables available for smart prompt templates */
 interface VarDef {
@@ -295,20 +285,20 @@ export const SmartPromptEditor: Component<{
 			</SettingRow>
 
 			{/* Placement */}
-			<SettingRow label="Placement">
+			<SettingRow label="Placement" hint="Where this prompt can be triggered from">
 				{() => (
 					<>
 						<div class={sp.placementGrid}>
-							<For each={ALL_PLACEMENTS}>
+							<For each={ALL_SMART_PLACEMENTS}>
 								{(placement) => (
-									<label class={sp.placementCheck}>
+									<label class={sp.placementCheck} title={SMART_PLACEMENT_INFO[placement].hint}>
 										<input
 											data-setting-id="prompts.prompts.{id}.text"
 											type="checkbox"
-											checked={props.prompt.placement?.includes(placement.value) ?? false}
-											onChange={() => handlePlacementToggle(placement.value)}
+											checked={props.prompt.placement?.includes(placement) ?? false}
+											onChange={() => handlePlacementToggle(placement)}
 										/>
-										<span>{placement.label}</span>
+										<span>{SMART_PLACEMENT_INFO[placement].label}</span>
 									</label>
 								)}
 							</For>
@@ -349,21 +339,25 @@ export const SmartPromptEditor: Component<{
 			</SettingRow>
 
 			<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
-				<SettingRow label="Target">
+				<SettingRow
+				label="Target"
+				hint="Auto reviews in an already-open Compose box, otherwise sends to the terminal; Compose always opens for review; Terminal always sends to the agent and waits for idle"
+			>
 					{(id, descriptionId) => (
 						<div>
 							<Select
 								data-setting-id="prompts.prompts.{id}.text"
 								id={id}
 								aria-describedby={descriptionId()}
-								value={props.prompt.injectTarget ?? "compose"}
+								value={props.prompt.injectTarget ?? "auto"}
 								onChange={(e) => {
 									const val = e.currentTarget.value;
-									if (val === "terminal" || val === "compose") {
+									if (val === "terminal" || val === "compose" || val === "auto") {
 										props.onChange({ injectTarget: val });
 									}
 								}}
 							>
+								<option value="auto">Auto — Compose if open, else Terminal</option>
 								<option value="compose">Compose box (review)</option>
 								<option value="terminal">Terminal (send to agent)</option>
 							</Select>
@@ -375,7 +369,7 @@ export const SmartPromptEditor: Component<{
 			<Show
 				when={
 					(props.prompt.executionMode ?? "inject") === "inject" &&
-					(props.prompt.injectTarget ?? "compose") === "terminal"
+					(props.prompt.injectTarget ?? "auto") !== "compose"
 				}
 			>
 				<SettingRow label="Send immediately">
