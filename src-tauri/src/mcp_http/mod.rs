@@ -828,6 +828,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(worktree_routes::finalize_merged_worktree_http),
         )
         .route(
+            "/worktrees/publish",
+            post(worktree_routes::publish_workspace_http),
+        )
+        .route(
             "/worktrees/run-script",
             post(worktree_routes::run_setup_script_http),
         )

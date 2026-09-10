@@ -1523,6 +1523,16 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			},
 		}),
 	},
+	publish_workspace: {
+		map: (args) => ({
+			method: "POST",
+			path: "/worktrees/publish",
+			body: {
+				repoPath: args.repoPath,
+				workspaceId: args.workspaceId,
+			},
+		}),
+	},
 	checkout_remote_branch: {
 		map: (args) => ({
 			method: "POST",

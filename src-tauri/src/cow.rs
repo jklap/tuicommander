@@ -297,6 +297,143 @@ fn check_creation_guards_inner(
     })
 }
 
+/// A COW workspace as the persisted document describes it.
+///
+/// `git worktree list` in the parent has never heard of a COW clone, so this is
+/// the only record that it exists. It comes from `repositories.json`, which the
+/// backend already owns (`config.rs`, behind the cross-process file lock) and
+/// every client already syncs — rather than a second registry that could
+/// disagree with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CowRecord {
+    pub(crate) workspace_id: String,
+    pub(crate) branch: String,
+    pub(crate) path: PathBuf,
+    pub(crate) parent_repo: PathBuf,
+}
+
+/// Mint an id for a new COW workspace.
+///
+/// Mirrors the frontend's `generateWorkspaceId`: the branch is kept in the id
+/// for legibility in logs and paths, but it is a LABEL — the suffix is what
+/// makes it unique, and a reader that wants the branch reads `branch`. Minted
+/// in Rust because creation happens here: an id invented by whichever client
+/// happened to ask would not exist for the other transports.
+pub(crate) fn mint_workspace_id(branch: &str, taken: &[String]) -> String {
+    let stem = sanitize_for_id(branch);
+    let taken: std::collections::HashSet<&str> = taken.iter().map(String::as_str).collect();
+    // 32 bits collides at about one in four billion, but uniqueness here is a
+    // correctness property — two workspaces sharing an id lose each other's
+    // terminals — so it is checked rather than assumed.
+    for _ in 0..100 {
+        let candidate = format!("{stem}~{:08x}", rand::random::<u32>());
+        if !taken.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    // 100 collisions against the same set is not a thing that happens; if it
+    // did, a nanosecond-suffixed id is still unique and still legible.
+    format!(
+        "{stem}~{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    )
+}
+
+fn sanitize_for_id(branch: &str) -> String {
+    let mut out = String::with_capacity(branch.len());
+    for ch in branch.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    let clipped: String = trimmed.chars().take(60).collect();
+    if clipped.is_empty() {
+        "workspace".to_string()
+    } else {
+        clipped
+    }
+}
+
+/// Every COW workspace `base_repo` owns, according to the persisted document.
+pub(crate) fn cow_workspaces_for(base_repo: &Path) -> Vec<CowRecord> {
+    cow_workspaces_in(&crate::config::load_repositories(), base_repo)
+}
+
+/// [`cow_workspaces_for`] over an explicit document, so the parsing is testable
+/// without touching the user's real config.
+///
+/// Reads the `workspaces` map only. A document still in the pre-migration
+/// `branches` shape contributes nothing, and that is correct rather than a gap:
+/// no COW workspace can exist in a document written before COW workspaces did.
+pub(crate) fn cow_workspaces_in(doc: &serde_json::Value, base_repo: &Path) -> Vec<CowRecord> {
+    let Some(repos) = doc.get("repos").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+
+    let mut records = Vec::new();
+    for (repo_path, repo) in repos {
+        if !same_path(Path::new(repo_path), base_repo) {
+            continue;
+        }
+        let Some(workspaces) = repo
+            .get("workspaces")
+            .and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
+        for (workspace_id, workspace) in workspaces {
+            if workspace.get("kind").and_then(serde_json::Value::as_str) != Some("cow") {
+                continue;
+            }
+            let Some(path) = workspace
+                .get("worktreePath")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            records.push(CowRecord {
+                workspace_id: workspace_id.clone(),
+                branch: workspace
+                    .get("branchName")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(workspace_id)
+                    .to_string(),
+                path: PathBuf::from(path),
+                parent_repo: workspace
+                    .get("parentRepoPath")
+                    .and_then(serde_json::Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(repo_path)),
+            });
+        }
+    }
+    records
+}
+
+/// Two paths naming the same directory, symlinks and trailing slashes aside.
+/// A repo reached as `/Users/x/repo` and as `/Users/x/repo/` is one repo, and a
+/// record filed under either spelling has to be found by the other.
+fn same_path(left: &Path, right: &Path) -> bool {
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    canonical(left) == canonical(right)
+}
+
+/// Is this record still describing something that exists?
+///
+/// The realistic failure is not a hostile document — the user IS the trust
+/// boundary here — it is a stale one: a workspace the user deleted in Finder,
+/// or a directory that moved. Answering "gone" is what lets a caller say so
+/// instead of failing inside git with something unrelated.
+pub(crate) fn cow_record_is_live(record: &CowRecord) -> bool {
+    record.path.join(".git").is_dir()
+}
+
 /// Which mechanism the caller is asking for.
 ///
 /// The caller asks for a WORKSPACE, not a mechanism — so `Auto` is the default
@@ -598,6 +735,222 @@ fn dirty_path_count(repo: &Path) -> usize {
         .run()
         .map(|out| out.stdout.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0)
+}
+
+/// What `publish` did, step by step.
+///
+/// Two steps that fail independently, reported independently: getting the work
+/// into the parent is what makes it reachable at all, and pushing to origin is
+/// what makes it reachable by anyone else. A failure to reach origin must not
+/// read as "publish failed" when the parent already has the commits.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct PublishOutcome {
+    /// The parent's `refs/heads/<branch>` now points at the workspace tip.
+    pub(crate) parent_updated: bool,
+    /// Why it does not, when it does not.
+    pub(crate) parent_error: Option<String>,
+    /// The commit the parent's branch was moved to, or would be.
+    pub(crate) published_commit: Option<String>,
+    pub(crate) origin_pushed: bool,
+    pub(crate) origin_error: Option<String>,
+    /// Set when there was nothing to do — a linked worktree already shares its
+    /// refs with the parent, so "publish" is a question that does not apply.
+    pub(crate) no_op_reason: Option<String>,
+}
+
+/// The ref a publish stages the workspace tip under, inside the parent.
+///
+/// Staging first separates object transfer from ref policy: after this the
+/// commits are IN the parent's object store, so an ancestry check and an
+/// atomic ref update are local operations that cannot half-succeed.
+///
+/// The id cannot go in verbatim. `~` is exactly the character `mint_workspace_id`
+/// uses to mark an id as minted — because git forbids it in a branch name — and
+/// git forbids it in ANY ref name, so a refspec built from a raw id is rejected
+/// with "invalid refspec" before anything is transferred.
+fn staged_ref(workspace_id: &str) -> String {
+    let safe: String = workspace_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("refs/tuic/published/{}", safe.trim_matches('.'))
+}
+
+/// Get a COW workspace's commits into the parent, then out to origin.
+///
+/// A COW clone is an independent repository: its commits exist ONLY there until
+/// this runs. `git merge <branch>` in the parent does not find them — and if a
+/// same-named branch exists in the parent, it silently merges that stale ref
+/// instead, which is the failure this function exists to prevent.
+pub(crate) fn publish_cow_workspace(record: &CowRecord) -> Result<PublishOutcome, String> {
+    if !cow_record_is_live(record) {
+        return Err(format!(
+            "the workspace directory '{}' is gone — nothing to publish",
+            record.path.display()
+        ));
+    }
+
+    let branch = record.branch.clone();
+    validate_branch_name(&branch)?;
+
+    let tip = git_cmd(&record.path)
+        .args(["rev-parse", "HEAD"])
+        .run()
+        .map_err(|e| format!("could not read the workspace's HEAD: {e}"))?
+        .stdout
+        .trim()
+        .to_string();
+
+    let mut outcome = PublishOutcome {
+        published_commit: Some(tip.clone()),
+        ..Default::default()
+    };
+
+    // Step 1: the parent. Fetch into a staging ref rather than straight into
+    // refs/heads/<branch> — one git call cannot both transfer objects and let
+    // us decide the ref policy, and a fetch into a checked-out branch is
+    // refused with an error about the wrong thing.
+    let staged = staged_ref(&record.workspace_id);
+    match git_cmd(&record.parent_repo)
+        .args([
+            "fetch",
+            &record.path.to_string_lossy(),
+            &format!("+refs/heads/{branch}:{staged}"),
+        ])
+        .run()
+    {
+        Ok(_) => match update_parent_branch(&record.parent_repo, &branch, &tip) {
+            Ok(()) => outcome.parent_updated = true,
+            Err(e) => outcome.parent_error = Some(e),
+        },
+        Err(e) => {
+            outcome.parent_error = Some(format!(
+                "could not fetch the workspace into the parent: {e}"
+            ));
+        }
+    }
+
+    // Step 2: origin. Independent of step 1 on purpose — the commits reaching
+    // the parent is worth reporting even when the network is down, and a
+    // failure here must not roll back what already landed.
+    if git_cmd(&record.path)
+        .args(["remote", "get-url", "origin"])
+        .run()
+        .is_err()
+    {
+        outcome.origin_error = Some("the workspace has no 'origin' remote".to_string());
+        return Ok(outcome);
+    }
+    match git_cmd(&record.path)
+        .args([
+            "push",
+            "origin",
+            &format!("refs/heads/{branch}:refs/heads/{branch}"),
+        ])
+        .timeout(crate::git_cli::FETCH_TIMEOUT)
+        .run()
+    {
+        Ok(_) => outcome.origin_pushed = true,
+        Err(e) => outcome.origin_error = Some(format!("could not push to origin: {e}")),
+    }
+
+    Ok(outcome)
+}
+
+/// Move the parent's branch to `tip`, or explain why not.
+///
+/// Fast-forward only. "Update the ref" does not authorise destroying commits:
+/// with two workspaces on one branch a divergent parent branch is the NORMAL
+/// case, and force-updating would silently orphan whichever side published
+/// second. The update is a compare-and-swap against the ref we just checked,
+/// so a publish racing another one fails instead of overwriting it.
+fn update_parent_branch(parent: &Path, branch: &str, tip: &str) -> Result<(), String> {
+    let target = format!("refs/heads/{branch}");
+
+    // A branch checked out in the parent (or in one of its linked worktrees)
+    // must not be moved behind its working tree: the ref would disagree with
+    // the index and the files. Publish is not an implicit checkout.
+    if let Some(where_checked_out) = branch_checkout_location(parent, branch) {
+        return Err(format!(
+            "'{branch}' is checked out at '{where_checked_out}' in the parent, so publishing cannot move it. \
+             The commits are in the parent's object store — switch that checkout to another branch and \
+             publish again, or merge them there yourself."
+        ));
+    }
+
+    let current = git_cmd(parent)
+        .args(["rev-parse", "--verify", "--quiet", &target])
+        .run()
+        .ok()
+        .map(|out| out.stdout.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    match current {
+        None => git_cmd(parent)
+            .args(["update-ref", &target, tip])
+            .run()
+            .map(|_| ())
+            .map_err(|e| format!("could not create '{target}' in the parent: {e}")),
+        Some(old) if old == tip => Ok(()),
+        Some(old) => {
+            let is_ancestor = git_cmd(parent)
+                .args(["merge-base", "--is-ancestor", &old, tip])
+                .run()
+                .is_ok();
+            if !is_ancestor {
+                return Err(format!(
+                    "the parent's '{branch}' is at {} and carries commits this workspace does not have, so \
+                     publishing would lose them. Merge or rebase first.",
+                    &old[..old.len().min(8)]
+                ));
+            }
+            git_cmd(parent)
+                .args(["update-ref", &target, tip, &old])
+                .run()
+                .map(|_| ())
+                .map_err(|e| {
+                    format!("could not fast-forward '{target}' in the parent (it moved underneath us): {e}")
+                })
+        }
+    }
+}
+
+/// Where `branch` is checked out in `parent` or any of its linked worktrees,
+/// if it is. `git worktree list --porcelain` reports the main checkout too, so
+/// one scan answers for both.
+fn branch_checkout_location(parent: &Path, branch: &str) -> Option<String> {
+    let out = git_cmd(parent)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .ok()?;
+    let mut current_path: Option<String> = None;
+    for line in out.stdout.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_path = Some(path.to_string());
+        } else if line.strip_prefix("branch ") == Some(&format!("refs/heads/{branch}")) {
+            return current_path;
+        }
+    }
+    None
+}
+
+/// Refuse anything git would not accept as a branch, before it is pasted into
+/// a refspec.
+fn validate_branch_name(branch: &str) -> Result<(), String> {
+    if branch.is_empty() {
+        return Err("the workspace has no branch to publish".to_string());
+    }
+    git_cmd(Path::new("."))
+        .args(["check-ref-format", "--branch", branch])
+        .run()
+        .map(|_| ())
+        .map_err(|_| format!("'{branch}' is not a valid branch name"))
 }
 
 /// Delete an inherited stale lock — inside the COPY, never in the source.
@@ -1373,6 +1726,287 @@ mod tests {
         assert!(
             !repo.join("only-here.txt").exists(),
             "the commit reached the parent's working tree"
+        );
+    }
+
+    // ── publish ──────────────────────────────────────────────────────────
+
+    /// A COW workspace with `n` commits of its own, and the record that names
+    /// it. Built through the real creation path so publish is tested against a
+    /// clone with the real fixups, not a hand-made directory.
+    fn published_fixture(temp: &TempDir, repo: &Path, branch: &str, commits: usize) -> CowRecord {
+        let dest = temp.path().join(format!("ws-{branch}"));
+        let guards = check_creation_guards(repo, &dest).expect("guards");
+        let workspace = create_cow_workspace(repo, &dest, branch, DirtyPolicy::Inherit, &guards)
+            .expect("clone");
+
+        for i in 0..commits {
+            fs::write(
+                workspace.path.join(format!("work-{i}.txt")),
+                format!("{i}\n"),
+            )
+            .expect("write");
+            git_cmd(&workspace.path)
+                .args(["add", "."])
+                .run()
+                .expect("add");
+            git_cmd(&workspace.path)
+                .args(["commit", "-m", &format!("work {i}")])
+                .run()
+                .expect("commit");
+        }
+
+        CowRecord {
+            workspace_id: format!("{branch}~aaaa1111"),
+            branch: branch.to_string(),
+            path: workspace.path,
+            parent_repo: repo.to_path_buf(),
+        }
+    }
+
+    fn rev(repo: &Path, refname: &str) -> Option<String> {
+        git_cmd(repo)
+            .args(["rev-parse", "--verify", "--quiet", refname])
+            .run()
+            .ok()
+            .map(|out| out.stdout.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    #[test]
+    fn the_parent_cannot_see_the_work_before_publish_and_can_merge_it_after() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 1);
+
+        assert_eq!(
+            rev(&repo, "refs/heads/feature"),
+            None,
+            "the parent must not have the branch before publish — that is what makes it unpublished"
+        );
+
+        let outcome = publish_cow_workspace(&record).expect("publish runs");
+
+        assert!(outcome.parent_updated, "{:?}", outcome.parent_error);
+        assert_eq!(
+            rev(&repo, "refs/heads/feature").as_deref(),
+            outcome.published_commit.as_deref()
+        );
+        // And the parent can actually merge it, which is the point.
+        git_cmd(&repo)
+            .args(["merge", "feature", "--no-edit"])
+            .run()
+            .expect("the parent can merge the published branch");
+        assert!(repo.join("work-0.txt").exists());
+    }
+
+    /// The failure mode publish exists to prevent: a same-named branch already
+    /// in the parent, which `git merge` would silently take instead.
+    #[test]
+    fn publish_fast_forwards_a_stale_same_named_branch_in_the_parent() {
+        let (temp, repo, _dest_parent) = setup();
+        // The parent already has `feature`, pointing at the commit the
+        // workspace was cloned from — stale, but present.
+        git_cmd(&repo)
+            .args(["branch", "feature"])
+            .run()
+            .expect("branch");
+        let stale = rev(&repo, "refs/heads/feature").expect("stale ref");
+        let record = published_fixture(&temp, &repo, "feature", 1);
+
+        let outcome = publish_cow_workspace(&record).expect("publish runs");
+
+        assert!(outcome.parent_updated, "{:?}", outcome.parent_error);
+        let updated = rev(&repo, "refs/heads/feature").expect("ref");
+        assert_ne!(updated, stale, "the parent is still on the stale commit");
+        assert_eq!(Some(updated), outcome.published_commit);
+    }
+
+    /// Two workspaces on one branch both committing makes a divergent parent
+    /// branch normal, not exotic. Publishing must refuse rather than orphan
+    /// whichever side went second.
+    #[test]
+    fn publish_refuses_to_move_a_parent_branch_that_has_its_own_commits() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 1);
+
+        // The parent gains its own `feature` with a different commit.
+        git_cmd(&repo)
+            .args(["checkout", "-b", "feature"])
+            .run()
+            .expect("branch");
+        fs::write(repo.join("parent-side.txt"), "parent\n").expect("write");
+        git_cmd(&repo).args(["add", "."]).run().expect("add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "parent-side work"])
+            .run()
+            .expect("commit");
+        let parent_tip = rev(&repo, "refs/heads/feature").expect("ref");
+        // Move off it, so this test is about divergence and not about the
+        // checked-out guard below.
+        git_cmd(&repo)
+            .args(["checkout", "--detach"])
+            .run()
+            .expect("detach");
+
+        let outcome = publish_cow_workspace(&record).expect("publish reports rather than throwing");
+
+        assert!(!outcome.parent_updated);
+        assert!(
+            outcome
+                .parent_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("would lose them"),
+            "{:?}",
+            outcome.parent_error
+        );
+        assert_eq!(
+            rev(&repo, "refs/heads/feature"),
+            Some(parent_tip),
+            "the parent's commits were orphaned"
+        );
+    }
+
+    /// Moving a ref behind its own working tree would leave the branch
+    /// disagreeing with the index and the files. Publish is not an implicit
+    /// checkout, so it stages the objects and says so.
+    #[test]
+    fn publish_refuses_to_move_a_branch_the_parent_has_checked_out() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 1);
+        git_cmd(&repo)
+            .args(["checkout", "-b", "feature"])
+            .run()
+            .expect("checkout");
+
+        let outcome = publish_cow_workspace(&record).expect("publish reports rather than throwing");
+
+        assert!(!outcome.parent_updated);
+        assert!(
+            outcome
+                .parent_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("checked out"),
+            "{:?}",
+            outcome.parent_error
+        );
+        // The objects DID arrive: the staged ref is what makes the failure
+        // recoverable without a second transfer.
+        assert!(
+            rev(&repo, &staged_ref(&record.workspace_id)).is_some(),
+            "the staged ref is missing, so the commits never reached the parent"
+        );
+    }
+
+    /// The two steps report independently: no origin is not a failed publish.
+    #[test]
+    fn a_missing_origin_does_not_undo_the_parent_side_of_a_publish() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 1);
+
+        let outcome = publish_cow_workspace(&record).expect("publish runs");
+
+        assert!(outcome.parent_updated, "{:?}", outcome.parent_error);
+        assert!(!outcome.origin_pushed);
+        assert!(
+            outcome
+                .origin_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("origin"),
+            "{:?}",
+            outcome.origin_error
+        );
+        assert!(
+            rev(&repo, "refs/heads/feature").is_some(),
+            "the parent update was rolled back"
+        );
+    }
+
+    #[test]
+    fn publishing_a_workspace_whose_directory_is_gone_says_so() {
+        let (temp, repo, _dest_parent) = setup();
+        let record = published_fixture(&temp, &repo, "feature", 1);
+        fs::remove_dir_all(&record.path).expect("remove");
+
+        let err = publish_cow_workspace(&record).expect_err("must not pretend to publish");
+        assert!(err.contains("gone"), "{err}");
+    }
+
+    // ── reading COW records out of the persisted document ────────────────
+
+    #[test]
+    fn cow_records_are_read_from_the_workspaces_map_and_filtered_by_kind() {
+        let doc = serde_json::json!({
+            "repos": {
+                "/repo": {
+                    "path": "/repo",
+                    "workspaces": {
+                        "main": { "branchName": "main", "kind": "main", "worktreePath": "/repo" },
+                        "feature": { "branchName": "feature", "kind": "worktree", "worktreePath": "/repo__wt/feature" },
+                        "feature~aaaa1111": {
+                            "branchName": "feature",
+                            "kind": "cow",
+                            "worktreePath": "/repo__cow/feature-1",
+                            "parentRepoPath": "/repo"
+                        }
+                    }
+                },
+                "/other": {
+                    "path": "/other",
+                    "workspaces": {
+                        "x~bbbb2222": { "branchName": "x", "kind": "cow", "worktreePath": "/other__cow/x" }
+                    }
+                }
+            }
+        });
+
+        let records = cow_workspaces_in(&doc, Path::new("/repo"));
+
+        assert_eq!(
+            records.len(),
+            1,
+            "only the cow row of THIS repo: {records:?}"
+        );
+        assert_eq!(records[0].workspace_id, "feature~aaaa1111");
+        assert_eq!(records[0].branch, "feature");
+        assert_eq!(records[0].path, PathBuf::from("/repo__cow/feature-1"));
+    }
+
+    /// A document written before COW workspaces existed keys its rows under
+    /// `branches`. Reading nothing from it is correct, not a gap: no COW
+    /// workspace can be described by a document that predates them.
+    #[test]
+    fn a_pre_migration_document_yields_no_cow_records() {
+        let doc = serde_json::json!({
+            "repos": {
+                "/repo": {
+                    "path": "/repo",
+                    "branches": {
+                        "main": { "name": "main", "isMain": true, "worktreePath": null }
+                    }
+                }
+            }
+        });
+
+        assert!(cow_workspaces_in(&doc, Path::new("/repo")).is_empty());
+    }
+
+    #[test]
+    fn a_minted_id_is_legible_keeps_the_branch_as_a_label_and_avoids_collisions() {
+        let id = mint_workspace_id("feature/shared identity", &[]);
+        assert!(id.starts_with("feature-shared-identity~"), "{id}");
+        assert!(!id.contains('/'), "an id ends up in logs and paths: {id}");
+
+        // The stem is a label; uniqueness comes from the suffix, and it is
+        // checked rather than assumed.
+        let taken = vec![id.clone()];
+        assert_ne!(mint_workspace_id("feature/shared identity", &taken), id);
+
+        assert_eq!(
+            mint_workspace_id("///", &[]).split('~').next(),
+            Some("workspace")
         );
     }
 

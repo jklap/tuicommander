@@ -1884,6 +1884,41 @@ other's directory (#726-5ac7). For a git worktree the id **is** the branch (the
 identity migration), so nothing persisted moves; only a COW clone carries a
 minted id. Nothing may parse the id back into a branch: read the `branch` field.
 
+### Publish Workspace
+
+```
+POST /worktrees/publish
+Content-Type: application/json
+
+{ "repoPath": "/path", "workspaceId": "feature-x~a1b2c3d4" }
+```
+
+Gets a workspace's commits into the parent repo and out to origin. Identical
+shape and identical response to the `publish_workspace` Tauri command — one
+implementation (`worktree::publish_workspace_impl`) behind both.
+
+```json
+{
+  "parent_updated": true,
+  "parent_error": null,
+  "published_commit": "9f2a...",
+  "origin_pushed": false,
+  "origin_error": "the workspace has no 'origin' remote",
+  "no_op_reason": null
+}
+```
+
+The two steps report independently: the commits reaching the parent is worth
+knowing even when origin is unreachable, and a failure there never rolls back
+what already landed. The parent's branch is moved **fast-forward only** — with
+two workspaces on one branch a divergent parent branch is normal, and forcing
+would orphan whichever side published second. A branch the parent has checked
+out is refused too, with the objects already staged under
+`refs/tuic/published/<workspace-id>` so a retry costs no transfer.
+
+`no_op_reason` is set for a linked worktree, whose refs are shared with the
+parent already.
+
 ### Generate Worktree Name
 
 ```

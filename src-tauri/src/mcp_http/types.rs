@@ -413,6 +413,16 @@ pub(super) struct FinalizeMergeRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct PublishWorkspaceRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    /// Which workspace's commits to publish. Addressed by id: a COW clone is
+    /// invisible to `git worktree list`, so the id is the only handle on it.
+    #[serde(rename = "workspaceId")]
+    pub workspace_id: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct CheckoutRemoteRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,

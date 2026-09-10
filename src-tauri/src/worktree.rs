@@ -409,6 +409,92 @@ pub(crate) fn create_worktree_with_stale_recovery(
     }
 }
 
+/// One workspace, resolved to the mechanism that built it.
+///
+/// Typed rather than a bare path because the two mechanisms need completely
+/// different lifecycle handling and the difference is invisible from the path
+/// alone. `git worktree remove` on a COW clone fails with "not a working tree",
+/// which `remove_worktree_internal` treats as "already gone" and follows with
+/// an unconditional `remove_dir_all` — so an untyped resolver would delete an
+/// independent repository, and its unpublished commits, without ever reaching
+/// the guard that exists to stop that.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolvedWorkspace {
+    /// The main checkout or a linked worktree: `git worktree list` knows it,
+    /// and its refs live in the parent.
+    Worktree(WorkspaceWorktree),
+    /// An independent clone. Only `repositories.json` knows it exists.
+    Cow(crate::cow::CowRecord),
+}
+
+/// Resolve `workspace_id` against BOTH sources: git's own worktree list and the
+/// COW records in the persisted document.
+///
+/// An id present in both is an error rather than a winner. The two id spaces
+/// are disjoint by construction — a linked worktree's id is its branch, a COW
+/// clone's is minted with a `~` suffix — so an overlap means a hand-edited or
+/// corrupt record, and picking one silently is how the wrong directory gets
+/// deleted.
+pub(crate) fn resolve_any_workspace(
+    base_repo: &Path,
+    workspace_id: &str,
+) -> Result<ResolvedWorkspace, String> {
+    let from_git = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .ok()
+        .and_then(|out| map_worktree_workspace_paths(&out.stdout).remove(workspace_id));
+
+    let from_records = crate::cow::cow_workspaces_for(base_repo)
+        .into_iter()
+        .find(|record| record.workspace_id == workspace_id);
+
+    match (from_git, from_records) {
+        (Some(_), Some(_)) => Err(format!(
+            "workspace id '{workspace_id}' names both a git worktree and a COW workspace in '{}' — \
+             refusing to guess which one you meant",
+            base_repo.display()
+        )),
+        (Some(worktree), None) => Ok(ResolvedWorkspace::Worktree(worktree)),
+        (None, Some(record)) => Ok(ResolvedWorkspace::Cow(record)),
+        (None, None) => Err(format!(
+            "No workspace found for id '{workspace_id}' in '{}'",
+            base_repo.display()
+        )),
+    }
+}
+
+/// Get a workspace's commits into the parent repo and out to origin.
+///
+/// A no-op for a linked worktree, which shares its refs with the parent
+/// already — and says so, rather than reporting a success that did nothing.
+pub(crate) fn publish_workspace_impl(
+    repo_path: &str,
+    workspace_id: &str,
+) -> Result<crate::cow::PublishOutcome, String> {
+    match resolve_any_workspace(Path::new(repo_path), workspace_id)? {
+        ResolvedWorkspace::Cow(record) => crate::cow::publish_cow_workspace(&record),
+        ResolvedWorkspace::Worktree(_) => Ok(crate::cow::PublishOutcome {
+            no_op_reason: Some(
+                "this is a linked worktree: its refs and objects are shared with the parent \
+                 repository, so its commits are already visible there. There is nothing to publish."
+                    .to_string(),
+            ),
+            ..Default::default()
+        }),
+    }
+}
+
+/// Tauri command: publish a workspace.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn publish_workspace(
+    repo_path: String,
+    workspace_id: String,
+) -> Result<crate::cow::PublishOutcome, String> {
+    publish_workspace_impl(&repo_path, &workspace_id)
+}
+
 /// A workspace, however it was built.
 ///
 /// One type for both mechanisms on purpose: the caller asked for a workspace,
@@ -5218,6 +5304,160 @@ branch refs/heads/feat
                 .contains("inside the source repository"),
             "{:?}",
             created.degraded_reason
+        );
+    }
+
+    // ── resolving an id against both sources, and publish ────────────────
+
+    /// Point the config dir at a temp dir holding `doc`, so a resolver test
+    /// reads a document we control instead of the user's real one.
+    fn with_repositories_document(doc: serde_json::Value) -> (impl Drop, TempDir) {
+        let config = TempDir::new().expect("config dir");
+        fs::write(
+            config.path().join("repositories.json"),
+            serde_json::to_string_pretty(&doc).expect("serialize"),
+        )
+        .expect("write");
+        let guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        (guard, config)
+    }
+
+    #[test]
+    fn an_id_git_knows_resolves_to_a_worktree() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "resolvable"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("worktree");
+        let (_guard, _config) = with_repositories_document(serde_json::json!({ "repos": {} }));
+
+        match resolve_any_workspace(&repo, "resolvable").expect("resolves") {
+            ResolvedWorkspace::Worktree(worktree) => {
+                assert_eq!(PathBuf::from(worktree.path), created.path);
+                assert_eq!(worktree.branch, "resolvable");
+            }
+            other => panic!("expected a linked worktree, got {other:?}"),
+        }
+    }
+
+    /// A COW clone is invisible to `git worktree list`, so the persisted
+    /// document is the only thing that knows it exists.
+    #[test]
+    fn an_id_only_the_document_knows_resolves_to_a_cow_workspace() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "cloned"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow");
+        assert_eq!(created.kind, WorkspaceKind::Cow);
+        assert!(
+            git_cmd(&repo)
+                .args(["worktree", "list", "--porcelain"])
+                .run()
+                .expect("list")
+                .stdout
+                .lines()
+                .all(|line| !line.contains("cloned")),
+            "git must not report the clone — that is the whole reason for the document"
+        );
+
+        let (_guard, _config) = with_repositories_document(serde_json::json!({
+            "repos": {
+                repo.to_string_lossy(): {
+                    "path": repo.to_string_lossy(),
+                    "workspaces": {
+                        "cloned~aaaa1111": {
+                            "branchName": "cloned",
+                            "kind": "cow",
+                            "worktreePath": created.path.to_string_lossy(),
+                            "parentRepoPath": repo.to_string_lossy(),
+                        }
+                    }
+                }
+            }
+        }));
+
+        match resolve_any_workspace(&repo, "cloned~aaaa1111").expect("resolves") {
+            ResolvedWorkspace::Cow(record) => {
+                assert_eq!(record.path, created.path);
+                assert_eq!(record.branch, "cloned");
+            }
+            other => panic!("expected a cow workspace, got {other:?}"),
+        }
+    }
+
+    /// The two id spaces are disjoint by construction, so an overlap means a
+    /// corrupt record — and picking one silently is how the wrong directory
+    /// gets deleted.
+    #[test]
+    fn an_id_both_sources_claim_is_an_error_rather_than_a_winner() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "contested"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("worktree");
+
+        let (_guard, _config) = with_repositories_document(serde_json::json!({
+            "repos": {
+                repo.to_string_lossy(): {
+                    "path": repo.to_string_lossy(),
+                    "workspaces": {
+                        "contested": {
+                            "branchName": "contested",
+                            "kind": "cow",
+                            "worktreePath": created.path.to_string_lossy(),
+                        }
+                    }
+                }
+            }
+        }));
+
+        let err = resolve_any_workspace(&repo, "contested").expect_err("must refuse");
+        assert!(err.contains("refusing to guess"), "{err}");
+    }
+
+    /// A linked worktree shares its refs with the parent, so publishing is a
+    /// question that does not apply — and saying that is not the same as
+    /// reporting a success that did nothing.
+    #[test]
+    fn publishing_a_linked_worktree_is_a_no_op_that_says_why() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "shared-refs"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("worktree");
+        let (_guard, _config) = with_repositories_document(serde_json::json!({ "repos": {} }));
+
+        let outcome =
+            publish_workspace_impl(&repo.to_string_lossy(), "shared-refs").expect("no-op");
+
+        assert!(!outcome.parent_updated);
+        assert!(!outcome.origin_pushed);
+        assert_eq!(outcome.parent_error, None, "a no-op is not a failure");
+        assert!(
+            outcome
+                .no_op_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("nothing to publish"),
+            "{:?}",
+            outcome.no_op_reason
         );
     }
 
