@@ -3827,7 +3827,7 @@ fn handle_session(
                 return serde_json::json!({"error": msg});
             }
             // Same core as HTTP resize_session: grid before SIGWINCH, same-dims no-op.
-            match crate::pty::resize_session_core(state, session_id, rows, cols) {
+            match crate::pty::resize_session_core(state, session_id, rows, cols, None, None) {
                 Ok(Some(frame)) => crate::pty::send_grid_frame(state, session_id, frame),
                 Ok(None) => {}
                 Err(e) if e.starts_with("Session not found") => {

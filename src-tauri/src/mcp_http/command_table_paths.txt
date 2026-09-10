@@ -304,6 +304,8 @@
 /sessions/x/terminal/cursor-line
 /sessions/x/terminal/hyperlink
 /sessions/x/terminal/hyperlink-span
+/sessions/x/terminal/image
+/sessions/x/terminal/image-ref
 /sessions/x/terminal/lines
 /sessions/x/terminal/logical-line
 /sessions/x/terminal/request-frame
