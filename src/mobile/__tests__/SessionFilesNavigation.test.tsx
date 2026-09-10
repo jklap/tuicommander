@@ -41,6 +41,7 @@ vi.mock("../components/TerminalKeybar", () => ({ TerminalKeybar: () => <div /> }
 vi.mock("../screens/MobileChatScreen", () => ({ MobileChatScreen: () => <div /> }));
 vi.mock("../components/MobileToastContainer", () => ({ MobileToastContainer: () => <div /> }));
 vi.mock("../../components/McpConfirmHost/McpConfirmHost", () => ({ McpConfirmHost: () => <div /> }));
+vi.mock("../../components/PtyOpenUrlHost/PtyOpenUrlHost", () => ({ PtyOpenUrlHost: () => null }));
 
 function session(cwd: string | null, worktreePath: string | null = null): SessionInfo {
 	return {
