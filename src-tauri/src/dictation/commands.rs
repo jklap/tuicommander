@@ -820,7 +820,10 @@ mod tests {
         // Accented dictation: 3 characters, 4 bytes on the composed side. A byte
         // ratio would report the final pass as having lost text it kept.
         let ratio = transcription_ratio("città", "città").expect("both sides present");
-        assert!((ratio - 1.0).abs() < 1e-9, "identical text is 1.0, got {ratio}");
+        assert!(
+            (ratio - 1.0).abs() < 1e-9,
+            "identical text is 1.0, got {ratio}"
+        );
     }
 
     /// A final pass that lost a whole window trips the warning.

@@ -3050,7 +3050,9 @@ impl AppState {
         let session_id = self.resolve_session_ref(reference)?;
         self.peer_agents
             .iter()
-            .find(|entry| self.live_pty_for_peer(entry.key()).as_deref() == Some(session_id.as_str()))
+            .find(|entry| {
+                self.live_pty_for_peer(entry.key()).as_deref() == Some(session_id.as_str())
+            })
             .map(|entry| entry.key().clone())
     }
 

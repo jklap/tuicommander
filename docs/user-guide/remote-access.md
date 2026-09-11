@@ -237,13 +237,39 @@ chmod +x tuic-remote
 
 ### Setup
 
-Set a password before first use:
+Set a password before first use. Omit `--instance` to use the existing default
+TUICommander configuration and credential vault:
 
 ```bash
 ./tuic-remote --set-password
 ```
 
-This stores a bcrypt hash in the TUICommander config directory (`~/.config/tuicommander/` on Linux).
+For an isolated daemon, pass the same named instance to password setup and every
+subsequent launch:
+
+```bash
+./tuic-remote --instance build-host --set-password
+./tuic-remote --instance build-host
+```
+
+An instance ID is one lowercase ASCII DNS label: 1–63 characters, letters or
+digits at both ends, with hyphens allowed internally. `default` is reserved;
+omit the option to select the default instance. Invalid IDs fail before any
+configuration or credentials are accessed.
+
+The default instance keeps the platform paths listed in
+[Configuration](../backend/config.md#config-directory) and the existing OS
+keyring entry. A named instance instead stores files in the corresponding
+`instances/<id>/` subdirectory and uses keyring service
+`tuicommander-instance-<id>`, user `vault`. It starts empty: it never falls back
+to, imports, changes, or deletes default or legacy files and credentials. In a
+release build the OS keyring is mandatory; if a named instance's vault cannot be
+opened, the daemon exits before binding its network socket.
+
+Automation that depends on this isolation contract must pin and verify the
+digest of the release artifact it launches. Artifact verification belongs to
+the consuming harness; `tuic-remote` does not expose a separate capability or
+version endpoint for it.
 
 ### Running
 
@@ -253,6 +279,9 @@ This stores a bcrypt hash in the TUICommander config directory (`~/.config/tuico
 
 # Custom port
 TUIC_PORT=8080 ./tuic-remote
+
+# Named instance, with the same port override
+TUIC_PORT=8080 ./tuic-remote --instance build-host
 ```
 
 The daemon binds to `0.0.0.0:<port>` and serves:
@@ -262,12 +291,18 @@ The daemon binds to `0.0.0.0:<port>` and serves:
 
 ### TLS
 
-Configure TLS via the TUICommander config file (`~/.config/tuicommander/config.toml`):
+Configure TLS in the instance's `config.json` under `services.tls`:
 
-```toml
-[services.tls]
-cert_path = "/path/to/cert.pem"
-key_path = "/path/to/key.pem"
+```json
+{
+  "services": {
+    "tls": {
+      "mode": "manual",
+      "cert_path": "/path/to/cert.pem",
+      "key_path": "/path/to/key.pem"
+    }
+  }
+}
 ```
 
 ### Differences from Desktop Remote Access

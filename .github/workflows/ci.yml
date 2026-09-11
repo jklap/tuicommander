@@ -179,9 +179,12 @@ jobs:
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
         run: cargo test --doc
 
-  # Verify tuic-remote compiles without the desktop feature (catches missing cfg gates)
+  # Verify tuic-remote compiles without the desktop feature (catches missing cfg
+  # gates) AND run the headless test suite. The `#[cfg(not(feature = "desktop"))]`
+  # tests — headless router refusals and the named-instance CLI contract — exist
+  # only in this configuration, so nothing else in CI ever executes them.
   check-remote:
-    timeout-minutes: 30
+    timeout-minutes: 45
     name: Remote daemon (no-default-features)
     runs-on: ubuntu-22.04
     steps:
@@ -205,6 +208,9 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Check tuic-remote
         working-directory: src-tauri
         env:
@@ -217,6 +223,19 @@ jobs:
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
         run: cargo check --no-default-features --bin tuic-remote
+
+      - name: Headless tests
+        working-directory: src-tauri
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+          CARGO_INCREMENTAL: "0"
+          CMAKE_C_COMPILER_LAUNCHER: "sccache"
+          CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
+          CMAKE_C_FLAGS: '-fPIC'
+          CMAKE_CXX_FLAGS: '-fPIC'
+          RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
+        run: cargo nextest run --no-default-features --profile ci
 
   # Push to main only: verify build on macOS and Windows.
   # GPU notes:

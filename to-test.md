@@ -1502,3 +1502,26 @@ fields that answered a question nobody asked.
 6. [ ] **Reading a dead session still works.** Let a session's process exit, then call
    `session action=output` on it. It must return the buffered output, not
    `Unknown session` — resolution falls through for a reference it cannot resolve.
+
+## Named `tuic-remote` application instances (story `736-0afd`, 2026-09-11) — **Rust, needs a `make dev` restart**
+
+`tuic-remote --instance <id>` now picks a separate config directory and OS-keyring
+vault before it touches any state. The default path through `config_dir()` and the
+credential vault moved behind the same seam, so the desktop app must be checked for
+regressions even though it has no `--instance` flag.
+
+1. [ ] **The desktop app still reads its own config.** After the restart, settings,
+   repositories, GitHub token and MCP upstream credentials are all still there —
+   `config_dir()` now goes through `app_instance`, and the default branch must
+   resolve to the same platform directory as before.
+2. [ ] **A named daemon starts empty and stays isolated.** Build the headless binary
+   (`cargo build --bin tuic-remote --no-default-features`), run
+   `./tuic-remote --instance build-host --set-password`, and check that
+   `<platform config>/com.tuic.commander/instances/build-host/config.json` appears
+   while the default `config.json` is untouched. A macOS Keychain entry must be
+   created for service `tuicommander-instance-build-host`, not `tuicommander`.
+3. [ ] **The password is per instance.** The password set for `build-host` must not
+   log you into the default daemon, and vice versa.
+4. [ ] **An invalid id fails loudly.** `./tuic-remote --instance Work-Laptop` and
+   `--instance default` both exit 1 with `Invalid application instance …` and never
+   bind the port.

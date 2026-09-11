@@ -128,6 +128,7 @@ pub(super) struct ScoredSegment {
 }
 
 impl ScoredSegment {
+    #[cfg(test)]
     pub(super) fn new(text: &str, no_speech_probability: f32) -> Self {
         Self {
             text: text.to_string(),

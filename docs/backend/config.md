@@ -15,8 +15,27 @@ Manages all application configuration as JSON files in the platform config direc
 Legacy paths `{platform_config}/tuicommander/`, `{platform_config}/tui-commander/`
 and `~/.tuicommander/` are auto-migrated on first launch.
 
-**Debug and release builds share this one directory** — `config_dir()` never
-branches on `cfg!(debug_assertions)`. The single-instance lock is release-only
+`tuic-remote --instance <id>` selects an isolated named namespace at process
+bootstrap. Named files live below the platform path above at
+`instances/<id>/`; the default instance keeps the paths in the table unchanged.
+The ID is a 1–63 character lowercase ASCII DNS label (alphanumeric ends,
+internal hyphens allowed), and `default` is reserved. A named instance never
+runs the default or legacy file migrations and never falls back to those
+locations when its own files are absent.
+
+The credential namespace follows the same immutable selection. The default
+vault remains keyring service `tuicommander`, user `vault`; a named instance
+uses service `tuicommander-instance-<id>`, user `vault`. Named instances never
+scan, import, modify, or delete default or legacy credential entries, including
+the dynamic legacy MCP credential locations. Release `tuic-remote` probes a
+named vault before binding its socket and exits on failure; it does not interpret
+a keyring error as an empty vault or fall back to a file. Debug builds retain the
+file-backed credential adapter, scoped below the selected instance directory.
+Instance selection precedes `--set-password`, so password setup writes only to
+the selected namespace.
+
+**For the default instance, debug and release builds share this one directory**
+— `config_dir()` never branches on `cfg!(debug_assertions)`. The single-instance lock is release-only
 (`lib.rs`, `#[cfg(not(debug_assertions))]`), so a `make dev` build runs happily
 alongside the installed app, and both read and write the exact same
 `config.json`, `repositories.json`, and every other file below. What makes that

@@ -317,6 +317,22 @@ Repository state is persisted by the Rust backend in `repositories.json`, in
 the single platform config directory shared by debug and release builds,
 written through the locked/atomic `ConfigFile` path.
 
+At bootstrap, `tuic-remote` may select one immutable named application instance
+with `--instance <id>`. Omitting it preserves the existing platform config path,
+keyring tuple (`tuicommander`/`vault`), and migrations. A named ID is a lowercase
+ASCII DNS label of 1–63 characters with alphanumeric ends and internal hyphens;
+`default` is reserved. Its files live below
+`<platform-app-config>/instances/<id>/` and its vault uses
+`tuicommander-instance-<id>`/`vault`. Named state never falls back to or migrates
+default/legacy state. Selection occurs before `--set-password` or persistence,
+and an invalid ID or unavailable named release vault terminates before network
+bind. Runtime switching is unsupported.
+
+Production black-box consumers pin and verify the digest of the exact
+`tuic-remote` artifact they launch. That consumer-side artifact identity is the
+capability proof for this contract; the daemon exposes no additional capability
+or version endpoint.
+
 Ordinary `config.json` and `mcp-upstreams.json` mutations use delta-under-lock
 semantics: after taking the cross-process file lock, the backend reloads the
 latest document and applies only the caller's changed fields or server-ID

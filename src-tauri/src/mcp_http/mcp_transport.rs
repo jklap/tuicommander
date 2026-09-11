@@ -2581,10 +2581,7 @@ fn handle_session(
                     insert_optional_value(
                         object,
                         "tuic_session",
-                        tuic_by_pty
-                            .get(&id)
-                            .cloned()
-                            .map(serde_json::Value::String),
+                        tuic_by_pty.get(&id).cloned().map(serde_json::Value::String),
                     );
                     insert_optional_value(
                         object,
@@ -8394,7 +8391,13 @@ mod tests {
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
 
         // Every field a pre-task client already read, with its original type.
-        for key in ["session_id", "name", "monitor_with", "status_with", "wait_with"] {
+        for key in [
+            "session_id",
+            "name",
+            "monitor_with",
+            "status_with",
+            "wait_with",
+        ] {
             assert!(
                 spawned[key].is_string(),
                 "{key} must still be a string: {spawned}"
@@ -16158,6 +16161,7 @@ mod tests {
 
     // ---- ui(action=screenshot) -------------------------------------------------
 
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn ui_screenshot_requires_id() {
         let state = test_state();
@@ -16176,6 +16180,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn ui_screenshot_times_out_without_frontend() {
         let state = test_state();
@@ -16194,6 +16199,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn ui_screenshot_channel_delivers_result() {
         let state = test_state();
@@ -16254,6 +16260,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn ui_screenshot_non_loopback_rejected() {
         let state = test_state();
@@ -16270,6 +16277,24 @@ mod tests {
         assert!(
             err.contains("localhost"),
             "Non-loopback should be rejected, got: {err}"
+        );
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn ui_screenshot_is_refused_without_desktop() {
+        let state = test_state();
+        let r = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "ui",
+            &serde_json::json!({ "action": "screenshot", "id": "x" }),
+            None,
+        )
+        .await;
+        assert_eq!(
+            r["error"].as_str(),
+            Some("Action 'screenshot' requires desktop feature")
         );
     }
 
@@ -16633,15 +16658,19 @@ mod tests {
         session_id: &str,
         mcp_session_id: Option<&str>,
     ) -> serde_json::Map<String, serde_json::Value> {
-        handle_session(state, &serde_json::json!({"action": "list"}), mcp_session_id)
-            .as_array()
-            .expect("session list is an array")
-            .iter()
-            .find(|entry| entry["session_id"] == session_id)
-            .unwrap_or_else(|| panic!("{session_id} missing from session list"))
-            .as_object()
-            .expect("session list entry is an object")
-            .clone()
+        handle_session(
+            state,
+            &serde_json::json!({"action": "list"}),
+            mcp_session_id,
+        )
+        .as_array()
+        .expect("session list is an array")
+        .iter()
+        .find(|entry| entry["session_id"] == session_id)
+        .unwrap_or_else(|| panic!("{session_id} missing from session list"))
+        .as_object()
+        .expect("session list entry is an object")
+        .clone()
     }
 
     /// A desktop tab persists its own `$TUIC_SESSION`, which is NOT the key the
@@ -16657,7 +16686,10 @@ mod tests {
             return;
         };
         let tab_uuid = "550e8400-e29b-41d4-a716-4466554417a0";
-        assert_ne!(tab_uuid, session_id, "the two ids must differ for this test");
+        assert_ne!(
+            tab_uuid, session_id,
+            "the two ids must differ for this test"
+        );
         state.bind_live_pty(tab_uuid, &session_id);
         apply_initialize_identity(&state, "caller-mcp-alias", Some(tab_uuid));
 
@@ -16746,11 +16778,7 @@ mod tests {
             );
         }
 
-        let missing = handle_session(
-            &state,
-            &serde_json::json!({"action": "status"}),
-            None,
-        );
+        let missing = handle_session(&state, &serde_json::json!({"action": "status"}), None);
         let error = missing["error"].as_str().unwrap_or_default();
         assert!(
             error.contains("alias"),

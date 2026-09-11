@@ -518,7 +518,7 @@ async fn inject_localhost_connect_info(
 /// Kept honest by `api_prefixes_cover_every_registered_route`, which reads the
 /// route literals out of this file — a new family added here without a matching
 /// entry fails that test instead of quietly serving HTML again.
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "desktop", test))]
 const API_PREFIXES: &[&str] = &[
     "acp",
     "agent",
@@ -2493,6 +2493,7 @@ mod tests {
     /// registered, not that it accepts the method the table declares. Probing
     /// the declared method would run the handler, which is what the technique
     /// exists to avoid.
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn command_table_paths_all_hit_a_registered_route() {
         const PATHS: &str = include_str!("command_table_paths.txt");
@@ -2538,6 +2539,33 @@ mod tests {
             "COMMAND_TABLE paths with no registered route: {unrouted:#?}\n\
              Every entry needs an axum route (AGENTS.md → IPC/HTTP Parity)."
         );
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn desktop_only_command_table_paths_are_refused_by_headless_router() {
+        let state = test_state();
+        let app = build_router(state, false, true);
+        for path in [
+            "/ai/triage/run",
+            "/dictation/status",
+            "/github/accounts",
+            "/repo/create-issue-from-proposal",
+            "/system/check-update",
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PATCH")
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path} should 404");
+        }
     }
 
     #[tokio::test]
@@ -4597,6 +4625,7 @@ mod tests {
 
     // --- Static file serving tests ---
 
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn test_serve_index_html() {
         let state = test_state();
@@ -4688,6 +4717,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn test_spa_fallback() {
         let state = test_state();
@@ -4713,6 +4743,22 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn headless_router_refuses_embedded_frontend_and_spa_paths() {
+        let state = test_state();
+        let app = build_router(state, false, true);
+        for path in ["/", "/some/unknown/spa/route", "/settings"] {
+            let resp = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path} should 404");
+        }
+    }
+
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn unknown_api_path_404s_while_spa_deep_links_still_load() {
         // A path under an API prefix that matched no route is a missing route,
