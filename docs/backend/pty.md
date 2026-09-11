@@ -444,6 +444,31 @@ implement the protocol itself.
   (`t=d/f/t/s`), `o=z` zlib compression, `m=` chunking,
   `i=`/`p=`/`c=`/`r=`/`z=`/`C=`/`q=`, and the capability-probe response —
   see `kitty.rs`'s own module doc comment for exactly what's implemented.
+- **Decode runs off the `vt_log` lock** (2026-09-11): cell reservation
+  (footprint sizing, cursor advance) still happens synchronously inside
+  `Term::process`, exactly as before — every real target tool (mpv, timg,
+  blackcat: raw `f=24`/`f=32` with explicit `c=`/`r=`/`s=`/`v=`) can compute
+  its footprint from control fields alone, never decoded bytes. Only the
+  actual decode (base64, zlib inflate, file/shared-memory reads) is deferred:
+  `kitty_process` queues a `PendingKittyDecodeJob` against a placeholder
+  `ImageData` (its `bytes` field is `OnceLock`-backed — `pending()`/
+  `complete_bytes()`/`mark_failed()`) instead of decoding inline, and
+  `pty.rs::process_chunk` resolves queued jobs in its existing lock-free
+  interlude (right where `PtyWrite` replies are already flushed), writing the
+  deferred OK/error reply and firing a new `image-decoded` event so the
+  frontend can retry a fetch that raced the still-in-flight decode. This is
+  what makes a sustained video stream (`mpv --vo=kitty`, `timg`, sending a
+  new frame every 16-33ms) not hold `vt_log` for the decode itself — the
+  original design goal a 2026-09-11 security review found was never actually
+  built (only the *worst-case cost* of decode was bounded, not its lock-hold
+  location). PNG format without explicit `c=`/`r=` (auto-sizing, the one
+  case that genuinely needs decoded bytes before it can reserve) stays on
+  the old fully-synchronous path — see `kitty::finish_decode`, shared
+  between both paths so there's one decode implementation, not two. One
+  disclosed behavior change: a transmission's eventual decode failure no
+  longer prevents its footprint from being reserved (reservation happens
+  before anyone knows whether decode will succeed) — cells just never get
+  real bytes.
 - **Transmission mediums** (Phase 6): `t=f`/`t=t` (file/temp-file) and `t=s`
   (POSIX/Windows shared memory) are implemented by delegating the actual
   OS I/O to the embedding app (`EventListener::read_file_medium`/

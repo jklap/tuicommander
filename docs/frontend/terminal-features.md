@@ -263,6 +263,21 @@ actually gets pixels on screen.
   case (a shell prompt or new text overwriting the placement's origin) without
   a per-cell wire-format change. Fails open (keeps the placement) if the
   verify call itself errors.
+- **Retrying a fetch that raced deferred backend decode** (2026-09-11): Kitty
+  image decode now runs off the backend's `vt_log` lock (see
+  `docs/backend/pty.md`'s Kitty Graphics Protocol section), which means a
+  placement's geometry can be known — and a placement event fired — slightly
+  before its bytes are actually fetchable via `terminal_image_bytes`.
+  `ImageLayer`'s `bitmaps` cache never retries a `"loading"`/`"error"` entry
+  on its own (a single failed/empty fetch is permanent — locked in by an
+  existing test), so a first paint attempt that raced the still-in-flight
+  decode would otherwise mark a real image permanently failed. Fixed with
+  `ImageLayer.invalidateImage(imageId)`, wired to a new `image-decoded` event
+  (`CanvasTerminal.tsx`, same `transport.onEvent` pattern as
+  `image-placement`) the backend fires once decode actually completes — this
+  clears the cache entry so the next paint attempt tries again. Never fired
+  for a decode that ultimately fails; the existing "no bytes, don't retry"
+  default already matches that outcome.
 
 ## Configurable Settings
 
