@@ -1567,41 +1567,113 @@ impl<T: EventListener> Term<T> {
                 self.kitty_respond_ok(&control);
             }
             kitty::Action::Transmit | kitty::Action::TransmitAndDisplay => {
-                if control.medium != kitty::Medium::Direct {
-                    self.kitty_respond_error(
-                        &control,
-                        "EINVAL",
-                        "only direct (t=d) transmission is supported",
-                    );
-                    return;
-                }
-                if control.compressed {
-                    self.kitty_respond_error(
-                        &control,
-                        "EINVAL",
-                        "compressed (o=z) payloads are not supported",
-                    );
-                    return;
-                }
-                let Ok(bytes) = Base64.decode(payload_b64) else {
+                let Ok(decoded) = Base64.decode(payload_b64) else {
                     self.kitty_respond_error(&control, "EINVAL", "payload is not valid base64");
                     return;
+                };
+                if decoded.is_empty() {
+                    self.kitty_respond_error(&control, "EINVAL", "empty payload");
+                    return;
+                }
+
+                // For `t=d` the (base64-)decoded payload IS the pixel/PNG
+                // bytes. For every other medium it's instead a path/name the
+                // *embedding application* resolves — see `read_file_medium`/
+                // `read_shm_medium`'s doc comments for why this crate
+                // delegates rather than touching the filesystem/OS shared-
+                // memory APIs itself.
+                let bytes = match control.medium {
+                    kitty::Medium::Direct => decoded,
+                    kitty::Medium::File | kitty::Medium::TempFile => {
+                        let delete_after = control.medium == kitty::Medium::TempFile;
+                        let Some(bytes) = self.event_proxy.read_file_medium(&decoded, delete_after)
+                        else {
+                            self.kitty_respond_error(
+                                &control,
+                                "ENOENT",
+                                "could not read the requested file",
+                            );
+                            return;
+                        };
+                        bytes
+                    }
+                    kitty::Medium::SharedMemory => {
+                        let Some(bytes) = self.event_proxy.read_shm_medium(&decoded) else {
+                            self.kitty_respond_error(
+                                &control,
+                                "ENOENT",
+                                "could not read the requested shared memory segment",
+                            );
+                            return;
+                        };
+                        bytes
+                    }
+                };
+
+                // `o=z`: the pixel/PNG payload itself is zlib-compressed,
+                // orthogonal to which medium delivered it.
+                let bytes = if control.compressed {
+                    use std::io::Read;
+                    let mut inflated = Vec::new();
+                    if flate2::read::ZlibDecoder::new(&bytes[..])
+                        .read_to_end(&mut inflated)
+                        .is_err()
+                    {
+                        self.kitty_respond_error(
+                            &control,
+                            "EINVAL",
+                            "payload is not valid zlib-compressed data",
+                        );
+                        return;
+                    }
+                    inflated
+                } else {
+                    bytes
                 };
                 if bytes.is_empty() {
                     self.kitty_respond_error(&control, "EINVAL", "empty payload");
                     return;
                 }
 
-                let (intrinsic_width, intrinsic_height, mime) = match control.format {
-                    kitty::Format::Rgb => {
-                        (control.width_px, control.height_px, "raw-rgb".to_string())
-                    }
-                    kitty::Format::Rgba => {
-                        (control.width_px, control.height_px, "raw-rgba".to_string())
+                let (intrinsic_width, intrinsic_height, mime, bytes) = match control.format {
+                    kitty::Format::Rgb | kitty::Format::Rgba => {
+                        let channels: u32 = if control.format == kitty::Format::Rgb {
+                            3
+                        } else {
+                            4
+                        };
+                        let expected = (control.width_px as usize)
+                            .saturating_mul(control.height_px as usize)
+                            .saturating_mul(channels as usize);
+                        // Raw formats carry no container/length field of their
+                        // own — `s=`/`v=` (width/height) are the only source
+                        // of truth for how many bytes are real pixel data.
+                        // Trim rather than trust the medium's own length: a
+                        // `t=s` shared-memory segment can be page-rounded
+                        // larger than the client's payload (observed on
+                        // macOS), and a client could in principle send extra
+                        // trailing bytes over `t=d`/`t=f` too. Never *pad*
+                        // upward — a short read is a real transmission
+                        // problem, not something to silently zero-fill.
+                        if bytes.len() < expected {
+                            self.kitty_respond_error(
+                                &control,
+                                "EINVAL",
+                                "payload shorter than width*height*channels",
+                            );
+                            return;
+                        }
+                        let mime = if channels == 3 { "raw-rgb" } else { "raw-rgba" };
+                        (
+                            control.width_px,
+                            control.height_px,
+                            mime.to_string(),
+                            bytes[..expected].to_vec(),
+                        )
                     }
                     kitty::Format::Png => {
                         let (w, h) = iterm2::sniff_image_dimensions(&bytes).unwrap_or((0, 0));
-                        (w, h, "image/png".to_string())
+                        (w, h, "image/png".to_string(), bytes)
                     }
                 };
 

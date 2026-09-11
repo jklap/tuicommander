@@ -241,6 +241,32 @@ pub trait EventListener {
 
     /// Forget every image (Kitty `a=d,d=a`/`d=A`).
     fn forget_all_images(&self) {}
+
+    /// Read the payload bytes for Kitty's `t=f` (plain file) or `t=t`
+    /// (temp file, delete after read) transmission mediums (color-tools
+    /// plan, Phase 6). `path` is the already-base64-decoded byte string the
+    /// wire format carries in the payload position for these mediums
+    /// (a filesystem path, not pixel data). `delete_after` is `true` only
+    /// for `t=t`.
+    ///
+    /// Deliberately not implemented in this crate: reading a client-chosen
+    /// path (and, for `t=t`, conditionally deleting it) is exactly the kind
+    /// of OS/filesystem-specific, security-sensitive operation the
+    /// embedding application owns (same reasoning as `store_image` above) —
+    /// see `terminal_images::read_file_medium` in the app crate for the
+    /// actual implementation and its safety guards. Default refuses
+    /// everything, matching every other storage-backed method here.
+    fn read_file_medium(&self, _path: &[u8], _delete_after: bool) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Read the payload bytes for Kitty's `t=s` (POSIX/Windows shared
+    /// memory) transmission medium (color-tools plan, Phase 6). `name` is
+    /// the already-base64-decoded shared-memory segment name. Same
+    /// delegation reasoning as `read_file_medium`.
+    fn read_shm_medium(&self, _name: &[u8]) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// Null sink for events.
