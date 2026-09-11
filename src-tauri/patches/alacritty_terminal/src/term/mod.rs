@@ -1441,10 +1441,24 @@ impl<T: EventListener> Term<T> {
         rows: u32,
         z_index: i32,
     ) {
+        // Hard cap on reserved rows, independent of `available_cols`'s
+        // viewport-width clamp above: `rows` comes straight from
+        // attacker-controlled wire data (Kitty `r=`, or iTerm2's resolved
+        // `height=`/`%`/`px`/`auto` footprint) with no upper bound of its
+        // own, and the loop below runs once per reserved row *inside*
+        // `Term::process`, under the session's `vt_log` lock. Without this
+        // clamp a single crafted sequence (e.g. Kitty `r=4000000000` or
+        // iTerm2 `height=4000000000`) would attempt up to `u32::MAX`
+        // `linefeed()` calls, hanging the session (and every other consumer
+        // of its grid — the frame ticker, HTTP reads) for as long as that
+        // takes. No real image needs anywhere near this many rows; this is
+        // generous headroom, not a meaningful functional limit.
+        const MAX_FOOTPRINT_ROWS: u32 = 10_000;
+
         let start_col = self.grid.cursor.point.column.0;
         let available_cols = self.columns().saturating_sub(start_col).max(1);
         let footprint_cols = (cols as usize).min(available_cols);
-        let footprint_rows = rows.max(1);
+        let footprint_rows = rows.clamp(1, MAX_FOOTPRINT_ROWS);
 
         // Eviction-stable absolute row of the placement's top-left corner —
         // same `history_base + grid_relative` addressing `terminal_grid.rs`'s
@@ -1500,6 +1514,13 @@ impl<T: EventListener> Term<T> {
             // Continuation chunk: per spec it carries only m=/q=, so the
             // ORIGINAL (first chunk's) control data is what's authoritative,
             // not this chunk's mostly-default one.
+            if pending.payload_b64.len() + payload_chunk.len() > kitty::MAX_CHUNKED_B64_BYTES {
+                // Fail closed: abort the whole transfer rather than let a
+                // client stream an unbounded number of `m=1` chunks and grow
+                // this buffer without limit.
+                self.pending_kitty_transmission = None;
+                return;
+            }
             pending.payload_b64.extend_from_slice(payload_chunk);
             if control.more_chunks {
                 return;
@@ -1625,18 +1646,35 @@ impl<T: EventListener> Term<T> {
                 };
 
                 // `o=z`: the pixel/PNG payload itself is zlib-compressed,
-                // orthogonal to which medium delivered it.
+                // orthogonal to which medium delivered it. Bound the
+                // inflated size — an unbounded `read_to_end` on a zlib
+                // stream is a classic decompression bomb (a few KB of
+                // compressed all-zero data can expand to gigabytes), so the
+                // decoder is wrapped in `Read::take` at one byte past the
+                // cap: if the inflated output fills that allowance exactly,
+                // there was more data than the cap allows and the whole
+                // payload is rejected before ever reaching the app-level
+                // `MAX_SESSION_IMAGE_BYTES` check (which only runs after the
+                // full buffer already exists).
+                const MAX_INFLATED_BYTES: u64 = 64 * 1024 * 1024;
                 let bytes = if control.compressed {
                     use std::io::Read;
                     let mut inflated = Vec::new();
-                    if flate2::read::ZlibDecoder::new(&bytes[..])
-                        .read_to_end(&mut inflated)
-                        .is_err()
-                    {
+                    let mut limited =
+                        flate2::read::ZlibDecoder::new(&bytes[..]).take(MAX_INFLATED_BYTES + 1);
+                    if limited.read_to_end(&mut inflated).is_err() {
                         self.kitty_respond_error(
                             &control,
                             "EINVAL",
                             "payload is not valid zlib-compressed data",
+                        );
+                        return;
+                    }
+                    if inflated.len() as u64 > MAX_INFLATED_BYTES {
+                        self.kitty_respond_error(
+                            &control,
+                            "EINVAL",
+                            "decompressed payload exceeds the size limit",
                         );
                         return;
                     }
@@ -1736,8 +1774,22 @@ impl<T: EventListener> Term<T> {
             // command, never on the placeholder text itself, so it has to
             // be remembered here for `try_resolve_unicode_placeholder` to
             // find later (color-tools plan, Phase 7's z-order follow-up).
-            self.unicode_placeholder_z
-                .insert((image.image_id, placement_id), control.z_index);
+            //
+            // Unlike `CellExtra.image`, this map has no cell to piggyback
+            // its lifetime on — it's only ever cleared by an explicit
+            // `a=d,d=a`/`d=i` (above) or session end, so a client that keeps
+            // registering new (image_id, placement_id) pairs without ever
+            // deleting them grows it for the session's lifetime. Cap it as
+            // a refusal, same pattern as the byte caps elsewhere in this
+            // feature: past the cap, a registration's `z=` simply isn't
+            // remembered and resolution falls back to the default z-index
+            // (0, "above text") — a benign degradation, not a correctness
+            // bug, and far better than unbounded growth.
+            const MAX_UNICODE_PLACEHOLDER_ENTRIES: usize = 100_000;
+            if self.unicode_placeholder_z.len() < MAX_UNICODE_PLACEHOLDER_ENTRIES {
+                self.unicode_placeholder_z
+                    .insert((image.image_id, placement_id), control.z_index);
+            }
             return;
         }
         let (cols, rows) = if control.cols > 0 && control.rows > 0 {

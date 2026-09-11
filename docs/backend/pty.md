@@ -477,7 +477,23 @@ implement the protocol itself.
   `kitty_respond_error`.
 - **Chunking**: `m=1` on all but the last sequence; only the *first* chunk
   carries real control data (continuation chunks are `m=`/`q=` only per
-  spec), tracked via `pending_kitty_transmission`.
+  spec), tracked via `pending_kitty_transmission`. Accumulated size across
+  all chunks of one transfer is capped at `kitty::MAX_CHUNKED_B64_BYTES`
+  (96 MiB, mirroring `iterm2::MAX_MULTIPART_B64_BYTES`'s "fail closed, abort
+  the whole transfer" pattern) — each individual chunk is already bounded by
+  vte's own `MAX_OSC_RAW_STD` (2 MiB), but nothing previously stopped a
+  client from streaming an unbounded *number* of `m=1` chunks and growing
+  the pending buffer without limit before the app-level
+  `MAX_SESSION_IMAGE_BYTES` cap ever ran (found by a 2026-09-11 security
+  review, see `to-test.md`).
+- **Reservation and decompression size caps** (also from that review):
+  `reserve_image_footprint` clamps requested rows to a hard
+  `MAX_FOOTPRINT_ROWS = 10_000` — a crafted `r=`/iTerm2 `height=` with no
+  clamp of its own could otherwise attempt up to `u32::MAX` `linefeed()`
+  calls under the session's `vt_log` lock, a real hang. `o=z` zlib
+  decompression is bounded via `Read::take` at 64 MiB before the inflated
+  buffer is fully built, closing a classic decompression-bomb path a plain
+  unbounded `read_to_end` would otherwise allow.
 - **`U=1` Unicode virtual placeholders** (Phase 7): fully implemented —
   `Term::input` recognizes an app-printed `U+10EEEE` placeholder character
   (with diacritics encoding tile row/column/most-significant-id-byte, image

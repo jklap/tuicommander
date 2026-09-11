@@ -188,6 +188,15 @@ pub struct PendingTransmission {
     pub payload_b64: Vec<u8>,
 }
 
+/// Cap on accumulated base64 across all chunks of one `m=1` transmission —
+/// mirrors `iterm2::MAX_MULTIPART_B64_BYTES`'s "fail closed" pattern for the
+/// same reason: each individual APC dispatch is already bounded by vte's own
+/// `MAX_OSC_RAW_STD`, but nothing previously stopped a client from streaming
+/// an unbounded *number* of chunks with `m=1` set forever, growing
+/// `PendingTransmission::payload_b64` without limit before the app-level
+/// `MAX_SESSION_IMAGE_BYTES` cap ever got a chance to reject it.
+pub const MAX_CHUNKED_B64_BYTES: usize = 96 * 1024 * 1024;
+
 /// Format a success response: `\x1b_Gi=<id>[,p=<placement>];OK\x1b\\`.
 pub fn ok_response(image_id: u32, placement_id: u32) -> String {
     if placement_id != 0 {
