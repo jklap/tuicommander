@@ -226,6 +226,25 @@ pub enum AppEvent {
     /// timed-out request never reaches here.
     #[serde(rename = "pty-open-url")]
     PtyOpenUrl { session_id: String, url: String },
+    /// An inline-image placement was just reserved (color-tools plan, Phase
+    /// 5). Field-for-field identical to the desktop `pty-image-placement-*`
+    /// event payload, same reasoning as `PtyOsc133`/`PtyCwd` above.
+    #[serde(rename = "pty-image-placement")]
+    PtyImagePlacement {
+        session_id: String,
+        placement_id: u32,
+        image_id: u32,
+        abs_row: u32,
+        col: u16,
+        rows: u16,
+        cols: u16,
+        z_index: i32,
+    },
+    /// Every previously-announced placement for this session should be
+    /// treated as gone; the consumer re-hydrates via
+    /// `terminal_image_placements`.
+    #[serde(rename = "pty-image-placements-cleared")]
+    PtyImagePlacementsCleared { session_id: String },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
@@ -587,6 +606,8 @@ impl AppEvent {
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyOpenUrl { session_id, .. }
+            | AppEvent::PtyImagePlacement { session_id, .. }
+            | AppEvent::PtyImagePlacementsCleared { session_id }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
             | AppEvent::SessionSuspendRequested { session_id, .. }
@@ -4878,7 +4899,11 @@ impl AppState {
             // signals, not session state. The cwd that state cares about is
             // written straight onto the `sessions` entry at the emit site; this
             // event exists to reach clients, not to be accumulated.
-            AppEvent::PtyOsc133 { .. } | AppEvent::PtyCwd { .. } | AppEvent::PtyOpenUrl { .. } => {}
+            AppEvent::PtyOsc133 { .. }
+            | AppEvent::PtyCwd { .. }
+            | AppEvent::PtyOpenUrl { .. }
+            | AppEvent::PtyImagePlacement { .. }
+            | AppEvent::PtyImagePlacementsCleared { .. } => {}
             AppEvent::SessionClosed { session_id, .. } => {
                 state.session_maps.session_states.remove(session_id);
             }

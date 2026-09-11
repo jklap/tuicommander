@@ -763,9 +763,13 @@ impl VtLogBuffer {
         self.grid.hyperlink_span(row, col)
     }
 
-    /// `(image_id, placement_id, tile_col, tile_row)` for the inline-image
-    /// tile shown at a viewport position, if any.
-    pub fn grid_image_ref_at(&self, row: usize, col: usize) -> Option<(u32, u32, u16, u16)> {
+    /// `(image_id, placement_id, tile_col, tile_row, z_index)` for the
+    /// inline-image tile shown at a viewport position, if any.
+    pub fn grid_image_ref_at(
+        &self,
+        row: usize,
+        col: usize,
+    ) -> Option<(u32, u32, u16, u16, i32)> {
         self.grid.image_ref_at(row, col)
     }
 
@@ -773,6 +777,14 @@ impl VtLogBuffer {
     /// already evicted (no cell references it any more).
     pub fn grid_image_bytes(&self, image_id: u32) -> Option<std::sync::Arc<[u8]>> {
         self.grid.image_bytes(image_id)
+    }
+
+    /// Every current inline-image placement (color-tools plan, Phase 5) — the
+    /// reconnect/new-client hydration query.
+    pub fn grid_image_placements(
+        &self,
+    ) -> Vec<alacritty_terminal::event::ImagePlacementInfo> {
+        self.grid.image_placements()
     }
 
     // --- private helpers ---
