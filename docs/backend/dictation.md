@@ -145,7 +145,7 @@ all. They run in order and each returns a `skip_reason` the UI shows verbatim.
 | Gate | Rejects | Tunable |
 |---|---|---|
 | RMS floor | audio quieter than `rms_threshold` — never reaches Whisper | yes |
-| `no_speech_probability` | a segment Whisper itself scores above `no_speech_threshold` | yes |
+| `no_speech_probability` | the segments Whisper itself scores above `no_speech_threshold` | yes |
 | `is_hallucination` | known subtitle boilerplate and bare thanks | no |
 
 **The two thresholds are settings, not constants** (`VoiceGates`, read from
@@ -154,11 +154,20 @@ the microphone: a headset a metre away picks up enough noise to clear a fixed
 floor, which is how an empty room ends up transcribed. Settings > Dictation
 exposes both against a live meter — see the user guide.
 
-`no_speech_probability()` is read per segment and kept at its worst. It
-generalises where a phrase list cannot, because it rejects whatever the model
-invented rather than only the wordings someone remembered to add to a list.
-Note that whisper.cpp does not implement the `no_speech_thold` *parameter*, so
-the value must be compared after the run, not set on `FullParams`.
+`no_speech_probability()` is read per segment and **filters per segment**
+(`filter_speech_segments`): a segment above the threshold is dropped, the rest
+are kept, and only a run where every segment was rejected skips the whole
+transcript. It generalises where a phrase list cannot, because it rejects
+whatever the model invented rather than only the wordings someone remembered to
+add to a list. Note that whisper.cpp does not implement the `no_speech_thold`
+*parameter*, so the value must be compared after the run, not set on
+`FullParams`.
+
+The gate used to take the worst score across the run and discard everything on
+it. That was harmless while a run was one segment, and wrong as soon as
+recordings longer than one window started decoding into many: an ordinary pause
+inside a long dictation scores as no-speech, so one silent segment threw away a
+transcript that was almost entirely speech.
 
 **`is_hallucination` matches per sentence, not on the whole trimmed string.**
 The short-phrase list (`HALLUCINATION_EXACT`) holds words a user genuinely
@@ -169,6 +178,31 @@ produce one bare `"Grazie."`, but the final pass runs on the whole buffer, where
 Whisper loops into `"Grazie. Grazie."` — the form that actually reached the
 terminal. `HALLUCINATION_SUBSTRING` holds channel boilerplate nobody dictates,
 so one occurrence anywhere condemns the transcript.
+
+## Decode flags depend on audio length
+
+`decode_flags_for` picks `single_segment` and `no_timestamps` from the sample
+count, split at `SINGLE_WINDOW_SAMPLES` (30 s — one whisper encoder window).
+Both flags are set at or under one window and cleared above it.
+
+`no_timestamps` suppresses every timestamp token outright (`whisper.cpp:6191`),
+so `has_ts` never becomes true. With either flag set, the end of a segment forces
+the window shift to a whole chunk (`whisper.cpp:7381`, `seek_delta =
+100*WHISPER_CHUNK_SIZE`) and `seek += seek_delta` (`whisper.cpp:7734`) advances a
+full 30 s no matter how much the decoder actually reached. An early end-of-text
+token or the 220-token decode limit (`whisper.cpp:7184`) then drops the rest of
+that window permanently — with timestamps on, `seek` would instead advance only
+to the last decoded timestamp and the remainder would be re-decoded.
+
+A 127.7 s dictation came back with 1175 characters against 1442 from the
+streaming partials before this split existed. At or under one window the loss
+cannot happen, because the loop breaks once `seek` reaches the end of the audio
+(`whisper.cpp:7008`) — which is why short dictation keeps both flags and the
+hallucination suppression they were added for (whisper.cpp issue 1724).
+
+Streaming windows are 1.5–3 s, so they keep the flags by the same rule; a
+`MAX_BUFFER_S` forced flush is the one window that can cross the line, and
+clearing the flags there is correct for the same reason.
 
 ## Recording cap
 

@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A dictation longer than 30 seconds no longer loses the tail of every
+  whisper window.** The final whole-recording pass ran with the flags that suit
+  a single streaming window (`single_segment`, `no_timestamps`). Above one 30 s
+  window those flags make whisper advance a full window on every step regardless
+  of how much the decoder actually reached, so an early end-of-text token or the
+  per-window token limit dropped the rest of that window for good — a 128 s
+  dictation came back shorter than the partials shown while speaking. The flags
+  are now chosen by audio length: a recording that fits one window keeps them,
+  and the hallucination suppression they were added for with it. The no-speech
+  gate also filters per segment instead of discarding the whole transcript on
+  its worst one, so an ordinary pause mid-dictation no longer empties it.
+
 - **Content search no longer grows the app until it is measured in tens of
   gigabytes.** Every repo switched to since 1.7.5 built a BM25 index that nothing
   ever released, so a working day across a few dozen repos left the backend

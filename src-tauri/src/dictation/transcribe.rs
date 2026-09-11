@@ -80,6 +80,106 @@ pub const DEFAULT_RMS_THRESHOLD: f32 = 0.001;
 /// whisper.cpp's own `no_speech_thold` default.
 pub const DEFAULT_NO_SPEECH_THRESHOLD: f32 = 0.6;
 
+/// One whisper encoder window, in samples at 16 kHz (`WHISPER_CHUNK_SIZE` is
+/// 30 s). The two streaming flags are safe at or under this length and lossy
+/// above it, which is the whole reason [`decode_flags_for`] exists.
+const SINGLE_WINDOW_SAMPLES: usize = 30 * 16_000;
+
+/// The two `FullParams` flags that suit a streaming window and ruin a long
+/// recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DecodeFlags {
+    pub single_segment: bool,
+    pub no_timestamps: bool,
+}
+
+/// Pick the decode flags for a buffer of `n_samples`.
+///
+/// `no_timestamps` suppresses every timestamp token outright
+/// (`whisper.cpp:6191`: `for (int i = vocab.token_beg; i < n_logits; ++i)
+/// logits[i] = -INFINITY;`), so `has_ts` never becomes true. With either flag
+/// set, the end of a segment then forces the window shift to a whole chunk
+/// (`whisper.cpp:7381`: `if (params.single_segment || params.no_timestamps) {
+/// result_len = i + 1; seek_delta = 100*WHISPER_CHUNK_SIZE; }`) and
+/// `seek += seek_delta` (`whisper.cpp:7734`) advances a full 30 s no matter how
+/// much the decoder actually reached. An early end-of-text token or the
+/// 220-token decode limit (`whisper.cpp:7184`) therefore drops the rest of that
+/// window for good — whisper cannot re-seek to it, because with timestamps on it
+/// would have advanced only to the last decoded timestamp.
+///
+/// At or under one window that cannot happen: the loop breaks once `seek`
+/// reaches the end of the audio (`whisper.cpp:7008`), so nothing follows the
+/// first window to be lost. Short dictation keeps both flags, which is where the
+/// hallucination suppression they were added for was measured
+/// (whisper.cpp issue 1724).
+pub(super) fn decode_flags_for(n_samples: usize) -> DecodeFlags {
+    let within_one_window = n_samples <= SINGLE_WINDOW_SAMPLES;
+    DecodeFlags {
+        single_segment: within_one_window,
+        no_timestamps: within_one_window,
+    }
+}
+
+/// One decoded segment with Whisper's own answer to "was anyone speaking?".
+#[derive(Debug, Clone)]
+pub(super) struct ScoredSegment {
+    pub text: String,
+    pub no_speech_probability: f32,
+}
+
+impl ScoredSegment {
+    pub(super) fn new(text: &str, no_speech_probability: f32) -> Self {
+        Self {
+            text: text.to_string(),
+            no_speech_probability,
+        }
+    }
+}
+
+/// What the per-segment no-speech gate decided about a run.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum SegmentFilter {
+    /// The text of the segments Whisper scored as speech. Empty when the run
+    /// decoded no segments at all — that is not a rejection, and the caller
+    /// already has its own message for it.
+    Speech(String),
+    /// Every segment scored above the threshold, carrying the worst score so the
+    /// skip reason can name it.
+    AllNoSpeech(f32),
+}
+
+/// Keep the segments Whisper scored as speech and drop the rest.
+///
+/// The gate used to take the worst score across the whole run, which was
+/// harmless while the run was one segment. A recording longer than one window
+/// decodes into many, and an ordinary pause inside a long dictation scores as
+/// no-speech — so one silent segment discarded a transcript that was almost
+/// entirely speech. The gate is per segment; only a run with nothing but
+/// no-speech segments is rejected outright.
+pub(super) fn filter_speech_segments(
+    segments: &[ScoredSegment],
+    no_speech_threshold: f32,
+) -> SegmentFilter {
+    let mut kept = String::new();
+    let mut worst_rejected = 0.0f32;
+    let mut rejected_any = false;
+
+    for segment in segments {
+        if segment.no_speech_probability > no_speech_threshold {
+            worst_rejected = worst_rejected.max(segment.no_speech_probability);
+            rejected_any = true;
+            continue;
+        }
+        kept.push_str(&segment.text);
+    }
+
+    let kept = kept.trim().to_string();
+    if kept.is_empty() && rejected_any {
+        return SegmentFilter::AllNoSpeech(worst_rejected);
+    }
+    SegmentFilter::Speech(kept)
+}
+
 /// Trait for transcription, enabling mock implementations in tests.
 pub trait Transcriber: Send + Sync {
     fn transcribe(
@@ -179,44 +279,47 @@ impl Transcriber for WhisperTranscriber {
         params.set_n_threads(optimal_n_threads());
         // Suppress non-speech tokens for cleaner output
         params.set_suppress_nst(true);
-        // Disable timestamp computation — primary fix for hallucination on silence
+        // Both flags suit a single streaming window and silently drop the tail
+        // of every window above one — see `decode_flags_for`. `no_timestamps` is
+        // also the primary fix for hallucination on silence, which is why a
+        // recording that fits one window keeps it.
         // See: https://github.com/ggml-org/whisper.cpp/issues/1724
-        params.set_no_timestamps(true);
-        // Force single segment for short dictation recordings
-        params.set_single_segment(true);
+        let flags = decode_flags_for(audio.len());
+        params.set_no_timestamps(flags.no_timestamps);
+        params.set_single_segment(flags.single_segment);
 
         state
             .full(params, audio)
             .map_err(|e| format!("Transcription failed: {e}"))?;
 
         let n_segments = state.full_n_segments();
-        let mut text = String::new();
-        // Whisper's own answer to "was anyone speaking?", read per segment and
-        // kept at its worst. It generalises where a phrase list cannot: it
-        // rejects whatever the model invents on room noise, not only the
-        // wordings someone remembered to add to HALLUCINATION_EXACT.
-        let mut worst_no_speech = 0.0f32;
+        // Whisper's own answer to "was anyone speaking?", read per segment. It
+        // generalises where a phrase list cannot: it rejects whatever the model
+        // invents on room noise, not only the wordings someone remembered to add
+        // to HALLUCINATION_EXACT.
+        let mut segments = Vec::with_capacity(n_segments as usize);
 
         for i in 0..n_segments {
             if let Some(segment) = state.get_segment(i) {
-                worst_no_speech = worst_no_speech.max(segment.no_speech_probability());
-                if let Ok(s) = segment.to_str() {
-                    text.push_str(s);
-                }
+                segments.push(ScoredSegment {
+                    text: segment.to_str().unwrap_or_default().to_string(),
+                    no_speech_probability: segment.no_speech_probability(),
+                });
             }
         }
 
-        let result = text.trim().to_string();
-
-        if worst_no_speech > gates.no_speech_threshold {
-            let thold = gates.no_speech_threshold;
-            return Ok(TranscribeResult {
-                text: String::new(),
-                skip_reason: Some(format!(
-                    "no speech detected (no_speech {worst_no_speech:.2} > {thold:.2})"
-                )),
-            });
-        }
+        let result = match filter_speech_segments(&segments, gates.no_speech_threshold) {
+            SegmentFilter::Speech(text) => text,
+            SegmentFilter::AllNoSpeech(worst_no_speech) => {
+                let thold = gates.no_speech_threshold;
+                return Ok(TranscribeResult {
+                    text: String::new(),
+                    skip_reason: Some(format!(
+                        "no speech detected (no_speech {worst_no_speech:.2} > {thold:.2})"
+                    )),
+                });
+            }
+        };
 
         // Filter known hallucination phrases that Whisper produces on near-silence
         if is_hallucination(&result) {
@@ -463,6 +566,95 @@ mod tests {
     fn a_thanks_followed_by_a_real_instruction_survives() {
         assert!(!is_hallucination("Grazie. Ora committa e pusha."));
         assert!(!is_hallucination("Thank you. Now run the tests."));
+    }
+
+    /// A recording that fits one 30 s whisper window cannot lose audio to the
+    /// streaming flags, because `seek` never advances past the end of the audio.
+    /// Above one window it can, so the flags must go.
+    #[test]
+    fn a_recording_within_one_whisper_window_keeps_the_streaming_flags() {
+        let flags = decode_flags_for(SINGLE_WINDOW_SAMPLES);
+        assert!(flags.single_segment);
+        assert!(flags.no_timestamps);
+
+        // A short dictation — the case the hallucination suppression was tuned for.
+        let flags = decode_flags_for(16_000);
+        assert!(flags.single_segment);
+        assert!(flags.no_timestamps);
+    }
+
+    /// One sample past the window is enough: with the flags set, whisper forces
+    /// `seek_delta` to a full 30 s and skips whatever the decoder did not reach.
+    #[test]
+    fn a_recording_past_one_whisper_window_clears_the_streaming_flags() {
+        let flags = decode_flags_for(SINGLE_WINDOW_SAMPLES + 1);
+        assert!(!flags.single_segment);
+        assert!(!flags.no_timestamps);
+
+        // The 127 s recording that lost its window tails.
+        let flags = decode_flags_for(127 * 16_000);
+        assert!(!flags.single_segment);
+        assert!(!flags.no_timestamps);
+    }
+
+    /// A long dictation decodes into many segments, and a pause inside it scores
+    /// as no-speech. Taking the worst score across all of them discarded the
+    /// whole transcript over one silent segment.
+    #[test]
+    fn a_no_speech_segment_inside_a_long_dictation_drops_only_itself() {
+        let segments = [
+            ScoredSegment::new(" run the tests", 0.05),
+            ScoredSegment::new(" Thank you.", 0.95),
+            ScoredSegment::new(" then commit", 0.10),
+        ];
+
+        match filter_speech_segments(&segments, DEFAULT_NO_SPEECH_THRESHOLD) {
+            SegmentFilter::Speech(text) => assert_eq!(text, "run the tests then commit"),
+            SegmentFilter::AllNoSpeech(worst) => panic!("speech segments were dropped ({worst})"),
+        }
+    }
+
+    /// The gate still has to fire when nothing was speech, and still has to name
+    /// the worst score — that value is what the UI shows the user.
+    #[test]
+    fn a_recording_with_no_speech_in_any_segment_is_still_skipped() {
+        let segments = [
+            ScoredSegment::new(" Grazie.", 0.72),
+            ScoredSegment::new(" Grazie.", 0.91),
+        ];
+
+        match filter_speech_segments(&segments, DEFAULT_NO_SPEECH_THRESHOLD) {
+            SegmentFilter::AllNoSpeech(worst) => {
+                assert!((worst - 0.91).abs() < 1e-6, "worst score reported: {worst}");
+            }
+            SegmentFilter::Speech(text) => panic!("no-speech audio produced text: {text:?}"),
+        }
+    }
+
+    /// A run that decoded nothing is not a no-speech rejection: it has no score
+    /// to report, and the caller already turns empty text into its own message.
+    #[test]
+    fn a_run_with_no_segments_reports_empty_text_rather_than_no_speech() {
+        match filter_speech_segments(&[], DEFAULT_NO_SPEECH_THRESHOLD) {
+            SegmentFilter::Speech(text) => assert!(text.is_empty()),
+            SegmentFilter::AllNoSpeech(worst) => panic!("empty run scored as no-speech ({worst})"),
+        }
+    }
+
+    /// The threshold is a setting, so the filter must honour the value it is
+    /// given rather than the default.
+    #[test]
+    fn the_per_segment_filter_uses_the_threshold_it_is_given() {
+        let segments = [ScoredSegment::new(" run the tests", 0.5)];
+
+        match filter_speech_segments(&segments, 1.0) {
+            SegmentFilter::Speech(text) => assert_eq!(text, "run the tests"),
+            SegmentFilter::AllNoSpeech(_) => panic!("1.0 disables the gate"),
+        }
+        match filter_speech_segments(&segments, 0.4) {
+            SegmentFilter::AllNoSpeech(worst) => assert!((worst - 0.5).abs() < 1e-6),
+            SegmentFilter::Speech(_) => panic!("a lowered threshold must still reject"),
+        }
     }
 
     /// Reusing one decoder state across windows is only safe if
