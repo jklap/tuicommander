@@ -17381,3 +17381,560 @@ fn test_chunk_processor_osc1337_steal_focus_and_request_attention_do_not_panic()
     state.config.write().osc1337_focus_attention = false;
     feed(&mut cp, b"\x1b]1337;StealFocus\x07");
 }
+
+#[cfg(unix)]
+fn insert_idle_shell_session(state: &AppState, session_id: &str) {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    // No args, so the shell itself stays the foreground process group leader —
+    // a confirmed, non-flaky "sh" match, unlike a spawned grandchild.
+    let command = CommandBuilder::new("/bin/sh");
+    let child = pair.slave.spawn_command(command).expect("spawn shell");
+    let child_pid = child.process_id().expect("spawned child has a pid");
+
+    // Poll the RAW pgid AND name directly (not through
+    // `get_session_foreground_process_impl`, whose returned `effective` is
+    // trivially `None` before any `session_states` entry exists regardless
+    // of whether the OS state has actually settled — that false signal is
+    // exactly what let this race slip through once already). Two distinct
+    // startup races were reproduced empirically here, and both must clear
+    // before any test code touches `session_states`:
+    //   1. Immediately after `spawn_command`, before the forked child
+    //      finishes `setsid`+`TIOCSCTTY`, `tcgetpgrp` on a brand new pty can
+    //      transiently report the *calling* (test) process's own pgid
+    //      instead of the child's.
+    //   2. Even once the pgid correctly matches the child, the child is
+    //      briefly still running a fork()'d copy of the *parent's own
+    //      binary image* until its `execve("/bin/sh", …)` actually
+    //      completes — `proc_pidpath` on that pid reports the parent's own
+    //      path (e.g. the test binary) right up until exec replaces it, at
+    //      which point it flips to "sh"/"bash" (macOS resolves `/bin/sh`'s
+    //      canonical path through to bash).
+    let mut settled = false;
+    for _ in 0..150 {
+        settled = pair.master.process_group_leader() == Some(child_pid as i32)
+            && matches!(
+                process_name_from_pid(child_pid).as_deref(),
+                Some("sh") | Some("bash")
+            );
+        if settled {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // Fail loudly on a timeout rather than silently falling through with
+    // stale fg data — an assertion mismatch further down would otherwise
+    // look like a logic regression instead of what it actually is: this
+    // environment took longer than 3s to settle a freshly spawned shell.
+    assert!(
+        settled,
+        "pty for {session_id:?} never settled to a confirmed foreground \
+         shell within 3s (pgid={:?}, name={:?}) — environment timing issue, \
+         not a logic regression",
+        pair.master.process_group_leader(),
+        process_name_from_pid(child_pid)
+    );
+
+    state.session_maps.sessions.insert(
+        session_id.to_string(),
+        Mutex::new(PtySession {
+            writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
+                bytes: Arc::new(std::sync::Mutex::new(Vec::new())),
+            })
+                as Box<dyn std::io::Write + Send>)),
+            master: pair.master,
+            _child: child,
+            paused: Arc::new(AtomicBool::new(false)),
+            worktree: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            is_remote: false,
+            shell: "/bin/sh".to_string(),
+        }),
+    );
+}
+
+/// Polls `get_session_foreground_process_impl` until `session_states`
+/// converges to a stable value (same `agent_type` observed twice in a
+/// row), then returns that settled entry. Foreground-pgid sampling right
+/// after `spawn_command` is a real, reproduced startup race (job control
+/// hasn't necessarily settled yet), and a transient failure inside the
+/// function's own `?` chain returns `None` from a completely different
+/// code path than the "confirmed shell" clearing branch — so a test must
+/// not trust a single call's return value or break on the first `None`
+/// it happens to see. Polling `session_states` (the actual thing under
+/// test) to a stable fixed point sidesteps both problems.
+#[cfg(unix)]
+fn settle_agent_type(state: &AppState, session_id: &str) -> Option<String> {
+    let mut last = None;
+    for _ in 0..200 {
+        get_session_foreground_process_impl(state, session_id);
+        let current = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .and_then(|e| e.agent_type.clone());
+        if current == last {
+            return current;
+        }
+        last = current;
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    last
+}
+
+/// A confirmed shell in the foreground, for a session that has actually
+/// observed its agent running before (`agent_seen_running`), must clear
+/// the sticky `session_states.agent_type` mirror — otherwise
+/// `should_transition_idle_with_hook` keeps using the longer agent-idle
+/// threshold for a session that no longer has an agent running, and the
+/// frontend's `LastPromptBar`/`agentType` stay stuck until the longer
+/// window finally elapses. See the "Prompt display ... does not disappear
+/// right away" bug this regression test guards against.
+#[cfg(unix)]
+#[test]
+fn get_session_foreground_process_clears_sticky_agent_type_on_confirmed_shell() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "confirmed-shell-clears-agent-type";
+    insert_idle_shell_session(&state, session_id);
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: true,
+            ..Default::default()
+        },
+    );
+
+    let settled = settle_agent_type(&state, session_id);
+
+    assert_eq!(
+        settled, None,
+        "confirmed shell foreground must clear the sticky agent_type mirror \
+         once the agent has actually been seen running"
+    );
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert!(
+        !entry.hook_instrumented,
+        "hook_instrumented must be cleared alongside agent_type"
+    );
+    assert!(
+        !entry.agent_seen_running,
+        "agent_seen_running resets so a subsequent agent re-arms the gate"
+    );
+}
+
+/// The exact regression a review caught in this fix: a session whose
+/// `agent_type` is only a run-config *preset* (`PtyConfig::agent_type`,
+/// for a custom/unrecognized launcher) — not yet confirmed by an actual
+/// observed foreground process — must NOT have that preset wiped just
+/// because the very first foreground read sees a plain shell. In
+/// production this races the pending init command: `Terminal.tsx`'s first
+/// `shell-state: idle` event fires `detectAgentForTerminal(id, "idle")`
+/// (which calls this function) in the same tick it sends the init
+/// command, so the shell is still confirmably in the foreground when this
+/// runs — before the custom binary has even been exec'd, let alone
+/// exited. `classify_agent` can never subsequently recognise a custom
+/// binary, so wiping the preset here would be permanent and
+/// unrecoverable. `agent_seen_running` (default `false`, unset by this
+/// preset-only insert) is exactly what must prevent the clear.
+#[cfg(unix)]
+#[test]
+fn get_session_foreground_process_preserves_unstarted_run_config_preset_on_confirmed_shell() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "unstarted-preset-not-cleared";
+    insert_idle_shell_session(&state, session_id);
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: false,
+            ..Default::default()
+        },
+    );
+
+    let settled = settle_agent_type(&state, session_id);
+
+    assert_eq!(
+        settled,
+        Some("claude".to_string()),
+        "a run-config preset that was never confirmed running must survive \
+         a confirmed-shell foreground — the custom launcher just hasn't exec'd yet"
+    );
+}
+
+/// The sticky-preserve behavior must still hold for the actually-flaky
+/// case: an *unrecognized* non-shell foreground (a short-lived grandchild
+/// like `git`/`sed`/`rg`) must NOT clear a pre-set agent_type, since the
+/// agent (e.g. claude) is still the live foreground owner moments later.
+#[cfg(unix)]
+#[test]
+fn get_session_foreground_process_keeps_sticky_agent_type_on_unrecognized_non_shell() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "unrecognized-non-shell-stays-sticky";
+
+    // Spawn `/bin/sleep` directly as the PTY's own child (no shell
+    // wrapper), so it is the process group leader from the start —
+    // an unrecognized, non-shell foreground, deterministically, unlike
+    // relying on a shell's job-control timing to hand off to a grandchild.
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    let mut command = CommandBuilder::new("/bin/sleep");
+    command.arg("30");
+    let child = pair.slave.spawn_command(command).expect("spawn sleep");
+    state.session_maps.sessions.insert(
+        session_id.to_string(),
+        Mutex::new(PtySession {
+            writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
+                bytes: Arc::new(std::sync::Mutex::new(Vec::new())),
+            })
+                as Box<dyn std::io::Write + Send>)),
+            master: pair.master,
+            _child: child,
+            paused: Arc::new(AtomicBool::new(false)),
+            worktree: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            is_remote: false,
+            shell: "/bin/sh".to_string(),
+        }),
+    );
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: true,
+            ..Default::default()
+        },
+    );
+
+    // Same startup-race concern as `insert_idle_shell_session` — poll to
+    // a stable fixed point rather than trusting the first call.
+    let settled = settle_agent_type(&state, session_id);
+
+    assert_eq!(
+        settled,
+        Some("claude".to_string()),
+        "unrecognized non-shell foreground must NOT clear the sticky agent_type mirror"
+    );
+}
+
+/// The static `SHELLS` list can never be exhaustive (xonsh, elvish, ion,
+/// murex, and anything else not on it) — a session's own recorded
+/// `PtySession.shell` (set from `resolve_shell()` at PTY creation) must
+/// independently confirm a foreground match, so an unlisted shell still
+/// gets the confirmed-shell clear instead of reproducing the original
+/// "stuck forever" bug for exactly the users that list doesn't cover.
+/// Spawns `/bin/sleep` directly (a real, deterministic non-shell
+/// foreground) with `session.shell` set to a path whose basename matches
+/// what's actually running — proving the match logic works without
+/// needing an exotic shell binary installed in CI.
+#[cfg(unix)]
+#[test]
+fn get_session_foreground_process_clears_via_session_shell_when_unlisted() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "unlisted-shell-clears-via-session-shell";
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    let mut command = CommandBuilder::new("/bin/sleep");
+    command.arg("30");
+    let child = pair.slave.spawn_command(command).expect("spawn sleep");
+    state.session_maps.sessions.insert(
+        session_id.to_string(),
+        Mutex::new(PtySession {
+            writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
+                bytes: Arc::new(std::sync::Mutex::new(Vec::new())),
+            })
+                as Box<dyn std::io::Write + Send>)),
+            master: pair.master,
+            _child: child,
+            paused: Arc::new(AtomicBool::new(false)),
+            worktree: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            is_remote: false,
+            // Not a real shell — the point is only that its basename
+            // ("sleep") matches the actually-running process, which is
+            // NOT on the static `SHELLS` list.
+            shell: "/opt/homebrew/bin/sleep".to_string(),
+        }),
+    );
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: true,
+            ..Default::default()
+        },
+    );
+
+    let settled = settle_agent_type(&state, session_id);
+
+    assert_eq!(
+        settled, None,
+        "a foreground matching session.shell's basename must clear agent_type \
+         even though its name isn't on the static SHELLS list"
+    );
+}
+
+/// The fallback path (unrecognized non-shell, resolved only via the
+/// preset — `detected.is_none()`) is genuinely ambiguous: it can't tell
+/// "the preset's own launcher" from "an intermediate wrapper hop." It
+/// must require the foreground to persist across
+/// `AGENT_SEEN_RUNNING_CONFIRM_MS` before confirming `agent_seen_running`,
+/// so a wrapper that fails almost immediately (e.g. a failed `direnv
+/// exec`) can't falsely confirm-then-strand the preset. A direct
+/// `classify_agent` match has no such ambiguity and is covered by the
+/// existing `..._clears_sticky_agent_type_on_confirmed_shell` test, which
+/// presets `agent_seen_running: true` directly rather than exercising
+/// this debounce.
+#[cfg(unix)]
+#[test]
+fn get_session_foreground_process_debounces_ambiguous_confirmation() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "ambiguous-confirmation-debounced";
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    let mut command = CommandBuilder::new("/bin/sleep");
+    command.arg("30");
+    let child = pair.slave.spawn_command(command).expect("spawn sleep");
+    state.session_maps.sessions.insert(
+        session_id.to_string(),
+        Mutex::new(PtySession {
+            writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
+                bytes: Arc::new(std::sync::Mutex::new(Vec::new())),
+            })
+                as Box<dyn std::io::Write + Send>)),
+            master: pair.master,
+            _child: child,
+            paused: Arc::new(AtomicBool::new(false)),
+            worktree: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            is_remote: false,
+            shell: "/bin/sh".to_string(),
+        }),
+    );
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: false,
+            ..Default::default()
+        },
+    );
+
+    // Retry until the ambiguous branch is genuinely reached — the same
+    // startup race documented on `insert_idle_shell_session` (a freshly
+    // spawned child's pgid/process-name can read unsettled for a moment)
+    // applies here too; a single untried call could transiently see
+    // `process_group_leader()` return `None` via the function's own
+    // early `?`, which looks identical to "not yet ambiguous" from the
+    // outside but isn't the thing under test. Retrying doesn't disturb
+    // the debounce math below: the confirmation window is measured from
+    // whenever `agent_seen_running_pending_since_ms` first gets set, not
+    // from how many calls preceded that.
+    let mut pending_set = false;
+    for _ in 0..150 {
+        let result = get_session_foreground_process_impl(&state, session_id);
+        if result == Some("claude".to_string())
+            && state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .is_some_and(|e| e.agent_seen_running_pending_since_ms.is_some())
+        {
+            pending_set = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        pending_set,
+        "the ambiguous observation must start the confirmation window"
+    );
+    assert!(
+        !state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .agent_seen_running,
+        "a single ambiguous observation must not confirm agent_seen_running yet"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(
+        AGENT_SEEN_RUNNING_CONFIRM_MS + 200,
+    ));
+    get_session_foreground_process_impl(&state, session_id);
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .agent_seen_running,
+        "once the ambiguous foreground has persisted past the confirm window, \
+         agent_seen_running must latch"
+    );
+}
+
+/// If the shell reclaims the foreground *before* an ambiguous
+/// confirmation window (`AGENT_SEEN_RUNNING_CONFIRM_MS`) elapses, the
+/// pending timestamp must reset rather than surviving into a later,
+/// unrelated episode — otherwise a stale `agent_seen_running_pending_since_ms`
+/// could let a much later ambiguous observation confirm immediately
+/// (using an old timestamp) instead of restarting its own window.
+#[cfg(unix)]
+#[test]
+fn get_session_foreground_process_resets_pending_window_on_shell_reclaim() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "pending-window-resets-on-shell-reclaim";
+    insert_idle_shell_session(&state, session_id);
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: false,
+            // Simulates a wrapper hop observed moments ago, still well
+            // within the confirmation window.
+            agent_seen_running_pending_since_ms: Some(now_epoch_ms()),
+            ..Default::default()
+        },
+    );
+
+    let mut settled = false;
+    for _ in 0..150 {
+        get_session_foreground_process_impl(&state, session_id);
+        if state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_some_and(|e| e.agent_seen_running_pending_since_ms.is_none())
+        {
+            settled = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    assert!(
+        settled,
+        "a confirmed shell must reset a pending ambiguous-confirmation window"
+    );
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert!(
+        !entry.agent_seen_running,
+        "the window was interrupted before confirming — must not have latched"
+    );
+    assert_eq!(
+        entry.agent_type,
+        Some("claude".to_string()),
+        "the preset itself is untouched — only the pending bookkeeping resets, \
+         since agent_seen_running never confirmed"
+    );
+}
+
+/// OSC 133's own prompt marker (`'A'`, `hook_state = false`) can only
+/// fire once the real shell redraws its prompt — it cannot fire while any
+/// foreground child still owns the terminal — so it's a reliable,
+/// immediate "the agent has genuinely exited" signal and must clear
+/// `agent_type` right away, without waiting for the next
+/// `get_session_foreground_process` poll. OSC 7770's `state=idle`
+/// (`hook_state = true`) means the hook-instrumented agent finished this
+/// turn and is waiting for the next prompt WHILE THE SAME PROCESS STAYS
+/// ALIVE — clearing there would wipe `agent_type` on every ordinary turn
+/// boundary, not just on exit, so it must NOT clear.
+#[test]
+fn osc133_idle_clears_agent_type_but_osc7770_idle_does_not() {
+    let state = crate::state::tests_support::make_test_app_state();
+
+    let osc133_session = "osc133-idle-clears-agent-type";
+    state.session_maps.shell_states.insert(
+        osc133_session.into(),
+        std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+    );
+    state.session_maps.session_states.insert(
+        osc133_session.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: true,
+            ..Default::default()
+        },
+    );
+    let transitioned =
+        transition_explicit_shell_state(&state, osc133_session, SHELL_IDLE, "idle", false);
+    assert!(
+        transitioned,
+        "BUSY->IDLE must be a real edge given the atomic starts at BUSY"
+    );
+    let entry = state.session_maps.session_states.get(osc133_session).unwrap();
+    assert_eq!(
+        entry.agent_type, None,
+        "OSC 133 idle (hook_state=false) must clear agent_type immediately"
+    );
+    assert!(!entry.agent_seen_running);
+    drop(entry);
+
+    let osc7770_session = "osc7770-idle-does-not-clear-agent-type";
+    state.session_maps.shell_states.insert(
+        osc7770_session.into(),
+        std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+    );
+    state.session_maps.session_states.insert(
+        osc7770_session.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: true,
+            ..Default::default()
+        },
+    );
+    let transitioned =
+        transition_explicit_shell_state(&state, osc7770_session, SHELL_IDLE, "idle", true);
+    assert!(transitioned);
+    let entry = state.session_maps.session_states.get(osc7770_session).unwrap();
+    assert_eq!(
+        entry.agent_type,
+        Some("claude".to_string()),
+        "OSC 7770 idle (hook_state=true) must NOT clear agent_type — it means \
+         the agent finished a turn, not that the agent process exited"
+    );
+}
