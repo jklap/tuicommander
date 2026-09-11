@@ -12237,6 +12237,20 @@ pub(crate) async fn terminal_image_bytes(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// `(mime, intrinsic_width, intrinsic_height)` for a previously transmitted
+/// image — lets a frontend renderer interpret Kitty's raw `f=24`/`f=32`
+/// payloads (no container of their own to sniff dimensions/format from,
+/// unlike PNG/GIF/JPEG, which `createImageBitmap` decodes unaided).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn terminal_image_meta(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    image_id: u32,
+) -> Result<Option<(String, u32, u32)>, String> {
+    vt_read(&state, session_id, move |vt| vt.grid_image_meta(image_id)).await
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn set_session_visible(

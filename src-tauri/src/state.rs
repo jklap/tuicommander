@@ -4648,6 +4648,14 @@ impl VtLogBuffer {
         self.grid.image_bytes(image_id)
     }
 
+    /// `(mime, intrinsic_width, intrinsic_height)` for a previously
+    /// transmitted image, by id (color-tools plan) — lets the frontend
+    /// interpret Kitty's raw `f=24`/`f=32` payloads, which carry no
+    /// container/dimensions of their own.
+    pub(crate) fn grid_image_meta(&self, image_id: u32) -> Option<(String, u32, u32)> {
+        self.grid.image_meta(image_id)
+    }
+
     /// Every current inline-image placement (color-tools plan, Phase 5) — the
     /// reconnect/new-client hydration query.
     pub(crate) fn grid_image_placements(

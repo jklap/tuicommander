@@ -2143,6 +2143,21 @@ pub(super) async fn terminal_image_bytes(
     }
 }
 
+/// `(mime, intrinsic_width, intrinsic_height)` for a previously transmitted
+/// image, as a JSON array — identical shape to the `terminal_image_meta`
+/// Tauri command. Answers `null` for an unknown/evicted image, same as the
+/// other `terminal_image_*` reads.
+pub(super) async fn terminal_image_meta(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<super::types::TerminalImageQuery>,
+) -> impl IntoResponse {
+    match crate::pty::vt_read(&state, session_id, move |vt| vt.grid_image_meta(query.id)).await {
+        Ok(meta) => Json(serde_json::json!(meta)).into_response(),
+        Err(e) => read_failed_response(&e),
+    }
+}
+
 /// Every current inline-image placement, as `(placement_id, image_id, abs_row,
 /// col, rows, cols, z_index)` tuples — identical shape to the
 /// `terminal_image_placements` Tauri command, so both transports carry the

@@ -2303,6 +2303,7 @@ pub fn run() {
             pty::terminal_hyperlink_span,
             pty::terminal_image_ref_at,
             pty::terminal_image_bytes,
+            pty::terminal_image_meta,
             pty::terminal_image_placements,
             pty::set_session_visible,
             pty::set_session_name,

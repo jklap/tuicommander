@@ -444,8 +444,6 @@ implement the protocol itself.
   (`t=d/f/t/s`), `o=z` zlib compression, `m=` chunking,
   `i=`/`p=`/`c=`/`r=`/`z=`/`C=`/`q=`, and the capability-probe response —
   see `kitty.rs`'s own module doc comment for exactly what's implemented.
-  Unicode-placeholder diacritic decoding is the one remaining deliberate
-  gap (documented no-op, not silent misbehavior).
 - **Transmission mediums** (Phase 6): `t=f`/`t=t` (file/temp-file) and `t=s`
   (POSIX/Windows shared memory) are implemented by delegating the actual
   OS I/O to the embedding app (`EventListener::read_file_medium`/
@@ -492,14 +490,17 @@ implement the protocol itself.
   left-neighbor diacritic-omission inheritance) via real end-to-end tests
   in `terminal_grid.rs`, not just unit-tested in isolation — this is the
   path image.nvim, snacks.nvim, and yazi's modern driver all actually use.
-- **Known gap**: the Phase 5 frontend renderer covers Kitty placements too
-  (any `z` renders in the same above-text layer today — see
-  `docs/frontend/terminal-features.md` for the z-index scope), but raw
-  `f=24`/`f=32` pixel payloads (no container) don't decode client-side yet,
-  since `createImageBitmap` needs a real image container and today's
-  `terminal_image_bytes` carries no width/height/format metadata a raw-pixel
-  decode would need. Diagnostics-ring elision (above) covers Kitty APC
-  payloads the same way it covers OSC 1337.
+  Because `z=` is only ever carried on the `a=p,U=1`/`a=T,U=1` registration
+  command and never on the placeholder text itself, `Term` remembers it in
+  a `unicode_placeholder_z: HashMap<(image_id, placement_id), i32>` (cleared
+  on `d=a`/`d=A`, filtered by image id on `d=i`/`d=I`) so
+  `try_resolve_unicode_placeholder` can recover the real `z_index` — including
+  image.nvim's `z=-1` — instead of hardcoding `0`.
+- The Phase 5 frontend renderer covers Kitty placements too, including full
+  z-order compositing, raw `f=24`/`f=32` pixel decoding, and heuristic
+  overwrite detection — see `docs/frontend/terminal-features.md`'s renderer
+  section for the current (no longer gapped) state. Diagnostics-ring elision
+  (above) covers Kitty APC payloads the same way it covers OSC 1337.
 
 ## Shell Environment Variables
 

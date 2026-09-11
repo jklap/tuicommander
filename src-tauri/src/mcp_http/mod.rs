@@ -668,6 +668,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::terminal_image_placements),
         )
         .route(
+            "/sessions/{id}/terminal/image-meta",
+            get(session::terminal_image_meta),
+        )
+        .route(
             "/sessions/{id}/terminal/selection-text",
             get(session::terminal_get_selection_text),
         )

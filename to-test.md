@@ -3240,16 +3240,28 @@ section needs a human running the rebuilt app, not just re-running tests.
   `terminal_image_placements` hydration query for reconnect/new-client attach) — this item now
   needs a real visual confirmation against a live rebuild, not just the unit-level formula/paint
   tests in `imageLayer.test.ts` and the backend's own placement-event tests in `terminal_grid.rs`.
-  **Known, deliberately-scoped gaps in the Phase 5 renderer** (not silent — each is a documented
-  simplification): (1) Kitty `z<0` ("paint below text") placements still render in the single
-  above-text layer today, so they'll visually occlude text they're meant to sit behind — correct
-  three-band compositing needs splitting `gridRenderer.ts`'s fused background+glyph paint into two
-  separately-paintable passes, which is real, separate follow-up work, not attempted in this pass.
-  (2) Kitty's raw `f=24`/`f=32` pixel formats (no container — used by mpv/blackcat) don't render:
-  `createImageBitmap` can only decode a real image container (PNG/GIF/JPEG), and today's
-  `terminal_image_bytes` response carries no width/height/format metadata a raw-pixel decode would
-  need. iTerm2's `File=` and Kitty's default `f=100` PNG (everything `imgcat`/`imgls`/`divider`
-  and most real Kitty clients actually send) both render fine.
+  **Full z-order compositing, raw pixel format decoding, and overwrite detection are now
+  implemented too** (previously-documented gaps, since closed): (1) Kitty `z<0` ("paint below
+  text") placements now render on a dedicated `belowTextImageCanvasRef` sandwiched between a
+  background-only canvas and a transparent glyph-only canvas — `CanvasTerminal.tsx` switches a
+  session from the single fused `canvasRef` paint to this 5-layer stack the first time
+  `ImageLayer.hasNegativeZ()` goes true, and never switches back, so the common case (no
+  negative-z images) keeps the original fast path. Live-verified against a real `make dev`
+  session: a `z=-1` placement painted through a blue square's text (visible on top) while an
+  otherwise-identical `z=0` placement stayed hidden beneath it, exactly as intended.
+  (2) Kitty's raw `f=24`/`f=32` pixel formats (no container — used by mpv/blackcat) now decode via
+  a new `terminal_image_meta` command (mime + intrinsic dimensions) plus frontend-side manual
+  `ImageData` reconstruction (RGB expanded to RGBA) in `imageLayer.ts`'s `decodeRawPixels`.
+  (3) A placement's cells being overwritten by ordinary text (not an explicit `a=d`/alt-screen
+  switch) is now detected heuristically: `ImageLayer.verifyOverlapping()` re-checks a placement's
+  top-left cell via `terminal_image_ref_at` whenever a dirty-row update touches one of its rows,
+  and drops the placement if the ref no longer matches — narrower than a full-rectangle check
+  (a partial overwrite that spares the top-left cell isn't caught) but covers the common case.
+  All three still need a real-tool visual pass beyond the z-order live-verification already done:
+  raw `f=24`/`f=32` against mpv/blackcat, and overwrite-clearing against a real TUI that redraws
+  over a placement's origin cell (yazi, image.nvim scrolling). iTerm2's `File=` and Kitty's default
+  `f=100` PNG (everything `imgcat`/`imgls`/`divider` and most real Kitty clients actually send)
+  both render fine and were live-verified earlier in this same session.
 - [ ] Diagnostics-ring elision (color-tools plan, Phase 8, `image_payload_elision.rs`) is now
   implemented: an OSC 1337/Kitty APC payload is replaced with a short placeholder before it reaches
   `pty_raw_rings` or a `.tcap` capture. Covered by unit tests (including one against the same real

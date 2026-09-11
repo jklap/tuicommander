@@ -435,6 +435,14 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/sessions/${args.sessionId}/terminal/image?id=${args.imageId}`,
 		}),
 	},
+	terminal_image_meta: {
+		map: (args) => ({
+			method: "GET",
+			path: `/sessions/${args.sessionId}/terminal/image-meta?id=${args.imageId}`,
+			// Option<(mime,intrinsicWidth,intrinsicHeight)> -> [...] | null.
+			transform: (data) => data ?? null,
+		}),
+	},
 	terminal_image_placements: {
 		map: (args) => ({
 			method: "GET",

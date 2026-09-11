@@ -168,14 +168,29 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// Behind the base canvas: paints only the one row above and one below the
 	// viewport, revealed as the stage slides. Never used for hit-testing.
 	let overscanCanvasRef!: HTMLCanvasElement;
-	// Inline images (color-tools plan, Phase 5): a dedicated layer between the
-	// glyph/background canvas and the overlay canvas, so an image always
-	// occludes text underneath it but never the cursor/selection/search
-	// overlay drawn on top. See `imageLayer.ts`'s doc comment for what z-index
-	// handling this pass does and doesn't cover.
+	// Inline images (color-tools plan, Phase 5 + z-order compositing): the
+	// above-text layer (imageCanvasRef, z>=0 — iTerm2 always, Kitty by
+	// default) sits between the glyph/background canvas and the cursor/
+	// selection overlay, so an image occludes text underneath it but never
+	// the overlay drawn on top. belowTextImageCanvasRef + glyphCanvasRef only
+	// get painted into once `usesSplitCompositing` flips true (a session
+	// registers its first z<0 placement) — see `switchToSplitCompositingIfNeeded`.
+	// See `imageLayer.ts`'s doc comment for the full z-band design and scope.
 	let imageCanvasRef!: HTMLCanvasElement;
 	let ictx!: CanvasRenderingContext2D;
+	let belowTextImageCanvasRef!: HTMLCanvasElement;
+	let bictx: CanvasRenderingContext2D | null = null;
+	let glyphCanvasRef!: HTMLCanvasElement;
+	let gctx: CanvasRenderingContext2D | null = null;
+	let glyphRenderer: GridRenderer | null = null;
 	let imageLayer: ImageLayer | null = null;
+	// Flips once (never back) the first time a placement with zIndex<0 is
+	// seen — switches canvasRef from the fused bg+glyph paint to a
+	// background-only paint, with glyphs moving to glyphCanvasRef and
+	// belowTextImageCanvasRef painted in between. Cost of the split (two
+	// canvas paints instead of one, two extra mostly-empty layers) is only
+	// paid by sessions that actually use Kitty z<0 placements.
+	let usesSplitCompositing = false;
 	let ctx!: CanvasRenderingContext2D;
 	let octx!: CanvasRenderingContext2D;
 	let octxOverscan: CanvasRenderingContext2D | null = null;
@@ -610,6 +625,28 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			ictx.scale(dpr, dpr);
 			ictx.translate(GUTTER_PX, 0);
 		}
+		// Split-compositing layers (z<0 image band + separated glyph canvas) —
+		// sized identically regardless of whether split mode is active yet, so
+		// switching mid-session (see `switchToSplitCompositingIfNeeded`) never
+		// needs a resize to catch up.
+		if (bictx) {
+			belowTextImageCanvasRef.width = logicalW * dpr;
+			belowTextImageCanvasRef.height = logicalH * dpr;
+			belowTextImageCanvasRef.style.width = `${logicalW}px`;
+			belowTextImageCanvasRef.style.height = `${logicalH}px`;
+			bictx.setTransform(1, 0, 0, 1, 0, 0);
+			bictx.scale(dpr, dpr);
+			bictx.translate(GUTTER_PX, 0);
+		}
+		if (gctx) {
+			glyphCanvasRef.width = logicalW * dpr;
+			glyphCanvasRef.height = logicalH * dpr;
+			glyphCanvasRef.style.width = `${logicalW}px`;
+			glyphCanvasRef.style.height = `${logicalH}px`;
+			gctx.setTransform(1, 0, 0, 1, 0, 0);
+			gctx.scale(dpr, dpr);
+			gctx.translate(GUTTER_PX, 0);
+		}
 
 		// Overscan canvas (smooth scroll): one extra row above and below the viewport.
 		// Positioned -cellHeight so its drawing y=0 maps to the row just above the
@@ -672,7 +709,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function paintFrame(frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
-		gridRenderer.paintGrid(rowMap, m, { fullRepaint: fullRepaintNeeded, dirtyIndices });
+		const opts = { fullRepaint: fullRepaintNeeded, dirtyIndices };
+		if (usesSplitCompositing && glyphRenderer) {
+			gridRenderer.paintGridBackground(rowMap, m, opts);
+			glyphRenderer.paintGridGlyphs(rowMap, m, opts);
+		} else {
+			gridRenderer.paintGrid(rowMap, m, opts);
+		}
 		fullRepaintNeeded = false;
 
 		// Overlay (cursor/selection/search/links/scrollbar/suggest) always stays on main.
@@ -680,12 +723,58 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		updateScrollbar(frame);
 		updateSuggestOverlay(frame, m, dirtyIndices);
+
+		// An ordinary text overwrite of a placement's cells has no dedicated
+		// wire signal (no spare bit in the grid frame) — re-verify any
+		// placement whose rows overlap this update's dirty rows instead (see
+		// imageLayer.ts's Overwrite Detection doc). Full repaints (resize,
+		// scroll-triggered redraw) don't need this: they aren't caused by a
+		// content overwrite, and hydration already covers the cases that do
+		// send a dedicated signal (alt-screen switch, Kitty a=d).
+		if (imageLayer && imageLayer.size > 0 && dirtyIndices && dirtyIndices.size > 0 && !opts.fullRepaint) {
+			const base = frame.historyBase + frame.historySize - frame.displayOffset;
+			const dirtyAbsRows = new Set<number>();
+			for (const idx of dirtyIndices) dirtyAbsRows.add(base + idx);
+			imageLayer.verifyOverlapping(dirtyAbsRows, frame).then((changed) => {
+				if (changed && currentFrame) {
+					const mm = metrics();
+					if (mm) repaintImages(currentFrame, mm);
+				}
+			});
+		}
 	}
 
 	function repaintImages(frame: DecodedFrame, m: CellMetrics) {
-		if (!ictx || !imageLayer) return;
-		ictx.clearRect(-GUTTER_PX, 0, imageCanvasRef.width / m.dpr, imageCanvasRef.height / m.dpr);
-		imageLayer.paint(ictx, frame, m);
+		if (!imageLayer) return;
+		if (ictx) {
+			ictx.clearRect(-GUTTER_PX, 0, imageCanvasRef.width / m.dpr, imageCanvasRef.height / m.dpr);
+			imageLayer.paintAboveText(ictx, frame, m);
+		}
+		if (usesSplitCompositing && bictx) {
+			bictx.clearRect(-GUTTER_PX, 0, belowTextImageCanvasRef.width / m.dpr, belowTextImageCanvasRef.height / m.dpr);
+			imageLayer.paintBelowText(bictx, frame, m);
+		}
+	}
+
+	/** One-way switch (color-tools plan, full z-order compositing): the first
+	 * time this session's `imageLayer` reports a `z<0` placement, move from
+	 * the fused single-canvas fast path to the background/glyph split so
+	 * that placement can actually render behind text. Cheap to call
+	 * whenever placements might have changed — a no-op once already split,
+	 * or while there's still nothing negative to composite. */
+	function switchToSplitCompositingIfNeeded(m: CellMetrics): void {
+		if (usesSplitCompositing || !imageLayer || !imageLayer.hasNegativeZ()) return;
+		if (!bictx || !gctx) return; // canvases not mounted yet — resize() will size them once they are
+		if (!glyphRenderer) {
+			glyphRenderer = createGridRenderer(gctx, {
+				fontWeight: () => settingsStore.state.fontWeight,
+				getFontFamily: () => settingsStore.getFontFamily(),
+			});
+			glyphRenderer.setTheme(cachedBgDefault, cachedFgDefault);
+		}
+		usesSplitCompositing = true;
+		fullRepaintNeeded = true;
+		if (currentFrame) paintFrame(currentFrame, m);
 	}
 
 	function repaintOverlay(frame: DecodedFrame, m: CellMetrics) {
@@ -2354,6 +2443,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const imageCtx = imageCanvasRef.getContext("2d", { alpha: true });
 		if (imageCtx) ictx = imageCtx;
 
+		// Split-compositing canvases (color-tools plan, full z-order
+		// compositing): acquired unconditionally at mount, same as every
+		// other overlay canvas, but only ever painted into once
+		// `switchToSplitCompositingIfNeeded` flips `usesSplitCompositing`.
+		bictx = belowTextImageCanvasRef.getContext("2d", { alpha: true });
+		gctx = glyphCanvasRef.getContext("2d", { alpha: true });
+
 		const baseCtx = canvasRef.getContext("2d", { alpha: false });
 		if (!baseCtx) {
 			appLogger.error("terminal", "Failed to acquire canvas 2D context");
@@ -2410,12 +2506,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			await transport.onEvent("image-placement", (payload) => {
 				imageLayer?.upsert(payload as ImagePlacement);
 				const m = metrics();
-				if (currentFrame && m) repaintImages(currentFrame, m);
+				if (!m) return;
+				switchToSplitCompositingIfNeeded(m);
+				if (currentFrame) repaintImages(currentFrame, m);
 			});
 			await transport.onEvent("image-placements-cleared", () => {
 				imageLayer?.clearAndRehydrate().then(() => {
 					const m = metrics();
-					if (currentFrame && m) repaintImages(currentFrame, m);
+					if (!m) return;
+					switchToSplitCompositingIfNeeded(m);
+					if (currentFrame) repaintImages(currentFrame, m);
 				});
 			});
 		} catch (e) {
@@ -3486,7 +3586,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// the live "image-placement" event only carries new ones from here on.
 			imageLayer?.hydrate().then(() => {
 				const m = metrics();
-				if (currentFrame && m) repaintImages(currentFrame, m);
+				if (!m) return;
+				switchToSplitCompositingIfNeeded(m);
+				if (currentFrame) repaintImages(currentFrame, m);
 			});
 		} catch (e) {
 			appLogger.error("terminal", "Failed to subscribe to terminal grid channel", {
@@ -3580,7 +3682,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				// re-fetch the full set the same way the initial mount does.
 				imageLayer?.hydrate().then(() => {
 					const m = metrics();
-					if (currentFrame && m) repaintImages(currentFrame, m);
+					if (!m) return;
+					switchToSplitCompositingIfNeeded(m);
+					if (currentFrame) repaintImages(currentFrame, m);
 				});
 			},
 			searchFind: async (query: string, blockScope?: boolean) => {
@@ -3913,6 +4017,31 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 							cursor: "text",
 						}}
 						tabIndex={0}
+					/>
+					{/* Below-text image layer (Kitty z<0, e.g. image.nvim's z=-1) — only
+					    ever painted into once a session registers its first z<0
+					    placement (switchToSplitCompositingIfNeeded); transparent/empty
+					    otherwise, so it costs nothing when unused. */}
+					<canvas
+						ref={belowTextImageCanvasRef!}
+						style={{
+							position: "absolute",
+							top: "0",
+							left: "0",
+							"pointer-events": "none",
+						}}
+					/>
+					{/* Glyph-only layer, used ONLY in split-compositing mode (canvasRef
+					    becomes background-only once split). Empty/unused in the default
+					    fused mode. */}
+					<canvas
+						ref={glyphCanvasRef!}
+						style={{
+							position: "absolute",
+							top: "0",
+							left: "0",
+							"pointer-events": "none",
+						}}
 					/>
 					{/* Inline-image layer (color-tools plan, Phase 5): above glyphs/backgrounds,
 					    below the cursor/selection overlay — an image occludes text but never the

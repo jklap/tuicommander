@@ -68,12 +68,12 @@ describe("ImageLayer", () => {
 
 		const ctx = fakeCtx();
 		// First paint: bitmap not decoded yet, nothing drawn, but a load kicks off.
-		layer.paint(ctx, frame(), metrics());
+		layer.paintAboveText(ctx, frame(), metrics());
 		expect(ctx.drawImage).not.toHaveBeenCalled();
 
 		await vi.waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
 
-		layer.paint(ctx, frame(), metrics());
+		layer.paintAboveText(ctx, frame(), metrics());
 		expect(ctx.drawImage).toHaveBeenCalledWith(fakeBitmap, 2 * 9, 5 * 18, 4 * 9, 3 * 18);
 	});
 
@@ -85,14 +85,14 @@ describe("ImageLayer", () => {
 		const ctx = fakeCtx();
 		// On-screen under this frame (screenRow = 100 - 100 - 0 + 0 = 0) so the
 		// first paint actually starts the bitmap load.
-		layer.paint(ctx, frame({ historyBase: 100 }), metrics());
+		layer.paintAboveText(ctx, frame({ historyBase: 100 }), metrics());
 		expect(ctx.drawImage).not.toHaveBeenCalled(); // still loading
 
 		await vi.waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
 
 		// screenRow = absRow - historyBase - historySize + displayOffset
 		// = 100 - 40 - 70 + 10 = 0
-		layer.paint(ctx, frame({ historyBase: 40, historySize: 70, displayOffset: 10 }), metrics());
+		layer.paintAboveText(ctx, frame({ historyBase: 40, historySize: 70, displayOffset: 10 }), metrics());
 		expect(ctx.drawImage).toHaveBeenCalledWith(fakeBitmap, 0, 0, 9, 18);
 	});
 
@@ -105,7 +105,7 @@ describe("ImageLayer", () => {
 		const ctx = fakeCtx();
 		const off = frame({ displayOffset: 0, historyBase: 0, historySize: 1000 });
 
-		layer.paint(ctx, off, metrics());
+		layer.paintAboveText(ctx, off, metrics());
 		expect(ctx.drawImage).not.toHaveBeenCalled();
 		// No bitmap fetch should even be attempted for an off-screen placement.
 		expect(invoke.mock.calls.filter((c) => c[0] === "terminal_image_bytes")).toHaveLength(0);
@@ -121,9 +121,9 @@ describe("ImageLayer", () => {
 		layer.upsert({ placementId: 1, imageId: 42, absRow: 0, col: 0, rows: 1, cols: 1, zIndex: 0 });
 		layer.upsert({ placementId: 2, imageId: 42, absRow: 1, col: 0, rows: 1, cols: 1, zIndex: 0 });
 		const ctx = fakeCtx();
-		layer.paint(ctx, frame(), metrics());
+		layer.paintAboveText(ctx, frame(), metrics());
 		await vi.waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
-		layer.paint(ctx, frame(), metrics());
+		layer.paintAboveText(ctx, frame(), metrics());
 
 		const bytesCalls = invoke.mock.calls.filter((c) => c[0] === "terminal_image_bytes");
 		expect(bytesCalls).toHaveLength(1);
@@ -136,11 +136,11 @@ describe("ImageLayer", () => {
 		const layer = new ImageLayer("s1", invoke, onSettled);
 		layer.upsert({ placementId: 1, imageId: 9, absRow: 0, col: 0, rows: 1, cols: 1, zIndex: 0 });
 		const ctx = fakeCtx();
-		layer.paint(ctx, frame(), metrics());
+		layer.paintAboveText(ctx, frame(), metrics());
 		await vi.waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
 
-		layer.paint(ctx, frame(), metrics());
-		layer.paint(ctx, frame(), metrics());
+		layer.paintAboveText(ctx, frame(), metrics());
+		layer.paintAboveText(ctx, frame(), metrics());
 		expect(ctx.drawImage).not.toHaveBeenCalled();
 		expect(invoke.mock.calls.filter((c) => c[0] === "terminal_image_bytes")).toHaveLength(1);
 	});
@@ -178,5 +178,153 @@ describe("ImageLayer", () => {
 		const layer = new ImageLayer("s1", invoke, vi.fn());
 		await expect(layer.hydrate()).resolves.toBeUndefined();
 		expect(layer.size).toBe(0);
+	});
+});
+
+describe("ImageLayer z-band split (full z-order compositing)", () => {
+	it("hasNegativeZ reflects only currently-known placements", () => {
+		const layer = new ImageLayer("s1", vi.fn(), vi.fn());
+		expect(layer.hasNegativeZ()).toBe(false);
+		layer.upsert({ placementId: 1, imageId: 1, absRow: 0, col: 0, rows: 1, cols: 1, zIndex: 0 });
+		expect(layer.hasNegativeZ()).toBe(false);
+		layer.upsert({ placementId: 2, imageId: 1, absRow: 0, col: 0, rows: 1, cols: 1, zIndex: -1 });
+		expect(layer.hasNegativeZ()).toBe(true);
+	});
+
+	it("paintAboveText and paintBelowText each draw only their own band", async () => {
+		const fakeBitmap = {} as ImageBitmap;
+		vi.stubGlobal(
+			"createImageBitmap",
+			vi.fn(async () => fakeBitmap),
+		);
+		const invoke = vi.fn(async (_cmd: string) => PNG_BYTES);
+		const onSettled = vi.fn();
+		const layer = new ImageLayer("s1", invoke, onSettled);
+		layer.upsert({ placementId: 1, imageId: 1, absRow: 0, col: 0, rows: 1, cols: 1, zIndex: 0 });
+		layer.upsert({ placementId: 2, imageId: 2, absRow: 1, col: 0, rows: 1, cols: 1, zIndex: -1 });
+
+		const above = fakeCtx();
+		const below = fakeCtx();
+		layer.paintAboveText(above, frame(), metrics());
+		layer.paintBelowText(below, frame(), metrics());
+		await vi.waitFor(() => expect(onSettled).toHaveBeenCalledTimes(2));
+
+		layer.paintAboveText(above, frame(), metrics());
+		layer.paintBelowText(below, frame(), metrics());
+		expect(above.drawImage).toHaveBeenCalledTimes(1);
+		expect(above.drawImage).toHaveBeenCalledWith(fakeBitmap, 0, 0, 9, 18);
+		expect(below.drawImage).toHaveBeenCalledTimes(1);
+		expect(below.drawImage).toHaveBeenCalledWith(fakeBitmap, 0, 18, 9, 18);
+	});
+});
+
+describe("ImageLayer.verifyOverlapping (overwrite detection)", () => {
+	it("drops a placement whose top-left cell no longer matches", async () => {
+		const invoke = vi.fn(async (cmd: string) => {
+			if (cmd === "terminal_image_ref_at") return null; // cell no longer shows this image
+			return PNG_BYTES;
+		});
+		const layer = new ImageLayer("s1", invoke, vi.fn());
+		layer.upsert({ placementId: 1, imageId: 7, absRow: 5, col: 2, rows: 2, cols: 2, zIndex: 0 });
+
+		const changed = await layer.verifyOverlapping(new Set([5, 6]), frame());
+		expect(changed).toBe(true);
+		expect(layer.size).toBe(0);
+	});
+
+	it("keeps a placement whose top-left cell still matches", async () => {
+		const invoke = vi.fn(async (cmd: string) => {
+			if (cmd === "terminal_image_ref_at") return [7, 1, 0, 0, 0];
+			return PNG_BYTES;
+		});
+		const layer = new ImageLayer("s1", invoke, vi.fn());
+		layer.upsert({ placementId: 1, imageId: 7, absRow: 5, col: 2, rows: 2, cols: 2, zIndex: 0 });
+
+		const changed = await layer.verifyOverlapping(new Set([5]), frame());
+		expect(changed).toBe(false);
+		expect(layer.size).toBe(1);
+	});
+
+	it("ignores a dirty row that doesn't overlap any placement", async () => {
+		const invoke = vi.fn(async (_cmd: string) => PNG_BYTES);
+		const layer = new ImageLayer("s1", invoke, vi.fn());
+		layer.upsert({ placementId: 1, imageId: 7, absRow: 5, col: 2, rows: 2, cols: 2, zIndex: 0 });
+
+		const changed = await layer.verifyOverlapping(new Set([50]), frame());
+		expect(changed).toBe(false);
+		expect(layer.size).toBe(1);
+		expect(invoke.mock.calls.filter((c) => c[0] === "terminal_image_ref_at")).toHaveLength(0);
+	});
+
+	it("skips verification for a placement scrolled off-screen (can't check, so leaves it alone)", async () => {
+		const invoke = vi.fn(async (_cmd: string) => PNG_BYTES);
+		const layer = new ImageLayer("s1", invoke, vi.fn());
+		layer.upsert({ placementId: 1, imageId: 7, absRow: 5, col: 2, rows: 2, cols: 2, zIndex: 0 });
+
+		// historyBase huge -> screenRow is deeply negative (off-screen).
+		const changed = await layer.verifyOverlapping(new Set([5]), frame({ historyBase: 1000 }));
+		expect(changed).toBe(false);
+		expect(layer.size).toBe(1);
+		expect(invoke.mock.calls.filter((c) => c[0] === "terminal_image_ref_at")).toHaveLength(0);
+	});
+
+	it("fails open (keeps the placement) if the verification call itself throws", async () => {
+		const invoke = vi.fn(async (cmd: string) => {
+			if (cmd === "terminal_image_ref_at") throw new Error("network down");
+			return PNG_BYTES;
+		});
+		const layer = new ImageLayer("s1", invoke, vi.fn());
+		layer.upsert({ placementId: 1, imageId: 7, absRow: 5, col: 2, rows: 2, cols: 2, zIndex: 0 });
+
+		const changed = await layer.verifyOverlapping(new Set([5]), frame());
+		expect(changed).toBe(false);
+		expect(layer.size).toBe(1);
+	});
+});
+
+describe("ImageLayer raw pixel format decoding", () => {
+	it("reconstructs a raw f=24 (RGB) payload via terminal_image_meta", async () => {
+		const rawRgb = new Uint8Array([255, 0, 0, 0, 255, 0]).buffer; // 2x1 px RGB
+		const invoke = vi.fn(async (cmd: string) => {
+			if (cmd === "terminal_image_bytes") return rawRgb;
+			if (cmd === "terminal_image_meta") return ["raw-rgb", 2, 1];
+			return [];
+		});
+		let capturedImageData: ImageData | undefined;
+		vi.stubGlobal(
+			"createImageBitmap",
+			vi.fn(async (arg: ImageData) => {
+				capturedImageData = arg;
+				return {} as ImageBitmap;
+			}),
+		);
+		const onSettled = vi.fn();
+		const layer = new ImageLayer("s1", invoke, onSettled);
+		layer.upsert({ placementId: 1, imageId: 1, absRow: 0, col: 0, rows: 1, cols: 2, zIndex: 0 });
+		layer.paintAboveText(fakeCtx(), frame(), metrics());
+		await vi.waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
+
+		expect(capturedImageData?.width).toBe(2);
+		expect(capturedImageData?.height).toBe(1);
+		// RGB expanded to RGBA, alpha forced opaque.
+		expect(Array.from(capturedImageData?.data ?? [])).toEqual([255, 0, 0, 255, 0, 255, 0, 255]);
+	});
+
+	it("marks a raw payload shorter than width*height*channels as errored, not corrupted", async () => {
+		const tooShort = new Uint8Array([1, 2, 3]).buffer; // 1 byte short of 2x1 RGB
+		const invoke = vi.fn(async (cmd: string) => {
+			if (cmd === "terminal_image_bytes") return tooShort;
+			if (cmd === "terminal_image_meta") return ["raw-rgb", 2, 1];
+			return [];
+		});
+		const onSettled = vi.fn();
+		const layer = new ImageLayer("s1", invoke, onSettled);
+		layer.upsert({ placementId: 1, imageId: 1, absRow: 0, col: 0, rows: 1, cols: 2, zIndex: 0 });
+		const ctx = fakeCtx();
+		layer.paintAboveText(ctx, frame(), metrics());
+		await vi.waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
+
+		layer.paintAboveText(ctx, frame(), metrics());
+		expect(ctx.drawImage).not.toHaveBeenCalled();
 	});
 });

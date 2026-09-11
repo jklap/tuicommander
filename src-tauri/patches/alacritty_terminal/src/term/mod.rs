@@ -413,6 +413,16 @@ pub struct Term<T> {
     /// time; a new chunked transfer starting while one is already open
     /// silently replaces it.
     pending_kitty_transmission: Option<kitty::PendingTransmission>,
+
+    /// `z=` registered by an `a=p,U=1`/`a=T,U=1` virtual-placement command,
+    /// keyed by `(image_id, placement_id)` (color-tools plan, Phase 7's
+    /// z-order compositing follow-up). A `U=1` registration never touches
+    /// any cell itself — the app prints the placeholder characters
+    /// separately — so this is the only place the requested z-index exists
+    /// between registration and whenever `try_resolve_unicode_placeholder`
+    /// later needs it. Cleared by `a=d` (see `kitty_process`'s `Delete` arm)
+    /// so it can't grow unbounded over a long session.
+    unicode_placeholder_z: std::collections::HashMap<(u32, u32), i32>,
 }
 
 /// Configuration options for the [`Term`].
@@ -548,6 +558,7 @@ impl<T> Term<T> {
             clipboard_capture: None,
             pending_multipart: None,
             pending_kitty_transmission: None,
+            unicode_placeholder_z: std::collections::HashMap::new(),
         }
     }
 
@@ -1541,6 +1552,7 @@ impl<T: EventListener> Term<T> {
                     Some('a') | Some('A') => {
                         self.event_proxy.forget_all_images();
                         self.event_proxy.send_event(Event::ImagePlacementsCleared);
+                        self.unicode_placeholder_z.clear();
                     }
                     Some('i') | Some('I') => {
                         self.event_proxy.forget_image(control.image_id);
@@ -1553,6 +1565,8 @@ impl<T: EventListener> Term<T> {
                         // cheap enough to re-fetch (a full grid scan) on the
                         // rare `a=d` case.
                         self.event_proxy.send_event(Event::ImagePlacementsCleared);
+                        self.unicode_placeholder_z
+                            .retain(|&(image_id, _), _| image_id != control.image_id);
                     }
                     _ => {} // other d= variants not implemented
                 }
@@ -1709,7 +1723,21 @@ impl<T: EventListener> Term<T> {
     /// (color-tools plan, Phase 7), where `try_resolve_unicode_placeholder`
     /// does the actual tile attachment.
     fn kitty_display(&mut self, control: &kitty::ControlData, image: Arc<cell::ImageData>) {
+        let placement_id = if control.placement_id != 0 {
+            control.placement_id
+        } else {
+            image.image_id
+        };
+
         if control.unicode_placeholder {
+            // No cell is touched here — the app prints the placeholder
+            // characters itself, separately, through the ordinary `input()`
+            // path. But `z=` is only ever carried on THIS registration
+            // command, never on the placeholder text itself, so it has to
+            // be remembered here for `try_resolve_unicode_placeholder` to
+            // find later (color-tools plan, Phase 7's z-order follow-up).
+            self.unicode_placeholder_z
+                .insert((image.image_id, placement_id), control.z_index);
             return;
         }
         let (cols, rows) = if control.cols > 0 && control.rows > 0 {
@@ -1729,11 +1757,6 @@ impl<T: EventListener> Term<T> {
                 1
             };
             (w.max(1), h.max(1))
-        };
-        let placement_id = if control.placement_id != 0 {
-            control.placement_id
-        } else {
-            image.image_id
         };
 
         if control.no_move_cursor {
@@ -1819,8 +1842,20 @@ impl<T: EventListener> Term<T> {
         } else {
             image_id
         };
+        // The z-index was only ever carried on the `a=p,U=1`/`a=T,U=1`
+        // registration command, never on the placeholder text itself —
+        // recovered here from what `kitty_display` stashed at registration
+        // time. `0` (Kitty's own default) if this placement was somehow
+        // never registered, rather than treating it as an error: the cell
+        // is still worth displaying.
+        let z_index = self
+            .unicode_placeholder_z
+            .get(&(image_id, placement_id))
+            .copied()
+            .unwrap_or(0);
 
-        let cell_ref = cell::ImageCellRef::new(image, placement_id, col as u16, row as u16, 0);
+        let cell_ref =
+            cell::ImageCellRef::new(image, placement_id, col as u16, row as u16, z_index);
         self.grid[line][column].set_image_ref(Some(cell_ref));
     }
 }

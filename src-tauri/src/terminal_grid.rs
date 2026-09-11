@@ -699,6 +699,20 @@ impl TerminalGrid {
         self.image_store.lock().unwrap().bytes(image_id)
     }
 
+    /// `(mime, intrinsic_width, intrinsic_height)` for a previously
+    /// transmitted image, by id — the frontend renderer's only way to learn
+    /// enough to interpret Kitty's raw `f=24`/`f=32` payloads (no container,
+    /// so `createImageBitmap` can't sniff dimensions/format the way it can
+    /// for PNG/GIF/JPEG). `None` under the same conditions as `image_bytes`.
+    pub fn image_meta(&self, image_id: u32) -> Option<(String, u32, u32)> {
+        let image = self.image_store.lock().unwrap().get(image_id)?;
+        Some((
+            image.mime.clone(),
+            image.intrinsic_width,
+            image.intrinsic_height,
+        ))
+    }
+
     /// The inline-image tile shown at a given viewport position, if any:
     /// `(image_id, placement_id, tile_col, tile_row, z_index)`. Mirrors
     /// `hyperlink_at`'s viewport addressing exactly.
@@ -5155,6 +5169,30 @@ mod tests {
             grid.image_bytes(42).as_deref(),
             Some(&raw_rgb[..]),
             "but must still store it"
+        );
+    }
+
+    /// The `z=` on an `a=T,U=1` registration is only ever carried on that
+    /// registration command — never on the placeholder text itself — so it
+    /// must still reach the resolved cell's `ImageCellRef.z_index` (color-
+    /// tools plan, Phase 7's z-order-compositing follow-up). Regression
+    /// guard for exactly the gap image.nvim's real usage (`z=-1`) would hit.
+    #[test]
+    fn kitty_unicode_placeholder_z_index_is_recovered_from_the_registration() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=42,a=T,f=24,s=1,v=1,U=1,z=-1,q=2;{payload}\x1b\\").as_bytes(),
+        );
+
+        grid.process("\x1b[38;5;42m\u{10EEEE}\u{305}\u{305}\x1b[39m".as_bytes());
+        let (image_id, _, _, _, z_index) = grid.image_ref_at(0, 0).expect("placeholder resolved");
+        assert_eq!(image_id, 42);
+        assert_eq!(
+            z_index, -1,
+            "z=-1 from the a=T,U=1 registration must survive to the cell"
         );
     }
 
