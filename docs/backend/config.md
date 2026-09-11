@@ -346,6 +346,10 @@ work starts.
 | `sounds.error` | `bool` | `true` | Play on error |
 | `sounds.completion` | `bool` | `true` | Play on completion |
 | `sounds.warning` | `bool` | `true` | Play on warning |
+| `sounds.info` | `bool` | `true` | Play on info |
+| `sounds.attention` | `bool` | `true` | Play the agent-needs-you callback |
+| `audio_device` | `Option<String>` | `None` | Specific output device name; `None` = system default |
+| `sound_choices.<event>` | `SoundChoice` | `{preset: "default", custom_path: None}` | Per-event sound source, one entry each for `question`/`error`/`completion`/`warning`/`info`/`attention`. `preset` is a plain string interpreted by `notification_sound::resolve_sequence` (`"default"`, another event's name to borrow its tone, or `"custom"`) rather than a Rust enum, so a new preset value needs no matching change to this struct. `custom_path` is only read when `preset == "custom"` |
 | `silence_remote_completions` | `bool` | `true` | Suppress the completion chime for HTTP/MCP-created sessions |
 | `toasts_in_bell` | `bool` | `true` | Mirror every toast into the toolbar bell, under a MESSAGES section |
 

@@ -1299,9 +1299,10 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 
 ### 11.6 Notifications
 - Master toggle, volume (0-100%)
-- Per-event: question, error, completed, warning, info
+- Per-event: question, error, completed, warning, info, attention
 - Test buttons per sound
 - Reset to defaults
+- **Sound customization** — per-event dropdown picks the sound source: the event's own default tone, another event's tone borrowed as a preset (e.g. use the "Attention" call for "Question"), or a custom audio file (desktop only, native file picker; `.wav`/`.mp3`/`.ogg`/`.flac`). A custom file that fails to open or decode falls back to that event's default tone rather than staying silent. Browser/PWA mode supports presets but not custom files (no filesystem access) — falls back to the default tone the same way.
 - **Keep toasts in the bell** — mirrors toasts into the bell's Messages section (see **4.4**). Outside the audio block, because the bell is visual and must stay configurable without an audio device
 
 ### 11.7 Keyboard Shortcuts

@@ -30,6 +30,37 @@ no items left goes too. What stays open must carry its own stated reason.
 > WebView gets the same change over Vite HMR. If a browser check of a frontend fix
 > shows nothing, check `dist/index.html`'s mtime before blaming the code.
 
+## Customizable notification sounds — per-event preset/custom-file picker (2026-09-11, **Rust change — needs `make dev` restart**)
+
+Settings > Notifications: each event's row gains a `<select>` next to its
+enable checkbox — Default, another event's tone borrowed as a preset (Chime /
+Arpeggio / Low Tone / Double-Tap / Pluck / Callback), or "Custom file…"
+(desktop only). Rust changes: `notification_sound.rs` (`resolve_sequence`,
+`open_custom_sound`, rodio `Decoder`/`amplify`), `config.rs`
+(`NotificationSoundChoices`/`SoundChoice`), Cargo.toml (`rodio` gained `wav`,
+`mp3`, `vorbis`, `flac` decoder features). Sequencing/decoding/config
+round-trip/merge logic is unit-tested (Rust + vitest) — what's NOT
+machine-verifiable:
+
+- [ ] Pick a real `.wav`/`.mp3`/`.ogg`/`.flac` file via "Custom file…" for at
+      least two different events and confirm it actually plays through Test —
+      and sounds like the chosen file, not a built-in tone.
+- [ ] Pick a preset borrowed from another event (e.g. set "Warning" to
+      "Callback") and confirm Test plays that OTHER event's tone, not
+      Warning's own.
+- [ ] Point a sound at a file, then delete/rename the file on disk and hit
+      Test again — should silently fall back to the default tone (a warning is
+      logged, not surfaced in the UI) rather than staying silent or erroring.
+- [ ] Confirm the native file picker itself opens (Tauri dialog, not a stub)
+      and that canceling it leaves the dropdown showing the previous choice,
+      not stuck on "Custom file…" with nothing set.
+- [ ] Reset Defaults clears every custom file / borrowed preset back to
+      Default across all six events.
+- [ ] Browser/PWA mode (`:9876` in a real browser, not the desktop app):
+      confirm a borrowed preset still plays the right Web Audio tone, and that
+      picking "Custom file…" is not offered at all (no filesystem access
+      there).
+
 ## Ghost/stale terminal ids inflating the removal dialog + sidebar dot, chevron auto-spawn (2026-09-10, frontend only — no rebuild/restart needed)
 
 Fixes three related sidebar/worktree-removal bugs Boss reported live:

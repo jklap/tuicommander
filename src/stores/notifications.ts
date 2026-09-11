@@ -5,6 +5,7 @@ import {
 	type NotificationConfig,
 	type NotificationSound,
 	notificationManager,
+	type SoundChoice,
 } from "../notifications";
 import { isTauri } from "../transport";
 import { appLogger } from "./appLogger";
@@ -62,6 +63,7 @@ function copyDefaults(): NotificationConfig {
 	return {
 		...DEFAULT_NOTIFICATION_CONFIG,
 		sounds: { ...DEFAULT_NOTIFICATION_CONFIG.sounds },
+		sound_choices: { ...DEFAULT_NOTIFICATION_CONFIG.sound_choices },
 		audio_device: DEFAULT_NOTIFICATION_CONFIG.audio_device,
 	};
 }
@@ -158,6 +160,14 @@ function createNotificationsStore() {
 		setSoundEnabled(sound: NotificationSound, enabled: boolean): void {
 			setState("config", "sounds", sound, enabled);
 			notificationManager.setSoundEnabled(sound, enabled);
+			saveConfig(state.config);
+		},
+
+		/** Choose the sound source for a specific event: the default tone,
+		 *  another event's tone borrowed as a preset, or a custom audio file. */
+		setSoundChoice(sound: NotificationSound, choice: SoundChoice): void {
+			setState("config", "sound_choices", sound, choice);
+			notificationManager.setSoundChoice(sound, choice);
 			saveConfig(state.config);
 		},
 

@@ -9,6 +9,7 @@ const {
 	mockSetSilenceRemoteCompletions,
 	mockSetToastsInBell,
 	mockSetSoundEnabled,
+	mockSetSoundChoice,
 	mockTestSound,
 	mockReset,
 } = vi.hoisted(() => ({
@@ -18,9 +19,14 @@ const {
 	mockSetSilenceRemoteCompletions: vi.fn(),
 	mockSetToastsInBell: vi.fn(),
 	mockSetSoundEnabled: vi.fn(),
+	mockSetSoundChoice: vi.fn(),
 	mockTestSound: vi.fn(),
 	mockReset: vi.fn(),
 }));
+
+function defaultChoice() {
+	return { preset: "default" as const, custom_path: null };
+}
 
 vi.mock("../../../stores/notifications", () => ({
 	notificationsStore: {
@@ -40,6 +46,14 @@ vi.mock("../../../stores/notifications", () => ({
 					info: true,
 					attention: true,
 				},
+				sound_choices: {
+					question: defaultChoice(),
+					error: defaultChoice(),
+					completion: defaultChoice(),
+					warning: defaultChoice(),
+					info: defaultChoice(),
+					attention: defaultChoice(),
+				},
 			},
 		},
 		setEnabled: mockSetEnabled,
@@ -48,6 +62,7 @@ vi.mock("../../../stores/notifications", () => ({
 		setSilenceRemoteCompletions: mockSetSilenceRemoteCompletions,
 		setToastsInBell: mockSetToastsInBell,
 		setSoundEnabled: mockSetSoundEnabled,
+		setSoundChoice: mockSetSoundChoice,
 		testSound: mockTestSound,
 		reset: mockReset,
 	},
@@ -142,64 +157,111 @@ describe("NotificationsTab", () => {
 			expect(mockInvoke).not.toHaveBeenCalled();
 		});
 
+		/** Per-sound preset pickers are also plain `<select>`s now, so a bare
+		 *  `container.querySelector("select")` is ambiguous — scope to the
+		 *  device group specifically via its label. */
+		function findDeviceSelect(getByText: (text: string) => HTMLElement): HTMLSelectElement {
+			const label = getByText("Audio Output Device");
+			const el = label.closest("div")?.querySelector("select");
+			if (!el) throw new Error("device select not yet rendered");
+			return el as HTMLSelectElement;
+		}
+
 		it("lists devices returned by list_audio_output_devices, marking the default", async () => {
 			mockInvoke.mockResolvedValueOnce([
 				{ name: "Built-in Speakers", is_default: true },
 				{ name: "USB Headset", is_default: false },
 			]);
-			const { getByText, container } = render(() => <NotificationsTab />);
+			const { getByText } = render(() => <NotificationsTab />);
 			fireEvent.click(getByText("Choose output device…"));
 
 			expect(mockInvoke).toHaveBeenCalledWith("list_audio_output_devices");
-			const select = await waitFor(() => {
-				const el = container.querySelector("select");
-				if (!el) throw new Error("select not yet rendered");
-				return el;
-			});
+			const select = await waitFor(() => findDeviceSelect(getByText));
 			const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
 			expect(options).toEqual(["System Default", "Built-in Speakers (current default)", "USB Headset"]);
 		});
 
 		it("calls setAudioDevice with the selected device name", async () => {
 			mockInvoke.mockResolvedValueOnce([{ name: "USB Headset", is_default: false }]);
-			const { getByText, container } = render(() => <NotificationsTab />);
+			const { getByText } = render(() => <NotificationsTab />);
 			fireEvent.click(getByText("Choose output device…"));
 
-			const select = await waitFor(() => {
-				const el = container.querySelector("select");
-				if (!el) throw new Error("select not yet rendered");
-				return el;
-			});
+			const select = await waitFor(() => findDeviceSelect(getByText));
 			fireEvent.change(select, { target: { value: "USB Headset" } });
 			expect(mockSetAudioDevice).toHaveBeenCalledWith("USB Headset");
 		});
 
 		it("calls setAudioDevice with null when 'System Default' is re-selected", async () => {
 			mockInvoke.mockResolvedValueOnce([{ name: "USB Headset", is_default: false }]);
-			const { getByText, container } = render(() => <NotificationsTab />);
+			const { getByText } = render(() => <NotificationsTab />);
 			fireEvent.click(getByText("Choose output device…"));
 
-			const select = await waitFor(() => {
-				const el = container.querySelector("select");
-				if (!el) throw new Error("select not yet rendered");
-				return el;
-			});
+			const select = await waitFor(() => findDeviceSelect(getByText));
 			fireEvent.change(select, { target: { value: "" } });
 			expect(mockSetAudioDevice).toHaveBeenCalledWith(null);
 		});
 
 		it("falls back to an empty (System Default-only) list when enumeration fails, instead of throwing", async () => {
 			mockInvoke.mockRejectedValueOnce(new Error("mic permission denied"));
-			const { getByText, container } = render(() => <NotificationsTab />);
+			const { getByText } = render(() => <NotificationsTab />);
 			fireEvent.click(getByText("Choose output device…"));
 
-			const select = await waitFor(() => {
-				const el = container.querySelector("select");
-				if (!el) throw new Error("select not yet rendered");
-				return el;
-			});
+			const select = await waitFor(() => findDeviceSelect(getByText));
 			expect(select.querySelectorAll("option")).toHaveLength(1);
 			expect(select.querySelector("option")?.textContent).toBe("System Default");
+		});
+	});
+
+	describe("per-sound preset picker", () => {
+		function presetSelectFor(container: HTMLElement, label: string): HTMLSelectElement {
+			const row = Array.from(container.querySelectorAll<HTMLElement>("div")).find(
+				(div) => div.textContent?.includes(label) && div.querySelector("select"),
+			);
+			const el = row?.querySelector("select");
+			if (!el) throw new Error(`preset select for "${label}" not found`);
+			return el as HTMLSelectElement;
+		}
+
+		it("offers every OTHER sound's tone as a preset, plus Default and Custom file…, but not its own tone", () => {
+			const { container } = render(() => <NotificationsTab />);
+			const select = presetSelectFor(container, "Question");
+			const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+			expect(options).toEqual(["Default", "Low Tone", "Arpeggio", "Double-Tap", "Pluck", "Callback", "Custom file…"]);
+		});
+
+		it("selecting another sound's preset calls setSoundChoice with that preset and no custom path", () => {
+			const { container } = render(() => <NotificationsTab />);
+			const select = presetSelectFor(container, "Question");
+			fireEvent.change(select, { target: { value: "attention" } });
+			expect(mockSetSoundChoice).toHaveBeenCalledWith("question", { preset: "attention", custom_path: null });
+		});
+
+		it("selecting Custom file… opens the native file picker and, on a pick, calls setSoundChoice with the path", async () => {
+			const { open } = await import("@tauri-apps/plugin-dialog");
+			vi.mocked(open).mockResolvedValueOnce("/Users/me/sounds/ding.wav");
+			const { container } = render(() => <NotificationsTab />);
+			const select = presetSelectFor(container, "Question");
+
+			fireEvent.change(select, { target: { value: "custom" } });
+			await waitFor(() =>
+				expect(mockSetSoundChoice).toHaveBeenCalledWith("question", {
+					preset: "custom",
+					custom_path: "/Users/me/sounds/ding.wav",
+				}),
+			);
+		});
+
+		it("canceling the file picker (null) leaves the choice unchanged and does not call setSoundChoice", async () => {
+			const { open } = await import("@tauri-apps/plugin-dialog");
+			vi.mocked(open).mockResolvedValueOnce(null);
+			const { container } = render(() => <NotificationsTab />);
+			const select = presetSelectFor(container, "Question");
+
+			fireEvent.change(select, { target: { value: "custom" } });
+			await waitFor(() => expect(vi.mocked(open)).toHaveBeenCalled());
+			expect(mockSetSoundChoice).not.toHaveBeenCalled();
+			// The visible selection reverts to what the store still holds ("default").
+			expect(select.value).toBe("default");
 		});
 	});
 });
@@ -233,5 +295,57 @@ describe("NotificationsTab (platform without audio)", () => {
 		expect(queryByText("Reset Defaults")).toBeNull();
 		// The bell setting lives outside the audio Show gate deliberately (it's visual, not audio).
 		expect(getByText("Keep toasts in the bell")).toBeTruthy();
+	});
+});
+
+describe("NotificationsTab (a sound already has a custom file configured)", () => {
+	const mockSetSoundChoiceCustom = vi.fn();
+	let NotificationsTabCustom: typeof import("../../../components/SettingsPanel/tabs/NotificationsTab").NotificationsTab;
+
+	beforeEach(async () => {
+		vi.resetModules();
+		mockSetSoundChoiceCustom.mockClear();
+		vi.doMock("../../../stores/notifications", () => ({
+			notificationsStore: {
+				state: {
+					isAvailable: true,
+					config: {
+						enabled: true,
+						volume: 0.5,
+						audio_device: null,
+						silence_remote_completions: false,
+						toasts_in_bell: true,
+						sounds: { question: true, error: true, completion: true, warning: true, info: true, attention: true },
+						sound_choices: {
+							question: { preset: "custom", custom_path: "/Users/me/sounds/ding.wav" },
+							error: { preset: "default", custom_path: null },
+							completion: { preset: "default", custom_path: null },
+							warning: { preset: "default", custom_path: null },
+							info: { preset: "default", custom_path: null },
+							attention: { preset: "default", custom_path: null },
+						},
+					},
+				},
+				setEnabled: vi.fn(),
+				setVolume: vi.fn(),
+				setAudioDevice: vi.fn(),
+				setSilenceRemoteCompletions: vi.fn(),
+				setToastsInBell: vi.fn(),
+				setSoundEnabled: vi.fn(),
+				setSoundChoice: mockSetSoundChoiceCustom,
+				testSound: vi.fn(),
+				reset: vi.fn(),
+			},
+		}));
+		const mod = await import("../../../components/SettingsPanel/tabs/NotificationsTab");
+		NotificationsTabCustom = mod.NotificationsTab;
+	});
+
+	it("shows the custom filename and lets the user reset that sound back to default", () => {
+		const { getByText } = render(() => <NotificationsTabCustom />);
+		expect(getByText("Custom: ding.wav")).toBeTruthy();
+
+		fireEvent.click(getByText("Reset to default"));
+		expect(mockSetSoundChoiceCustom).toHaveBeenCalledWith("question", { preset: "default", custom_path: null });
 	});
 });

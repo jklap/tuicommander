@@ -474,4 +474,10 @@ export const TIPS: Tip[] = [
 			"Settings → Appearance → UI Legend isn't just a reference — pick a color, icon, or animation for any status dot, badge, or symbol, and toggle whole groups (tab tint, PR badges, git status, diff stats) on or off.",
 		shortcut: null,
 	},
+	{
+		feature: "Custom Notification Sounds",
+		description:
+			"Settings → Notifications lets each event use its own default tone, borrow another event's tone, or play your own audio file (.wav/.mp3/.ogg/.flac) via the Sound dropdown.",
+		shortcut: null,
+	},
 ];

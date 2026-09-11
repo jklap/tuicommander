@@ -19,12 +19,48 @@ export function isNotificationSound(value: unknown): value is NotificationSound 
 	return typeof value === "string" && (NOTIFICATION_SOUNDS as readonly string[]).includes(value);
 }
 
+/** A sound source a user can pick for one notification type: the built-in
+ *  default tone, another notification type's tone borrowed as a preset, or a
+ *  user-supplied audio file (desktop only — see `SoundChoice.custom_path`). */
+export type SoundPreset = "default" | NotificationSound | "custom";
+
+export const SOUND_PRESETS: readonly SoundPreset[] = [
+	"default",
+	"question",
+	"completion",
+	"error",
+	"warning",
+	"info",
+	"attention",
+	"custom",
+] as const;
+
+export function isSoundPreset(value: unknown): value is SoundPreset {
+	return typeof value === "string" && (SOUND_PRESETS as readonly string[]).includes(value);
+}
+
+/** The chosen sound source for one notification type. `custom_path` is only
+ *  meaningful when `preset === "custom"`; it's a native filesystem path, so it
+ *  only ever plays in Tauri mode (the browser/PWA fallback has no filesystem
+ *  access and falls back to the sound's own default tone). */
+export interface SoundChoice {
+	preset: SoundPreset;
+	custom_path: string | null;
+}
+
+function defaultSoundChoice(): SoundChoice {
+	return { preset: "default", custom_path: null };
+}
+
 /** Notification configuration */
 export interface NotificationConfig {
 	enabled: boolean;
 	volume: number; // 0.0 to 1.0
 	sounds: Record<NotificationSound, boolean>;
 	audio_device: string | null;
+	/** Per-sound source selection. Independent of `sounds` above, which only
+	 *  gates whether that sound plays at all. */
+	sound_choices: Record<NotificationSound, SoundChoice>;
 	/** Drop the completion chime for MCP/HTTP-created sessions (`session create`,
 	 *  `agent spawn`) — an orchestration of many agents otherwise beeps per worker.
 	 *  Visual signals (activity item, badge, OS notification) are unaffected. */
@@ -47,6 +83,14 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
 		attention: true,
 	},
 	audio_device: null,
+	sound_choices: {
+		question: defaultSoundChoice(),
+		error: defaultSoundChoice(),
+		completion: defaultSoundChoice(),
+		warning: defaultSoundChoice(),
+		info: defaultSoundChoice(),
+		attention: defaultSoundChoice(),
+	},
 	silence_remote_completions: true,
 	toasts_in_bell: true,
 };
@@ -87,14 +131,16 @@ export class NotificationManager {
 		}
 
 		try {
+			const choice = this.config.sound_choices[sound];
 			if (isTauri()) {
 				await invoke("play_notification_sound", {
 					sound,
 					volume: this.config.volume,
 					device: this.config.audio_device,
+					choice,
 				});
 			} else {
-				playWebAudioTone(sound, this.config.volume);
+				playWebAudioTone(sound, this.config.volume, choice);
 			}
 			this.consecutiveFailures = 0;
 		} catch (err) {
@@ -140,6 +186,10 @@ export class NotificationManager {
 		this.config.sounds[sound] = enabled;
 	}
 
+	setSoundChoice(sound: NotificationSound, choice: SoundChoice): void {
+		this.config.sound_choices[sound] = choice;
+	}
+
 	getConfig(): NotificationConfig {
 		return { ...this.config };
 	}
@@ -175,23 +225,33 @@ const ATTENTION_DURATIONS = [0.075, 0.075, 0.14];
 
 let webAudioCtx: AudioContext | null = null;
 
-function playWebAudioTone(sound: NotificationSound, volume: number): void {
+/** Resolve a chosen preset to the sound whose tone table entry should
+ *  actually play. "custom" has no meaning in browser mode — there's no
+ *  filesystem access to a native path — so it falls back to the sound's own
+ *  default tone, same as an unrecognized preset would. */
+function resolveToneSound(sound: NotificationSound, choice: SoundChoice): NotificationSound {
+	if (choice.preset === "default" || choice.preset === "custom") return sound;
+	return choice.preset;
+}
+
+function playWebAudioTone(sound: NotificationSound, volume: number, choice: SoundChoice): void {
 	if (!webAudioCtx) {
 		webAudioCtx = new AudioContext();
 	}
 	const ctx = webAudioCtx;
 	if (ctx.state === "suspended") ctx.resume();
 
-	const freqs = TONE_FREQS[sound] ?? [660];
+	const toneSound = resolveToneSound(sound, choice);
+	const freqs = TONE_FREQS[toneSound] ?? [660];
 	const gain = ctx.createGain();
-	gain.gain.value = volume * 0.3 * (TONE_GAINS[sound] ?? 1); // Gentle volume
+	gain.gain.value = volume * 0.3 * (TONE_GAINS[toneSound] ?? 1); // Gentle volume
 	gain.connect(ctx.destination);
-	const interval = sound === "attention" ? 0.125 : 0.15;
+	const interval = toneSound === "attention" ? 0.125 : 0.15;
 
 	freqs.forEach((freq, i) => {
-		const duration = sound === "attention" ? ATTENTION_DURATIONS[i] : 0.12;
+		const duration = toneSound === "attention" ? ATTENTION_DURATIONS[i] : 0.12;
 		const osc = ctx.createOscillator();
-		osc.type = TONE_WAVEFORMS[sound] ?? "sine";
+		osc.type = TONE_WAVEFORMS[toneSound] ?? "sine";
 		osc.frequency.value = freq;
 		osc.connect(gain);
 		osc.start(ctx.currentTime + i * interval);

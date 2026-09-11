@@ -1087,6 +1087,52 @@ impl Default for NotificationSounds {
     }
 }
 
+/// A user's chosen sound source for one notification type: the built-in
+/// default tone, another notification type's tone borrowed as a preset, or
+/// a user-supplied audio file. `preset` is deliberately a plain string, not
+/// an enum — the valid set of values is owned by the frontend
+/// (`src/notifications.ts`'s `SOUND_PRESETS`) and interpreted by
+/// `notification_sound::resolve_sequence`, which falls back gracefully for
+/// anything it doesn't recognize. This struct only stores the choice; it
+/// never validates or enumerates it, so a preset added there needs no
+/// matching change here.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct SoundChoice {
+    #[serde(default = "default_preset")]
+    pub(crate) preset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) custom_path: Option<String>,
+}
+
+fn default_preset() -> String {
+    "default".to_string()
+}
+
+impl Default for SoundChoice {
+    fn default() -> Self {
+        Self {
+            preset: default_preset(),
+            custom_path: None,
+        }
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct NotificationSoundChoices {
+    #[serde(default)]
+    pub(crate) question: SoundChoice,
+    #[serde(default)]
+    pub(crate) error: SoundChoice,
+    #[serde(default)]
+    pub(crate) completion: SoundChoice,
+    #[serde(default)]
+    pub(crate) warning: SoundChoice,
+    #[serde(default)]
+    pub(crate) info: SoundChoice,
+    #[serde(default)]
+    pub(crate) attention: SoundChoice,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct NotificationConfig {
     #[serde(default = "default_true")]
@@ -1097,6 +1143,11 @@ pub(crate) struct NotificationConfig {
     pub(crate) sounds: NotificationSounds,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) audio_device: Option<String>,
+    /// Per-sound source selection (default tone, a borrowed preset, or a
+    /// custom file). Independent of `sounds` above, which only gates
+    /// whether that sound plays at all.
+    #[serde(default)]
+    pub(crate) sound_choices: NotificationSoundChoices,
     /// Drop the completion chime for sessions created over MCP/HTTP (`session
     /// create`, `agent spawn`). An orchestration of many agents otherwise turns
     /// every finished worker into a beep. Visual signals (activity item, badge,
@@ -1125,6 +1176,7 @@ impl Default for NotificationConfig {
             volume: 0.5,
             sounds: NotificationSounds::default(),
             audio_device: None,
+            sound_choices: NotificationSoundChoices::default(),
             silence_remote_completions: true,
             toasts_in_bell: true,
         }
@@ -4032,6 +4084,17 @@ mod tests {
                 attention: false,
             },
             audio_device: Some("Test Speaker".to_string()),
+            sound_choices: NotificationSoundChoices {
+                question: SoundChoice {
+                    preset: "attention".to_string(),
+                    custom_path: None,
+                },
+                error: SoundChoice {
+                    preset: "custom".to_string(),
+                    custom_path: Some("/Users/test/ding.wav".to_string()),
+                },
+                ..Default::default()
+            },
             silence_remote_completions: true,
             toasts_in_bell: false,
         };
@@ -4042,8 +4105,56 @@ mod tests {
         assert!(!loaded.sounds.error);
         assert!(!loaded.sounds.attention);
         assert_eq!(loaded.audio_device.as_deref(), Some("Test Speaker"));
+        assert_eq!(loaded.sound_choices.question.preset, "attention");
+        assert!(loaded.sound_choices.question.custom_path.is_none());
+        assert_eq!(loaded.sound_choices.error.preset, "custom");
+        assert_eq!(
+            loaded.sound_choices.error.custom_path.as_deref(),
+            Some("/Users/test/ding.wav")
+        );
+        // Untouched entries keep the plain default.
+        assert_eq!(loaded.sound_choices.completion.preset, "default");
         assert!(loaded.silence_remote_completions);
         assert!(!loaded.toasts_in_bell);
+    }
+
+    /// A config saved before `sound_choices` existed must default every sound
+    /// to the "default" preset with no custom path — not fail to deserialize.
+    #[test]
+    fn notification_config_sound_choices_defaults_when_entirely_missing() {
+        let legacy: NotificationConfig =
+            serde_json::from_str(r#"{"enabled":true,"volume":0.5}"#).unwrap();
+        for preset in [
+            &legacy.sound_choices.question.preset,
+            &legacy.sound_choices.error.preset,
+            &legacy.sound_choices.completion.preset,
+            &legacy.sound_choices.warning.preset,
+            &legacy.sound_choices.info.preset,
+            &legacy.sound_choices.attention.preset,
+        ] {
+            assert_eq!(preset, "default");
+        }
+        assert!(legacy.sound_choices.question.custom_path.is_none());
+    }
+
+    /// A `sound_choices` object missing a single sound's entry (e.g. written
+    /// before "attention" support existed) must default just that one entry,
+    /// not fall back to `NotificationSoundChoices::default()` for the whole
+    /// struct and silently discard the others sitting right next to it.
+    #[test]
+    fn notification_sound_choices_defaults_only_the_missing_field() {
+        let choices: NotificationSoundChoices = serde_json::from_str(
+            r#"{"question":{"preset":"attention"},"error":{"preset":"custom","custom_path":"/a.wav"}}"#,
+        )
+        .unwrap();
+        assert_eq!(choices.question.preset, "attention");
+        assert_eq!(choices.error.preset, "custom");
+        assert_eq!(choices.error.custom_path.as_deref(), Some("/a.wav"));
+        // The four fields missing from the JSON — must default, not vanish.
+        assert_eq!(choices.completion.preset, "default");
+        assert_eq!(choices.warning.preset, "default");
+        assert_eq!(choices.info.preset, "default");
+        assert_eq!(choices.attention.preset, "default");
     }
 
     /// A user who never saw the setting keeps the mirroring, so nothing a toast
