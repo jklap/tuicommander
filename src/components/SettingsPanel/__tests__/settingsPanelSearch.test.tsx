@@ -30,6 +30,12 @@ vi.mock("../../../stores/notifications", () => ({
 				enabled: true,
 				volume: 0.5,
 				sounds: { question: true, error: true, completion: true, warning: true },
+				sound_choices: Object.fromEntries(
+					["question", "error", "completion", "warning", "info", "attention"].map((k) => [
+						k,
+						{ preset: "default", custom_path: null },
+					]),
+				),
 			},
 		},
 		setEnabled: vi.fn(),

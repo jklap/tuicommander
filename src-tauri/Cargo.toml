@@ -220,7 +220,7 @@ rfd = { version = "0.16", default-features = false, features = [
     "common-controls-v6",
 ], optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
-rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "wav", "mp3", "vorbis", "flac"], optional = true }
 # gzip/brotli: the daemon compresses every response above 860 bytes
 # (`CompressionLayer` in mcp_http), but only for a client that advertises the
 # encoding. A browser does it unasked; reqwest does not, so without these two

@@ -30,6 +30,22 @@ pub(super) struct NotificationSoundRequest {
     pub volume: f32,
     #[serde(default)]
     pub device: Option<String>,
+    /// Same field as the desktop command's `choice` (default tone, a borrowed
+    /// preset, or a custom file). Optional so an older client that never sends
+    /// it keeps playing the default tone.
+    #[serde(default)]
+    pub choice: Option<crate::notification_sound::SoundChoice>,
+}
+
+/// The sound source an HTTP caller may select. A borrowed preset is honoured;
+/// a `custom` file path is not — it falls back to the default tone. The custom
+/// path is a native filesystem path, and the desktop feature's security review
+/// relied on no remote client being able to trigger playback of an arbitrary
+/// path (the desktop UI only ever sets one through the native file picker).
+fn http_sound_choice(
+    choice: Option<crate::notification_sound::SoundChoice>,
+) -> crate::notification_sound::SoundChoice {
+    choice.filter(|c| c.preset != "custom").unwrap_or_default()
 }
 
 /// `POST /system/notification-sound` — mirror of `play_notification_sound`.
@@ -37,7 +53,12 @@ pub(super) struct NotificationSoundRequest {
 pub(super) async fn play_notification_sound_http(
     Json(body): Json<NotificationSoundRequest>,
 ) -> impl IntoResponse {
-    crate::notification_sound::play_notification_sound(body.sound, body.volume, body.device);
+    crate::notification_sound::play_notification_sound(
+        body.sound,
+        body.volume,
+        body.device,
+        http_sound_choice(body.choice),
+    );
     Json(serde_json::Value::Null)
 }
 
@@ -50,4 +71,28 @@ pub(super) struct CheckUpdateQuery {
 /// `GET /system/check-update` — mirror of `check_update_channel`.
 pub(super) async fn check_update_channel_http(Query(q): Query<CheckUpdateQuery>) -> Response {
     json_result(crate::updater::check_update_channel(q.channel).await)
+}
+
+#[cfg(test)]
+mod notification_sound_choice_tests {
+    use super::http_sound_choice;
+    use crate::notification_sound::SoundChoice;
+
+    #[test]
+    fn http_keeps_a_borrowed_preset_but_never_plays_a_custom_file() {
+        let borrowed = http_sound_choice(Some(SoundChoice {
+            preset: "attention".into(),
+            custom_path: None,
+        }));
+        assert_eq!(borrowed.preset, "attention");
+
+        let custom = http_sound_choice(Some(SoundChoice {
+            preset: "custom".into(),
+            custom_path: Some("/etc/passwd".into()),
+        }));
+        assert_eq!(custom.preset, "default");
+        assert!(custom.custom_path.is_none());
+
+        assert_eq!(http_sound_choice(None).preset, "default");
+    }
 }
