@@ -429,13 +429,35 @@ parsing, mirroring `iterm2.rs`'s split) plus `term/mod.rs`'s
 `kitty_graphics`/`kitty_graphics_dispatch`/`kitty_process`/`kitty_display`
 implement the protocol itself.
 
-- **Scope**: `a=t/T/p/d/q`, `f=24/32/100`, `t=d` (direct) only, `m=`
-  chunking, `i=`/`p=`/`c=`/`r=`/`z=`/`C=`/`q=`, and the capability-probe
-  response — see `kitty.rs`'s own module doc comment for exactly what's
-  implemented vs. deliberately deferred (`t=f`/`t=t`/`t=s` mediums, `o=z`
-  compression, and Unicode-placeholder diacritic decoding all get a
-  protocol-correct error response or a documented no-op, never silent
-  misbehavior).
+- **Scope**: `a=t/T/p/d/q`, `f=24/32/100`, all four transmission mediums
+  (`t=d/f/t/s`), `o=z` zlib compression, `m=` chunking,
+  `i=`/`p=`/`c=`/`r=`/`z=`/`C=`/`q=`, and the capability-probe response —
+  see `kitty.rs`'s own module doc comment for exactly what's implemented.
+  Unicode-placeholder diacritic decoding is the one remaining deliberate
+  gap (documented no-op, not silent misbehavior).
+- **Transmission mediums** (Phase 6): `t=f`/`t=t` (file/temp-file) and `t=s`
+  (POSIX/Windows shared memory) are implemented by delegating the actual
+  OS I/O to the embedding app (`EventListener::read_file_medium`/
+  `read_shm_medium`, implemented in `terminal_image_transmission.rs`) —
+  the vendored crate only base64-decodes the wire payload into a path/name
+  string and hands it off, never touching the filesystem or a shared-memory
+  API itself. `t=t`'s delete-after-read only proceeds if the canonicalized
+  path resolves inside `std::env::temp_dir()` — the arbitrary-file-deletion
+  guard the color-tools plan's Architecture section calls for (reading
+  itself isn't access-restricted beyond that, since the process driving
+  these sequences already runs as this user in this PTY). `t=s` never
+  trusts the client's claimed `S=`/`v=` size over the OS-reported segment
+  size (`fstat`/`VirtualQuery`), and only ever opens/reads an existing
+  segment — it is never the creator or unlinker/closer-of-record. **The
+  Windows `t=s` path is written against documented Win32 semantics but
+  has not been compiled or run on Windows** (this repo is developed on
+  macOS/Linux) — see `to-test.md`.
+- **Raw pixel formats and length**: `f=24`/`f=32` payloads are trimmed to
+  exactly `width_px * height_px * channels` bytes regardless of medium — a
+  page-rounded `t=s` segment (observed on macOS: `fstat` can report a
+  larger size than what was actually written) must never leak trailing
+  garbage into the stored image, and a payload shorter than expected is a
+  real transmission error (`EINVAL`), not something to zero-pad.
 - **Client-chosen image ids**: unlike iTerm2, Kitty's `i=` is chosen by the
   client and referenced by later `a=p`/`a=d` — `terminal_images::ImageStore`
   accepts an optional `client_id` for exactly this (iTerm2 passes `None` and

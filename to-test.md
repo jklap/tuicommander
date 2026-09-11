@@ -3262,11 +3262,19 @@ section needs a human running the rebuilt app, not just re-running tests.
 - [ ] Kitty capability probe (`a=q` + immediate `i=` echo): confirm against yazi or blackcat, both
   of which do a live runtime probe rather than an env-var allowlist. yazi in particular keys its
   `kgp`/`kgp_shm` flags off the echoed `i=` matching what it sent — worth checking specifically.
-- [ ] Kitty scope gaps to verify don't silently break a real tool rather than cleanly erroring:
-  `t=f`/`t=t`/`t=s` transmission mediums (blackcat requires `t=s`; ranger's kitty backend probes
-  `t=f`) and `o=z` compression both return a protocol error response now — confirm the real client
-  actually falls back gracefully rather than hanging, since that's a client-side behavior this
-  session couldn't verify without the real binaries.
+- [ ] Kitty `t=f`/`t=t`/`t=s` transmission mediums and `o=z` compression are now implemented
+  (color-tools plan, Phase 6) and covered by real end-to-end tests in `terminal_grid.rs` (a real
+  temp file read+delete, a real POSIX shared-memory segment round-tripped through `shm_open`, a
+  real `flate2`-compressed zlib payload) and `terminal_image_transmission.rs` (file/shm reader unit
+  tests, including the temp-dir-delete-guard and the size-cap check). Still needs a real-client
+  pass: blackcat (`t=s`, `o=z`), ranger's kitty backend (`t=f`), and mpv (raw `f=24`/`t=s`) against
+  a live `make dev` session.
+  **The Windows `t=s` path (`read_shm_medium` in `terminal_image_transmission.rs`, `#[cfg(windows)]`
+  branch) is written against documented Win32 `OpenFileMappingW`/`MapViewOfFile`/`VirtualQuery`
+  semantics but has never been compiled, let alone run, on Windows** — this repo is developed on
+  macOS, and cross-compiling the whole app for `x86_64-pc-windows-gnu` here hits an unrelated
+  missing-mingw-toolchain wall before reaching this code at all. Needs a real Windows build and a
+  real `t=s` client to verify.
 - [ ] Unicode virtual placeholders (`U=1`, used by image.nvim/snacks.nvim/yazi's modern driver):
   registration exists but nothing yet recognizes the `U+10EEEE` placeholder characters those tools
   print, so images from these specific tools/paths will not display even once the frontend

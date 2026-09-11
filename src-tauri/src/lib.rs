@@ -111,6 +111,7 @@ pub(crate) mod terminal_grid;
 // covered by its own unit tests (including the refcount-eviction property the
 // whole design exists for) in the meantime.
 #[allow(dead_code)]
+pub(crate) mod terminal_image_transmission;
 pub(crate) mod terminal_images;
 pub(crate) mod text_rank;
 pub(crate) mod themes;

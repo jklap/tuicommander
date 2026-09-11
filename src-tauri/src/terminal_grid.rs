@@ -106,6 +106,14 @@ impl EventListener for TermEventCollector {
         self.image_store.lock().unwrap().forget_all();
     }
 
+    fn read_file_medium(&self, path: &[u8], delete_after: bool) -> Option<Vec<u8>> {
+        crate::terminal_image_transmission::read_file_medium(path, delete_after)
+    }
+
+    fn read_shm_medium(&self, name: &[u8]) -> Option<Vec<u8>> {
+        crate::terminal_image_transmission::read_shm_medium(name)
+    }
+
     fn send_event(&self, event: Event) {
         match event {
             Event::Bell => {
@@ -5105,7 +5113,7 @@ mod tests {
     #[test]
     fn kitty_transmit_and_display_direct_raw_rgb() {
         use base64::Engine;
-        let raw_rgb = vec![0u8; 3 * 3]; // 3x3 px, doesn't matter what's in it
+        let raw_rgb = vec![0u8; 3 * 3 * 3]; // 3x3 px, f=24 (RGB) = width*height*3 bytes
         let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
         let full = format!("\x1b_Gi=1,a=T,f=24,s=3,v=3,c=2,r=1;{payload}\x1b\\");
 
@@ -5214,32 +5222,147 @@ mod tests {
     /// a real protocol error response (so a well-behaved client can fall
     /// back), not be silently ignored.
     #[test]
-    fn kitty_unsupported_transmission_medium_gets_a_protocol_error() {
-        for medium in ["f", "t", "s"] {
-            let mut grid = TerminalGrid::new(24, 80, 0);
-            grid.process(format!("\x1b_Gi=1,a=T,t={medium},f=24,s=1,v=1\x1b\\").as_bytes());
-            assert_eq!(grid.image_ref_at(0, 0), None);
-            assert_eq!(
-                grid.drain_pty_write_events(),
-                vec![format!(
-                    "\x1b_Gi=1;EINVAL:only direct (t=d) transmission is supported\x1b\\"
-                )],
-                "medium t={medium}"
-            );
-        }
+    fn kitty_t_equals_f_reads_a_real_file_and_displays_it() {
+        use base64::Engine;
+        let dir = std::env::temp_dir().join(format!("tuic-grid-test-tf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("raw.bin");
+        let raw_rgb = vec![9u8; 3 * 2 * 2]; // 2x2 px, f=24
+        std::fs::write(&path, &raw_rgb).unwrap();
+        let path_b64 = base64::engine::general_purpose::STANDARD.encode(path.to_str().unwrap());
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,t=f,f=24,s=2,v=2,c=1,r=1;{path_b64}\x1b\\").as_bytes());
+        assert!(grid.image_ref_at(0, 0).is_some(), "t=f must display");
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+        // t=f (unlike t=t) must never delete the source file.
+        assert!(path.exists());
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
     }
 
-    /// `o=z` (zlib compression) is unimplemented and must error rather than
-    /// attempt to display mis-decoded pixel data.
     #[test]
-    fn kitty_compressed_payload_gets_a_protocol_error() {
+    fn kitty_t_equals_t_reads_and_deletes_a_temp_file() {
+        use base64::Engine;
+        let dir = std::env::temp_dir().join(format!("tuic-grid-test-tt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("raw.bin");
+        let raw_rgb = vec![7u8; 3 * 2 * 2];
+        std::fs::write(&path, &raw_rgb).unwrap();
+        let path_b64 = base64::engine::general_purpose::STANDARD.encode(path.to_str().unwrap());
+
         let mut grid = TerminalGrid::new(24, 80, 0);
-        grid.process(b"\x1b_Gi=1,a=T,f=24,s=1,v=1,o=z;AAAA\x1b\\");
+        grid.process(format!("\x1b_Gi=1,a=T,t=t,f=24,s=2,v=2,c=1,r=1;{path_b64}\x1b\\").as_bytes());
+        assert!(grid.image_ref_at(0, 0).is_some(), "t=t must display");
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+        assert!(!path.exists(), "t=t must delete the temp-dir source file");
+
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn kitty_t_equals_f_missing_file_errors_cleanly() {
+        use base64::Engine;
+        let path_b64 = base64::engine::general_purpose::STANDARD.encode("/no/such/path/at/all");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,t=f,f=24,s=1,v=1;{path_b64}\x1b\\").as_bytes());
         assert_eq!(grid.image_ref_at(0, 0), None);
         assert_eq!(
             grid.drain_pty_write_events(),
-            vec!["\x1b_Gi=1;EINVAL:compressed (o=z) payloads are not supported\x1b\\".to_string()]
+            vec!["\x1b_Gi=1;ENOENT:could not read the requested file\x1b\\".to_string()]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kitty_t_equals_s_reads_a_real_shared_memory_segment() {
+        use base64::Engine;
+        let name = format!("/tuic-grid-test-shm-{}", std::process::id());
+        let cname = std::ffi::CString::new(name.clone()).unwrap();
+        let raw_rgb = vec![3u8; 3 * 2 * 2];
+        unsafe {
+            let fd = libc::shm_open(cname.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600);
+            assert!(fd >= 0);
+            assert_eq!(libc::ftruncate(fd, raw_rgb.len() as i64), 0);
+            let ptr = libc::mmap(
+                std::ptr::null_mut(),
+                raw_rgb.len(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            );
+            assert_ne!(ptr, libc::MAP_FAILED);
+            std::ptr::copy_nonoverlapping(raw_rgb.as_ptr(), ptr as *mut u8, raw_rgb.len());
+            libc::munmap(ptr, raw_rgb.len());
+            libc::close(fd);
+        }
+        let name_b64 = base64::engine::general_purpose::STANDARD.encode(&name);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,t=s,f=24,s=2,v=2,c=1,r=1;{name_b64}\x1b\\").as_bytes());
+        assert!(grid.image_ref_at(0, 0).is_some(), "t=s must display");
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+
+        unsafe {
+            libc::shm_unlink(cname.as_ptr());
+        }
+    }
+
+    /// `o=z`: the payload is zlib-compressed pixel/PNG data, orthogonal to
+    /// which medium delivered it — verified against a real `flate2` roundtrip,
+    /// not a hand-rolled byte string, so this test would fail if either side's
+    /// zlib framing assumptions ever drifted.
+    #[test]
+    fn kitty_o_equals_z_decompresses_a_real_zlib_payload() {
+        use base64::Engine;
+        use std::io::Write;
+        let raw_rgb = vec![42u8; 3 * 2 * 2];
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&raw_rgb).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1,o=z;{payload_b64}\x1b\\").as_bytes(),
+        );
+        assert!(grid.image_ref_at(0, 0).is_some());
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+    }
+
+    /// A raw-format (`f=24`/`f=32`) payload shorter than `width*height*channels`
+    /// is a real transmission problem, not something to zero-pad and display.
+    #[test]
+    fn kitty_raw_format_payload_shorter_than_expected_errors() {
+        use base64::Engine;
+        // f=24 (RGB, 3 bytes/px) at 2x2 needs 12 bytes; supply only 3.
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes());
+        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec!["\x1b_Gi=1;EINVAL:payload shorter than width*height*channels\x1b\\".to_string()]
+        );
+    }
+
+    /// A payload longer than `width*height*channels` (observed in practice
+    /// when `t=s`'s backing OS segment is page-rounded larger than the
+    /// client's actual payload) must be trimmed to the exact expected
+    /// length, not stored with trailing garbage appended.
+    #[test]
+    fn kitty_raw_format_payload_longer_than_expected_is_trimmed() {
+        use base64::Engine;
+        let mut oversized = vec![5u8; 3 * 2 * 2]; // exact 2x2 f=24 payload
+        oversized.extend_from_slice(&[0xffu8; 100]); // page-rounding-style padding
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&oversized);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes());
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&[5u8; 12][..]));
     }
 
     /// `a=d,d=I,i=<id>` forgets the store's own reference but must not

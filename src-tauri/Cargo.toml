@@ -278,7 +278,7 @@ block2 = { version = "0.6", optional = true }
 # the CI runner. Dictation runs on CPU; re-enable "vulkan" only once the
 # whisper.cpp Windows shader build is stabilized.
 whisper-rs = { version = "0.16", optional = true }
-windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_Foundation", "Win32_System_ProcessStatus", "Wdk_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_Foundation", "Win32_System_ProcessStatus", "Wdk_System_Threading", "Win32_System_Memory"] }
 
 [patch.crates-io]
 alacritty_terminal = { path = "patches/alacritty_terminal" }
@@ -295,3 +295,4 @@ tower = { version = "0.5", features = ["util"] }
 serial_test = "3"
 mockito = "1"
 strip-ansi-escapes = "0.2"
+flate2 = "1.0"

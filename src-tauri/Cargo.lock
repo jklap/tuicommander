@@ -106,6 +106,7 @@ version = "0.26.0"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.1",
+ "flate2",
  "home",
  "libc",
  "log",
@@ -9059,6 +9060,7 @@ dependencies = [
  "dashmap",
  "dirs",
  "drag",
+ "flate2",
  "futures-util",
  "genai",
  "gh-token",

@@ -5,19 +5,20 @@
 //!
 //! # Scope (deliberately narrower than the full spec)
 //!
-//! Implemented: `a=t/T/p/d/q`, `f=24/32/100`, `t=d` (direct transmission),
-//! `m=` chunking, `i=`/`p=`/`c=`/`r=`/`z=`/`C=`/`q=`, and the capability
-//! probe response. **Not implemented, and returns a protocol-correct error
-//! response rather than silently misbehaving:** `t=f`/`t=t`/`t=s`
-//! (file/temp-file/shared-memory transmission — `t=d` alone still covers
-//! most real clients, several of which fall back to it) and `o=z` (zlib
-//! compression). **Registered but not yet wired to cell text:** `U=1`
-//! Unicode virtual placeholders — the `a=p,U=1` registration exists, but
-//! decoding the actual `U+10EEEE` diacritic-encoded placeholder characters
-//! an app prints is a separate, not-yet-implemented step (the diacritic
-//! table is large and error-prone to transcribe without a canonical
-//! reference to check against; shipping a wrong mapping would silently
-//! misplace image tiles, which is worse than not supporting it yet).
+//! Implemented: `a=t/T/p/d/q`, `f=24/32/100`, all four transmission mediums
+//! (`t=d` direct, `t=f` file, `t=t` temp-file-delete-after-read, `t=s`
+//! shared memory — the actual file/shared-memory I/O is delegated to the
+//! embedding application via `EventListener::read_file_medium`/
+//! `read_shm_medium`, see `terminal_images.rs` in the app crate for the
+//! safety guards), `o=z` zlib decompression, `m=` chunking,
+//! `i=`/`p=`/`c=`/`r=`/`z=`/`C=`/`q=`, and the capability probe response.
+//! **Registered but not yet wired to cell text:** `U=1` Unicode virtual
+//! placeholders — the `a=p,U=1` registration exists, but decoding the
+//! actual `U+10EEEE` diacritic-encoded placeholder characters an app prints
+//! is a separate, not-yet-implemented step (the diacritic table is large
+//! and error-prone to transcribe without a canonical reference to check
+//! against; shipping a wrong mapping would silently misplace image tiles,
+//! which is worse than not supporting it yet).
 
 use core::str;
 
