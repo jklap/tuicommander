@@ -4687,12 +4687,11 @@ impl VtLogBuffer {
     /// Cloned handles for `pty.rs::process_chunk` to resolve pending Kitty
     /// decode jobs *after* dropping `vt_log` — see `TerminalGrid::kitty_decode_handles`'s
     /// doc comment for why this must never be called while still holding it.
-    #[allow(clippy::type_complexity)]
     pub(crate) fn grid_kitty_decode_handles(
         &self,
     ) -> (
-        Arc<std::sync::Mutex<crate::terminal_images::ImageStore>>,
-        Arc<std::sync::Mutex<Vec<alacritty_terminal::term::kitty::PendingKittyDecodeJob>>>,
+        crate::terminal_image_transmission::KittyImageStoreHandle,
+        crate::terminal_image_transmission::KittyPendingJobsHandle,
     ) {
         self.grid.kitty_decode_handles()
     }

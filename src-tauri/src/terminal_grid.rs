@@ -780,12 +780,11 @@ impl TerminalGrid {
     /// *after* dropping that lock. Never re-acquire `vt_log` just to call
     /// this — that would reintroduce exactly the lock-hold-during-decode
     /// problem the color-tools plan's deferred-decode design exists to avoid.
-    #[allow(clippy::type_complexity)]
     pub(crate) fn kitty_decode_handles(
         &self,
     ) -> (
-        Arc<Mutex<crate::terminal_images::ImageStore>>,
-        Arc<Mutex<Vec<alacritty_terminal::term::kitty::PendingKittyDecodeJob>>>,
+        crate::terminal_image_transmission::KittyImageStoreHandle,
+        crate::terminal_image_transmission::KittyPendingJobsHandle,
     ) {
         (self.image_store.clone(), self.pending_kitty_jobs.clone())
     }
@@ -3285,6 +3284,42 @@ mod tests {
         }
     }
 
+    /// A DEC 2026 synchronized update that stalls past its deadline and gets
+    /// force-flushed (`flush_sync_timeout_if_needed`) replays its buffered
+    /// bytes through the same `Term`/`Handler` an ordinary `process()` call
+    /// uses — so a Kitty image transmission buried inside it queues a
+    /// deferred decode job exactly like normal processing does. A code
+    /// review caught this as a real gap: before deferred decode existed,
+    /// this same flush path decoded the image inline; the production fix
+    /// (`pty.rs`'s `resolve_kitty_decode_jobs`, called from the frame
+    /// ticker after this exact flush) isn't reachable from this unit-test
+    /// level, but this proves the replay path itself queues a job that IS
+    /// resolvable — the part that's genuinely new/risky here.
+    #[test]
+    fn stalled_sync_update_flush_queues_a_resolvable_kitty_decode_job() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3 * 4]; // 2x2 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(BSU);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=2,r=2;{payload}\x1b\\").as_bytes());
+        std::thread::sleep(PAST_DEADLINE);
+        assert!(grid.flush_sync_timeout_if_needed());
+
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "reservation happens during the replay itself, same as ordinary processing"
+        );
+        assert_eq!(
+            grid.image_bytes(1),
+            None,
+            "not resolved yet -- nothing has drained the queued job"
+        );
+
+        grid.drain_and_run_pending_kitty_decode_jobs();
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+    }
+
     /// A live TUI redraw re-runs the same search over and over, and each run was
     /// compiling the query from scratch — `RegexSearch::new` builds four DFAs
     /// (forward/backward x literal/regex). The query changes when the user types,
@@ -5701,6 +5736,47 @@ mod tests {
             grid.drain_pty_write_events(),
             vec!["\x1b_Gi=1;EINVAL:payload shorter than width*height*channels\x1b\\".to_string()]
         );
+    }
+
+    /// A permanently-failed deferred decode must not leave a dead entry in
+    /// `ImageStore` forever — a security review found `store_pending`
+    /// registers unconditionally (no bytes exist yet to check against a
+    /// cap), so without eviction-on-failure, a stream of cheap (~30-byte)
+    /// junk transmissions that each fail to decode would grow the store's
+    /// `HashMap` without bound, independent of and unbounded by
+    /// `MAX_SESSION_IMAGE_BYTES` (which only ever looks at bytes that
+    /// resolved successfully). `image_meta` is the observable proxy for
+    /// this: it reads straight through the store's `get()`, so it returns
+    /// `None` only once the entry is actually gone from the map — not just
+    /// once its `bytes` resolve to empty (which `image_bytes` alone would
+    /// show even if the entry technically still existed).
+    #[test]
+    fn kitty_failed_deferred_decode_evicts_the_store_entry_not_just_the_bytes() {
+        use base64::Engine;
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes());
+        assert_eq!(
+            grid.image_meta(1),
+            None,
+            "a permanently-failed image must be fully evicted from the store, \
+             not merely left with empty bytes under a live entry"
+        );
+
+        // Confirmed at scale too: many failing transmissions in a row must
+        // never accumulate live entries.
+        for i in 2..502u32 {
+            grid.process(
+                format!("\x1b_Gi={i},a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes(),
+            );
+        }
+        for i in 2..502u32 {
+            assert_eq!(
+                grid.image_meta(i),
+                None,
+                "image {i} must have been evicted too"
+            );
+        }
     }
 
     /// A payload longer than `width*height*channels` (observed in practice

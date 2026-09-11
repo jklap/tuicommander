@@ -156,14 +156,20 @@ impl ImageStore {
     /// mutates the placeholder on the error path, matching `store`'s
     /// "a refused transmission must not be registered" behavior).
     ///
-    /// Accepted narrow simplification: several placeholders can each
-    /// individually pass this check while all still pending (each
-    /// contributing 0 to `live_bytes` until resolved), then all complete in
-    /// close succession and collectively land somewhat over the cap. This
-    /// cap is a long-term-growth guard, not a hard security boundary against
-    /// simultaneous in-flight transmissions, and closing this window would
-    /// need a separate "reserved but not yet spent" budget for no realistic
-    /// benefit — no real client transmits many large images concurrently.
+    /// In principle, several placeholders could each individually pass this
+    /// check while all still pending (each contributing 0 to `live_bytes`
+    /// until resolved), then all complete in close succession and
+    /// collectively land over the cap — but NOT under the current
+    /// architecture: `drain_and_run_pending_kitty_decode_jobs` resolves
+    /// queued jobs strictly one at a time, re-locking the store and
+    /// re-checking `live_bytes()` fresh immediately before *each*
+    /// `try_complete` call, so an already-completed job earlier in the same
+    /// drain correctly counts against a later one. Combined with each
+    /// session having exactly one PTY reader thread (no concurrent drain for
+    /// one session's store), this bypass window cannot open today — it
+    /// would only become real if that drain loop were ever parallelized, at
+    /// which point closing it would need a separate "reserved but not yet
+    /// spent" budget.
     pub(crate) fn try_complete(
         &self,
         placeholder: &ImageData,

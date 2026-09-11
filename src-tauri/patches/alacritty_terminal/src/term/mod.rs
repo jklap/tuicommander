@@ -1623,8 +1623,23 @@ impl<T: EventListener> Term<T> {
                             ("raw-rgba".to_string(), control.width_px, control.height_px)
                         }
                         // Explicit c=/r= means kitty_display never needs
-                        // intrinsic dims to size the footprint — 0 is never
-                        // read for anything here.
+                        // intrinsic dims to size the footprint, so 0 here is
+                        // never read for that. But it IS a real, disclosed
+                        // gap for anyone else querying this image's size
+                        // (e.g. `terminal_image_meta`) before decode
+                        // completes: real PNG dimensions only come from
+                        // sniffing the decoded header, and `intrinsic_width`/
+                        // `intrinsic_height` are plain eager fields on
+                        // `ImageData` (not `OnceLock`-backed like `bytes`),
+                        // so there is no way to fill in the real values once
+                        // decode finishes without a further refactor. No
+                        // current caller is affected — the frontend only
+                        // reads these fields for raw `f=24`/`f=32` (always
+                        // known synchronously here), never for PNG, which
+                        // decodes its own dimensions via the browser's
+                        // `createImageBitmap` instead — but a future PNG-
+                        // dimension consumer querying mid-decode would see a
+                        // silently wrong `0x0` rather than "not ready yet".
                         kitty::Format::Png => ("image/png".to_string(), 0, 0),
                     };
                     let client_id = (control.image_id != 0).then_some(control.image_id);

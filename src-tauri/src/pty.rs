@@ -5266,27 +5266,6 @@ impl ChunkProcessor {
         }
     }
 
-    /// Fan out "this Kitty image finished deferred decode" (color-tools
-    /// plan) — mirrors `TermEvent::ImagePlacement`'s own forwarding exactly
-    /// (desktop Tauri `emit` + `state.emit_pty_event` for WS/SSE), just
-    /// triggered from `process_chunk`'s post-lock decode-drain step instead
-    /// of the `TermEvent`-drain loop below (this signal doesn't originate
-    /// from `Term`'s own event queue at all, since the job that produces it
-    /// runs after `vt_log` is already dropped).
-    fn emit_pty_image_decoded(&self, state: &AppState, session_id: &str, image_id: u32) {
-        #[cfg(feature = "desktop")]
-        if let Some(a) = state.app_handle.read().as_ref() {
-            let _ = a.emit(
-                &format!("pty-image-decoded-{session_id}"),
-                serde_json::json!({ "imageId": image_id }),
-            );
-        }
-        state.emit_pty_event(crate::state::AppEvent::PtyImageDecoded {
-            session_id: session_id.to_string(),
-            image_id,
-        });
-    }
-
     /// Process a chunk of PTY output after kitty-sequence stripping.
     /// Handles: VT log buffer, ring buffer, WebSocket broadcast, event parsing,
     /// dedup, resize-grace filtering, PlanFile resolution, event emission,
@@ -5418,27 +5397,7 @@ impl ChunkProcessor {
             // Resolve any Kitty image transmission this chunk queued for
             // deferred decode (color-tools plan) — genuinely lock-free now,
             // using only the two handles cloned above, never `vt_log`.
-            for outcome in
-                crate::terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs(
-                    &kitty_image_store,
-                    &kitty_pending_jobs,
-                )
-            {
-                if let Some(reply) =
-                    crate::terminal_image_transmission::format_kitty_reply(&outcome)
-                {
-                    write_terminal_reply(state, session_id, reply.as_bytes(), "PtyWrite");
-                }
-                if outcome.result.is_ok() {
-                    // The frontend's `ImageLayer` never retries a failed/
-                    // empty `terminal_image_bytes` fetch on its own — if its
-                    // first attempt raced this decode (plausible under IPC/
-                    // network jitter even though the window is normally
-                    // tiny), this is what tells it to invalidate that cache
-                    // entry and try again now that bytes are actually ready.
-                    self.emit_pty_image_decoded(state, session_id, outcome.image_id);
-                }
-            }
+            resolve_kitty_decode_jobs(state, session_id, &kitty_image_store, &kitty_pending_jobs);
 
             // Grid is the source of truth for mouse DECSET (including combined
             // `?1000;1002;1006h`). String-matching the chunk would miss grok.
@@ -6665,6 +6624,65 @@ fn write_terminal_reply(state: &AppState, session_id: &str, response: &[u8], kin
         tracing::warn!(source = "terminal", session_id = %session_id, %kind, %error,
             "Terminal reply failed");
     }
+}
+
+/// Resolve every Kitty decode job queued for `session_id` since the last
+/// call (color-tools plan: decode deferred off `vt_log`), writing each
+/// outcome's deferred OK/error reply and firing `image-decoded` on success.
+///
+/// **Every code path that replays bytes through `Term`/the `Handler` impl
+/// outside the ordinary `process_chunk` path can queue one of these jobs and
+/// must call this itself** — exactly the same invariant AGENTS.md's PtyWrite
+/// drain section already documents for `Event::PtyWrite`, now extended to
+/// this second, separate (non-`TermEvent`) queue. `flush_sync_timeout_if_needed`/
+/// `force_stop_sync_if_buffered` (both call `Processor::stop_sync`, which
+/// replays buffered bytes through the same `Term`) are the two production
+/// call sites besides `process_chunk` itself — a code review caught the
+/// first as a real regression: before deferred decode existed, that flush
+/// path decoded a Kitty image inline and got a reply out immediately;
+/// without this, a job it queues would sit pending until an unrelated later
+/// PTY chunk happens to arrive, or forever if the stalled stream never sends
+/// one (exactly the workload — a killed `mpv --vo=kitty` — this whole
+/// feature targets). Always call with the handles obtained BEFORE dropping
+/// whatever lock guarded the flush, but invoke this function itself only
+/// after that lock is dropped.
+fn resolve_kitty_decode_jobs(
+    state: &AppState,
+    session_id: &str,
+    image_store: &crate::terminal_image_transmission::KittyImageStoreHandle,
+    pending_jobs: &crate::terminal_image_transmission::KittyPendingJobsHandle,
+) {
+    for outcome in crate::terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs(
+        image_store,
+        pending_jobs,
+    ) {
+        if let Some(reply) = crate::terminal_image_transmission::format_kitty_reply(&outcome) {
+            write_terminal_reply(state, session_id, reply.as_bytes(), "PtyWrite");
+        }
+        if outcome.result.is_ok() {
+            emit_pty_image_decoded(state, session_id, outcome.image_id);
+        }
+    }
+}
+
+/// Fan out "this Kitty image finished deferred decode" (color-tools plan) —
+/// mirrors `TermEvent::ImagePlacement`'s own forwarding exactly (desktop
+/// Tauri `emit` + `state.emit_pty_event` for WS/SSE). Free function, not a
+/// `ChunkProcessor` method, since `resolve_kitty_decode_jobs` above is
+/// called from more than one context (`process_chunk` and the frame
+/// ticker's stalled-sync flush).
+fn emit_pty_image_decoded(state: &AppState, session_id: &str, image_id: u32) {
+    #[cfg(feature = "desktop")]
+    if let Some(a) = state.app_handle.read().as_ref() {
+        let _ = a.emit(
+            &format!("pty-image-decoded-{session_id}"),
+            serde_json::json!({ "imageId": image_id }),
+        );
+    }
+    state.emit_pty_event(crate::state::AppEvent::PtyImageDecoded {
+        session_id: session_id.to_string(),
+        image_id,
+    });
 }
 
 /// Flush remaining bytes at EOF and write to ring buffer + WebSocket.
@@ -8657,6 +8675,10 @@ pub(crate) fn spawn_reader_thread(
             // atomic hint keeps idle sessions from touching the vt lock at all.
             let mut sync_timeout_flush = false;
             let mut stalled_replies: Vec<String> = Vec::new();
+            let mut stalled_kitty_handles: Option<(
+                crate::terminal_image_transmission::KittyImageStoreHandle,
+                crate::terminal_image_transmission::KittyPendingJobsHandle,
+            )> = None;
             if ticker_sync_active
                 .as_ref()
                 .is_some_and(|f| f.load(Ordering::Relaxed))
@@ -8678,6 +8700,12 @@ pub(crate) fn spawn_reader_thread(
                     // queued for the next real chunk, which is the only
                     // place equipped to act on them.
                     stalled_replies = g.grid_drain_pty_write_events();
+                    // Same reasoning, for the second (non-`TermEvent`) queue
+                    // a Kitty image transmission buried in the stalled
+                    // update can populate — see `resolve_kitty_decode_jobs`'s
+                    // doc comment. Handles cloned now, while `g` is already
+                    // locked for this flush; resolved below, after `drop(g)`.
+                    stalled_kitty_handles = Some(g.grid_kitty_decode_handles());
                 }
                 let still_active = g.is_sync_update_active();
                 drop(g);
@@ -8687,6 +8715,9 @@ pub(crate) fn spawn_reader_thread(
             }
             for reply in &stalled_replies {
                 write_terminal_reply(&ticker_state, &ticker_sid, reply.as_bytes(), "PtyWrite");
+            }
+            if let Some((image_store, pending_jobs)) = &stalled_kitty_handles {
+                resolve_kitty_decode_jobs(&ticker_state, &ticker_sid, image_store, pending_jobs);
             }
             if !effective_dirty {
                 // Idle tick: leave sustained-animation mode so the next burst
@@ -8839,8 +8870,19 @@ pub(crate) fn spawn_reader_thread(
         if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
             let mut g = vt.lock();
             g.force_stop_sync_if_buffered();
+            // Same reasoning as the stalled-sync-update flush above: this
+            // can also queue a Kitty decode job. No PTY reply will ever be
+            // read at this point (the child has already exited), but
+            // resolving the job still matters for the *store* — leaving a
+            // placeholder permanently `is_pending()` would make any later
+            // `image_bytes`/`image_meta` read against this now-closing
+            // session's residual state (e.g. a final scrollback view) see
+            // "still loading" forever instead of a clean ready/failed
+            // result.
+            let (image_store, pending_jobs) = g.grid_kitty_decode_handles();
             let frame = g.serialize_dirty_rows();
             drop(g);
+            resolve_kitty_decode_jobs(&ticker_state, &ticker_sid, &image_store, &pending_jobs);
             send_grid_frame(&ticker_state, &ticker_sid, frame);
         }
         ticker_state.grid_frame_dirty.remove(&ticker_sid);

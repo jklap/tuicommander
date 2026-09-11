@@ -257,6 +257,16 @@ pub(crate) struct KittyJobOutcome {
     pub result: Result<(), (&'static str, &'static str)>,
 }
 
+/// Shared handle types for the two `Arc<Mutex<...>>`s
+/// `drain_and_run_pending_kitty_decode_jobs` needs — named so every call
+/// site (`pty.rs`, `terminal_grid.rs`, `state.rs`) spells the same type
+/// instead of repeating the nested generics (which clippy's
+/// `type_complexity` lint rejects at any local-variable declaration site).
+pub(crate) type KittyImageStoreHandle =
+    std::sync::Arc<std::sync::Mutex<crate::terminal_images::ImageStore>>;
+pub(crate) type KittyPendingJobsHandle =
+    std::sync::Arc<std::sync::Mutex<Vec<alacritty_terminal::term::kitty::PendingKittyDecodeJob>>>;
+
 /// Base64-decode a Kitty transmission's wire payload, resolve its medium
 /// (file/shared-memory read for `t=f`/`t=t`/`t=s`; the direct bytes
 /// themselves for `t=d`), then hand off to
@@ -362,18 +372,38 @@ pub(crate) fn drain_and_run_pending_kitty_decode_jobs(
             let quiet = job.quiet;
             let result = match execute_pending_kitty_job(&job) {
                 Ok(payload) => {
-                    let store = image_store.lock().unwrap();
+                    let mut store = image_store.lock().unwrap();
                     match store.try_complete(&job.placeholder, std::sync::Arc::from(payload.bytes))
                     {
                         Ok(()) => Ok(()),
                         Err(_) => {
+                            // `store_pending` registers unconditionally (no
+                            // bytes exist yet to check against a cap), so a
+                            // permanently-failed placeholder must evict
+                            // itself here — otherwise a stream of cheap
+                            // (~30-byte) junk transmissions that each fail
+                            // this same cap check would grow `ImageStore`'s
+                            // HashMap without bound, independent of and
+                            // unbounded by `MAX_SESSION_IMAGE_BYTES` (which
+                            // only ever looks at bytes that resolved
+                            // successfully). Cells that already reference
+                            // this `Arc` (there are none here — reservation
+                            // used the same placeholder, but nothing ever
+                            // completed it) keep it alive independently,
+                            // same as any other `forget`.
                             job.placeholder.mark_failed();
+                            store.forget(image_id);
                             Err(("ENOSPC", "over the per-session image byte cap"))
                         }
                     }
                 }
                 Err(err) => {
+                    // Same reasoning as the cap-exceeded branch above: a
+                    // decode failure (bad base64, missing file, corrupt
+                    // zlib, ...) must not leave a dead entry in the store
+                    // forever.
                     job.placeholder.mark_failed();
+                    image_store.lock().unwrap().forget(image_id);
                     Err((err.code, err.message))
                 }
             };
