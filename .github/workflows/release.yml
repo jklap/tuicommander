@@ -256,6 +256,46 @@ jobs:
           RUSTFLAGS: ${{ startsWith(matrix.platform, 'ubuntu') && matrix.target != 'aarch64-unknown-linux-gnu' && '-C link-arg=-fuse-ld=mold' || '' }}
         run: cargo build --release --no-default-features --bin tuic-remote --target ${{ matrix.target }}
 
+      - name: Check named-instance CLI contract (Unix)
+        # The Linux ARM artifact is cross-compiled on x64 and cannot run here.
+        if: matrix.platform != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-gnu'
+        working-directory: src-tauri
+        shell: bash
+        run: |
+          set +e
+          OUTPUT=$(perl -e 'alarm 10; exec @ARGV' ./target/${{ matrix.target }}/release/tuic-remote --instance default 2>&1)
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 1 ]; then
+            echo "Reserved instance ID did not fail with the expected CLI error (status $STATUS)"
+            printf '%s\n' "$OUTPUT"
+            exit 1
+          fi
+          if ! grep -Fq 'Invalid application instance "default"' <<<"$OUTPUT"; then
+            echo "Reserved instance ID did not report the expected diagnostic"
+            printf '%s\n' "$OUTPUT"
+            exit 1
+          fi
+
+      - name: Check named-instance CLI contract (Windows)
+        if: matrix.platform == 'windows-latest'
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $errorPath = Join-Path $env:RUNNER_TEMP "tuic-instance-error-$PID.txt"
+          $proc = Start-Process -FilePath "target/${{ matrix.target }}/release/tuic-remote.exe" -ArgumentList "--instance", "default" -RedirectStandardError $errorPath -PassThru -NoNewWindow
+          if (-not $proc.WaitForExit(10000)) {
+            Stop-Process -Id $proc.Id -Force
+            throw "Reserved instance ID did not fail within 10 seconds"
+          }
+          if ($proc.ExitCode -ne 1) {
+            throw "Reserved instance ID did not fail with the expected CLI error (status $($proc.ExitCode))"
+          }
+          $diagnostic = Get-Content -Raw -Path $errorPath
+          if ($diagnostic -notmatch 'Invalid application instance "default"') {
+            throw "Reserved instance ID did not report the expected diagnostic: $diagnostic"
+          }
+
       - name: Smoke test (Linux x64)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         working-directory: src-tauri

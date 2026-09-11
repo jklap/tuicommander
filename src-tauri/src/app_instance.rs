@@ -1,0 +1,101 @@
+//! Immutable process-wide identity for configuration and credential namespaces.
+
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+const DEFAULT_ID: &str = "default";
+const DEFAULT_VAULT_SERVICE: &str = "tuicommander";
+const NAMED_VAULT_SERVICE_PREFIX: &str = "tuicommander-instance-";
+const VAULT_USER: &str = "vault";
+
+/// One immutable default or named application identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppInstance {
+    id: Option<String>,
+    vault_service: String,
+}
+
+impl Default for AppInstance {
+    fn default() -> Self {
+        Self {
+            id: None,
+            vault_service: DEFAULT_VAULT_SERVICE.to_string(),
+        }
+    }
+}
+
+impl AppInstance {
+    /// Construct an isolated named instance.
+    pub fn named(id: &str) -> Result<Self, String> {
+        if !is_valid_named_id(id) {
+            return Err(format!(
+                "Invalid application instance {id:?}: expected a lowercase DNS label of 1-63 characters other than {DEFAULT_ID:?}"
+            ));
+        }
+
+        Ok(Self {
+            id: Some(id.to_string()),
+            vault_service: format!("{NAMED_VAULT_SERVICE_PREFIX}{id}"),
+        })
+    }
+
+    /// Resolve the instance config directory from platform and home bases.
+    pub fn config_dir_from(&self, platform_config: Option<&Path>, home: &Path) -> PathBuf {
+        let root = platform_config
+            .map(|base| base.join("com.tuic.commander"))
+            .unwrap_or_else(|| home.join(".tuicommander"));
+        match &self.id {
+            Some(id) => root.join("instances").join(id),
+            None => root,
+        }
+    }
+
+    /// Keyring service holding this instance's vault.
+    pub fn vault_service(&self) -> &str {
+        &self.vault_service
+    }
+
+    /// Keyring user holding this instance's vault.
+    pub fn vault_user(&self) -> &str {
+        VAULT_USER
+    }
+
+    /// Whether this instance may import state from historical global namespaces.
+    pub fn allows_legacy_migration(&self) -> bool {
+        self.id.is_none()
+    }
+}
+
+pub(crate) fn is_owned_vault_service(service: &str) -> bool {
+    service == DEFAULT_VAULT_SERVICE || service.starts_with(NAMED_VAULT_SERVICE_PREFIX)
+}
+
+fn is_valid_named_id(id: &str) -> bool {
+    if id.is_empty() || id.len() > 63 || id == DEFAULT_ID {
+        return false;
+    }
+    let bytes = id.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+static APP_INSTANCE: OnceLock<AppInstance> = OnceLock::new();
+
+/// Select the process instance exactly once, before persistent state is observed.
+pub fn select_app_instance(id: Option<&str>) -> Result<(), String> {
+    let instance = match id {
+        Some(id) => AppInstance::named(id)?,
+        None => AppInstance::default(),
+    };
+    APP_INSTANCE
+        .set(instance)
+        .map_err(|_| "Application instance has already been selected or observed".to_string())
+}
+
+/// Return the selected instance, freezing the process to the default if not selected yet.
+pub fn current_app_instance() -> &'static AppInstance {
+    APP_INSTANCE.get_or_init(AppInstance::default)
+}

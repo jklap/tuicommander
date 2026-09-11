@@ -1964,13 +1964,24 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Available as GitHub Release artifacts for Linux x64/ARM64, macOS ARM, and Windows x64
 
 ### 22.2 Configuration
-- Uses the same config file as the desktop app (`~/.config/tuicommander/config.toml`)
+- Without `--instance`, uses the desktop app's existing platform config directory,
+  keyring service `tuicommander`, user `vault`, and legacy migrations unchanged
+- `--instance <id>` selects an immutable isolated namespace before password setup
+  or startup: files under `<platform-app-config>/instances/<id>/` and keyring
+  service `tuicommander-instance-<id>`, user `vault`
+- Instance IDs are lowercase ASCII DNS labels of 1–63 characters with
+  alphanumeric ends and optional internal hyphens; `default` is reserved
+- Named instances start empty and never fall back to or migrate default/legacy
+  files or credentials. A release daemon exits before binding if its named OS
+  keyring vault cannot be opened
 - Default port: 9877 (overridable via `TUIC_PORT` env var)
-- `--set-password` flag for interactive password setup (bcrypt hashed)
+- `--set-password` performs interactive password setup (bcrypt hashed) inside
+  the instance selected earlier on the same command line
 - LAN auth bypass always disabled in headless mode (security hardening)
 
 ### 22.3 TLS
-- Manual TLS via `[services.tls]` config section (cert + key PEM paths)
+- Manual TLS via `services.tls` in the instance's `config.json` (`mode: "manual"`,
+  plus cert and key PEM paths)
 - No TLS by default — use a reverse proxy or Tailscale for production
 
 ### 22.4 Lifecycle

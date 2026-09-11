@@ -67,7 +67,7 @@ fn plugin_read_credential_inner(service_name: &str) -> Result<Option<String>, St
     // Deny access to TUICommander's OWN secrets vault. `credentials:read` is for
     // reading OTHER tools' credentials (e.g. aws-cli creds), never the host's
     // GitHub/LLM/MCP tokens. Reject the vault service and any legacy entry.
-    if service_name == crate::credentials::KEYRING_SERVICE
+    if crate::app_instance::is_owned_vault_service(service_name)
         || crate::credentials::LEGACY_ENTRIES
             .iter()
             .any(|&(service, _)| service == service_name)
@@ -209,6 +209,14 @@ mod tests {
             assert!(result.is_err(), "expected {service} to be denied");
             assert!(result.unwrap_err().contains("denied"));
         }
+
+        // A named application instance has its own vault service, which must
+        // remain private to the host just like the default vault.
+        let named_instance =
+            crate::app_instance::AppInstance::named("work-laptop").expect("valid named instance");
+        let result = plugin_read_credential_inner(named_instance.vault_service());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("denied"));
     }
 
     #[cfg(target_os = "macos")]

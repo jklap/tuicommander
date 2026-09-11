@@ -491,7 +491,10 @@ pub(crate) fn publish_workspace_impl(
 /// survive the directory, so there is nothing a removal could destroy. That is
 /// the same asymmetry the removal guard is built on, and reporting it as a
 /// number lets the UI show the count on the rows where it means something.
-pub(crate) fn unpublished_commits_impl(repo_path: &str, workspace_id: &str) -> Result<usize, String> {
+pub(crate) fn unpublished_commits_impl(
+    repo_path: &str,
+    workspace_id: &str,
+) -> Result<usize, String> {
     match resolve_any_workspace(Path::new(repo_path), workspace_id)? {
         ResolvedWorkspace::Cow(record) => crate::cow::unpublished_commit_count(&record),
         ResolvedWorkspace::Worktree(_) => Ok(0),

@@ -50,14 +50,14 @@ pub(crate) fn config_dir() -> PathBuf {
     if let Some(dir) = CONFIG_DIR_OVERRIDE.lock().unwrap().clone() {
         return dir;
     }
-    let new_dir = dirs::config_dir()
-        .map(|d| d.join("com.tuic.commander"))
-        .unwrap_or_else(legacy_dotdir);
+    let platform_dir = dirs::config_dir();
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let instance = crate::app_instance::current_app_instance();
+    let new_dir = instance.config_dir_from(platform_dir.as_deref(), &home);
 
     // Migrate if our config file is missing (the dir may already exist from Tauri's window-state plugin)
-    if !new_dir.join(APP_CONFIG_FILE).exists() {
+    if instance.allows_legacy_migration() && !new_dir.join(APP_CONFIG_FILE).exists() {
         // Try migrating from legacy dirs (newest first): tuicommander, tui-commander, ~/.tuicommander
-        let platform_dir = dirs::config_dir();
         let candidates = [
             platform_dir.as_ref().map(|d| d.join("tuicommander")),
             platform_dir.as_ref().map(|d| d.join("tui-commander")),

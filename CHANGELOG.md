@@ -59,6 +59,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nothing is passed through unchanged, so a session whose process has exited can
   still be read.
 
+- **`tuic-remote` can run isolated named application instances.**
+  `--instance <id>` selects a separate platform configuration tree and OS
+  keyring vault before password setup or daemon startup. Named instances never
+  migrate or fall back to default state, and a vault failure stops a release
+  daemon before it binds. Omitting the option preserves all existing paths,
+  credentials, and migrations.
+
 - **A repo dropped by the memory budget comes back without re-indexing it.** The
   index is written to `<data_dir>/content-index/` on the way out and reloaded on
   the way back in, so returning to a repo costs a stat walk instead of a full
@@ -86,8 +93,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The binary it launches is a setting, never an argument: no request can choose
   what your machine runs, and correcting the setting takes effect without a
   restart.
-
-## [1.7.6] - 2026-09-02
 
 ### Changed
 

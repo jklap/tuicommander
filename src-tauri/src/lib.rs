@@ -16,6 +16,7 @@ pub(crate) mod agent_session;
 pub(crate) mod ai_agent;
 pub(crate) mod ai_chat;
 pub(crate) mod ai_chat_registry;
+pub mod app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
 pub(crate) mod chrome;
@@ -2345,6 +2346,8 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .map_err(|_| anyhow::anyhow!("Failed to install rustls CryptoProvider"))?;
+
+    credentials::probe_named_vault_read().map_err(anyhow::Error::msg)?;
 
     let log_buffer = Arc::new(parking_lot::Mutex::new(app_logger::LogRingBuffer::new(
         app_logger::LOG_RING_CAPACITY,

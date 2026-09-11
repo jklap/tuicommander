@@ -59,7 +59,12 @@ fn circuit_record_failure() {
     cb.last_failure = Some(Instant::now());
 }
 
+/// The default instance vault tuple. Named instances derive their own in
+/// `app_instance`; these constants only remain to address the default vault in
+/// tests.
+#[cfg(test)]
 pub(crate) const KEYRING_SERVICE: &str = "tuicommander";
+#[cfg(test)]
 const KEYRING_USER: &str = "vault";
 
 pub(crate) const LEGACY_ENTRIES: &[(&str, &str)] = &[
@@ -158,10 +163,12 @@ fn persist(vault: &Vault) -> Result<(), String> {
     circuit_check()?;
     let json =
         serde_json::to_string(vault).map_err(|e| format!("Failed to serialize vault: {e}"))?;
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| {
-        circuit_record_failure();
-        format!("Failed to create keyring entry: {e}")
-    })?;
+    let instance = crate::app_instance::current_app_instance();
+    let entry =
+        keyring::Entry::new(instance.vault_service(), instance.vault_user()).map_err(|e| {
+            circuit_record_failure();
+            format!("Failed to create keyring entry: {e}")
+        })?;
     entry.set_password(&json).map_err(|e| {
         circuit_record_failure();
         format!("Failed to save vault: {e}")
@@ -191,7 +198,11 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
     #[cfg(test)]
     ensure_mock_keyring();
 
-    let mut vault: Vault = match read_keyring_entry(KEYRING_SERVICE, KEYRING_USER)? {
+    let instance = crate::app_instance::current_app_instance();
+    let mut vault: Vault = match read_keyring_entry(
+        instance.vault_service(),
+        instance.vault_user(),
+    )? {
         Some(json) => match serde_json::from_str(&json) {
             Ok(v) => v,
             Err(e) => {
@@ -206,21 +217,24 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
         None => HashMap::new(),
     };
 
-    // Always sweep legacy entries — handles stragglers when vault was created
-    // before all legacy keys were migrated. Persist the merged vault BEFORE
-    // deleting any legacy copy, so a persist failure (locked keychain, circuit
-    // breaker open) can never lose a secret from both locations (#116-1cb4).
+    // The default instance always sweeps legacy entries — handles stragglers when
+    // its vault was created before all legacy keys were migrated. Persist the
+    // merged vault BEFORE deleting any legacy copy, so a persist failure (locked
+    // keychain, circuit breaker open) can never lose a secret from both locations
+    // (#116-1cb4). Named instances never inspect that global namespace.
     let mut to_delete: Vec<(&str, &str)> = Vec::new();
-    for &(service, user) in LEGACY_ENTRIES {
-        if let Ok(Some(value)) = read_keyring_entry(service, user) {
-            let cred = match (service, user) {
-                ("tuicommander-ai-chat", "api-key") => Credential::AiChatApiKey,
-                ("tuicommander-llm-api", "api-key") => Credential::LlmApiKey,
-                ("tuicommander-github", "oauth-token") => Credential::GithubOauthToken,
-                _ => unreachable!(),
-            };
-            vault.entry(cred.vault_key()).or_insert(value);
-            to_delete.push((service, user));
+    if instance.allows_legacy_migration() {
+        for &(service, user) in LEGACY_ENTRIES {
+            if let Ok(Some(value)) = read_keyring_entry(service, user) {
+                let cred = match (service, user) {
+                    ("tuicommander-ai-chat", "api-key") => Credential::AiChatApiKey,
+                    ("tuicommander-llm-api", "api-key") => Credential::LlmApiKey,
+                    ("tuicommander-github", "oauth-token") => Credential::GithubOauthToken,
+                    _ => unreachable!(),
+                };
+                vault.entry(cred.vault_key()).or_insert(value);
+                to_delete.push((service, user));
+            }
         }
     }
     if !to_delete.is_empty() {
@@ -251,7 +265,8 @@ pub(crate) fn get(cred: Credential<'_>) -> Result<Option<String>, String> {
 
     // Lazy migration for dynamic keys only (MCP upstreams aren't in LEGACY_ENTRIES).
     // Static credentials are swept in load() — no extra keychain prompts.
-    if matches!(cred, Credential::McpUpstream(_))
+    if crate::app_instance::current_app_instance().allows_legacy_migration()
+        && matches!(cred, Credential::McpUpstream(_))
         && let Some((service, user)) = cred.legacy_entry()
         && let Some(value) = read_keyring_entry(service, user)?
     {
@@ -288,6 +303,24 @@ pub(crate) fn delete(cred: Credential<'_>) -> Result<(), String> {
     Ok(())
 }
 
+/// Fail a named instance before it binds if its vault namespace is unreadable.
+/// The default instance has nothing to prove here: `load()` already sweeps it.
+#[cfg(not(feature = "desktop"))]
+pub(crate) fn probe_named_vault_read() -> Result<(), String> {
+    let instance = crate::app_instance::current_app_instance();
+    if instance.allows_legacy_migration() {
+        return Ok(());
+    }
+
+    #[cfg(all(debug_assertions, not(test)))]
+    dev_store::init();
+
+    #[cfg(test)]
+    ensure_mock_keyring();
+
+    read_keyring_entry(instance.vault_service(), instance.vault_user()).map(|_| ())
+}
+
 // ---------------------------------------------------------------------------
 // Debug file-backed keyring (avoids OS keychain prompts during development)
 // ---------------------------------------------------------------------------
@@ -308,7 +341,16 @@ mod dev_store {
 
     fn file_path() -> PathBuf {
         let home = dirs::home_dir().expect("Cannot determine home directory");
-        let dir = home.join(".tuicommander-dev");
+        let instance = crate::app_instance::current_app_instance();
+        let mut dir = home.join(".tuicommander-dev");
+        if !instance.allows_legacy_migration() {
+            dir = dir.join("instances").join(
+                instance
+                    .vault_service()
+                    .strip_prefix("tuicommander-instance-")
+                    .expect("named vault service prefix"),
+            );
+        }
         std::fs::create_dir_all(&dir).ok();
         dir.join("credentials.json")
     }
