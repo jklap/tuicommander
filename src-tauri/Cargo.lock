@@ -99,6 +99,7 @@ dependencies = [
  "arrayvec",
  "base64 0.22.1",
  "bitflags 2.13.1",
+ "flate2",
  "home",
  "libc",
  "log",
@@ -9726,7 +9727,9 @@ dependencies = [
  "alacritty_terminal",
  "base64 0.22.1",
  "dirs",
+ "flate2",
  "lazy_static",
+ "libc",
  "parking_lot",
  "regex",
  "serde",
@@ -9736,6 +9739,7 @@ dependencies = [
  "tuic-ansi",
  "tuic-test-support",
  "unicode-width 0.2.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
