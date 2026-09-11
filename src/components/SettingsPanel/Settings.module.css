@@ -515,6 +515,7 @@
 .soundRow {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
@@ -526,6 +527,14 @@
 
 .soundRow:last-child {
   border-bottom: none;
+}
+
+/* Forces the custom-file hint line onto its own row below the rest of a
+   .soundRow — needs .soundRow's flex-wrap: wrap above to actually take
+   effect, since a flex-basis: 100% child does nothing under nowrap. */
+.soundCustomFile {
+  flex-basis: 100%;
+  margin-top: 4px;
 }
 
 .testBtn {

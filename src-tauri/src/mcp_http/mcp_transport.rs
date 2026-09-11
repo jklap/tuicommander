@@ -12740,6 +12740,47 @@ mod tests {
         }
     }
 
+    /// `TOAST_SOUNDS` is a fourth, independent list of valid sound names
+    /// (alongside `notification_sound::NotificationSound`, `src/notifications.ts`,
+    /// and `src/plugins/types.ts` — one of which drifted for real: `plugins/types.ts`
+    /// was missing "attention" entirely until a 2026-09-10 fix). The `match` below
+    /// is exhaustive, so adding a `NotificationSound` variant without updating
+    /// `TOAST_SOUNDS` fails to *compile*, not just fails this test at runtime.
+    #[test]
+    fn toast_sounds_stay_in_sync_with_notification_sound_variants() {
+        use crate::notification_sound::NotificationSound;
+
+        fn as_toast_name(sound: NotificationSound) -> &'static str {
+            match sound {
+                NotificationSound::Question => "question",
+                NotificationSound::Completion => "completion",
+                NotificationSound::Error => "error",
+                NotificationSound::Warning => "warning",
+                NotificationSound::Info => "info",
+                NotificationSound::Attention => "attention",
+            }
+        }
+
+        for sound in [
+            NotificationSound::Question,
+            NotificationSound::Completion,
+            NotificationSound::Error,
+            NotificationSound::Warning,
+            NotificationSound::Info,
+            NotificationSound::Attention,
+        ] {
+            assert!(
+                TOAST_SOUNDS.contains(&as_toast_name(sound)),
+                "{sound:?} missing from TOAST_SOUNDS"
+            );
+        }
+        assert_eq!(
+            TOAST_SOUNDS.len(),
+            6,
+            "TOAST_SOUNDS grew or shrank without updating this test"
+        );
+    }
+
     /// A typo must not silently produce a silent toast — the agent would believe
     /// it had rung a bell that never rang.
     #[test]

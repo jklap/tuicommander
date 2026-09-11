@@ -179,8 +179,8 @@ fn default_preset_name() -> String {
 /// arguments rather than being read back off disk here.
 ///
 /// `preset` is deliberately a plain string, not an enum: the set of valid
-/// values is owned by the frontend (`src/notifications.ts`'s `SOUND_PRESETS`)
-/// and interpreted here by `resolve_sequence`, which falls back gracefully
+/// values is owned by the frontend (`src/notifications.ts`'s `SoundPreset`
+/// union) and interpreted here by `resolve_sequence`, which falls back gracefully
 /// for anything it doesn't recognize. Keeping this a string means a preset
 /// this module doesn't know about (an older Rust build, a hand-edited
 /// config) degrades to that sound's own default tone instead of failing to
@@ -202,30 +202,82 @@ impl Default for SoundChoice {
     }
 }
 
+/// The preset name each `NotificationSound` is known by when borrowed as
+/// another sound's preset. Exhaustive on purpose: adding a `NotificationSound`
+/// variant without giving it a preset name here fails to *compile*, unlike a
+/// plain `match preset { "question" => ... }` which would just silently never
+/// offer the new sound as a borrowable preset.
+fn preset_name_for(sound: NotificationSound) -> &'static str {
+    match sound {
+        NotificationSound::Question => "question",
+        NotificationSound::Completion => "completion",
+        NotificationSound::Error => "error",
+        NotificationSound::Warning => "warning",
+        NotificationSound::Info => "info",
+        NotificationSound::Attention => "attention",
+    }
+}
+
 /// Resolve a chosen preset name to the tone sequence to play. Presets other
 /// than "default" simply borrow another notification type's own built-in
 /// motif — there is no separate library of generic tones to keep in sync.
 /// An unrecognized name (including "custom", which the caller handles before
 /// ever reaching this function) falls back to the sound's own default.
 fn resolve_sequence(sound: NotificationSound, preset: &str) -> SoundSequence {
-    match preset {
-        "question" => sound_sequence(NotificationSound::Question),
-        "completion" => sound_sequence(NotificationSound::Completion),
-        "error" => sound_sequence(NotificationSound::Error),
-        "warning" => sound_sequence(NotificationSound::Warning),
-        "info" => sound_sequence(NotificationSound::Info),
-        "attention" => sound_sequence(NotificationSound::Attention),
-        _ => sound_sequence(sound),
+    for candidate in [
+        NotificationSound::Question,
+        NotificationSound::Completion,
+        NotificationSound::Error,
+        NotificationSound::Warning,
+        NotificationSound::Info,
+        NotificationSound::Attention,
+    ] {
+        if preset_name_for(candidate) == preset {
+            return sound_sequence(candidate);
+        }
     }
+    sound_sequence(sound)
 }
 
-/// Open and probe-decode a user-supplied sound file. Done eagerly (before
-/// spawning the playback thread) so a bad path or unsupported format
-/// surfaces synchronously to the caller — e.g. the Settings "Test" button —
-/// instead of only as a background warn log the user never sees.
+/// Open and probe-decode a user-supplied sound file.
 fn open_custom_sound(path: &str) -> Result<Decoder<BufReader<File>>, String> {
     let file = File::open(path).map_err(|e| format!("Could not open \"{path}\": {e}"))?;
     Decoder::new(BufReader::new(file)).map_err(|e| format!("Could not decode \"{path}\": {e}"))
+}
+
+/// What actually gets played: a decoded custom file, or a procedural tone
+/// sequence. A separate type (rather than inlining this decision inside
+/// `play()`) so the fallback logic is unit-testable without touching real
+/// audio hardware or a background thread.
+enum PlaybackSource {
+    Custom(Decoder<BufReader<File>>),
+    Sequence(SoundSequence),
+}
+
+/// Decide what to play for `sound` given the user's `choice`. A "custom"
+/// choice whose file can't be opened or decoded (moved, deleted, corrupted,
+/// unsupported format) falls back to the sound's own default tone — same as
+/// "custom" selected with no file configured yet, or any unrecognized preset
+/// name — rather than producing no sound at all. The failure is logged, not
+/// propagated: nothing downstream of this function can distinguish "played
+/// the default tone because the user chose it" from "fell back to it," and
+/// that's intentional — playing *something* always beats erroring out.
+fn resolve_playback_source(sound: NotificationSound, choice: &SoundChoice) -> PlaybackSource {
+    if choice.preset == "custom"
+        && let Some(path) = choice.custom_path.as_deref()
+    {
+        match open_custom_sound(path) {
+            Ok(decoder) => return PlaybackSource::Custom(decoder),
+            Err(e) => {
+                tracing::warn!(
+                    source = "notification_sound",
+                    path,
+                    "Failed to open/decode custom sound, falling back to default tone: {e}"
+                );
+            }
+        }
+    }
+    PlaybackSource::Sequence(resolve_sequence(sound, &choice.preset))
 }
 
 // ---------------------------------------------------------------------------
@@ -445,29 +497,17 @@ fn resolve_output_stream(device_name: Option<&str>) -> Option<MixerDeviceSink> {
 /// Volume is 0.0-1.0. `device_name` selects a specific output device;
 /// `None` uses the system default. `choice` selects the sound source: the
 /// built-in default tone, another sound's tone borrowed as a preset, or a
-/// user-supplied audio file. Returns as soon as the source is confirmed
-/// playable — a custom file is opened and probe-decoded synchronously right
-/// here so a bad path/format surfaces to the caller immediately, but actual
-/// playback (including opening the output device) happens asynchronously on
-/// a short-lived thread, matching the built-in-tone path's existing
-/// fire-and-forget behavior for device errors.
+/// user-supplied audio file — see `resolve_playback_source` for the
+/// fallback rules. Returns immediately; audio plays asynchronously on a
+/// short-lived thread, including resolving the custom-file decoder, so a
+/// slow disk/decode never blocks the caller (e.g. the IPC dispatch thread).
 pub(crate) fn play(
     sound: NotificationSound,
     volume: f32,
     device_name: Option<String>,
     choice: SoundChoice,
-) -> Result<(), String> {
+) {
     let volume = volume.clamp(0.0, 1.0);
-
-    let custom_source = if choice.preset == "custom" {
-        match choice.custom_path.as_deref() {
-            Some(path) => Some(open_custom_sound(path)?),
-            None => None, // no file configured yet — fall back to the default tone below
-        }
-    } else {
-        None
-    };
-
     std::thread::spawn(move || {
         let Some(stream) = resolve_output_stream(device_name.as_deref()) else {
             tracing::warn!(source = "notification_sound", "Failed to open audio output");
@@ -475,28 +515,31 @@ pub(crate) fn play(
         };
         let player = Player::connect_new(stream.mixer());
 
-        if let Some(decoder) = custom_source {
-            player.append(decoder.amplify(volume));
-        } else {
-            let seq = resolve_sequence(sound, &choice.preset);
-            let volume = volume * seq.gain;
-            for step in playback_steps(&seq) {
-                match step {
-                    PlaybackStep::Tone {
-                        frequency,
-                        duration,
-                        waveform,
-                    } => {
-                        player.append(EnvelopedTone::new(frequency, duration, volume, waveform));
-                    }
-                    PlaybackStep::Gap(gap) => {
-                        player.append(
-                            rodio::source::Zero::new(
-                                NonZero::new(1).expect("one channel is non-zero"),
-                                NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
-                            )
-                            .take_duration(gap),
-                        );
+        match resolve_playback_source(sound, &choice) {
+            PlaybackSource::Custom(decoder) => {
+                player.append(decoder.amplify(volume));
+            }
+            PlaybackSource::Sequence(seq) => {
+                let volume = volume * seq.gain;
+                for step in playback_steps(&seq) {
+                    match step {
+                        PlaybackStep::Tone {
+                            frequency,
+                            duration,
+                            waveform,
+                        } => {
+                            player
+                                .append(EnvelopedTone::new(frequency, duration, volume, waveform));
+                        }
+                        PlaybackStep::Gap(gap) => {
+                            player.append(
+                                rodio::source::Zero::new(
+                                    NonZero::new(1).expect("one channel is non-zero"),
+                                    NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
+                                )
+                                .take_duration(gap),
+                            );
+                        }
                     }
                 }
             }
@@ -504,21 +547,20 @@ pub(crate) fn play(
 
         player.sleep_until_end();
     });
-    Ok(())
 }
 
-/// Tauri command: play a notification sound. Returns an error only for a
-/// "custom" choice whose file couldn't be opened/decoded — every other
-/// failure (missing output device, mid-playback error) is logged, not
-/// surfaced, matching the existing fire-and-forget behavior.
+/// Tauri command: play a notification sound. Fire-and-forget, like every
+/// other failure mode here (missing output device, mid-playback error, a
+/// broken custom file) — see `resolve_playback_source`'s doc comment for why
+/// there is nothing meaningful left to return.
 #[tauri::command]
 pub(crate) fn play_notification_sound(
     sound: NotificationSound,
     volume: f32,
     device: Option<String>,
     choice: SoundChoice,
-) -> Result<(), String> {
-    play(sound, volume, device, choice)
+) {
+    play(sound, volume, device, choice);
 }
 
 /// Tauri command: list available audio output devices.
@@ -870,20 +912,53 @@ mod tests {
         assert!(open_custom_sound(path.to_str().unwrap()).is_err());
     }
 
+    /// Asserts a `PlaybackSource` resolved to the fallback sequence, and that
+    /// it's the RIGHT sequence (`sound`'s own default) — not just "any
+    /// sequence, not the custom decoder."
+    fn assert_falls_back_to_default(source: PlaybackSource, sound: NotificationSound) {
+        match source {
+            PlaybackSource::Sequence(seq) => {
+                let own = sound_sequence(sound);
+                assert_eq!(seq.notes.len(), own.notes.len());
+                assert_eq!(seq.gap, own.gap);
+            }
+            PlaybackSource::Custom(_) => {
+                panic!("expected a fallback to the default tone, got a custom decoder")
+            }
+        }
+    }
+
     #[test]
-    fn play_returns_err_for_a_custom_choice_with_a_missing_file_without_touching_audio_hardware() {
-        // The Err path returns before resolve_output_stream/thread::spawn ever
-        // run, so this must pass identically whether or not real audio
-        // hardware is present in the test environment.
+    fn resolve_playback_source_falls_back_to_default_when_the_custom_file_is_missing() {
+        // The exact regression a code review caught: this must fall back to
+        // playing something, not silently produce no sound at all.
         let choice = SoundChoice {
             preset: "custom".to_string(),
             custom_path: Some("/definitely/not/a/real/path/xyz-123.wav".to_string()),
         };
-        assert!(play(NotificationSound::Info, 0.5, None, choice).is_err());
+        assert_falls_back_to_default(
+            resolve_playback_source(NotificationSound::Info, &choice),
+            NotificationSound::Info,
+        );
     }
 
     #[test]
-    fn play_returns_ok_for_a_custom_choice_with_a_valid_file() {
+    fn resolve_playback_source_falls_back_to_default_when_the_custom_file_is_unparseable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("garbage.wav");
+        std::fs::write(&path, b"not a real audio file, just text").unwrap();
+        let choice = SoundChoice {
+            preset: "custom".to_string(),
+            custom_path: Some(path.to_str().unwrap().to_string()),
+        };
+        assert_falls_back_to_default(
+            resolve_playback_source(NotificationSound::Warning, &choice),
+            NotificationSound::Warning,
+        );
+    }
+
+    #[test]
+    fn resolve_playback_source_uses_the_custom_decoder_for_a_valid_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.wav");
         std::fs::write(&path, minimal_wav_bytes()).unwrap();
@@ -891,11 +966,15 @@ mod tests {
             preset: "custom".to_string(),
             custom_path: Some(path.to_str().unwrap().to_string()),
         };
-        assert!(play(NotificationSound::Info, 0.5, None, choice).is_ok());
+        assert!(matches!(
+            resolve_playback_source(NotificationSound::Info, &choice),
+            PlaybackSource::Custom(_)
+        ));
     }
 
     #[test]
-    fn play_returns_ok_for_every_built_in_preset_without_touching_the_filesystem() {
+    fn resolve_playback_source_falls_back_for_every_built_in_preset_without_touching_the_filesystem()
+     {
         for preset in [
             "default",
             "question",
@@ -910,21 +989,47 @@ mod tests {
                 custom_path: None,
             };
             assert!(
-                play(NotificationSound::Warning, 0.5, None, choice).is_ok(),
-                "preset {preset:?} should not error"
+                matches!(
+                    resolve_playback_source(NotificationSound::Warning, &choice),
+                    PlaybackSource::Sequence(_)
+                ),
+                "preset {preset:?} should resolve to a sequence, never a custom decoder"
             );
         }
     }
 
     #[test]
-    fn play_returns_ok_for_custom_preset_with_no_path_configured_yet() {
-        // "custom" selected but no file chosen yet — falls back to the
-        // default tone rather than erroring.
+    fn resolve_playback_source_falls_back_when_custom_is_chosen_with_no_path_set_yet() {
         let choice = SoundChoice {
             preset: "custom".to_string(),
             custom_path: None,
         };
-        assert!(play(NotificationSound::Info, 0.5, None, choice).is_ok());
+        assert_falls_back_to_default(
+            resolve_playback_source(NotificationSound::Info, &choice),
+            NotificationSound::Info,
+        );
+    }
+
+    #[test]
+    fn resolve_playback_source_ignores_a_stray_custom_path_when_the_preset_is_not_custom() {
+        // A custom_path can linger in a config even after the user switches
+        // back to a named preset (the frontend's setSoundChoice always nulls
+        // it out on that path, but this proves the fallback logic itself
+        // doesn't depend on that call-site discipline) — it must not even
+        // attempt to open the bogus path.
+        let choice = SoundChoice {
+            preset: "attention".to_string(),
+            custom_path: Some("/definitely/not/a/real/path/xyz-123.wav".to_string()),
+        };
+        match resolve_playback_source(NotificationSound::Info, &choice) {
+            PlaybackSource::Sequence(seq) => {
+                let attention = sound_sequence(NotificationSound::Attention);
+                assert_eq!(seq.notes.len(), attention.notes.len());
+            }
+            PlaybackSource::Custom(_) => {
+                panic!("preset != \"custom\" — must never touch custom_path")
+            }
+        }
     }
 
     #[test]

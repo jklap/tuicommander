@@ -936,6 +936,54 @@ See [`docs/release-checklist.md`](docs/release-checklist.md) for version bump, t
 
 After non-trivial implementations, write an mdkb `memory_write` entry. Content: **Goal**, **Approach**, **Outcome**, **Gotchas**, **Rejected alternatives**. Skip file lists (mdkb indexes code). Focus on non-obvious insights a future session can't derive from reading the code. Search existing memories first to avoid duplicates.
 
+## Notification Sound Playback (`rodio` decoder features, custom-file fallback)
+
+`notification_sound.rs` generates its built-in tones procedurally (`EnvelopedTone`,
+a custom `Source` impl) — this needs only rodio's `playback` feature. **Playing a
+user-supplied audio file (`rodio::Decoder`) is a separate capability that needs
+its own Cargo features.** `src-tauri/Cargo.toml`'s `rodio` dependency sets
+`default-features = false`, so `Decoder::new(...)` compiles but silently has zero
+format backends registered — every file fails to decode — unless the relevant
+feature is explicitly listed. Currently enabled: `wav`, `mp3`, `vorbis` (ogg),
+`flac`. Adding support for another container (e.g. `mp4`/m4a-aac) means adding
+that feature to the `rodio = { ... features = [...] }` line, not just writing
+Rust code that calls `Decoder::new` and expecting it to work.
+
+**A custom sound file that fails to open/decode MUST still play something —
+the sound's own default tone — never propagate an error that silences the
+notification entirely.** `resolve_playback_source` (not `play()`/
+`play_notification_sound` themselves, which are plain fire-and-forget with no
+return value) owns this fallback: it only ever returns `PlaybackSource::Custom`
+when the file opened and decoded successfully, logging a warning and falling
+through to `PlaybackSource::Sequence` (the sound's default tone) for every
+other case — missing file, corrupt/unsupported format, or "custom" selected
+with no path configured yet. A first version of this feature used `?` to
+propagate `open_custom_sound`'s error straight out of `play()`, which a code
+review caught as a real regression: it meant a moved/deleted/corrupted custom
+file made that notification silent forever, directly contradicting the
+feature's own shipped docs. The lesson generalizes — a graceful-fallback
+promise ("falls back to X" in a commit message or docs) needs a test that
+actually exercises the fallback path end-to-end (what plays when the primary
+source fails), not just a test that the function "doesn't return Err."
+
+**`SoundChoice.preset` is a plain `String`, not a Rust enum, in both
+`config.rs` (persisted config) and `notification_sound.rs` (the IPC command's
+own copy) — deliberately.** The frontend (`src/notifications.ts`'s
+`SoundPreset` union) is the sole source of truth for which preset names are
+valid; both Rust sides just pattern-match known strings and fall back to that
+sound's own default tone for anything unrecognized. This was a direct
+reaction to fixing a real bug the same day: `src/plugins/types.ts`'s
+`NOTIFICATION_SOUNDS` had silently drifted out of sync with the other two
+definitions of the *sound name* enum (missing `"attention"` entirely). Adding
+a second enum-typed concept (*preset* choice) duplicated across Rust and TS
+would recreate the exact same drift risk one layer up. Don't "fix" this by
+introducing a `SoundPreset` Rust enum matching the TS one — instead, where a
+string→string mapping needs real drift protection (e.g. `preset_name_for` /
+`TOAST_SOUNDS`), match *from* the enum *to* the string with an exhaustive
+`match` and no `_` arm, so a new `NotificationSound` variant fails to compile
+until every such mapping is updated — cheaper than a runtime parity test and
+catches the gap before it ships, not after.
+
 ## Accepted Security Decisions
 
 Do NOT flag these as security issues in reviews — they are intentional design choices.

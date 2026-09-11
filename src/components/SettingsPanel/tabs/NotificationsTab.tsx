@@ -5,6 +5,7 @@ import type { NotificationSound, SoundPreset } from "../../../notifications";
 import { appLogger } from "../../../stores/appLogger";
 import { notificationsStore } from "../../../stores/notifications";
 import { isTauri } from "../../../transport";
+import { pathBasename } from "../../../utils/pathUtils";
 import { SettingSlider, SettingToggle, settingSlugId } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -29,11 +30,6 @@ const PRESET_LABELS: Record<NotificationSound, string> = {
 	info: "Pluck",
 	attention: "Callback",
 };
-
-function basename(path: string): string {
-	const parts = path.split(/[/\\]/);
-	return parts[parts.length - 1] || path;
-}
 
 // ---------------------------------------------------------------------------
 // Sound pattern visualizations (inline SVG showing pitch contour)
@@ -244,19 +240,24 @@ export const NotificationsTab: Component = () => {
 							async function handlePresetChange(e: Event & { currentTarget: HTMLSelectElement }): Promise<void> {
 								const val = e.currentTarget.value as SoundPreset;
 								if (val === "custom") {
-									const { open } = await import("@tauri-apps/plugin-dialog");
-									const picked = await open({
-										multiple: false,
-										filters: [{ name: "Audio", extensions: CUSTOM_SOUND_EXTENSIONS }],
-									});
-									if (typeof picked === "string") {
-										notificationsStore.setSoundChoice(sound.key, { preset: "custom", custom_path: picked });
-									} else if (selectRef) {
-										// Canceled — the browser already flipped the <select>'s own
-										// displayed value to "custom"; force it back since the store
-										// (and Solid's reactive `value` binding) never changed.
-										selectRef.value = choice().preset;
+									try {
+										const { open } = await import("@tauri-apps/plugin-dialog");
+										const picked = await open({
+											multiple: false,
+											filters: [{ name: "Audio", extensions: CUSTOM_SOUND_EXTENSIONS }],
+										});
+										if (typeof picked === "string") {
+											notificationsStore.setSoundChoice(sound.key, { preset: "custom", custom_path: picked });
+											return;
+										}
+									} catch (err) {
+										appLogger.warn("settings", "Failed to open the custom sound file picker", err);
 									}
+									// Canceled, or the picker itself failed — the browser already
+									// flipped the <select>'s own displayed value to "custom"; force
+									// it back since the store (and Solid's reactive `value` binding)
+									// never changed.
+									if (selectRef) selectRef.value = choice().preset;
 								} else {
 									notificationsStore.setSoundChoice(sound.key, { preset: val, custom_path: null });
 								}
@@ -278,7 +279,21 @@ export const NotificationsTab: Component = () => {
 										<For each={otherSounds}>
 											{(other) => <option value={other.key}>{PRESET_LABELS[other.key]}</option>}
 										</For>
-										<Show when={isTauri()}>
+										<Show
+											when={isTauri()}
+											fallback={
+												// Desktop and a browser-mode dev instance share config.json (see
+												// AGENTS.md's isolation caveat), so a custom choice made on desktop
+												// can still be the current value here even though this mode can't
+												// set or use one. Render it as a disabled option so the <select>
+												// always has a matching value instead of silently selecting nothing.
+												<Show when={choice().preset === "custom"}>
+													<option value="custom" disabled>
+														{t("notifications.preset.customDesktopOnly", "Custom file (desktop only)")}
+													</option>
+												</Show>
+											}
+										>
 											<option value="custom">{t("notifications.preset.custom", "Custom file…")}</option>
 										</Show>
 									</select>
@@ -286,8 +301,10 @@ export const NotificationsTab: Component = () => {
 										{t("notifications.btn.test", "Test")}
 									</button>
 									<Show when={choice().preset === "custom" && choice().custom_path}>
-										<p class={s.hint} style={{ "flex-basis": "100%", margin: "4px 0 0" }}>
-											{t("notifications.hint.customSound", "Custom: {file}", { file: basename(choice().custom_path!) })}{" "}
+										<p class={`${s.hint} ${s.soundCustomFile}`}>
+											{t("notifications.hint.customSound", "Custom: {file}", {
+												file: pathBasename(choice().custom_path!),
+											})}{" "}
 											<button
 												class={s.testBtn}
 												onClick={() =>

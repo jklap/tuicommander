@@ -21,23 +21,13 @@ export function isNotificationSound(value: unknown): value is NotificationSound 
 
 /** A sound source a user can pick for one notification type: the built-in
  *  default tone, another notification type's tone borrowed as a preset, or a
- *  user-supplied audio file (desktop only — see `SoundChoice.custom_path`). */
+ *  user-supplied audio file (desktop only — see `SoundChoice.custom_path`).
+ *  No runtime validator (`isSoundPreset`-style) is needed for this one: unlike
+ *  `NotificationSound`, a `SoundPreset` never arrives from an untrusted
+ *  source — it's only ever produced by this app's own Settings UI — and both
+ *  consumers (Rust's `resolve_sequence`, the Web Audio fallback below)
+ *  already fall back gracefully for any unrecognized string. */
 export type SoundPreset = "default" | NotificationSound | "custom";
-
-export const SOUND_PRESETS: readonly SoundPreset[] = [
-	"default",
-	"question",
-	"completion",
-	"error",
-	"warning",
-	"info",
-	"attention",
-	"custom",
-] as const;
-
-export function isSoundPreset(value: unknown): value is SoundPreset {
-	return typeof value === "string" && (SOUND_PRESETS as readonly string[]).includes(value);
-}
 
 /** The chosen sound source for one notification type. `custom_path` is only
  *  meaningful when `preset === "custom"`; it's a native filesystem path, so it

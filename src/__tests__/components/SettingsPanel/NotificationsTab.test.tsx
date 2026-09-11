@@ -1,5 +1,5 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../mocks/tauri";
 
 const {
@@ -263,6 +263,17 @@ describe("NotificationsTab", () => {
 			// The visible selection reverts to what the store still holds ("default").
 			expect(select.value).toBe("default");
 		});
+
+		it("a rejected file picker also reverts the visible selection instead of leaving it stuck on 'custom'", async () => {
+			const { open } = await import("@tauri-apps/plugin-dialog");
+			vi.mocked(open).mockRejectedValueOnce(new Error("dialog plugin unavailable"));
+			const { container } = render(() => <NotificationsTab />);
+			const select = presetSelectFor(container, "Question");
+
+			fireEvent.change(select, { target: { value: "custom" } });
+			await waitFor(() => expect(select.value).toBe("default"));
+			expect(mockSetSoundChoice).not.toHaveBeenCalled();
+		});
 	});
 });
 
@@ -347,5 +358,76 @@ describe("NotificationsTab (a sound already has a custom file configured)", () =
 
 		fireEvent.click(getByText("Reset to default"));
 		expect(mockSetSoundChoiceCustom).toHaveBeenCalledWith("question", { preset: "default", custom_path: null });
+	});
+});
+
+describe("NotificationsTab (browser mode viewing a custom choice made on desktop)", () => {
+	// Desktop and a browser-mode dev instance share config.json (see AGENTS.md's
+	// isolation caveat), so a sound already set to "custom" on desktop is a real
+	// state a browser client can observe, even though it can't set or use one.
+	const originalTauriShim = (globalThis as Record<string, unknown>).__TAURI_SHIM__;
+	let NotificationsTabBrowser: typeof import("../../../components/SettingsPanel/tabs/NotificationsTab").NotificationsTab;
+
+	beforeEach(async () => {
+		(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true; // forces isTauri() === false
+		vi.resetModules();
+		vi.doMock("../../../stores/notifications", () => ({
+			notificationsStore: {
+				state: {
+					isAvailable: true,
+					config: {
+						enabled: true,
+						volume: 0.5,
+						audio_device: null,
+						silence_remote_completions: false,
+						toasts_in_bell: true,
+						sounds: { question: true, error: true, completion: true, warning: true, info: true, attention: true },
+						sound_choices: {
+							question: { preset: "custom", custom_path: "/Users/me/sounds/ding.wav" },
+							error: { preset: "default", custom_path: null },
+							completion: { preset: "default", custom_path: null },
+							warning: { preset: "default", custom_path: null },
+							info: { preset: "default", custom_path: null },
+							attention: { preset: "default", custom_path: null },
+						},
+					},
+				},
+				setEnabled: vi.fn(),
+				setVolume: vi.fn(),
+				setAudioDevice: vi.fn(),
+				setSilenceRemoteCompletions: vi.fn(),
+				setToastsInBell: vi.fn(),
+				setSoundEnabled: vi.fn(),
+				setSoundChoice: vi.fn(),
+				testSound: vi.fn(),
+				reset: vi.fn(),
+			},
+		}));
+		const mod = await import("../../../components/SettingsPanel/tabs/NotificationsTab");
+		NotificationsTabBrowser = mod.NotificationsTab;
+	});
+
+	afterEach(() => {
+		if (originalTauriShim === undefined) {
+			delete (globalThis as Record<string, unknown>).__TAURI_SHIM__;
+		} else {
+			(globalThis as Record<string, unknown>).__TAURI_SHIM__ = originalTauriShim;
+		}
+	});
+
+	it("renders a disabled option matching the persisted 'custom' value instead of leaving the select unmatched", () => {
+		const { container, getByText } = render(() => <NotificationsTabBrowser />);
+		const row = Array.from(container.querySelectorAll<HTMLElement>("div")).find(
+			(div) => div.textContent?.includes("Question") && div.querySelector("select"),
+		);
+		const select = row?.querySelector("select") as HTMLSelectElement;
+
+		expect(select.value).toBe("custom");
+		const customOption = Array.from(select.querySelectorAll("option")).find((o) => o.value === "custom");
+		expect(customOption?.disabled).toBe(true);
+		// The live "Custom file…" picker option must not be offered here.
+		expect(customOption?.textContent).not.toBe("Custom file…");
+		// The hint + reset control stays reachable regardless of mode.
+		expect(getByText("Custom: ding.wav")).toBeTruthy();
 	});
 });
