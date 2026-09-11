@@ -1602,6 +1602,69 @@ impl<T: EventListener> Term<T> {
                 self.kitty_respond_ok(&control);
             }
             kitty::Action::Transmit | kitty::Action::TransmitAndDisplay => {
+                // PNG without an explicit placement size is the one case
+                // that genuinely needs decoded bytes before it can even
+                // compute a footprint (auto-sizing sniffs the PNG header for
+                // intrinsic dimensions) — keep that path fully synchronous,
+                // exactly as before this deferred-decode split existed.
+                // Every real target tool (mpv, timg, blackcat: raw `f=24`/
+                // `f=32` with explicit `c=`/`r=`/`s=`/`v=`) takes the
+                // deferred path below instead, which is the one that matters
+                // for a sustained video stream never holding `vt_log` for the
+                // decode itself (color-tools plan; a security review found
+                // this running fully synchronously under that lock).
+                let has_explicit_cells = control.cols > 0 && control.rows > 0;
+                if control.format != kitty::Format::Png || has_explicit_cells {
+                    let (mime, intrinsic_width, intrinsic_height) = match control.format {
+                        kitty::Format::Rgb => {
+                            ("raw-rgb".to_string(), control.width_px, control.height_px)
+                        }
+                        kitty::Format::Rgba => {
+                            ("raw-rgba".to_string(), control.width_px, control.height_px)
+                        }
+                        // Explicit c=/r= means kitty_display never needs
+                        // intrinsic dims to size the footprint — 0 is never
+                        // read for anything here.
+                        kitty::Format::Png => ("image/png".to_string(), 0, 0),
+                    };
+                    let client_id = (control.image_id != 0).then_some(control.image_id);
+                    let Some(placeholder) = self.event_proxy.store_pending_image(
+                        client_id,
+                        mime,
+                        intrinsic_width,
+                        intrinsic_height,
+                    ) else {
+                        self.kitty_respond_error(
+                            &control,
+                            "ENOSPC",
+                            "over the per-session image byte cap",
+                        );
+                        return;
+                    };
+
+                    if control.action == kitty::Action::TransmitAndDisplay {
+                        self.kitty_display(&control, Arc::clone(&placeholder));
+                    }
+
+                    self.event_proxy
+                        .queue_kitty_decode_job(kitty::PendingKittyDecodeJob {
+                            placeholder,
+                            format: control.format,
+                            compressed: control.compressed,
+                            medium: control.medium,
+                            width_px: control.width_px,
+                            height_px: control.height_px,
+                            payload_b64: payload_b64.to_vec(),
+                            reply_image_id: control.image_id,
+                            reply_placement_id: control.placement_id,
+                            quiet: control.quiet,
+                        });
+                    // No immediate OK/error reply — the deferred job writes
+                    // it once decode actually finishes.
+                    return;
+                }
+
+                // --- PNG auto-sizing: unchanged, fully synchronous path ---
                 let Ok(decoded) = Base64.decode(payload_b64) else {
                     self.kitty_respond_error(&control, "EINVAL", "payload is not valid base64");
                     return;
@@ -1645,97 +1708,27 @@ impl<T: EventListener> Term<T> {
                     }
                 };
 
-                // `o=z`: the pixel/PNG payload itself is zlib-compressed,
-                // orthogonal to which medium delivered it. Bound the
-                // inflated size — an unbounded `read_to_end` on a zlib
-                // stream is a classic decompression bomb (a few KB of
-                // compressed all-zero data can expand to gigabytes), so the
-                // decoder is wrapped in `Read::take` at one byte past the
-                // cap: if the inflated output fills that allowance exactly,
-                // there was more data than the cap allows and the whole
-                // payload is rejected before ever reaching the app-level
-                // `MAX_SESSION_IMAGE_BYTES` check (which only runs after the
-                // full buffer already exists).
-                const MAX_INFLATED_BYTES: u64 = 64 * 1024 * 1024;
-                let bytes = if control.compressed {
-                    use std::io::Read;
-                    let mut inflated = Vec::new();
-                    let mut limited =
-                        flate2::read::ZlibDecoder::new(&bytes[..]).take(MAX_INFLATED_BYTES + 1);
-                    if limited.read_to_end(&mut inflated).is_err() {
-                        self.kitty_respond_error(
-                            &control,
-                            "EINVAL",
-                            "payload is not valid zlib-compressed data",
-                        );
+                let payload = match kitty::finish_decode(
+                    control.format,
+                    control.compressed,
+                    control.width_px,
+                    control.height_px,
+                    bytes,
+                ) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        self.kitty_respond_error(&control, err.code, err.message);
                         return;
-                    }
-                    if inflated.len() as u64 > MAX_INFLATED_BYTES {
-                        self.kitty_respond_error(
-                            &control,
-                            "EINVAL",
-                            "decompressed payload exceeds the size limit",
-                        );
-                        return;
-                    }
-                    inflated
-                } else {
-                    bytes
-                };
-                if bytes.is_empty() {
-                    self.kitty_respond_error(&control, "EINVAL", "empty payload");
-                    return;
-                }
-
-                let (intrinsic_width, intrinsic_height, mime, bytes) = match control.format {
-                    kitty::Format::Rgb | kitty::Format::Rgba => {
-                        let channels: u32 = if control.format == kitty::Format::Rgb {
-                            3
-                        } else {
-                            4
-                        };
-                        let expected = (control.width_px as usize)
-                            .saturating_mul(control.height_px as usize)
-                            .saturating_mul(channels as usize);
-                        // Raw formats carry no container/length field of their
-                        // own — `s=`/`v=` (width/height) are the only source
-                        // of truth for how many bytes are real pixel data.
-                        // Trim rather than trust the medium's own length: a
-                        // `t=s` shared-memory segment can be page-rounded
-                        // larger than the client's payload (observed on
-                        // macOS), and a client could in principle send extra
-                        // trailing bytes over `t=d`/`t=f` too. Never *pad*
-                        // upward — a short read is a real transmission
-                        // problem, not something to silently zero-fill.
-                        if bytes.len() < expected {
-                            self.kitty_respond_error(
-                                &control,
-                                "EINVAL",
-                                "payload shorter than width*height*channels",
-                            );
-                            return;
-                        }
-                        let mime = if channels == 3 { "raw-rgb" } else { "raw-rgba" };
-                        (
-                            control.width_px,
-                            control.height_px,
-                            mime.to_string(),
-                            bytes[..expected].to_vec(),
-                        )
-                    }
-                    kitty::Format::Png => {
-                        let (w, h) = iterm2::sniff_image_dimensions(&bytes).unwrap_or((0, 0));
-                        (w, h, "image/png".to_string(), bytes)
                     }
                 };
 
                 let client_id = (control.image_id != 0).then_some(control.image_id);
                 let Some(image) = self.event_proxy.store_image(
                     client_id,
-                    Arc::from(bytes),
-                    mime,
-                    intrinsic_width,
-                    intrinsic_height,
+                    Arc::from(payload.bytes),
+                    payload.mime,
+                    payload.intrinsic_width,
+                    payload.intrinsic_height,
                 ) else {
                     self.kitty_respond_error(
                         &control,

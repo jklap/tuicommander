@@ -1556,6 +1556,12 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
         crate::state::AppEvent::PtyImagePlacementsCleared { .. } => {
             serde_json::json!({"type": "image-placements-cleared"})
         }
+        // Field name matches the desktop `pty-image-decoded-*` Tauri event
+        // payload exactly (color-tools plan: deferred Kitty decode) — same
+        // reasoning as `image-placement` above.
+        crate::state::AppEvent::PtyImageDecoded { image_id, .. } => {
+            serde_json::json!({"type": "image-decoded", "imageId": image_id})
+        }
         _ => return None,
     })
 }

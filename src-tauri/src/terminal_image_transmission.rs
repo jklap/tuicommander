@@ -239,6 +239,155 @@ pub(crate) fn read_shm_medium(_name: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+/// The outcome of one deferred Kitty decode job (color-tools plan) — enough
+/// for the caller (`pty.rs::process_chunk`, running outside the `vt_log`
+/// lock) to write the deferred OK/error PTY reply and, on success, fire the
+/// `image-decoded` signal the frontend needs to retry a fetch that may have
+/// raced the still-in-flight decode.
+pub(crate) struct KittyJobOutcome {
+    /// The real, resolved image id (`placeholder.image_id`) — what the
+    /// frontend's `image-decoded` event should carry. Not necessarily the
+    /// same as `reply_image_id` (a client that omitted `i=` gets an
+    /// auto-allocated id here, but the wire reply still echoes back `0`,
+    /// matching this protocol's existing behavior for that case).
+    pub image_id: u32,
+    pub reply_image_id: u32,
+    pub reply_placement_id: u32,
+    pub quiet: u8,
+    pub result: Result<(), (&'static str, &'static str)>,
+}
+
+/// Base64-decode a Kitty transmission's wire payload, resolve its medium
+/// (file/shared-memory read for `t=f`/`t=t`/`t=s`; the direct bytes
+/// themselves for `t=d`), then hand off to
+/// `alacritty_terminal::term::kitty::finish_decode` for the parts that don't
+/// need OS I/O (zlib inflate, raw-format trim, PNG dimension sniff — shared
+/// with the still-synchronous PNG-auto-size path in `term/mod.rs` so there
+/// is one implementation, not two).
+fn execute_pending_kitty_job(
+    job: &alacritty_terminal::term::kitty::PendingKittyDecodeJob,
+) -> Result<
+    alacritty_terminal::term::kitty::DecodedImagePayload,
+    alacritty_terminal::term::kitty::KittyDecodeError,
+> {
+    use alacritty_terminal::term::kitty::{KittyDecodeError, Medium, finish_decode};
+    use base64::Engine;
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&job.payload_b64)
+        .map_err(|_| KittyDecodeError {
+            code: "EINVAL",
+            message: "payload is not valid base64",
+        })?;
+    if decoded.is_empty() {
+        return Err(KittyDecodeError {
+            code: "EINVAL",
+            message: "empty payload",
+        });
+    }
+
+    let bytes = match job.medium {
+        Medium::Direct => decoded,
+        Medium::File | Medium::TempFile => {
+            let delete_after = job.medium == Medium::TempFile;
+            read_file_medium(&decoded, delete_after).ok_or(KittyDecodeError {
+                code: "ENOENT",
+                message: "could not read the requested file",
+            })?
+        }
+        Medium::SharedMemory => read_shm_medium(&decoded).ok_or(KittyDecodeError {
+            code: "ENOENT",
+            message: "could not read the requested shared memory segment",
+        })?,
+    };
+
+    finish_decode(
+        job.format,
+        job.compressed,
+        job.width_px,
+        job.height_px,
+        bytes,
+    )
+}
+
+/// Format the deferred OK/error PTY reply for one completed Kitty decode
+/// job, honoring `quiet` exactly like `Term::kitty_respond_ok`/
+/// `kitty_respond_error` already do for the still-synchronous path. `None`
+/// if `quiet` suppresses it. Shared between `pty.rs::process_chunk` (writes
+/// it directly to the PTY) and `TerminalGrid::process` (pushes it onto the
+/// same `TermEvent::PtyWrite` queue an immediate reply would use, so
+/// `drain_pty_write_events` sees a deferred reply exactly like it always
+/// saw an immediate one).
+pub(crate) fn format_kitty_reply(outcome: &KittyJobOutcome) -> Option<String> {
+    match &outcome.result {
+        Ok(()) if outcome.quiet == 0 => Some(alacritty_terminal::term::kitty::ok_response(
+            outcome.reply_image_id,
+            outcome.reply_placement_id,
+        )),
+        Ok(()) => None,
+        Err((code, message)) if outcome.quiet < 2 => Some(
+            alacritty_terminal::term::kitty::error_response(outcome.reply_image_id, code, message),
+        ),
+        Err(_) => None,
+    }
+}
+
+/// Drain every Kitty decode job queued since the last drain and run each to
+/// completion, resolving its placeholder `ImageData` one way or the other.
+///
+/// **This is the whole point of the color-tools plan's deferred-decode
+/// design: the caller must invoke this OUTSIDE the session's `vt_log` lock.**
+/// A security review found Kitty image decode (base64, zlib inflate, file/
+/// shared-memory reads) running fully synchronously under that lock — fine
+/// for an occasional image, but a real, continuous cost for a sustained
+/// video stream (`mpv --vo=kitty`, `timg`) sending a new frame every
+/// 16-33ms. Takes the store/queue as plain `&Mutex` references rather than
+/// `&TerminalGrid`/`&VtLogBuffer` specifically so a caller can hold only
+/// these two independent locks — never the grid lock — while this runs. See
+/// `pty.rs::process_chunk`'s lock-free interlude for the real call site, and
+/// `TerminalGrid::drain_and_run_pending_kitty_decode_jobs` for the
+/// equivalent single-call convenience the test suite uses (safe there only
+/// because a bare test `TerminalGrid` has no concurrent lock contention to
+/// begin with).
+pub(crate) fn drain_and_run_pending_kitty_decode_jobs(
+    image_store: &std::sync::Mutex<crate::terminal_images::ImageStore>,
+    pending_jobs: &std::sync::Mutex<Vec<alacritty_terminal::term::kitty::PendingKittyDecodeJob>>,
+) -> Vec<KittyJobOutcome> {
+    let jobs = std::mem::take(&mut *pending_jobs.lock().unwrap());
+    jobs.into_iter()
+        .map(|job| {
+            let image_id = job.placeholder.image_id;
+            let reply_image_id = job.reply_image_id;
+            let reply_placement_id = job.reply_placement_id;
+            let quiet = job.quiet;
+            let result = match execute_pending_kitty_job(&job) {
+                Ok(payload) => {
+                    let store = image_store.lock().unwrap();
+                    match store.try_complete(&job.placeholder, std::sync::Arc::from(payload.bytes))
+                    {
+                        Ok(()) => Ok(()),
+                        Err(_) => {
+                            job.placeholder.mark_failed();
+                            Err(("ENOSPC", "over the per-session image byte cap"))
+                        }
+                    }
+                }
+                Err(err) => {
+                    job.placeholder.mark_failed();
+                    Err((err.code, err.message))
+                }
+            };
+            KittyJobOutcome {
+                image_id,
+                reply_image_id,
+                reply_placement_id,
+                quiet,
+                result,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

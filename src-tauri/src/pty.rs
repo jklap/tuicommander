@@ -5266,6 +5266,27 @@ impl ChunkProcessor {
         }
     }
 
+    /// Fan out "this Kitty image finished deferred decode" (color-tools
+    /// plan) — mirrors `TermEvent::ImagePlacement`'s own forwarding exactly
+    /// (desktop Tauri `emit` + `state.emit_pty_event` for WS/SSE), just
+    /// triggered from `process_chunk`'s post-lock decode-drain step instead
+    /// of the `TermEvent`-drain loop below (this signal doesn't originate
+    /// from `Term`'s own event queue at all, since the job that produces it
+    /// runs after `vt_log` is already dropped).
+    fn emit_pty_image_decoded(&self, state: &AppState, session_id: &str, image_id: u32) {
+        #[cfg(feature = "desktop")]
+        if let Some(a) = state.app_handle.read().as_ref() {
+            let _ = a.emit(
+                &format!("pty-image-decoded-{session_id}"),
+                serde_json::json!({ "imageId": image_id }),
+            );
+        }
+        state.emit_pty_event(crate::state::AppEvent::PtyImageDecoded {
+            session_id: session_id.to_string(),
+            image_id,
+        });
+    }
+
     /// Process a chunk of PTY output after kitty-sequence stripping.
     /// Handles: VT log buffer, ring buffer, WebSocket broadcast, event parsing,
     /// dedup, resize-grace filtering, PlanFile resolution, event emission,
@@ -5317,9 +5338,26 @@ impl ChunkProcessor {
             // terminal reads) for as long as the write is stuck. Collect
             // replies to flush once the lock is dropped, below.
             use crate::terminal_grid::TermEvent;
-            let (changed, total, hist, alt_screen, mouse_reporting, tevts, pending_replies) = {
+            let (
+                changed,
+                total,
+                hist,
+                alt_screen,
+                mouse_reporting,
+                tevts,
+                pending_replies,
+                kitty_image_store,
+                kitty_pending_jobs,
+            ) = {
                 let mut vt = vt_log.lock();
                 let changed = vt.process(data.as_bytes());
+                // Cloned Arc handles, not the grid itself — resolving any
+                // Kitty decode job these bytes just queued happens below,
+                // AFTER this lock drops (color-tools plan: a security
+                // review found Kitty image decode running fully
+                // synchronously under this lock, a real continuous cost for
+                // a sustained video stream like `mpv --vo=kitty`).
+                let (kitty_image_store, kitty_pending_jobs) = vt.grid_kitty_decode_handles();
                 // Publish the real sync state (a nested BSU keeps it open) so the
                 // frame ticker knows whether this session can have a stalled
                 // synchronized update worth taking the lock for.
@@ -5359,6 +5397,8 @@ impl ChunkProcessor {
                     mouse_reporting,
                     tevts,
                     pending_replies,
+                    kitty_image_store,
+                    kitty_pending_jobs,
                 )
             };
 
@@ -5373,6 +5413,31 @@ impl ChunkProcessor {
             // TUI queries cursor position.
             for response in &pending_replies {
                 write_terminal_reply(state, session_id, response.as_bytes(), "PtyWrite");
+            }
+
+            // Resolve any Kitty image transmission this chunk queued for
+            // deferred decode (color-tools plan) — genuinely lock-free now,
+            // using only the two handles cloned above, never `vt_log`.
+            for outcome in
+                crate::terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs(
+                    &kitty_image_store,
+                    &kitty_pending_jobs,
+                )
+            {
+                if let Some(reply) =
+                    crate::terminal_image_transmission::format_kitty_reply(&outcome)
+                {
+                    write_terminal_reply(state, session_id, reply.as_bytes(), "PtyWrite");
+                }
+                if outcome.result.is_ok() {
+                    // The frontend's `ImageLayer` never retries a failed/
+                    // empty `terminal_image_bytes` fetch on its own — if its
+                    // first attempt raced this decode (plausible under IPC/
+                    // network jitter even though the window is normally
+                    // tiny), this is what tells it to invalidate that cache
+                    // entry and try again now that bytes are actually ready.
+                    self.emit_pty_image_decoded(state, session_id, outcome.image_id);
+                }
             }
 
             // Grid is the source of truth for mouse DECSET (including combined

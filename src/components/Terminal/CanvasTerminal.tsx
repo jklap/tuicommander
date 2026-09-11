@@ -2518,6 +2518,18 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					if (currentFrame) repaintImages(currentFrame, m);
 				});
 			});
+			// A Kitty image finished deferred decode (color-tools plan: decode
+			// moved off the vt_log lock, so a placement can be known before its
+			// bytes are ready). Invalidate any cached fetch failure for this
+			// image id and retry — see `ImageLayer.invalidateImage`'s own doc
+			// comment for why this is needed even though the race it covers is
+			// normally tiny.
+			await transport.onEvent("image-decoded", (payload) => {
+				const { imageId } = payload as { imageId: number };
+				imageLayer?.invalidateImage(imageId);
+				const m = metrics();
+				if (m && currentFrame) repaintImages(currentFrame, m);
+			});
 		} catch (e) {
 			appLogger.error("terminal", "Failed to subscribe to terminal session events", {
 				sessionId: props.sessionId,

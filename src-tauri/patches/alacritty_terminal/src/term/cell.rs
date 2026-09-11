@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use bitflags::bitflags;
 #[cfg(feature = "serde")]
@@ -117,39 +117,155 @@ impl HyperlinkInner {
     }
 }
 
-/// Shared, immutable data for one transmitted inline image (iTerm2 OSC 1337 /
-/// Kitty graphics protocol — color-tools plan). Every [`ImageCellRef`] that
-/// shows one of this image's tiles holds a direct, strong `Arc` clone: once no
-/// cell (main screen or scrollback) references it any more, the last `Arc`
-/// drops and the bytes are freed automatically — the same reason [`Hyperlink`]
+/// Shared data for one transmitted inline image (iTerm2 OSC 1337 / Kitty
+/// graphics protocol — color-tools plan). Every [`ImageCellRef`] that shows
+/// one of this image's tiles holds a direct, strong `Arc` clone: once no cell
+/// (main screen or scrollback) references it any more, the last `Arc` drops
+/// and the bytes are freed automatically — the same reason [`Hyperlink`]
 /// stores its data behind an `Arc` rather than a lookup key. This crate only
 /// stores the decoded-header bytes and dimensions; protocol parsing and
 /// per-session bookkeeping (transmission caps, placement geometry) belong to
 /// the embedding application, not this vendored terminal-emulation crate.
+///
+/// # `bytes` can be filled in after construction (color-tools plan)
+///
+/// Kitty image decode (base64, zlib inflate, file/shared-memory reads) can be
+/// slow, and running it synchronously while reserving a cell footprint would
+/// mean doing that work under the caller's own lock (the app crate's
+/// `vt_log`) — fine for an occasional image, but a real cost for a sustained
+/// video stream (`mpv --vo=kitty`) sending a new frame every 16-33ms. So
+/// `bytes` is filled in lazily: `pending()` constructs a placeholder with
+/// `mime`/`intrinsic_width`/`intrinsic_height` already known (for the target
+/// tools that matter — raw `f=24`/`f=32` formats — these come straight from
+/// the wire's `s=`/`v=`, never from decoded bytes), which can be attached to
+/// cells and reserved immediately; `complete_bytes`/`mark_failed` resolve it
+/// once decode finishes, off any lock, and every existing `Arc` clone (cells
+/// *and* the store) sees the result with no need to revisit a single cell.
+/// PNG format without explicit placement dimensions is the one case that
+/// still needs decoded bytes just to know how many cells to reserve — that
+/// path stays fully synchronous and just calls `ready()` directly, exactly
+/// as before this existed.
 pub struct ImageData {
     /// Identifies this image within the emulator that created it. Not
     /// necessarily unique across sessions/restarts — callers that need a
     /// globally stable identity should key on it plus their own session id.
     pub image_id: u32,
-    /// Original file bytes (PNG/GIF/etc.), or raw pixel data for Kitty's
-    /// `f=24`/`f=32` formats — never decoded/rasterized by this crate.
-    pub bytes: Arc<[u8]>,
-    /// A short label for the encoding, e.g. `"image/png"` or `"raw-rgb"`.
+    /// A short label for the encoding, e.g. `"image/png"` or `"raw-rgb"` —
+    /// always derivable from the wire format alone, never from decoded
+    /// bytes, so (unlike `bytes`) this is known synchronously up front.
     pub mime: String,
+    /// Known synchronously for raw formats (straight from `s=`/`v=`); for
+    /// PNG without explicit placement dims, only ever set via `ready()`
+    /// (decode already completed by the time this exists) — `pending()`'s
+    /// PNG placeholders are never auto-sized, so `0` never leaks into a
+    /// footprint calculation.
     pub intrinsic_width: u32,
     pub intrinsic_height: u32,
+    /// `None` (the `OnceLock` empty) = decode not finished yet. `Some(None)`
+    /// = decode finished and permanently failed (bad base64, cap exceeded,
+    /// corrupt zlib, ...) — indistinguishable from here on out from an image
+    /// that never existed, which is exactly the response shape every
+    /// existing caller (`terminal_image_bytes` et al.) already handles.
+    /// `Some(Some(bytes))` = ready.
+    bytes: OnceLock<Option<Arc<[u8]>>>,
+}
+
+impl ImageData {
+    /// Fully decoded up front — iTerm2's path, and Kitty's still-synchronous
+    /// PNG-auto-size path. Equivalent to `pending()` immediately followed by
+    /// a successful `complete_bytes()`, but skips the two-step dance for the
+    /// many callers (most tests included) that never need a placeholder
+    /// window at all.
+    pub fn ready(
+        image_id: u32,
+        bytes: Arc<[u8]>,
+        mime: String,
+        intrinsic_width: u32,
+        intrinsic_height: u32,
+    ) -> Self {
+        let data = Self::pending(image_id, mime, intrinsic_width, intrinsic_height);
+        let completed = data.complete_bytes(bytes);
+        debug_assert!(
+            completed,
+            "a freshly constructed ImageData is never already set"
+        );
+        data
+    }
+
+    /// A registered-but-not-yet-decoded image. `bytes()` returns `None` until
+    /// `complete_bytes()`/`mark_failed()` resolves it.
+    pub fn pending(
+        image_id: u32,
+        mime: String,
+        intrinsic_width: u32,
+        intrinsic_height: u32,
+    ) -> Self {
+        Self {
+            image_id,
+            mime,
+            intrinsic_width,
+            intrinsic_height,
+            bytes: OnceLock::new(),
+        }
+    }
+
+    /// Fill in a `pending()` placeholder's real bytes. Every existing `Arc`
+    /// clone (cells, the store) sees this immediately — no cell is revisited.
+    /// Returns `false` if this placeholder was already resolved (ready or
+    /// failed) — should never happen in practice, since a job runs exactly
+    /// once, but this is a plain bool rather than a panic since a stray
+    /// double-resolve is a correctness question for the caller to notice via
+    /// its own logging, not something worth crashing the terminal over.
+    pub fn complete_bytes(&self, bytes: Arc<[u8]>) -> bool {
+        self.bytes.set(Some(bytes)).is_ok()
+    }
+
+    /// Mark a `pending()` placeholder as permanently failed to decode.
+    /// `bytes()` keeps returning `None` forever afterward, same as an
+    /// unknown image id.
+    pub fn mark_failed(&self) -> bool {
+        self.bytes.set(None).is_ok()
+    }
+
+    /// `true` until `complete_bytes`/`mark_failed` resolves this placeholder
+    /// one way or the other.
+    pub fn is_pending(&self) -> bool {
+        self.bytes.get().is_none()
+    }
+
+    /// Original file bytes (PNG/GIF/etc.), or raw pixel data for Kitty's
+    /// `f=24`/`f=32` formats — never decoded/rasterized by this crate.
+    /// `None` while still pending, or if decode permanently failed.
+    pub fn bytes(&self) -> Option<Arc<[u8]>> {
+        self.bytes.get()?.clone()
+    }
 }
 
 impl std::fmt::Debug for ImageData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Hand-written so a Cell/Row Debug dump never spews a multi-MB byte
-        // array — only its length.
+        // array — only its length (and, unlike a plain length, distinguishes
+        // "still pending"/"failed" from "ready but empty").
+        let bytes_state: &dyn std::fmt::Debug = match self.bytes.get() {
+            None => &"pending",
+            Some(None) => &"failed",
+            Some(Some(b)) => {
+                return f
+                    .debug_struct("ImageData")
+                    .field("image_id", &self.image_id)
+                    .field("mime", &self.mime)
+                    .field("intrinsic_width", &self.intrinsic_width)
+                    .field("intrinsic_height", &self.intrinsic_height)
+                    .field("bytes_len", &b.len())
+                    .finish();
+            }
+        };
         f.debug_struct("ImageData")
             .field("image_id", &self.image_id)
             .field("mime", &self.mime)
             .field("intrinsic_width", &self.intrinsic_width)
             .field("intrinsic_height", &self.intrinsic_height)
-            .field("bytes_len", &self.bytes.len())
+            .field("bytes", bytes_state)
             .finish()
     }
 }
@@ -158,7 +274,10 @@ impl PartialEq for ImageData {
     /// `image_id` is the protocol-level identity of an image; two `ImageData`
     /// values are the same image iff they share it. Deliberately not a
     /// byte-for-byte comparison, which would be O(image size) on every
-    /// `Cell`/`CellExtra` equality check.
+    /// `Cell`/`CellExtra` equality check — and doubles as "a placeholder and
+    /// its later-completed self compare equal," which is what keeps
+    /// completing a pending image from churning `Cell`/`CellExtra` equality
+    /// (and therefore damage-tracking) even though its `bytes` just changed.
     fn eq(&self, other: &Self) -> bool {
         self.image_id == other.image_id
     }

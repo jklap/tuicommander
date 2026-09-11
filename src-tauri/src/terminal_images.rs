@@ -74,9 +74,16 @@ impl ImageStore {
 
     /// Combined size of every image this store currently holds a strong
     /// reference to (see module docs for why that's "currently held", not
-    /// "currently displayed somewhere").
+    /// "currently displayed somewhere"). A still-pending (not yet decoded)
+    /// image contributes 0 until its bytes are known — see `try_complete`'s
+    /// own doc comment for why that's an accepted, narrow simplification
+    /// rather than a real cap-bypass.
     pub(crate) fn live_bytes(&self) -> usize {
-        self.by_id.values().map(|d| d.bytes.len()).sum()
+        self.by_id
+            .values()
+            .filter_map(|d| d.bytes())
+            .map(|b| b.len())
+            .sum()
     }
 
     /// Register a new image, or refuse if doing so would exceed the
@@ -106,30 +113,91 @@ impl ImageStore {
                 cap: MAX_SESSION_IMAGE_BYTES,
             });
         }
-        let image_id = match client_id {
-            Some(id) => id,
-            None => {
-                self.next_image_id = self.next_image_id.wrapping_add(1);
-                self.next_image_id
-            }
-        };
-        let data = Arc::new(ImageData {
+        let image_id = self.next_id(client_id);
+        let data = Arc::new(ImageData::ready(
             image_id,
             bytes,
             mime,
             intrinsic_width,
             intrinsic_height,
-        });
+        ));
         self.by_id.insert(image_id, Arc::clone(&data));
         Ok(data)
     }
 
+    /// Register a not-yet-decoded image and return a placeholder handle to
+    /// it immediately (color-tools plan: Kitty decode deferred off the
+    /// `vt_log` lock) — no byte cap check yet, since no bytes exist to check
+    /// (that happens later, in `try_complete`). Same `client_id` semantics
+    /// as `store`.
+    pub(crate) fn store_pending(
+        &mut self,
+        client_id: Option<u32>,
+        mime: String,
+        intrinsic_width: u32,
+        intrinsic_height: u32,
+    ) -> Arc<ImageData> {
+        let image_id = self.next_id(client_id);
+        let data = Arc::new(ImageData::pending(
+            image_id,
+            mime,
+            intrinsic_width,
+            intrinsic_height,
+        ));
+        self.by_id.insert(image_id, Arc::clone(&data));
+        data
+    }
+
+    /// Resolve a `store_pending` placeholder once decode finishes, honoring
+    /// the same live-byte cap `store` enforces up front — checked here
+    /// rather than inside `ImageData::complete_bytes`, since only the store
+    /// knows the session's current live total. On `Err`, the caller must
+    /// still call `placeholder.mark_failed()` itself (this method never
+    /// mutates the placeholder on the error path, matching `store`'s
+    /// "a refused transmission must not be registered" behavior).
+    ///
+    /// Accepted narrow simplification: several placeholders can each
+    /// individually pass this check while all still pending (each
+    /// contributing 0 to `live_bytes` until resolved), then all complete in
+    /// close succession and collectively land somewhat over the cap. This
+    /// cap is a long-term-growth guard, not a hard security boundary against
+    /// simultaneous in-flight transmissions, and closing this window would
+    /// need a separate "reserved but not yet spent" budget for no realistic
+    /// benefit — no real client transmits many large images concurrently.
+    pub(crate) fn try_complete(
+        &self,
+        placeholder: &ImageData,
+        bytes: Arc<[u8]>,
+    ) -> Result<(), ImageStoreError> {
+        let incoming = bytes.len();
+        let live = self.live_bytes();
+        if live.saturating_add(incoming) > MAX_SESSION_IMAGE_BYTES {
+            return Err(ImageStoreError::CapExceeded {
+                incoming,
+                live,
+                cap: MAX_SESSION_IMAGE_BYTES,
+            });
+        }
+        placeholder.complete_bytes(bytes);
+        Ok(())
+    }
+
+    fn next_id(&mut self, client_id: Option<u32>) -> u32 {
+        match client_id {
+            Some(id) => id,
+            None => {
+                self.next_image_id = self.next_image_id.wrapping_add(1);
+                self.next_image_id
+            }
+        }
+    }
+
     /// Look up an image's bytes by id, for the `terminal_image_bytes` fetch
-    /// surface. `None` if the id is unknown or has been forgotten (`a=d`) —
-    /// the caller should treat both cases identically (a 404-shaped
-    /// response), not try to distinguish "never existed" from "forgotten".
+    /// surface. `None` if the id is unknown, has been forgotten (`a=d`),
+    /// or is still pending decode — the caller should treat all three cases
+    /// identically (a 404-shaped response), not try to distinguish them.
     pub(crate) fn bytes(&self, image_id: u32) -> Option<Arc<[u8]>> {
-        self.by_id.get(&image_id).map(|d| Arc::clone(&d.bytes))
+        self.by_id.get(&image_id)?.bytes()
     }
 
     /// Look up a previously stored image by id, for Kitty's `a=p` (place an
@@ -228,11 +296,14 @@ mod tests {
         let new = store
             .store(Some(7), Arc::from(vec![2u8]), "image/png".to_string(), 1, 1)
             .unwrap();
-        assert_eq!(store.get(7).map(|d| d.bytes.to_vec()), Some(vec![2u8]));
+        assert_eq!(
+            store.get(7).and_then(|d| d.bytes()).map(|b| b.to_vec()),
+            Some(vec![2u8])
+        );
         // The old Arc is still perfectly valid on its own -- a cell holding
         // it directly would keep showing the old bytes.
-        assert_eq!(old.bytes.to_vec(), vec![1u8]);
-        assert_eq!(new.bytes.to_vec(), vec![2u8]);
+        assert_eq!(old.bytes().unwrap().to_vec(), vec![1u8]);
+        assert_eq!(new.bytes().unwrap().to_vec(), vec![2u8]);
     }
 
     #[test]
@@ -379,5 +450,80 @@ mod tests {
         // Nothing left to assert on the Arc itself (it's gone), but the
         // store-level view must agree it's unreachable.
         assert_eq!(store.get(1), None);
+    }
+
+    /// `store_pending` registers an id and makes it immediately lookupable
+    /// (Kitty `a=p` referencing a still-decoding `a=t` must find it), but
+    /// `bytes`/`live_bytes` treat it exactly like an unknown image until
+    /// `try_complete` resolves it — color-tools plan's deferred-decode design.
+    #[test]
+    fn store_pending_is_lookupable_but_reports_no_bytes_until_completed() {
+        let mut store = ImageStore::new();
+        let placeholder = store.store_pending(Some(7), "raw-rgb".to_string(), 4, 4);
+        assert_eq!(placeholder.image_id, 7);
+        assert!(placeholder.is_pending());
+        assert_eq!(store.get(7).map(|d| d.image_id), Some(7));
+        assert_eq!(store.bytes(7), None);
+        assert_eq!(store.live_bytes(), 0);
+
+        store
+            .try_complete(&placeholder, Arc::from(vec![9u8; 48]))
+            .expect("under cap");
+        assert!(!placeholder.is_pending());
+        assert_eq!(store.bytes(7).as_deref(), Some(&[9u8; 48][..]));
+        assert_eq!(store.live_bytes(), 48);
+    }
+
+    /// An auto-allocated pending id (client omitted `i=`, iTerm2-style) works
+    /// the same way as the client-chosen case above.
+    #[test]
+    fn store_pending_auto_allocates_when_no_client_id_given() {
+        let mut store = ImageStore::new();
+        let a = store.store_pending(None, "image/png".to_string(), 0, 0);
+        let b = store.store_pending(None, "image/png".to_string(), 0, 0);
+        assert_ne!(a.image_id, b.image_id);
+    }
+
+    /// `try_complete` enforces the same live-byte cap `store` does, and —
+    /// matching `store`'s "a refused transmission must not be registered" —
+    /// does not resolve the placeholder on the error path (the caller is
+    /// expected to call `mark_failed` itself).
+    #[test]
+    fn try_complete_over_the_cap_is_refused_and_leaves_the_placeholder_pending() {
+        let mut store = ImageStore::new();
+        let placeholder = store.store_pending(Some(1), "raw-rgb".to_string(), 1, 1);
+        let oversized = vec![0u8; MAX_SESSION_IMAGE_BYTES + 1];
+        let err = store
+            .try_complete(&placeholder, Arc::from(oversized))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            ImageStoreError::CapExceeded {
+                incoming: MAX_SESSION_IMAGE_BYTES + 1,
+                live: 0,
+                cap: MAX_SESSION_IMAGE_BYTES,
+            }
+        );
+        assert!(
+            placeholder.is_pending(),
+            "a refused completion must leave the placeholder resolvable by a later, smaller attempt \
+             rather than silently marking it done"
+        );
+    }
+
+    /// `mark_failed` (called by the job executor when decode itself fails,
+    /// e.g. bad base64 — a case `try_complete` never sees since it only
+    /// handles the cap check) makes the placeholder permanently indistinct
+    /// from an unknown image, matching every other error path in this store.
+    #[test]
+    fn mark_failed_makes_bytes_permanently_none() {
+        let mut store = ImageStore::new();
+        let placeholder = store.store_pending(Some(1), "raw-rgb".to_string(), 1, 1);
+        assert!(placeholder.mark_failed());
+        assert!(!placeholder.is_pending());
+        assert_eq!(store.bytes(1), None);
+        // A second resolution attempt must not silently succeed.
+        assert!(!placeholder.complete_bytes(Arc::from(vec![1u8])));
+        assert_eq!(store.bytes(1), None);
     }
 }
