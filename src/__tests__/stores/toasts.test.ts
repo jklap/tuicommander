@@ -246,6 +246,7 @@ describe("toastsStore — mirroring into the bell", () => {
 describe("toastsStore — sound routes through the customizable Info/Warning/Error sounds", () => {
 	let toastsStore: typeof import("../../stores/toasts").toastsStore;
 	let notificationManager: typeof import("../../notifications").notificationManager;
+	let notificationsStore: typeof import("../../stores/notifications").notificationsStore;
 
 	beforeEach(async () => {
 		vi.useFakeTimers();
@@ -253,6 +254,7 @@ describe("toastsStore — sound routes through the customizable Info/Warning/Err
 		const mod = await import("../../stores/toasts");
 		toastsStore = mod.toastsStore;
 		notificationManager = (await import("../../notifications")).notificationManager;
+		notificationsStore = (await import("../../stores/notifications")).notificationsStore;
 	});
 
 	afterEach(() => {
@@ -304,6 +306,27 @@ describe("toastsStore — sound routes through the customizable Info/Warning/Err
 			toastsStore.add("Repeat", "same", "info", true);
 			toastsStore.add("Repeat", "same", "info", true); // hasVisible() suppresses this one
 			expect(spy).toHaveBeenCalledOnce();
+		});
+	});
+
+	/** Deliberately calls `notificationManager` directly, not
+	 *  `notificationsStore.play()` — the store wrapper also increments the dock
+	 *  badge and can fire an OS notification when the window is unfocused, both
+	 *  meant for the agent-attention events (Question/Completion), not routine
+	 *  UI toasts. A future "simplify by calling notificationsStore.play()
+	 *  instead" edit would silently reintroduce that side effect for every
+	 *  toast in the app — this test exists to catch that regression. */
+	it("never goes through notificationsStore.play() — no badge increment for a routine toast", () => {
+		testInScope(() => {
+			const storePlaySpy = vi.spyOn(notificationsStore, "play");
+			const managerSpy = vi.spyOn(notificationManager, "playError").mockResolvedValue(undefined);
+			const badgeBefore = notificationsStore.state.badgeCount;
+
+			toastsStore.add("Discard failed", "could not discard", "error", true);
+
+			expect(managerSpy).toHaveBeenCalledOnce();
+			expect(storePlaySpy).not.toHaveBeenCalled();
+			expect(notificationsStore.state.badgeCount).toBe(badgeBefore);
 		});
 	});
 });
