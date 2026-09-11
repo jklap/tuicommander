@@ -568,9 +568,20 @@ Settings navigation, or from the sidebar `⋯` → "Repo Settings".
 ### Worktree Tab
 
 - **Display Name** — Custom name shown in sidebar
-- **Base Branch** — Branch to create worktrees from (auto-detect, main, master, develop)
+- **Branch From** — Base branch new worktrees are created from: "Use global default", "Automatic"
+  (let TUIC detect the repo's default branch), or any of the repo's actual local/remote branches,
+  grouped under "Local"/"Remote" — the list is fetched live, so it only ever offers branches that
+  really exist in this repo. Drives the Create Worktree dialog's preselected "Start from" branch
+  (session picks in the dialog still win for the rest of that session). If a previously-configured
+  branch has since been deleted, the dropdown keeps showing it with a "(no longer exists)" marker
+  and a warning to pick a different one — this never blocks creating a worktree; the dialog just
+  preselects nothing and shows the same warning until a branch is chosen
 - **Copy ignored files** — Copy .gitignored files to new worktrees
 - **Copy untracked files** — Copy untracked files to new worktrees
+- **Always Copy These Files/Directories** — a repo-specific list of extra paths (relative to the
+  repo root) always copied — or symlinked, to share a single copy across worktrees — into every
+  new worktree of this repo, regardless of the two toggles above. There is no global default for
+  this list; it only ever lives on the repo
 - **Prompt on create**, **Delete branch on remove**, **Auto-archive merged** — override the
   matching global worktree default for this repo (see [Worktrees](worktrees.md#worktree-settings))
 - **PR Visibility** — per-repo override of Hide Draft/Conflicting/CI-Failing PRs (see
@@ -581,6 +592,11 @@ Settings navigation, or from the sidebar `⋯` → "Repo Settings".
 Every on/off field in this list uses a three-position **On / Use global / Off** control rather
 than a plain checkbox, so "inherit the global setting" is always one of the three choices you can
 select directly — not just the state you land in until you touch the control once.
+
+Copying ignored/untracked files and the explicit list both run in the background, after the
+worktree itself is created and usable — a toast announces when the copy starts and again when it
+finishes (naming how many files were skipped, if any). This can take a while for a large ignored
+tree (e.g. `node_modules`), which is exactly why it doesn't block opening the worktree.
 
 ### Scripts Tab
 

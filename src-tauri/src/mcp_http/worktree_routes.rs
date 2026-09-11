@@ -265,6 +265,16 @@ pub(super) async fn create_worktree_shared(
                 },
             )
             .await;
+            // A recycled checkout (#1705) keeps the files it was created with,
+            // like the desktop path in worktree.rs; only a fresh worktree is synced.
+            if !reused {
+                crate::worktree::spawn_worktree_file_sync(
+                    state,
+                    &base_repo,
+                    &branch_name,
+                    &workspace.path,
+                );
+            }
             Ok(CreatedWorktree {
                 worktree: crate::state::WorktreeInfo {
                     name: workspace
