@@ -1892,7 +1892,7 @@ pub(super) fn handle_ui(
 /// autonomous agents that need the user back at the keyboard; the rest are the
 /// tones already wired into the app's own notifications, exposed so a caller can
 /// borrow the meaning the user has already learned.
-const TOAST_SOUNDS: [&str; 6] = [
+pub(super) const TOAST_SOUNDS: [&str; 6] = [
     "question",
     "completion",
     "error",

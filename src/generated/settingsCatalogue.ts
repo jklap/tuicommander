@@ -6349,7 +6349,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "notifications",
       "group": "pr_native_notifications",
-      "order": 11,
+      "order": 23,
       "path": "/pr_native_notifications",
       "labelKey": "settings.catalogue.notifications.pr_native_notifications.label",
       "helpKey": "settings.catalogue.notifications.pr_native_notifications.help",
@@ -6381,7 +6381,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "notifications",
       "group": "silence_remote_completions",
-      "order": 9,
+      "order": 21,
       "path": "/silence_remote_completions",
       "labelKey": "settings.catalogue.notifications.silence_remote_completions.label",
       "helpKey": "settings.catalogue.notifications.silence_remote_completions.help",
@@ -6400,6 +6400,390 @@ export const settingsCatalogue = {
       "sensitivity": "public",
       "apply": "live",
       "effect": "Updates silence remote completions for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.attention.custom_path": {
+      "id": "notifications.sound_choices.attention.custom_path",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 20,
+      "path": "/sound_choices/attention/custom_path",
+      "labelKey": "settings.catalogue.notifications.sound_choices.attention.custom_path.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.attention.custom_path.help",
+      "label": "custom path",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Sets the audio file played when this sound uses the custom source.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.attention.preset": {
+      "id": "notifications.sound_choices.attention.preset",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 19,
+      "path": "/sound_choices/attention/preset",
+      "labelKey": "settings.catalogue.notifications.sound_choices.attention.preset.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.attention.preset.help",
+      "label": "preset",
+      "schema": {
+        "type": "string",
+        "default": "default"
+      },
+      "nullable": false,
+      "default": "default",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Selects the built-in tone, a borrowed preset tone, or a custom file for this sound.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.completion.custom_path": {
+      "id": "notifications.sound_choices.completion.custom_path",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 14,
+      "path": "/sound_choices/completion/custom_path",
+      "labelKey": "settings.catalogue.notifications.sound_choices.completion.custom_path.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.completion.custom_path.help",
+      "label": "custom path",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Sets the audio file played when this sound uses the custom source.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.completion.preset": {
+      "id": "notifications.sound_choices.completion.preset",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 13,
+      "path": "/sound_choices/completion/preset",
+      "labelKey": "settings.catalogue.notifications.sound_choices.completion.preset.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.completion.preset.help",
+      "label": "preset",
+      "schema": {
+        "type": "string",
+        "default": "default"
+      },
+      "nullable": false,
+      "default": "default",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Selects the built-in tone, a borrowed preset tone, or a custom file for this sound.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.error.custom_path": {
+      "id": "notifications.sound_choices.error.custom_path",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 12,
+      "path": "/sound_choices/error/custom_path",
+      "labelKey": "settings.catalogue.notifications.sound_choices.error.custom_path.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.error.custom_path.help",
+      "label": "custom path",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Sets the audio file played when this sound uses the custom source.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.error.preset": {
+      "id": "notifications.sound_choices.error.preset",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 11,
+      "path": "/sound_choices/error/preset",
+      "labelKey": "settings.catalogue.notifications.sound_choices.error.preset.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.error.preset.help",
+      "label": "preset",
+      "schema": {
+        "type": "string",
+        "default": "default"
+      },
+      "nullable": false,
+      "default": "default",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Selects the built-in tone, a borrowed preset tone, or a custom file for this sound.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.info.custom_path": {
+      "id": "notifications.sound_choices.info.custom_path",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 18,
+      "path": "/sound_choices/info/custom_path",
+      "labelKey": "settings.catalogue.notifications.sound_choices.info.custom_path.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.info.custom_path.help",
+      "label": "custom path",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Sets the audio file played when this sound uses the custom source.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.info.preset": {
+      "id": "notifications.sound_choices.info.preset",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 17,
+      "path": "/sound_choices/info/preset",
+      "labelKey": "settings.catalogue.notifications.sound_choices.info.preset.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.info.preset.help",
+      "label": "preset",
+      "schema": {
+        "type": "string",
+        "default": "default"
+      },
+      "nullable": false,
+      "default": "default",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Selects the built-in tone, a borrowed preset tone, or a custom file for this sound.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.question.custom_path": {
+      "id": "notifications.sound_choices.question.custom_path",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 10,
+      "path": "/sound_choices/question/custom_path",
+      "labelKey": "settings.catalogue.notifications.sound_choices.question.custom_path.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.question.custom_path.help",
+      "label": "custom path",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Sets the audio file played when this sound uses the custom source.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.question.preset": {
+      "id": "notifications.sound_choices.question.preset",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 9,
+      "path": "/sound_choices/question/preset",
+      "labelKey": "settings.catalogue.notifications.sound_choices.question.preset.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.question.preset.help",
+      "label": "preset",
+      "schema": {
+        "type": "string",
+        "default": "default"
+      },
+      "nullable": false,
+      "default": "default",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Selects the built-in tone, a borrowed preset tone, or a custom file for this sound.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.warning.custom_path": {
+      "id": "notifications.sound_choices.warning.custom_path",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 16,
+      "path": "/sound_choices/warning/custom_path",
+      "labelKey": "settings.catalogue.notifications.sound_choices.warning.custom_path.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.warning.custom_path.help",
+      "label": "custom path",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Sets the audio file played when this sound uses the custom source.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "notifications.sound_choices.warning.preset": {
+      "id": "notifications.sound_choices.warning.preset",
+      "store": "notifications",
+      "owner": "machine",
+      "area": "notifications",
+      "group": "sound_choices",
+      "order": 15,
+      "path": "/sound_choices/warning/preset",
+      "labelKey": "settings.catalogue.notifications.sound_choices.warning.preset.label",
+      "helpKey": "settings.catalogue.notifications.sound_choices.warning.preset.help",
+      "label": "preset",
+      "schema": {
+        "type": "string",
+        "default": "default"
+      },
+      "nullable": false,
+      "default": "default",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Selects the built-in tone, a borrowed preset tone, or a custom file for this sound.",
       "operations": [
         "get",
         "set",
@@ -6600,7 +6984,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "notifications",
       "group": "toasts_in_bell",
-      "order": 10,
+      "order": 22,
       "path": "/toasts_in_bell",
       "labelKey": "settings.catalogue.notifications.toasts_in_bell.label",
       "helpKey": "settings.catalogue.notifications.toasts_in_bell.help",

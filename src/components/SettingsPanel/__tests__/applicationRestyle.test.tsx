@@ -65,7 +65,9 @@ describe("Application Settings restyle contracts", () => {
 		fireEvent.click(view.getByRole("button", { name: "Choose output device…" }));
 		await waitFor(() => expect(view.getByRole("option", { name: "USB speakers" })).toBeInTheDocument());
 		expect(invoke).toHaveBeenCalledExactlyOnceWith("list_audio_output_devices");
-		fireEvent.change(view.getByRole("combobox"), { target: { value: "USB speakers" } });
+		fireEvent.change(view.getByRole("combobox", { name: "Audio Output Device" }), {
+			target: { value: "USB speakers" },
+		});
 		expect(setAudioDevice).toHaveBeenCalledWith("USB speakers");
 	});
 
