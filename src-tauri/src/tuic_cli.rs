@@ -246,7 +246,7 @@ fn sidecar_name() -> &'static str {
 /// in `agent_mcp.rs`; the previous resource-dir lookup never resolved in a
 /// packaged build and fell through to the dev path, which only exists on the
 /// build machine (the root cause of issue #52).
-fn resolve_sidecar_path() -> Result<String, String> {
+pub(crate) fn resolve_sidecar_path() -> Result<String, String> {
     #[cfg(test)]
     if let Some(root) = crate::agent_test::test_root() {
         return Ok(root.join("sidecar-tuic").to_string_lossy().into_owned());

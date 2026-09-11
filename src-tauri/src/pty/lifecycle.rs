@@ -227,6 +227,93 @@ fn inject_unix_terminal_env(cmd: &mut CommandBuilder) {
     }
     // Agent Teams: always inject feature flag so CC unlocks team tools
     cmd.env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
+    // Bare `imgcat`/`imgls`/`divider` on PATH (color-tools plan, Phase 9) —
+    // `tuic imgcat`/etc. already work without this; these shims exist purely
+    // so a user (or script) coming from iTerm2's own conventions finds the
+    // bare names too. Silently absent if the `tuic` sidecar can't be
+    // resolved (e.g. a from-source checkout with no built sidecar) — never
+    // worth failing a PTY spawn over. Unix only: this function also runs for a
+    // WSL shell on Windows, where a host path on PATH would be meaningless.
+    #[cfg(all(feature = "desktop", unix))]
+    if let Some(shim_dir) = crate::image_cli_shims::shim_dir() {
+        prepend_path_entry(cmd, shim_dir);
+    }
+}
+
+/// Put `dir` first on the command's PATH, preserving every other entry once.
+/// Reads the PATH already set on `cmd` (falling back to the process PATH), the
+/// same composition `shell_integration`'s agent-shim install uses, so neither
+/// prepend can drop the other's entry whichever runs first.
+#[cfg(all(feature = "desktop", unix))]
+fn prepend_path_entry(cmd: &mut CommandBuilder, dir: &std::path::Path) {
+    let path = cmd
+        .get_env("PATH")
+        .map(|path| path.to_os_string())
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    let mut entries = vec![dir.to_path_buf()];
+    entries.extend(std::env::split_paths(&path).filter(|entry| entry != dir));
+    if let Ok(joined) = std::env::join_paths(entries) {
+        cmd.env("PATH", joined);
+    }
+}
+
+#[cfg(all(test, feature = "desktop", unix))]
+mod inject_unix_terminal_env_tests {
+    use super::*;
+
+    // Catches: the image-shim prepend discarding a PATH already set on the command.
+    #[test]
+    fn prepend_path_entry_keeps_the_commands_own_path_and_dedupes() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env("PATH", "/opt/shim:/custom/bin:/usr/bin");
+        prepend_path_entry(&mut cmd, std::path::Path::new("/opt/shim"));
+        assert_eq!(
+            cmd.get_env("PATH").unwrap().to_string_lossy(),
+            "/opt/shim:/custom/bin:/usr/bin"
+        );
+        prepend_path_entry(&mut cmd, std::path::Path::new("/img"));
+        assert_eq!(
+            cmd.get_env("PATH").unwrap().to_string_lossy(),
+            "/img:/opt/shim:/custom/bin:/usr/bin"
+        );
+    }
+
+    /// The image-CLI shim dir, when resolvable, must be *prepended* (not
+    /// appended or set alone) so it wins over any same-named binary already
+    /// on the user's `PATH`, while every existing entry is preserved.
+    ///
+    /// `image_cli_shims::shim_dir()` caches its result in a process-wide
+    /// `OnceLock` on first call, so the `set_config_dir_override` below only
+    /// actually redirects it away from the real config dir when THIS is the
+    /// first call in the process — true under `cargo nextest run` (one
+    /// process per test, the repo's real gate), not guaranteed under a bare
+    /// `cargo test` if another test calls `shim_dir()` first. Same caveat
+    /// `config.rs`'s own `CONFIG_DIR_OVERRIDE` tests already carry.
+    #[test]
+    fn prepends_the_image_shim_dir_to_path_when_resolvable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+
+        // This test only asserts something meaningful when the dev/test
+        // environment can actually resolve a `tuic` sidecar (same
+        // requirement `resolve_sidecar_path` has everywhere else) — skip
+        // cleanly rather than fail the build in an environment with none.
+        let Some(shim_dir) = crate::image_cli_shims::shim_dir() else {
+            return;
+        };
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        inject_unix_terminal_env(&mut cmd);
+        let path = cmd
+            .get_env("PATH")
+            .expect("PATH must be set when a shim dir was resolved")
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            path.starts_with(&shim_dir.to_string_lossy().to_string()),
+            "shim dir must be the first PATH entry, got {path}"
+        );
+    }
 }
 
 /// Attempts made before a PTY spawn is reported as failed.
