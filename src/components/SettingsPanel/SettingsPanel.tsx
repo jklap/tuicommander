@@ -1,7 +1,9 @@
-import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js";
+import type { BaseRefOption } from "../../hooks/useRepository";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
+import { appLogger } from "../../stores/appLogger";
 import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { type RepoSettings, repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
@@ -238,6 +240,18 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 
 	const repoSettings = (path: string) => repoSettingsStore.getOrCreate(path, shortenHomePath(path));
 
+	// Real branch/ref list for the active repo's "Branch From" dropdown — refetched whenever
+	// the active repo nav item changes. A failure (e.g. repo path no longer valid) just leaves
+	// this undefined; RepoWorktreeTab must never treat "still loading" as "branch is missing".
+	const [baseRefs] = createResource(activeRepoPath, async (path) => {
+		try {
+			return await invoke<BaseRefOption[]>("list_base_ref_options", { repoPath: path });
+		} catch (err) {
+			appLogger.warn("settings", "list_base_ref_options failed", { repoPath: path, error: String(err) });
+			return undefined;
+		}
+	});
+
 	const updateRepoSetting =
 		(repoPath: string) =>
 		<K extends keyof RepoSettings>(key: K, value: RepoSettings[K]) => {
@@ -305,7 +319,12 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 						const onUpdate = updateRepoSetting(path);
 						return (
 							<>
-								<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								<RepoWorktreeTab
+									settings={settings}
+									defaults={repoDefaultsStore.state}
+									onUpdate={onUpdate}
+									baseRefs={baseRefs()}
+								/>
 								<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
 								<Show when={isTauri()}>
 									<div class={s.section}>

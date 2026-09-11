@@ -17,8 +17,15 @@ export interface WorktreeDialogState {
 	worktreesDir: string;
 	baseRefs: BaseRefOption[];
 	/** Base ref to preselect in the dialog — the last one used successfully for this
-	 * repo this session, falling back to `baseRefs[0]`. */
+	 * repo this session, falling back to the repo's configured "Branch From" setting,
+	 * then to `baseRefs[0]`. Empty when the configured setting is stale (see
+	 * `missingBaseBranch`) and nothing else applies. */
 	defaultBaseRef: string;
+	/** Set when the repo's configured "Branch From" setting names a branch that is no
+	 * longer in `baseRefs` (deleted since it was set) AND nothing else (session memory)
+	 * resolved a default instead. The dialog surfaces this as a non-blocking warning;
+	 * it must never prevent creating a worktree. */
+	missingBaseBranch?: string;
 }
 
 interface WorktreeCreationCoordinatorDeps {
@@ -70,12 +77,29 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 	// DIALOG; see confirmCreateWorktree below.
 	const lastBaseRefByRepo = new Map<string, string>();
 
-	/** Base ref to preselect: the remembered one if it still exists among `baseRefs`,
-	 * else the backend's own default (`baseRefs[0]`). */
-	const resolveDefaultBaseRef = (repoPath: string, baseRefs: BaseRefOption[]): string => {
+	/** Base ref to preselect: the remembered one if it still exists among `baseRefs`; else
+	 * the repo's configured "Branch From" setting if it's a concrete branch that still
+	 * exists; else the backend's own default (`baseRefs[0]`). A configured setting that no
+	 * longer exists is reported via `missingBaseBranch` rather than silently ignored — it
+	 * never blocks resolving *some* default, just flags that the setting needs a look. */
+	const resolveDefaultBaseRef = (
+		repoPath: string,
+		baseRefs: BaseRefOption[],
+	): { defaultBaseRef: string; missingBaseBranch?: string } => {
 		const remembered = lastBaseRefByRepo.get(repoPath);
-		if (remembered && baseRefs.some((r) => r.name === remembered)) return remembered;
-		return baseRefs[0]?.name ?? "";
+		if (remembered && baseRefs.some((r) => r.name === remembered)) {
+			return { defaultBaseRef: remembered };
+		}
+
+		const configured = repoSettingsStore.getEffectiveField(repoPath, "baseBranch");
+		if (configured && configured !== "automatic") {
+			if (baseRefs.some((r) => r.name === configured)) {
+				return { defaultBaseRef: configured };
+			}
+			return { defaultBaseRef: baseRefs[0]?.name ?? "", missingBaseBranch: configured };
+		}
+
+		return { defaultBaseRef: baseRefs[0]?.name ?? "" };
 	};
 
 	const handleAddWorktree = async (repoPath: string) => {
@@ -93,11 +117,25 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 			deps.repo.listBaseRefOptions(repoPath),
 		]);
 
-		const defaultBaseRef = resolveDefaultBaseRef(repoPath, baseRefs);
+		const { defaultBaseRef, missingBaseBranch } = resolveDefaultBaseRef(repoPath, baseRefs);
 		const promptOnCreate = deps.getPromptOnCreate?.(repoPath) ?? true;
 
+		if (missingBaseBranch) {
+			appLogger.warn(
+				"git",
+				`Configured "Branch From" setting "${missingBaseBranch}" no longer exists in ${repoPath} — falling back`,
+			);
+		}
+
 		if (!promptOnCreate) {
-			// Skip dialog: create worktree instantly with auto-generated name
+			// Skip dialog: create worktree instantly with auto-generated name. A stale
+			// configured setting still falls back to defaultBaseRef (baseRefs[0]) here —
+			// there's no dialog to show the warning in, so it's surfaced via status instead.
+			if (missingBaseBranch) {
+				deps.setStatusInfo(
+					`Configured base branch "${missingBaseBranch}" no longer exists — using "${defaultBaseRef}" instead`,
+				);
+			}
 			setWorktreeDialogState({
 				repoPath,
 				suggestedName,
@@ -106,6 +144,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				worktreesDir,
 				baseRefs,
 				defaultBaseRef,
+				missingBaseBranch,
 			});
 			await confirmCreateWorktree({
 				branchName: suggestedName,
@@ -123,6 +162,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 			worktreesDir,
 			baseRefs,
 			defaultBaseRef,
+			missingBaseBranch,
 		});
 	};
 
@@ -193,11 +233,14 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		let pendingHandoff = false;
 		try {
 			deps.setStatusInfo(`Creating worktree ${options.branchName}...`);
+			// An empty baseRef (nothing selected — e.g. a stale configured branch left the
+			// dialog with no preselection) must reach the backend as "no base ref" (branch
+			// from HEAD), not as a literal empty-string start-point argument.
 			const result = await deps.repo.createWorktree(
 				repoPath,
 				options.branchName,
 				options.createBranch,
-				options.baseRef,
+				options.baseRef || undefined,
 			);
 
 			// Remember this repo's base ref for next time — only on success (never in

@@ -408,7 +408,7 @@ Per-repository fields:
 |-------|------|---------|-------------|
 | `path` | `String` | -- | Repository path |
 | `display_name` | `String` | -- | Display name |
-| `base_branch` | `String` | `"main"` | Base branch for worktrees |
+| `base_branch` | `Option<String>` | `null` | Tri-state override (`null` inherits `.tuic.json`, then the global default) naming which branch new worktrees are created from — `"automatic"` means detect the repo's default branch |
 | `copy_ignored_files` | `Option<bool>` | `null` | Tri-state override (`null` inherits `.tuic.json`, then the global default) of whether `.gitignore`d files are copied into a new worktree |
 | `copy_untracked_files` | `Option<bool>` | `null` | Tri-state override of whether untracked (never `git add`ed) files are copied into a new worktree |
 | `copy_paths` | `Vec<CopyPathEntry>` | `[]` | Files/directories always copied (or symlinked) into every new worktree of this repo, regardless of the two toggles above. Repo-specific only — no `.tuic.json`/global tier, same as `branch_labels`. Each entry is `{ path: String, mode: CopyPathMode }` (`mode`: `"copy"` \| `"symlink"`) |

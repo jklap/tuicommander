@@ -3098,3 +3098,39 @@ the intended behavior.
   classes) with only new page-specific styling in `RepoPickerDialog.module.css` genuinely
   unverified visually. While doing the real Finder round-trip above, screenshot the picker dialog
   and the Settings section and save them to `.screenshots/finder-service/` in the main checkout.
+
+## Branch From: real branch list + stale-setting warning (2026-09-10, frontend only — no `make dev` restart needed)
+
+Frontend-only change (no Rust touched): `RepoWorktreeTab` now lists the repo's real local/remote
+branches (via the existing `list_base_ref_options` command) instead of a hardcoded
+main/master/develop list, and the Create Worktree dialog now consults the repo's "Branch From"
+setting when preselecting a base ref, with a non-blocking warning when the configured branch has
+since been deleted. Covered by 40+ new/updated vitest cases (coordinator, `RepoWorktreeTab`,
+`CreateWorktreeDialog`, `repoSettings`), but **no live/visual verification was done** — this
+worktree had no prior build (`dist/`, sidecar binaries), and standing up a full `make dev` instance
+purely to eyeball CSS on a frontend-only change wasn't judged worth the build time. Needs:
+
+- [ ] Settings → *a repo* → Worktree Configuration → **Branch From**: confirm the dropdown shows
+  `Automatic` plus `<optgroup>`s "Local"/"Remote" populated with the repo's actual branches (not a
+  static main/master/develop list), and that a repo without `develop`/`master` doesn't offer them.
+- [ ] Set Branch From to a real branch, then delete that branch (`git branch -D <name>`) outside
+  the app and let the repo refresh — confirm the dropdown keeps showing the stale value with a
+  "(no longer exists)" option label, plus a warning line below the dropdown.
+- [ ] With that stale setting still configured, open **Create Worktree** (`+`) for that repo —
+  confirm the "Start from" control shows a "Select a branch…" placeholder (nothing preselected),
+  a warning row with a tooltip icon appears above the preview footer, and **Create still works**
+  (the warning must never disable the Create button).
+- [ ] Repeat with a repo where Branch From names a branch that still exists — confirm it *is*
+  preselected as "Start from" when no session-remembered ref exists yet for that repo.
+- [ ] With the stale-setting dialog open (warning showing, nothing preselected), pick any branch
+  from the "Start from" dropdown — confirm the warning row disappears immediately (a code-review
+  fix: it used to stay visible, telling the user to "pick one below" even after they'd already
+  picked one).
+- [ ] Repeat the stale-setting scenario on a repo with **only one branch total** — confirm the
+  dialog does NOT show the warning row (no dropdown exists to pick from), and confirm the created
+  worktree is actually based on that one real branch, not on `HEAD`/whatever the main repo's
+  current checkout happens to be (a code-review fix: it used to leave nothing selected here,
+  silently falling back to HEAD instead of the one real branch).
+- [ ] **[VISUAL]** Screenshot the Branch From dropdown (both the normal grouped state and the
+  stale-value + warning state) and the Create Worktree dialog's warning row, save to
+  `.screenshots/branch-from/` in the main checkout.

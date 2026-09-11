@@ -27,6 +27,10 @@ export interface CreateWorktreeDialogProps {
 	/** Base ref to preselect when the dialog opens — e.g. the last one used
 	 * successfully for this repo this session. Falls back to `baseRefs[0]`. */
 	defaultBaseRef?: string;
+	/** Set when the repo's configured "Branch From" setting names a branch that no longer
+	 * exists — the dialog shows a non-blocking warning and leaves nothing preselected
+	 * instead of using `defaultBaseRef`, so the user makes an explicit choice. */
+	missingBaseBranch?: string;
 	/** Generate a random branch name */
 	onGenerateName?: () => Promise<string>;
 	onClose: () => void;
@@ -329,7 +333,9 @@ const BaseRefDropdown: Component<{
 						if (e.key === " ") e.preventDefault();
 					}}
 				>
-					<span class={s.dropdownValue}>{props.value}</span>
+					<span class={`${s.dropdownValue} ${props.value ? "" : s.dropdownPlaceholder}`}>
+						{props.value || t("createWorktree.selectBranch", "Select a branch…")}
+					</span>
 					<svg class={s.dropdownChevron} width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
 						<path d="M4 6l4 4 4-4" />
 					</svg>
@@ -390,6 +396,12 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 
 	/** Available base refs — first entry is the default */
 	const availableBaseRefs = () => props.baseRefs ?? [];
+
+	/** The stale-branch name to warn about, or undefined once resolved — cleared the moment
+	 * `baseRef` has a real value (the user picked something, or the single-ref fallback above
+	 * resolved it for them), so the "pick one below" instruction never lingers after it's
+	 * already been followed. */
+	const staleBaseBranch = () => (props.missingBaseBranch && !baseRef() ? props.missingBaseBranch : undefined);
 
 	const trimmedName = () => branchName().trim();
 
@@ -455,7 +467,15 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 	createEffect(() => {
 		if (props.visible) {
 			setBranchName("");
-			setBaseRef(props.defaultBaseRef || availableBaseRefs()[0]?.name || "");
+			// A stale configured "Branch From" setting (missingBaseBranch set) leaves nothing
+			// preselected when there's an actual choice to make (>1 ref) — falling back to
+			// availableBaseRefs()[0] there would silently pick a branch the user never chose,
+			// defeating the point of surfacing the warning below. But when only one ref exists,
+			// there's no dropdown to choose from at all (hidden below) — blanking it then would
+			// leave nothing selected with no way to fix it, silently branching from HEAD instead
+			// of the one real ref. Same fallback the coordinator already computes for this case.
+			const hasRealChoice = props.missingBaseBranch && availableBaseRefs().length > 1;
+			setBaseRef(hasRealChoice ? "" : props.defaultBaseRef || availableBaseRefs()[0]?.name || "");
 			setError(null);
 			setBranchIndex(-1);
 			// Cleared on re-close/unmount so a stale timer can't fire `.focus()` against
@@ -655,6 +675,32 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 								onChange={setBaseRef}
 								disabled={isExistingBranch()}
 							/>
+						</Show>
+
+						{/* Rendered outside the dropdown's own <Show> above so it still appears
+						    even in a single-ref repo (where the dropdown itself is hidden) —
+						    the setting can be stale regardless of how many refs exist today. */}
+						<Show when={staleBaseBranch()}>
+							{(branch) => (
+								<div class={s.baseRefWarning} data-testid="base-ref-warning">
+									<svg class={s.warningIcon} width="14" height="14" viewBox="0 0 16 16" fill="currentColor" role="img">
+										<title>
+											{t(
+												"createWorktree.missingBaseBranchTooltip",
+												"Fix this in Settings → Worktree Configuration → Branch From",
+											)}
+										</title>
+										<path d="M8 1.5 1 14h14L8 1.5zM8 6a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 6zm0 6.75a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8z" />
+									</svg>
+									<span>
+										{t(
+											"createWorktree.missingBaseBranch",
+											'Configured base branch "{branch}" no longer exists — pick one below.',
+											{ branch: branch() },
+										)}
+									</span>
+								</div>
+							)}
 						</Show>
 
 						{/* Wrapped in a fixed-min-height footer (rather than making each row

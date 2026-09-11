@@ -297,7 +297,14 @@ Per-repository settings accessed via sidebar `⋯` → "Repo Settings".
 ### Worktree Tab
 
 - **Display Name** — Custom name shown in sidebar
-- **Base Branch** — Branch to create worktrees from (auto-detect, main, master, develop)
+- **Branch From** — Base branch new worktrees are created from: "Use global default", "Automatic"
+  (let TUIC detect the repo's default branch), or any of the repo's actual local/remote branches,
+  grouped under "Local"/"Remote" — the list is fetched live, so it only ever offers branches that
+  really exist in this repo. Drives the Create Worktree dialog's preselected "Start from" branch
+  (session picks in the dialog still win for the rest of that session). If a previously-configured
+  branch has since been deleted, the dropdown keeps showing it with a "(no longer exists)" marker
+  and a warning to pick a different one — this never blocks creating a worktree; the dialog just
+  preselects nothing and shows the same warning until a branch is chosen
 - **Copy ignored files** — Copy .gitignored files to new worktrees
 - **Copy untracked files** — Copy untracked files to new worktrees
 - **Always Copy These Files/Directories** — a repo-specific list of extra paths (relative to the

@@ -1291,7 +1291,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 
 ### 11.5 Repository Settings (per-repo)
 - Display name
-- Worktree tab: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge action (each overridable from global defaults)
+- Worktree tab: Branch From (which base branch new worktrees are created from — "Use global default", "Automatic", or any of the repo's actual local/remote branches, fetched live and grouped; a configured branch that's since been deleted is shown with a "no longer exists" marker and a warning rather than silently dropped), storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge action (each overridable from global defaults)
 - PR Visibility (hide draft/conflicting/CI-failing) and, on macOS, Cmd+1-9 terminal hotkeys — also per-repo overridable
 - Scripts tab: setup script (post-worktree), run script (`Cmd+R`), archive script (pre-archive/delete hook)
 - Repo-local config: `.tuic.json` in repo root provides team-shared settings. Three-tier precedence: `.tuic.json` > per-repo app settings > global defaults. **Scripts (setup, run, archive) are intentionally excluded from `.tuic.json` merging** — arbitrary script execution by a checked-in file poses a security risk; scripts are always sourced from the local per-repo app settings only
