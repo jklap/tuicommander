@@ -613,6 +613,18 @@ export const BranchItem: Component<{
 
 	const hasUnseen = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.unseen);
 
+	// Mirrors branchActivitySummary's isBusy semantics (see activitySnapshot.ts)
+	// so the sidebar dot and the removal-confirmation dialog never disagree: an
+	// id missing from terminalsStore still counts (conservative, brief race
+	// window only), but an id we CAN see and know has exited — e.g. an
+	// agent-owned terminal whose process exited on its own, tab still lingering
+	// in the UI — must not keep the row's dot green forever.
+	const hasLiveTerminals = () =>
+		props.branch.terminals.some((id) => {
+			const t = terminalsStore.get(id);
+			return t == null || t.shellState !== "exited";
+		});
+
 	const handleDoubleClick = (e: MouseEvent) => {
 		e.stopPropagation();
 		if (props.branch.isMain || props.branch.isShell) {
@@ -762,7 +774,7 @@ export const BranchItem: Component<{
 			hasQuestion={hasQuestion()}
 			hasBusy={hasBusy()}
 			hasUnseen={hasUnseen()}
-			branchHasTerminals={props.branch.terminals.length > 0}
+			branchHasTerminals={hasLiveTerminals()}
 		/>
 	);
 
