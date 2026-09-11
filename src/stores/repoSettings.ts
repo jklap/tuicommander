@@ -14,6 +14,16 @@ import type {
 import { repoDefaultsStore } from "./repoDefaults";
 import { settingsStore } from "./settings";
 
+/** One entry in a repo's "always copy these files/directories" list. `path` is
+ *  relative to the repo root. Deliberately single-word field names (`path`/
+ *  `mode`, not `filePath`/`copyMode`) — `caseKeys.ts`'s camelCase<->snake_case
+ *  conversion is shallow (top-level keys only), so a multi-word nested field
+ *  name here would silently fail to round-trip through the Rust backend. */
+export interface CopyPathEntry {
+	path: string;
+	mode: "copy" | "symlink";
+}
+
 /** Per-repository settings — overridable fields are nullable (null = inherit from global defaults) */
 export interface RepoSettings {
 	path: string;
@@ -72,6 +82,10 @@ export interface RepoSettings {
 	prHideCiFailing: boolean | null;
 	/** Human-readable labels for branches/worktrees, keyed by branch name */
 	branchLabels: Record<string, string>;
+	/** Files/directories always copied (or symlinked) into every new worktree of
+	 *  this repo, independent of copyIgnoredFiles/copyUntrackedFiles. Repo-specific,
+	 *  not inheritable — same rationale as branchLabels. */
+	copyPaths: CopyPathEntry[];
 }
 
 /** Fully resolved settings with no nulls — use getEffective() to obtain */
@@ -103,6 +117,8 @@ export interface EffectiveRepoSettings {
 	prHideCiFailing: boolean;
 	/** Human-readable labels for branches/worktrees, keyed by branch name */
 	branchLabels: Record<string, string>;
+	/** Files/directories always copied (or symlinked) into every new worktree */
+	copyPaths: CopyPathEntry[];
 }
 
 /** Fields that can be overridden per-repo (all others are repo-specific) */
@@ -206,6 +222,7 @@ function blankSettings(path: string, displayName: string): RepoSettings {
 		autoConsolidateWorktrees: false,
 		devServerUrl: null,
 		branchLabels: {},
+		copyPaths: [],
 		...OVERRIDABLE_NULL_DEFAULTS,
 	};
 }
@@ -288,6 +305,7 @@ function createRepoSettingsStore() {
 		prHideConflicting: (s) => s.prHideConflicting ?? settingsStore.state.prHideConflicting,
 		prHideCiFailing: (s) => s.prHideCiFailing ?? settingsStore.state.prHideCiFailing,
 		branchLabels: (s) => s.branchLabels ?? {},
+		copyPaths: (s) => s.copyPaths ?? [],
 	};
 
 	async function readLocalConfig(path: string): Promise<{ config: RepoLocalConfig | null; failed: boolean }> {
@@ -428,6 +446,7 @@ function createRepoSettingsStore() {
 				prHideConflicting: resolvers.prHideConflicting(settings, local),
 				prHideCiFailing: resolvers.prHideCiFailing(settings, local),
 				branchLabels: resolvers.branchLabels(settings, local),
+				copyPaths: resolvers.copyPaths(settings, local),
 			};
 		},
 
