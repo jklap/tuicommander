@@ -235,7 +235,7 @@ host.getGitDiff(repoPath, scope?)       // unified diff string (scope: "staged" 
 | `host.openMarkdownFile(absolutePath: string): void` | `ui:markdown` |
 | `host.openMarkdownFileBackground(absolutePath: string): boolean` — opens a pinned background tab; false when no registered repo owns the path | `ui:markdown` |
 | `host.openEditorTab(filePath: string, repoPath: string, opts?: { fsRoot?: string, line?: number }): void` | *(none)* |
-| `await host.playNotificationSound(sound?: "question" \| "error" \| "completion" \| "warning" \| "info"): Promise<void>` | `ui:sound` |
+| `await host.playNotificationSound(sound?: "question" \| "error" \| "completion" \| "warning" \| "info" \| "attention"): Promise<void>` | `ui:sound` |
 | `host.openPanel({ id, title, html, onMessage? }): PanelHandle` | `ui:panel` |
 | `host.setTicker({ id, text, label?, icon?, priority?, ttlMs?, onClick? }): void` | `ui:ticker` |
 | `host.clearTicker(id: string): void` | `ui:ticker` |
