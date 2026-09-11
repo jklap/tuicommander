@@ -73,6 +73,17 @@ export interface GridRenderer {
 	invalidateCaches(): void;
 	paintGrid(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void;
 	paintRow(row: DecodedRow, y: number, m: CellMetrics, fontFamily?: string, hideAnswerMarker?: boolean): void;
+	/**
+	 * Split rendering (color-tools plan, Phase 5 z-order compositing): the
+	 * same passes `paintRow`/`paintGrid` fuse onto one opaque canvas,
+	 * but targetable at two separate canvases so an image layer can be
+	 * sandwiched between backgrounds and glyphs. Only used once a session has
+	 * ever registered a `z<0` image placement — see `CanvasTerminal.tsx`'s
+	 * `usesSplitCompositing`. Both honour the same `ViewportProjection` as
+	 * `paintGrid`, so text and backgrounds stay on the same display slots.
+	 */
+	paintGridBackground(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void;
+	paintGridGlyphs(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void;
 	/** Cell fg, honouring ATTR_INVERSE — falls back to the theme defaults set via setTheme. */
 	resolveFg(fgP: number, bgP: number, a: number): string;
 	/** Cell bg, honouring ATTR_INVERSE — falls back to the theme defaults set via setTheme. */
@@ -1246,8 +1257,20 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		fontFamily ??= deps.getFontFamily();
 		const first = columns?.[0] ?? 0;
 		const end = Math.min(columns?.[1] ?? row.count, row.count);
+		paintBackgroundPass(row, y, m, first, end);
+		paintGlyphPass(row, y, m, fontFamily, first, end);
+	}
 
-		// Pass 1: resolved background runs. Default-background gaps end a run;
+	/**
+	 * Pass 1: backgrounds. Paints ONLY cells with an explicit (non-default)
+	 * background; a default-background cell is never filled here. The default
+	 * fill happens canvas- or row-wide in the caller's clear step, which is
+	 * what makes this pass reusable as the split-compositing background
+	 * canvas's paint: on a canvas that was not pre-filled, default-bg cells
+	 * stay transparent and a below-text image layer shows through.
+	 */
+	function paintBackgroundPass(row: DecodedFrame["rows"][0], y: number, m: CellMetrics, first: number, end: number) {
+		// Resolved background runs. Default-background gaps end a run;
 		// explicit trailing blanks and inverse cells remain part of their band.
 		let runStart = first;
 		let runColor: string | undefined;
@@ -1265,10 +1288,21 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 			runColor = color;
 			runStart = c;
 		}
+	}
 
-		// Pass 2: text — render each glyph at its exact grid position to prevent
-		// cursor drift (cellWidth is Math.round'd, so batched fillText runs
-		// accumulate sub-pixel error over long lines).
+	/** Pass 2 + 3: text glyphs and decorations. Transparent everywhere it does
+	 * not draw, so it is safe on its own transparent canvas in split mode. */
+	function paintGlyphPass(
+		row: DecodedFrame["rows"][0],
+		y: number,
+		m: CellMetrics,
+		fontFamily: string,
+		first: number,
+		end: number,
+	) {
+		// Render each glyph at its exact grid position to prevent cursor drift
+		// (cellWidth is Math.round'd, so batched fillText runs accumulate
+		// sub-pixel error over long lines).
 		let lastFont = "";
 		let lastFg = "";
 		let lastDim = false;
@@ -1502,9 +1536,83 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		paintedGeometry = geometry;
 	}
 
+	// Projection last painted by a split layer; a change repaints that layer fully.
+	let splitProjection: string | undefined;
+	let splitGeometry = "";
+
+	/** Shared driver for the two split-compositing layers: the same display-slot
+	 * mapping as `paintGrid`, without its scroll-copy and partial-row fast paths
+	 * (a split session is rare; correctness over speed). */
+	function paintSplitLayer(
+		rowMap: Map<number, DecodedRow>,
+		m: CellMetrics,
+		opts: PaintGridOptions,
+		clear: (y: number, h: number, w: number) => void,
+		paint: (row: DecodedRow, y: number, fontFamily: string) => void,
+	): void {
+		const projection = opts.projection ?? new ViewportProjection(rowMap, opts.hiddenRows, opts.hiddenAnswerMarkers);
+		const fontFamily = deps.getFontFamily();
+		const w = ctx.canvas.width / m.dpr;
+		const geometry = `${ctx.canvas.width}:${ctx.canvas.height}:${m.dpr}:${m.cellWidth}:${m.cellHeight}:${fontFamily}`;
+		const displayRows = new Map<number, DecodedRow>();
+		for (const [index, row] of rowMap) {
+			const display = projection.displayRow(index);
+			if (display !== null) displayRows.set(display, projection.projectRow(row)!);
+		}
+		const full =
+			opts.fullRepaint || !opts.dirtyIndices || projection.key !== splitProjection || geometry !== splitGeometry;
+		if (full) {
+			clear(0, ctx.canvas.height / m.dpr, w);
+			for (const [slot, row] of displayRows) paint(row, slot * m.cellHeight, fontFamily);
+		} else {
+			for (const index of opts.dirtyIndices ?? []) {
+				const slot = projection.displayRow(index);
+				if (slot === null) continue;
+				const y = slot * m.cellHeight;
+				clear(y, m.cellHeight, w);
+				const row = displayRows.get(slot);
+				if (row) paint(row, y, fontFamily);
+			}
+		}
+		splitProjection = projection.key;
+		splitGeometry = geometry;
+	}
+
+	/** Split-compositing background canvas: opaque (default-bg fill, exactly
+	 * like `paintGrid`'s), since nothing in this renderer's layer stack sits
+	 * below it — the below-text image layer is painted on top of it by the
+	 * caller. */
+	function paintGridBackground(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void {
+		paintSplitLayer(
+			rowMap,
+			m,
+			opts,
+			(y, h, w) => {
+				ctx.fillStyle = cachedBgDefault;
+				ctx.fillRect(-GUTTER_PX, y, w, h);
+			},
+			(row, y) => paintBackgroundPass(row, y, m, 0, row.count),
+		);
+	}
+
+	/** Split-compositing glyph canvas: transparent (`clearRect`, not `fillRect`)
+	 * so the below-text image layer painted underneath shows through
+	 * everywhere there isn't a glyph. */
+	function paintGridGlyphs(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void {
+		paintSplitLayer(
+			rowMap,
+			m,
+			opts,
+			(y, h, w) => ctx.clearRect(-GUTTER_PX, y, w, h),
+			(row, y, fontFamily) => paintGlyphPass(row, y, m, fontFamily, 0, row.count),
+		);
+	}
+
 	function setTheme(bgDefault: string, fgDefault: string, neutralSurface = bgDefault): void {
-		if (cachedBgDefault !== bgDefault || cachedFgDefault !== fgDefault || cachedNeutralSurface !== neutralSurface)
+		if (cachedBgDefault !== bgDefault || cachedFgDefault !== fgDefault || cachedNeutralSurface !== neutralSurface) {
 			paintedLayout = undefined;
+			splitProjection = undefined;
+		}
 		cachedBgDefault = bgDefault;
 		cachedFgDefault = fgDefault;
 		cachedNeutralSurface = neutralSurface;
@@ -1514,9 +1622,20 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 
 	function invalidateCaches(): void {
 		paintedLayout = undefined;
+		splitProjection = undefined;
 		colorStringCache.clear();
 		fontStyleCache.clear();
 	}
 
-	return { setTheme, invalidateCaches, paintGrid, paintRow, resolveFg, resolveBg, buildFontStyle };
+	return {
+		setTheme,
+		invalidateCaches,
+		paintGrid,
+		paintRow,
+		paintGridBackground,
+		paintGridGlyphs,
+		resolveFg,
+		resolveBg,
+		buildFontStyle,
+	};
 }
