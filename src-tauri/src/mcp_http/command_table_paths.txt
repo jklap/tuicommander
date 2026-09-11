@@ -305,6 +305,7 @@
 /sessions/x/terminal/hyperlink
 /sessions/x/terminal/hyperlink-span
 /sessions/x/terminal/image
+/sessions/x/terminal/image-meta
 /sessions/x/terminal/image-placements
 /sessions/x/terminal/image-ref
 /sessions/x/terminal/lines
