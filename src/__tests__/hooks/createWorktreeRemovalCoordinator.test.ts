@@ -9,6 +9,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 	let createWorktreeRemovalCoordinator: typeof import("../../hooks/git/createWorktreeRemovalCoordinator").createWorktreeRemovalCoordinator;
 	let repositoriesStore: typeof import("../../stores/repositories").repositoriesStore;
 	let repoSettingsStore: typeof import("../../stores/repoSettings").repoSettingsStore;
+	let terminalsStore: typeof import("../../stores/terminals").terminalsStore;
 
 	const REPO = "/Gits/alpha";
 	const BRANCH = "feature-x";
@@ -21,6 +22,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 			.createWorktreeRemovalCoordinator;
 		repositoriesStore = (await import("../../stores/repositories")).repositoriesStore;
 		repoSettingsStore = (await import("../../stores/repoSettings")).repoSettingsStore;
+		terminalsStore = (await import("../../stores/terminals")).terminalsStore;
 		repositoriesStore._testSetHydrated(true);
 	});
 
@@ -131,6 +133,38 @@ describe("createWorktreeRemovalCoordinator", () => {
 
 			expect(confirmRemoveBusyWorktree).toHaveBeenCalledWith(BRANCH, expect.any(Object));
 			expect(confirmRemoveWorktree).not.toHaveBeenCalled();
+		});
+	});
+
+	it("shows the plain confirmRemoveWorktree, not the busy dialog, when the only attached terminal has exited", async () => {
+		// This is the exact user-facing symptom the 2026-09-10 ghost-terminal fix
+		// closed: an agent-owned terminal that exited on its own used to keep a
+		// branch "busy" forever (branchActivitySummary's isBusy was a bare
+		// terminals.length > 0), so removing its worktree always hit the scary
+		// "N terminal(s) attached" dialog even with nothing really running.
+		await testInScopeAsync(async () => {
+			const termId = terminalsStore.add({
+				name: "Finished agent",
+				sessionId: null,
+				cwd: null,
+				fontSize: 14,
+				awaitingInput: null,
+				agentType: null,
+			});
+			terminalsStore.update(termId, { shellState: "exited" });
+			setupBranch({ terminals: [termId] });
+			const { coordinator, confirmRemoveWorktree, confirmRemoveBusyWorktree, closeTerminal } = makeCoordinator();
+
+			await coordinator.handleRemoveBranch(REPO, BRANCH);
+
+			expect(confirmRemoveWorktree).toHaveBeenCalledWith(BRANCH, true);
+			expect(confirmRemoveBusyWorktree).not.toHaveBeenCalled();
+			// branch.terminals itself is left untouched by the exited terminal —
+			// only the busy/color read at removal-check time ignores it (see
+			// AGENTS.md's "branch.terminals Membership Must Never Be Pruned On
+			// Terminal Exit"). handleRemoveBranch still closes it as part of
+			// removal, which is why it must stay in the array.
+			expect(closeTerminal).toHaveBeenCalledWith(termId, true);
 		});
 	});
 
