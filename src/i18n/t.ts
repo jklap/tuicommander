@@ -40,7 +40,10 @@ export function t(key: string, fallback: string, params?: Record<string, string>
 	let str = typeof message === "string" ? message : fallback;
 	if (params) {
 		for (const [k, v] of Object.entries(params)) {
-			str = str.replace(new RegExp(`\\{${k}\\}`, "g"), v);
+			// String.replace treats "$&", "$1", "$$", etc. in the replacement string as
+			// special patterns — escape "$" so an interpolated value (e.g. a branch name)
+			// is always inserted literally, never reinterpreted.
+			str = str.replace(new RegExp(`\\{${k}\\}`, "g"), v.replace(/\$/g, "$$$$"));
 		}
 	}
 	return str;
