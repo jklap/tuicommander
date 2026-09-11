@@ -162,6 +162,39 @@ describe("createWorktreeRemovalCoordinator", () => {
 		});
 	});
 
+	it("shows only the plain confirmRemoveWorktree, not the in-use question, when the only attached terminal has exited", async () => {
+		// This is the exact user-facing symptom the 2026-09-10 ghost-terminal fix
+		// closed: an agent-owned terminal that exited on its own used to keep a
+		// workspace "busy" forever (branchActivitySummary's isBusy was a bare
+		// terminals.length > 0), so removing its worktree always hit the scary
+		// "N terminal(s) attached" dialog even with nothing really running.
+		await testInScopeAsync(async () => {
+			const termId = terminalsStore.add({
+				name: "Finished agent",
+				sessionId: null,
+				// main closes a worktree's residents by live cwd (closeWorktreeTerminals).
+				cwd: `${REPO}__wt/${WORKSPACE}`,
+				fontSize: 14,
+				awaitingInput: null,
+				agentType: null,
+			});
+			terminalsStore.update(termId, { shellState: "exited" });
+			setupWorkspace({ terminals: [termId] });
+			const { coordinator, confirmRemoveWorktree, confirmRemoveBusyWorktree, closeTerminal } = makeCoordinator();
+
+			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
+
+			expect(confirmRemoveWorktree).toHaveBeenCalledWith(WORKSPACE, SAFE_LIFECYCLE, true);
+			expect(confirmRemoveBusyWorktree).not.toHaveBeenCalled();
+			// The workspace's terminals list itself is left untouched by the exited
+			// terminal — only the busy read at removal-check time ignores it (see
+			// AGENTS.md's "branch.terminals Membership Must Never Be Pruned On
+			// Terminal Exit"). handleRemoveWorkspace still closes it as part of
+			// removal, which is why it must stay in the array.
+			expect(closeTerminal).toHaveBeenCalledWith(termId, true);
+		});
+	});
+
 	it("declining the in-use question closes no terminal and removes nothing", async () => {
 		await testInScopeAsync(async () => {
 			setupWorkspace({ terminals: ["t1"] });
