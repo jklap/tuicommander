@@ -4059,6 +4059,26 @@ mod tests {
         assert!(!opted_out.toasts_in_bell);
     }
 
+    /// A legacy `sounds` object missing a single key (e.g. written before
+    /// "attention" existed) must default just that one field to `true`, not
+    /// fall back to `NotificationSounds::default()` for the whole struct and
+    /// silently discard the other explicit values sitting right next to it.
+    #[test]
+    fn notification_sounds_defaults_only_the_missing_field() {
+        let sounds: NotificationSounds = serde_json::from_str(
+            r#"{"question":false,"error":false,"completion":false,"warning":false,"info":false}"#,
+        )
+        .unwrap();
+        assert!(!sounds.question);
+        assert!(!sounds.error);
+        assert!(!sounds.completion);
+        assert!(!sounds.warning);
+        assert!(!sounds.info);
+        // The only field missing from the JSON — must default true, not
+        // resurrect the other five fields' defaults too.
+        assert!(sounds.attention);
+    }
+
     /// Orchestrations spawn many workers; a chime per finished worker is noise, so
     /// silencing them is the default. Both the struct default and an older config
     /// file written before the field existed must land on `true`.

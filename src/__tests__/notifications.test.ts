@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isNotificationSound, NOTIFICATION_SOUNDS, type NotificationConfig } from "../notifications";
 
 // Mock the invoke module — NotificationManager delegates to Rust
 vi.mock("../invoke", () => ({
@@ -123,6 +124,73 @@ describe("NotificationManager", () => {
 				device: null,
 			});
 		});
+
+		it("forwards a configured audio_device to Rust", async () => {
+			manager.updateConfig({ audio_device: "USB Speakers" });
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledWith("play_notification_sound", {
+				sound: "question",
+				volume: 0.5,
+				device: "USB Speakers",
+			});
+		});
+	});
+
+	describe("exponential backoff", () => {
+		it("backs off after 3 consecutive failures, then recovers once the window passes", async () => {
+			mockInvoke
+				.mockRejectedValueOnce(new Error("e1"))
+				.mockRejectedValueOnce(new Error("e2"))
+				.mockRejectedValueOnce(new Error("e3"));
+
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(2);
+
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(3); // 3rd failure arms the 5s backoff
+
+			// Still well within the 5s backoff window — invoke must not even be attempted.
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(3);
+
+			// Past the 5s window — resumes attempting.
+			await vi.advanceTimersByTimeAsync(4500);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(4);
+		});
+
+		it("resets the failure count after a successful play, so a later run of failures re-arms from 3, not cumulatively", async () => {
+			mockInvoke.mockRejectedValueOnce(new Error("e1")).mockRejectedValueOnce(new Error("e2"));
+
+			await manager.play("question"); // failure 1
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question"); // failure 2 — still below the 3-failure threshold
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question"); // succeeds (default mock), resets consecutiveFailures to 0
+			expect(mockInvoke).toHaveBeenCalledTimes(3);
+
+			mockInvoke
+				.mockRejectedValueOnce(new Error("e4"))
+				.mockRejectedValueOnce(new Error("e5"))
+				.mockRejectedValueOnce(new Error("e6"));
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question"); // 3rd fresh failure — arms backoff again
+			expect(mockInvoke).toHaveBeenCalledTimes(6);
+
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(6); // backed off, not a 7th attempt
+		});
 	});
 
 	describe("convenience play methods", () => {
@@ -179,6 +247,43 @@ describe("NotificationManager", () => {
 			manager.updateConfig({ volume: 0.9, enabled: false });
 			expect(manager.getConfig().volume).toBe(0.9);
 			expect(manager.getConfig().enabled).toBe(false);
+		});
+
+		it("updateConfig shallow-merges: a partial `sounds` patch replaces the whole map, not just the given keys", () => {
+			// Documents current behavior as a guardrail. `NotificationConfig["sounds"]` is
+			// currently a flat Record<NotificationSound, boolean> so no real caller passes a
+			// partial `sounds` object today — but a future per-sound field (e.g. a custom
+			// sound-source override) is exactly the kind of nested value this shallow merge
+			// would silently corrupt. If this test starts failing because updateConfig grew
+			// a deep merge, that's fine — update it; the point is a future regression here
+			// must be a deliberate change, not a silent one.
+			manager.updateConfig({ sounds: { question: false } as unknown as NotificationConfig["sounds"] });
+			const sounds = manager.getConfig().sounds;
+			expect(sounds.question).toBe(false);
+			expect(sounds.error).toBeUndefined();
+			expect(sounds.completion).toBeUndefined();
+		});
+	});
+
+	describe("isNotificationSound()", () => {
+		it("accepts every known sound name", () => {
+			for (const sound of NOTIFICATION_SOUNDS) {
+				expect(isNotificationSound(sound)).toBe(true);
+			}
+		});
+
+		it("rejects unknown strings", () => {
+			expect(isNotificationSound("bogus")).toBe(false);
+			expect(isNotificationSound("")).toBe(false);
+			expect(isNotificationSound("Question")).toBe(false); // case-sensitive
+		});
+
+		it("rejects non-string values", () => {
+			expect(isNotificationSound(null)).toBe(false);
+			expect(isNotificationSound(undefined)).toBe(false);
+			expect(isNotificationSound(42)).toBe(false);
+			expect(isNotificationSound({})).toBe(false);
+			expect(isNotificationSound(["question"])).toBe(false);
 		});
 	});
 

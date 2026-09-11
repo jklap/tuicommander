@@ -306,6 +306,40 @@ pub(crate) fn list_output_devices() -> Vec<AudioOutputDevice> {
 }
 
 // ---------------------------------------------------------------------------
+// Sequence -> playback step expansion (pure, unit-testable independent of
+// real audio I/O — the actual note/gap interleaving logic lives here so it
+// doesn't have to be exercised through a live rodio player to be tested).
+// ---------------------------------------------------------------------------
+
+/// One playback step: either a tone or a timed gap of silence.
+enum PlaybackStep {
+    Tone {
+        frequency: f32,
+        duration: Duration,
+        waveform: Waveform,
+    },
+    Gap(Duration),
+}
+
+/// Expand a sound sequence into the ordered list of playback steps — a gap
+/// follows every note except the last, and a zero-length gap is skipped
+/// entirely rather than emitted as a no-op step.
+fn playback_steps(seq: &SoundSequence) -> Vec<PlaybackStep> {
+    let mut steps = Vec::with_capacity(seq.notes.len() * 2);
+    for (i, note) in seq.notes.iter().enumerate() {
+        steps.push(PlaybackStep::Tone {
+            frequency: note.frequency,
+            duration: note.duration,
+            waveform: note.waveform,
+        });
+        if i < seq.notes.len() - 1 && !seq.gap.is_zero() {
+            steps.push(PlaybackStep::Gap(seq.gap));
+        }
+    }
+    steps
+}
+
+// ---------------------------------------------------------------------------
 // Playback
 // ---------------------------------------------------------------------------
 
@@ -356,22 +390,24 @@ pub(crate) fn play(sound: NotificationSound, volume: f32, device_name: Option<St
 
         let seq = sound_sequence(sound);
         let volume = volume * seq.gain;
-        for (i, note) in seq.notes.iter().enumerate() {
-            player.append(EnvelopedTone::new(
-                note.frequency,
-                note.duration,
-                volume,
-                note.waveform,
-            ));
-            // Insert silence gap between notes (not after the last one)
-            if i < seq.notes.len() - 1 && !seq.gap.is_zero() {
-                player.append(
-                    rodio::source::Zero::new(
-                        NonZero::new(1).expect("one channel is non-zero"),
-                        NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
-                    )
-                    .take_duration(seq.gap),
-                );
+        for step in playback_steps(&seq) {
+            match step {
+                PlaybackStep::Tone {
+                    frequency,
+                    duration,
+                    waveform,
+                } => {
+                    player.append(EnvelopedTone::new(frequency, duration, volume, waveform));
+                }
+                PlaybackStep::Gap(gap) => {
+                    player.append(
+                        rodio::source::Zero::new(
+                            NonZero::new(1).expect("one channel is non-zero"),
+                            NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
+                        )
+                        .take_duration(gap),
+                    );
+                }
             }
         }
 
@@ -570,6 +606,116 @@ mod tests {
                 "{other:?} plays at the user's configured volume"
             );
         }
+    }
+
+    #[test]
+    fn playback_steps_single_note_has_no_gap() {
+        let seq = sound_sequence(NotificationSound::Info);
+        let steps = playback_steps(&seq);
+        assert_eq!(steps.len(), 1);
+        assert!(matches!(steps[0], PlaybackStep::Tone { .. }));
+    }
+
+    #[test]
+    fn playback_steps_interleaves_gaps_between_notes_but_not_after_the_last() {
+        let seq = sound_sequence(NotificationSound::Question); // 2 notes, non-zero gap
+        let steps = playback_steps(&seq);
+        assert_eq!(steps.len(), 3, "tone, gap, tone — no trailing gap");
+        assert!(matches!(steps[0], PlaybackStep::Tone { .. }));
+        assert!(matches!(steps[1], PlaybackStep::Gap(gap) if gap == seq.gap));
+        assert!(matches!(steps[2], PlaybackStep::Tone { .. }));
+    }
+
+    #[test]
+    fn playback_steps_omits_gap_step_entirely_when_sequence_gap_is_zero() {
+        let seq = SoundSequence {
+            notes: vec![
+                Note {
+                    frequency: 440.0,
+                    duration: Duration::from_millis(10),
+                    waveform: Waveform::Sine,
+                },
+                Note {
+                    frequency: 550.0,
+                    duration: Duration::from_millis(10),
+                    waveform: Waveform::Sine,
+                },
+            ],
+            gap: Duration::ZERO,
+            gain: 1.0,
+        };
+        let steps = playback_steps(&seq);
+        // Zero-length gaps are skipped outright, not emitted as no-op steps.
+        assert_eq!(steps.len(), 2);
+        assert!(steps.iter().all(|s| matches!(s, PlaybackStep::Tone { .. })));
+    }
+
+    #[test]
+    fn playback_steps_matches_note_count_for_every_sound() {
+        for sound in [
+            NotificationSound::Question,
+            NotificationSound::Completion,
+            NotificationSound::Error,
+            NotificationSound::Warning,
+            NotificationSound::Info,
+            NotificationSound::Attention,
+        ] {
+            let seq = sound_sequence(sound);
+            let tone_count = playback_steps(&seq)
+                .iter()
+                .filter(|s| matches!(s, PlaybackStep::Tone { .. }))
+                .count();
+            assert_eq!(
+                tone_count,
+                seq.notes.len(),
+                "{sound:?} should emit exactly one Tone step per note"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_output_stream_falls_back_to_default_for_an_unknown_device_name() {
+        // Whether or not this environment has real audio hardware, an unresolvable
+        // device name must fall back to exactly the same outcome as no device name
+        // at all — this is the "configured device not found" branch.
+        let default_present = resolve_output_stream(None).is_some();
+        let unknown_present =
+            resolve_output_stream(Some("definitely-not-a-real-device-xyz-123")).is_some();
+        assert_eq!(
+            default_present, unknown_present,
+            "an unresolvable device name must fall back to the same outcome as the default device"
+        );
+    }
+
+    #[test]
+    fn resolve_output_stream_opens_a_named_device_when_one_is_available() {
+        let devices = list_output_devices();
+        let Some(device) = devices.first() else {
+            eprintln!("skipping: no audio output devices available in this test environment");
+            return;
+        };
+        assert!(
+            resolve_output_stream(Some(&device.name)).is_some(),
+            "a device name returned by list_output_devices() should always resolve"
+        );
+    }
+
+    #[test]
+    fn list_output_devices_has_at_most_one_default_and_no_duplicate_names() {
+        let devices = list_output_devices();
+        let default_count = devices.iter().filter(|d| d.is_default).count();
+        assert!(
+            default_count <= 1,
+            "at most one device should be marked default, got {default_count}"
+        );
+        let mut names: Vec<&str> = devices.iter().map(|d| d.name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            devices.len(),
+            "device names returned by list_output_devices() should be unique"
+        );
     }
 
     #[test]

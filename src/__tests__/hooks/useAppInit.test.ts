@@ -1683,6 +1683,24 @@ describe("initApp", () => {
 			play.mockRestore();
 		});
 
+		it("does not replay the sound for an identical duplicate toast, even with a valid sound name", async () => {
+			const { getCallback } = captureMcpToast();
+			const deps = createMockDeps();
+			await initApp(deps);
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+
+			const payload = { title: "need you", message: "which branch?", level: "warn", sound: "attention" };
+			getCallback()!({ payload });
+			expect(play).toHaveBeenCalledTimes(1);
+
+			// Identical event again (e.g. a duplicated MCP emit) — the toast itself
+			// dedups, and the sound must not replay either.
+			getCallback()!({ payload });
+			expect(play).toHaveBeenCalledTimes(1);
+
+			play.mockRestore();
+		});
+
 		it("scopes the toast to the repository resolved from the caller cwd", async () => {
 			repositoriesStore.add({ path: "/Gits/personal/tuicommander", displayName: "TUICommander" });
 			const { getCallback } = captureMcpToast();

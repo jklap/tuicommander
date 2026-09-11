@@ -1169,4 +1169,24 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
+
+    #[tokio::test]
+    async fn list_audio_output_devices_http_returns_a_device_array() {
+        let resp = list_audio_output_devices_http().await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert!(value.is_array(), "response body must be a JSON array");
+
+        // A headless (non-desktop) build has no audio output context at all and
+        // must report an empty list rather than erroring.
+        #[cfg(not(feature = "desktop"))]
+        assert_eq!(
+            value.as_array().unwrap().len(),
+            0,
+            "non-desktop builds report no audio devices"
+        );
+    }
 }

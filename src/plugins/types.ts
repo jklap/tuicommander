@@ -344,7 +344,7 @@ export type PluginCapability =
 	| "ui:file-preview";
 
 /** Valid sound names for playNotificationSound — single source of truth */
-export const NOTIFICATION_SOUNDS = ["question", "error", "completion", "warning", "info"] as const;
+export const NOTIFICATION_SOUNDS = ["question", "error", "completion", "warning", "info", "attention"] as const;
 export type NotificationSound = (typeof NOTIFICATION_SOUNDS)[number];
 
 /** Error thrown when a plugin calls a method without the required capability */
@@ -670,7 +670,7 @@ export interface PluginHost {
 
 	/**
 	 * Play a notification sound. Requires "ui:sound" capability.
-	 * @param sound - One of NOTIFICATION_SOUNDS ("question" | "error" | "completion" | "warning" | "info"). Defaults to "info".
+	 * @param sound - One of NOTIFICATION_SOUNDS ("question" | "error" | "completion" | "warning" | "info" | "attention"). Defaults to "info".
 	 */
 	playNotificationSound(sound?: NotificationSound): Promise<void>;
 

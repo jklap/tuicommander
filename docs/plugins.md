@@ -470,7 +470,7 @@ Plays a notification sound. **Requires `"ui:sound"` capability.**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `sound` | `string` | `"info"` | One of: `"question"`, `"error"`, `"completion"`, `"warning"`, `"info"` |
+| `sound` | `string` | `"info"` | One of: `"question"`, `"error"`, `"completion"`, `"warning"`, `"info"`, `"attention"` |
 
 ```typescript
 await host.playNotificationSound("error");      // CI failure, build error
@@ -1250,7 +1250,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `pty:write` | `host.writePty()`, `host.sendAgentInput()` | Can send input to terminals |
 | `pty:read` | `host.invoke("get_input_buffer_content", …)` | Can read the terminal input line buffer |
 | `ui:markdown` | `host.openMarkdownPanel()`, `host.openMarkdownFile()` | Can open panels and files in the UI |
-| `ui:sound` | `host.playNotificationSound(sound?)` | Can play sounds (question, error, completion, warning, info) |
+| `ui:sound` | `host.playNotificationSound(sound?)` | Can play sounds (question, error, completion, warning, info, attention) |
 | `ui:panel` | `host.openPanel()` | Can render arbitrary HTML in sandboxed iframe |
 | `ui:ticker` | `host.setTicker()`, `host.clearTicker()` | Can post messages to the shared status bar ticker |
 | `credentials:read` | `host.readCredential()` | Can read system credentials (consent dialog shown) |

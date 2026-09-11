@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testInScope, testInScopeAsync } from "../helpers/store";
 
 const mockInvoke = vi.fn().mockResolvedValue(undefined);
@@ -347,6 +347,33 @@ describe("notificationsStore", () => {
 		it("plays info sound via play()", async () => {
 			await store.playInfo();
 			expect(mockManager.play).toHaveBeenCalledWith("info");
+		});
+	});
+
+	describe("play() badge side-effect based on window focus", () => {
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		it("does not increment the badge when the window is focused", async () => {
+			vi.spyOn(document, "hasFocus").mockReturnValue(true);
+			await testInScopeAsync(async () => {
+				await store.play("question");
+				expect(store.state.badgeCount).toBe(0);
+				expect(mockSetBadgeCount).not.toHaveBeenCalled();
+			});
+		});
+
+		it("increments the badge when the window is not focused", async () => {
+			vi.spyOn(document, "hasFocus").mockReturnValue(false);
+			await testInScopeAsync(async () => {
+				await store.play("question");
+				expect(store.state.badgeCount).toBe(1);
+				// play() fires incrementBadge() without awaiting it, so its own
+				// `await import("@tauri-apps/api/window")` + setBadgeCount call
+				// land a tick or two after play() itself resolves.
+				await vi.waitFor(() => expect(mockSetBadgeCount).toHaveBeenCalledWith(1));
+			});
 		});
 	});
 

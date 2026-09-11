@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "../../invoke";
+import { notificationManager } from "../../notifications";
 import { dashboardRegistry } from "../../plugins/dashboardRegistry";
 import { filePreviewRegistry } from "../../plugins/filePreviewRegistry";
 import { markdownProviderRegistry } from "../../plugins/markdownProviderRegistry";
@@ -7,6 +8,7 @@ import { pluginRegistry } from "../../plugins/pluginRegistry";
 import type { PluginHost, TuiPlugin } from "../../plugins/types";
 import { PluginCapabilityError } from "../../plugins/types";
 import { activityStore } from "../../stores/activityStore";
+import { appLogger } from "../../stores/appLogger";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { pluginStore } from "../../stores/pluginStore";
@@ -1183,6 +1185,70 @@ describe("PluginHost — Tier 3 capability gating", () => {
 			["ui:sound"],
 		);
 		await expect(host!.playNotificationSound()).resolves.toBeUndefined();
+	});
+
+	it("falls back to 'info' and logs a warning for an unknown sound name", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:sound"],
+		);
+		const playSpy = vi.spyOn(notificationManager, "play").mockResolvedValue(undefined);
+		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+
+		// biome-ignore lint/suspicious/noExplicitAny: deliberately passing an invalid sound name
+		await host!.playNotificationSound("bogus-sound" as any);
+
+		expect(playSpy).toHaveBeenCalledWith("info");
+		expect(warnSpy).toHaveBeenCalledWith(
+			"plugin",
+			expect.stringContaining('unknown sound "bogus-sound", defaulting to "info"'),
+		);
+
+		playSpy.mockRestore();
+		warnSpy.mockRestore();
+	});
+
+	it("forwards a valid non-default sound unchanged, with no warning", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:sound"],
+		);
+		const playSpy = vi.spyOn(notificationManager, "play").mockResolvedValue(undefined);
+		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+
+		await host!.playNotificationSound("attention");
+
+		expect(playSpy).toHaveBeenCalledWith("attention");
+		expect(warnSpy).not.toHaveBeenCalled();
+
+		playSpy.mockRestore();
+		warnSpy.mockRestore();
+	});
+
+	it("defaults to 'info' with no warning when no sound is given at all", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:sound"],
+		);
+		const playSpy = vi.spyOn(notificationManager, "play").mockResolvedValue(undefined);
+		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+
+		await host!.playNotificationSound();
+
+		expect(playSpy).toHaveBeenCalledWith("info");
+		expect(warnSpy).not.toHaveBeenCalled();
+
+		playSpy.mockRestore();
+		warnSpy.mockRestore();
 	});
 });
 

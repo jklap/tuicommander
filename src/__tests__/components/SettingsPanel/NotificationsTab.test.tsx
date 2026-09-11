@@ -1,6 +1,6 @@
+import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import "../../mocks/tauri";
-import { fireEvent, render } from "@solidjs/testing-library";
+import { mockInvoke } from "../../mocks/tauri";
 
 const {
 	mockSetEnabled,
@@ -113,6 +113,94 @@ describe("NotificationsTab", () => {
 		const { getByText } = render(() => <NotificationsTab />);
 		fireEvent.click(getByText("Reset Defaults"));
 		expect(mockReset).toHaveBeenCalledOnce();
+	});
+
+	it("calls setVolume with a 0-1 fraction as the slider is dragged", () => {
+		const { container } = render(() => <NotificationsTab />);
+		const slider = container.querySelector('input[type="range"]') as HTMLInputElement;
+		fireEvent.input(slider, { target: { value: "80" } });
+		expect(mockSetVolume).toHaveBeenCalledWith(0.8);
+	});
+
+	it("plays an 'info' preview once the volume slider is released", () => {
+		const { container } = render(() => <NotificationsTab />);
+		const slider = container.querySelector('input[type="range"]') as HTMLInputElement;
+		fireEvent.change(slider, { target: { value: "80" } });
+		expect(mockTestSound).toHaveBeenCalledWith("info");
+		// Releasing the slider must not also fire setVolume a second time —
+		// that already happened live via onInput.
+		expect(mockSetVolume).not.toHaveBeenCalled();
+	});
+
+	describe("audio output device picker", () => {
+		beforeEach(() => {
+			mockInvoke.mockReset();
+		});
+
+		it("lazily loads devices only when 'Choose output device…' is clicked, not on mount", () => {
+			render(() => <NotificationsTab />);
+			expect(mockInvoke).not.toHaveBeenCalled();
+		});
+
+		it("lists devices returned by list_audio_output_devices, marking the default", async () => {
+			mockInvoke.mockResolvedValueOnce([
+				{ name: "Built-in Speakers", is_default: true },
+				{ name: "USB Headset", is_default: false },
+			]);
+			const { getByText, container } = render(() => <NotificationsTab />);
+			fireEvent.click(getByText("Choose output device…"));
+
+			expect(mockInvoke).toHaveBeenCalledWith("list_audio_output_devices");
+			const select = await waitFor(() => {
+				const el = container.querySelector("select");
+				if (!el) throw new Error("select not yet rendered");
+				return el;
+			});
+			const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+			expect(options).toEqual(["System Default", "Built-in Speakers (current default)", "USB Headset"]);
+		});
+
+		it("calls setAudioDevice with the selected device name", async () => {
+			mockInvoke.mockResolvedValueOnce([{ name: "USB Headset", is_default: false }]);
+			const { getByText, container } = render(() => <NotificationsTab />);
+			fireEvent.click(getByText("Choose output device…"));
+
+			const select = await waitFor(() => {
+				const el = container.querySelector("select");
+				if (!el) throw new Error("select not yet rendered");
+				return el;
+			});
+			fireEvent.change(select, { target: { value: "USB Headset" } });
+			expect(mockSetAudioDevice).toHaveBeenCalledWith("USB Headset");
+		});
+
+		it("calls setAudioDevice with null when 'System Default' is re-selected", async () => {
+			mockInvoke.mockResolvedValueOnce([{ name: "USB Headset", is_default: false }]);
+			const { getByText, container } = render(() => <NotificationsTab />);
+			fireEvent.click(getByText("Choose output device…"));
+
+			const select = await waitFor(() => {
+				const el = container.querySelector("select");
+				if (!el) throw new Error("select not yet rendered");
+				return el;
+			});
+			fireEvent.change(select, { target: { value: "" } });
+			expect(mockSetAudioDevice).toHaveBeenCalledWith(null);
+		});
+
+		it("falls back to an empty (System Default-only) list when enumeration fails, instead of throwing", async () => {
+			mockInvoke.mockRejectedValueOnce(new Error("mic permission denied"));
+			const { getByText, container } = render(() => <NotificationsTab />);
+			fireEvent.click(getByText("Choose output device…"));
+
+			const select = await waitFor(() => {
+				const el = container.querySelector("select");
+				if (!el) throw new Error("select not yet rendered");
+				return el;
+			});
+			expect(select.querySelectorAll("option")).toHaveLength(1);
+			expect(select.querySelector("option")?.textContent).toBe("System Default");
+		});
 	});
 });
 
