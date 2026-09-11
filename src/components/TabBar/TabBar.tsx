@@ -301,6 +301,21 @@ export const TabBar: Component<TabBarProps> = (props) => {
 				},
 			);
 		}
+		// The alias is the address another agent is told to notify, so it has to be
+		// readable and copyable from the tab that owns it — otherwise it exists only
+		// inside an MCP payload.
+		if (term?.alias) {
+			const alias = term.alias;
+			items.push(
+				{ label: "", separator: true, action: () => {} },
+				{
+					label: t("tabBar.alias", "Alias: {alias}", { alias }),
+					action: () => {
+						writeClipboard(alias).catch((err) => appLogger.error("app", "Failed to copy alias", err));
+					},
+				},
+			);
+		}
 		// Global workspace promote/unpromote
 		const isPromoted = globalWorkspaceStore.isPromoted(id);
 		items.push(

@@ -230,6 +230,24 @@ describe("transport", () => {
 			expect(result.body).toEqual({ rows: 24, cols: 80, shell: null, cwd: "/tmp" });
 		});
 
+		// The desktop path reads `alias` off `PtyConfig`; the HTTP route reads it off
+		// the same body under the same name. A restore over either transport has to
+		// reserve the address the tab already had, so the field cannot be dropped in
+		// the mapper.
+		it("carries the requested alias through to POST /sessions", () => {
+			const result = mapCommandToHttp("create_pty", {
+				config: { rows: 24, cols: 80, shell: null, cwd: "/tmp", tuic_session: "tab-uuid", alias: "tu-3" },
+			});
+			expect(result.body).toEqual({
+				rows: 24,
+				cols: 80,
+				shell: null,
+				cwd: "/tmp",
+				tuic_session: "tab-uuid",
+				alias: "tu-3",
+			});
+		});
+
 		it("maps write_pty to POST /sessions/{id}/write", () => {
 			const result = mapCommandToHttp("write_pty", { sessionId: "abc", data: "hello" });
 			expect(result.method).toBe("POST");

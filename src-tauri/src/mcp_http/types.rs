@@ -47,6 +47,10 @@ pub(super) struct CreateSessionRequest {
     /// locally-created and does not spawn a duplicate "PTY:" tab. Honored only
     /// when non-empty and not already in use; otherwise the backend mints one.
     pub session_id: Option<String>,
+    /// Terminal alias this tab held before the restart (e.g. `tu-3`). Same field
+    /// name and meaning as `PtyConfig::alias` on the Tauri IPC side — a restored
+    /// tab keeps the address other agents already know.
+    pub alias: Option<String>,
 }
 
 #[derive(Deserialize)]

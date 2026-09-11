@@ -116,11 +116,18 @@ Content-Type: application/json
   "rows": 24,
   "cols": 80,
   "shell": "/bin/zsh",    // optional
-  "cwd": "/path/to/dir"   // optional
+  "cwd": "/path/to/dir",  // optional
+  "alias": "tu-1"         // optional — reclaim a persisted alias
 }
 ```
 
 Returns `{ "session_id": "..." }`.
+
+`alias` lets a client restore the short address a tab had before a restart. The server
+honours it only when it still has the `<prefix>-<number>` shape and no live session
+holds it, and then raises the per-prefix counter past that number so the next
+auto-assigned alias cannot collide. Anything else is ignored and the session receives a
+freshly minted alias.
 
 ### Create Session with Worktree
 

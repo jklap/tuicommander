@@ -3,6 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getModifierSymbol } from "../../platform";
 import type { AwaitingInputType } from "../../stores/terminals";
 
+const mockWriteClipboard = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("../../utils/clipboard", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../utils/clipboard")>()),
+	writeClipboard: mockWriteClipboard,
+}));
+
 // Mock Tauri APIs
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn().mockResolvedValue(undefined),
@@ -1318,6 +1324,50 @@ describe("TabBar", () => {
 			fireEvent.click(featureItem!);
 
 			expect(handleMove).toHaveBeenCalledWith(termId, "/repo-wt/feature-a");
+		});
+	});
+	describe("alias context menu item", () => {
+		const renderTabBar = () =>
+			render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+
+		function aliasItem(container: HTMLElement): Element | undefined {
+			fireEvent.contextMenu(container.querySelector(".tab")!);
+			return Array.from(container.querySelectorAll(".menu .item")).find((item) =>
+				item.querySelector(".label")?.textContent?.startsWith("Alias:"),
+			);
+		}
+
+		beforeEach(() => {
+			mockWriteClipboard.mockClear();
+		});
+
+		// The alias is the address another agent has to be told, so it has to be
+		// readable and copyable from the tab that owns it — otherwise it is only
+		// ever visible inside an MCP payload.
+		it("shows the alias and copies it to the clipboard", () => {
+			const id = addTerminal({ name: "Tab 1" });
+			terminalsStore.update(id, { alias: "tu-2" });
+
+			const { container } = renderTabBar();
+			const item = aliasItem(container);
+
+			expect(item?.querySelector(".label")?.textContent).toBe("Alias: tu-2");
+			fireEvent.click(item!);
+			expect(mockWriteClipboard).toHaveBeenCalledWith("tu-2");
+		});
+
+		it("is absent while the session has no alias yet", () => {
+			addTerminal({ name: "Tab 1" });
+			const { container } = renderTabBar();
+			expect(aliasItem(container)).toBeUndefined();
 		});
 	});
 });

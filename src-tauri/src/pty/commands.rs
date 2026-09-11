@@ -97,7 +97,7 @@ pub(crate) async fn create_pty(
             shell: shell.clone(),
         }),
     );
-    state.assign_term_alias(&session_id);
+    state.assign_term_alias(&session_id, config.alias.as_deref());
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -261,7 +261,7 @@ pub(crate) async fn create_pty_with_worktree(
             shell,
         }),
     );
-    state.assign_term_alias(&session_id);
+    state.assign_term_alias(&session_id, pty_config.alias.as_deref());
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics

@@ -76,4 +76,30 @@ describe("createBranchSelectionCoordinator", () => {
 			expect(messages).toEqual(["Max sessions reached (50)"]);
 		});
 	});
+	it("carries a saved alias onto the terminal it restores", async () => {
+		await testInScope(async () => {
+			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+			repositoriesStore.setWorkspace("/Gits/alpha", "main", {
+				worktreePath: "/Gits/alpha",
+				savedTerminals: [
+					{
+						name: "claude",
+						cwd: "/Gits/alpha",
+						fontSize: 14,
+						agentType: "claude",
+						agentSessionId: null,
+						tuicSession: "tab-uuid",
+						agentLaunchCommand: null,
+						alias: "al-3",
+					},
+				],
+			});
+
+			await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "main");
+
+			const restored = terminalsStore.getIds().map((id) => terminalsStore.get(id));
+			expect(restored.map((t) => t?.alias)).toEqual(["al-3"]);
+			expect(restored.map((t) => t?.tuicSession)).toEqual(["tab-uuid"]);
+		});
+	});
 });

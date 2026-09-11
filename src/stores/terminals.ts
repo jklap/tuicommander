@@ -148,6 +148,7 @@ type TerminalCreateData = Omit<
 > & {
 	repoPath?: string | null;
 	tuicSession?: string | null;
+	alias?: string | null;
 	isRemote?: boolean;
 	nameIsCustom?: boolean;
 	agentType?: AgentType | null;

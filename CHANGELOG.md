@@ -49,6 +49,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **One terminal, three addresses.** Every `session` action that takes a
+  `session_id`, and `agent action=send`'s `to`, now accept the PTY id, the
+  `tuic_session` the tab persists, or the repo-derived alias (`tu-1`)
+  interchangeably. An alias also survives a restart: the frontend replays it at
+  create time and the backend reserves it, advancing the per-prefix counter past
+  it so the next auto-assigned alias cannot collide. A terminal tab's context
+  menu shows its alias and copies it on click. An address that resolves to
+  nothing is passed through unchanged, so a session whose process has exited can
+  still be read.
+
 - **A repo dropped by the memory budget comes back without re-indexing it.** The
   index is written to `<data_dir>/content-index/` on the way out and reloaded on
   the way back in, so returning to a repo costs a stat walk instead of a full
@@ -76,6 +86,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The binary it launches is a setting, never an argument: no request can choose
   what your machine runs, and correcting the setting takes effect without a
   restart.
+
+## [1.7.6] - 2026-09-02
+
+### Changed
+
+- **The MCP session and peer payloads stopped restating themselves.**
+  `session action=list` drops `child_pid` and `foreground_pgid` — no action
+  accepts a raw pid — and adds `tuic_session`; `background_work` and `standby`
+  appear only when true. `list_peers` drops the per-entry `registered_at` and
+  `mail_wake` and the top-level `count`, and adds `alias` and `session_id` for a
+  peer that owns a live terminal. `agent action=send` drops `ok`, `accepted`,
+  `buffered_in_inbox` and `recipient_has_terminal`, leaving `delivered` and
+  `delivery_path` as the whole verdict; `spawn` drops `peer_registered`,
+  `communication_ready` and `send_to`, which restated `parent_session_id`.
+
+- **`is_caller` marks the tab the caller runs in, not the one it is bound to.**
+  It compares the caller's identity against the PTY that identity owns, so an
+  orchestrator no longer risks closing itself.
 
 ## [1.7.6] - 2026-09-02
 

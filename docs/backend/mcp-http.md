@@ -397,6 +397,22 @@ Eight native tools, organized by domain. Two (`config`, `debug`) are hidden by d
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
 
+#### One session, three addresses
+
+Every action that takes a `session_id` — and `agent action=send`'s `to` — accepts any
+of three names for the same terminal: the **PTY id** the server minted, the
+**`tuic_session`** the tab persists across restarts, and the repo-derived **alias**
+(`tu-1`). `AppState::resolve_session_ref` maps the first two forms onto the live PTY
+id and `AppState::resolve_peer_ref` maps any of them back onto the peer identity that
+owns that terminal, so a model never has to remember which of the three it was handed.
+
+Resolution deliberately **falls through instead of failing**. A reference that matches
+nothing is passed to the action unchanged, because a session whose process has exited
+leaves its output buffers behind while its registry entry is gone: hard-erroring on an
+unresolvable reference would break `session action=output` on exactly the session an
+orchestrator most needs to read. The action that owns the reference still reports
+`Unknown session` when it genuinely needs a live one.
+
 `ui action=confirm` blocks only its requesting tool call while the native dialog
 is open. The dialog runs on the blocking pool, so an unanswered confirmation
 cannot occupy the async MCP workers serving other agents and sessions.
@@ -512,7 +528,14 @@ files in the session's sandboxed repo. All input and mutating
 operations (`send_input`, `send_key`, `drive_agent`, `write_file`, `edit_file`, `run_command`) require user confirmation and are
 rejected while an internal agent loop is active on the target session.
 
-**Session aliases** — Every tool that accepts a `session_id` also accepts a human-friendly alias (e.g. `tc-1`). Aliases are auto-assigned from the repo directory name: first letter of each segment joined + per-repo counter. `list_sessions` includes the `alias` field. Aliases reset on app restart.
+**Session aliases** — Every tool that accepts a `session_id` also accepts a human-friendly alias (e.g. `tu-1`). Aliases are auto-assigned from the repo directory name: a multi-word name contributes the first character of each segment, a single word its first two characters (`tuicommander` -> `tu`), plus a per-repo counter. `list_sessions` includes the `alias` field.
+
+An alias survives an app restart. The frontend persists it with the rest of the tab
+state and replays it at create time; the backend reserves the requested alias when it
+still has the `<prefix>-<number>` shape and no live session holds it, and raises the
+per-prefix counter past it so the next auto-assignment cannot collide. A restored alias
+is untrusted input, so a malformed or already-taken value is dropped and the session
+gets a freshly minted alias instead.
 
 **Gated by `ai_terminal_mcp_enabled` config flag (default `false`).** When the flag is off, these tools are hidden from `tools/list` (via `filtered_native_tools`) and calls are rejected at dispatch time. Enable in `config.json` or Settings > Services & MCP. Note: no live-reload — a connected client may see a stale tools snapshot until it reconnects or `notifications/tools/list_changed` fires.
 
@@ -597,7 +620,7 @@ two calls.
 
 ### MCP Tool: `session` Output
 
-The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). For managed peers, task results travel through `agent action=send`; raw session output is only the anomaly fallback when a child failed to send its result. The `action=list` response includes process details per session: `child_pid`, `foreground_pgid`, `foreground_process`, `shell_state`, `agent_state`, `background_work`, and `is_caller`. `is_caller=true` identifies the managed PTY that owns the current MCP connection so an orchestrator does not close itself. Optional values such as alias, display name, cwd, worktree data, process identity, and agent state are omitted when absent rather than serialized as `null`; `status` follows the same omission rule.
+The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). For managed peers, task results travel through `agent action=send`; raw session output is only the anomaly fallback when a child failed to send its result. The `action=list` response includes per session: `foreground_process`, `shell_state`, `agent_state`, `tuic_session`, and `is_caller`. `is_caller=true` identifies the managed PTY that owns the current MCP connection so an orchestrator does not close itself; it compares the caller's identity against the PTY that identity is bound to, not against the PTY id. `tuic_session` is the stable identity the tab persists, so a caller can address a session across restarts. `child_pid` and `foreground_pgid` are no longer serialized — no MCP action accepts a raw pid, so they only enlarged every list response. `background_work` and `standby` appear only when true. Optional values such as alias, display name, cwd, worktree data, process identity, and agent state are omitted when absent rather than serialized as `null`; `status` follows the same omission rule.
 
 `Global overview: session action=list` — one call; no per-session `status` fan-out.
 
@@ -839,9 +862,11 @@ the same field without adding another command to the MCP surface.
 Every managed child is registered server-side and receives an inbox immediately,
 even when the caller has no bound peer identity. A registered parent additionally
 creates the bidirectional relationship: the child prompt receives its parent ID
-and send instruction, while the spawn response returns `communication_ready`,
-`send_to`, and `parent_session_id`. An unregistered caller receives
-`communication_ready=false` plus a warning instead of a false two-way guarantee.
+and send instruction, while the spawn response returns `parent_session_id`. An
+unregistered caller gets no `parent_session_id` and a warning instead of a false
+two-way guarantee. `communication_ready`, `send_to` and `peer_registered` are gone:
+the first two restated `parent_session_id`, and the third restated that TUIC always
+registers a managed child.
 The spawn still records the caller's MCP session as a pending parent: a later
 `register` call links existing children to the stable parent UUID and migrates
 any lifecycle notifications emitted before registration.
@@ -859,7 +884,11 @@ Clearing or submitting the composer rechecks the queue.
 An orchestrator role is declared explicitly with
 `agent action=register orchestrator=true` and removed with `orchestrator=false`; spawning a child never
 infers or permanently grants the role. The declaration is returned by `register`
-and `list_peers`. Its routing is intentionally stricter: every peer and
+and `list_peers`. A `list_peers` entry carries `tuic_session`, `name` and
+`orchestrator`, plus `alias` and `session_id` when the peer owns a live terminal —
+the two fields that make an answer from `list_peers` directly usable as a `to` or a
+`session_id`. `registered_at` and `mail_wake` are no longer per-entry, and the
+top-level `count` is gone: the array's own length already reports it. Its routing is intentionally stricter: every peer and
 child-lifecycle message remains in the authoritative inbox, and peer payloads
 never enter its channel, active turn, pending-injection queue, or composer. An
 active `agent wait` owns delivery and suppresses terminal wake. Without a waiter,
@@ -893,7 +922,7 @@ until a successful inbox or wait observation acknowledges the group. An attempt
 that writes no bytes remains `NotStarted` and does not enter an automatic retry
 loop.
 
-`register` and `list_peers` also return `mail_wake`. Its only current non-`none`
+`register` also returns `mail_wake`. Its only current non-`none`
 value is `managed_pty_lifecycle`, derived from a live TUIC-managed PTY rather than
 claimed by the caller. Headerless/external orchestrators have a mailbox and MCP/SSE
 transport but no authoritative model lifecycle or host wake adapter capable of
@@ -982,8 +1011,9 @@ requests (`focus=false`) do not change repository context.
    PTY — `mail_stranded` and an `identity_warning`. That last case deliberately moves nothing: an
    identity with a terminal is a reachable peer, and taking its inbox would strand a working agent.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
-3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
-   `accepted=true` and `buffered_in_inbox=true` acknowledge success;
+3. **Send**: `agent action=send to=<address> message="..."` buffers to the recipient's inbox.
+   `to` takes any of the three address forms — the peer's `tuic_session`, the id of the
+   PTY it runs in, or that terminal's alias. `delivered` is the verdict and
    `delivery_path` is the single source of truth for the route and distinguishes SSE,
    terminal-or-queued, waiter, generic/coalesced orchestrator wake, and inbox-only
    delivery. It replaced `delivered_via_channel` on this response, which reported only
