@@ -3263,12 +3263,21 @@ The review's remaining findings: (a) **Fixed 2026-09-11**: Kitty transmit decode
 Kitty Graphics Protocol section for the design (`PendingKittyDecodeJob`, `ImageData`'s
 `OnceLock`-backed `bytes`, the new `image-decoded` frontend retry signal). Cell reservation
 stays synchronous/in-order; a transmission's eventual decode failure no longer prevents its
-footprint from being reserved (disclosed behavior change, 3 existing tests updated). Still needs
-a real-tool pass beyond the unit/integration coverage already in `terminal_grid.rs`: run
-`mpv --vo=kitty`/`timg` against a live `make dev` session and confirm no visible stutter in other
-panes/HTTP polling during sustained playback — the fix's *correctness* is tested, but the
-*latency benefit* (this was the whole point) has not been benchmarked, only reasoned about from
-the code. (b) `ImageLayer.verifyOverlapping()`'s fail-open behavior on a `terminal_image_ref_at`
+footprint from being reserved (disclosed behavior change, 3 existing tests updated).
+**Live-verified** against a real `make dev` instance: a real Kitty raw-`f=24` image decoded and
+displayed correctly end-to-end through the actual `pty.rs::process_chunk` path (not just the
+test harness), and the reserve-before-decode-completes behavior confirmed live too. A follow-up
+code review + security review of that fix (commit `484d269b`) found and fixed two more real
+issues: an unbounded `ImageStore` entry-count growth path (a permanently-failed decode never
+evicted its placeholder — now fixed) and a functional regression (the frame ticker's
+stalled-sync-update flush and session-teardown flush could each queue a Kitty decode job without
+ever resolving it — now fixed, and flagged in `AGENTS.md` as a "check every such queue, not just
+`PtyWrite`" lesson). **Still needs a real-tool pass** beyond the unit/integration coverage and
+the one hand-crafted live test already done: run `mpv --vo=kitty`/`timg` against a live
+`make dev` session and confirm no visible stutter in other panes/HTTP polling during *sustained*
+playback — the fix's *correctness* is tested and spot-verified live, but the *latency benefit*
+under real sustained load (this was the whole point) has not been benchmarked, only reasoned
+about from the code. (b) `ImageLayer.verifyOverlapping()`'s fail-open behavior on a `terminal_image_ref_at`
 error could in principle mask a *persistent* backend error (a genuinely-overwritten placement
 never getting cleared) rather than just a transient one — low severity, since `a=d`/alt-screen
 cleanup independently cover the common cases; left open. (c) **Fixed 2026-09-11**: added
