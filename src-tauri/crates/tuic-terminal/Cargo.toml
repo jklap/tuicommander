@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 alacritty_terminal = "0.26.0"
+# Kitty deferred decode (terminal_image_transmission.rs).
+base64 = "0.22"
 dirs = "6"
 lazy_static = "1"
 parking_lot = "0.12"
@@ -22,7 +24,6 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Memory"] }
 
 [dev-dependencies]
-base64 = "0.22"
 flate2 = "1.1"
 tempfile = "3"
 tuic-ansi = { path = "../tuic-ansi" }
