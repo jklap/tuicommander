@@ -535,6 +535,8 @@ exactly how the corrupted value above sailed through validation on every launch)
 - A new push (`AppHandle.emit`, `Channel<T>`, or per-stream broadcast) → bridge it: low-frequency lifecycle/progress events go on `event_bus` → `/events` SSE (add arms to `sse_routes.rs`); high-frequency token streams get a dedicated per-id WS (mirrors the PTY log-mode WS). Keep the desktop `emit` AND the bus/WS path — there is **no** bus→window forwarder, so producers **dual-emit**.
 - Request/response shapes (field names, casing, payload structure) MUST be identical across IPC and HTTP so the same frontend store code works unchanged on both transports.
 
+**Gap found and fixed 2026-09-10:** `get_session_foreground_process` (`pty.rs`, the desktop IPC command) mirrors the detected foreground agent into `session_states.agent_type` — the flag `should_transition_idle_with_hook` reads to pick the shell-idle vs. agent-idle threshold. Its HTTP counterpart, `get_foreground_process` (`mcp_http/session.rs`), used to only compute and return the detected name — it never wrote anything into `session_states` at all, neither the set nor the clear path, so a browser/PWA/remote client polling this endpoint never actually corrected the backend's per-session `agent_type` mirror. Fixed by making the underlying logic a shared `pub(crate) get_session_foreground_process_impl` (not gated to the `desktop` feature — nothing it calls is Tauri-specific, only the `#[tauri::command]` wrapper is) and having the HTTP handler call it directly instead of re-deriving a second copy. If you add a THIRD transport-specific consumer of foreground-process detection, share this same function — don't re-implement the detection logic again.
+
 ## PTY Command Injection
 
 NEVER write text + `\r` directly to a PTY. Always use `sendCommand()` from `src/utils/sendCommand.ts` — it handles agent-specific Enter semantics (Ink raw mode needs split writes). This applies to dictation, command palette, suggested actions, and any other feature that sends input to a terminal.
@@ -770,6 +772,96 @@ which is precisely why the footer is the key.
 `.tcap` captures include user input and can replay SET/CLEAR ordering, but the
 `Awaiting RETRACTION` block must still drive the real event-bus accumulator and
 assert `SessionState` — the thing a tab actually renders.
+
+**The same SET-without-CLEAR shape recurred in a sibling flag, not just
+`awaiting_input`.** `session_states.agent_type` (mirrored by
+`get_session_foreground_process`, `pty.rs`) was sticky *forever* once any
+agent had run in a session — deliberately, to survive a real flaky case (an
+agent's short-lived grandchild like `git`/`sed`/`rg` transiently becoming the
+pgid leader, which must not flip `agent_active_for_parse` off mid-stream) —
+but nothing ever cleared it back to `None` when the foreground genuinely
+became a plain shell again. That kept `should_transition_idle_with_hook`
+selecting the longer `AGENT_IDLE_MS` (2500ms) instead of `SHELL_IDLE_MS`
+(500ms) for a tab whose agent had already exited, which delayed the
+`shell-state: idle` emission the frontend's `useAgentPolling.ts` requires to
+clear `agentType` — visible to the user as the `LastPromptBar` ("Context"
+bar) lingering for seconds after exiting an agent instead of disappearing
+immediately. Fixed by distinguishing *confirmed* shell foreground (a real,
+positive match against the known `SHELLS` list — `fg_is_shell`) from merely
+*unrecognized* foreground (the actually-flaky case): only the confirmed-shell
+case clears the mirror. If you add another sticky per-session flag mirroring
+live process/foreground state, give it the same treatment — a "which case is
+this flag's stickiness actually protecting against" audit, not a blanket
+never-clear.
+
+**Two residual limitations found by review were fixed the same day (2026-09-10),
+plus a fourth, faster trigger added on top:**
+- The confirmed-shell clear used to only fire for a login shell in the
+  hardcoded `SHELLS` list (`pty.rs`, inside `get_session_foreground_process_impl`
+  — there's a second, independent copy of this same list in the unrelated
+  `has_foreground_process` command; they are not the same list and don't need
+  to stay in sync). A shell missing from that list got the original "sticky
+  forever" bug for the exact reason the fix exists to solve. Broadened twice:
+  a few less-common shells (`xonsh`, `elvish`, `ion`, `murex`) were added to
+  the static list, and — more durably — the foreground name is now *also*
+  checked against the session's own recorded `PtySession.shell` basename (set
+  from `resolve_shell()` at PTY creation). TUIC always knows exactly which
+  shell it launched for a given session, so this covers any shell at all, not
+  just ones enumerated in a static list. **A follow-up review caught a real
+  bug in this specific mechanism, since fixed:** `session.shell`'s basename is
+  compared byte-for-byte against `process_name_from_pid`'s detected name —
+  but on Windows, `process_name_from_pid` strips a trailing `.exe`
+  (`pty.rs`'s Windows arm, for consistency with `classify_agent`) while
+  `default_shell()`/`resolve_shell()` always populate `session.shell` WITH
+  `.exe` (`COMSPEC`, or the `"powershell.exe"` fallback). Unfixed, this
+  fallback would silently never match on Windows for any shell not already on
+  the static list, since one side always carries the suffix and the other
+  never does. Fixed by stripping a case-insensitive `.exe` from
+  `session_shell_name` too before comparing.
+- `agent_seen_running` used to be set true by ANY unrecognized non-shell
+  foreground observed while a preset exists — not specifically by the
+  preset's own eventual target binary, since the fallback path that sets it
+  can't tell those apart (`classify_agent` already failed to recognise
+  whatever it saw, which is *why* it fell back to the preset in the first
+  place). A custom-launcher run config whose init command is itself a
+  multi-hop wrapper (e.g. `direnv exec . mytool`, or a non-`exec`'d wrapper
+  script) could have that intervening hop prematurely confirm the preset as
+  "seen running," and a wrapper failing before the real target ever execs
+  could then have the preset wiped by a confirmed shell reappearing —
+  reproducing a narrower version of the original regression. Fixed with a
+  time-based confirmation window (`AGENT_SEEN_RUNNING_CONFIRM_MS`, 1000ms,
+  `SessionState.agent_seen_running_pending_since_ms`): only the *ambiguous*
+  fallback path (no direct `classify_agent` match) has to persist across that
+  window before confirming; a direct match has no such ambiguity and still
+  confirms immediately. This narrows the window to "a wrapper hop that
+  survives over a second before failing," rather than closing it with full
+  PID-based correlation (a bigger change, not pursued — the common case, a
+  preset's init command directly execs the target with no wrapper hop, was
+  never affected either way).
+- **Fourth addition, on top of the above (same day):** all of the above only
+  clear on the *next* `get_session_foreground_process` poll. OSC 133's own
+  prompt marker (`'A'`) is a much faster, event-driven signal — it can only
+  fire once the real shell redraws its prompt, so it's immediate and reliable.
+  `transition_explicit_shell_state_with_hook` now calls the same
+  `clear_agent_type_on_confirmed_shell` helper directly when `hook_state =
+  false` (OSC 133) and `target == SHELL_IDLE`. Deliberately **not** extended
+  to `hook_state = true` (OSC 7770): a hook-instrumented agent's own
+  `state=idle` means it finished this turn and is waiting for the next
+  prompt while the SAME process stays alive (see `handle_tuic_state`'s
+  `AgentBlock` start/end framing) — clearing there would wipe `agent_type`
+  on every ordinary turn boundary, not just on exit. See
+  `agent-signal-architecture.html`'s 2026-09-10 Incident Log entry (main
+  checkout `plans/`) for the full mechanism.
+- **Defensive hardening (same review pass):** `apply_event_to_session_state`'s
+  `SessionCreated` handler (`state.rs`) now also resets `agent_seen_running`/
+  `agent_seen_running_pending_since_ms` to their fresh-session defaults in its
+  `.and_modify` branch (the `.or_insert_with` branch already got this for
+  free from `..Default::default()`). A `SessionCreated` event landing against
+  a *pre-existing* `session_states` entry (session-id reuse, or an
+  out-of-order bus replay racing the synchronous insert at the PTY-creation
+  call site) would otherwise leave a stale `agent_seen_running: true` in
+  place, letting a subsequent confirmed-shell foreground immediately wipe
+  the freshly-set preset before its launcher has even run.
 
 ## Frontend performance instrumentation (`perfDebug`)
 

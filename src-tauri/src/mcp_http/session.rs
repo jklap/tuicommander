@@ -754,21 +754,14 @@ pub(super) async fn get_foreground_process(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let agent = (|| -> Option<String> {
-        let entry = state.sessions.get(&session_id)?;
-        let session = entry.value().lock();
-        #[cfg(not(windows))]
-        {
-            let pgid = session.master.process_group_leader()?;
-            let name = crate::pty::process_name_from_pid(pgid as u32)?;
-            crate::pty::classify_agent(&name).map(|s| s.to_string())
-        }
-        #[cfg(windows)]
-        {
-            drop(session);
-            None
-        }
-    })();
+    // Shares `get_session_foreground_process_impl` with the desktop IPC
+    // command (`pty.rs`) rather than re-deriving the detection separately —
+    // that impl also mirrors the result into `session_states.agent_type`
+    // (set AND, since 2026-09-10, clear), which a bare detection-only
+    // re-implementation here silently skipped, leaving this transport's
+    // `should_transition_idle_with_hook` threshold selection permanently
+    // stale. See AGENTS.md's "IPC / HTTP Parity" section.
+    let agent = crate::pty::get_session_foreground_process_impl(&state, &session_id);
 
     match agent {
         Some(name) => (StatusCode::OK, Json(serde_json::json!({"agent": name}))),
@@ -779,7 +772,13 @@ pub(super) async fn get_foreground_process(
 // --- PTY/terminal read-state queries (browser/remote parity, story 062). ---
 // These mirror the desktop-only `#[tauri::command]`s in pty.rs by reading the
 // same AppState directly — the commands themselves are cfg'd out of the remote
-// build, so the access logic is replicated here (as get_foreground_process does).
+// build, so the access logic is replicated here. `get_foreground_process`
+// above is the exception: it calls straight into `pty.rs`'s
+// `get_session_foreground_process_impl` (not gated to the `desktop` feature,
+// only its `#[tauri::command]` wrapper is), since sharing that exact
+// mutation logic is what keeps this transport's `session_states.agent_type`
+// mirror in sync — a bare re-implementation of the detection alone
+// previously left this transport never observing agent exits at all.
 
 /// Shell state atom ("busy"/"idle") for a session, or null if never produced output.
 pub(super) async fn get_shell_state(
@@ -2213,6 +2212,107 @@ mod tests {
             }
             other => panic!("expected SessionRenamed on a genuine rename, got {other:?}"),
         }
+    }
+
+    /// Spawns a plain `/bin/sh` directly as the PTY's own child (no `-c`
+    /// wrapper — that execs into whatever it's given, e.g. `-c "sleep 30"`
+    /// resolves to the unrelated "sleep" binary, not a confirmed shell,
+    /// which is `insert_dummy_session`'s shape and NOT what this test needs).
+    /// Settles past two distinct, reproduced startup races before returning
+    /// (see `pty.rs`'s identical `insert_idle_shell_session` for the full
+    /// explanation): the pgid not yet reflecting the forked child, and the
+    /// child still running a pre-`execve` copy of the parent's own image.
+    #[cfg(unix)]
+    fn insert_idle_shell_session_for_http_test(state: &AppState, session_id: &str) {
+        use portable_pty::{CommandBuilder, native_pty_system};
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let command = CommandBuilder::new("/bin/sh");
+        let child = pair.slave.spawn_command(command).expect("spawn shell");
+        let child_pid = child.process_id().expect("spawned child has a pid");
+        for _ in 0..150 {
+            let settled = pair.master.process_group_leader() == Some(child_pid as i32)
+                && matches!(
+                    crate::pty::process_name_from_pid(child_pid).as_deref(),
+                    Some("sh") | Some("bash")
+                );
+            if settled {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let writer = pair.master.take_writer().expect("writer");
+        state.sessions.insert(
+            session_id.to_string(),
+            Mutex::new(PtySession {
+                writer: Arc::new(Mutex::new(writer)),
+                master: pair.master,
+                _child: child,
+                paused: Arc::new(AtomicBool::new(false)),
+                worktree: None,
+                cwd: None,
+                display_name: None,
+                display_name_is_custom: false,
+                is_remote: false,
+                shell: "/bin/sh".to_string(),
+            }),
+        );
+    }
+
+    /// `get_foreground_process` used to independently re-derive the detected
+    /// agent name and return it without ever touching `session_states` — the
+    /// HTTP/remote transport's IPC/HTTP parity gap this test guards against.
+    /// It now shares `pty.rs`'s `get_session_foreground_process_impl` with
+    /// the desktop IPC command, so a browser/remote client polling this
+    /// endpoint after an agent exits actually observes the mirror clear, the
+    /// same way the desktop path does (covered by `pty.rs`'s own
+    /// `get_session_foreground_process_clears_sticky_agent_type_on_confirmed_shell`).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn get_foreground_process_mutates_session_states_via_shared_impl() {
+        let state = super::super::tests::test_state();
+        let session_id = "http-foreground-mutates-session-states";
+        insert_idle_shell_session_for_http_test(&state, session_id);
+        state.session_states.insert(
+            session_id.into(),
+            crate::state::SessionState {
+                agent_type: Some("claude".into()),
+                hook_instrumented: true,
+                agent_seen_running: true,
+                ..Default::default()
+            },
+        );
+
+        let mut last = state
+            .session_states
+            .get(session_id)
+            .and_then(|e| e.agent_type.clone());
+        for _ in 0..200 {
+            let _ =
+                get_foreground_process(State(state.clone()), Path(session_id.to_string())).await;
+            let current = state
+                .session_states
+                .get(session_id)
+                .and_then(|e| e.agent_type.clone());
+            if current == last && current.is_none() {
+                break;
+            }
+            last = current;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert_eq!(
+            state.session_states.get(session_id).unwrap().agent_type,
+            None,
+            "the HTTP/remote transport must mutate session_states.agent_type via the \
+             same shared impl the desktop IPC command uses, not silently no-op"
+        );
     }
 
     #[cfg(unix)]

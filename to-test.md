@@ -102,6 +102,97 @@ a plain browser reload once `pnpm build` (or `make dev`) rebuilds `dist/`.
   branch that has never been selected this session (freshly restored, before
   any click) to hit the specific auto-spawn-on-first-select path.
 
+## LastPromptBar / agent idle-threshold lingers after an agent exits back to a plain shell (2026-09-10, backend — needs `make dev` restart)
+
+Bug: after exiting an agent (e.g. `claude` → `/exit` or Ctrl+D) back to a plain
+shell in the same tab, the "Context" bar (`LastPromptBar`, showing
+`Intent: … · Assignment: … · Prompt: …`) stayed visible for a few extra
+seconds instead of disappearing immediately. Root cause:
+`session_states.agent_type` (`get_session_foreground_process`, `pty.rs`) was
+sticky *forever* once any agent had run in a session — by design, to survive
+transient unrecognized grandchildren (`git`/`sed`/`rg`) spawned by a live
+agent — but nothing ever cleared it back to `None` when the foreground
+process was *confirmably* a plain shell again. That kept
+`should_transition_idle_with_hook` selecting the longer `AGENT_IDLE_MS`
+(2500ms) threshold instead of `SHELL_IDLE_MS` (500ms) for a tab that no longer
+had an agent running, delaying the backend's `shell-state: idle` emission —
+the only signal `useAgentPolling.ts`'s `detectAgentForTerminal` accepts to
+clear the frontend's `agentType` (and therefore the `LastPromptBar`/gate in
+`Terminal.tsx`).
+
+Fix, in four parts (`clear_agent_type_on_confirmed_shell` in `pty.rs` is the
+single shared clearing routine all of them funnel through):
+
+1. **Confirmed-shell clear.** `get_session_foreground_process_impl` clears the
+   sticky mirror when the foreground is a *confirmed* shell match (`fg_is_shell`)
+   rather than merely "unrecognized" — this is not the flaky case the
+   stickiness was meant to protect. A first version had a real regression,
+   caught by code review: clearing unconditionally on any confirmed-shell
+   foreground could race `Terminal.tsx`'s pending-init-command flow and
+   permanently wipe a run-config preset for a custom/unrecognized agent
+   launcher (`PtyConfig::agent_type`), since the tab's very first
+   `shell-state: idle` event fires before the init command has even executed.
+   Fixed by adding `SessionState.agent_seen_running` (`state.rs`): the clear
+   now only fires once the session has actually observed a real (recognized
+   or not) non-shell foreground at least once, not merely on a preset that
+   hasn't launched yet.
+2. **HTTP/remote parity.** `mcp_http/session.rs`'s `get_foreground_process`
+   previously re-derived the detected name independently and never touched
+   `session_states` at all — a browser/PWA/remote client's idle-threshold
+   selection never reflected reality. It now calls the same
+   `get_session_foreground_process_impl` the desktop IPC command uses.
+3. **Non-exhaustive shell list.** The static `SHELLS` list can never cover
+   every login shell (xonsh, elvish, ion, murex, …). The confirmed-shell match
+   now *also* checks the session's own recorded `PtySession.shell` basename
+   (set from `resolve_shell()` at PTY creation) — any shell TUIC actually
+   launched clears correctly, not just ones on the static list.
+4. **Multi-hop launcher false positive.** The ambiguous fallback path
+   (unrecognized non-shell, resolved only via the preset) couldn't distinguish
+   "the preset's own launcher" from "an intermediate wrapper hop" (`direnv
+   exec`, a non-`exec`'d wrapper script) — a wrapper failing before the real
+   target ran could still confirm-then-strand the preset. Now requires the
+   ambiguous foreground to persist across `AGENT_SEEN_RUNNING_CONFIRM_MS`
+   (1000ms) before confirming; a direct `classify_agent` match has no such
+   ambiguity and still confirms immediately.
+5. **Fast, event-driven path.** All of the above only clear on the *next*
+   `get_session_foreground_process` poll (busy-debounce or the 30s fallback).
+   `transition_explicit_shell_state_with_hook` now also calls
+   `clear_agent_type_on_confirmed_shell` directly on OSC 133's own prompt
+   marker (`'A'`, `hook_state = false`) — it can only fire once the real shell
+   redraws its prompt, so it's an immediate, reliable "agent has genuinely
+   exited" signal. Deliberately **not** extended to the OSC 7770
+   (`hook_state = true`) path: a hook-instrumented agent's own `state=idle`
+   means it finished this turn and is waiting for the next prompt while the
+   SAME process stays alive — clearing there would wipe `agent_type` on every
+   ordinary turn boundary, not just on exit. See `agent-signal-architecture.html`'s
+   2026-09-10 Incident Log entry (main checkout `plans/`) for the full writeup.
+
+Covered by 8 Rust unit tests across `pty.rs` and `mcp_http/session.rs`, each
+spawning real PTY child processes or driving the shell-state machinery
+directly — no manual repro needed to prove the backend logic, but the
+end-to-end UI timing still needs a human check:
+
+- [ ] Restart `make dev` to pick up the Rust change. Open a terminal tab, run
+  `claude`, let it start, then exit it (`/exit` or Ctrl+D) back to the shell
+  prompt. The "Context" bar at the top of the pane should disappear
+  essentially instantly (OSC 133 path) rather than after any visible delay.
+- [ ] Re-run the same check for another supported agent (e.g. `codex` or
+  `gemini`) to confirm this isn't claude-specific.
+- [ ] Start an agent, let it spawn a real subprocess momentarily (e.g. ask it
+  to run `git status`), and confirm the Context bar does NOT flicker off
+  during that subprocess call — only a genuine exit back to the shell should
+  clear it (this is what one of the unit tests guards at the code level, but
+  a live screen check is cheap insurance).
+- [ ] Launch a session from a run config using a custom/unrecognized launcher
+  alias (a wrapper script or symlink `classify_agent` won't name-match) and
+  confirm the Context bar/intent-parsing still activates normally on first
+  launch — this is the exact scenario the regression above would have broken
+  (the preset getting wiped before the launcher even ran).
+- [ ] Hit `GET http://127.0.0.1:9877/sessions/{id}/foreground` (the `:9877`
+  test instance's HTTP API) on a session before and after exiting an agent in
+  it, confirming the returned `agent` name — and, indirectly via the
+  idle-threshold behavior, the mirror — updates over HTTP too, not just IPC.
+
 ## Worktree file sync: copy/symlink ignored/untracked/explicit files into new worktrees (2026-09-10, backend — needs `make dev` restart)
 
 `copy_ignored_files`/`copy_untracked_files` were previously fully plumbed

@@ -467,6 +467,28 @@ pub(crate) struct SessionState {
     /// Resolved from config when `agent_type` is set; internal, not serialized.
     #[serde(skip)]
     pub hook_instrumented: bool,
+    /// True once `get_session_foreground_process` has actually observed a
+    /// non-shell foreground for this session (recognized or not) — i.e.
+    /// `agent_type` reflects a process that has genuinely been seen running,
+    /// not merely a run-config preset for a launch that hasn't happened yet.
+    /// Only set once this is true does a later confirmed-shell foreground
+    /// clear `agent_type` back to `None`: a fresh session's preset (from a
+    /// custom/unrecognized agent launcher's run config) starts as a plain
+    /// shell before its init command has even been sent, and clearing on
+    /// that unconditionally would permanently wipe the preset with no path
+    /// to restore it, since `classify_agent` never matches a custom binary.
+    /// Internal bookkeeping only, not serialized.
+    #[serde(skip)]
+    pub agent_seen_running: bool,
+    /// Epoch ms when an *ambiguous* non-shell foreground (unrecognized,
+    /// resolved only via the preset fallback) was first observed but not yet
+    /// old enough to latch `agent_seen_running` — see
+    /// `AGENT_SEEN_RUNNING_CONFIRM_MS` in `pty.rs`. `None` when no such
+    /// window is pending (including once it has latched, or after a
+    /// confirmed-shell foreground resets it). Internal bookkeeping only, not
+    /// serialized.
+    #[serde(skip)]
+    pub agent_seen_running_pending_since_ms: Option<u64>,
     /// Last API error, if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
@@ -3468,6 +3490,17 @@ impl AppState {
                     .and_modify(|session| {
                         session.last_activity_ms = now_ms;
                         session.agent_type = agent_type.clone();
+                        // A fresh SessionCreated always means "nothing has run
+                        // yet" — reset both, so a stale agent_seen_running left
+                        // over from a pre-existing entry (session-id reuse, or
+                        // an out-of-order bus replay racing the synchronous
+                        // insert at the PTY-creation call site) can't let a
+                        // subsequent confirmed-shell foreground immediately
+                        // wipe this freshly-set preset before its launcher has
+                        // even run — the exact regression this mirror's
+                        // clearing logic exists to avoid, from a different path.
+                        session.agent_seen_running = false;
+                        session.agent_seen_running_pending_since_ms = None;
                     })
                     .or_insert_with(|| SessionState {
                         last_activity_ms: now_ms,
