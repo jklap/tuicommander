@@ -30,6 +30,33 @@ impl Drop for RecordingGuard<'_> {
     }
 }
 
+/// Below this ratio of final-pass text to streaming-partial text, the final pass
+/// returned less than the streaming windows already had — which is what window
+/// tail loss looks like from the outside.
+///
+/// Set at 0.9 rather than 0.8 because the incident that motivated the warning
+/// landed at 81.5% (full=1175 against composed=1442) and an 80% line would have
+/// stayed silent on it. A warning that misses the case it exists for is worth
+/// less than an occasional false positive, which costs one log line.
+const SHORT_TRANSCRIPTION_RATIO: f64 = 0.9;
+
+/// How much of the streaming partials survived into the final transcription.
+///
+/// Characters on both sides. `String::len()` counts bytes, so an accented
+/// dictation measures longer than it reads and any ratio built on it lies. The
+/// metric this replaced compared a common-PREFIX character count against a byte
+/// length: one differing leading space reported 0% and said nothing at all about
+/// how much text was missing.
+///
+/// `None` when there are no partials to compare against.
+fn transcription_ratio(full: &str, composed: &str) -> Option<f64> {
+    let composed_chars = composed.chars().count();
+    if composed_chars == 0 {
+        return None;
+    }
+    Some(full.chars().count() as f64 / composed_chars as f64)
+}
+
 /// RAII guard that resets the processing flag to false on drop (including panic).
 /// Holds an `Arc<AtomicBool>` so it can be moved into `spawn_blocking`.
 struct ProcessingGuard(Arc<std::sync::atomic::AtomicBool>);
@@ -582,29 +609,35 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
 
         // Log accuracy comparison (lengths only — no verbatim text to avoid PII in logs)
         let composed = std::mem::take(&mut *accumulated_partials.lock());
-        let match_pct = if !composed.is_empty() && !final_text.is_empty() {
-            let common = final_text
-                .chars()
-                .zip(composed.chars())
-                .take_while(|(a, b)| a == b)
-                .count();
-            let max_len = final_text.len().max(composed.len());
-            (common as f64 / max_len as f64 * 100.0).round() as u32
-        } else {
-            0
-        };
+        let full_chars = final_text.chars().count();
+        let composed_chars = composed.chars().count();
+        let ratio = transcription_ratio(&final_text, &composed);
         app_logger::log_via_handle(
             &app_clone,
             "info",
             "dictation",
             &format!(
-                "[accuracy] full={} chars, composed={} chars, match={}%, audio={:.1}s",
-                final_text.len(),
-                composed.len(),
-                match_pct,
+                "[accuracy] full={} chars, composed={} chars, ratio={}, audio={:.1}s",
+                full_chars,
+                composed_chars,
+                ratio.map_or_else(|| "n/a".to_string(), |r| format!("{:.0}%", r * 100.0)),
                 total_duration_s
             ),
         );
+        // The final pass is normally the LONGER of the two — streaming skips
+        // VAD-silent windows. Coming back shorter means it lost text the
+        // streaming windows already had, which is the shape of window tail loss.
+        if ratio.is_some_and(|r| r < SHORT_TRANSCRIPTION_RATIO) {
+            app_logger::log_via_handle(
+                &app_clone,
+                "warn",
+                "dictation",
+                &format!(
+                    "Final transcription is shorter than the streaming partials: full={full_chars} chars against composed={composed_chars} chars (below {:.0}%)",
+                    SHORT_TRANSCRIPTION_RATIO * 100.0
+                ),
+            );
+        }
 
         // Apply corrections
         let corrected = corrections.lock().correct(&final_text);
@@ -777,6 +810,55 @@ mod tests {
             ..Default::default()
         })
         .expect("config save");
+    }
+
+    /// The old metric compared a common-prefix character count against a byte
+    /// length, so one differing leading space read as 0% and said nothing about
+    /// how much text the final pass had lost. The ratio says exactly that.
+    #[test]
+    fn the_accuracy_ratio_compares_character_counts() {
+        // Accented dictation: 3 characters, 4 bytes on the composed side. A byte
+        // ratio would report the final pass as having lost text it kept.
+        let ratio = transcription_ratio("città", "città").expect("both sides present");
+        assert!((ratio - 1.0).abs() < 1e-9, "identical text is 1.0, got {ratio}");
+    }
+
+    /// A final pass that lost a whole window trips the warning.
+    #[test]
+    fn a_final_pass_that_lost_a_window_is_below_the_warning_ratio() {
+        let ratio = transcription_ratio(&"x".repeat(1000), &"x".repeat(1442)).expect("present");
+        assert!(ratio < SHORT_TRANSCRIPTION_RATIO, "1000/1442 = {ratio}");
+    }
+
+    /// The reported incident — full=1175 against composed=1442 — lands at 81.5%.
+    /// The threshold exists to catch exactly this, so it has to warn here: an
+    /// earlier 0.8 line sat below the incident and would have stayed silent on
+    /// the very recording that motivated the warning.
+    #[test]
+    fn the_reported_incident_trips_the_warning_ratio() {
+        let ratio = transcription_ratio(&"x".repeat(1175), &"x".repeat(1442)).expect("present");
+
+        assert!((ratio - 0.815).abs() < 0.001, "1175/1442 = {ratio}");
+        assert!(ratio < SHORT_TRANSCRIPTION_RATIO, "must trip the warning");
+    }
+
+    /// A final pass that merely tidies the partials is not a loss — the warning
+    /// has to stay quiet there or it fires on every ordinary dictation.
+    #[test]
+    fn a_final_pass_close_to_the_partials_does_not_warn() {
+        let ratio = transcription_ratio(&"x".repeat(95), &"x".repeat(100)).expect("present");
+        assert!(ratio >= SHORT_TRANSCRIPTION_RATIO, "95/100 = {ratio}");
+
+        // The final pass is routinely LONGER: streaming skips VAD-silent windows.
+        let ratio = transcription_ratio(&"x".repeat(140), &"x".repeat(100)).expect("present");
+        assert!(ratio >= SHORT_TRANSCRIPTION_RATIO, "140/100 = {ratio}");
+    }
+
+    /// With no partials there is nothing to compare against, and dividing by zero
+    /// would report every such run as a loss.
+    #[test]
+    fn no_partials_means_no_ratio() {
+        assert!(transcription_ratio("run the tests", "").is_none());
     }
 
     /// The gates are read from the config on every start, so a config written

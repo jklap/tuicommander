@@ -1455,3 +1455,26 @@ payload and the sidebar would look like nothing happening.
 6. [ ] **MCP `repo action=worktree_remove` now requires `workspace_id`.** A call
    passing only `branch` must be refused with a message naming `workspace_id`.
    Get an id from `repo action=worktree_list` first.
+
+## Long dictation keeps its window tails (story `738-1e31`, 2026-09-11) — **Rust, needs a `make dev` restart**
+
+The final whole-recording whisper pass used to run with the streaming flags
+(`single_segment`, `no_timestamps`) at any length. Above one 30 s whisper window
+those flags make `seek` advance a full window regardless of how much the decoder
+reached, so every window silently lost its tail. The flags are now chosen by
+audio length, and the no-speech gate filters per segment instead of discarding
+the whole transcript on its worst segment.
+
+1. [ ] **Dictate for more than 60 s.** The final text must not be shorter than
+   the streaming partials that appeared while speaking. Check
+   `GET http://localhost:9876/logs?source=dictation`: the `[accuracy]` line now
+   reports `ratio=` instead of `match=`, and a ratio under 90% also logs a
+   warning naming both character counts. A ratio at or above 100% is the normal
+   case — streaming skips VAD-silent windows.
+2. [ ] **A pause mid-dictation no longer eats the transcript.** Dictate, stay
+   silent for several seconds, then keep dictating. Both halves must arrive; the
+   silent stretch is now dropped as one segment rather than rejecting everything.
+3. [ ] **Short dictation is unchanged.** A few seconds of speech still
+   transcribes, and dictating into a silent room still produces nothing rather
+   than invented subtitle boilerplate — that suppression relies on the flags the
+   short path still sets.
