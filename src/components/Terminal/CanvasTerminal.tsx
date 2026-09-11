@@ -85,6 +85,7 @@ import {
 import { installFrameTimingDebugHook, isFrameTimingEnabled, recordFrameTiming, resetFrameTiming } from "./frameTiming";
 import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } from "./glyphCache";
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
+import { ImageLayer, type ImagePlacement } from "./imageLayer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml, shouldShowScrollbar } from "./scrollbarMarks";
@@ -165,6 +166,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// Behind the base canvas: paints only the one row above and one below the
 	// viewport, revealed as the stage slides. Never used for hit-testing.
 	let overscanCanvasRef!: HTMLCanvasElement;
+	// Inline images (color-tools plan, Phase 5): a dedicated layer between the
+	// glyph/background canvas and the overlay canvas, so an image always
+	// occludes text underneath it but never the cursor/selection/search
+	// overlay drawn on top. See `imageLayer.ts`'s doc comment for what z-index
+	// handling this pass does and doesn't cover.
+	let imageCanvasRef!: HTMLCanvasElement;
+	let ictx!: CanvasRenderingContext2D;
+	let imageLayer: ImageLayer | null = null;
 	let ctx!: CanvasRenderingContext2D;
 	let octx!: CanvasRenderingContext2D;
 	let octxOverscan: CanvasRenderingContext2D | null = null;
@@ -606,6 +615,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		overlayCanvasRef.style.height = `${logicalH}px`;
 		octx.scale(dpr, dpr);
 		octx.translate(GUTTER_PX, 0);
+		if (ictx) {
+			imageCanvasRef.width = logicalW * dpr;
+			imageCanvasRef.height = logicalH * dpr;
+			imageCanvasRef.style.width = `${logicalW}px`;
+			imageCanvasRef.style.height = `${logicalH}px`;
+			ictx.setTransform(1, 0, 0, 1, 0, 0);
+			ictx.scale(dpr, dpr);
+			ictx.translate(GUTTER_PX, 0);
+		}
 
 		// Overscan canvas (smooth scroll): one extra row above and below the viewport.
 		// Positioned -cellHeight so its drawing y=0 maps to the row just above the
@@ -704,7 +722,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		updateSuggestOverlay(frame, m, dirtyIndices);
 	}
 
+	function repaintImages(frame: DecodedFrame, m: CellMetrics) {
+		if (!ictx || !imageLayer) return;
+		ictx.clearRect(-GUTTER_PX, 0, imageCanvasRef.width / m.dpr, imageCanvasRef.height / m.dpr);
+		imageLayer.paint(ictx, frame, m);
+	}
+
 	function repaintOverlay(frame: DecodedFrame, m: CellMetrics) {
+		repaintImages(frame, m);
 		octx.clearRect(-GUTTER_PX, 0, overlayCanvasRef.width / m.dpr, overlayCanvasRef.height / m.dpr);
 		paintSelection(m);
 		paintSearchHighlights(m);
@@ -2432,6 +2457,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		octx = overlayCtx;
 
+		const imageCtx = imageCanvasRef.getContext("2d", { alpha: true });
+		if (imageCtx) ictx = imageCtx;
+
 		const baseCtx = canvasRef.getContext("2d", { alpha: false });
 		if (!baseCtx) {
 			appLogger.error("terminal", "Failed to acquire canvas 2D context");
@@ -2453,6 +2481,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// The grid subscription stays below: frames replay on subscribe.
 		transport = createTransport(props.sessionId);
 		invokeRef = (cmd, args) => transport!.invoke(cmd, args);
+		imageLayer = new ImageLayer(props.sessionId, invokeRef, () => {
+			const m = metrics();
+			if (currentFrame && m) repaintImages(currentFrame, m);
+		});
 		// Teardown covering what exists right now: unmounting during the font load
 		// below must not leave these listeners attached. Widened to the DOM
 		// listeners further down, once those exist.
@@ -2477,6 +2509,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			await transport.onEvent("watcher-lines", (payload) => {
 				const { lines } = payload as { lines: Array<{ text: string; matched_ids: string[] }> };
 				pluginRegistry.handleWatcherLines(props.sessionId, lines);
+			});
+			// Inline images (color-tools plan, Phase 5). Field names match on
+			// both transports (desktop Tauri event payload and the WS JSON
+			// frame) — see `mcp_http/session.rs`'s `grid_ws_frame`.
+			await transport.onEvent("image-placement", (payload) => {
+				imageLayer?.upsert(payload as ImagePlacement);
+				const m = metrics();
+				if (currentFrame && m) repaintImages(currentFrame, m);
+			});
+			await transport.onEvent("image-placements-cleared", () => {
+				imageLayer?.clearAndRehydrate().then(() => {
+					const m = metrics();
+					if (currentFrame && m) repaintImages(currentFrame, m);
+				});
 			});
 		} catch (e) {
 			appLogger.error("terminal", "Failed to subscribe to terminal session events", {
@@ -3545,6 +3591,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// idempotent on desktop and fixes the black-on-load in browser mode.
 			noteFrameRequest();
 			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+			// Hydrate any placements that existed before this listener attached —
+			// the live "image-placement" event only carries new ones from here on.
+			imageLayer?.hydrate().then(() => {
+				const m = metrics();
+				if (currentFrame && m) repaintImages(currentFrame, m);
+			});
 		} catch (e) {
 			appLogger.error("terminal", "Failed to subscribe to terminal grid channel", {
 				sessionId: props.sessionId,
@@ -3633,6 +3685,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				hiddenAck.cancel();
 				framesReceived = 0;
 				await transport?.resubscribe();
+				// A fresh (re)subscribe only carries new placements from here on —
+				// re-fetch the full set the same way the initial mount does.
+				imageLayer?.hydrate().then(() => {
+					const m = metrics();
+					if (currentFrame && m) repaintImages(currentFrame, m);
+				});
 			},
 			searchFind: async (query: string, blockScope?: boolean) => {
 				if (!query || !invokeRef) {
@@ -3966,6 +4024,18 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 							cursor: "text",
 						}}
 						tabIndex={0}
+					/>
+					{/* Inline-image layer (color-tools plan, Phase 5): above glyphs/backgrounds,
+					    below the cursor/selection overlay — an image occludes text but never the
+					    cursor. See imageLayer.ts's doc comment for z-index scope. */}
+					<canvas
+						ref={imageCanvasRef!}
+						style={{
+							position: "absolute",
+							top: "0",
+							left: "0",
+							"pointer-events": "none",
+						}}
 					/>
 					{/* Overlay canvas: cursor, selection, search highlights — redrawn every frame without touching base canvas */}
 					<canvas

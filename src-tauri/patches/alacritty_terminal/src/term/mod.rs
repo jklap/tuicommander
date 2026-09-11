@@ -13,7 +13,7 @@ use bitflags::bitflags;
 use log::{debug, trace};
 use unicode_width::UnicodeWidthChar;
 
-use crate::event::{Event, EventListener};
+use crate::event::{Event, EventListener, ImagePlacementInfo};
 use crate::grid::{Dimensions, Grid, GridIterator, Scroll};
 use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
@@ -1406,9 +1406,10 @@ impl<T: EventListener> Term<T> {
         };
         // iTerm2 has no explicit placement-id concept (unlike Kitty) — an
         // image is only ever displayed once, so its own id doubles as the
-        // placement id.
+        // placement id. iTerm2 also has no z-index concept: it always paints
+        // above everything else, z=0, same as Kitty's default.
         let placement_id = image.image_id;
-        self.reserve_image_footprint(image, placement_id, cols, rows);
+        self.reserve_image_footprint(image, placement_id, cols, rows, 0);
     }
 
     /// Reserve `cols x rows` cells starting at the current cursor position
@@ -1427,11 +1428,22 @@ impl<T: EventListener> Term<T> {
         placement_id: u32,
         cols: u32,
         rows: u32,
+        z_index: i32,
     ) {
         let start_col = self.grid.cursor.point.column.0;
         let available_cols = self.columns().saturating_sub(start_col).max(1);
         let footprint_cols = (cols as usize).min(available_cols);
         let footprint_rows = rows.max(1);
+
+        // Eviction-stable absolute row of the placement's top-left corner —
+        // same `history_base + grid_relative` addressing `terminal_grid.rs`'s
+        // `hyperlink_span` already uses, simplified: `history_base +
+        // (line.0 + history_size) == total_scrolled() + line.0` (since
+        // `history_base == total_scrolled() - history_size`). Captured before
+        // this reservation's own `linefeed()` calls move both the cursor and
+        // `total_scrolled()`.
+        let abs_row = (self.grid.total_scrolled() as i64 + self.grid.cursor.point.line.0 as i64)
+            .max(0) as u32;
 
         for row in 0..footprint_rows {
             if row > 0 {
@@ -1445,12 +1457,24 @@ impl<T: EventListener> Term<T> {
                     placement_id,
                     col as u16,
                     row as u16,
+                    z_index,
                 );
                 self.grid[line][column].set_image_ref(Some(cell_ref));
             }
         }
         self.linefeed();
         self.carriage_return();
+
+        self.event_proxy
+            .send_event(Event::ImagePlacement(ImagePlacementInfo {
+                placement_id,
+                image_id: image.image_id,
+                abs_row,
+                col: start_col as u16,
+                rows: footprint_rows as u16,
+                cols: footprint_cols as u16,
+                z_index,
+            }));
     }
 
     /// Kitty graphics protocol entry point (color-tools plan, Phase 3). See
@@ -1514,8 +1538,22 @@ impl<T: EventListener> Term<T> {
             }
             kitty::Action::Delete => {
                 match control.delete_target {
-                    Some('a') | Some('A') => self.event_proxy.forget_all_images(),
-                    Some('i') | Some('I') => self.event_proxy.forget_image(control.image_id),
+                    Some('a') | Some('A') => {
+                        self.event_proxy.forget_all_images();
+                        self.event_proxy.send_event(Event::ImagePlacementsCleared);
+                    }
+                    Some('i') | Some('I') => {
+                        self.event_proxy.forget_image(control.image_id);
+                        // `d=i`/`d=I` deletes an *image* by id, not a specific
+                        // placement — but with only one placement id known
+                        // here (none; the wire form doesn't carry `p=` for
+                        // this variant), the renderer can't be told which
+                        // placement(s) to drop by id alone. Signal a full
+                        // resync instead of guessing; the placement list is
+                        // cheap enough to re-fetch (a full grid scan) on the
+                        // rare `a=d` case.
+                        self.event_proxy.send_event(Event::ImagePlacementsCleared);
+                    }
                     _ => {} // other d= variants not implemented
                 }
                 self.kitty_respond_ok(&control);
@@ -1632,10 +1670,10 @@ impl<T: EventListener> Term<T> {
             // simplification rather than reimplementing full
             // reserve-without-scroll-disturbance semantics.
             let saved = self.grid.cursor.point;
-            self.reserve_image_footprint(image, placement_id, cols, rows);
+            self.reserve_image_footprint(image, placement_id, cols, rows, control.z_index);
             self.grid.cursor.point = saved;
         } else {
-            self.reserve_image_footprint(image, placement_id, cols, rows);
+            self.reserve_image_footprint(image, placement_id, cols, rows, control.z_index);
         }
     }
 }
@@ -2634,6 +2672,13 @@ impl<T: EventListener> Handler for Term<T> {
             NamedPrivateMode::SwapScreenAndSetRestoreCursor => {
                 if !self.mode.contains(TermMode::ALT_SCREEN) {
                     self.swap_alt();
+                    // Image placements are primary-screen-only (color-tools
+                    // plan, Architecture) — entering the alt screen hides
+                    // them all; a renderer re-hydrates once the primary
+                    // screen is visible again rather than tracking which
+                    // placements survive across the swap (none do, by
+                    // design).
+                    self.event_proxy.send_event(Event::ImagePlacementsCleared);
                 }
             }
             NamedPrivateMode::ShowCursor => self.mode.insert(TermMode::SHOW_CURSOR),
@@ -2699,6 +2744,12 @@ impl<T: EventListener> Handler for Term<T> {
             NamedPrivateMode::SwapScreenAndSetRestoreCursor => {
                 if self.mode.contains(TermMode::ALT_SCREEN) {
                     self.swap_alt();
+                    // Returning to the primary screen: any placements
+                    // reserved there before the alt-screen visit are still
+                    // physically on their cells (never touched), but the
+                    // renderer dropped them all on the way in, so it needs a
+                    // fresh hydration query rather than an incremental event.
+                    self.event_proxy.send_event(Event::ImagePlacementsCleared);
                 }
             }
             NamedPrivateMode::ShowCursor => self.mode.remove(TermMode::SHOW_CURSOR),
