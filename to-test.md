@@ -3250,12 +3250,18 @@ section needs a human running the rebuilt app, not just re-running tests.
   `terminal_image_bytes` response carries no width/height/format metadata a raw-pixel decode would
   need. iTerm2's `File=` and Kitty's default `f=100` PNG (everything `imgcat`/`imgls`/`divider`
   and most real Kitty clients actually send) both render fine.
-- [ ] Diagnostics-ring elision (color-tools plan, Architecture: PTY flight-recorder rings must
-  not have a large image payload's base64 bytes evict their whole history) is **not implemented**.
-  A large image transmission will currently consume a large fraction of `pty_raw_rings`'
-  2 MB cap and any in-flight `.tcap` capture. Deliberately deferred rather than rushed into the
-  PTY reader thread's hot loop (AGENTS.md flags this as one of the most regression-prone spots in
-  the codebase) — needs its own careful pass with a live capture to verify, not just unit tests.
+- [ ] Diagnostics-ring elision (color-tools plan, Phase 8, `image_payload_elision.rs`) is now
+  implemented: an OSC 1337/Kitty APC payload is replaced with a short placeholder before it reaches
+  `pty_raw_rings` or a `.tcap` capture. Covered by unit tests (including one against the same real
+  captured `tuic divider` bytes `terminal_grid.rs`'s end-to-end parser test uses), but the PTY
+  reader thread's hot loop (AGENTS.md flags this as one of the most regression-prone spots in the
+  codebase) deserves its own live-capture pass, not just unit tests: run a real image tool (`tuic
+  imgcat`/`chafa -f kitty`) against a `make dev` session, then enable capture mode
+  (`POST /diagnostics/capture`) and confirm the resulting `.tcap` shows `<image N bytes elided>`
+  in place of the base64 payload while the image still displays correctly on screen (proving the
+  real parser saw the unelided bytes). Also worth confirming: a payload that straddles a PTY
+  `read()` boundary (a large image) is passed through unelided rather than partially elided —
+  by design, not a bug, but worth seeing once with a real large image.
 - [ ] `CSI 14 t`/`CSI 16 t`/XTVERSION replies: confirm against a real client. `timg -pk` and
   `broot` are the easiest first targets — `broot`'s env-based detection already matches our
   `TERM_PROGRAM=ghostty` with zero further changes needed.

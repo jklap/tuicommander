@@ -408,11 +408,22 @@ real cell pixel size before they'll attempt to display anything:
   avoids.
 - **`inline=0`** (the default when omitted) is a display no-op, not a
   write-to-disk — the download path is out of scope for now.
-- **Known gap**: the PTY flight-recorder rings (`pty_raw_rings`,
-  `OUTPUT_RING_BUFFER_CAPACITY`) do not elide image payload bytes, so a large
-  transmission can consume a large fraction of their 2 MB cap. Deliberately
-  deferred rather than modifying the reader thread's hot loop under time
-  pressure — see `to-test.md`.
+- **Diagnostics-ring elision** (Phase 8, `image_payload_elision.rs`): an OSC
+  1337/Kitty APC payload is replaced with a short `<image N bytes elided>`
+  placeholder before it reaches the PTY flight-recorder ring (`pty_raw_rings`)
+  or a `.tcap` capture (`pty_capture::record`) — both are pure debugging aids
+  (AGENTS.md's "capture before you theorise"), and a single large
+  transmission would otherwise evict most of the ring's 2 MB cap or overflow
+  a capture's 512 KB one outright. The real parser downstream is never
+  touched by this — it always sees the original, unelided bytes.
+  **Deliberately NOT applied to `output_buffers`/`broadcast_to_ws_clients`**
+  (`state.rs`) — unlike the two sinks above, that ring is a real client's
+  live raw-stream + reconnect-replay source, not a debugging aid; eliding
+  there would visibly break image display for whatever consumes it. Scope
+  is also deliberately narrow: only a sequence fully contained within one
+  `read()`'s bytes is elided — one split across a read boundary (a large
+  image straddling a 64 KB read) passes through unelided, same as before
+  this change, so there is no new failure mode, only a strict improvement.
 - **Frontend renderer** (Phase 5): `src/components/Terminal/imageLayer.ts` +
   a dedicated canvas layer in `CanvasTerminal.tsx`, between the glyph canvas
   and the cursor/selection overlay. See `docs/frontend/terminal-features.md`
@@ -476,13 +487,14 @@ implement the protocol itself.
   storing it as a glyph — is not implemented. See `kitty.rs`'s module doc
   comment for why (the diacritic table is large and easy to get subtly
   wrong without a canonical reference to verify against).
-- **Known gap**: same diagnostics-ring gap as OSC 1337, above. The Phase 5
-  frontend renderer covers Kitty placements too (any `z` renders in the same
-  above-text layer today — see `docs/frontend/terminal-features.md` for the
-  z-index scope), but raw `f=24`/`f=32` pixel payloads (no container) don't
-  decode client-side yet, since `createImageBitmap` needs a real image
-  container and today's `terminal_image_bytes` carries no width/height/format
-  metadata a raw-pixel decode would need.
+- **Known gap**: the Phase 5 frontend renderer covers Kitty placements too
+  (any `z` renders in the same above-text layer today — see
+  `docs/frontend/terminal-features.md` for the z-index scope), but raw
+  `f=24`/`f=32` pixel payloads (no container) don't decode client-side yet,
+  since `createImageBitmap` needs a real image container and today's
+  `terminal_image_bytes` carries no width/height/format metadata a raw-pixel
+  decode would need. Diagnostics-ring elision (above) covers Kitty APC
+  payloads the same way it covers OSC 1337.
 
 ## Shell Environment Variables
 
