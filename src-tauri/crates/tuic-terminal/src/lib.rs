@@ -10,6 +10,9 @@ pub mod terminal_grid;
 // whole design exists for) in the meantime.
 #[allow(dead_code)]
 pub mod terminal_images;
+// Kitty `t=f`/`t=t`/`t=s` transmission-medium readers (color-tools plan, Phase 6).
+#[allow(dead_code)]
+pub mod terminal_image_transmission;
 
 pub mod vt_log;
 
