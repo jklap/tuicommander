@@ -87,6 +87,23 @@
   white-space: nowrap;
 }
 
+.dropdownPlaceholder {
+  color: var(--fg-muted);
+}
+
+.baseRefWarning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: var(--font-sm);
+  color: var(--warning);
+}
+
+.warningIcon {
+  flex-shrink: 0;
+}
+
 .dropdownChevron {
   flex-shrink: 0;
   opacity: 0.5;
