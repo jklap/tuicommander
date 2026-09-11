@@ -145,6 +145,48 @@ describe("ImageLayer", () => {
 		expect(invoke.mock.calls.filter((c) => c[0] === "terminal_image_bytes")).toHaveLength(1);
 	});
 
+	// color-tools plan: Kitty decode deferred off the vt_log lock means a
+	// placement can arrive (and a first paint attempt fire) before the
+	// backend's decode job has actually finished — a fetch landing in that
+	// window sees empty bytes, same as the permanent-failure case above.
+	// `invalidateImage` (driven by the backend's `image-decoded` signal, once
+	// the real bytes are ready) is what turns that into a retry instead of a
+	// second permanent failure.
+	it("invalidateImage clears a failed fetch and the next paint attempt retries", async () => {
+		let bytesReady = false;
+		const invoke = vi.fn(async (cmd: string) => {
+			if (cmd !== "terminal_image_bytes") return [];
+			return bytesReady ? PNG_BYTES : new ArrayBuffer(0);
+		});
+		const onSettled = vi.fn();
+		const layer = new ImageLayer("s1", invoke, onSettled);
+		layer.upsert({ placementId: 1, imageId: 9, absRow: 0, col: 0, rows: 1, cols: 1, zIndex: 0 });
+		const ctx = fakeCtx();
+
+		// First attempt races the still-in-flight decode: empty bytes.
+		layer.paintAboveText(ctx, frame(), metrics());
+		await vi.waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
+		layer.paintAboveText(ctx, frame(), metrics());
+		expect(ctx.drawImage).not.toHaveBeenCalled();
+
+		// Decode actually finishes; the backend signals it.
+		bytesReady = true;
+		layer.invalidateImage(9);
+		layer.paintAboveText(ctx, frame(), metrics());
+		expect(ctx.drawImage).not.toHaveBeenCalled(); // loading again
+		await vi.waitFor(() => expect(onSettled).toHaveBeenCalledTimes(2));
+
+		layer.paintAboveText(ctx, frame(), metrics());
+		expect(ctx.drawImage).toHaveBeenCalledTimes(1);
+		expect(invoke.mock.calls.filter((c) => c[0] === "terminal_image_bytes")).toHaveLength(2);
+	});
+
+	it("invalidateImage on an image with no cache entry is a harmless no-op", () => {
+		const invoke = vi.fn(async (_cmd: string) => []);
+		const layer = new ImageLayer("s1", invoke, vi.fn());
+		expect(() => layer.invalidateImage(999)).not.toThrow();
+	});
+
 	it("hydrate() populates placements from the terminal_image_placements tuple shape", async () => {
 		const invoke = vi.fn(async (cmd: string) => {
 			if (cmd === "terminal_image_placements") return [[1, 7, 5, 2, 3, 4, -1]];

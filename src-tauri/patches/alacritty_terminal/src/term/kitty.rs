@@ -211,6 +211,139 @@ pub fn error_response(image_id: u32, code: &str, message: &str) -> String {
     format!("\x1b_Gi={image_id};{code}:{message}\x1b\\")
 }
 
+/// A Kitty transmission decode failure — `code`/`message` map directly onto
+/// `error_response`'s wire format.
+#[derive(Debug, Clone, Copy)]
+pub struct KittyDecodeError {
+    pub code: &'static str,
+    pub message: &'static str,
+}
+
+/// Final, ready-to-store form of a decoded Kitty transmission.
+pub struct DecodedImagePayload {
+    pub bytes: Vec<u8>,
+    pub mime: String,
+    pub intrinsic_width: u32,
+    pub intrinsic_height: u32,
+}
+
+/// Finish decoding a Kitty transmission, given the medium-resolved bytes —
+/// i.e. after base64 decode and, for `t=f`/`t=t`/`t=s`, the actual file/
+/// shared-memory read (this function never does I/O itself, so it runs the
+/// same whether called synchronously or from a deferred job): zlib inflate
+/// if `o=z`, then either raw-format trim (`f=24`/`f=32`) or PNG dimension
+/// sniff (`f=100`). Shared verbatim between the still-synchronous PNG-auto-
+/// size path (`term/mod.rs`) and the deferred post-lock decode path
+/// (color-tools plan) so there is one implementation, not two.
+pub fn finish_decode(
+    format: Format,
+    compressed: bool,
+    width_px: u32,
+    height_px: u32,
+    bytes: Vec<u8>,
+) -> Result<DecodedImagePayload, KittyDecodeError> {
+    // `o=z`: the pixel/PNG payload itself is zlib-compressed, orthogonal to
+    // which medium delivered it. Bounded — an unbounded `read_to_end` on a
+    // zlib stream is a classic decompression bomb (a few KB of compressed
+    // all-zero data can expand to gigabytes) — via `Read::take` at one byte
+    // past the cap: if the inflated output fills that allowance exactly,
+    // there was more data than the cap allows.
+    const MAX_INFLATED_BYTES: u64 = 64 * 1024 * 1024;
+    let bytes = if compressed {
+        use std::io::Read;
+        let mut inflated = Vec::new();
+        let mut limited = flate2::read::ZlibDecoder::new(&bytes[..]).take(MAX_INFLATED_BYTES + 1);
+        if limited.read_to_end(&mut inflated).is_err() {
+            return Err(KittyDecodeError {
+                code: "EINVAL",
+                message: "payload is not valid zlib-compressed data",
+            });
+        }
+        if inflated.len() as u64 > MAX_INFLATED_BYTES {
+            return Err(KittyDecodeError {
+                code: "EINVAL",
+                message: "decompressed payload exceeds the size limit",
+            });
+        }
+        inflated
+    } else {
+        bytes
+    };
+    if bytes.is_empty() {
+        return Err(KittyDecodeError {
+            code: "EINVAL",
+            message: "empty payload",
+        });
+    }
+
+    let (intrinsic_width, intrinsic_height, mime, bytes) = match format {
+        Format::Rgb | Format::Rgba => {
+            let channels: u32 = if format == Format::Rgb { 3 } else { 4 };
+            let expected = (width_px as usize)
+                .saturating_mul(height_px as usize)
+                .saturating_mul(channels as usize);
+            // Raw formats carry no container/length field of their own —
+            // `s=`/`v=` (width/height) are the only source of truth for how
+            // many bytes are real pixel data. Trim rather than trust the
+            // medium's own length: a `t=s` shared-memory segment can be
+            // page-rounded larger than the client's payload (observed on
+            // macOS), and a client could in principle send extra trailing
+            // bytes over `t=d`/`t=f` too. Never *pad* upward — a short read
+            // is a real transmission problem, not something to zero-fill.
+            if bytes.len() < expected {
+                return Err(KittyDecodeError {
+                    code: "EINVAL",
+                    message: "payload shorter than width*height*channels",
+                });
+            }
+            let mime = if channels == 3 { "raw-rgb" } else { "raw-rgba" };
+            (
+                width_px,
+                height_px,
+                mime.to_string(),
+                bytes[..expected].to_vec(),
+            )
+        }
+        Format::Png => {
+            let (w, h) = crate::term::iterm2::sniff_image_dimensions(&bytes).unwrap_or((0, 0));
+            (w, h, "image/png".to_string(), bytes)
+        }
+    };
+
+    Ok(DecodedImagePayload {
+        bytes,
+        mime,
+        intrinsic_width,
+        intrinsic_height,
+    })
+}
+
+/// A queued Kitty transmission whose payload hasn't been decoded yet
+/// (color-tools plan: decode deferred off the `vt_log` lock). Cell
+/// reservation (footprint sizing, cursor advance) already happened
+/// synchronously against `placeholder` — this job's only remaining work is
+/// to resolve it, off any lock, and (unless `quiet` suppresses it) write the
+/// deferred OK/error reply.
+pub struct PendingKittyDecodeJob {
+    pub placeholder: std::sync::Arc<crate::term::cell::ImageData>,
+    pub format: Format,
+    pub compressed: bool,
+    pub medium: Medium,
+    pub width_px: u32,
+    pub height_px: u32,
+    /// The still-base64-encoded wire payload, exactly as received.
+    pub payload_b64: Vec<u8>,
+    /// Verbatim from the original control data, for constructing the
+    /// deferred reply exactly as `kitty_respond_ok`/`kitty_respond_error`
+    /// already do it today — NOT `placeholder.image_id`, which can differ
+    /// from `reply_image_id` when the client omitted `i=` (auto-allocated
+    /// id) and matches today's existing behavior of echoing `control.image_id`
+    /// verbatim regardless.
+    pub reply_image_id: u32,
+    pub reply_placement_id: u32,
+    pub quiet: u8,
+}
+
 /// Unicode virtual placeholders (`U=1`) — color-tools plan, Phase 7.
 ///
 /// The wire mechanism (see
