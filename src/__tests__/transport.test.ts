@@ -833,6 +833,39 @@ describe("transport", () => {
 			expect(result.transform?.(null)).toBeNull();
 		});
 
+		// --- Inline images (color-tools plan) ---
+		it("maps terminal_image_ref_at to GET with null-passthrough transform", () => {
+			const result = mapCommandToHttp("terminal_image_ref_at", { sessionId: "s1", row: 3, col: 7 });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/sessions/s1/terminal/image-ref?row=3&col=7");
+			// (image_id, placement_id, tile_col, tile_row, z_index)
+			expect(result.transform?.([42, 1, 0, 0, -1])).toEqual([42, 1, 0, 0, -1]);
+			expect(result.transform?.(null)).toBeNull();
+		});
+
+		it("maps terminal_image_bytes to GET with the image id as a query param, no transform", () => {
+			const result = mapCommandToHttp("terminal_image_bytes", { sessionId: "s1", imageId: 42 });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/sessions/s1/terminal/image?id=42");
+			expect(result.transform).toBeUndefined();
+		});
+
+		it("maps terminal_image_meta to GET with null-passthrough transform", () => {
+			const result = mapCommandToHttp("terminal_image_meta", { sessionId: "s1", imageId: 42 });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/sessions/s1/terminal/image-meta?id=42");
+			// (mime, intrinsic_width, intrinsic_height)
+			expect(result.transform?.(["raw-rgb", 4, 4])).toEqual(["raw-rgb", 4, 4]);
+			expect(result.transform?.(null)).toBeNull();
+		});
+
+		it("maps terminal_image_placements to GET with no transform (tuple array passes through)", () => {
+			const result = mapCommandToHttp("terminal_image_placements", { sessionId: "s1" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/sessions/s1/terminal/image-placements");
+			expect(result.transform).toBeUndefined();
+		});
+
 		// --- Claude Usage dashboard (story 063) ---
 		it("maps get_claude_usage_api to GET /claude/usage", () => {
 			const result = mapCommandToHttp("get_claude_usage_api", {});
@@ -2153,6 +2186,51 @@ describe("transport", () => {
 				count: 64,
 			});
 			expect(result.byteLength).toBe(0);
+		});
+
+		// terminal_image_bytes shares terminal_styled_rows's exact "raw packed
+		// bytes, no transform" shape (color-tools plan) — a dedicated test for
+		// THIS command, not just the shared mechanism, so a future change to its
+		// path/response shape specifically is caught rather than only the
+		// generic octet-stream decode path staying green via a sibling command.
+		it("fetches terminal_image_bytes as an ArrayBuffer via the octet-stream path", async () => {
+			const { rpc } = await import("../transport");
+
+			const payload = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
+			const mockResponse = {
+				ok: true,
+				headers: new Headers({ "content-type": "application/octet-stream" }),
+				arrayBuffer: vi.fn().mockResolvedValue(payload.buffer),
+				json: vi.fn(),
+				text: vi.fn(),
+			};
+			globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+			const result = await rpc<ArrayBuffer>("terminal_image_bytes", { sessionId: "s1", imageId: 42 });
+
+			const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(fetchCall[0]).toContain("/sessions/s1/terminal/image?id=42");
+			expect(result).toBeInstanceOf(ArrayBuffer);
+			expect([...new Uint8Array(result)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+		});
+
+		// terminal_image_meta's response is a small JSON tuple, not packed bytes
+		// — the opposite failure mode from image_bytes (this one must go
+		// through the JSON path and pass a real null through unmolested, not
+		// misfire the octet-stream branch just because the two commands are
+		// adjacent in the image-command family).
+		it("fetches terminal_image_meta as JSON, passing null through for an unknown image id", async () => {
+			const { rpc } = await import("../transport");
+
+			const mockResponse = {
+				ok: true,
+				headers: new Headers({ "content-type": "application/json" }),
+				text: vi.fn().mockResolvedValue("null"),
+			};
+			globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+			const result = await rpc("terminal_image_meta", { sessionId: "s1", imageId: 999 });
+			expect(result).toBeNull();
 		});
 
 		it("handles text response without content-type as JSON fallback", async () => {

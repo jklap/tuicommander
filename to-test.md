@@ -3258,18 +3258,22 @@ feature could be considered done — see commit history for the fix commit:
    many real escape-sequence parses, which wasn't judged worth the runtime cost for a
    defense-in-depth-only fix; reviewed by inspection instead.
 
-The review's remaining findings were judged lower-priority and left open, tracked here rather
-than fixed: (a) Kitty transmit decode (base64/zlib/file-read/shm-copy) still runs synchronously
-under the `vt_log` lock rather than the plan's originally-designed post-lock deferred-decode
-(`TermEvent::ImagePending`) — the three byte-cap fixes above now bound that lock-hold time to a
-small, fixed worst case (tens of milliseconds) instead of it being unbounded, which was judged
-sufficient mitigation without taking on the larger architectural refactor; revisit if this ever
-shows up as a real-world stall. (b) `ImageLayer.verifyOverlapping()`'s fail-open behavior on a
-`terminal_image_ref_at` error could in principle mask a *persistent* backend error (a
-genuinely-overwritten placement never getting cleared) rather than just a transient one — low
-severity, since `a=d`/alt-screen cleanup independently cover the common cases. (c) No
-per-command request/response-shape test for the 4 new image commands beyond the generic
-route-existence parity test in `transport.test.ts`.
+The review's remaining findings were judged lower-priority; two are left open, tracked here
+rather than fixed: (a) Kitty transmit decode (base64/zlib/file-read/shm-copy) still runs
+synchronously under the `vt_log` lock rather than the plan's originally-designed post-lock
+deferred-decode (`TermEvent::ImagePending`) — the three byte-cap fixes above now bound that
+lock-hold time to a small, fixed worst case (tens of milliseconds) instead of it being unbounded,
+which was judged sufficient mitigation without taking on the larger architectural refactor;
+revisit if this ever shows up as a real-world stall. (b) `ImageLayer.verifyOverlapping()`'s
+fail-open behavior on a `terminal_image_ref_at` error could in principle mask a *persistent*
+backend error (a genuinely-overwritten placement never getting cleared) rather than just a
+transient one — low severity, since `a=d`/alt-screen cleanup independently cover the common
+cases. (c) **Fixed 2026-09-11**: added dedicated `mapCommandToHttp` shape tests for all 4 image
+commands (method/path/transform, including the null-passthrough cases) plus two `rpc()`-level
+integration tests — one proving `terminal_image_bytes` specifically goes through the
+octet-stream/`ArrayBuffer` path (not just a sibling command sharing the mechanism), one proving
+`terminal_image_meta` goes through the JSON path and passes a real `null` through for an unknown
+image id — in `transport.test.ts`.
 
 - [ ] After a rebuild, run the real `imgcat`/`imgls`/`divider` scripts, a hand-written OSC 1337
   sequence, or a real Kitty-protocol tool (`chafa -f kitty`, `mpv --vo=kitty`) against a live
