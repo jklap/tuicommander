@@ -1,4 +1,5 @@
-import { type Component, For, Show } from "solid-js";
+import { type Component, createSignal, For, Show } from "solid-js";
+import type { BaseRefOption } from "../../../hooks/useRepository";
 import { t } from "../../../i18n";
 import { isMacOS } from "../../../platform";
 import type { SettingId } from "../../../services/settingsCatalogue";
@@ -11,7 +12,7 @@ import type {
 	WorktreeAfterMerge,
 	WorktreeStorage,
 } from "../../../stores/repoDefaults";
-import type { RepoSettings } from "../../../stores/repoSettings";
+import type { CopyPathEntry, RepoSettings } from "../../../stores/repoSettings";
 import { settingsStore } from "../../../stores/settings";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
@@ -27,6 +28,13 @@ export interface RepoTabProps {
 	settings: RepoSettings;
 	defaults: RepoDefaults;
 	onUpdate: <K extends keyof RepoSettings>(key: K, value: RepoSettings[K]) => void;
+}
+
+export interface RepoWorktreeTabProps extends RepoTabProps {
+	/** The repo's actual local/remote refs, for the "Branch From" dropdown — undefined while
+	 * still loading (or on fetch failure). Never treat "undefined" as "the configured branch
+	 * is missing"; only an actually-loaded list that doesn't contain it means that. */
+	baseRefs?: BaseRefOption[];
 }
 
 /** Nullable controls retain an explicit inherited state instead of flattening it. */
@@ -59,18 +67,59 @@ function BooleanOverride(props: {
 	);
 }
 
-export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
-	const branchOptions = [
-		{ value: "automatic", label: t("repoWorktree.baseBranch.automatic", "Automatic") },
-		{ value: "main", label: "main" },
-		{ value: "master", label: "master" },
-		{ value: "develop", label: "develop" },
-	];
+/** Sentinel meaning "let TUIC detect the repo's default branch" — distinct from INHERIT
+ * (which means "use the global default setting", which itself may resolve to "automatic"). */
+const AUTOMATIC = "automatic";
 
+export const RepoWorktreeTab: Component<RepoWorktreeTabProps> = (props) => {
 	const baseBranchValue = () => props.settings.baseBranch ?? INHERIT;
 
 	const handleBaseBranchChange = (value: string) => {
 		props.onUpdate("baseBranch", value === INHERIT ? null : value);
+	};
+
+	// A real branch literally named "automatic" (or the __inherit__ sentinel) would render as
+	// a second <option> sharing that reserved value — the native <select> can then never
+	// distinguish selecting it from the sentinel meaning. Excluding it here is a narrow,
+	// display-only fix for that name collision; it doesn't change what the sentinels mean.
+	const isReservedRefName = (name: string) => name === AUTOMATIC || name === INHERIT;
+	const localRefs = () => (props.baseRefs ?? []).filter((r) => r.kind === "local" && !isReservedRefName(r.name));
+	const remoteRefs = () => (props.baseRefs ?? []).filter((r) => r.kind === "remote" && !isReservedRefName(r.name));
+
+	/** The configured value is "stale" only once we've actually loaded the ref list and it's
+	 * genuinely absent — a still-loading `baseRefs` (undefined) must never flag as stale. */
+	const staleBaseBranch = (): string | null => {
+		const value = props.settings.baseBranch;
+		if (!value || value === AUTOMATIC || !props.baseRefs) return null;
+		return props.baseRefs.some((r) => r.name === value) ? null : value;
+	};
+
+	// Draft state for the "always copy" list's add row — local to this tab,
+	// cleared once the entry is committed to props.settings.copyPaths.
+	const [newCopyPath, setNewCopyPath] = createSignal("");
+	const [newCopyMode, setNewCopyMode] = createSignal<CopyPathEntry["mode"]>("copy");
+
+	const addCopyPath = () => {
+		const path = newCopyPath().trim();
+		if (!path) return;
+		if (props.settings.copyPaths.some((e) => e.path === path)) return;
+		props.onUpdate("copyPaths", [...props.settings.copyPaths, { path, mode: newCopyMode() }]);
+		setNewCopyPath("");
+		setNewCopyMode("copy");
+	};
+
+	const removeCopyPath = (path: string) => {
+		props.onUpdate(
+			"copyPaths",
+			props.settings.copyPaths.filter((e) => e.path !== path),
+		);
+	};
+
+	const updateCopyPathMode = (path: string, mode: CopyPathEntry["mode"]) => {
+		props.onUpdate(
+			"copyPaths",
+			props.settings.copyPaths.map((e) => (e.path === path ? { ...e, mode } : e)),
+		);
 	};
 
 	return (
@@ -163,9 +212,37 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 								default: props.defaults.baseBranch,
 							})}
 						</option>
-						<For each={branchOptions}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
+						<option value={AUTOMATIC}>{t("repoWorktree.baseBranch.automatic", "Automatic")}</option>
+						<Show when={staleBaseBranch()}>
+							{(value) => (
+								<option value={value()}>
+									{t("repoWorktree.baseBranch.noLongerExists", "{branch} (no longer exists)", { branch: value() })}
+								</option>
+							)}
+						</Show>
+						<Show when={localRefs().length > 0}>
+							<optgroup label={t("repoWorktree.baseBranch.local", "Local")}>
+								<For each={localRefs()}>{(ref) => <option value={ref.name}>{ref.name}</option>}</For>
+							</optgroup>
+						</Show>
+						<Show when={remoteRefs().length > 0}>
+							<optgroup label={t("repoWorktree.baseBranch.remote", "Remote")}>
+								<For each={remoteRefs()}>{(ref) => <option value={ref.name}>{ref.name}</option>}</For>
+							</optgroup>
+						</Show>
 					</Select>
 					<p class={s.hint}>{t("repoWorktree.hint.branchFrom", "Base branch for new worktrees")}</p>
+					<Show when={staleBaseBranch()}>
+						{(value) => (
+							<p class={s.warning}>
+								{t(
+									"repoWorktree.warning.baseBranchMissing",
+									'"{branch}" no longer exists in this repo — pick a different branch.',
+									{ branch: value() },
+								)}
+							</p>
+						)}
+					</Show>
 				</div>
 
 				<div class={r.group}>
@@ -189,6 +266,66 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 						fallback={props.defaults.copyUntrackedFiles}
 						onChange={(v) => props.onUpdate("copyUntrackedFiles", v)}
 					/>
+
+					<p class={s.hint}>
+						{t(
+							"repoWorktree.hint.copySync",
+							"Copying runs in the background after the worktree is created — a toast shows when it starts and finishes.",
+						)}
+					</p>
+				</div>
+
+				<div class={r.group}>
+					<label>{t("repoWorktree.label.copyPaths", "Always Copy These Files/Directories")}</label>
+					<p class={s.hint}>
+						{t(
+							"repoWorktree.hint.copyPaths",
+							"Copied (or symlinked) into every new worktree of this repo, regardless of the toggles above. Paths are relative to the repository root. Repo-specific — there is no global default for this list.",
+						)}
+					</p>
+
+					<For each={props.settings.copyPaths}>
+						{(entry) => (
+							<div class={s.copyPathRow}>
+								<span class={s.copyPathText}>{entry.path}</span>
+								<select
+									class={s.transferSelect}
+									value={entry.mode}
+									onChange={(e) => updateCopyPathMode(entry.path, e.currentTarget.value as CopyPathEntry["mode"])}
+								>
+									<option value="copy">{t("repoWorktree.copyPaths.copy", "Copy")}</option>
+									<option value="symlink">{t("repoWorktree.copyPaths.symlink", "Symlink")}</option>
+								</select>
+								<button type="button" class={s.transferBtn} onClick={() => removeCopyPath(entry.path)}>
+									{t("repoWorktree.copyPaths.remove", "Remove")}
+								</button>
+							</div>
+						)}
+					</For>
+
+					<div class={s.copyPathRow}>
+						<input
+							type="text"
+							class={s.copyPathInput}
+							value={newCopyPath()}
+							onInput={(e) => setNewCopyPath(e.currentTarget.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") addCopyPath();
+							}}
+							placeholder={t("repoWorktree.copyPaths.placeholder", "e.g. .env or node_modules")}
+						/>
+						<select
+							class={s.transferSelect}
+							value={newCopyMode()}
+							onChange={(e) => setNewCopyMode(e.currentTarget.value as CopyPathEntry["mode"])}
+						>
+							<option value="copy">{t("repoWorktree.copyPaths.copy", "Copy")}</option>
+							<option value="symlink">{t("repoWorktree.copyPaths.symlink", "Symlink")}</option>
+						</select>
+						<button type="button" class={s.transferBtn} onClick={addCopyPath} disabled={!newCopyPath().trim()}>
+							{t("repoWorktree.copyPaths.add", "Add")}
+						</button>
+					</div>
 				</div>
 			</SectionCard>
 			<SectionCard title={t("repoWorktree.heading.worktreeSettings", "Worktree Settings")}>

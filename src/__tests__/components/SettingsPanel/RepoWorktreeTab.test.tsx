@@ -44,9 +44,16 @@ function makeSettings(overrides: Partial<RepoSettings> = {}): RepoSettings {
 		prHideCiFailing: null,
 		branchLabels: {},
 		devServerUrl: null,
+		copyPaths: [],
 		...overrides,
 	};
 }
+
+const BASE_REFS = [
+	{ name: "main", kind: "local", is_default: true },
+	{ name: "master", kind: "local", is_default: false },
+	{ name: "develop", kind: "local", is_default: false },
+];
 
 const defaults: RepoDefaults = {
 	baseBranch: "main",
@@ -98,7 +105,12 @@ describe("RepoWorktreeTab", () => {
 
 	it("shows the global-default option text interpolated with the actual default, and selects it when baseBranch is null", () => {
 		const { container, getByText } = render(() => (
-			<RepoWorktreeTab settings={makeSettings({ baseBranch: null })} defaults={defaults} onUpdate={onUpdate} />
+			<RepoWorktreeTab
+				settings={makeSettings({ baseBranch: null })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+				baseRefs={BASE_REFS}
+			/>
 		));
 		expect(getByText("Use global default (main)")).toBeTruthy();
 		const select = selectByOptionValue(container, "master");
@@ -107,7 +119,12 @@ describe("RepoWorktreeTab", () => {
 
 	it("converts the inherit sentinel back to null when baseBranch is reset to global default", () => {
 		const { container } = render(() => (
-			<RepoWorktreeTab settings={makeSettings({ baseBranch: "master" })} defaults={defaults} onUpdate={onUpdate} />
+			<RepoWorktreeTab
+				settings={makeSettings({ baseBranch: "master" })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+				baseRefs={BASE_REFS}
+			/>
 		));
 		const select = selectByOptionValue(container, "master");
 		fireEvent.change(select, { target: { value: "__inherit__" } });
@@ -116,11 +133,131 @@ describe("RepoWorktreeTab", () => {
 
 	it("passes a concrete branch value through unchanged when baseBranch is overridden", () => {
 		const { container } = render(() => (
-			<RepoWorktreeTab settings={makeSettings({ baseBranch: null })} defaults={defaults} onUpdate={onUpdate} />
+			<RepoWorktreeTab
+				settings={makeSettings({ baseBranch: null })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+				baseRefs={BASE_REFS}
+			/>
 		));
 		const select = selectByOptionValue(container, "master");
 		fireEvent.change(select, { target: { value: "develop" } });
 		expect(onUpdate).toHaveBeenCalledWith("baseBranch", "develop");
+	});
+
+	describe("Branch From: dynamic ref list", () => {
+		it("offers only Automatic plus 'Use global default' when no baseRefs are loaded yet, with no stale warning", () => {
+			const { container, queryByText } = render(() => (
+				<RepoWorktreeTab settings={makeSettings({ baseBranch: null })} defaults={defaults} onUpdate={onUpdate} />
+			));
+			const select = selectByOptionValue(container, "automatic");
+			const values = Array.from(select.options).map((o) => o.value);
+			expect(values).toEqual(["__inherit__", "automatic"]);
+			expect(queryByText(/no longer exists/)).toBeNull();
+		});
+
+		it("groups local and remote refs under their own optgroups, in the order the backend returned them", () => {
+			const { container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: null })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={[
+						{ name: "main", kind: "local", is_default: true },
+						{ name: "feature-x", kind: "local", is_default: false },
+						{ name: "origin/release", kind: "remote", is_default: false },
+					]}
+				/>
+			));
+			const select = selectByOptionValue(container, "main");
+			const groups = Array.from(select.querySelectorAll("optgroup"));
+			expect(groups.map((g) => g.label)).toEqual(["Local", "Remote"]);
+			expect(Array.from(groups[0].querySelectorAll("option")).map((o) => o.value)).toEqual(["main", "feature-x"]);
+			expect(Array.from(groups[1].querySelectorAll("option")).map((o) => o.value)).toEqual(["origin/release"]);
+		});
+
+		it("does not offer master/develop when they don't exist in this repo", () => {
+			const { container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: null })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={[{ name: "trunk", kind: "local", is_default: true }]}
+				/>
+			));
+			const select = selectByOptionValue(container, "trunk");
+			const values = Array.from(select.options).map((o) => o.value);
+			expect(values).not.toContain("master");
+			expect(values).not.toContain("develop");
+		});
+
+		it("excludes a real branch literally named 'automatic' instead of rendering a second option with the same value as the sentinel", () => {
+			const { container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: null })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={[
+						{ name: "main", kind: "local", is_default: true },
+						{ name: "automatic", kind: "local", is_default: false },
+					]}
+				/>
+			));
+			const select = selectByOptionValue(container, "main");
+			const automaticOptions = Array.from(select.options).filter((o) => o.value === "automatic");
+			expect(automaticOptions).toHaveLength(1);
+			expect(automaticOptions[0].textContent).toBe("Automatic");
+		});
+
+		it("shows a stale-branch option plus a warning when the configured branch no longer exists in a loaded list", () => {
+			const { container, getByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: "removed-branch" })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={BASE_REFS}
+				/>
+			));
+			const select = selectByOptionValue(container, "removed-branch");
+			expect(select.value).toBe("removed-branch");
+			expect(select.selectedOptions[0].textContent).toContain("no longer exists");
+			expect(getByText(/no longer exists in this repo/)).toBeTruthy();
+		});
+
+		it("does not warn about a configured branch while baseRefs is still loading (undefined)", () => {
+			const { queryByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: "removed-branch" })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			expect(queryByText(/no longer exists/)).toBeNull();
+		});
+
+		it("never warns about the 'automatic' sentinel even when baseRefs is loaded", () => {
+			const { queryByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: "automatic" })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={BASE_REFS}
+				/>
+			));
+			expect(queryByText(/no longer exists/)).toBeNull();
+		});
+
+		it("does not show a stale warning once the configured branch is present in baseRefs", () => {
+			const { queryByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: "develop" })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={BASE_REFS}
+				/>
+			));
+			expect(queryByText(/no longer exists/)).toBeNull();
+		});
 	});
 
 	it("converts the auto-fetch-interval select value to a number, or null for the inherit option", () => {
@@ -247,6 +384,119 @@ describe("RepoWorktreeTab", () => {
 		// mocked settingsStore.state: prHideDrafts=false, prHideConflicting=true
 		expect(triRowText(triGroup(container, "Hide Draft PRs"))).toContain("Use global default: Off");
 		expect(triRowText(triGroup(container, "Hide Conflicting PRs"))).toContain("Use global default: On");
+	});
+
+	describe("copyPaths list", () => {
+		it("renders each existing entry with its path and mode", () => {
+			const { getByText, container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({
+						copyPaths: [
+							{ path: ".env", mode: "copy" },
+							{ path: "node_modules", mode: "symlink" },
+						],
+					})}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			expect(getByText(".env")).toBeTruthy();
+			expect(getByText("node_modules")).toBeTruthy();
+			const modeSelects = Array.from(container.querySelectorAll("select")).filter((sel) =>
+				Array.from((sel as HTMLSelectElement).options).some((o) => o.value === "symlink"),
+			) as HTMLSelectElement[];
+			// One per existing row, plus the add-row's own mode select.
+			expect(modeSelects).toHaveLength(3);
+			expect(modeSelects[0].value).toBe("copy");
+			expect(modeSelects[1].value).toBe("symlink");
+		});
+
+		it("adds a new entry with the chosen mode and clears the draft input", () => {
+			const { getByPlaceholderText, getByText } = render(() => (
+				<RepoWorktreeTab settings={makeSettings({ copyPaths: [] })} defaults={defaults} onUpdate={onUpdate} />
+			));
+			const input = getByPlaceholderText("e.g. .env or node_modules") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: ".env" } });
+			fireEvent.click(getByText("Add"));
+
+			expect(onUpdate).toHaveBeenCalledWith("copyPaths", [{ path: ".env", mode: "copy" }]);
+			expect(input.value).toBe("");
+		});
+
+		it("adds a new entry on Enter without requiring the Add button", () => {
+			const { getByPlaceholderText } = render(() => (
+				<RepoWorktreeTab settings={makeSettings({ copyPaths: [] })} defaults={defaults} onUpdate={onUpdate} />
+			));
+			const input = getByPlaceholderText("e.g. .env or node_modules") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "config/local.json" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+
+			expect(onUpdate).toHaveBeenCalledWith("copyPaths", [{ path: "config/local.json", mode: "copy" }]);
+		});
+
+		it("does not add an entry for a blank or whitespace-only path", () => {
+			const { getByPlaceholderText, getByText } = render(() => (
+				<RepoWorktreeTab settings={makeSettings({ copyPaths: [] })} defaults={defaults} onUpdate={onUpdate} />
+			));
+			const input = getByPlaceholderText("e.g. .env or node_modules") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: "   " } });
+			fireEvent.click(getByText("Add"));
+			expect(onUpdate).not.toHaveBeenCalled();
+		});
+
+		it("does not add a duplicate path", () => {
+			const { getByPlaceholderText, getByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ copyPaths: [{ path: ".env", mode: "copy" }] })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			const input = getByPlaceholderText("e.g. .env or node_modules") as HTMLInputElement;
+			fireEvent.input(input, { target: { value: ".env" } });
+			fireEvent.click(getByText("Add"));
+			expect(onUpdate).not.toHaveBeenCalled();
+		});
+
+		it("removes an entry by path", () => {
+			const { getByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({
+						copyPaths: [
+							{ path: ".env", mode: "copy" },
+							{ path: "node_modules", mode: "symlink" },
+						],
+					})}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			fireEvent.click(getByText(".env").closest("div")!.querySelector("button")!);
+			expect(onUpdate).toHaveBeenCalledWith("copyPaths", [{ path: "node_modules", mode: "symlink" }]);
+		});
+
+		it("changes an existing entry's mode without touching other entries", () => {
+			const { container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({
+						copyPaths: [
+							{ path: ".env", mode: "copy" },
+							{ path: "node_modules", mode: "copy" },
+						],
+					})}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			const rowSelects = Array.from(container.querySelectorAll("select")).filter((sel) =>
+				Array.from((sel as HTMLSelectElement).options).some((o) => o.value === "symlink"),
+			) as HTMLSelectElement[];
+			fireEvent.change(rowSelects[0], { target: { value: "symlink" } });
+			expect(onUpdate).toHaveBeenCalledWith("copyPaths", [
+				{ path: ".env", mode: "symlink" },
+				{ path: "node_modules", mode: "copy" },
+			]);
+		});
 	});
 
 	it("hides the macOS-only Terminal section when not on macOS", () => {
