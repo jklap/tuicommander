@@ -250,6 +250,18 @@ export const BranchItem: Component<{
 
 	const hasUnseen = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.unseen);
 
+	// Mirrors branchActivitySummary's isBusy semantics (see activitySnapshot.ts)
+	// so the sidebar dot and the removal-confirmation dialog never disagree: an
+	// id missing from terminalsStore still counts (conservative, brief race
+	// window only), but an id we CAN see and know has exited — e.g. an
+	// agent-owned terminal whose process exited on its own, tab still lingering
+	// in the UI — must not keep the row's dot green forever.
+	const hasLiveTerminals = () =>
+		props.branch.terminals.some((id) => {
+			const t = terminalsStore.get(id);
+			return t == null || t.shellState !== "exited";
+		});
+
 	const handleDoubleClick = (e: MouseEvent) => {
 		e.stopPropagation();
 		if (props.branch.isMain || props.branch.isShell) {
@@ -267,7 +279,10 @@ export const BranchItem: Component<{
 	// We read isActive BEFORE onSelect(), since onSelect synchronously flips the
 	// branch to active. Tabs only exist when a branch has more than one terminal.
 	// Child controls that own an action (PR badge, diff stats, add-terminal,
-	// remove) stopPropagation, so they never reach here.
+	// remove, the expand/collapse chevron) stopPropagation, so they never reach
+	// here — the chevron in particular must NOT call onSelect: merely revealing
+	// the tab list must never have the side effect of selecting/auto-spawning a
+	// terminal on the branch (that's what "+" is for).
 	const handleRowClick = () => {
 		const wasActive = props.isActive;
 		props.onSelect();
@@ -448,7 +463,7 @@ export const BranchItem: Component<{
 					hasQuestion={hasQuestion()}
 					hasBusy={hasBusy()}
 					hasUnseen={hasUnseen()}
-					branchHasTerminals={props.branch.terminals.length > 0}
+					branchHasTerminals={hasLiveTerminals()}
 				/>
 				<div class={s.branchContent}>
 					<span class={s.branchName} onDblClick={handleDoubleClick} title={branchLabel() ?? props.branch.name}>
@@ -576,7 +591,21 @@ export const BranchItem: Component<{
 					onClose={ctxMenu.close}
 				/>
 				<Show when={getBranchTabsAvailable(props.branch)}>
-					<span class={cx(s.branchTabsChevron, props.branch.tabsExpanded && s.expanded)} aria-hidden="true">
+					<span
+						class={cx(s.branchTabsChevron, props.branch.tabsExpanded && s.expanded)}
+						role="button"
+						tabIndex={0}
+						aria-label={t("sidebar.toggleTerminalList", "Toggle terminal list")}
+						aria-expanded={props.branch.tabsExpanded ?? false}
+						onClick={(e) => {
+							e.stopPropagation();
+							repositoriesStore.toggleBranchTabsExpanded(props.repoPath, props.branch.name);
+						}}
+						onKeyDown={onClickKeyDown((e) => {
+							e.stopPropagation();
+							repositoriesStore.toggleBranchTabsExpanded(props.repoPath, props.branch.name);
+						})}
+					>
 						›
 					</span>
 				</Show>

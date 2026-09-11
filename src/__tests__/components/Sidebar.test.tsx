@@ -1377,6 +1377,45 @@ describe("Sidebar", () => {
 			expect(mockToggleBranchTabsExpanded).not.toHaveBeenCalled();
 			expect(mockSetBranchTabsExpanded).not.toHaveBeenCalled();
 		});
+
+		it("clicking only the chevron toggles the tab list without selecting the branch", () => {
+			// Regression test: the chevron used to have no click handler of its own
+			// and relied on bubbling into the row's onClick, which also calls
+			// onSelect — so merely revealing the tab list could trigger branch
+			// selection (and the auto-spawn-a-terminal side effect that comes with
+			// first-ever selection). The chevron must toggle the list on its own,
+			// stopping propagation before it ever reaches onSelect.
+			setRepos(
+				{
+					"/repo1": makeRepo({
+						activeBranch: "main",
+						branches: {
+							main: { name: "main", isMain: true, worktreePath: null, terminals: ["t1"], additions: 0, deletions: 0 },
+							"feature/x": {
+								name: "feature/x",
+								isMain: false,
+								worktreePath: "/wt/x",
+								terminals: ["t2", "t3"],
+								additions: 0,
+								deletions: 0,
+								tabsExpanded: false,
+							},
+						},
+					}),
+				},
+				"/repo1",
+			);
+			const onBranchSelect = vi.fn();
+			const { container } = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+
+			const chevron = branchRow(container, "feature/x").querySelector(".branchTabsChevron");
+			expect(chevron).not.toBeNull();
+			fireEvent.click(chevron!);
+
+			expect(mockToggleBranchTabsExpanded).toHaveBeenCalledWith("/repo1", "feature/x");
+			expect(mockSetBranchTabsExpanded).not.toHaveBeenCalled();
+			expect(onBranchSelect).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("branch tab list (gating: setting off)", () => {

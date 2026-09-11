@@ -263,6 +263,57 @@ Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath
 
 **Panel visibility gates must check the specific scope they care about.** A gate bundled in from cross-repo/global state (e.g. `globalWorkspaceStore.isActive()`) must check the scope (`MANUAL_SCOPE`) it actually cares about, not just `isActive()` — a per-repo auto-consolidated workspace is a different activation with a single well-defined repo, and a bare `isActive()` check will wrongly suppress panels for it. The same "boolean/flag check too coarse for a growing state space" shape has recurred more than once (File Browser/Git Panel suppression, sidebar branch-icon color falling through to the wrong case) — when a state space grows a new case, re-check every existing boolean gate against it rather than assuming the old check still covers the new state correctly.
 
+## `branch.terminals` Membership Must Never Be Pruned On Terminal Exit
+
+`repositoriesStore`'s `branch.terminals: string[]` means "every terminal ever
+attached to this branch/worktree, whether or not it's still alive" — NOT "every
+currently-live terminal." Multiple consumers depend on the former, broader
+meaning: `closeTerminalsForBranch` (`createWorktreeWorkflowCoordinator.ts`,
+`createWorktreeRemovalCoordinator.ts`) iterates `branch.terminals` to close
+every terminal — including an already-**exited** one — before a worktree is
+merged/archived/removed, so its tab doesn't survive pointing at a deleted
+directory; `useWorktreeSwitchPrompt.ts`'s `pruneRemovedWorktree` uses
+`branch.terminals.length` to decide whether cleanup is even needed; and
+`RepoSection.tsx`'s `getBranchTabsAvailable`/`BranchTabList` render the sidebar's
+own expandable tab list straight from `branch.terminals`, so a still-open (if
+exited) tab stays reachable there.
+
+A 2026-09-10 fix for a real bug (a ghost-attached terminal — one whose process
+exited on its own rather than via the tab's close button — inflating the
+worktree-removal "N terminal(s) attached" dialog and keeping the sidebar dot
+green) initially tried removing the id from `branch.terminals` the moment the
+terminal exited (`Terminal.tsx`'s `hadAgent` PTY-exit branch,
+`useAppInit.ts`'s `"session-closed"` listener). An independent code-review pass
+caught that this broke all three consumers above: an exited-but-lingering tab
+became invisible to `closeTerminalsForBranch` (so it was never closed,
+surviving worktree teardown as a dangling tab pointing at a deleted directory),
+could make `pruneRemovedWorktree` skip cleanup entirely (`branch.terminals`
+going empty), and vanished from the sidebar's own tab-list even though the tab
+itself was still open — directly contradicting the intent that the tab
+"lingers so the user can still see it."
+
+**The correct fix does not touch array membership at all.** `branch.terminals`
+keeps every id, live or exited, until the terminal's tab is actually closed (or
+the branch/worktree itself goes away). Instead, everything that only cares
+about *live* activity — the removal-confirmation gate and the sidebar dot —
+filters by `terminalsStore.get(id)?.shellState !== "exited"` at read time:
+`branchActivitySummary`'s `isBusy` (`activitySnapshot.ts`) and
+`hasLiveTerminals()` (`RepoSection.tsx`). An id missing from `terminalsStore`
+entirely still counts as live/busy by design (conservative — see
+`activitySnapshot.ts`'s doc comment on `branchActivitySummary`). The
+confusing `"—"` label a stale/exited entry showed in the removal dialog (the
+shared `effectiveActivityState`/`terminalStatusLabel` has no `"exited"` case,
+so it falls through to `"unknown"`) is likewise handled locally in
+`branchActivitySummary`, not by adding an `"exited"` case to the shared
+dashboard label function — the Activity Dashboard has its own existing,
+tested contract for how it renders an exited session (`terminalStatusLabel`'s
+`"—"` fallback), which this fix deliberately leaves alone.
+
+**Do not reintroduce eager pruning of `branch.terminals` on terminal exit** —
+if a future ghost-attachment bug shows up again, fix it the same way: filter
+by live `shellState` in the specific consumer that cares about liveness,
+never by mutating branch membership.
+
 ## SolidJS `<For>` Index Staleness
 
 `<For>`'s mapping callback is invoked once per distinct item **reference**, not once per render — it does not re-run just because filtering/sorting shifted that same item to a new position. `<For>` hands the callback an `index` **accessor** (a function) specifically so consumers can read the item's current position later; calling it immediately (`i()`) and stashing the plain number in a closure throws that liveness away. Any handler built from that captured number (a click/hover callback that indexes back into the filtered array) goes stale the instant the array's composition changes without that item's own identity changing — the callback still runs, but against a now-wrong (sometimes out-of-bounds) slot, so it silently no-ops instead of throwing.

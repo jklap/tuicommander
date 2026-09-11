@@ -1462,6 +1462,46 @@ describe("initApp", () => {
 			// No terminal registered for this session — should not throw
 			expect(() => getCallback()!({ payload: { session_id: "unknown-sess", reason: "process_exit" } })).not.toThrow();
 		});
+
+		it("does NOT prune the terminal from repositoriesStore's branch.terminals when a remote session closes", async () => {
+			// Regression guard: an earlier version of this fix pruned branch.terminals
+			// as soon as a remote/agent session exited, to stop a ghost id from
+			// inflating the worktree-removal dialog / keeping the sidebar dot green.
+			// That broke every OTHER consumer that walks branch.terminals expecting to
+			// find every terminal ever attached, including exited ones still needing
+			// cleanup or still visible in the sidebar's own tab list — e.g.
+			// closeTerminalsForBranch (createWorktreeWorkflowCoordinator.ts,
+			// createWorktreeRemovalCoordinator.ts) iterates branch.terminals to close
+			// every terminal before a worktree is merged/archived/removed; an exited id
+			// silently pruned out of that array meant its tab was never closed and was
+			// left dangling with a now-deleted cwd. The correct fix (activitySnapshot.ts,
+			// RepoSection.tsx) instead makes the busy/color signals ignore exited ids
+			// WITHOUT removing them from branch.terminals — see AGENTS.md's
+			// "branch.terminals Membership Must Never Be Pruned On Terminal Exit".
+			const { getCallback } = captureSessionClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+
+			const termId = terminalsStore.add({
+				sessionId: "remote-sess-prune",
+				fontSize: 14,
+				name: "Agent",
+				cwd: "/tmp",
+				awaitingInput: null,
+				isRemote: true,
+			});
+			repositoriesStore.addTerminalToBranch("/repo", "main", termId);
+			expect(repositoriesStore.get("/repo")?.branches["main"]?.terminals).toContain(termId);
+
+			getCallback()!({ payload: { session_id: "remote-sess-prune", reason: "process_exit", agent_type: "claude" } });
+
+			// Still a member of the branch — only its display state changes.
+			expect(repositoriesStore.get("/repo")?.branches["main"]?.terminals).toContain(termId);
+			expect(terminalsStore.get(termId)?.shellState).toBe("exited");
+		});
 	});
 
 	describe("session-closed auto-close path", () => {

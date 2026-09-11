@@ -506,4 +506,70 @@ describe("branchActivitySummary", () => {
 		expect(summary.isBusy).toBe(true);
 		expect(summary.terminals).toEqual([{ id: "gone", agentType: null, label: "—" }]);
 	});
+
+	it("is not busy when the only attached terminal has exited", () => {
+		// Regression test: an agent-owned terminal whose process exited on its
+		// own (Terminal.tsx, useAppInit.ts's session-closed handler) keeps a
+		// lingering "exited" record in terminalsStore so the user can still see
+		// its tab — but it must not count as "attached" for removal-confirmation
+		// or sidebar-activity purposes, or the worktree looks busy forever.
+		const id = terminalsStore.add({
+			name: "Finished agent",
+			sessionId: null,
+			cwd: "/repo/wt",
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: null,
+		});
+		terminalsStore.update(id, { shellState: "exited" });
+
+		const summary = branchActivitySummary([id]);
+		expect(summary.isBusy).toBe(false);
+		expect(summary.terminalCount).toBe(1);
+	});
+
+	it("labels a present-but-exited terminal 'Exited', not the generic '—' fallback", () => {
+		// terminalStatusLabel/effectiveActivityState have no "exited" case (by
+		// design — see the shared dashboard's own tested contract), so without
+		// this override a present-but-exited id would render the exact same
+		// "—" as a ghost id missing from terminalsStore entirely, which is what
+		// produced the confusing "terminal — —" the removal dialog used to show.
+		const id = terminalsStore.add({
+			name: "Finished agent",
+			sessionId: null,
+			cwd: "/repo/wt",
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: "claude",
+		});
+		terminalsStore.update(id, { shellState: "exited" });
+
+		const summary = branchActivitySummary([id]);
+		expect(summary.terminals).toEqual([{ id, agentType: "claude", label: "Exited" }]);
+	});
+
+	it("is busy when at least one of several attached terminals is still live", () => {
+		const liveId = terminalsStore.add({
+			name: "Idle shell",
+			sessionId: "s1",
+			cwd: "/repo/wt",
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: null,
+		});
+		terminalsStore.update(liveId, { shellState: "idle" });
+		const exitedId = terminalsStore.add({
+			name: "Finished agent",
+			sessionId: null,
+			cwd: "/repo/wt",
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: null,
+		});
+		terminalsStore.update(exitedId, { shellState: "exited" });
+
+		const summary = branchActivitySummary([liveId, exitedId]);
+		expect(summary.isBusy).toBe(true);
+		expect(summary.terminalCount).toBe(2);
+	});
 });

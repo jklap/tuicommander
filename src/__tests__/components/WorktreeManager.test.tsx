@@ -481,6 +481,38 @@ describe("WorktreeManager", () => {
 			expect(order).toEqual(["feat-safe", "feat-busy"]);
 		});
 
+		it("buckets a branch whose only attached terminal has exited as safe, not busy", () => {
+			// Regression test: branchActivitySummary's isBusy (which this bucketing
+			// is built on) used to be `terminals.length > 0` — any attached id,
+			// including a ghost left behind by an agent-owned terminal that exited
+			// on its own, counted as busy forever. It now excludes ids it can see
+			// have shellState "exited", so a branch like this must bucket safe.
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feat-exited", { worktreePath: "/repo/.wt/exited" });
+			repositoriesStore.setBranch("/repo", "feat-safe", { worktreePath: "/repo/.wt/safe" });
+			const termId = terminalsStore.add(makeTerminal({ name: "T1" }));
+			terminalsStore.update(termId, { shellState: "exited" });
+			repositoriesStore.addTerminalToBranch("/repo", "feat-exited", termId);
+
+			worktreeManagerStore.open();
+			worktreeManagerStore.toggleSelect("/repo::feat-exited");
+			worktreeManagerStore.toggleSelect("/repo::feat-safe");
+			const { container } = render(() => <WorktreeManager actions={mockActions} />);
+
+			const deleteBtn = container.querySelector("[class*='batchDeleteBtn']")!;
+			fireEvent.click(deleteBtn);
+
+			// Both safe (safe-first ordering only reorders when at least one item
+			// is actually busy) — order alone isn't proof, so assert directly that
+			// neither delete went through the busy confirmation path by checking
+			// both fired in the same "safe" pass (mockActions.onDelete call count
+			// unaffected by a busy-gate prompt, which this test's mockActions does
+			// not stub a resolution for).
+			expect(mockActions.onDelete).toHaveBeenCalledTimes(2);
+			const order = mockActions.onDelete.mock.calls.map((call) => call[1]);
+			expect(order).toEqual(["feat-exited", "feat-safe"]);
+		});
+
 		it("shows Merge & Archive Selected button when items selected", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "feat-a", { worktreePath: "/repo/.wt/a" });

@@ -30,6 +30,78 @@ no items left goes too. What stays open must carry its own stated reason.
 > WebView gets the same change over Vite HMR. If a browser check of a frontend fix
 > shows nothing, check `dist/index.html`'s mtime before blaming the code.
 
+## Ghost/stale terminal ids inflating the removal dialog + sidebar dot, chevron auto-spawn (2026-09-10, frontend only — no rebuild/restart needed)
+
+Fixes three related sidebar/worktree-removal bugs Boss reported live:
+
+1. **"N terminal(s) attached" removal dialog inflated by exited terminals,
+   some showing `terminal — —`.** `branchActivitySummary`'s `isBusy`
+   (`activitySnapshot.ts`) used to count ANY attached id — including an
+   agent-owned terminal/session that exited on its own (rather than the user
+   closing its tab), both the in-process agent-exit path (`Terminal.tsx`) and
+   the remote/tmux-swarm-shim sub-pane path (`useAppInit.ts`'s
+   `session-closed` listener, the one behind the `(9s)`/`(30s)` auto-close
+   countdown tab names) — as "busy" forever. It now excludes ids it can see
+   have `shellState === "exited"`, so the busy-dialog (with its scary
+   terminal list) simply doesn't appear once every attached terminal has
+   exited; the plain confirm is used instead. **`branch.terminals` itself is
+   deliberately left untouched** — an earlier version of this fix tried
+   pruning the array directly on exit, but an independent code review caught
+   that this broke worktree teardown (`closeTerminalsForBranch` iterates
+   `branch.terminals` to close every terminal, including exited ones, before
+   a merge/archive/removal — a pruned id was silently never closed) and the
+   sidebar's own expandable tab list (which also renders straight from
+   `branch.terminals`). See AGENTS.md's "`branch.terminals` Membership Must
+   Never Be Pruned On Terminal Exit" for the full writeup — don't re-attempt
+   array pruning if this class of bug resurfaces.
+2. **A present-but-exited terminal showed the confusing generic `"—"`
+   label** (same as a genuinely-missing/unknown id) in the removal dialog's
+   terminal list. `branchActivitySummary` now labels it `"Exited"` instead —
+   scoped locally to this function, not by changing the shared
+   `terminalStatusLabel`/`effectiveActivityState` used by the Activity
+   Dashboard (which has its own existing, tested `"—"`-for-exited contract,
+   deliberately left alone).
+3. **Sidebar dot stayed green for a branch with zero *live* open
+   terminals.** `RepoSection.tsx`'s `BranchIcon` only checked
+   `branch.terminals.length > 0`, never whether those ids were actually
+   still live. A new `hasLiveTerminals()` mirrors the same "present +
+   `shellState !== 'exited'`" logic as `isBusy` above (array membership
+   itself still untouched).
+4. **Clicking the expand chevron sometimes spawned a new terminal.** The
+   chevron had no click handler of its own — it bubbled into the row's
+   `onClick`, which always calls `onSelect()`, and first-ever branch
+   selection in a session auto-spawns a terminal if none exists. The chevron
+   now has its own handler (`stopPropagation`, toggles the list only).
+
+Covered by unit tests (`activitySnapshot.test.ts`, `useAppInit.test.ts`,
+`Sidebar.test.tsx`, `WorktreeManager.test.tsx`) that render real DOM and fire
+real click events / exercise the real store functions, including a
+regression guard that `branch.terminals` is NOT pruned on exit (the
+mistake the code review caught). A full end-to-end live repro (spawn an
+agent sub-pane, kill it, watch the sidebar dot and the removal dialog
+settle) wasn't done: this test instance shares Boss's real config/MCP-
+registration state with the running app (see "Test instance vs orchestrator
+instance" above), and reproducing the ghost-terminal state needs actually
+spawning + abruptly killing an agent, which felt too risky to do against
+live sidebar/repo state. Frontend-only change — no Rust rebuild, picks up on
+a plain browser reload once `pnpm build` (or `make dev`) rebuilds `dist/`.
+
+- [ ] Spawn an agent-owned terminal (or a tmux-swarm-shim sub-pane) on some
+  branch, then kill the agent process directly (not via the tab's close
+  button). Confirm: the tab lingers with a grey "exited" state/countdown as
+  before, the sidebar dot for that branch goes idle (not green) once it's the
+  only terminal on the branch, and opening the worktree-removal dialog for
+  that branch does NOT show the busy/attached-terminals confirmation (plain
+  confirm only) — but the exited tab is STILL visible/reachable in the
+  sidebar's own expandable tab list (chevron), and merging/archiving or
+  removing that worktree still actually closes that tab rather than leaving
+  it dangling.
+- [ ] With `tabTreeEnabled` on and a branch that has >1 terminal (chevron
+  visible), click only the chevron (not the branch name). Confirm the tab
+  list toggles open/closed and NO new terminal is created — repeat on a
+  branch that has never been selected this session (freshly restored, before
+  any click) to hit the specific auto-spawn-on-first-select path.
+
 ## Worktree file sync: copy/symlink ignored/untracked/explicit files into new worktrees (2026-09-10, backend — needs `make dev` restart)
 
 `copy_ignored_files`/`copy_untracked_files` were previously fully plumbed
