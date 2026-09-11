@@ -98,6 +98,8 @@ export interface GitOperationsDeps {
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
 		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
 		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
+		countUnpublishedCommits: (repoPath: string, workspaceId: string) => Promise<number>;
+		publishWorkspace: (repoPath: string, workspaceId: string) => Promise<import("./useRepository").PublishOutcome>;
 		switchBranch: (
 			repoPath: string,
 			branchName: string,
@@ -112,7 +114,7 @@ export interface GitOperationsDeps {
 	};
 	dialogs: {
 		confirmRemoveRepo: (repoName: string) => Promise<boolean>;
-		confirmRemoveWorktree: (branchName: string) => Promise<boolean>;
+		confirmRemoveWorktree: (branchName: string, unpublishedCommits?: number) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (paths: string[]) => Promise<boolean>;
@@ -667,6 +669,39 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	};
 
 	/** Handle branch switch request from sidebar. Checks terminal safety, then calls Rust. */
+	/**
+	 * Publish a COW workspace, reporting the two steps separately.
+	 *
+	 * The parent getting the commits and origin getting them are different
+	 * facts, and a single "published" toast would hide the case that matters:
+	 * the work is safe in the parent while origin was unreachable.
+	 */
+	const publishWorkspace = async (repoPath: string, workspaceId: string) => {
+		const branch = repositoriesStore.branchNameFor(repoPath, workspaceId);
+		deps.setStatusInfo(`Publishing ${branch}...`);
+		try {
+			const outcome = await deps.repo.publishWorkspace(repoPath, workspaceId);
+			if (outcome.no_op_reason) {
+				deps.setStatusInfo(`${branch}: nothing to publish — refs are shared with the parent`);
+				return outcome;
+			}
+			const parent = outcome.parent_updated ? "parent updated" : `parent NOT updated (${outcome.parent_error})`;
+			const origin = outcome.origin_pushed ? "pushed to origin" : `origin NOT pushed (${outcome.origin_error})`;
+			deps.setStatusInfo(`${branch}: ${parent}; ${origin}`);
+			// A refusal is the backend doing its job, not a crash — but the user
+			// has to see which half failed, so it is logged as well as shown.
+			if (!outcome.parent_updated || !outcome.origin_pushed) {
+				appLogger.warn("git", `publish ${branch} partially failed`, outcome);
+			}
+			repositoriesStore.bumpGitRevision(repoPath);
+			return outcome;
+		} catch (err) {
+			appLogger.error("git", `Failed to publish ${branch}`, err);
+			deps.setStatusInfo(`Failed to publish ${branch}: ${err}`);
+			return null;
+		}
+	};
+
 	const handleSwitchBranch = async (repoPath: string, branchName: string) => {
 		const repo = repositoriesStore.get(repoPath);
 		if (!repo) return;
@@ -777,6 +812,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	};
 
 	return {
+		publishWorkspace,
 		currentRepoPath,
 		setCurrentRepoPath,
 		currentBranch,

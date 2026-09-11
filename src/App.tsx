@@ -735,6 +735,11 @@ const App: Component = () => {
 		onDelete: (repoPath, workspaceId) => {
 			void gitOps.handleRemoveWorkspace(repoPath, workspaceId);
 		},
+		// COW rows only — the manager hides the button for a linked worktree,
+		// whose refs the parent already shares.
+		onPublish: (repoPath, workspaceId) => {
+			void gitOps.publishWorkspace(repoPath, workspaceId);
+		},
 		onMergeAndArchive: (repoPath, workspaceId) => {
 			const repoState = repositoriesStore.get(repoPath);
 			const mainBranch = repoState ? Object.values(repoState.workspaces).find((b) => b.isMain)?.branchName : undefined;

@@ -56,6 +56,30 @@ export interface WorkspaceWorktree {
 	path: string;
 }
 
+/** Which mechanism to use. The caller asks for a workspace, not a mechanism, so
+ *  `auto` is the default: a copy-on-write clone where the filesystem and the
+ *  repo shape allow it, a linked worktree otherwise. */
+export type WorkspaceMode = "auto" | "cow" | "worktree";
+
+/** Which mechanism a workspace actually got. Mirrors `WorkspaceState.kind`. */
+export type WorkspaceKind = "cow" | "worktree";
+
+/** What to do with the parent's uncommitted work in a clone. `inherit` writes
+ *  zero blocks; `clean` was measured at 15 MB → 113 MB on a real repo. */
+export type DirtyPolicy = "inherit" | "clean_untracked" | "clean";
+
+/** The two steps of a publish, reported independently: origin being unreachable
+ *  is not the same as the parent not having the work. */
+export interface PublishOutcome {
+	parent_updated: boolean;
+	parent_error: string | null;
+	published_commit: string | null;
+	origin_pushed: boolean;
+	origin_error: string | null;
+	/** Set for a linked worktree, whose refs the parent already shares. */
+	no_op_reason: string | null;
+}
+
 /** Repository hook for git operations */
 export function useRepository() {
 	/** Get repository info */
@@ -113,16 +137,26 @@ export function useRepository() {
 		});
 	}
 
-	/** Create a new worktree with a branch */
+	/** Create a new workspace: a copy-on-write clone where possible, a linked
+	 *  worktree otherwise. `mode` and `dirty` default to `auto` and `inherit`
+	 *  in the backend, which is the pair that always produces a workspace at
+	 *  zero extra cost. */
 	async function createWorktree(
 		baseRepo: string,
 		branchName: string,
 		createBranch?: boolean,
 		baseRef?: string,
+		mode?: WorkspaceMode,
+		dirty?: DirtyPolicy,
 	): Promise<{
 		status: "ok" | "pending";
 		name: string;
 		path: string;
+		/** Which mechanism this workspace actually got. Absent on the
+		 *  stale-recovery `pending` path, which is always a linked worktree. */
+		kind?: WorkspaceKind;
+		/** Set when `auto` asked for a clone and could not have one. */
+		degraded_reason?: string | null;
 		/** How to address the new workspace from here on — the store key, and the
 		 *  id every later call takes (removal, dirtiness, finalize). Reported by the
 		 *  backend rather than derived here, because for a COW clone it is not the
@@ -131,7 +165,20 @@ export function useRepository() {
 		branch: string;
 		base_repo: string;
 	}> {
-		return await invoke("create_worktree", { baseRepo, branchName, createBranch, baseRef });
+		return await invoke("create_worktree", { baseRepo, branchName, createBranch, baseRef, mode, dirty });
+	}
+
+	/** How many commits exist only in this workspace. Always 0 for a linked
+	 *  worktree, whose objects live in the parent and outlive the directory. */
+	async function countUnpublishedCommits(repoPath: string, workspaceId: string): Promise<number> {
+		return await invoke<number>("count_unpublished_commits", { repoPath, workspaceId });
+	}
+
+	/** Get a workspace's commits into the parent and out to origin. The two
+	 *  steps report independently: origin being unreachable is not the same as
+	 *  the parent not having the work. */
+	async function publishWorkspace(repoPath: string, workspaceId: string): Promise<PublishOutcome> {
+		return await invoke<PublishOutcome>("publish_workspace", { repoPath, workspaceId });
 	}
 
 	/** Get workspaces: workspace id → its checkout */
@@ -422,6 +469,8 @@ export function useRepository() {
 		createBranch,
 		removeWorktree,
 		createWorktree,
+		countUnpublishedCommits,
+		publishWorkspace,
 		getWorktreePaths,
 		getChangedFiles,
 		getFileDiff,

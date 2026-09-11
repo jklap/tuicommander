@@ -1523,6 +1523,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			},
 		}),
 	},
+	count_unpublished_commits: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/worktrees/unpublished?repoPath=${p("repoPath")}&workspaceId=${p("workspaceId")}`,
+		}),
+	},
 	publish_workspace: {
 		map: (args) => ({
 			method: "POST",

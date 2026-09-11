@@ -421,6 +421,15 @@ pub(super) struct FinalizeMergeRequest {
     pub force: Option<bool>,
 }
 
+/// One workspace, addressed by id, for the read-only queries.
+#[derive(Deserialize)]
+pub(super) struct WorkspaceIdQuery {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    #[serde(rename = "workspaceId")]
+    pub workspace_id: String,
+}
+
 #[derive(Deserialize)]
 pub(super) struct PublishWorkspaceRequest {
     #[serde(rename = "repoPath")]

@@ -153,6 +153,16 @@ how it renders and whether it interrupts anything.
   **Switch**: the tab moves to the new branch and `cd`s into the worktree.
 - [ ] Repeat with a *running agent* as the active tab: the worktree opens in its
   own terminal and the agent's tab stays on its branch and CWD.
+- [ ] **[VISUAL] Needs `make dev` restart** (#735-55d7). Nothing runs this
+  build yet, so none of the COW UI has been seen. After a restart, in the
+  create-worktree dialog: two segmented pickers, **Mechanism** (Auto | Clone |
+  Worktree) with Auto preselected and **Parent's changes** (Keep | Drop
+  untracked | Reset) with Keep preselected, the second hidden when Worktree is
+  chosen, and a hint line under them. Then create one with Clone and open the
+  Worktree Manager: that row carries a `clone` badge and, once it has a commit,
+  an `N unpublished` badge; a publish button (up-arrow) sits on it and NOT on a
+  plain worktree row; deleting it raises a confirm naming the count, while
+  deleting a clone with nothing unpublished does not.
 - [ ] **Rust change — needs `make dev` restart** (#734-ca73). COW workspaces
   are reachable from MCP: `repo action=worktree_create` now takes
   `mode: auto|cow|worktree` and `dirty: inherit|clean_untracked|clean`, and its

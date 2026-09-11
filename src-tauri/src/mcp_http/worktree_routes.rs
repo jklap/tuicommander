@@ -395,6 +395,23 @@ pub(super) async fn merge_pr_via_github_http(
     }
 }
 
+/// `GET /worktrees/unpublished?repoPath=&workspaceId=` — the HTTP half of
+/// `count_unpublished_commits`.
+pub(super) async fn unpublished_commits_http(Query(q): Query<WorkspaceIdQuery>) -> Response {
+    if let Err(e) = validate_repo_path(&q.repo_path) {
+        return e.into_response();
+    }
+    // Blocking: counting refreshes the parent mirror first.
+    let res = tokio::task::spawn_blocking(move || {
+        crate::worktree::unpublished_commits_impl(&q.repo_path, &q.workspace_id)
+    })
+    .await;
+    match res {
+        Ok(r) => json_result(r),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}
+
 /// `POST /worktrees/publish` — the HTTP half of `publish_workspace`.
 ///
 /// Shares `publish_workspace_impl` with the Tauri command, so the two-step

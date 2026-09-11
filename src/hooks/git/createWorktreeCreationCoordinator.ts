@@ -5,7 +5,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
-import type { BaseRefOption } from "../useRepository";
+import type { BaseRefOption, DirtyPolicy, WorkspaceMode } from "../useRepository";
 import type { AgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
 
@@ -29,6 +29,8 @@ interface WorktreeCreationCoordinatorDeps {
 			branchName: string,
 			createBranch?: boolean,
 			baseRef?: string,
+			mode?: WorkspaceMode,
+			dirty?: DirtyPolicy,
 		) => Promise<PendingCreation["result"] & { status: "ok" | "pending" }>;
 		runSetupScript: (script: string, cwd: string) => Promise<{ exit_code: number; stdout: string; stderr: string }>;
 		getDiffStats: (path: string) => Promise<{ additions: number; deletions: number }>;
@@ -92,6 +94,10 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				branchName: suggestedName,
 				createBranch: true,
 				baseRef: baseRefs[0]?.name ?? "HEAD",
+				// Skipping the dialog means taking its defaults, not a different
+				// set: the user turned the prompt off, not the mechanism choice.
+				mode: "auto",
+				dirty: "inherit",
 			});
 			return;
 		}
@@ -109,7 +115,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 	/** Shared post-creation setup: run scripts, open terminal, fetch stats */
 	const setupNewWorktree = async (
 		repoPath: string,
-		result: { name: string; path: string; workspace_id: string; branch: string; base_repo: string },
+		result: PendingCreation["result"],
 		displayName: string,
 		agentSeed?: AgentSeed,
 	) => {
@@ -119,6 +125,10 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		repositoriesStore.setWorkspace(repoPath, result.workspace_id, {
 			branchName: result.branch,
 			worktreePath: result.path,
+			// Recorded, never inferred: publish and remove behave differently per
+			// mechanism, and the directory does not say which one this is.
+			kind: result.kind ?? "worktree",
+			parentRepoPath: result.kind === "cow" ? repoPath : null,
 		});
 		repositoriesStore.setActiveWorkspace(repoPath, result.workspace_id);
 
@@ -183,6 +193,8 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				options.branchName,
 				options.createBranch,
 				options.baseRef,
+				options.mode,
+				options.dirty,
 			);
 
 			setWorktreeDialogState(null);

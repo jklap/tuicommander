@@ -485,6 +485,29 @@ pub(crate) fn publish_workspace_impl(
     }
 }
 
+/// How many commits exist only in this workspace.
+///
+/// Zero for a linked worktree, always: its objects live in the parent and
+/// survive the directory, so there is nothing a removal could destroy. That is
+/// the same asymmetry the removal guard is built on, and reporting it as a
+/// number lets the UI show the count on the rows where it means something.
+pub(crate) fn unpublished_commits_impl(repo_path: &str, workspace_id: &str) -> Result<usize, String> {
+    match resolve_any_workspace(Path::new(repo_path), workspace_id)? {
+        ResolvedWorkspace::Cow(record) => crate::cow::unpublished_commit_count(&record),
+        ResolvedWorkspace::Worktree(_) => Ok(0),
+    }
+}
+
+/// Tauri command: how many commits exist only in this workspace.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn count_unpublished_commits(
+    repo_path: String,
+    workspace_id: String,
+) -> Result<usize, String> {
+    unpublished_commits_impl(&repo_path, &workspace_id)
+}
+
 /// Tauri command: publish a workspace.
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -920,7 +943,54 @@ pub(crate) async fn create_worktree(
     branch_name: String,
     create_branch: Option<bool>,
     base_ref: Option<String>,
+    mode: Option<crate::cow::WorkspaceMode>,
+    dirty: Option<crate::cow::DirtyPolicy>,
 ) -> Result<serde_json::Value, String> {
+    // The desktop path gets the same two levers as MCP and HTTP: without them
+    // the UI could not create a COW workspace at all, and the transports would
+    // disagree about what `create_worktree` means.
+    let mode = mode.unwrap_or_default();
+    let dirty = dirty.unwrap_or_default();
+    if mode != crate::cow::WorkspaceMode::Worktree {
+        let worktrees_dir =
+            resolve_worktree_dir_for_repo(Path::new(&base_repo), &state.worktrees_dir);
+        let config = WorktreeConfig {
+            task_name: branch_name.clone(),
+            base_repo: base_repo.clone(),
+            branch: Some(branch_name.clone()),
+            create_branch: create_branch.unwrap_or(true),
+        };
+        let base_ref_owned = base_ref.clone();
+        let workspace = tokio::task::spawn_blocking(move || {
+            create_workspace(
+                &worktrees_dir,
+                &config,
+                base_ref_owned.as_deref(),
+                mode,
+                dirty,
+            )
+        })
+        .await
+        .map_err(|e| format!("Task panic: {e}"))??;
+
+        state.invalidate_repo_caches(&base_repo);
+        return Ok(serde_json::json!({
+            "status": "ok",
+            "name": workspace.path.file_name().map(|n| n.to_string_lossy().to_string()),
+            "path": workspace.path.to_string_lossy(),
+            "workspace_id": workspace.workspace_id,
+            "branch": workspace.branch,
+            "base_repo": base_repo,
+            "kind": workspace.kind,
+            "degraded_reason": workspace.degraded_reason,
+            "instructions": workspace.instruction_payload(),
+        }));
+    }
+
+    // `mode=worktree` keeps the original path, which carries the stale-directory
+    // recovery the UI depends on (the `status: "pending"` placeholder and its
+    // background recreate). Routing it through `create_workspace` would drop
+    // that, and it is the path the "+" button has always taken.
     let config = WorktreeConfig {
         task_name: branch_name.clone(),
         base_repo,

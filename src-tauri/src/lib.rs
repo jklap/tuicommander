@@ -1801,6 +1801,7 @@ pub fn run() {
             worktree::merge_and_archive_worktree,
             worktree::finalize_merged_worktree,
             worktree::publish_workspace,
+            worktree::count_unpublished_commits,
             worktree::list_local_branches,
             worktree::list_base_ref_options,
             worktree::switch_branch,
