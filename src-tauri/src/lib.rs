@@ -201,6 +201,7 @@ pub(crate) mod tasks;
 pub(crate) mod telegram;
 pub(crate) mod transcript_tail;
 pub(crate) use tuic_terminal::terminal_grid;
+pub(crate) use tuic_terminal::terminal_image_transmission;
 #[cfg(test)]
 mod build_graph_tests;
 #[cfg(test)]
