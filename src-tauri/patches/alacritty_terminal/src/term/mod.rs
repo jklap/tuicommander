@@ -1702,10 +1702,12 @@ impl<T: EventListener> Term<T> {
     }
 
     /// Display a (transmitted-or-looked-up) image per its placement's
-    /// control data. `U=1` (Unicode virtual placeholders) is registration
-    /// only for now — see the `kitty` module's own doc comment on why the
-    /// diacritic-decoding step is deliberately not implemented yet; no cells
-    /// are touched in that case.
+    /// control data. `U=1` (Unicode virtual placeholders) is a pure
+    /// registration no-op here: per spec, a virtual placement has no
+    /// physical location on screen at all — the app itself prints the
+    /// `U+10EEEE` placeholder characters through the ordinary `input()` path
+    /// (color-tools plan, Phase 7), where `try_resolve_unicode_placeholder`
+    /// does the actual tile attachment.
     fn kitty_display(&mut self, control: &kitty::ControlData, image: Arc<cell::ImageData>) {
         if control.unicode_placeholder {
             return;
@@ -1748,6 +1750,92 @@ impl<T: EventListener> Term<T> {
             self.reserve_image_footprint(image, placement_id, cols, rows, control.z_index);
         }
     }
+
+    /// If the cell at `(line, column)` is a Kitty Unicode placeholder
+    /// (`U+10EEEE`), (re-)resolve which image tile it refers to from its
+    /// current foreground color (image id), underline color (placement id),
+    /// and zero-width diacritics (row/column/most-significant-byte),
+    /// applying the spec's left-neighbor inheritance for any that are
+    /// missing (color-tools plan, Phase 7). Called after every cell write
+    /// that could affect this cell's diacritics, so it may run more than
+    /// once per cell as diacritics arrive one at a time — each call fully
+    /// re-derives the result from the cell's current state rather than
+    /// patching incrementally, so there is nothing to get out of sync.
+    ///
+    /// A cell that can't be resolved (no image with that id, or no row/
+    /// column available from either an explicit diacritic or a matching
+    /// left neighbor) is left exactly as ordinary printed text — this is
+    /// deliberately lossless: nothing here can make a real character
+    /// disappear, only add an image tile on top of a placeholder that
+    /// already carries no visible glyph of its own (`U+10EEEE` renders as
+    /// nothing in every real font).
+    fn try_resolve_unicode_placeholder(&mut self, line: Line, column: Column) {
+        if self.grid[line][column].c != kitty::UNICODE_PLACEHOLDER {
+            return;
+        }
+        let cell = &self.grid[line][column];
+        let fg = cell.fg;
+        let underline = cell.underline_color();
+        let Some(id_low) = color_to_placeholder_id_part(fg) else {
+            return;
+        };
+        let placement_low = underline
+            .and_then(color_to_placeholder_id_part)
+            .unwrap_or(0);
+        let zerowidth = cell.zerowidth().unwrap_or(&[]);
+        let diacritics = kitty::parse_placeholder_diacritics(zerowidth);
+
+        let left = (column.0 > 0)
+            .then(|| {
+                let left_cell = &self.grid[line][Column(column.0 - 1)];
+                (left_cell.c == kitty::UNICODE_PLACEHOLDER
+                    && left_cell.fg == fg
+                    && left_cell.underline_color() == underline)
+                    .then(|| left_cell.image_ref())
+                    .flatten()
+            })
+            .flatten()
+            .map(|r| kitty::ResolvedPlaceholder {
+                row: r.tile_row as u32,
+                col: r.tile_col as u32,
+                // The most-significant byte is never stored separately —
+                // it's always folded into the already-resolved image id's
+                // top byte (see the `image_id` computation below), so it
+                // can be recovered exactly from there.
+                msb: (r.image.image_id >> 24) & 0xff,
+            });
+
+        let (row, col, msb) = kitty::resolve_placeholder_tile(diacritics, left);
+        let (Some(row), Some(col)) = (row, col) else {
+            return;
+        };
+
+        let image_id = id_low | (msb << 24);
+        let Some(image) = self.event_proxy.image_by_id(image_id) else {
+            return;
+        };
+        let placement_id = if placement_low != 0 {
+            placement_low
+        } else {
+            image_id
+        };
+
+        let cell_ref = cell::ImageCellRef::new(image, placement_id, col as u16, row as u16, 0);
+        self.grid[line][column].set_image_ref(Some(cell_ref));
+    }
+}
+
+/// The numeric value a Kitty Unicode-placeholder cell's foreground (image
+/// id) or underline (placement id) color encodes: the low byte(s) of an
+/// indexed (256-color) color, or the packed 24 bits of a true-color RGB
+/// value. `Color::Named` has no defined mapping — a real client always sets
+/// an explicit indexed/true-color pen before printing a placeholder.
+fn color_to_placeholder_id_part(color: Color) -> Option<u32> {
+    match color {
+        Color::Indexed(n) => Some(n as u32),
+        Color::Spec(rgb) => Some(((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | rgb.b as u32),
+        Color::Named(_) => None,
+    }
 }
 
 impl<T: EventListener> Handler for Term<T> {
@@ -1788,6 +1876,11 @@ impl<T: EventListener> Handler for Term<T> {
             }
 
             self.grid[line][column].push_zerowidth(c);
+            // Kitty Unicode placeholder diacritics (color-tools plan, Phase
+            // 7) ride in on zero-width characters exactly like this —
+            // re-resolve the tile every time one lands on a placeholder
+            // cell, since row/col/msb may arrive one diacritic at a time.
+            self.try_resolve_unicode_placeholder(line, column);
             return;
         }
 
@@ -1826,6 +1919,16 @@ impl<T: EventListener> Handler for Term<T> {
 
         if width == 1 {
             self.write_at_cursor(c);
+            if c == kitty::UNICODE_PLACEHOLDER {
+                let line = self.grid.cursor.point.line;
+                let column = self.grid.cursor.point.column;
+                // No diacritics have arrived yet — this resolves purely via
+                // left-neighbor inheritance (correct if the app relies on
+                // the spec's "omit repeated diacritics" optimization) and
+                // gets re-resolved above as soon as a real diacritic lands,
+                // if any does.
+                self.try_resolve_unicode_placeholder(line, column);
+            }
         } else {
             if self.grid.cursor.point.column + 1 >= columns {
                 if self.mode.contains(TermMode::LINE_WRAP) {

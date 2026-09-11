@@ -218,6 +218,12 @@ actually gets pixels on screen.
   `resubscribe()` — verified against a live `make dev` instance: a full page
   reload still shows a previously-displayed image with no live event
   involved.
+- **Unicode virtual placeholders** (`U=1`; color-tools plan, Phase 7 —
+  image.nvim, snacks.nvim, yazi's modern driver) need no frontend changes at
+  all: `image_placements()` groups cells by `placement_id` regardless of
+  which backend path attached them (terminal-reserved-footprint or a
+  placeholder character's own resolved id), so this renderer already covers
+  them once the backend attaches the `CellExtra.image` ref.
 - **Known, deliberately-scoped gaps** (each documented, not silent):
   1. **Z-index**: Kitty's `z<0` ("paint below text") placements render in
      this same single above-text layer, so they'll visually sit on top of
