@@ -49,6 +49,7 @@ mod global_hotkey;
 pub(crate) mod grid_gate;
 #[cfg(feature = "desktop")]
 pub(crate) mod hook_binary;
+pub(crate) mod image_cli_shims;
 pub(crate) mod improvement_scan;
 mod input_line_buffer;
 pub(crate) mod jsonc_edit;

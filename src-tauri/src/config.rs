@@ -33,6 +33,17 @@ pub(crate) fn set_config_dir_override(dir: PathBuf) -> impl Drop {
     Guard { _lock: lock }
 }
 
+/// Whether a test has an active `set_config_dir_override`. Lets a function
+/// with a real (production) filesystem side effect keyed off `config_dir()`
+/// — e.g. `image_cli_shims::shim_dir()` — refuse to run at all in a test
+/// binary that never opted in, rather than silently writing into the real,
+/// shared config directory just because some unrelated test happened to
+/// exercise a code path that calls it.
+#[cfg(test)]
+pub(crate) fn has_config_dir_override() -> bool {
+    CONFIG_DIR_OVERRIDE.lock().unwrap().is_some()
+}
+
 /// Get the config directory using platform-appropriate location.
 ///
 /// - macOS: `~/Library/Application Support/com.tuic.commander/`

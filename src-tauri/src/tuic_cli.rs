@@ -221,7 +221,7 @@ fn sidecar_name() -> &'static str {
 /// in `agent_mcp.rs`; the previous resource-dir lookup never resolved in a
 /// packaged build and fell through to the dev path, which only exists on the
 /// build machine (the root cause of issue #52).
-fn resolve_sidecar_path() -> Result<String, String> {
+pub(crate) fn resolve_sidecar_path() -> Result<String, String> {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     resolve_sidecar_path_from(
         std::env::current_exe().ok().as_deref(),

@@ -267,6 +267,11 @@ tuic imgls ~/Pictures
 tuic divider ~/.config/tuic/divider.png
 ```
 
+Inside any TUICommander terminal (Unix only), bare `imgcat`/`imgls`/`divider`
+also work with no `tuic` prefix — one-line shim scripts on that session's
+`PATH` `exec` the same subcommands, matching the bare-command convention
+iTerm2's own scripts use.
+
 The frontend renders these inline, on their own canvas layer above the text
 but below the cursor/selection — see `docs/frontend/terminal-features.md`'s
 "Inline Images" section for how, and its documented gaps (Kitty `z<0`

@@ -3289,8 +3289,14 @@ section needs a human running the rebuilt app, not just re-running tests.
   confirming against a fresh build), verify: `imgcat` against a real PNG/JPEG, `imgls` against a
   directory with several images, `divider` producing a visible full-width bar, and the tmux
   passthrough path (`TERM=tmux-256color tuic imgcat ...` inside a real tmux pane).
-- [ ] `imgcat`/`imgls`/`divider` are not yet wired onto each PTY session's `PATH` as shims (the
-  plan's "Phase 4: PATH shims" item) — right now they're only reachable as `tuic imgcat`/etc., not
-  as bare `imgcat`/`imgls`/`divider` commands the way a user coming from iTerm2 would expect.
-  Deferred: needs a small addition to `inject_unix_terminal_env` (`pty.rs`) to prepend a bin
-  directory of shim scripts/symlinks to each spawned PTY's `PATH`.
+- [ ] `imgcat`/`imgls`/`divider` are now wired onto each spawned PTY's `PATH` as one-line shim
+  scripts (color-tools plan, Phase 9: `image_cli_shims.rs`, written to `<config
+  dir>/image-cli-shims/` and prepended in `inject_unix_terminal_env`), each `exec`-ing the resolved
+  `tuic` sidecar with the right subcommand. **Requires a `make dev` restart** to take effect (Rust
+  change, no hot-reload) — after restarting, open a NEW terminal tab (existing PTYs were spawned
+  before the restart and won't have the updated `PATH`) and confirm bare `imgcat photo.png`,
+  `imgls`, and `divider ...` all work with no `tuic` prefix. Unix only, matching
+  `inject_unix_terminal_env`'s own scope — Windows PATH shims are out of scope for this pass.
+  Silently absent (no error, no shim) if the `tuic` sidecar can't be resolved at all (e.g. a
+  from-source checkout with no built sidecar) — confirm that failure mode doesn't also break
+  anything else about the PTY spawn.
