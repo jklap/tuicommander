@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { ATTR_BOLD, ATTR_DEFAULT_BG, ATTR_DEFAULT_FG, ATTR_INVERSE, ATTR_ITALIC } from "../canvasTerminalUtils";
+import {
+	ATTR_BOLD,
+	ATTR_DEFAULT_BG,
+	ATTR_DEFAULT_FG,
+	ATTR_INVERSE,
+	ATTR_ITALIC,
+	ATTR_UNDERLINE,
+	type CellMetrics,
+	type DecodedRow,
+} from "../canvasTerminalUtils";
 import { createGridRenderer } from "../gridRenderer";
 
 // resolveFg/resolveBg/buildFontStyle never touch the 2D context, so a stub ctx
@@ -84,5 +93,99 @@ describe("gridRenderer font style", () => {
 	it("prefixes italic for italic cells", () => {
 		const gr = makeRenderer(400);
 		expect(gr.buildFontStyle(ATTR_ITALIC, 16, "Hack")).toBe("italic 400 16px Hack");
+	});
+});
+
+// --- Split (background/glyph) compositing regression guard ---
+//
+// color-tools plan, Phase 5 z-order compositing: `paintRowBackground` +
+// `paintRowGlyphs` must always stay an exact decomposition of the fused
+// `paintRow` — the split canvases only get exercised once a session sees a
+// z<0 image placement, so a silent drift between the two paths would go
+// unnoticed by anyone testing the (far more common) fused fast path.
+
+interface RecordedOp {
+	op: string;
+	args: unknown[];
+}
+
+function makeRecordingCtx(): { ctx: CanvasRenderingContext2D; ops: RecordedOp[] } {
+	const ops: RecordedOp[] = [];
+	const store: Record<string, unknown> = {};
+	const ctx = new Proxy(store, {
+		get(target, prop) {
+			if (typeof prop !== "string") return undefined;
+			if (prop === "canvas") return { width: 800, height: 400 };
+			// A property previously SET (fillStyle, font, ...) reads back its
+			// real value; anything else is treated as a method call and
+			// recorded when invoked.
+			if (prop in target) return target[prop];
+			return (...args: unknown[]) => {
+				ops.push({ op: prop, args });
+			};
+		},
+		set(target, prop, value) {
+			if (typeof prop === "string") {
+				target[prop] = value;
+				ops.push({ op: `set:${prop}`, args: [value] });
+			}
+			return true;
+		},
+	}) as unknown as CanvasRenderingContext2D;
+	return { ctx, ops };
+}
+
+function makeRow(cells: Array<{ ch: string; bg?: number; attrs?: number }>): DecodedRow {
+	const count = cells.length;
+	const codepoints = new Uint32Array(count);
+	const fg = new Uint32Array(count);
+	const bg = new Uint32Array(count);
+	const attrs = new Uint8Array(count);
+	cells.forEach((cell, i) => {
+		codepoints[i] = cell.ch.codePointAt(0) ?? 0x20;
+		bg[i] = cell.bg ?? 0;
+		attrs[i] = (cell.attrs ?? 0) | ATTR_DEFAULT_FG | (cell.bg === undefined ? ATTR_DEFAULT_BG : 0);
+	});
+	return { index: 0, count, wrapped: false, codepoints, fg, bg, attrs };
+}
+
+const TEST_METRICS = {
+	cellWidth: 9,
+	cellHeight: 18,
+	baseline: 14,
+	dpr: 1,
+	scaledCellWidth: 9,
+	scaledCellHeight: 18,
+	fontSize: 14,
+} as unknown as CellMetrics;
+
+describe("gridRenderer split compositing matches the fused pass", () => {
+	it("paintGridBackground + paintGridGlyphs together reproduce paintGrid's exact op sequence", () => {
+		const rowMap = new Map<number, DecodedRow>([
+			[0, makeRow([{ ch: "x", bg: 0x112233 }, { ch: "y" }, { ch: "!", attrs: ATTR_UNDERLINE }])],
+		]);
+
+		const fused = makeRecordingCtx();
+		const grFused = createGridRenderer(fused.ctx, { fontWeight: () => 400, getFontFamily: () => "monospace" });
+		grFused.setTheme(DEF_BG, DEF_FG);
+		grFused.paintGrid(rowMap, TEST_METRICS, { fullRepaint: true });
+
+		const split = makeRecordingCtx();
+		const grSplit = createGridRenderer(split.ctx, { fontWeight: () => 400, getFontFamily: () => "monospace" });
+		grSplit.setTheme(DEF_BG, DEF_FG);
+		grSplit.paintGridBackground(rowMap, TEST_METRICS, { fullRepaint: true });
+		grSplit.paintGridGlyphs(rowMap, TEST_METRICS, { fullRepaint: true });
+
+		// The background canvas fills its own opaque cachedBgDefault (matching
+		// paintGrid's fused clear) and the glyph canvas instead clears
+		// (transparent) — so the canvas-wide clear/fill op itself legitimately
+		// differs (fillRect for fused and background-split, clearRect for
+		// glyph-split, and split has one MORE such op than fused since it's
+		// two separate canvases) while every per-cell drawing op must still
+		// match exactly. Identify a canvas-wide clear by its height arg (the
+		// full canvas height, 400) vs. a per-cell fillRect (one cell tall).
+		const dropCanvasWideClears = (ops: RecordedOp[]) =>
+			ops.filter((o) => !((o.op === "fillRect" || o.op === "clearRect") && o.args[3] === 400));
+		expect(dropCanvasWideClears(split.ops)).toEqual(dropCanvasWideClears(fused.ops));
 	});
 });

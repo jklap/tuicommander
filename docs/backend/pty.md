@@ -461,8 +461,6 @@ implement the protocol itself.
   (`t=d/f/t/s`), `o=z` zlib compression, `m=` chunking,
   `i=`/`p=`/`c=`/`r=`/`z=`/`C=`/`q=`, and the capability-probe response —
   see `kitty.rs`'s own module doc comment for exactly what's implemented.
-  Unicode-placeholder diacritic decoding is the one remaining deliberate
-  gap (documented no-op, not silent misbehavior).
 - **Transmission mediums** (Phase 6): `t=f`/`t=t` (file/temp-file) and `t=s`
   (POSIX/Windows shared memory) are implemented by delegating the actual
   OS I/O to the embedding app (`EventListener::read_file_medium`/
@@ -496,7 +494,23 @@ implement the protocol itself.
   `kitty_respond_error`.
 - **Chunking**: `m=1` on all but the last sequence; only the *first* chunk
   carries real control data (continuation chunks are `m=`/`q=` only per
-  spec), tracked via `pending_kitty_transmission`.
+  spec), tracked via `pending_kitty_transmission`. Accumulated size across
+  all chunks of one transfer is capped at `kitty::MAX_CHUNKED_B64_BYTES`
+  (96 MiB, mirroring `iterm2::MAX_MULTIPART_B64_BYTES`'s "fail closed, abort
+  the whole transfer" pattern) — each individual chunk is already bounded by
+  vte's own `MAX_OSC_RAW_STD` (2 MiB), but nothing previously stopped a
+  client from streaming an unbounded *number* of `m=1` chunks and growing
+  the pending buffer without limit before the app-level
+  `MAX_SESSION_IMAGE_BYTES` cap ever ran (found by a 2026-09-11 security
+  review, see `to-test.md`).
+- **Reservation and decompression size caps** (also from that review):
+  `reserve_image_footprint` clamps requested rows to a hard
+  `MAX_FOOTPRINT_ROWS = 10_000` — a crafted `r=`/iTerm2 `height=` with no
+  clamp of its own could otherwise attempt up to `u32::MAX` `linefeed()`
+  calls under the session's `vt_log` lock, a real hang. `o=z` zlib
+  decompression is bounded via `Read::take` at 64 MiB before the inflated
+  buffer is fully built, closing a classic decompression-bomb path a plain
+  unbounded `read_to_end` would otherwise allow.
 - **`U=1` Unicode virtual placeholders** (Phase 7): fully implemented —
   `Term::input` recognizes an app-printed `U+10EEEE` placeholder character
   (with diacritics encoding tile row/column/most-significant-id-byte, image
@@ -509,14 +523,17 @@ implement the protocol itself.
   left-neighbor diacritic-omission inheritance) via real end-to-end tests
   in `terminal_grid.rs`, not just unit-tested in isolation — this is the
   path image.nvim, snacks.nvim, and yazi's modern driver all actually use.
-- **Known gap**: the Phase 5 frontend renderer covers Kitty placements too
-  (any `z` renders in the same above-text layer today — see
-  `docs/frontend/terminal-features.md` for the z-index scope), but raw
-  `f=24`/`f=32` pixel payloads (no container) don't decode client-side yet,
-  since `createImageBitmap` needs a real image container and today's
-  `terminal_image_bytes` carries no width/height/format metadata a raw-pixel
-  decode would need. Diagnostics-ring elision (above) covers Kitty APC
-  payloads the same way it covers OSC 1337.
+  Because `z=` is only ever carried on the `a=p,U=1`/`a=T,U=1` registration
+  command and never on the placeholder text itself, `Term` remembers it in
+  a `unicode_placeholder_z: HashMap<(image_id, placement_id), i32>` (cleared
+  on `d=a`/`d=A`, filtered by image id on `d=i`/`d=I`) so
+  `try_resolve_unicode_placeholder` can recover the real `z_index` — including
+  image.nvim's `z=-1` — instead of hardcoding `0`.
+- The Phase 5 frontend renderer covers Kitty placements too, including full
+  z-order compositing, raw `f=24`/`f=32` pixel decoding, and heuristic
+  overwrite detection — see `docs/frontend/terminal-features.md`'s renderer
+  section for the current (no longer gapped) state. Diagnostics-ring elision
+  (above) covers Kitty APC payloads the same way it covers OSC 1337.
 
 ## Shell Environment Variables
 

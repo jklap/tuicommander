@@ -413,6 +413,16 @@ pub struct Term<T> {
     /// time; a new chunked transfer starting while one is already open
     /// silently replaces it.
     pending_kitty_transmission: Option<kitty::PendingTransmission>,
+
+    /// `z=` registered by an `a=p,U=1`/`a=T,U=1` virtual-placement command,
+    /// keyed by `(image_id, placement_id)` (color-tools plan, Phase 7's
+    /// z-order compositing follow-up). A `U=1` registration never touches
+    /// any cell itself — the app prints the placeholder characters
+    /// separately — so this is the only place the requested z-index exists
+    /// between registration and whenever `try_resolve_unicode_placeholder`
+    /// later needs it. Cleared by `a=d` (see `kitty_process`'s `Delete` arm)
+    /// so it can't grow unbounded over a long session.
+    unicode_placeholder_z: std::collections::HashMap<(u32, u32), i32>,
 }
 
 /// Configuration options for the [`Term`].
@@ -548,6 +558,7 @@ impl<T> Term<T> {
             clipboard_capture: None,
             pending_multipart: None,
             pending_kitty_transmission: None,
+            unicode_placeholder_z: std::collections::HashMap::new(),
         }
     }
 
@@ -1430,10 +1441,24 @@ impl<T: EventListener> Term<T> {
         rows: u32,
         z_index: i32,
     ) {
+        // Hard cap on reserved rows, independent of `available_cols`'s
+        // viewport-width clamp above: `rows` comes straight from
+        // attacker-controlled wire data (Kitty `r=`, or iTerm2's resolved
+        // `height=`/`%`/`px`/`auto` footprint) with no upper bound of its
+        // own, and the loop below runs once per reserved row *inside*
+        // `Term::process`, under the session's `vt_log` lock. Without this
+        // clamp a single crafted sequence (e.g. Kitty `r=4000000000` or
+        // iTerm2 `height=4000000000`) would attempt up to `u32::MAX`
+        // `linefeed()` calls, hanging the session (and every other consumer
+        // of its grid — the frame ticker, HTTP reads) for as long as that
+        // takes. No real image needs anywhere near this many rows; this is
+        // generous headroom, not a meaningful functional limit.
+        const MAX_FOOTPRINT_ROWS: u32 = 10_000;
+
         let start_col = self.grid.cursor.point.column.0;
         let available_cols = self.columns().saturating_sub(start_col).max(1);
         let footprint_cols = (cols as usize).min(available_cols);
-        let footprint_rows = rows.max(1);
+        let footprint_rows = rows.clamp(1, MAX_FOOTPRINT_ROWS);
 
         // Eviction-stable absolute row of the placement's top-left corner —
         // same `history_base + grid_relative` addressing `terminal_grid.rs`'s
@@ -1489,6 +1514,13 @@ impl<T: EventListener> Term<T> {
             // Continuation chunk: per spec it carries only m=/q=, so the
             // ORIGINAL (first chunk's) control data is what's authoritative,
             // not this chunk's mostly-default one.
+            if pending.payload_b64.len() + payload_chunk.len() > kitty::MAX_CHUNKED_B64_BYTES {
+                // Fail closed: abort the whole transfer rather than let a
+                // client stream an unbounded number of `m=1` chunks and grow
+                // this buffer without limit.
+                self.pending_kitty_transmission = None;
+                return;
+            }
             pending.payload_b64.extend_from_slice(payload_chunk);
             if control.more_chunks {
                 return;
@@ -1541,6 +1573,7 @@ impl<T: EventListener> Term<T> {
                     Some('a') | Some('A') => {
                         self.event_proxy.forget_all_images();
                         self.event_proxy.send_event(Event::ImagePlacementsCleared);
+                        self.unicode_placeholder_z.clear();
                     }
                     Some('i') | Some('I') => {
                         self.event_proxy.forget_image(control.image_id);
@@ -1553,6 +1586,8 @@ impl<T: EventListener> Term<T> {
                         // cheap enough to re-fetch (a full grid scan) on the
                         // rare `a=d` case.
                         self.event_proxy.send_event(Event::ImagePlacementsCleared);
+                        self.unicode_placeholder_z
+                            .retain(|&(image_id, _), _| image_id != control.image_id);
                     }
                     _ => {} // other d= variants not implemented
                 }
@@ -1611,18 +1646,35 @@ impl<T: EventListener> Term<T> {
                 };
 
                 // `o=z`: the pixel/PNG payload itself is zlib-compressed,
-                // orthogonal to which medium delivered it.
+                // orthogonal to which medium delivered it. Bound the
+                // inflated size — an unbounded `read_to_end` on a zlib
+                // stream is a classic decompression bomb (a few KB of
+                // compressed all-zero data can expand to gigabytes), so the
+                // decoder is wrapped in `Read::take` at one byte past the
+                // cap: if the inflated output fills that allowance exactly,
+                // there was more data than the cap allows and the whole
+                // payload is rejected before ever reaching the app-level
+                // `MAX_SESSION_IMAGE_BYTES` check (which only runs after the
+                // full buffer already exists).
+                const MAX_INFLATED_BYTES: u64 = 64 * 1024 * 1024;
                 let bytes = if control.compressed {
                     use std::io::Read;
                     let mut inflated = Vec::new();
-                    if flate2::read::ZlibDecoder::new(&bytes[..])
-                        .read_to_end(&mut inflated)
-                        .is_err()
-                    {
+                    let mut limited =
+                        flate2::read::ZlibDecoder::new(&bytes[..]).take(MAX_INFLATED_BYTES + 1);
+                    if limited.read_to_end(&mut inflated).is_err() {
                         self.kitty_respond_error(
                             &control,
                             "EINVAL",
                             "payload is not valid zlib-compressed data",
+                        );
+                        return;
+                    }
+                    if inflated.len() as u64 > MAX_INFLATED_BYTES {
+                        self.kitty_respond_error(
+                            &control,
+                            "EINVAL",
+                            "decompressed payload exceeds the size limit",
                         );
                         return;
                     }
@@ -1709,7 +1761,35 @@ impl<T: EventListener> Term<T> {
     /// (color-tools plan, Phase 7), where `try_resolve_unicode_placeholder`
     /// does the actual tile attachment.
     fn kitty_display(&mut self, control: &kitty::ControlData, image: Arc<cell::ImageData>) {
+        let placement_id = if control.placement_id != 0 {
+            control.placement_id
+        } else {
+            image.image_id
+        };
+
         if control.unicode_placeholder {
+            // No cell is touched here — the app prints the placeholder
+            // characters itself, separately, through the ordinary `input()`
+            // path. But `z=` is only ever carried on THIS registration
+            // command, never on the placeholder text itself, so it has to
+            // be remembered here for `try_resolve_unicode_placeholder` to
+            // find later (color-tools plan, Phase 7's z-order follow-up).
+            //
+            // Unlike `CellExtra.image`, this map has no cell to piggyback
+            // its lifetime on — it's only ever cleared by an explicit
+            // `a=d,d=a`/`d=i` (above) or session end, so a client that keeps
+            // registering new (image_id, placement_id) pairs without ever
+            // deleting them grows it for the session's lifetime. Cap it as
+            // a refusal, same pattern as the byte caps elsewhere in this
+            // feature: past the cap, a registration's `z=` simply isn't
+            // remembered and resolution falls back to the default z-index
+            // (0, "above text") — a benign degradation, not a correctness
+            // bug, and far better than unbounded growth.
+            const MAX_UNICODE_PLACEHOLDER_ENTRIES: usize = 100_000;
+            if self.unicode_placeholder_z.len() < MAX_UNICODE_PLACEHOLDER_ENTRIES {
+                self.unicode_placeholder_z
+                    .insert((image.image_id, placement_id), control.z_index);
+            }
             return;
         }
         let (cols, rows) = if control.cols > 0 && control.rows > 0 {
@@ -1729,11 +1809,6 @@ impl<T: EventListener> Term<T> {
                 1
             };
             (w.max(1), h.max(1))
-        };
-        let placement_id = if control.placement_id != 0 {
-            control.placement_id
-        } else {
-            image.image_id
         };
 
         if control.no_move_cursor {
@@ -1819,8 +1894,20 @@ impl<T: EventListener> Term<T> {
         } else {
             image_id
         };
+        // The z-index was only ever carried on the `a=p,U=1`/`a=T,U=1`
+        // registration command, never on the placeholder text itself —
+        // recovered here from what `kitty_display` stashed at registration
+        // time. `0` (Kitty's own default) if this placement was somehow
+        // never registered, rather than treating it as an error: the cell
+        // is still worth displaying.
+        let z_index = self
+            .unicode_placeholder_z
+            .get(&(image_id, placement_id))
+            .copied()
+            .unwrap_or(0);
 
-        let cell_ref = cell::ImageCellRef::new(image, placement_id, col as u16, row as u16, 0);
+        let cell_ref =
+            cell::ImageCellRef::new(image, placement_id, col as u16, row as u16, z_index);
         self.grid[line][column].set_image_ref(Some(cell_ref));
     }
 }
