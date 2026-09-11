@@ -245,6 +245,16 @@ pub enum AppEvent {
     /// `terminal_image_placements`.
     #[serde(rename = "pty-image-placements-cleared")]
     PtyImagePlacementsCleared { session_id: String },
+    /// A Kitty image transmission finished deferred decode (color-tools
+    /// plan) — `image_id` is now fetchable via `terminal_image_bytes`. The
+    /// frontend's `ImageLayer` never retries a fetch that came back empty on
+    /// its own, so this is what tells it to invalidate that cache entry and
+    /// try again, covering the rare case where its first attempt raced this
+    /// decode. Fired only on success — a permanently failed decode needs no
+    /// signal, since the frontend's existing "no bytes, don't retry" default
+    /// already matches that outcome.
+    #[serde(rename = "pty-image-decoded")]
+    PtyImageDecoded { session_id: String, image_id: u32 },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
@@ -608,6 +618,7 @@ impl AppEvent {
             | AppEvent::PtyOpenUrl { session_id, .. }
             | AppEvent::PtyImagePlacement { session_id, .. }
             | AppEvent::PtyImagePlacementsCleared { session_id }
+            | AppEvent::PtyImageDecoded { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
             | AppEvent::SessionSuspendRequested { session_id, .. }
@@ -4903,7 +4914,8 @@ impl AppState {
             | AppEvent::PtyCwd { .. }
             | AppEvent::PtyOpenUrl { .. }
             | AppEvent::PtyImagePlacement { .. }
-            | AppEvent::PtyImagePlacementsCleared { .. } => {}
+            | AppEvent::PtyImagePlacementsCleared { .. }
+            | AppEvent::PtyImageDecoded { .. } => {}
             AppEvent::SessionClosed { session_id, .. } => {
                 state.session_maps.session_states.remove(session_id);
             }
