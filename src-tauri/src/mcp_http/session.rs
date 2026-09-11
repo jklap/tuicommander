@@ -1528,6 +1528,34 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
         crate::state::AppEvent::PtyCwd { cwd, .. } => {
             serde_json::json!({"type": "cwd", "cwd": cwd})
         }
+        // Field names match the desktop `pty-image-placement-*` Tauri event
+        // payload exactly (color-tools plan, Phase 5) — same reasoning as
+        // `osc133`/`cwd` above, so `CanvasTerminal` needs no per-transport
+        // branch.
+        crate::state::AppEvent::PtyImagePlacement {
+            placement_id,
+            image_id,
+            abs_row,
+            col,
+            rows,
+            cols,
+            z_index,
+            ..
+        } => {
+            serde_json::json!({
+                "type": "image-placement",
+                "placementId": placement_id,
+                "imageId": image_id,
+                "absRow": abs_row,
+                "col": col,
+                "rows": rows,
+                "cols": cols,
+                "zIndex": z_index,
+            })
+        }
+        crate::state::AppEvent::PtyImagePlacementsCleared { .. } => {
+            serde_json::json!({"type": "image-placements-cleared"})
+        }
         _ => return None,
     })
 }
@@ -2111,6 +2139,39 @@ pub(super) async fn terminal_image_bytes(
     {
         Ok(Some(bytes)) => styled_rows_response(bytes).into_response(),
         Ok(None) => not_found_response().into_response(),
+        Err(e) => read_failed_response(&e),
+    }
+}
+
+/// Every current inline-image placement, as `(placement_id, image_id, abs_row,
+/// col, rows, cols, z_index)` tuples — identical shape to the
+/// `terminal_image_placements` Tauri command, so both transports carry the
+/// same array-of-arrays JSON with no per-transport `transform`. Answers `[]`
+/// for a gone session rather than 404, same as the other `terminal_image_*`
+/// reads (color-tools plan, Phase 5).
+pub(super) async fn terminal_image_placements(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    match crate::pty::vt_read(&state, session_id, move |vt| {
+        vt.grid_image_placements()
+            .into_iter()
+            .map(|p| {
+                (
+                    p.placement_id,
+                    p.image_id,
+                    p.abs_row,
+                    p.col,
+                    p.rows,
+                    p.cols,
+                    p.z_index,
+                )
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    {
+        Ok(placements) => Json(placements).into_response(),
         Err(e) => read_failed_response(&e),
     }
 }

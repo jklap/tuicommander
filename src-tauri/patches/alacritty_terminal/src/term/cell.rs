@@ -181,15 +181,28 @@ pub struct ImageCellRef {
     /// This cell's position within the placement's cell-space footprint.
     pub tile_col: u16,
     pub tile_row: u16,
+    /// Kitty `z=` (always `0` for iTerm2, which has no z-index concept).
+    /// Carried per-cell, not just on the placement-creation event, so a
+    /// renderer that re-derives placements by scanning the grid (the
+    /// reconnect-hydration path) can recover z-ordering without a second
+    /// side table.
+    pub z_index: i32,
 }
 
 impl ImageCellRef {
-    pub fn new(image: Arc<ImageData>, placement_id: u32, tile_col: u16, tile_row: u16) -> Self {
+    pub fn new(
+        image: Arc<ImageData>,
+        placement_id: u32,
+        tile_col: u16,
+        tile_row: u16,
+        z_index: i32,
+    ) -> Self {
         Self {
             image,
             placement_id,
             tile_col,
             tile_row,
+            z_index,
         }
     }
 }

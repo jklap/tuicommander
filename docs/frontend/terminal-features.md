@@ -170,6 +170,68 @@ Clickable file paths in terminal output (absolute and relative paths with known 
 - Flexible ratios preserved across layout changes
 - Modes: "separate" (independent tab bars) or "unified" (shared tab bar)
 
+## Inline Images (color-tools plan, Phase 5)
+
+iTerm2's OSC 1337 inline-image protocol and the Kitty graphics protocol are
+both parsed and rendered end to end — see `docs/backend/pty.md`'s "iTerm2
+Inline Images" and "Kitty Graphics Protocol" sections for the wire-protocol
+scope. This section covers the frontend half: how a reserved placement
+actually gets pixels on screen.
+
+- **A dedicated canvas layer** (`imageCanvasRef`/`ictx` in `CanvasTerminal.tsx`)
+  sits between the glyph/background canvas and the cursor/selection overlay —
+  an image occludes text underneath it, but never the cursor or a selection
+  highlight drawn on top. Sized and dpr-scaled identically to the overlay
+  canvas, repainted from `repaintOverlay` (so every existing overlay-repaint
+  trigger — resize, scroll, frame update, hover — refreshes images too, with
+  no new call sites to remember).
+- **`imageLayer.ts`** (`ImageLayer` class) owns two pieces of per-terminal
+  state: the current placement set (`Map<placementId, ImagePlacement>`) and a
+  decoded-bitmap cache keyed by image id, so multiple placements of the same
+  image share one decode.
+  - **Coordinate math**: a placement's `absRow` (eviction-stable — see
+    `alacritty_terminal::event::ImagePlacementInfo`'s doc comment) converts to
+    an on-screen row via `absRow - frame.historyBase - frame.historySize +
+    frame.displayOffset` — the exact formula `DecodedFrame.historyBase`'s own
+    doc comment already documents for the scroll row cache. A placement whose
+    row range is entirely outside `[0, frame.screenRows)` is skipped without
+    even starting a bitmap fetch.
+  - **Decode**: bytes come from the existing `terminal_image_bytes` command
+    (unchanged), wrapped in a `Blob` and handed to `createImageBitmap` — which
+    only decodes a real image container (PNG/GIF/JPEG). Kitty's raw
+    `f=24`/`f=32` formats (no container; mpv/blackcat) fail to decode and are
+    marked errored (never retried, logged nowhere loud since this is a known,
+    documented gap, not a bug) — see `to-test.md`.
+- **Transport — a new event pair, not a new binary-frame bit.** The existing
+  grid-frame binary header has zero free bits (`canvasTerminalUtils.ts`'s
+  per-cell attrs byte and header flag bytes are fully packed), so placements
+  ride the same JSON-event mechanism as `cwd`/`osc133`: `image-placement`
+  (one new/updated placement) and `image-placements-cleared` (alt-screen
+  switch, Kitty `a=d,d=A`/`a=d,d=I` — see `mcp_http/session.rs`'s
+  `grid_ws_frame` for the WS JSON shape and the desktop `pty-image-placement-*`
+  Tauri event for the IPC twin; both carry identical field names).
+- **Reconnect/new-client hydration**: the live event stream only carries
+  placements created *after* a listener attaches, so `ImageLayer.hydrate()`
+  calls the `terminal_image_placements` command (Tauri + HTTP, identical
+  `[placementId, imageId, absRow, col, rows, cols, zIndex]` tuple-array
+  shape) once after the initial grid subscribe and again on every
+  `resubscribe()` — verified against a live `make dev` instance: a full page
+  reload still shows a previously-displayed image with no live event
+  involved.
+- **Known, deliberately-scoped gaps** (each documented, not silent):
+  1. **Z-index**: Kitty's `z<0` ("paint below text") placements render in
+     this same single above-text layer, so they'll visually sit on top of
+     text rather than behind it. Correct three-band compositing (per the
+     original design) needs splitting `gridRenderer.ts`'s fused
+     background+glyph paint into two separately-paintable passes so an image
+     layer can be sandwiched between them — real, separate follow-up work.
+  2. **Raw pixel formats**: see the Decode bullet above.
+  3. A placement's cells being overwritten by ordinary text (rather than an
+     explicit Kitty `a=d` or an alt-screen switch, both of which do notify
+     the renderer) does not proactively clear the image from this canvas
+     layer — there is no spare bit in the grid frame to signal "this cell's
+     image ref was just dropped" without adding a new per-cell wire field.
+
 ## Configurable Settings
 
 | Setting | Default | Description |

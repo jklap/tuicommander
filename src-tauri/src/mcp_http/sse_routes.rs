@@ -259,6 +259,8 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::PtyOsc133 { .. } => "pty-osc133",
         AppEvent::PtyCwd { .. } => "pty-cwd",
         AppEvent::PtyOpenUrl { .. } => "pty-open-url",
+        AppEvent::PtyImagePlacement { .. } => "pty-image-placement",
+        AppEvent::PtyImagePlacementsCleared { .. } => "pty-image-placements-cleared",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
         AppEvent::SessionRenamed { .. } => "session-renamed",
@@ -353,6 +355,30 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::PtyOpenUrl { session_id, url } => {
             serde_json::json!({ "session_id": session_id, "url": url })
+        }
+        AppEvent::PtyImagePlacement {
+            session_id,
+            placement_id,
+            image_id,
+            abs_row,
+            col,
+            rows,
+            cols,
+            z_index,
+        } => {
+            serde_json::json!({
+                "session_id": session_id,
+                "placement_id": placement_id,
+                "image_id": image_id,
+                "abs_row": abs_row,
+                "col": col,
+                "rows": rows,
+                "cols": cols,
+                "z_index": z_index,
+            })
+        }
+        AppEvent::PtyImagePlacementsCleared { session_id } => {
+            serde_json::json!({ "session_id": session_id })
         }
         AppEvent::PluginWatcherLines { session_id, lines } => {
             serde_json::json!({ "session_id": session_id, "lines": lines })

@@ -267,9 +267,11 @@ tuic imgls ~/Pictures
 tuic divider ~/.config/tuic/divider.png
 ```
 
-**Not implemented**: the frontend doesn't render inline images yet (see
-`to-test.md`), so these currently produce correct escape sequences that no
-part of this app's UI paints to the screen.
+The frontend renders these inline, on their own canvas layer above the text
+but below the cursor/selection — see `docs/frontend/terminal-features.md`'s
+"Inline Images" section for how, and its documented gaps (Kitty `z<0`
+placements, and mpv/blackcat's raw pixel formats, both deferred — see
+`to-test.md`).
 
 ## System Commands
 

@@ -413,9 +413,11 @@ real cell pixel size before they'll attempt to display anything:
   transmission can consume a large fraction of their 2 MB cap. Deliberately
   deferred rather than modifying the reader thread's hot loop under time
   pressure — see `to-test.md`.
-- **Known gap**: no frontend renderer exists yet. `terminal_image_ref_at`/
-  `terminal_image_bytes` return real data once an image is transmitted, but
-  nothing paints it to the canvas.
+- **Frontend renderer** (Phase 5): `src/components/Terminal/imageLayer.ts` +
+  a dedicated canvas layer in `CanvasTerminal.tsx`, between the glyph canvas
+  and the cursor/selection overlay. See `docs/frontend/terminal-features.md`
+  for the transport/paint design and its documented z-index/raw-pixel-format
+  scope.
 
 ## Kitty Graphics Protocol
 
@@ -452,8 +454,13 @@ implement the protocol itself.
   storing it as a glyph — is not implemented. See `kitty.rs`'s module doc
   comment for why (the diacritic table is large and easy to get subtly
   wrong without a canonical reference to verify against).
-- **Known gap**: same diagnostics-ring and frontend-renderer gaps as OSC
-  1337, above.
+- **Known gap**: same diagnostics-ring gap as OSC 1337, above. The Phase 5
+  frontend renderer covers Kitty placements too (any `z` renders in the same
+  above-text layer today — see `docs/frontend/terminal-features.md` for the
+  z-index scope), but raw `f=24`/`f=32` pixel payloads (no container) don't
+  decode client-side yet, since `createImageBitmap` needs a real image
+  container and today's `terminal_image_bytes` carries no width/height/format
+  metadata a raw-pixel decode would need.
 
 ## Shell Environment Variables
 

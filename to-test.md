@@ -3224,7 +3224,7 @@ cloned repo.
   HEAD, then open the branch switcher again — confirm there is no phantom
   `(HEAD detached at ...`-style entry in the list.
 
-## Inline images (color-tools plan, Phases 1-3 backend)
+## Inline images (color-tools plan, Phases 1-5 + docs)
 
 Rust changes here **require a `make dev` restart** to take effect (no hot-reload) — this whole
 section needs a human running the rebuilt app, not just re-running tests.
@@ -3232,11 +3232,24 @@ section needs a human running the rebuilt app, not just re-running tests.
 - [ ] After a rebuild, run the real `imgcat`/`imgls`/`divider` scripts, a hand-written OSC 1337
   sequence, or a real Kitty-protocol tool (`chafa -f kitty`, `mpv --vo=kitty`) against a live
   `make dev` session and confirm an image visibly displays. **Both protocols' backends are fully
-  implemented and unit/integration-tested end to end (parsing, decode, footprint sizing incl.
+  implemented and unit/integration-tested end to end** (parsing, decode, footprint sizing incl.
   `auto`/aspect-ratio, cell reservation, `CellExtra` attachment, transmit/place/delete/query,
-  chunking, quiet levels) but there is no frontend renderer yet** — `terminal_image_ref_at`/
-  `terminal_image_bytes` will return real data, but nothing paints it to the canvas. This is the
-  single largest remaining gap before the feature is user-visible at all.
+  chunking, quiet levels), **and a frontend renderer now exists** (Phase 5: `imageLayer.ts`, a
+  dedicated canvas between the glyph canvas and the cursor/selection overlay, fed by a new
+  `image-placement`/`image-placements-cleared` WS/Tauri event pair and a
+  `terminal_image_placements` hydration query for reconnect/new-client attach) — this item now
+  needs a real visual confirmation against a live rebuild, not just the unit-level formula/paint
+  tests in `imageLayer.test.ts` and the backend's own placement-event tests in `terminal_grid.rs`.
+  **Known, deliberately-scoped gaps in the Phase 5 renderer** (not silent — each is a documented
+  simplification): (1) Kitty `z<0` ("paint below text") placements still render in the single
+  above-text layer today, so they'll visually occlude text they're meant to sit behind — correct
+  three-band compositing needs splitting `gridRenderer.ts`'s fused background+glyph paint into two
+  separately-paintable passes, which is real, separate follow-up work, not attempted in this pass.
+  (2) Kitty's raw `f=24`/`f=32` pixel formats (no container — used by mpv/blackcat) don't render:
+  `createImageBitmap` can only decode a real image container (PNG/GIF/JPEG), and today's
+  `terminal_image_bytes` response carries no width/height/format metadata a raw-pixel decode would
+  need. iTerm2's `File=` and Kitty's default `f=100` PNG (everything `imgcat`/`imgls`/`divider`
+  and most real Kitty clients actually send) both render fine.
 - [ ] Diagnostics-ring elision (color-tools plan, Architecture: PTY flight-recorder rings must
   not have a large image payload's base64 bytes evict their whole history) is **not implemented**.
   A large image transmission will currently consume a large fraction of `pty_raw_rings`'

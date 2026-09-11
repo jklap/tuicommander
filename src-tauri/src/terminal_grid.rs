@@ -47,6 +47,14 @@ pub enum TermEvent {
     RequestAttention(String),
     /// iTerm2 OSC 1337 `OpenURL=:<base64>` — the decoded URL.
     OpenUrl(String),
+    /// A new inline-image placement was reserved (color-tools plan, Phase 5).
+    /// Carries `alacritty_terminal`'s own info struct verbatim — no reason to
+    /// re-shape it, since the WS/HTTP transport layer serializes its fields
+    /// directly.
+    ImagePlacement(alacritty_terminal::event::ImagePlacementInfo),
+    /// Every previously-announced placement should be treated as gone; the
+    /// consumer re-hydrates via `TerminalGrid::image_placements`.
+    ImagePlacementsCleared,
 }
 
 #[derive(Clone)]
@@ -176,6 +184,18 @@ impl EventListener for TermEventCollector {
                 let window_size = *self.window_size_px.lock().unwrap();
                 let reply = cb(window_size);
                 self.events.lock().unwrap().push(TermEvent::PtyWrite(reply));
+            }
+            Event::ImagePlacement(info) => {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(TermEvent::ImagePlacement(info));
+            }
+            Event::ImagePlacementsCleared => {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(TermEvent::ImagePlacementsCleared);
             }
             Event::ClipboardLoad(..)
             | Event::ColorRequest(..)
@@ -672,9 +692,9 @@ impl TerminalGrid {
     }
 
     /// The inline-image tile shown at a given viewport position, if any:
-    /// `(image_id, placement_id, tile_col, tile_row)`. Mirrors `hyperlink_at`'s
-    /// viewport addressing exactly.
-    pub fn image_ref_at(&self, row: usize, col: usize) -> Option<(u32, u32, u16, u16)> {
+    /// `(image_id, placement_id, tile_col, tile_row, z_index)`. Mirrors
+    /// `hyperlink_at`'s viewport addressing exactly.
+    pub fn image_ref_at(&self, row: usize, col: usize) -> Option<(u32, u32, u16, u16, i32)> {
         let grid = self.term.grid();
         let display_offset = grid.display_offset();
         let line = Line(row as i32 - display_offset as i32);
@@ -682,8 +702,86 @@ impl TerminalGrid {
             return None;
         }
         let cell = &grid[line][Column(col)];
-        cell.image_ref()
-            .map(|r| (r.image.image_id, r.placement_id, r.tile_col, r.tile_row))
+        cell.image_ref().map(|r| {
+            (
+                r.image.image_id,
+                r.placement_id,
+                r.tile_col,
+                r.tile_row,
+                r.z_index,
+            )
+        })
+    }
+
+    /// Every inline-image placement currently anchored anywhere in the
+    /// addressable grid (live screen *and* scrollback), as bounding
+    /// rectangles keyed by `placement_id` — the reconnect/new-client
+    /// hydration query (color-tools plan, Phase 5). Derived by scanning
+    /// `CellExtra.image` refs directly rather than kept in a side table: the
+    /// cell is the single source of truth for which placements still exist
+    /// (an overwritten or scrolled-off-history cell simply stops
+    /// contributing), so there is nothing to invalidate separately. A full
+    /// scan is O(rows × cols); acceptable because this only runs once per
+    /// (re)subscribe, not per frame.
+    pub fn image_placements(&self) -> Vec<alacritty_terminal::event::ImagePlacementInfo> {
+        use std::collections::HashMap;
+
+        let grid = self.term.grid();
+        let history = grid.history_size() as i32;
+        let screen_lines = grid.screen_lines() as i32;
+        let history_base = self
+            .term
+            .grid()
+            .total_scrolled()
+            .saturating_sub(history as usize);
+
+        struct Bounds {
+            image_id: u32,
+            z_index: i32,
+            min_row: i32,
+            max_row: i32,
+            min_col: u16,
+            max_col: u16,
+        }
+        let mut by_placement: HashMap<u32, Bounds> = HashMap::new();
+
+        for line_idx in -history..screen_lines {
+            let line = Line(line_idx);
+            let row = &grid[line];
+            for col in 0..grid.columns() {
+                let Some(r) = row[Column(col)].image_ref() else {
+                    continue;
+                };
+                let abs_row = (history_base as i64 + (line_idx + history) as i64) as u32;
+                let entry = by_placement.entry(r.placement_id).or_insert(Bounds {
+                    image_id: r.image.image_id,
+                    z_index: r.z_index,
+                    min_row: abs_row as i32,
+                    max_row: abs_row as i32,
+                    min_col: col as u16,
+                    max_col: col as u16,
+                });
+                entry.min_row = entry.min_row.min(abs_row as i32);
+                entry.max_row = entry.max_row.max(abs_row as i32);
+                entry.min_col = entry.min_col.min(col as u16);
+                entry.max_col = entry.max_col.max(col as u16);
+            }
+        }
+
+        by_placement
+            .into_iter()
+            .map(
+                |(placement_id, b)| alacritty_terminal::event::ImagePlacementInfo {
+                    placement_id,
+                    image_id: b.image_id,
+                    abs_row: b.min_row as u32,
+                    col: b.min_col,
+                    rows: (b.max_row - b.min_row + 1) as u16,
+                    cols: b.max_col - b.min_col + 1,
+                    z_index: b.z_index,
+                },
+            )
+            .collect()
     }
 
     /// Attach an image tile reference directly to the cell at a viewport
@@ -695,7 +793,7 @@ impl TerminalGrid {
     ///
     /// Real callers land in Phase 2/3's dispatch handlers, same as
     /// `store_image` above.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::too_many_arguments)]
     pub fn set_image_ref_at(
         &mut self,
         row: usize,
@@ -704,6 +802,7 @@ impl TerminalGrid {
         placement_id: u32,
         tile_col: u16,
         tile_row: u16,
+        z_index: i32,
     ) -> bool {
         let display_offset = self.term.grid().display_offset();
         let line = Line(row as i32 - display_offset as i32);
@@ -716,6 +815,7 @@ impl TerminalGrid {
             placement_id,
             tile_col,
             tile_row,
+            z_index,
         );
         self.term.grid_mut()[line][Column(col)].set_image_ref(Some(cell_ref));
         true
@@ -4848,8 +4948,8 @@ mod tests {
             .expect("under cap");
         let image_id = data.image_id;
 
-        assert!(grid.set_image_ref_at(0, 0, data, 1, 0, 0));
-        assert_eq!(grid.image_ref_at(0, 0), Some((image_id, 1, 0, 0)));
+        assert!(grid.set_image_ref_at(0, 0, data, 1, 0, 0, 0));
+        assert_eq!(grid.image_ref_at(0, 0), Some((image_id, 1, 0, 0, 0)));
         assert_eq!(
             grid.image_bytes(image_id).as_deref(),
             Some(&[1u8, 2, 3, 4][..])
@@ -4859,7 +4959,7 @@ mod tests {
         let data2 = grid
             .store_image(Arc::from(vec![9u8]), "image/png".to_string(), 1, 1)
             .unwrap();
-        assert!(!grid.set_image_ref_at(999, 999, data2, 1, 0, 0));
+        assert!(!grid.set_image_ref_at(999, 999, data2, 1, 0, 0, 0));
 
         // Overwriting the cell with a plain character clears its *ref* — same
         // mechanism as the hyperlink test above (`write_at_cursor` replacing
@@ -4895,12 +4995,12 @@ mod tests {
         grid.process(seq.as_bytes());
 
         // 4x2 footprint reserved starting at (0,0).
-        let (image_id, placement_id, _, _) = grid.image_ref_at(0, 0).expect("top-left tile");
+        let (image_id, placement_id, _, _, _) = grid.image_ref_at(0, 0).expect("top-left tile");
         for row in 0..2 {
             for col in 0..4 {
                 assert_eq!(
                     grid.image_ref_at(row, col),
-                    Some((image_id, placement_id, col as u16, row as u16)),
+                    Some((image_id, placement_id, col as u16, row as u16, 0)),
                     "tile at ({row},{col})"
                 );
             }
@@ -5043,7 +5143,7 @@ mod tests {
         );
 
         grid.process(b"\x1b_Ga=p,i=5,c=1,r=1,q=2\x1b\\");
-        assert_eq!(grid.image_ref_at(0, 0), Some((5, 5, 0, 0)));
+        assert_eq!(grid.image_ref_at(0, 0), Some((5, 5, 0, 0, 0)));
     }
 
     /// `a=p` against an unknown image id must respond with an error, not
@@ -5262,6 +5362,130 @@ mod tests {
             grid.image_bytes(image_id).as_deref(),
             Some(&b"hello world"[..]),
             "the real CLI's base64 payload must decode to the original file bytes"
+        );
+    }
+
+    /// Reserving an image footprint must emit a `TermEvent::ImagePlacement`
+    /// carrying the exact geometry the frontend renderer needs (color-tools
+    /// plan, Phase 5) — not just mutate cells silently.
+    #[test]
+    fn reserve_image_footprint_emits_a_placement_event_with_correct_geometry() {
+        use base64::Engine;
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode(b"not a real image, just bytes");
+        let seq = format!("\x1b]1337;File=width=4;height=2;inline=1:{payload}\x1b\\");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(seq.as_bytes());
+
+        let events = grid.drain_events();
+        let placement = events
+            .iter()
+            .find_map(|e| match e {
+                TermEvent::ImagePlacement(info) => Some(info),
+                _ => None,
+            })
+            .expect("an ImagePlacement event must have been emitted");
+        assert_eq!(placement.abs_row, 0);
+        assert_eq!(placement.col, 0);
+        assert_eq!(placement.rows, 2);
+        assert_eq!(placement.cols, 4);
+        assert_eq!(placement.z_index, 0, "iTerm2 has no z-index concept");
+    }
+
+    /// A Kitty placement's `z=` must ride all the way through to the emitted
+    /// placement event, not just the per-cell `ImageCellRef`.
+    #[test]
+    fn kitty_placement_event_carries_the_requested_z_index() {
+        use base64::Engine;
+        let raw_rgb = vec![0u8; 3 * 4];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=9,a=T,f=24,s=2,v=2,c=2,r=2,z=-1,q=2;{payload}\x1b\\").as_bytes(),
+        );
+
+        let events = grid.drain_events();
+        let placement = events
+            .iter()
+            .find_map(|e| match e {
+                TermEvent::ImagePlacement(info) => Some(info),
+                _ => None,
+            })
+            .expect("an ImagePlacement event must have been emitted");
+        assert_eq!(placement.z_index, -1);
+    }
+
+    /// The reconnect/new-client hydration query (`image_placements`) must
+    /// derive the same bounding rectangle a live placement event reports,
+    /// purely by scanning cells — proving the two paths (live event vs.
+    /// scan-based hydration) agree with no separate bookkeeping to drift.
+    #[test]
+    fn image_placements_scan_matches_the_live_placement_event() {
+        use base64::Engine;
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode(b"not a real image, just bytes");
+        let seq = format!("\x1b]1337;File=width=4;height=2;inline=1:{payload}\x1b\\");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(seq.as_bytes());
+
+        let placements = grid.image_placements();
+        assert_eq!(placements.len(), 1);
+        let p = &placements[0];
+        assert_eq!(p.abs_row, 0);
+        assert_eq!(p.col, 0);
+        assert_eq!(p.rows, 2);
+        assert_eq!(p.cols, 4);
+    }
+
+    /// Kitty `a=d,d=A` (delete all) must tell the renderer every placement is
+    /// gone, not just forget the images server-side — otherwise a deleted
+    /// image stays stuck on the frontend's separate image canvas layer,
+    /// which never sees the ordinary cell-overwrite diff that ordinary text
+    /// relies on.
+    #[test]
+    fn kitty_delete_all_emits_placements_cleared() {
+        use base64::Engine;
+        let raw_rgb = vec![0u8; 3 * 2];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=3,a=T,f=24,s=1,v=1,c=1,r=1,q=2;{payload}\x1b\\").as_bytes());
+        grid.drain_events();
+
+        grid.process(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+        let events = grid.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::ImagePlacementsCleared)),
+            "a=d,d=A must emit ImagePlacementsCleared"
+        );
+    }
+
+    /// Entering and leaving the alt screen must each tell the renderer to
+    /// drop its placement set — image placements are primary-screen-only by
+    /// design (color-tools plan, Architecture), and the underlying cells are
+    /// never touched by the swap itself, so there is no incremental diff for
+    /// the renderer to key off without this explicit signal.
+    #[test]
+    fn alt_screen_swap_emits_placements_cleared_both_ways() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+
+        grid.process(b"\x1b[?1049h"); // enter alt screen
+        let events = grid.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::ImagePlacementsCleared)),
+            "entering the alt screen must emit ImagePlacementsCleared"
+        );
+
+        grid.process(b"\x1b[?1049l"); // leave alt screen
+        let events = grid.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::ImagePlacementsCleared)),
+            "leaving the alt screen must emit ImagePlacementsCleared"
         );
     }
 
