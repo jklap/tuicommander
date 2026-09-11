@@ -234,6 +234,16 @@ pub enum AppEvent {
     /// `terminal_image_placements`.
     #[serde(rename = "pty-image-placements-cleared")]
     PtyImagePlacementsCleared { session_id: String },
+    /// A Kitty image transmission finished deferred decode (color-tools
+    /// plan) — `image_id` is now fetchable via `terminal_image_bytes`. The
+    /// frontend's `ImageLayer` never retries a fetch that came back empty on
+    /// its own, so this is what tells it to invalidate that cache entry and
+    /// try again, covering the rare case where its first attempt raced this
+    /// decode. Fired only on success — a permanently failed decode needs no
+    /// signal, since the frontend's existing "no bytes, don't retry" default
+    /// already matches that outcome.
+    #[serde(rename = "pty-image-decoded")]
+    PtyImageDecoded { session_id: String, image_id: u32 },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
@@ -543,6 +553,7 @@ impl AppEvent {
             | AppEvent::PtyOpenUrl { session_id, .. }
             | AppEvent::PtyImagePlacement { session_id, .. }
             | AppEvent::PtyImagePlacementsCleared { session_id }
+            | AppEvent::PtyImageDecoded { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
             | AppEvent::SessionAccentColorChanged { session_id, .. }
@@ -4212,7 +4223,8 @@ impl AppState {
             | AppEvent::PtyCwd { .. }
             | AppEvent::PtyOpenUrl { .. }
             | AppEvent::PtyImagePlacement { .. }
-            | AppEvent::PtyImagePlacementsCleared { .. } => {}
+            | AppEvent::PtyImagePlacementsCleared { .. }
+            | AppEvent::PtyImageDecoded { .. } => {}
             AppEvent::SessionClosed { session_id, .. } => {
                 state.session_maps.session_states.remove(session_id);
             }
@@ -5046,6 +5058,14 @@ impl VtLogBuffer {
     /// deliberately excluded from the durable log. The same exclusion applies
     /// while mouse reporting is on the primary screen (`grok --no-alt-screen`):
     /// the app owns the viewport and its SU/line dumps are not shell output.
+    /// Feeds `data` through the grid but deliberately does **not** resolve
+    /// any Kitty image decode job queued along the way (color-tools plan) —
+    /// this method runs while the caller (`pty.rs::process_chunk`) holds
+    /// `vt_log`, and decode can be slow (base64, zlib, file/shared-memory
+    /// I/O). The caller is responsible for draining those jobs itself,
+    /// after dropping that lock, via `kitty_decode_handles` +
+    /// `terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs`.
+    /// See `TerminalGrid::process`'s own doc comment for the full rationale.
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         let is_alternate = self.grid.is_alternate_screen();
 
@@ -5056,7 +5076,7 @@ impl VtLogBuffer {
             self.grid.clear_prev_rows();
         }
 
-        let changed = self.grid.process(data);
+        let changed = self.grid.process_without_kitty_decode_drain(data);
 
         let is_alternate = self.grid.is_alternate_screen();
         let inline_tui = !is_alternate && self.grid.is_mouse_reporting();
@@ -5433,6 +5453,18 @@ impl VtLogBuffer {
         &self,
     ) -> Vec<alacritty_terminal::event::ImagePlacementInfo> {
         self.grid.image_placements()
+    }
+
+    /// Cloned handles for `pty.rs::process_chunk` to resolve pending Kitty
+    /// decode jobs *after* dropping `vt_log` — see `TerminalGrid::kitty_decode_handles`'s
+    /// doc comment for why this must never be called while still holding it.
+    pub(crate) fn grid_kitty_decode_handles(
+        &self,
+    ) -> (
+        crate::terminal_image_transmission::KittyImageStoreHandle,
+        crate::terminal_image_transmission::KittyPendingJobsHandle,
+    ) {
+        self.grid.kitty_decode_handles()
     }
 
     // --- private helpers ---
