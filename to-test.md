@@ -3098,7 +3098,6 @@ the intended behavior.
   classes) with only new page-specific styling in `RepoPickerDialog.module.css` genuinely
   unverified visually. While doing the real Finder round-trip above, screenshot the picker dialog
   and the Settings section and save them to `.screenshots/finder-service/` in the main checkout.
-
 ## Branch From: real branch list + stale-setting warning (2026-09-10, frontend only — no `make dev` restart needed)
 
 Frontend-only change (no Rust touched): `RepoWorktreeTab` now lists the repo's real local/remote
@@ -3134,3 +3133,49 @@ purely to eyeball CSS on a frontend-only change wasn't judged worth the build ti
 - [ ] **[VISUAL]** Screenshot the Branch From dropdown (both the normal grouped state and the
   stale-value + warning state) and the Create Worktree dialog's warning row, save to
   `.screenshots/branch-from/` in the main checkout.
+
+## `get_git_branches`/`get_branches_detail` remote-classification + phantom-entry fixes (2026-09-10, Rust change — needs `make dev` restart)
+
+Fixed three bugs found while closing test-coverage gaps in git branch enumeration:
+
+1. **`get_git_branches`'s `is_remote`** was a naive `name.starts_with("origin/")` check
+   on the short ref name, so a remote added under any name other than `origin` (e.g.
+   `upstream`) was never detected as remote, and a local branch literally named
+   `origin/foo` was misreported as remote. Backend for `BranchSwitcher.tsx`
+   (`Cmd+B`-style branch switcher dialog).
+2. **Detached-HEAD garbage entry** — in a detached-HEAD repo state (checked out a
+   specific commit/tag, mid-rebase, mid-bisect), `git branch -a`'s synthetic
+   `(HEAD detached at abc1234)` pseudo-entry was parsed into a garbage branch named
+   `(HEAD`. Also `get_git_branches`.
+3. **Remote-HEAD-symref phantom branch, in BOTH `get_git_branches` AND the already-shipped
+   `get_branches_detail_impl`** (backend for `GitPanel`'s **Branches** tab, not just the
+   switcher) — found by code review, not in the original plan. Every normally **cloned**
+   repo has a `refs/remotes/<remote>/HEAD` symref (e.g. `refs/remotes/origin/HEAD`)
+   whose *short* name collapses to just the remote's own name (`"origin"`, not
+   `"origin/HEAD"`). Both functions' old filtering logic checked the short name for a
+   `/HEAD` suffix, which this ref never matches — so a phantom branch literally named
+   `"origin"` (or whatever the remote is called) has been leaking into both the branch
+   switcher AND the Git Panel's Branches tab for any cloned repo, likely for a long time
+   (this bug predates this session entirely for `get_branches_detail_impl`). Now both
+   check the *full* refname for a `refs/remotes/.../HEAD` shape instead.
+
+All three are covered by new unit tests (`git.rs`), but the actual UI surfaces (branch
+switcher dialog, Git Panel Branches tab) have not been visually checked against a real
+cloned repo.
+
+- [ ] Restart `make dev` to pick up the Rust change. Open **any normally-cloned repo**
+  (not one created via `git init`) in the branch switcher (`BranchSwitcher.tsx`) —
+  confirm there is no phantom branch entry named exactly `origin` (or whatever the
+  remote is called) in the list. This is the highest-value check: it's a
+  long-standing, previously-undetected bug affecting ordinary repos, not just an edge
+  case.
+- [ ] Open the same repo's Git Panel → **Branches** tab (`GitPanel/BranchesTab.tsx`,
+  backed by `get_branches_detail`) — confirm the same phantom `origin` entry does not
+  appear there either.
+- [ ] Open a repo with a remote added under a non-`origin` name
+  (`git remote add upstream <url> && git fetch upstream`), open the branch switcher,
+  and confirm the `upstream/*` branches render in the "remote" section/style, not
+  mixed in with locals, and that there's no phantom `upstream` entry either.
+- [ ] In that same repo, check out a specific commit (`git checkout <sha>`) to detach
+  HEAD, then open the branch switcher again — confirm there is no phantom
+  `(HEAD detached at ...`-style entry in the list.

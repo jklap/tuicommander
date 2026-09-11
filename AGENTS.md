@@ -464,6 +464,46 @@ it too. When adding a new per-agent disk-config field read inside `build_mcp_ins
 audit every existing test that passes a Claude-family `client_name` and add the annotation
 where it's missing — don't assume "I didn't touch that test" means it's safe.
 
+## Git Ref Enumeration — Never Classify a Ref by Its Short Name
+
+Any code that parses `git branch -a`/`for-each-ref` output to classify refs (is this
+remote? is this the synthetic HEAD entry?) must make that decision from the **full**
+refname (`%(refname)`, e.g. `refs/remotes/origin/main`), never the short name
+(`%(refname:short)`, e.g. `origin/main`). Two real bugs, one already shipped, both traced
+to this exact mistake (`git.rs`, fixed 2026-09-10):
+
+- `is_remote = name.starts_with("origin/")` on the short name (`get_git_branches`)
+  misclassified a local branch literally named `origin/foo`, and never detected a remote
+  added under any name other than `origin` (a common fork-workflow shape, e.g.
+  `upstream`). Fixed: `refname.starts_with("refs/remotes/")` on the full refname.
+- **Every normally `git clone`d repo has a `refs/remotes/<remote>/HEAD` symref**, and
+  git's `%(refname:short)` collapses this symref's short name down to just the remote's
+  own name — `"origin"`, not `"origin/HEAD"` — for any remote name. A filter written as
+  `name.ends_with("/HEAD")` on the *short* name (`get_branches_detail_impl`'s original
+  "skip the synthetic origin/HEAD pointer" check) never matches this ref, so it leaked a
+  phantom branch literally named after the remote into both the branch switcher
+  (`BranchSwitcher.tsx`) and the Git Panel's Branches tab (`GitPanel/BranchesTab.tsx`) —
+  for any ordinary cloned repo, not an edge case. This shipped for a long time undetected:
+  an existing "real repo" test ran against this exact checkout (which has this exact
+  symref) but asserted the wrong condition and silently passed. Fixed:
+  `refname.starts_with("refs/remotes/") && refname.ends_with("/HEAD")` on the full
+  refname.
+
+Also watch for a **detached-HEAD state** (checked-out commit/tag, mid-rebase,
+mid-bisect): `git branch -a` emits a synthetic pseudo-entry like
+`(HEAD detached at abc1234)` whose fields aren't a real ref at all and contain spaces
+(breaking any parser that assumes a ref name has none). `for-each-ref` is immune to this
+by construction (it only ever walks real refs matching the given pattern), which is one
+more reason to prefer it over `branch -a` for anything beyond a quick local-branch-name
+listing.
+
+**Testing note:** `git remote add` + `git fetch` does **not** create the remote's HEAD
+symref — only `git clone` does that automatically. To exercise this class of bug in a
+test fixture, explicitly run `git remote set-head <name> -a` after the fetch, or the test
+will silently never hit the code path it's meant to guard (this happened once already in
+this exact session — a code review had to point out the test setup was avoiding the
+exact scenario it claimed to cover).
+
 ## Worktree Removal Safety
 
 `git worktree remove`'s dirty-worktree and lock refusals are independent — never collapse them into a single `force: bool`. Branch deletion after a worktree removal must always use `git branch -d` (safe), never `-D`, regardless of how the worktree itself was removed. A destructive worktree action gated behind a confirm dialog must default Enter to Cancel (`defaultButton: 'cancel'`) — verify every dialog in the removal/archive/delete family sets this explicitly; don't assume a sibling dialog's fix covers all of them (`confirmRemoveLockedWorktree` shipped without it in the same commit that correctly set it on its two siblings). A heuristic detector (e.g. orphan = detached HEAD + no branch) must never drive an unrecoverable destructive action by default — give it an archive/move-aside default and require a separate, explicitly-labeled opt-in for a true hard delete.
