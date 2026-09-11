@@ -196,12 +196,17 @@ actually gets pixels on screen.
     doc comment already documents for the scroll row cache. A placement whose
     row range is entirely outside `[0, frame.screenRows)` is skipped without
     even starting a bitmap fetch.
-  - **Decode**: bytes come from the existing `terminal_image_bytes` command
-    (unchanged), wrapped in a `Blob` and handed to `createImageBitmap` — which
-    only decodes a real image container (PNG/GIF/JPEG). Kitty's raw
-    `f=24`/`f=32` formats (no container; mpv/blackcat) fail to decode and are
-    marked errored (never retried, logged nowhere loud since this is a known,
-    documented gap, not a bug) — see `to-test.md`.
+  - **Decode**: bytes come from the existing `terminal_image_bytes` command,
+    wrapped in a `Blob` and handed to `createImageBitmap` — which only decodes
+    a real image container (PNG/GIF/JPEG). Kitty's raw `f=24`/`f=32` formats
+    (no container; mpv/blackcat) have no container for `createImageBitmap` to
+    sniff, so `imageLayer.ts`'s `decode()` first calls the `terminal_image_meta`
+    command (mime + intrinsic width/height); when the mime is `"raw-rgb"` or
+    `"raw-rgba"` it manually expands the bytes into an RGBA `Uint8ClampedArray`
+    (RGB gets alpha=255 synthesized) and builds an `ImageData` for
+    `createImageBitmap` instead of going through `Blob`. A size mismatch
+    between the declared dimensions and the byte count is treated as a decode
+    error (`decodeRawPixels` returns `null`) rather than corrupting the canvas.
 - **Transport — a new event pair, not a new binary-frame bit.** The existing
   grid-frame binary header has zero free bits (`canvasTerminalUtils.ts`'s
   per-cell attrs byte and header flag bytes are fully packed), so placements
@@ -224,19 +229,40 @@ actually gets pixels on screen.
   which backend path attached them (terminal-reserved-footprint or a
   placeholder character's own resolved id), so this renderer already covers
   them once the backend attaches the `CellExtra.image` ref.
-- **Known, deliberately-scoped gaps** (each documented, not silent):
-  1. **Z-index**: Kitty's `z<0` ("paint below text") placements render in
-     this same single above-text layer, so they'll visually sit on top of
-     text rather than behind it. Correct three-band compositing (per the
-     original design) needs splitting `gridRenderer.ts`'s fused
-     background+glyph paint into two separately-paintable passes so an image
-     layer can be sandwiched between them — real, separate follow-up work.
-  2. **Raw pixel formats**: see the Decode bullet above.
-  3. A placement's cells being overwritten by ordinary text (rather than an
-     explicit Kitty `a=d` or an alt-screen switch, both of which do notify
-     the renderer) does not proactively clear the image from this canvas
-     layer — there is no spare bit in the grid frame to signal "this cell's
-     image ref was just dropped" without adding a new per-cell wire field.
+- **Z-index: full compositing, split-mode-on-demand.** A session paints
+  through the single fused `canvasRef` (`gridRenderer.paintGrid`) exactly as
+  before, until the first `z<0` placement arrives — `ImageLayer.hasNegativeZ()`
+  becomes true and `CanvasTerminal.tsx`'s `switchToSplitCompositingIfNeeded`
+  flips a one-way `usesSplitCompositing` flag, lazily builds a second
+  `GridRenderer` bound to the new `glyphCanvasRef`, and from then on paints the
+  5-layer stack every frame: `canvasRef` (background-only, opaque default fill
+  + explicit per-cell bg via `gridRenderer.paintGridBackground`) →
+  `belowTextImageCanvasRef` (`ImageLayer.paintBelowText`, `z<0`) →
+  `glyphCanvasRef` (transparent, text+decorations only, via
+  `glyphRenderer.paintGridGlyphs`) → `imageCanvasRef`
+  (`ImageLayer.paintAboveText`, `z>=0`) → `overlayCanvasRef` (cursor/
+  selection/search, unchanged). The switch never reverts for the life of the
+  session. Kitty's extreme `z < INT32_MIN/2` sub-band (below a *non-default*
+  background) is folded into the same "below text" band as ordinary `z<0`
+  rather than getting a sixth canvas — no target tool in the coverage table
+  relies on that sub-band being visually distinct from ordinary `z<0`.
+  `gridRenderer.ts`'s `paintGridBackground`/`paintGridGlyphs` are an exact
+  decomposition of `paintGrid` (see `gridRenderer.test.ts`'s split-compositing
+  regression guard), so the fused fast path's output is provably unchanged.
+- **Raw pixel formats**: see the Decode bullet above — now handled.
+- **Overwrite detection**: a placement's cells being overwritten by ordinary
+  text (rather than an explicit Kitty `a=d` or an alt-screen switch, both of
+  which do notify the renderer) has no spare wire bit to signal "this cell's
+  image ref was just dropped." `ImageLayer.verifyOverlapping()` closes most of
+  this gap heuristically: whenever an ordinary dirty-row update touches a row
+  a live placement occupies, it re-checks that placement's *top-left cell
+  only* via the existing single-cell `terminal_image_ref_at` lookup, and drops
+  the placement if the ref no longer matches. This is deliberately narrower
+  than perfect — a partial overwrite within a placement's rectangle that
+  leaves the top-left cell untouched is not caught — but covers the common
+  case (a shell prompt or new text overwriting the placement's origin) without
+  a per-cell wire-format change. Fails open (keeps the placement) if the
+  verify call itself errors.
 
 ## Configurable Settings
 
