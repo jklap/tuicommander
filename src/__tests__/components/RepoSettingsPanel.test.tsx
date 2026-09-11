@@ -118,6 +118,7 @@ describe("SettingsPanel — repo context", () => {
 			prHideConflicting: null,
 			prHideCiFailing: null,
 			branchLabels: {},
+			copyPaths: [],
 		};
 		vi.mocked(repoSettingsStore.getOrCreate).mockReturnValue(mockSettings);
 	});
