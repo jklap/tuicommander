@@ -890,6 +890,17 @@ const SHELL_IDLE_MS: u64 = 500;
 /// Combined with the 2s frontend debounce, this gives ~4.5s total hold.
 const AGENT_IDLE_MS: u64 = 2500;
 
+/// How long an *ambiguous* non-shell foreground (unrecognized, resolved only
+/// via the run-config preset fallback — not a direct `classify_agent` match)
+/// must persist before `session_states.agent_seen_running` latches. Guards
+/// against a fast-failing intermediate wrapper hop (e.g. `direnv exec .
+/// mytool` erroring out before `mytool` itself ever runs) prematurely
+/// confirming a preset as "seen running," which would let a shell reappearing
+/// moments later wipe it. A direct `classify_agent` match has no such
+/// ambiguity and confirms immediately, no debounce. See
+/// `get_session_foreground_process_impl`.
+const AGENT_SEEN_RUNNING_CONFIRM_MS: u64 = 1000;
+
 /// Retry horizon for the payload-free orchestrator mail notice after an
 /// ambiguous PTY write. Ordinary payload injection remains non-retriable.
 const ORCHESTRATOR_WAKE_UNCERTAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
@@ -4104,6 +4115,22 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
                 rank = ?evidence.rank,
                 "Shell state → {label}"
             );
+        }
+        if !hook_state && target == SHELL_IDLE {
+            // OSC 133's own prompt marker (`'A'`) only fires once the real
+            // shell redraws its prompt — it cannot fire while any foreground
+            // child (agent or not) still owns the terminal, so this is an
+            // immediate, reliable "the agent has genuinely exited" signal.
+            // Deliberately NOT extended to the `hook_state` (OSC 7770) path:
+            // a hook-instrumented agent's own "idle" means it finished this
+            // turn and is waiting for the next prompt while the SAME process
+            // stays alive — clearing there would wipe `agent_type` on every
+            // ordinary turn boundary, not just on exit. Clearing here (before
+            // `emit_shell_state` below, which reads `agent_type` fresh for
+            // its payload) makes the LastPromptBar disappear as fast as the
+            // shell's own prompt redraws, instead of waiting for the next
+            // `get_session_foreground_process` poll.
+            clear_agent_type_on_confirmed_shell(state, session_id);
         }
         emit_shell_state(state, session_id, label);
         // Publish IDLE before a queued delivery claims IDLE→BUSY again. Reversing
@@ -11289,6 +11316,215 @@ fn exact_agent_name(process_name: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// Plain-function body of [`get_session_foreground_process`], factored out so
+/// tests can call it directly with a plain `&AppState` instead of having to
+/// construct a `tauri::State` wrapper, and so the HTTP/remote transport
+/// (`mcp_http::session::get_foreground_process`) can share the exact same
+/// detection-and-mirror logic instead of drifting from a second copy — none
+/// of what this function calls is desktop/Tauri-specific, only the
+/// `#[tauri::command]` wrapper above is.
+pub(crate) fn get_session_foreground_process_impl(
+    state: &AppState,
+    session_id: &str,
+) -> Option<String> {
+    const SHELLS: &[&str] = &[
+        "zsh",
+        "bash",
+        "fish",
+        "sh",
+        "dash",
+        "ksh",
+        "csh",
+        "tcsh",
+        "nushell",
+        "nu",
+        "powershell",
+        "pwsh",
+        "cmd",
+        // Less common but real login shells. A shell missing from this list
+        // isn't just unrecognized for classification — since 2026-09-10 it
+        // also can never trigger the confirmed-shell agent_type clear below,
+        // so its user's LastPromptBar/agent-idle-threshold would stay stuck
+        // exactly like the bug this list's newer consumer was fixing.
+        "xonsh",
+        "elvish",
+        "ion",
+        "murex",
+    ];
+
+    let (detected, fg_is_shell) = {
+        let entry = state.session_maps.sessions.get(session_id)?;
+        let session = entry.value().lock();
+        // TUIC already knows exactly which shell binary it launched for THIS
+        // session (`session.shell`, set from `resolve_shell()` at PTY
+        // creation) — matching against it directly covers any login shell,
+        // not just the ones on the static `SHELLS` list above, which can
+        // never be exhaustive by construction.
+        // Strip a trailing ".exe" (case-insensitive) to match
+        // `process_name_from_pid`'s Windows arm, which does the same for
+        // consistency with `classify_agent` — without this, `session.shell`
+        // (which `default_shell()`/`resolve_shell()` always populate WITH the
+        // suffix on Windows, e.g. "powershell.exe") would never match the
+        // detected foreground name (which never carries it), silently
+        // defeating this fallback for every Windows shell not already on the
+        // static `SHELLS` list.
+        let session_shell_name = std::path::Path::new(&session.shell)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .map(|s| match s.len().checked_sub(4) {
+                Some(cut) if s[cut..].eq_ignore_ascii_case(".exe") => s[..cut].to_string(),
+                _ => s.to_string(),
+            });
+        #[cfg(not(windows))]
+        {
+            let pgid = session.master.process_group_leader()?;
+            let name = process_name_from_pid(pgid as u32)?;
+            let is_shell = SHELLS.contains(&name.as_str())
+                || session_shell_name.as_deref() == Some(name.as_str());
+            (classify_agent(&name).map(|s| s.to_string()), is_shell)
+        }
+        #[cfg(windows)]
+        {
+            let child_pid = session._child.process_id()?;
+            let leaf = deepest_descendant_pid(child_pid)?;
+            let name = process_name_from_pid(leaf)?;
+            let is_shell = SHELLS.contains(&name.as_str())
+                || session_shell_name.as_deref() == Some(name.as_str());
+            (classify_agent(&name).map(|s| s.to_string()), is_shell)
+        }
+    };
+
+    // Fallback: unrecognised non-shell foreground + pre-set agent type → use preset.
+    // Covers custom commands (aliases, symlinks, wrappers) from run configs.
+    let effective = detected.clone().or_else(|| {
+        if fg_is_shell {
+            return None;
+        }
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .and_then(|s| s.agent_type.clone())
+    });
+
+    // Mirror the detected agent type into session_states so the PTY reader's
+    // `agent_active_for_parse` check flips on and plain-prefix structured
+    // tokens (`intent:`, `action:`, `suggest:`) start being parsed. Without
+    // this sync, sessions started by running `claude` inside a plain shell
+    // (as opposed to via the /agent spawn route) never enable plain-prefix
+    // parsing, so intents never rename the tab.
+    //
+    // Sticky on unrecognized foreground: only set on Some, never clear on None
+    // from an *unrecognized* foreground. Foreground-pgid sampling is inherently
+    // flaky during subprocess transitions — when claude spawns a short-lived
+    // grandchild (git, sed, rg) the pgid leader briefly points to that
+    // unrecognized binary and classify_agent returns None. Writing that None
+    // back would flip agent_active off and drop the very next
+    // `suggest:`/`intent:` token even though claude is still the live agent.
+    // Frontend useAgentPolling.ts applies the same stickiness (streak +
+    // source=idle) on its store mirror; backend must match or the parser
+    // gates off while the UI still shows the agent active.
+    //
+    // A *confirmed* shell foreground is not that flaky case — it's a positive
+    // match against the known SHELLS list, not "unrecognized" — so once we've
+    // actually seen this session's agent running at least once
+    // (`agent_seen_running`), it's a reliable signal that the agent has since
+    // exited and control returned to the shell. Clearing here (rather than
+    // leaving the mirror permanently sticky for the session's lifetime) lets
+    // the idle-threshold selection in `should_transition_idle_with_hook` drop
+    // back to the shorter shell-idle window immediately, instead of the
+    // longer agent-idle window outliving the agent that justified it.
+    //
+    // `agent_seen_running` gates this deliberately: a freshly created session
+    // whose `agent_type` is only a run-config *preset* (a custom/unrecognized
+    // launcher's binary hasn't been exec'd yet — see `PtyConfig::agent_type`)
+    // is ALSO a confirmed-shell foreground at this point, since nothing has
+    // launched yet. Clearing unconditionally on that would permanently wipe
+    // the preset the instant the shell's first idle event fires (which races
+    // with, and can land before, the pending init command actually running) —
+    // `classify_agent` will never subsequently recognise a custom binary, so
+    // nothing would ever restore it. Session teardown also clears
+    // session_states entirely, independent of this.
+    //
+    // A direct `classify_agent` match (`detected.is_some()`) confirms
+    // `agent_seen_running` immediately — there's no ambiguity about what's
+    // running. The fallback path (unrecognized non-shell, resolved only via
+    // the preset) is genuinely ambiguous — it can't tell "the preset's own
+    // launcher" from "an intermediate wrapper hop" (`direnv exec`, a
+    // non-`exec`'d wrapper script) — so it requires the foreground to
+    // persist across `AGENT_SEEN_RUNNING_CONFIRM_MS` before confirming,
+    // so a wrapper that fails almost immediately can't strand the preset.
+    if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id) {
+        if !fg_is_shell && effective.is_some() {
+            if entry.agent_seen_running {
+                // Already confirmed — no more debounce bookkeeping needed.
+            } else if detected.is_some() {
+                entry.agent_seen_running = true;
+                entry.agent_seen_running_pending_since_ms = None;
+            } else {
+                let now = now_epoch_ms();
+                match entry.agent_seen_running_pending_since_ms {
+                    None => entry.agent_seen_running_pending_since_ms = Some(now),
+                    Some(first_seen)
+                        if now.saturating_sub(first_seen) >= AGENT_SEEN_RUNNING_CONFIRM_MS =>
+                    {
+                        entry.agent_seen_running = true;
+                        entry.agent_seen_running_pending_since_ms = None;
+                    }
+                    _ => {}
+                }
+            }
+            if entry.agent_type != effective {
+                entry.agent_type = effective.clone();
+                entry.hook_instrumented = hook_instrumented_for(
+                    &crate::config::load_agents_config(),
+                    entry.agent_type.as_deref(),
+                );
+            }
+        } else if fg_is_shell {
+            // A pending ambiguous-confirmation window that never reached its
+            // threshold means whatever was running already ended — correctly
+            // never confirmed, but the stale timestamp must not leak into a
+            // later, unrelated episode.
+            entry.agent_seen_running_pending_since_ms = None;
+        }
+    }
+
+    if fg_is_shell {
+        clear_agent_type_on_confirmed_shell(state, session_id);
+    }
+
+    effective
+}
+
+/// Clear the sticky `session_states.agent_type` mirror once the shell has
+/// genuinely reclaimed the foreground AND the session's agent had actually
+/// been observed running (`agent_seen_running`) — never touches an
+/// unconfirmed run-config preset. Shared by two independent "shell is back"
+/// signals: the fast, event-driven OSC 133 prompt marker
+/// (`transition_explicit_shell_state_with_hook`, OSC 133 only — deliberately
+/// NOT OSC 7770, whose "idle" means "agent finished this turn, still
+/// running," not "agent exited"; see that function's call site) and the
+/// pgid-polling fallback above (for shells without injected shell
+/// integration, or when the fast path is unavailable).
+fn clear_agent_type_on_confirmed_shell(state: &AppState, session_id: &str) {
+    if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id)
+        && entry.agent_type.is_some()
+        && entry.agent_seen_running
+    {
+        entry.agent_type = None;
+        entry.hook_instrumented = false;
+        entry.agent_seen_running = false;
+        entry.agent_seen_running_pending_since_ms = None;
+    }
+}
+
+
+
+
+
+
 
 /// Info about an active PTY session for frontend reconnection
 #[derive(Clone, Serialize)]
