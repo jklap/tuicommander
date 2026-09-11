@@ -222,10 +222,15 @@ export interface BranchActivityTerminal {
 
 /** Whether a branch's worktree has anything attached, and what it's doing.
  *
- *  `isBusy` mirrors the backend's live-session gate exactly: it is true
- *  whenever ANY terminal is attached, not only when one is actively working —
- *  the 2026-08-26 incident's worktree was deleted while an idle plain shell
- *  sat in it, not a busy agent. `terminals` gives a removal dialog something
+ *  `isBusy` is true whenever any attached terminal is not known to have
+ *  exited, not only when one is actively working — the 2026-08-26 incident's
+ *  worktree was deleted while an idle plain shell sat in it, not a busy
+ *  agent. An id missing from terminalsStore entirely still counts as busy
+ *  (conservative — better to over-warn than delete a worktree with a
+ *  terminal we can't yet see); only an id we CAN see and know has
+ *  `shellState === "exited"` is excluded, so an agent-owned terminal/session
+ *  that exited on its own (its tab may still linger in the UI) doesn't keep
+ *  a branch "busy" forever. `terminals` gives a removal dialog something
  *  more specific to show than a bare count. */
 export interface BranchActivitySummary {
 	terminalCount: number;
@@ -244,22 +249,40 @@ const REMOVAL_DIALOG_CLASS_NAMES = { rateLimited: "", error: "", waiting: "", wo
  *  closures for the sidebar-dot precedent this generalizes. */
 export function branchActivitySummary(terminalIds: string[]): BranchActivitySummary {
 	const terminals: BranchActivityTerminal[] = [];
+	let anyLive = false;
 	for (const id of terminalIds) {
 		const t = terminalsStore.get(id);
+		// Conservative by design: an id missing from terminalsStore entirely
+		// (e.g. a load-order race) still counts as busy, same as before — better
+		// to over-warn than delete a worktree with a terminal we can't yet see.
+		// Only a terminal we CAN see and know has exited is excluded, so an
+		// agent-owned terminal/session that exited on its own (Terminal.tsx,
+		// useAppInit.ts's session-closed handler) doesn't keep a branch "busy"
+		// forever just because its tab is still lingering in the UI.
+		if (t == null || t.shellState !== "exited") anyLive = true;
 		const isRateLimited = !!(t?.sessionId && rateLimitStore.isRateLimited(t.sessionId));
-		const { label } = terminalStatusLabel(
-			t?.shellState ?? null,
-			t?.awaitingInput ?? null,
-			isRateLimited,
-			REMOVAL_DIALOG_CLASS_NAMES,
-			t?.agentState ?? null,
-			t?.backgroundWork ?? false,
-		);
+		// terminalStatusLabel has no "exited" case of its own (it falls through to
+		// the generic "—" it also uses for a genuinely unknown/missing id) — that's
+		// the right call for the Activity Dashboard's existing, tested contract,
+		// but in a removal dialog a present, exited terminal deserves a clearer
+		// label than a bare dash, so it's overridden locally here rather than by
+		// changing the shared dashboard label function.
+		const label =
+			t != null && t.shellState === "exited"
+				? "Exited"
+				: terminalStatusLabel(
+						t?.shellState ?? null,
+						t?.awaitingInput ?? null,
+						isRateLimited,
+						REMOVAL_DIALOG_CLASS_NAMES,
+						t?.agentState ?? null,
+						t?.backgroundWork ?? false,
+					).label;
 		terminals.push({ id, agentType: t?.agentType ?? null, label });
 	}
 	return {
 		terminalCount: terminalIds.length,
-		isBusy: terminalIds.length > 0,
+		isBusy: anyLive,
 		terminals,
 	};
 }
