@@ -77,6 +77,9 @@ pub(crate) mod grid_watch;
 pub(crate) mod grok_usage;
 #[cfg(feature = "desktop")]
 pub(crate) mod hook_binary;
+// Resolves the `tuic` sidecar via the desktop-only `tuic_cli` module.
+#[cfg(feature = "desktop")]
+pub(crate) mod image_cli_shims;
 pub(crate) mod improvement_scan;
 pub(crate) use tuic_core::jsonc_edit;
 pub(crate) use tuic_terminal::input_line_buffer;

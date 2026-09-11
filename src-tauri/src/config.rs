@@ -232,7 +232,8 @@ use std::path::PathBuf;
 
 #[cfg(test)]
 pub(crate) use tuic_core::config_dir::{
-    set_override as set_config_dir_override, without_override as without_config_dir_override,
+    has_override as has_config_dir_override, set_override as set_config_dir_override,
+    without_override as without_config_dir_override,
 };
 
 /// Resolve the config directory for production or the isolated test support feature.
