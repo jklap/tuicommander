@@ -802,6 +802,20 @@ impl TerminalGrid {
         self.image_store.lock().bytes(image_id)
     }
 
+    /// `(mime, intrinsic_width, intrinsic_height)` for a previously
+    /// transmitted image, by id — the frontend renderer's only way to learn
+    /// enough to interpret Kitty's raw `f=24`/`f=32` payloads (no container,
+    /// so `createImageBitmap` can't sniff dimensions/format the way it can
+    /// for PNG/GIF/JPEG). `None` under the same conditions as `image_bytes`.
+    pub fn image_meta(&self, image_id: u32) -> Option<(String, u32, u32)> {
+        let image = self.image_store.lock().get(image_id)?;
+        Some((
+            image.mime.clone(),
+            image.intrinsic_width,
+            image.intrinsic_height,
+        ))
+    }
+
     /// The inline-image tile shown at a given viewport position, if any:
     /// `(image_id, placement_id, tile_col, tile_row, z_index)`. Mirrors
     /// `hyperlink_at`'s viewport addressing exactly.
@@ -5403,6 +5417,30 @@ mod tests {
         );
     }
 
+    /// The `z=` on an `a=T,U=1` registration is only ever carried on that
+    /// registration command — never on the placeholder text itself — so it
+    /// must still reach the resolved cell's `ImageCellRef.z_index` (color-
+    /// tools plan, Phase 7's z-order-compositing follow-up). Regression
+    /// guard for exactly the gap image.nvim's real usage (`z=-1`) would hit.
+    #[test]
+    fn kitty_unicode_placeholder_z_index_is_recovered_from_the_registration() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=42,a=T,f=24,s=1,v=1,U=1,z=-1,q=2;{payload}\x1b\\").as_bytes(),
+        );
+
+        grid.process("\x1b[38;5;42m\u{10EEEE}\u{305}\u{305}\x1b[39m".as_bytes());
+        let (image_id, _, _, _, z_index) = grid.image_ref_at(0, 0).expect("placeholder resolved");
+        assert_eq!(image_id, 42);
+        assert_eq!(
+            z_index, -1,
+            "z=-1 from the a=T,U=1 registration must survive to the cell"
+        );
+    }
+
     /// The spec's own worked example: a 2x2 grid of image 42, printed as
     /// plain SGR-256-color text with row/column diacritics — verified
     /// against the real end-to-end parser, not just the pure diacritic
@@ -5746,6 +5784,63 @@ mod tests {
         assert_eq!(grid.image_bytes(1).as_deref(), Some(&[5u8; 12][..]));
     }
 
+    /// A crafted `r=` far larger than any real image needs must not hang the
+    /// session — `reserve_image_footprint` clamps to a hard cap
+    /// (`MAX_FOOTPRINT_ROWS`) instead of looping once per requested row.
+    /// Regression guard for a real DoS a security review found:
+    /// `r=4000000000` previously attempted up to `u32::MAX` `linefeed()`
+    /// calls, all under the session's `vt_log` lock.
+    #[test]
+    fn kitty_footprint_row_count_is_clamped_to_a_sane_maximum() {
+        use base64::Engine;
+        let raw_rgb = vec![1u8; 3];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 20_000);
+        grid.process(
+            format!("\x1b_Gi=1,a=T,f=24,s=1,v=1,c=1,r=50000,q=2;{payload}\x1b\\").as_bytes(),
+        );
+        let placements = grid.image_placements();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(
+            placements[0].rows, 10_000,
+            "a far-oversized r= must clamp to the hard cap, not attempt 50,000 linefeeds"
+        );
+    }
+
+    /// `o=z` inflating far beyond the accepted size must be rejected before
+    /// the full decompressed buffer is ever built — a classic decompression
+    /// bomb (a small compressed all-zero payload expanding to tens of MB).
+    /// Regression guard for a real gap a security review found: the
+    /// previous unbounded `read_to_end` allocated the entire inflated
+    /// buffer before the app-level `MAX_SESSION_IMAGE_BYTES` cap ever ran.
+    #[test]
+    fn kitty_o_equals_z_decompression_bomb_is_rejected() {
+        use base64::Engine;
+        use std::io::Write;
+        // ~65 MiB of zeros compresses to a tiny payload but would inflate
+        // past the 64 MiB cap this fix enforces.
+        let huge = vec![0u8; 65 * 1024 * 1024];
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&huge).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=1,a=T,f=24,s=1,v=1,c=1,r=1,o=z;{payload_b64}\x1b\\").as_bytes(),
+        );
+        assert_eq!(
+            grid.image_ref_at(0, 0),
+            None,
+            "an oversized inflated payload must be rejected, not displayed"
+        );
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec!["\x1b_Gi=1;EINVAL:decompressed payload exceeds the size limit\x1b\\".to_string()]
+        );
+    }
+
     /// `a=d,d=I,i=<id>` forgets the store's own reference but must not
     /// affect a cell already displaying that image — the cell holds its own
     /// clone of the `Arc`, independent of the store's bookkeeping.
@@ -5828,6 +5923,42 @@ mod tests {
         grid.process(b"hello");
         assert_eq!(grid.image_ref_at(0, 0), None);
         assert_eq!(grid.get_row_text(0).trim_end(), "hello");
+    }
+
+    /// A malicious client could keep the `m=1` bit set forever, streaming
+    /// chunk after chunk with no final chunk that ever assembles the
+    /// transfer. Each individual chunk is already capped by vte's own
+    /// `MAX_OSC_RAW_STD` (2 MiB per dispatch), but nothing previously
+    /// stopped the *accumulated total* from growing past
+    /// `kitty::MAX_CHUNKED_B64_BYTES` before the app-level byte cap ever got
+    /// a chance to reject it. Regression guard for a real gap a security
+    /// review found.
+    #[test]
+    fn kitty_chunked_transmission_over_cap_aborts_the_whole_transfer() {
+        let chunk = "A".repeat(2_000_000); // under vte's own 2 MiB per-dispatch cap
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=1,v=1,c=1,r=1,m=1;{chunk}\x1b\\").as_bytes());
+        // Enough further chunks to push the accumulated total past the
+        // 96 MiB cap while still claiming more chunks are coming. No final
+        // (`m=0`) chunk is ever sent — a real `m=0` chunk carries only
+        // `m=`/`q=` per spec, so completing the transfer after an abort
+        // would just start a brand-new, independent (and here, otherwise
+        // valid) transmission under a freshly auto-allocated image id,
+        // which would prove nothing about whether *this* transfer's
+        // accumulated payload was actually discarded.
+        for _ in 0..50 {
+            grid.process(format!("\x1b_Gm=1;{chunk}\x1b\\").as_bytes());
+        }
+        assert_eq!(
+            grid.image_ref_at(0, 0),
+            None,
+            "the whole transfer must have been aborted once the accumulated total exceeded the cap"
+        );
+        assert_eq!(
+            grid.image_bytes(1),
+            None,
+            "image id 1 (this transfer's own client-chosen id) must never have been stored"
+        );
     }
 
     /// An APC sequence without the literal `G` marker isn't a Kitty graphics

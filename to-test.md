@@ -5423,6 +5423,48 @@ cloned repo.
 Rust changes here **require a `make dev` restart** to take effect (no hot-reload) — this whole
 section needs a human running the rebuilt app, not just re-running tests.
 
+**Post-implementation code review + security review (2026-09-11)**, scoped to the whole
+inline-images feature diff (`93d00740..d11e3f4b`), found and fixed 4 real issues before this
+feature could be considered done — see commit history for the fix commit:
+1. **[Critical, fixed]** `reserve_image_footprint` had no upper bound on requested rows — a
+   crafted `r=`/`height=` (e.g. `r=4000000000`) could attempt up to `u32::MAX` `linefeed()`
+   calls under the session's `vt_log` lock, hanging that session (and every other consumer of
+   its grid) indefinitely. Now clamped to a hard `MAX_FOOTPRINT_ROWS = 10_000` cap. Regression
+   test: `terminal_grid::tests::kitty_footprint_row_count_is_clamped_to_a_sane_maximum`.
+2. **[High, fixed]** Kitty's `m=1` chunked-transmission accumulation had no cap of its own —
+   each individual chunk was already bounded by vte's `MAX_OSC_RAW_STD` (2 MiB), but a client
+   could stream an unbounded *number* of chunks, growing the pending buffer past any reasonable
+   size before the app-level `MAX_SESSION_IMAGE_BYTES` cap ever ran. Now capped at
+   `kitty::MAX_CHUNKED_B64_BYTES` (96 MiB, mirroring iTerm2's own equivalent guard), failing
+   closed (aborts the whole transfer). Regression test:
+   `terminal_grid::tests::kitty_chunked_transmission_over_cap_aborts_the_whole_transfer`.
+3. **[High, fixed]** `o=z` zlib decompression had no bound on inflated output size — a classic
+   decompression bomb (a small compressed all-zero payload expanding to gigabytes) would
+   allocate the full inflated buffer before the byte cap ever checked it. Now bounded via
+   `Read::take` at 64 MiB, rejecting before the oversized buffer is ever fully built.
+   Regression test: `terminal_grid::tests::kitty_o_equals_z_decompression_bomb_is_rejected`.
+4. **[Should-fix, fixed]** `unicode_placeholder_z` (the U=1 z_index map) had no cap of its own —
+   only cleared by explicit `a=d` or session end — so a client registering many placements
+   without ever deleting them would grow it for the session's lifetime. Now capped at 100,000
+   entries as a refusal (falls back to the default z_index=0 past the cap, a benign
+   degradation). **No dedicated regression test was written for this one** — the guard is a
+   one-line length check, and a test proving the exact 100,000-entry boundary would need that
+   many real escape-sequence parses, which wasn't judged worth the runtime cost for a
+   defense-in-depth-only fix; reviewed by inspection instead.
+
+The review's remaining findings were judged lower-priority and left open, tracked here rather
+than fixed: (a) Kitty transmit decode (base64/zlib/file-read/shm-copy) still runs synchronously
+under the `vt_log` lock rather than the plan's originally-designed post-lock deferred-decode
+(`TermEvent::ImagePending`) — the three byte-cap fixes above now bound that lock-hold time to a
+small, fixed worst case (tens of milliseconds) instead of it being unbounded, which was judged
+sufficient mitigation without taking on the larger architectural refactor; revisit if this ever
+shows up as a real-world stall. (b) `ImageLayer.verifyOverlapping()`'s fail-open behavior on a
+`terminal_image_ref_at` error could in principle mask a *persistent* backend error (a
+genuinely-overwritten placement never getting cleared) rather than just a transient one — low
+severity, since `a=d`/alt-screen cleanup independently cover the common cases. (c) No
+per-command request/response-shape test for the 4 new image commands beyond the generic
+route-existence parity test in `transport.test.ts`.
+
 - [ ] After a rebuild, run the real `imgcat`/`imgls`/`divider` scripts, a hand-written OSC 1337
   sequence, or a real Kitty-protocol tool (`chafa -f kitty`, `mpv --vo=kitty`) against a live
   `make dev` session and confirm an image visibly displays. **Both protocols' backends are fully
@@ -5434,16 +5476,28 @@ section needs a human running the rebuilt app, not just re-running tests.
   `terminal_image_placements` hydration query for reconnect/new-client attach) — this item now
   needs a real visual confirmation against a live rebuild, not just the unit-level formula/paint
   tests in `imageLayer.test.ts` and the backend's own placement-event tests in `terminal_grid.rs`.
-  **Known, deliberately-scoped gaps in the Phase 5 renderer** (not silent — each is a documented
-  simplification): (1) Kitty `z<0` ("paint below text") placements still render in the single
-  above-text layer today, so they'll visually occlude text they're meant to sit behind — correct
-  three-band compositing needs splitting `gridRenderer.ts`'s fused background+glyph paint into two
-  separately-paintable passes, which is real, separate follow-up work, not attempted in this pass.
-  (2) Kitty's raw `f=24`/`f=32` pixel formats (no container — used by mpv/blackcat) don't render:
-  `createImageBitmap` can only decode a real image container (PNG/GIF/JPEG), and today's
-  `terminal_image_bytes` response carries no width/height/format metadata a raw-pixel decode would
-  need. iTerm2's `File=` and Kitty's default `f=100` PNG (everything `imgcat`/`imgls`/`divider`
-  and most real Kitty clients actually send) both render fine.
+  **Full z-order compositing, raw pixel format decoding, and overwrite detection are now
+  implemented too** (previously-documented gaps, since closed): (1) Kitty `z<0` ("paint below
+  text") placements now render on a dedicated `belowTextImageCanvasRef` sandwiched between a
+  background-only canvas and a transparent glyph-only canvas — `CanvasTerminal.tsx` switches a
+  session from the single fused `canvasRef` paint to this 5-layer stack the first time
+  `ImageLayer.hasNegativeZ()` goes true, and never switches back, so the common case (no
+  negative-z images) keeps the original fast path. Live-verified against a real `make dev`
+  session: a `z=-1` placement painted through a blue square's text (visible on top) while an
+  otherwise-identical `z=0` placement stayed hidden beneath it, exactly as intended.
+  (2) Kitty's raw `f=24`/`f=32` pixel formats (no container — used by mpv/blackcat) now decode via
+  a new `terminal_image_meta` command (mime + intrinsic dimensions) plus frontend-side manual
+  `ImageData` reconstruction (RGB expanded to RGBA) in `imageLayer.ts`'s `decodeRawPixels`.
+  (3) A placement's cells being overwritten by ordinary text (not an explicit `a=d`/alt-screen
+  switch) is now detected heuristically: `ImageLayer.verifyOverlapping()` re-checks a placement's
+  top-left cell via `terminal_image_ref_at` whenever a dirty-row update touches one of its rows,
+  and drops the placement if the ref no longer matches — narrower than a full-rectangle check
+  (a partial overwrite that spares the top-left cell isn't caught) but covers the common case.
+  All three still need a real-tool visual pass beyond the z-order live-verification already done:
+  raw `f=24`/`f=32` against mpv/blackcat, and overwrite-clearing against a real TUI that redraws
+  over a placement's origin cell (yazi, image.nvim scrolling). iTerm2's `File=` and Kitty's default
+  `f=100` PNG (everything `imgcat`/`imgls`/`divider` and most real Kitty clients actually send)
+  both render fine and were live-verified earlier in this same session.
 - [ ] Diagnostics-ring elision (color-tools plan, Phase 8, `image_payload_elision.rs`) is now
   implemented: an OSC 1337/Kitty APC payload is replaced with a short placeholder before it reaches
   `pty_raw_rings` or a `.tcap` capture. Covered by unit tests (including one against the same real
