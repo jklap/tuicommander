@@ -68,6 +68,7 @@ describe("NotificationManager", () => {
 				sound: "question",
 				volume: 0.5,
 				device: null,
+				choice: { preset: "default", custom_path: null },
 			});
 		});
 

@@ -1325,9 +1325,10 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 
 ### 11.6 Notifications
 - Master toggle, volume (0-100%)
-- Per-event: question, error, completed, warning, info
+- Per-event: question, error, completed, warning, info, attention
 - Test buttons per sound
 - Reset to defaults
+- **Sound customization** — per-event dropdown picks the sound source: the event's own default tone, another event's tone borrowed as a preset (e.g. use the "Attention" call for "Question"), or a custom audio file (desktop only, native file picker; `.wav`/`.mp3`/`.ogg`/`.flac`). A custom file that fails to open or decode falls back to that event's default tone rather than staying silent. Browser/PWA mode supports presets but not custom files (no filesystem access) — falls back to the default tone the same way.
 - **Keep toasts in the bell** — mirrors toasts into the bell's Messages section (see **4.4**). Outside the audio block, because the bell is visual and must stay configurable without an audio device
 
 ### 11.7 Keyboard Shortcuts
@@ -1741,7 +1742,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - **Path resolution:** relative paths resolve against active repo; absolute paths match longest repo prefix; `../` traversal outside repo root is blocked
 - **Repository:** `tuic.activeRepo()` returns active repo path; `tuic.onRepoChange(cb)` / `tuic.offRepoChange(cb)` for live updates
 - **Terminal:** `tuic.terminal(repoPath)` — open terminal in repository
-- **UI feedback:** `tuic.toast(title, {message?, level?, sound?})` — native toast notifications with optional sound (info blip, warn double-beep, error descending sweep); `tuic.clipboard(text)` — copy to clipboard from sandboxed iframe
+- **UI feedback:** `tuic.toast(title, {message?, level?, sound?})` — native toast notifications; `sound: true` plays through the same customizable Info/Warning/Error sounds as everything else in Settings > Notifications (master toggle, volume, device, and any preset/custom file chosen for that event), matched to `level`; `tuic.clipboard(text)` — copy to clipboard from sandboxed iframe
 - **Messaging:** `tuic.send(data)` / `tuic.onMessage(cb)` — bidirectional host↔plugin communication
 - **Theme:** `tuic.theme` — current theme as JS object (camelCase CSS vars); `tuic.onThemeChange(cb)` for live updates
 - `<a href="tuic://open/...">` and `<a href="tuic://terminal?repo=...">` links intercepted automatically
