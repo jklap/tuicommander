@@ -406,6 +406,25 @@ describe("repoSettingsStore", () => {
 			});
 		});
 
+		it("getEffectiveField resolves baseBranch through the same .tuic.json tier as getEffective", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockImplementation(async (cmd: string) => {
+					if (cmd === "load_repo_local_config") {
+						return { base_branch: "develop" };
+					}
+					return undefined;
+				});
+
+				store.getOrCreate("/repo", "my-repo");
+				await store.loadLocalConfig("/repo");
+
+				expect(store.getEffectiveField("/repo", "baseBranch")).toBe("develop");
+
+				store.update("/repo", { baseBranch: "main" });
+				expect(store.getEffectiveField("/repo", "baseBranch")).toBe("main");
+			});
+		});
+
 		it("returns undefined for missing .tuic.json (no local config cached)", () => {
 			testInScope(() => {
 				store.getOrCreate("/repo", "my-repo");

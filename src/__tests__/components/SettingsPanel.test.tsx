@@ -1,6 +1,6 @@
+import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import "../mocks/tauri";
-import { fireEvent, render } from "@solidjs/testing-library";
+import { mockInvoke } from "../mocks/tauri";
 
 vi.mock("../../stores/settings", () => ({
 	settingsStore: {
@@ -268,6 +268,53 @@ describe("SettingsPanel", () => {
 		// RepoWorktreeTab has a h3 "Repository"
 		const h3 = container.querySelector(".section h3");
 		expect(h3!.textContent).toBe("Repository");
+	});
+
+	it("fetches list_base_ref_options for the active repo and threads it into RepoWorktreeTab's Branch From dropdown", async () => {
+		mockInvoke.mockImplementation(async (cmd: string) => {
+			if (cmd === "list_base_ref_options") {
+				return [
+					{ name: "main", kind: "local", is_default: true },
+					{ name: "trunk", kind: "local", is_default: false },
+				];
+			}
+			return undefined;
+		});
+
+		const { container } = render(() => (
+			<SettingsPanel visible={true} onClose={() => {}} context={{ kind: "repo", repoPath: "/repo/alpha" }} />
+		));
+
+		expect(mockInvoke).toHaveBeenCalledWith("list_base_ref_options", { repoPath: "/repo/alpha" });
+
+		await waitFor(() => {
+			const select = Array.from(container.querySelectorAll("select")).find((s) =>
+				Array.from(s.options).some((o) => o.value === "trunk"),
+			);
+			expect(select).toBeTruthy();
+		});
+
+		mockInvoke.mockReset().mockResolvedValue(undefined);
+	});
+
+	it("does not crash the panel when list_base_ref_options fails — Branch From just has no dynamic options", async () => {
+		mockInvoke.mockImplementation(async (cmd: string) => {
+			if (cmd === "list_base_ref_options") throw new Error("boom");
+			return undefined;
+		});
+
+		const { container } = render(() => (
+			<SettingsPanel visible={true} onClose={() => {}} context={{ kind: "repo", repoPath: "/repo/alpha" }} />
+		));
+
+		await waitFor(() => {
+			expect(mockInvoke).toHaveBeenCalledWith("list_base_ref_options", { repoPath: "/repo/alpha" });
+		});
+		// Panel still renders normally — the failure doesn't propagate as an unhandled error.
+		const h3 = container.querySelector(".section h3");
+		expect(h3!.textContent).toBe("Repository");
+
+		mockInvoke.mockReset().mockResolvedValue(undefined);
 	});
 
 	it("shows Reset to Defaults button only when repo nav item is active", () => {

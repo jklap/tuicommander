@@ -400,6 +400,85 @@ describe("CreateWorktreeDialog", () => {
 			expect(trigger.textContent).toContain("develop");
 		});
 
+		it("preselects nothing and shows a placeholder when missingBaseBranch is set, even if defaultBaseRef is also given", () => {
+			const { container } = render(() => (
+				<CreateWorktreeDialog
+					{...defaultProps}
+					baseRefs={BASE_REFS}
+					defaultBaseRef="main"
+					missingBaseBranch="long-gone"
+				/>
+			));
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+			expect(trigger.textContent).toContain("Select a branch");
+			expect(trigger.textContent).not.toContain("main");
+		});
+
+		it("shows a non-blocking warning with the configured branch name when missingBaseBranch is set", () => {
+			const { container, getByTestId } = render(() => (
+				<CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} missingBaseBranch="long-gone" />
+			));
+			expect(getByTestId("base-ref-warning").textContent).toContain("long-gone");
+
+			// Creation must not be blocked by the stale setting alone.
+			fireEvent.input(container.querySelector("input[type='text']")!, { target: { value: "new-branch" } });
+			const createBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Create");
+			expect(createBtn?.disabled).toBe(false);
+		});
+
+		it("does not show a warning when missingBaseBranch is unset", () => {
+			const { queryByTestId } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
+			expect(queryByTestId("base-ref-warning")).toBeNull();
+		});
+
+		it("clears the warning once the user picks a branch from the dropdown, and creates with that branch", () => {
+			const onCreate = vi.fn();
+			const { container, queryByTestId } = render(() => (
+				<CreateWorktreeDialog
+					{...defaultProps}
+					baseRefs={BASE_REFS}
+					missingBaseBranch="long-gone"
+					onCreate={onCreate}
+				/>
+			));
+			expect(queryByTestId("base-ref-warning")).toBeTruthy();
+
+			const trigger = container.querySelector("[class*='dropdownTrigger']")!;
+			fireEvent.click(trigger);
+			const developItem = Array.from(container.querySelectorAll("[class*='dropdownItem']")).find(
+				(el) => el.textContent?.trim() === "develop",
+			);
+			fireEvent.click(developItem!);
+
+			expect(queryByTestId("base-ref-warning")).toBeNull();
+
+			fireEvent.input(container.querySelector("input[type='text']")!, { target: { value: "new-branch" } });
+			const createBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Create");
+			fireEvent.click(createBtn!);
+			expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "develop" }));
+		});
+
+		it("auto-resolves to the one real ref (and shows no warning) for a single-ref repo, instead of leaving nothing selectable", () => {
+			const onCreate = vi.fn();
+			const { container, queryByTestId } = render(() => (
+				<CreateWorktreeDialog
+					{...defaultProps}
+					baseRefs={[{ name: "main", kind: "local", is_default: true }]}
+					missingBaseBranch="long-gone"
+					onCreate={onCreate}
+				/>
+			));
+			// No dropdown to choose from — but the warning must not linger with nothing the
+			// user can do about it; the one real ref is used instead of silently falling to HEAD.
+			expect(container.querySelector("[class*='dropdownTrigger']")).toBeNull();
+			expect(queryByTestId("base-ref-warning")).toBeNull();
+
+			fireEvent.input(container.querySelector("input[type='text']")!, { target: { value: "new-branch" } });
+			const createBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Create");
+			fireEvent.click(createBtn!);
+			expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "main" }));
+		});
+
 		it("groups refs under Local and Remote section headers", () => {
 			const { container } = render(() => <CreateWorktreeDialog {...defaultProps} baseRefs={BASE_REFS} />);
 			const trigger = container.querySelector("[class*='dropdownTrigger']")!;

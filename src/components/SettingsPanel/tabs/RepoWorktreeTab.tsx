@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, Show } from "solid-js";
+import type { BaseRefOption } from "../../../hooks/useRepository";
 import { t } from "../../../i18n";
 import { isMacOS } from "../../../platform";
 import type {
@@ -22,21 +23,40 @@ export interface RepoTabProps {
 	onUpdate: <K extends keyof RepoSettings>(key: K, value: RepoSettings[K]) => void;
 }
 
+export interface RepoWorktreeTabProps extends RepoTabProps {
+	/** The repo's actual local/remote refs, for the "Branch From" dropdown — undefined while
+	 * still loading (or on fetch failure). Never treat "undefined" as "the configured branch
+	 * is missing"; only an actually-loaded list that doesn't contain it means that. */
+	baseRefs?: BaseRefOption[];
+}
+
 /** "inherit" sentinel value for nullable dropdowns */
 const INHERIT = "__inherit__";
+/** Sentinel meaning "let TUIC detect the repo's default branch" — distinct from INHERIT
+ * (which means "use the global default setting", which itself may resolve to "automatic"). */
+const AUTOMATIC = "automatic";
 
-export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
-	const branchOptions = [
-		{ value: "automatic", label: t("repoWorktree.baseBranch.automatic", "Automatic") },
-		{ value: "main", label: "main" },
-		{ value: "master", label: "master" },
-		{ value: "develop", label: "develop" },
-	];
-
+export const RepoWorktreeTab: Component<RepoWorktreeTabProps> = (props) => {
 	const baseBranchValue = () => props.settings.baseBranch ?? INHERIT;
 
 	const handleBaseBranchChange = (value: string) => {
 		props.onUpdate("baseBranch", value === INHERIT ? null : value);
+	};
+
+	// A real branch literally named "automatic" (or the __inherit__ sentinel) would render as
+	// a second <option> sharing that reserved value — the native <select> can then never
+	// distinguish selecting it from the sentinel meaning. Excluding it here is a narrow,
+	// display-only fix for that name collision; it doesn't change what the sentinels mean.
+	const isReservedRefName = (name: string) => name === AUTOMATIC || name === INHERIT;
+	const localRefs = () => (props.baseRefs ?? []).filter((r) => r.kind === "local" && !isReservedRefName(r.name));
+	const remoteRefs = () => (props.baseRefs ?? []).filter((r) => r.kind === "remote" && !isReservedRefName(r.name));
+
+	/** The configured value is "stale" only once we've actually loaded the ref list and it's
+	 * genuinely absent — a still-loading `baseRefs` (undefined) must never flag as stale. */
+	const staleBaseBranch = (): string | null => {
+		const value = props.settings.baseBranch;
+		if (!value || value === AUTOMATIC || !props.baseRefs) return null;
+		return props.baseRefs.some((r) => r.name === value) ? null : value;
 	};
 
 	// Draft state for the "always copy" list's add row — local to this tab,
@@ -132,9 +152,37 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 							default: props.defaults.baseBranch,
 						})}
 					</option>
-					<For each={branchOptions}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
+					<option value={AUTOMATIC}>{t("repoWorktree.baseBranch.automatic", "Automatic")}</option>
+					<Show when={staleBaseBranch()}>
+						{(value) => (
+							<option value={value()}>
+								{t("repoWorktree.baseBranch.noLongerExists", "{branch} (no longer exists)", { branch: value() })}
+							</option>
+						)}
+					</Show>
+					<Show when={localRefs().length > 0}>
+						<optgroup label={t("repoWorktree.baseBranch.local", "Local")}>
+							<For each={localRefs()}>{(ref) => <option value={ref.name}>{ref.name}</option>}</For>
+						</optgroup>
+					</Show>
+					<Show when={remoteRefs().length > 0}>
+						<optgroup label={t("repoWorktree.baseBranch.remote", "Remote")}>
+							<For each={remoteRefs()}>{(ref) => <option value={ref.name}>{ref.name}</option>}</For>
+						</optgroup>
+					</Show>
 				</select>
 				<p class={s.hint}>{t("repoWorktree.hint.branchFrom", "Base branch for new worktrees")}</p>
+				<Show when={staleBaseBranch()}>
+					{(value) => (
+						<p class={s.warning}>
+							{t(
+								"repoWorktree.warning.baseBranchMissing",
+								'"{branch}" no longer exists in this repo — pick a different branch.',
+								{ branch: value() },
+							)}
+						</p>
+					)}
+				</Show>
 			</div>
 
 			<div class={s.group}>
