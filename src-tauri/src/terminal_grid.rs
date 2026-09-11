@@ -163,6 +163,11 @@ pub(crate) struct TermEventCollector {
     /// / Kitty graphics `Handler` methods, via `EventListener::store_image`)
     /// hit the exact same store.
     image_store: Arc<Mutex<crate::terminal_images::ImageStore>>,
+    /// Kitty transmissions queued for deferred decode (color-tools plan) —
+    /// `queue_kitty_decode_job` (called synchronously, under `vt_log`, from
+    /// the `Handler` impl) only pushes onto this; the actual decode work
+    /// runs later, off that lock, in `TerminalGrid::drain_and_run_pending_kitty_decode_jobs`.
+    pending_kitty_jobs: Arc<Mutex<Vec<alacritty_terminal::term::kitty::PendingKittyDecodeJob>>>,
 }
 
 impl EventListener for TermEventCollector {
@@ -202,6 +207,25 @@ impl EventListener for TermEventCollector {
 
     fn read_shm_medium(&self, name: &[u8]) -> Option<Vec<u8>> {
         crate::terminal_image_transmission::read_shm_medium(name)
+    }
+
+    fn store_pending_image(
+        &self,
+        client_id: Option<u32>,
+        mime: String,
+        intrinsic_width: u32,
+        intrinsic_height: u32,
+    ) -> Option<Arc<alacritty_terminal::term::cell::ImageData>> {
+        Some(self.image_store.lock().store_pending(
+            client_id,
+            mime,
+            intrinsic_width,
+            intrinsic_height,
+        ))
+    }
+
+    fn queue_kitty_decode_job(&self, job: alacritty_terminal::term::kitty::PendingKittyDecodeJob) {
+        self.pending_kitty_jobs.lock().push(job);
     }
 
     fn send_event(&self, event: Event) {
@@ -698,6 +722,8 @@ pub struct TerminalGrid {
     /// 1337 / Kitty graphics `Handler` methods can register images directly,
     /// via `EventListener::store_image`, without needing `&mut TerminalGrid`.
     image_store: Arc<Mutex<crate::terminal_images::ImageStore>>,
+    /// See `TermEventCollector`'s field of the same name.
+    pending_kitty_jobs: Arc<Mutex<Vec<alacritty_terminal::term::kitty::PendingKittyDecodeJob>>>,
     /// When true, column resizes reflow scrollback history while leaving the
     /// visible screen untouched. Preserves TUI cursor positioning on screen
     /// while keeping scrollback readable across resize cycles.
@@ -741,11 +767,13 @@ impl TerminalGrid {
             cell_height: DEFAULT_CELL_HEIGHT_PX,
         }));
         let image_store = Arc::new(Mutex::new(crate::terminal_images::ImageStore::new()));
+        let pending_kitty_jobs = Arc::new(Mutex::new(Vec::new()));
         let listener = TermEventCollector {
             bell: bell_flag.clone(),
             events: events.clone(),
             window_size_px: window_size_px.clone(),
             image_store: image_store.clone(),
+            pending_kitty_jobs: pending_kitty_jobs.clone(),
         };
         let term = Term::new(config, &size, listener);
         Self {
@@ -767,6 +795,7 @@ impl TerminalGrid {
             events,
             window_size_px,
             image_store,
+            pending_kitty_jobs,
             reflow_history: true,
         }
     }
@@ -814,6 +843,53 @@ impl TerminalGrid {
             image.intrinsic_width,
             image.intrinsic_height,
         ))
+    }
+
+    /// Resolve every Kitty decode job queued since the last call, and push
+    /// each one's deferred OK/error reply onto the same `TermEvent::PtyWrite`
+    /// queue an immediate reply would use — so `drain_pty_write_events` (and
+    /// therefore the entire existing test suite built on it) sees no
+    /// difference between "replied synchronously" and "replied once decode
+    /// finished a moment later." Safe to call directly here (a bare, unlocked
+    /// test `TerminalGrid` has no lock-contention concept to preserve in the
+    /// first place) — `process` does, as its last step, for exactly this
+    /// reason. Production (`pty.rs::process_chunk`) instead calls
+    /// `terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs`
+    /// directly against cloned handles and writes each reply itself, so it
+    /// never needs a `TerminalGrid`/lock reference while the (potentially
+    /// slow) decode work runs — which is also why this method itself has no
+    /// production caller, only `process` and the test suite.
+    #[allow(dead_code)]
+    pub(crate) fn drain_and_run_pending_kitty_decode_jobs(
+        &self,
+    ) -> Vec<crate::terminal_image_transmission::KittyJobOutcome> {
+        let outcomes = crate::terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs(
+            &self.image_store,
+            &self.pending_kitty_jobs,
+        );
+        for outcome in &outcomes {
+            if let Some(reply) = crate::terminal_image_transmission::format_kitty_reply(outcome) {
+                self.events.lock().push(TermEvent::PtyWrite(reply));
+            }
+        }
+        outcomes
+    }
+
+    /// Cloned handles to this grid's image store and pending-Kitty-decode-job
+    /// queue — cheap `Arc::clone`s, meant to be taken once while the caller
+    /// already holds `vt_log` for another reason (e.g. `pty.rs::process_chunk`'s
+    /// Phase 1, which calls `process_without_kitty_decode_drain` anyway), then
+    /// used to run `terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs`
+    /// *after* dropping that lock. Never re-acquire `vt_log` just to call
+    /// this — that would reintroduce exactly the lock-hold-during-decode
+    /// problem the color-tools plan's deferred-decode design exists to avoid.
+    pub(crate) fn kitty_decode_handles(
+        &self,
+    ) -> (
+        crate::terminal_image_transmission::KittyImageStoreHandle,
+        crate::terminal_image_transmission::KittyPendingJobsHandle,
+    ) {
+        (self.image_store.clone(), self.pending_kitty_jobs.clone())
     }
 
     /// The inline-image tile shown at a given viewport position, if any:
@@ -963,11 +1039,39 @@ impl TerminalGrid {
         (ws.cell_width, ws.cell_height)
     }
 
-    /// Feed raw PTY bytes into the terminal emulator.
+    /// Feed raw PTY bytes into the terminal emulator, then resolve any Kitty
+    /// image decode jobs queued along the way (color-tools plan).
     ///
     /// Returns changed rows. OSC 133 events are delivered via `drain_events()`
     /// as `TermEvent::Osc133` (parsed natively by the patched VTE handler).
+    ///
+    /// **Do not call this from behind a shared lock other callers also need**
+    /// (i.e. never from `VtLogBuffer::process`/`pty.rs::process_chunk`) —
+    /// resolving a Kitty decode job here can be slow (base64, zlib, file/
+    /// shared-memory I/O), and this method's `&mut self` requires holding
+    /// whatever lock guards the `TerminalGrid` for the entire call, exactly
+    /// the problem the deferred-decode design exists to avoid. Safe for the
+    /// entire existing test suite (a bare, unlocked `TerminalGrid`, so there
+    /// is no contention to protect) and any other single-threaded caller.
+    /// Production instead calls `process_without_kitty_decode_drain` under
+    /// the lock, drops it, then calls
+    /// `terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs`
+    /// directly against the cloned `image_store`/`pending_kitty_jobs`
+    /// handles — never through this method. That leaves this one with no
+    /// production caller at all today — kept as the general-purpose
+    /// convenience API for the entire test suite and any future
+    /// single-threaded (no lock contention to protect) caller.
+    #[allow(dead_code)]
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
+        let changed = self.process_without_kitty_decode_drain(data);
+        self.drain_and_run_pending_kitty_decode_jobs();
+        changed
+    }
+
+    /// The decode-deferred half of `process` split out — see its doc
+    /// comment for why. Never queues a Kitty decode job's actual resolution;
+    /// only `drain_and_run_pending_kitty_decode_jobs` does that.
+    pub(crate) fn process_without_kitty_decode_drain(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         self.processor.advance(&mut self.term, data);
 
         // Prefer the alacritty parse-damage set: read+diff ONLY the lines whose
@@ -3425,6 +3529,42 @@ mod tests {
         }
     }
 
+    /// A DEC 2026 synchronized update that stalls past its deadline and gets
+    /// force-flushed (`flush_sync_timeout_if_needed`) replays its buffered
+    /// bytes through the same `Term`/`Handler` an ordinary `process()` call
+    /// uses — so a Kitty image transmission buried inside it queues a
+    /// deferred decode job exactly like normal processing does. A code
+    /// review caught this as a real gap: before deferred decode existed,
+    /// this same flush path decoded the image inline; the production fix
+    /// (`pty.rs`'s `resolve_kitty_decode_jobs`, called from the frame
+    /// ticker after this exact flush) isn't reachable from this unit-test
+    /// level, but this proves the replay path itself queues a job that IS
+    /// resolvable — the part that's genuinely new/risky here.
+    #[test]
+    fn stalled_sync_update_flush_queues_a_resolvable_kitty_decode_job() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3 * 4]; // 2x2 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(BSU);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=2,r=2;{payload}\x1b\\").as_bytes());
+        std::thread::sleep(PAST_DEADLINE);
+        assert!(grid.flush_sync_timeout_if_needed());
+
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "reservation happens during the replay itself, same as ordinary processing"
+        );
+        assert_eq!(
+            grid.image_bytes(1),
+            None,
+            "not resolved yet -- nothing has drained the queued job"
+        );
+
+        grid.drain_and_run_pending_kitty_decode_jobs();
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+    }
+
     /// A live TUI redraw re-runs the same search over and over, and each run was
     /// compiling the query from scratch — `RegexSearch::new` builds four DFAs
     /// (forward/backward x literal/regex). The query changes when the user types,
@@ -5392,6 +5532,57 @@ mod tests {
         assert_eq!(replies, vec!["\x1b_Gi=1;OK\x1b\\".to_string()]);
     }
 
+    /// The whole point of the deferred-decode design (color-tools plan): a
+    /// Kitty transmission's footprint is reserved synchronously — before the
+    /// decode job that resolves its actual bytes has run at all. Proven here
+    /// by using `process_without_kitty_decode_drain` directly (what
+    /// `pty.rs::process_chunk` calls before dropping `vt_log`) instead of the
+    /// convenience `process()` every other test uses, which would resolve
+    /// the job before this test ever got a chance to observe the gap.
+    #[test]
+    fn kitty_reservation_is_visible_before_the_decode_job_runs() {
+        use base64::Engine;
+        let raw_rgb = vec![7u8; 3 * 4]; // 2x2 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process_without_kitty_decode_drain(
+            format!("\x1b_Gi=9,a=T,f=24,s=2,v=2,c=2,r=2;{payload}\x1b\\").as_bytes(),
+        );
+
+        let (image_id, placement_id, ..) = grid
+            .image_ref_at(0, 0)
+            .expect("reservation must be visible immediately, before decode runs");
+        assert_eq!(image_id, 9);
+        assert_eq!(placement_id, 9);
+        assert_eq!(
+            grid.image_bytes(9),
+            None,
+            "bytes aren't resolved yet — the decode job hasn't run"
+        );
+        assert!(
+            grid.drain_pty_write_events().is_empty(),
+            "the OK/error reply is deferred along with decode, not sent yet"
+        );
+
+        // Now resolve it — same call `process()` makes internally.
+        grid.drain_and_run_pending_kitty_decode_jobs();
+        assert_eq!(
+            grid.image_bytes(9).as_deref(),
+            Some(&raw_rgb[..]),
+            "bytes are resolved once the job actually runs"
+        );
+        assert_eq!(
+            grid.image_ref_at(0, 0).map(|(id, ..)| id),
+            Some(9),
+            "completing the placeholder must not change its identity or require touching any cell"
+        );
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec!["\x1b_Gi=9;OK\x1b\\".to_string()],
+            "the OK reply arrives once decode actually completes"
+        );
+    }
+
     /// Unicode virtual placeholders (`U=1`, color-tools plan Phase 7):
     /// registration via `a=T,U=1,q=2` must store the image but touch no
     /// cells, exactly like today — the app then prints ordinary text
@@ -5680,13 +5871,24 @@ mod tests {
         std::fs::remove_dir(&dir).ok();
     }
 
+    /// Raw formats (`f=24`/`f=32`) reserve their footprint synchronously from
+    /// `s=`/`v=` alone — no decode needed for that — so a placement is
+    /// already visible before the deferred job discovers the file doesn't
+    /// exist (color-tools plan: decode moved off the `vt_log` lock). The
+    /// cells just never get real bytes: `image_bytes` stays `None` forever
+    /// and the deferred ENOENT reply still arrives, same as before this
+    /// changed which came first.
     #[test]
     fn kitty_t_equals_f_missing_file_errors_cleanly() {
         use base64::Engine;
         let path_b64 = base64::engine::general_purpose::STANDARD.encode("/no/such/path/at/all");
         let mut grid = TerminalGrid::new(24, 80, 0);
         grid.process(format!("\x1b_Gi=1,a=T,t=f,f=24,s=1,v=1;{path_b64}\x1b\\").as_bytes());
-        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "reservation happens synchronously, before the deferred job learns the file is missing"
+        );
+        assert_eq!(grid.image_bytes(1), None, "decode must still have failed");
         assert_eq!(
             grid.drain_pty_write_events(),
             vec!["\x1b_Gi=1;ENOENT:could not read the requested file\x1b\\".to_string()]
@@ -5754,6 +5956,11 @@ mod tests {
 
     /// A raw-format (`f=24`/`f=32`) payload shorter than `width*height*channels`
     /// is a real transmission problem, not something to zero-pad and display.
+    /// Reservation (from `s=`/`v=`/`c=`/`r=` alone) still happens
+    /// synchronously and is unaffected — only the pixel bytes never arrive
+    /// (color-tools plan: decode moved off the `vt_log` lock, so a
+    /// transmission's eventual success/failure is no longer known before its
+    /// footprint is reserved).
     #[test]
     fn kitty_raw_format_payload_shorter_than_expected_errors() {
         use base64::Engine;
@@ -5761,11 +5968,60 @@ mod tests {
         let payload_b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
         let mut grid = TerminalGrid::new(24, 80, 0);
         grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes());
-        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "reservation is unaffected by the eventual decode failure"
+        );
+        assert_eq!(
+            grid.image_bytes(1),
+            None,
+            "but the payload itself must never be accepted"
+        );
         assert_eq!(
             grid.drain_pty_write_events(),
             vec!["\x1b_Gi=1;EINVAL:payload shorter than width*height*channels\x1b\\".to_string()]
         );
+    }
+
+    /// A permanently-failed deferred decode must not leave a dead entry in
+    /// `ImageStore` forever — a security review found `store_pending`
+    /// registers unconditionally (no bytes exist yet to check against a
+    /// cap), so without eviction-on-failure, a stream of cheap (~30-byte)
+    /// junk transmissions that each fail to decode would grow the store's
+    /// `HashMap` without bound, independent of and unbounded by
+    /// `MAX_SESSION_IMAGE_BYTES` (which only ever looks at bytes that
+    /// resolved successfully). `image_meta` is the observable proxy for
+    /// this: it reads straight through the store's `get()`, so it returns
+    /// `None` only once the entry is actually gone from the map — not just
+    /// once its `bytes` resolve to empty (which `image_bytes` alone would
+    /// show even if the entry technically still existed).
+    #[test]
+    fn kitty_failed_deferred_decode_evicts_the_store_entry_not_just_the_bytes() {
+        use base64::Engine;
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes());
+        assert_eq!(
+            grid.image_meta(1),
+            None,
+            "a permanently-failed image must be fully evicted from the store, \
+             not merely left with empty bytes under a live entry"
+        );
+
+        // Confirmed at scale too: many failing transmissions in a row must
+        // never accumulate live entries.
+        for i in 2..502u32 {
+            grid.process(
+                format!("\x1b_Gi={i},a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes(),
+            );
+        }
+        for i in 2..502u32 {
+            assert_eq!(
+                grid.image_meta(i),
+                None,
+                "image {i} must have been evicted too"
+            );
+        }
     }
 
     /// A payload longer than `width*height*channels` (observed in practice
@@ -5813,6 +6069,11 @@ mod tests {
     /// Regression guard for a real gap a security review found: the
     /// previous unbounded `read_to_end` allocated the entire inflated
     /// buffer before the app-level `MAX_SESSION_IMAGE_BYTES` cap ever ran.
+    /// Reservation (from `s=`/`v=`/`c=`/`r=`) still happens synchronously
+    /// and is unaffected — the deferred-decode design (color-tools plan)
+    /// means a transmission's footprint is reserved before anyone knows
+    /// whether its payload will actually decode; only the pixel bytes are
+    /// permanently refused.
     #[test]
     fn kitty_o_equals_z_decompression_bomb_is_rejected() {
         use base64::Engine;
@@ -5830,10 +6091,14 @@ mod tests {
         grid.process(
             format!("\x1b_Gi=1,a=T,f=24,s=1,v=1,c=1,r=1,o=z;{payload_b64}\x1b\\").as_bytes(),
         );
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "reservation is unaffected by the eventual decode failure"
+        );
         assert_eq!(
-            grid.image_ref_at(0, 0),
+            grid.image_bytes(1),
             None,
-            "an oversized inflated payload must be rejected, not displayed"
+            "an oversized inflated payload must never be accepted, even though a placement exists"
         );
         assert_eq!(
             grid.drain_pty_write_events(),

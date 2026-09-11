@@ -267,6 +267,33 @@ pub trait EventListener {
     fn read_shm_medium(&self, _name: &[u8]) -> Option<Vec<u8>> {
         None
     }
+
+    /// Register a not-yet-decoded inline image and return a placeholder
+    /// handle to it immediately (color-tools plan: Kitty decode deferred off
+    /// the `vt_log` lock) — or `None` if refused. Unlike `store_image`, this
+    /// never fails on a byte cap (no bytes exist yet to check); a listener
+    /// would only refuse if it has no image storage at all, matching
+    /// `store_image`'s default. `mime`/`intrinsic_width`/`intrinsic_height`
+    /// are already fully known at this point (derived from the wire format
+    /// alone, or `s=`/`v=` for raw formats) — only the pixel bytes remain
+    /// pending.
+    fn store_pending_image(
+        &self,
+        _client_id: Option<u32>,
+        _mime: String,
+        _intrinsic_width: u32,
+        _intrinsic_height: u32,
+    ) -> Option<Arc<crate::term::cell::ImageData>> {
+        None
+    }
+
+    /// Queue a `store_pending_image`-created placeholder's actual decode
+    /// work (base64, medium read, zlib inflate, format trim) to run once the
+    /// caller's lock is dropped. Default no-op, matching every other
+    /// storage-backed method here — a listener that accepts this without
+    /// ever draining it would just leave the placeholder pending forever,
+    /// which is a safe (if useless) degradation, not a crash.
+    fn queue_kitty_decode_job(&self, _job: crate::term::kitty::PendingKittyDecodeJob) {}
 }
 
 /// Null sink for events.

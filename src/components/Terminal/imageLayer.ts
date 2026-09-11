@@ -128,6 +128,22 @@ export class ImageLayer {
 		this.placements.set(p.placementId, p);
 	}
 
+	/** The backend finished deferred-decoding this image (color-tools plan —
+	 * Kitty decode moved off the `vt_log` lock, so a placement can be known
+	 * before its bytes are ready). `bitmaps` never retries a `"loading"`/
+	 * `"error"` entry on its own (see `getBitmapIfReady`), so if this
+	 * image's first paint-triggered fetch happened to race the still-
+	 * in-flight decode — plausible under IPC/network jitter even though the
+	 * window is normally tiny — it would otherwise be marked permanently
+	 * failed. Dropping the cache entry here (only if one exists; a fetch
+	 * that hasn't started yet needs no help) makes the next paint attempt
+	 * try again now that bytes actually exist. Never called for a decode
+	 * that ultimately failed — the existing "no bytes, don't retry" default
+	 * already matches that outcome, so no signal is needed for it. */
+	invalidateImage(imageId: number): void {
+		this.bitmaps.delete(imageId);
+	}
+
 	/** Every previously-known placement is gone (alt-screen switch, `a=d`);
 	 * re-fetch the authoritative current set. */
 	async clearAndRehydrate(): Promise<void> {
