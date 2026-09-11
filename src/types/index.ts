@@ -29,6 +29,10 @@ export interface PtyConfig {
 	/** Pre-set agent type for sessions launched from a run config. Enables intent
 	 *  parsing from the start even when the binary name doesn't match classify_agent. */
 	agent_type?: string | null;
+	/** Terminal alias this tab held before the restart (e.g. `tu-3`). Reserved by
+	 *  Rust so a restored tab keeps the address other agents already know; a
+	 *  malformed or taken value is ignored and a fresh alias is generated. */
+	alias?: string | null;
 	/** Client-provided PTY session id (browser mode only). Generated and locally
 	 *  registered before the create RPC so the `session-created` SSE echo is
 	 *  recognized as locally-created and does not spawn a duplicate "PTY:" tab. */
@@ -190,6 +194,9 @@ export interface SavedTerminal {
 	tuicSession?: string | null;
 	/** Run-config command used to launch (e.g. "c"), ensures resume uses the same binary */
 	agentLaunchCommand?: string | null;
+	/** Terminal alias (e.g. `tu-3`) — the address other agents already hold, so a
+	 *  restore reserves it instead of taking a fresh number */
+	alias?: string | null;
 }
 
 /** GitHub Issue from GraphQL API */

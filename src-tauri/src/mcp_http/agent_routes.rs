@@ -431,6 +431,7 @@ pub(super) async fn spawn_agent_session(
         rows,
         cols,
         body.agent_type.clone(),
+        None,
     );
 
     #[cfg(feature = "desktop")]

@@ -8621,7 +8621,7 @@ pub(crate) async fn spawn_session_for_agent(
             shell: shell.clone(),
         }),
     );
-    state.assign_term_alias(&session_id);
+    state.assign_term_alias(&session_id, None);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics

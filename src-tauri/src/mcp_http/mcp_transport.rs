@@ -755,7 +755,24 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
             existing.project.clone(),
             existing.registered_at,
         ),
-        None => ("agent".to_string(), None, now_unix_ms()),
+        // A managed peer IS the terminal it runs in, so its address is the name
+        // worth showing. Defaulting every one of them to "agent" made list_peers a
+        // list of identical rows nobody could pick a recipient from. "agent"
+        // survives only for an identity with no live PTY to be named after.
+        None => (
+            state
+                .live_pty_for_peer(tuic)
+                .and_then(|session_id| {
+                    state
+                        .session_maps
+                        .term_aliases
+                        .get(&session_id)
+                        .map(|alias| alias.value().clone())
+                })
+                .unwrap_or_else(|| "agent".to_string()),
+            None,
+            now_unix_ms(),
+        ),
     };
     bind_peer_identity_locked(state, mcp_sid, tuic, name, project, registered_at);
     if let Some(prior_mcp) = prior_mcp {
@@ -968,7 +985,7 @@ fn build_mcp_instructions_for_mode(
         out.push_str("There is no separate `swarm` action; multi-agent orchestration uses `agent` and `session` primitives.\n\n");
     }
     out.push_str("- **Identity:** managed PTYs auto-bind from `$TUIC_SESSION`. Headerless external callers use `agent action=register` without a UUID to receive an MCP-scoped identity; pass `tuic_session` only to reclaim an explicit stable UUID.\n");
-    out.push_str("- **Orchestrator role:** declare it with `agent action=register orchestrator=true`; use `false` to remove it. Spawn never infers the role. `mail_wake=managed_pty_lifecycle` is server-derived; external/headerless peers remain wait/inbox-only.\n");
+    out.push_str("- **Orchestrator role:** declare it with `agent action=register orchestrator=true`; use `false` to remove it. Spawn never infers the role. `register` reports `mail_wake=managed_pty_lifecycle` when it applies; external/headerless peers remain wait/inbox-only.\n");
     out.push_str("- **Same repo:** `agent action=spawn` peers; wait with `agent action=wait`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`. Use `session output` only as an anomaly fallback when a child failed to send its result.\n");
     out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
     if is_claude_code {
@@ -1047,10 +1064,10 @@ fn native_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts three forms of the same address: the PTY id, the tuic_session, or the alias (e.g. tu-1).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
-                "session_id": { "type": "string", "description": "Session ID (required for submit, input, output, resize, close, pause, resume, wait)" },
+                "session_id": { "type": "string", "description": "Session address — the PTY id, the tuic_session, or the alias (e.g. 'tu-1'). Required for submit, input, output, status, resize, close, kill, pause, resume, wait" },
                 "until": { "type": "string", "description": "Wait target: 'idle' or 'exited' (action=wait, default idle)" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "action=submit: acknowledgement wait, clamped 250-10000ms, default 3000. action=wait: max wait, default 60000; values at or above 300000 run as 295000." },
                 "input": { "type": "string", "description": "Non-empty command (action=submit) or raw text (action=input)" },
@@ -1068,7 +1085,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Ordinary managed agents keep direct delivery. A registered orchestrator keeps peer payloads in its inbox; only idle/completed lifecycle may submit a generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox.\n- list_peers: List peers. Optional: project filter. Absent project is omitted.\n- send: Message a peer (requires to, message). Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse channel, terminal, or inbox-only. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Ordinary managed agents keep direct delivery. A registered orchestrator keeps peer payloads in its inbox; only idle/completed lifecycle may submit a generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: project filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, the id of the PTY it runs in, or that terminal's alias. Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse channel, terminal, or inbox-only. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
@@ -1088,7 +1105,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "name": { "type": "string", "description": "Non-empty peer/session display name (action=spawn optional; action=register optional; default: 'agent')" },
                 "project": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
                 "orchestrator": { "type": "boolean", "description": "Explicitly enable or remove orchestrator inbox-only routing (action=register). Omission preserves the current role; spawning a child never infers it." },
-                "to": { "type": "string", "description": "Recipient tuic_session UUID (action=send, required)" },
+                "to": { "type": "string", "description": "Recipient address (action=send, required): its tuic_session UUID, the id of the PTY it runs in, or that terminal's alias (e.g. 'tu-1')" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
                 "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
             }, "required": ["action"] }
@@ -1386,14 +1403,30 @@ fn require_action<'a>(
         .ok_or_else(|| serde_json::json!({"error": format!("Missing 'action'. Available actions for '{}': {}", tool, available)}))
 }
 
-/// Extract session_id from args with guidance error
-fn require_session_id<'a>(
-    args: &'a serde_json::Value,
+/// Extract the session reference from args and resolve it to the live PTY key.
+///
+/// Callers hold whichever name they were given: the PTY key, the `$TUIC_SESSION`
+/// a desktop tab persists, or the short repo alias the tab menu shows. All three
+/// address one terminal — see [`AppState::resolve_session_ref`].
+///
+/// A reference that resolves to nothing is handed back unchanged rather than
+/// rejected here. An exited session keeps its output buffers as a tombstone while
+/// its `sessions` entry is gone, so `action=output` on a dead child must still
+/// reach the handler that can answer it — and that handler owns the
+/// "Session not found" wording.
+fn require_session_id(
+    state: &AppState,
+    args: &serde_json::Value,
     action: &str,
-) -> Result<&'a str, serde_json::Value> {
-    args["session_id"]
-        .as_str()
-        .ok_or_else(|| serde_json::json!({"error": format!("Action '{}' requires 'session_id'. Get valid IDs with session action='list'", action)}))
+) -> Result<String, serde_json::Value> {
+    let reference = args["session_id"].as_str().ok_or_else(|| {
+        serde_json::json!({"error": format!(
+            "Action '{action}' requires 'session_id' — a PTY id, a tuic_session, or an alias such as 'tu-1'. Get valid values with session action='list'"
+        )})
+    })?;
+    Ok(state
+        .resolve_session_ref(reference)
+        .unwrap_or_else(|| reference.to_string()))
 }
 
 fn require_string<'a>(
@@ -1909,8 +1942,8 @@ fn session_wait_response(
 /// exited, or the timeout elapses. Replaces an LLM polling loop (each poll is a
 /// full model turn) with one cheap blocking call.
 async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
-    let session_id = match require_session_id(args, "wait") {
-        Ok(id) => id.to_string(),
+    let session_id = match require_session_id(state, args, "wait") {
+        Ok(id) => id,
         Err(e) => return e,
     };
     let until = args["until"].as_str().unwrap_or("idle");
@@ -2002,8 +2035,8 @@ fn submission_output_offset(state: &AppState, session_id: &str) -> Option<u64> {
 }
 
 fn begin_session_submit(state: &Arc<AppState>, args: &serde_json::Value) -> BeginSubmission {
-    let session_id = match require_session_id(args, "submit") {
-        Ok(id) => id.to_string(),
+    let session_id = match require_session_id(state, args, "submit") {
+        Ok(id) => id,
         Err(error) => return BeginSubmission::Response(error),
     };
     let text = match args["input"].as_str() {
@@ -2459,6 +2492,33 @@ fn handle_session(
             let caller_tuic = mcp_session_id
                 .and_then(|sid| state.mcp.to_session.get(sid))
                 .map(|entry| entry.value().clone());
+            // Resolve, do not compare. A desktop tab persists its own
+            // `$TUIC_SESSION`, which is never the key its PTY was filed under, so
+            // `caller_tuic == pty_id` answered false for every tab — the one case
+            // the flag exists for, since an orchestrator that cannot recognise its
+            // own terminal can close itself.
+            let caller_pty = caller_tuic
+                .as_deref()
+                .and_then(|tuic| state.live_pty_for_peer(tuic));
+            // One pass instead of one scan per row: a per-session reverse lookup
+            // would be quadratic in the session cap for a list every orientation
+            // call reads.
+            //
+            // A session opened with no caller identity is bound under its own PTY
+            // key as a fallback, so a real `$TUIC_SESSION` outranks that entry
+            // whichever order the map is walked — otherwise the field would depend
+            // on hash order.
+            let mut tuic_by_pty: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for entry in state.session_maps.live_pty_by_tuic_session.iter() {
+                let (identity, pty) = (entry.key(), entry.value());
+                let bound = tuic_by_pty
+                    .entry(pty.clone())
+                    .or_insert_with(|| identity.clone());
+                if bound == pty && identity != pty {
+                    *bound = identity.clone();
+                }
+            }
             let sessions: Vec<serde_json::Value> = state
                 .session_maps
                 .sessions
@@ -2490,7 +2550,6 @@ fn handle_session(
                         .term_aliases
                         .get(&id)
                         .map(|e| e.value().clone());
-                    let child_pid = s._child.process_id();
                     #[cfg(unix)]
                     let standby = state
                         .session_maps
@@ -2500,19 +2559,33 @@ fn handle_session(
                     let standby = false;
                     let mut session = serde_json::json!({
                         "session_id": id,
-                        "background_work": background_work,
-                        "standby": standby,
-                        "is_caller": caller_tuic.as_deref() == Some(id.as_str()),
+                        "is_caller": caller_pty.as_deref() == Some(id.as_str()),
                     });
                     let object = session
                         .as_object_mut()
                         .expect("session list entry is an object");
+                    // Both flags are false for nearly every session, and an omitted
+                    // field already reads as "not the case" everywhere else in this
+                    // payload.
                     insert_optional_value(
                         object,
-                        "child_pid",
-                        child_pid.map(serde_json::Value::from),
+                        "background_work",
+                        background_work.then_some(serde_json::Value::Bool(true)),
+                    );
+                    insert_optional_value(
+                        object,
+                        "standby",
+                        standby.then_some(serde_json::Value::Bool(true)),
                     );
                     insert_optional_value(object, "alias", alias.map(serde_json::Value::String));
+                    insert_optional_value(
+                        object,
+                        "tuic_session",
+                        tuic_by_pty
+                            .get(&id)
+                            .cloned()
+                            .map(serde_json::Value::String),
+                    );
                     insert_optional_value(
                         object,
                         "display_name",
@@ -2546,11 +2619,6 @@ fn handle_session(
                             .as_ref()
                             .and_then(|worktree| worktree.branch.clone())
                             .map(serde_json::Value::String),
-                    );
-                    insert_optional_value(
-                        object,
-                        "foreground_pgid",
-                        pgid.map(serde_json::Value::from),
                     );
                     insert_optional_value(
                         object,
@@ -2591,7 +2659,7 @@ fn handle_session(
                 rows,
                 cols,
                 None,
-                None,
+                super::session::RequestedIdentity::default(),
             ) {
                 Ok(session_id) => serde_json::json!({"session_id": session_id}),
                 Err((_, body)) => {
@@ -2600,10 +2668,11 @@ fn handle_session(
             }
         }
         "input" => {
-            let session_id = match require_session_id(args, "input") {
+            let resolved = match require_session_id(state, args, "input") {
                 Ok(id) => id,
                 Err(e) => return e,
             };
+            let session_id = resolved.as_str();
             let text = args["input"].as_str().unwrap_or("");
             let key_seq: Option<&str> = if let Some(key) = args["special_key"].as_str() {
                 match translate_special_key(key) {
@@ -2683,10 +2752,11 @@ fn handle_session(
             "error": "Action 'submit' requires the asynchronous MCP dispatch path"
         }),
         "output" => {
-            let session_id = match require_session_id(args, "output") {
+            let resolved = match require_session_id(state, args, "output") {
                 Ok(id) => id,
                 Err(e) => return e,
             };
+            let session_id = resolved.as_str();
             let limit = (args["limit"].as_u64().unwrap_or(50) as usize).max(1);
 
             // Resolve the session's lifecycle state.
@@ -2815,10 +2885,11 @@ fn handle_session(
             response
         }
         "resize" => {
-            let session_id = match require_session_id(args, "resize") {
+            let resolved = match require_session_id(state, args, "resize") {
                 Ok(id) => id,
                 Err(e) => return e,
             };
+            let session_id = resolved.as_str();
             let rows = args["rows"].as_u64().unwrap_or(24) as u16;
             let cols = args["cols"].as_u64().unwrap_or(80) as u16;
             if let Err(msg) = super::validate_terminal_size(rows, cols) {
@@ -2839,10 +2910,11 @@ fn handle_session(
             serde_json::json!({"ok": true})
         }
         "close" => {
-            let session_id = match require_session_id(args, "close") {
+            let resolved = match require_session_id(state, args, "close") {
                 Ok(id) => id,
                 Err(e) => return e,
             };
+            let session_id = resolved.as_str();
             // Self-close guard: prevent an agent from closing its own session.
             if let Some(sid) = mcp_session_id
                 && let Some(own_pty) = state.mcp.to_session.get(sid)
@@ -2880,10 +2952,11 @@ fn handle_session(
             serde_json::json!({"ok": true})
         }
         "kill" => {
-            let session_id = match require_session_id(args, "kill") {
+            let resolved = match require_session_id(state, args, "kill") {
                 Ok(id) => id,
                 Err(e) => return e,
             };
+            let session_id = resolved.as_str();
             // Self-kill guard: mirror the close branch — an agent must not SIGKILL itself.
             if let Some(sid) = mcp_session_id
                 && let Some(own_pty) = state.mcp.to_session.get(sid)
@@ -2915,10 +2988,11 @@ fn handle_session(
             }
         }
         "pause" => {
-            let session_id = match require_session_id(args, "pause") {
+            let resolved = match require_session_id(state, args, "pause") {
                 Ok(id) => id,
                 Err(e) => return e,
             };
+            let session_id = resolved.as_str();
             let entry = match state.session_maps.sessions.get(session_id) {
                 Some(e) => e,
                 None => return serde_json::json!({"error": "Session not found"}),
@@ -2927,10 +3001,11 @@ fn handle_session(
             serde_json::json!({"ok": true})
         }
         "resume" => {
-            let session_id = match require_session_id(args, "resume") {
+            let resolved = match require_session_id(state, args, "resume") {
                 Ok(id) => id,
                 Err(e) => return e,
             };
+            let session_id = resolved.as_str();
             let entry = match state.session_maps.sessions.get(session_id) {
                 Some(e) => e,
                 None => return serde_json::json!({"error": "Session not found"}),
@@ -2939,10 +3014,11 @@ fn handle_session(
             serde_json::json!({"ok": true})
         }
         "status" => {
-            let session_id = match require_session_id(args, "status") {
+            let resolved = match require_session_id(state, args, "status") {
                 Ok(id) => id,
                 Err(e) => return e,
             };
+            let session_id = resolved.as_str();
             match state.session_state_with_shell(session_id) {
                 Some(ss) => {
                     let exit_code = state
@@ -3171,7 +3247,7 @@ fn create_session_in_dir(state: &Arc<AppState>, cwd: &str) -> Result<String, Str
         24,
         80,
         None,
-        None,
+        super::session::RequestedIdentity::default(),
     )
     .map_err(|(_, body)| {
         body.0
@@ -3787,6 +3863,7 @@ fn handle_agent_with_parent_cwd(
                 rows,
                 cols,
                 effective_agent_type.clone(),
+                None,
             );
             let cwd_str = effective_cwd.clone();
 
@@ -3874,9 +3951,11 @@ fn handle_agent_with_parent_cwd(
                 "task_id": task_id,
                 "poll_interval_ms": TASK_POLL_INTERVAL_MS,
                 "name": peer_name,
-                "peer_registered": true,
-                "communication_ready": caller_tuic.is_some(),
-                "send_to": session_id,
+                // No `peer_registered` / `communication_ready` / `send_to`: the
+                // first two are constant for every successful spawn, and the third
+                // repeated `session_id` verbatim. `parent_session_id` (or the
+                // `communication_warning` in its place) already reports whether
+                // child-to-parent messaging is available.
                 "server_ts": spawn_ts,
                 "monitor_with": format!("session(action=output, session_id={session_id}) — anomaly fallback only if the child fails to send its result"),
                 "status_with": format!("session(action=status, session_id={session_id})"),
@@ -4268,7 +4347,7 @@ fn handle_messaging(
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
                     "monitor": "Use blocking waits instead of polling: agent action=wait (wakes on new mail; the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
                     "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited|awaiting_input, session_id, exit_code?, prompt?}. This is not task output. awaiting_input means the child hit an interactive prompt and is parked with nobody at its keyboard — it will NOT progress until you answer it with session action=input (the `prompt` field carries the question). Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
-                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle may submit one coalesced, payload-free wake instructing `agent action=inbox`, while working, external, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); `accepted=true` only confirms buffering.",
+                    "send": "agent action=send to=<peer tuic_session | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB>. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle may submit one coalesced, payload-free wake instructing `agent action=inbox`, while working, external, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
                     "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
@@ -4311,44 +4390,58 @@ fn handle_messaging(
                 })
                 .map(|entry| {
                     let p = entry.value();
+                    // The terminal behind the peer, when it has one. Without it
+                    // `list_peers` answered with names nothing could be typed into,
+                    // so finding "the tab working on X" still cost a session list
+                    // and a manual join.
+                    let live_pty = state.live_pty_for_peer(&p.tuic_session);
                     let mut peer = serde_json::json!({
                         "tuic_session": p.tuic_session,
                         "name": p.name,
-                        "registered_at": p.registered_at,
                         "orchestrator": state.orchestrator_peers.contains(&p.tuic_session),
-                        "mail_wake": if state.orchestrator_peers.contains(&p.tuic_session)
-                            && state
-                                .live_pty_for_peer(&p.tuic_session)
-                                .and_then(|session_id| {
-                                    state
-                                        .session_maps.session_states
-                                        .get(&session_id)
-                                        .map(|session| session.agent_type.is_some())
-                                })
-                                .unwrap_or(false)
-                        {
-                            "managed_pty_lifecycle"
-                        } else {
-                            "none"
-                        },
                     });
+                    let object = peer.as_object_mut().expect("peer entry is an object");
                     insert_optional_value(
-                        peer.as_object_mut().expect("peer entry is an object"),
+                        object,
+                        "alias",
+                        live_pty
+                            .as_deref()
+                            .and_then(|session_id| {
+                                state
+                                    .session_maps
+                                    .term_aliases
+                                    .get(session_id)
+                                    .map(|alias| alias.value().clone())
+                            })
+                            .map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
+                        "session_id",
+                        live_pty.map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
                         "project",
                         p.project.clone().map(serde_json::Value::String),
                     );
                     peer
                 })
                 .collect();
-            serde_json::json!({"peers": peers, "count": peers.len()})
+            serde_json::json!({"peers": peers})
         }
         "send" => {
-            let to = match args["to"].as_str() {
+            let requested_to = match args["to"].as_str() {
                 Some(s) if !s.is_empty() => s,
                 _ => {
-                    return serde_json::json!({"error": "Action 'send' requires 'to' (recipient's tuic_session UUID)"});
+                    return serde_json::json!({"error": "Action 'send' requires 'to' — the recipient's tuic_session, the id of the PTY it runs in, or that terminal's alias (e.g. 'tu-1')"});
                 }
             };
+            // Mail is filed under the peer key, so an address that names the
+            // terminal has to be walked back to the peer that owns it — otherwise
+            // "notify tu-1" is a dead letter with a valid-looking address.
+            let resolved_to = state.resolve_peer_ref(requested_to);
+            let to = resolved_to.as_deref().unwrap_or(requested_to);
             let message = match args["message"].as_str() {
                 Some(s) if !s.is_empty() => s,
                 _ => return serde_json::json!({"error": "Action 'send' requires 'message'"}),
@@ -4398,7 +4491,9 @@ fn handle_messaging(
             let message_timestamp = {
                 let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
                 if !state.peer_agents.contains_key(to) {
-                    return serde_json::json!({"error": format!("Recipient '{}' is not registered. Use list_peers to find valid targets.", to)});
+                    return serde_json::json!({"error": format!(
+                        "Recipient '{requested_to}' is not registered — it matched no tuic_session, PTY id or terminal alias. Use list_peers to find valid targets."
+                    )});
                 }
                 state.push_agent_inbox(to, msg)
             };
@@ -4444,10 +4539,7 @@ fn handle_messaging(
                     "Peer message routed to orchestrator inbox"
                 );
                 let mut response = serde_json::json!({
-                    "ok": true,
-                    "accepted": true,
                     "message_id": msg_id,
-                    "buffered_in_inbox": true,
                     "delivered": delivered,
                     // See the note on the other send response: `delivery_path` is the
                     // single source of truth for the route. This branch used to
@@ -4466,10 +4558,6 @@ fn handle_messaging(
                         } else {
                             "Recipient has NO terminal and no active wait: nothing will wake it. The message stays in its inbox until it calls agent action=wait/inbox. If you need an answer, do not block on it."
                         }),
-                    );
-                    object.insert(
-                        "recipient_has_terminal".to_string(),
-                        serde_json::json!(managed_recipient),
                     );
                 }
                 insert_optional_value(
@@ -4582,10 +4670,7 @@ fn handle_messaging(
                 "Peer message delivered"
             );
             let mut response = serde_json::json!({
-                "ok": true,
-                "accepted": true,
                 "message_id": msg_id,
-                "buffered_in_inbox": true,
                 // `delivered` answers the only question the sender actually has:
                 // will anything surface this message? A waiter consumed it, the SSE
                 // channel took it, or the terminal typed/queued it — those reach the
@@ -4619,10 +4704,6 @@ fn handle_messaging(
                     } else {
                         "Recipient has NO terminal and no active wait: nothing will wake it. The message stays in its inbox until it calls agent action=wait/inbox. If you need an answer, do not block on it."
                     }),
-                );
-                object.insert(
-                    "recipient_has_terminal".to_string(),
-                    serde_json::json!(managed_recipient),
                 );
             }
             insert_optional_value(
@@ -7233,11 +7314,13 @@ mod tests {
             "worktree_path",
             "worktree_branch",
             "agent_state",
+            // False for nearly every session, so they follow the same rule as
+            // every other optional field rather than being spelled out as false.
+            "background_work",
+            "standby",
         ] {
             assert!(!entry.contains_key(absent), "{absent} must be omitted");
         }
-        assert!(entry.contains_key("background_work"));
-        assert!(entry.contains_key("standby"));
         assert!(entry.contains_key("is_caller"));
 
         let _ = handle_session(
@@ -8277,7 +8360,8 @@ mod tests {
             return;
         }
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
-        assert_eq!(spawned["communication_ready"], true);
+        // `parent_session_id` IS the readiness signal: it is present exactly when
+        // the caller has a peer identity for the child to answer.
         assert_eq!(spawned["parent_session_id"], TEST_UUID_A);
     }
 
@@ -8310,23 +8394,10 @@ mod tests {
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
 
         // Every field a pre-task client already read, with its original type.
-        for key in [
-            "session_id",
-            "name",
-            "send_to",
-            "monitor_with",
-            "status_with",
-            "wait_with",
-        ] {
+        for key in ["session_id", "name", "monitor_with", "status_with", "wait_with"] {
             assert!(
                 spawned[key].is_string(),
                 "{key} must still be a string: {spawned}"
-            );
-        }
-        for key in ["peer_registered", "communication_ready"] {
-            assert!(
-                spawned[key].is_boolean(),
-                "{key} must still be a boolean: {spawned}"
             );
         }
         assert!(spawned["server_ts"].is_u64(), "server_ts must stay numeric");
@@ -10383,7 +10454,7 @@ mod tests {
             &serde_json::json!({"action": "list_peers"}),
             Some("mcp-1"),
         );
-        assert_eq!(list["count"], 2);
+        assert_eq!(list["peers"].as_array().map(Vec::len), Some(2));
 
         // Filter by project
         let filtered = handle_messaging(
@@ -10393,7 +10464,7 @@ mod tests {
             }),
             Some("mcp-1"),
         );
-        assert_eq!(filtered["count"], 0);
+        assert_eq!(filtered["peers"].as_array().map(Vec::len), Some(0));
     }
 
     #[test]
@@ -10805,7 +10876,7 @@ mod tests {
             }),
             Some("mcp-1"),
         );
-        assert_eq!(r["ok"], true);
+        assert!(r.get("error").is_none(), "send must succeed: {r}");
 
         // Bob checks inbox
         let inbox = handle_messaging(
@@ -11144,7 +11215,7 @@ mod tests {
             Some("mcp-sender"),
         );
 
-        assert_eq!(result["accepted"], true);
+        assert!(result.get("error").is_none(), "send must succeed: {result}");
         assert_eq!(result["delivery_path"], "inbox_only");
         let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
         assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
@@ -11193,7 +11264,7 @@ mod tests {
             Some("mcp-sender"),
         );
 
-        assert_eq!(result["accepted"], true);
+        assert!(result.get("error").is_none(), "send must succeed: {result}");
         assert_eq!(result["delivery_path"], "terminal_or_queued_and_inbox");
         assert!(
             matches!(
@@ -14040,13 +14111,16 @@ mod tests {
             }
             other => panic!("expected session-created, got {other:?}"),
         }
-        assert_eq!(result["peer_registered"], true);
-        assert_eq!(result["communication_ready"], true);
-        assert_eq!(result["send_to"], session_id);
         assert_eq!(
             result["parent_session_id"],
             "550e8400-e29b-41d4-a716-446655440b01"
         );
+        for dropped in ["peer_registered", "communication_ready", "send_to"] {
+            assert!(
+                result.get(dropped).is_none(),
+                "{dropped} was constant or a second copy of session_id: {result}"
+            );
+        }
         assert_eq!(
             state.peer_agents.get(session_id).unwrap().name,
             "linux-primary"
@@ -14481,8 +14555,6 @@ mod tests {
             result.get("peer_monitor_with").is_none(),
             "standalone spawn must not include peer_monitor_with: {result}"
         );
-        assert_eq!(result["peer_registered"], true);
-        assert_eq!(result["communication_ready"], false);
         assert!(result["communication_warning"].as_str().is_some());
 
         let session_id = result["session_id"].as_str().unwrap();
@@ -14531,7 +14603,10 @@ mod tests {
             return;
         }
         let child = spawned["session_id"].as_str().unwrap();
-        assert_eq!(spawned["communication_ready"], false);
+        assert!(
+            spawned.get("parent_session_id").is_none(),
+            "an unregistered parent has no identity for the child to answer: {spawned}"
+        );
         let pending_parent = pending_parent_id(parent_mcp);
         state.push_agent_inbox(
             &pending_parent,
@@ -14627,7 +14702,6 @@ mod tests {
             ready_child.get("error").is_none(),
             "registered external parent spawn failed: {ready_child}"
         );
-        assert_eq!(ready_child["communication_ready"], true);
         assert_eq!(ready_child["parent_session_id"], parent_tuic);
         let ready_child_id = ready_child["session_id"].as_str().unwrap();
         assert!(state.agent_inbox.contains_key(ready_child_id));
@@ -14835,13 +14909,7 @@ mod tests {
             }),
             Some(sender_mcp),
         );
-        assert_eq!(
-            result["ok"].as_bool(),
-            Some(true),
-            "send must succeed: {result}"
-        );
-        assert_eq!(result["accepted"], true);
-        assert_eq!(result["buffered_in_inbox"], true);
+        assert!(result.get("error").is_none(), "send must succeed: {result}");
         assert_eq!(result["delivery_path"], "inbox_only");
         assert!(
             result.get("recipient_state").is_none(),
@@ -14909,16 +14977,13 @@ mod tests {
             Some(sender_mcp),
         );
         // The mail is stored — that part did succeed.
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["accepted"], true);
-        assert_eq!(result["buffered_in_inbox"], true);
+        assert!(result.get("error").is_none(), "send must succeed: {result}");
         assert_eq!(result["delivery_path"], "inbox_only");
         // …but nothing will surface it.
         assert_eq!(
             result["delivered"], false,
             "inbox_only must not be reported as delivered: {result}"
         );
-        assert_eq!(result["recipient_has_terminal"], false);
         let warning = result["warning"].as_str().unwrap_or_default();
         assert!(
             warning.contains("NO terminal"),
@@ -15104,9 +15169,8 @@ mod tests {
             &serde_json::json!({"action": "send", "to": tuic, "message": "note to self"}),
             Some(mcp_sid),
         );
-        assert_eq!(
-            send_result["ok"].as_bool(),
-            Some(true),
+        assert!(
+            send_result.get("error").is_none(),
             "send-to-self must succeed: {send_result}"
         );
 
@@ -16542,5 +16606,337 @@ mod tests {
             outcome.is_ok(),
             "a native tool call blocked on reading repo-settings.json"
         );
+    }
+
+    // ── session alias as the universal agent address (#737-2150) ────────────
+
+    /// Create a live PTY for a test, or report that this environment has none.
+    fn create_test_session(state: &Arc<AppState>) -> Option<String> {
+        let created = handle_session(state, &serde_json::json!({"action": "create"}), None);
+        if created.get("error").is_some() {
+            eprintln!("Skipping: PTY not available in this environment");
+            return None;
+        }
+        Some(created["session_id"].as_str().unwrap().to_string())
+    }
+
+    fn kill_test_session(state: &Arc<AppState>, session_id: &str) {
+        let _ = handle_session(
+            state,
+            &serde_json::json!({"action": "kill", "session_id": session_id}),
+            None,
+        );
+    }
+
+    fn listed_entry(
+        state: &Arc<AppState>,
+        session_id: &str,
+        mcp_session_id: Option<&str>,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        handle_session(state, &serde_json::json!({"action": "list"}), mcp_session_id)
+            .as_array()
+            .expect("session list is an array")
+            .iter()
+            .find(|entry| entry["session_id"] == session_id)
+            .unwrap_or_else(|| panic!("{session_id} missing from session list"))
+            .as_object()
+            .expect("session list entry is an object")
+            .clone()
+    }
+
+    /// A desktop tab persists its own `$TUIC_SESSION`, which is NOT the key the
+    /// server filed its PTY under. Comparing the caller's identity with the PTY key
+    /// therefore answered "not the caller" for every desktop tab — the one case the
+    /// flag exists for, since an orchestrator that cannot recognise its own terminal
+    /// can close itself.
+    // Needs a runtime: creating a PTY arms the reader thread through tokio.
+    #[tokio::test]
+    async fn is_caller_holds_when_the_tuic_session_differs_from_the_pty_id() {
+        let state = test_state();
+        let Some(session_id) = create_test_session(&state) else {
+            return;
+        };
+        let tab_uuid = "550e8400-e29b-41d4-a716-4466554417a0";
+        assert_ne!(tab_uuid, session_id, "the two ids must differ for this test");
+        state.bind_live_pty(tab_uuid, &session_id);
+        apply_initialize_identity(&state, "caller-mcp-alias", Some(tab_uuid));
+
+        let entry = listed_entry(&state, &session_id, Some("caller-mcp-alias"));
+
+        assert_eq!(
+            entry["is_caller"], true,
+            "the caller's own terminal must be recognised through its identity: {entry:?}"
+        );
+        assert_eq!(
+            entry["tuic_session"], tab_uuid,
+            "the list must publish the identity the terminal answers to"
+        );
+        kill_test_session(&state, &session_id);
+    }
+
+    /// The list is read by a model on every orientation call. Process internals it
+    /// cannot act on, and flags that are false for nearly every session, are cost
+    /// without signal.
+    // Needs a runtime: creating a PTY arms the reader thread through tokio.
+    #[tokio::test]
+    async fn session_list_drops_process_internals_and_quiet_flags() {
+        let state = test_state();
+        let Some(session_id) = create_test_session(&state) else {
+            return;
+        };
+
+        let entry = listed_entry(&state, &session_id, None);
+        for dropped in ["child_pid", "foreground_pgid"] {
+            assert!(
+                !entry.contains_key(dropped),
+                "{dropped} is a process internal no caller acts on"
+            );
+        }
+        for quiet in ["background_work", "standby"] {
+            assert!(
+                !entry.contains_key(quiet),
+                "{quiet} must be omitted while false, like every other optional field"
+            );
+        }
+
+        let mut session_state = crate::state::SessionState::default();
+        session_state.background_work = true;
+        state
+            .session_maps
+            .session_states
+            .insert(session_id.clone(), session_state);
+        let entry = listed_entry(&state, &session_id, None);
+        assert_eq!(
+            entry["background_work"], true,
+            "the flag must still be reported when it is true"
+        );
+        kill_test_session(&state, &session_id);
+    }
+
+    /// One address book: whatever name the caller holds for a terminal reaches it.
+    // Needs a runtime: creating a PTY arms the reader thread through tokio.
+    #[tokio::test]
+    async fn the_session_tool_addresses_a_session_by_alias_or_tuic_session() {
+        let state = test_state();
+        let Some(session_id) = create_test_session(&state) else {
+            return;
+        };
+        let tab_uuid = "550e8400-e29b-41d4-a716-4466554417a1";
+        state.bind_live_pty(tab_uuid, &session_id);
+        state
+            .session_maps
+            .session_states
+            .insert(session_id.clone(), crate::state::SessionState::default());
+        let alias = state
+            .session_maps
+            .term_aliases
+            .get(&session_id)
+            .map(|entry| entry.value().clone())
+            .expect("a spawned session has an alias");
+
+        for reference in [session_id.as_str(), tab_uuid, alias.as_str()] {
+            let status = handle_session(
+                &state,
+                &serde_json::json!({"action": "status", "session_id": reference}),
+                None,
+            );
+            assert_eq!(
+                status["session_id"], session_id,
+                "'{reference}' must address the same terminal: {status}"
+            );
+        }
+
+        let missing = handle_session(
+            &state,
+            &serde_json::json!({"action": "status"}),
+            None,
+        );
+        let error = missing["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("alias"),
+            "the guidance must name the alias as an accepted address, got: {error}"
+        );
+        kill_test_session(&state, &session_id);
+    }
+
+    /// Mail is filed under the peer key, so an alias or a PTY id has to be walked
+    /// back to the peer before delivery — otherwise "notify tu-1" is a dead letter.
+    // Needs a runtime: creating a PTY arms the reader thread through tokio.
+    #[tokio::test]
+    async fn agent_send_addresses_a_peer_by_alias_or_pty_id() {
+        let state = test_state();
+        let Some(session_id) = create_test_session(&state) else {
+            return;
+        };
+        let sender_mcp = "mcp-alias-sender";
+        let sender_tuic = "550e8400-e29b-41d4-a716-4466554417b0";
+        let recipient_tuic = "550e8400-e29b-41d4-a716-4466554417b1";
+        register_peer(&state, sender_tuic, "alice", sender_mcp);
+        state.bind_live_pty(recipient_tuic, &session_id);
+        register_peer(&state, recipient_tuic, "bob", "mcp-alias-recipient");
+        let alias = state
+            .session_maps
+            .term_aliases
+            .get(&session_id)
+            .map(|entry| entry.value().clone())
+            .expect("a spawned session has an alias");
+
+        for reference in [alias.as_str(), session_id.as_str()] {
+            let result = handle_messaging(
+                &state,
+                &serde_json::json!({
+                    "action": "send",
+                    "to": reference,
+                    "message": format!("addressed as {reference}"),
+                }),
+                Some(sender_mcp),
+            );
+            assert!(
+                result.get("error").is_none(),
+                "'{reference}' must reach the peer that owns the terminal: {result}"
+            );
+        }
+        assert_eq!(
+            state
+                .agent_inbox
+                .get(recipient_tuic)
+                .map(|inbox| inbox.len())
+                .unwrap_or(0),
+            2,
+            "both addresses must file mail under the one peer key"
+        );
+
+        let unknown = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": "nobody", "message": "hi"}),
+            Some(sender_mcp),
+        );
+        let error = unknown["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("alias"),
+            "the error must name every address form, got: {error}"
+        );
+        kill_test_session(&state, &session_id);
+    }
+
+    /// `list_peers` is how one agent finds another. Without the terminal address it
+    /// returns names nothing can be typed into, while `registered_at`, `mail_wake`
+    /// and `count` are derivable or constant.
+    // Needs a runtime: creating a PTY arms the reader thread through tokio.
+    #[tokio::test]
+    async fn list_peers_reports_the_terminal_address_of_a_peer() {
+        let state = test_state();
+        let Some(session_id) = create_test_session(&state) else {
+            return;
+        };
+        let peer_tuic = "550e8400-e29b-41d4-a716-4466554417c0";
+        state.bind_live_pty(peer_tuic, &session_id);
+        register_peer(&state, peer_tuic, "bob", "mcp-listpeers-alias");
+        let alias = state
+            .session_maps
+            .term_aliases
+            .get(&session_id)
+            .map(|entry| entry.value().clone())
+            .expect("a spawned session has an alias");
+
+        let listed = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "list_peers"}),
+            Some("mcp-listpeers-alias"),
+        );
+        assert!(
+            listed.get("count").is_none(),
+            "count restates the length of the array beside it: {listed}"
+        );
+        let peer = listed["peers"]
+            .as_array()
+            .expect("peers is an array")
+            .iter()
+            .find(|peer| peer["tuic_session"] == peer_tuic)
+            .expect("the registered peer must be listed")
+            .as_object()
+            .expect("peer entry is an object");
+        assert_eq!(peer["alias"], alias, "the short address must be published");
+        assert_eq!(
+            peer["session_id"], session_id,
+            "the terminal behind the peer must be named"
+        );
+        for dropped in ["registered_at", "mail_wake"] {
+            assert!(
+                !peer.contains_key(dropped),
+                "{dropped} is not something a sender acts on"
+            );
+        }
+        kill_test_session(&state, &session_id);
+    }
+
+    /// A field that is always the same value carries no information. `delivered`
+    /// and `delivery_path` are the whole verdict.
+    #[test]
+    fn send_response_carries_only_the_delivery_verdict() {
+        let state = test_state();
+        let sender_mcp = "mcp-constant-sender";
+        let sender_tuic = "550e8400-e29b-41d4-a716-4466554417d0";
+        let recipient_tuic = "550e8400-e29b-41d4-a716-4466554417d1";
+        register_peer(&state, sender_tuic, "alice", sender_mcp);
+        register_peer(&state, recipient_tuic, "phantom", "mcp-constant-recipient");
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": recipient_tuic,
+                "message": "did you finish?",
+            }),
+            Some(sender_mcp),
+        );
+        for constant in [
+            "ok",
+            "accepted",
+            "buffered_in_inbox",
+            "recipient_has_terminal",
+        ] {
+            assert!(
+                result.get(constant).is_none(),
+                "{constant} never varies with the outcome: {result}"
+            );
+        }
+        assert_eq!(result["delivered"], false);
+        assert_eq!(result["delivery_path"], "inbox_only");
+        assert!(
+            result["warning"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("NO terminal"),
+            "the warning still has to say the recipient cannot be woken: {result}"
+        );
+    }
+
+    /// An auto-bound managed peer is the terminal it runs in. Naming every one of
+    /// them "agent" makes `list_peers` a list of identical rows.
+    // Needs a runtime: creating a PTY arms the reader thread through tokio.
+    #[tokio::test]
+    async fn an_auto_bound_peer_is_named_after_its_alias() {
+        let state = test_state();
+        let Some(session_id) = create_test_session(&state) else {
+            return;
+        };
+        let tab_uuid = "550e8400-e29b-41d4-a716-4466554417e0";
+        state.bind_live_pty(tab_uuid, &session_id);
+        let alias = state
+            .session_maps
+            .term_aliases
+            .get(&session_id)
+            .map(|entry| entry.value().clone())
+            .expect("a spawned session has an alias");
+
+        apply_initialize_identity(&state, "mcp-autobind-alias", Some(tab_uuid));
+
+        assert_eq!(
+            state.peer_agents.get(tab_uuid).expect("peer bound").name,
+            alias,
+            "an auto-bound peer must answer to the address its tab shows"
+        );
+        kill_test_session(&state, &session_id);
     }
 }

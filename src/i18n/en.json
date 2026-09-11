@@ -756,6 +756,7 @@
 	"statusBar.toggleNotes": "Toggle Ideas Panel",
 	"statusBar.updating": "Updating",
 	"statusBar.voiceDictation": "Voice Dictation",
+	"tabBar.alias": "Alias: {alias}",
 	"tabBar.captureSession": "Capture Session",
 	"tabBar.close": "Close",
 	"tabBar.closeOthers": "Close Other Tabs",

@@ -1478,3 +1478,27 @@ the whole transcript on its worst segment.
    transcribes, and dictating into a silent room still produces nothing rather
    than invented subtitle boilerplate — that suppression relies on the flags the
    short path still sets.
+
+## Session alias as the universal agent address (story `737-2150`, 2026-09-11) — **Rust + frontend, needs a `make dev` restart**
+
+Every action that takes a `session_id`, and `agent action=send`'s `to`, now accept
+three names for one terminal: the PTY id, the `tuic_session`, and the alias. The
+alias also persists across a restart, and the session/peer list payloads dropped the
+fields that answered a question nobody asked.
+
+1. [ ] **Address a session by alias.** Take an alias from `session action=list`
+   (e.g. `tu-1`) and call `session action=output session_id=tu-1`. The same call with
+   that session's `tuic_session` must return the same terminal.
+2. [ ] **`agent action=send to=<alias>`** reaches the peer that owns that terminal,
+   with the same `delivery_path` as sending to its `tuic_session`.
+3. [ ] **The alias survives a restart.** Note a tab's alias, quit the app, start it
+   again, and check `session action=list`: the restored tab must hold the same alias,
+   and a new session in that repo must get the next free number rather than reusing it.
+4. [ ] **Tab context menu copies the alias.** Right-click a terminal tab that has an
+   alias. The menu shows `Alias: tu-1` under a separator; clicking it puts the alias
+   on the clipboard. A tab with no alias shows no such item.
+5. [ ] **`is_caller` marks the right tab.** From an agent running in a TUIC tab, call
+   `session action=list`: exactly the caller's own session carries `is_caller: true`.
+6. [ ] **Reading a dead session still works.** Let a session's process exit, then call
+   `session action=output` on it. It must return the buffered output, not
+   `Unknown session` — resolution falls through for a reference it cannot resolve.

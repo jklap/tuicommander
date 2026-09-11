@@ -2896,11 +2896,30 @@ impl AppState {
     }
 
     /// Assign a human-friendly alias based on the repo/cwd name.
-    /// E.g. `tuicommander` → `tc-1`, `night-recovery` → `nr-1`, no repo → `sh-1`.
+    /// E.g. `tuicommander` → `tu-1`, `night-recovery` → `nr-1`, no repo → `sh-1`.
     ///
     /// If the same repo name already has a prefix in `term_alias_counters`, reuse it.
     /// Collision resolution only runs for new repo names whose base acronym clashes.
-    pub(crate) fn assign_term_alias(&self, session_id: &str) -> String {
+    ///
+    /// `requested` is the alias a restored tab was saved with. It is honoured
+    /// verbatim and the prefix counter is moved past its number, so the next fresh
+    /// tab in that repo cannot be handed the same address. A malformed request, or
+    /// one a live session already holds, is dropped — see
+    /// [`reservable_alias`]. The alias is a routable address, so an untrusted
+    /// value must never be able to point two tabs at one name.
+    pub(crate) fn assign_term_alias(&self, session_id: &str, requested: Option<&str>) -> String {
+        if let Some((prefix, number)) = requested.and_then(|alias| self.reservable_alias(alias)) {
+            let alias = format!("{prefix}-{number}");
+            let mut counter = self
+                .session_maps
+                .term_alias_counters
+                .entry(prefix)
+                .or_insert(0);
+            *counter = (*counter).max(number);
+            drop(counter);
+            self.record_term_alias(session_id, alias.clone());
+            return alias;
+        }
         let cwd = self
             .session_maps
             .sessions
@@ -2927,6 +2946,35 @@ impl AppState {
             .or_insert(0);
         *counter += 1;
         let alias = format!("{prefix}-{}", *counter);
+        drop(counter);
+        self.record_term_alias(session_id, alias.clone());
+        alias
+    }
+
+    /// Split a requested alias into `(prefix, number)` when it is a shape this
+    /// map can address and nothing live already answers to it.
+    ///
+    /// `prefix` must be non-empty and carry no `-` (the separator the resolver
+    /// splits on) and the number must be a positive `u32`, because that is
+    /// exactly what [`assign_term_alias`] generates and what the counter counts.
+    fn reservable_alias(&self, alias: &str) -> Option<(String, u32)> {
+        let (prefix, number) = alias.rsplit_once('-')?;
+        if prefix.is_empty() || prefix.contains('-') {
+            return None;
+        }
+        let number: u32 = number.parse().ok()?;
+        if number == 0 {
+            return None;
+        }
+        if self.resolve_alias(alias).is_some() {
+            return None;
+        }
+        Some((prefix.to_string(), number))
+    }
+
+    /// File an alias against a session and tell the UI, so the tab shows the
+    /// address other agents can reach it by.
+    fn record_term_alias(&self, session_id: &str, alias: String) {
         self.session_maps
             .term_aliases
             .insert(session_id.to_string(), alias.clone());
@@ -2940,7 +2988,6 @@ impl AppState {
                 }),
             );
         }
-        alias
     }
 
     /// Find an existing prefix used by a session with the same repo name.
@@ -2974,6 +3021,37 @@ impl AppState {
             .iter()
             .find(|e| e.value() == alias)
             .map(|e| e.key().clone())
+    }
+
+    /// Resolve any address a caller may hold for a terminal into the live PTY key.
+    ///
+    /// Three names reach the same session and callers do not get to know which one
+    /// they were handed: the PTY key the server minted, the `$TUIC_SESSION` a
+    /// desktop tab persists across restarts, and the short repo alias the tab menu
+    /// shows. Every tool that takes a `session_id` goes through here, so "notify
+    /// tu-1" works without a UUID lookup.
+    ///
+    /// `None` means no live session answers to that name — never a guess.
+    pub(crate) fn resolve_session_ref(&self, reference: &str) -> Option<String> {
+        self.live_pty_for_peer(reference)
+            .or_else(|| self.resolve_alias(reference))
+            .filter(|session_id| self.session_maps.sessions.contains_key(session_id))
+    }
+
+    /// Resolve any address into the key a peer's mail is filed under.
+    ///
+    /// [`resolve_session_ref`] travels towards the terminal; mail travels the other
+    /// way, because `peer_agents` is keyed by `tuic_session`. An alias or a PTY key
+    /// therefore has to be walked back to the peer that owns that terminal.
+    pub(crate) fn resolve_peer_ref(&self, reference: &str) -> Option<String> {
+        if self.peer_agents.contains_key(reference) {
+            return Some(reference.to_string());
+        }
+        let session_id = self.resolve_session_ref(reference)?;
+        self.peer_agents
+            .iter()
+            .find(|entry| self.live_pty_for_peer(entry.key()).as_deref() == Some(session_id.as_str()))
+            .map(|entry| entry.key().clone())
     }
 
     /// This session's knowledge record, read off disk when it is not resident.
@@ -3043,7 +3121,7 @@ impl AppState {
 /// Derive a short prefix from a repo directory name.
 ///
 /// Split by `-`, `_`, `.`, and camelCase boundaries, then take initials.
-/// - Multi-word: `tuicommander` → `tc` (camel split), `night-recovery` → `nr`
+/// - Multi-word: `tuiCommander` → `tc` (camel split), `night-recovery` → `nr`
 /// - Single word < 3 chars: use as-is (`go` → `go`)
 /// - Single word >= 3 chars: first 2 letters (`server` → `se`)
 /// - Empty/no repo: `sh`
@@ -4089,6 +4167,11 @@ pub(crate) struct PtyConfig {
     /// symlinks, wrapper scripts).
     #[serde(default)]
     pub(crate) agent_type: Option<String>,
+    /// Terminal alias this tab held before the restart (e.g. `tu-3`). Reserved
+    /// verbatim so the address other agents already know keeps working; a
+    /// malformed or taken value is ignored. See `AppState::assign_term_alias`.
+    #[serde(default)]
+    pub(crate) alias: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -4776,6 +4859,19 @@ pub(crate) mod tests_support {
                 shell: "/bin/sh".to_string(),
             }),
         );
+    }
+
+    /// Give a live test session a working directory, which is what the alias
+    /// prefix is derived from.
+    #[cfg(unix)]
+    pub fn set_session_cwd(state: &AppState, session_id: &str, cwd: &str) {
+        state
+            .session_maps
+            .sessions
+            .get(session_id)
+            .expect("session exists")
+            .lock()
+            .cwd = Some(cwd.to_string());
     }
 
     pub fn make_test_app_state() -> AppState {
@@ -6175,6 +6271,118 @@ mod tests {
             m.insert(format!("s{}", prefixes.len()), format!("{p}-1"));
             prefixes.push(p);
         }
+    }
+
+    // ── alias reservation + session reference resolution ──
+
+    /// A tab that comes back from disk brings its alias with it. Without a
+    /// reservation the restored tab is handed `tc-1` while an older tab in the
+    /// same repo already answers to that address, so a `send` reaches the wrong
+    /// terminal — and the counter has to move past the restored number, or the
+    /// next fresh tab collides with it.
+    #[cfg(unix)]
+    #[test]
+    fn a_restored_alias_is_reserved_and_the_counter_moves_past_it() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "restored");
+        tests_support::set_session_cwd(&state, "restored", "/repos/tuicommander");
+
+        assert_eq!(
+            state.assign_term_alias("restored", Some("tc-3")),
+            "tc-3",
+            "a restored tab keeps the alias it was saved with"
+        );
+
+        tests_support::insert_dummy_session(&state, "fresh");
+        tests_support::set_session_cwd(&state, "fresh", "/repos/tuicommander");
+
+        assert_eq!(
+            state.assign_term_alias("fresh", None),
+            "tc-4",
+            "the counter must resume past the restored alias, not re-issue it"
+        );
+    }
+
+    /// The requested alias arrives from persisted client state, so it is input:
+    /// a shape the resolver cannot address, or one another live tab already owns,
+    /// is dropped in favour of a generated alias rather than trusted.
+    #[cfg(unix)]
+    #[test]
+    fn a_requested_alias_that_is_malformed_or_taken_is_not_honoured() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "first");
+        tests_support::set_session_cwd(&state, "first", "/repos/tuicommander");
+        let first = state.assign_term_alias("first", Some("tc-1"));
+        assert_eq!(first, "tc-1");
+
+        for rejected in ["garbage", "tc-", "-1", "tc-0", "tc-x", "", "tc-1"] {
+            tests_support::insert_dummy_session(&state, rejected);
+            tests_support::set_session_cwd(&state, rejected, "/repos/tuicommander");
+            let assigned = state.assign_term_alias(rejected, Some(rejected));
+            assert_ne!(
+                assigned, rejected,
+                "'{rejected}' is not a reservable alias and must not be honoured"
+            );
+            assert!(
+                assigned.starts_with("tc-"),
+                "the fallback must still be a generated alias: got {assigned}"
+            );
+        }
+    }
+
+    /// One address book for everything a human or an agent can name a terminal
+    /// by: the PTY key, the `$TUIC_SESSION` the tab persists, or the short alias
+    /// shown in the tab menu.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_session_ref_accepts_pty_id_tuic_session_and_alias() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-key");
+        state.bind_live_pty("tuic-uuid", "pty-key");
+        let alias = state.assign_term_alias("pty-key", None);
+
+        for reference in ["pty-key", "tuic-uuid", alias.as_str()] {
+            assert_eq!(
+                state.resolve_session_ref(reference),
+                Some("pty-key".to_string()),
+                "'{reference}' must address the terminal behind it"
+            );
+        }
+        assert_eq!(
+            state.resolve_session_ref("never-seen"),
+            None,
+            "an unknown reference resolves to nothing rather than to a guess"
+        );
+    }
+
+    /// Mail is filed under the peer key, so an address that names the terminal
+    /// has to travel back the other way before a message can be delivered.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_peer_ref_maps_a_terminal_address_back_to_its_peer() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-key");
+        state.bind_live_pty("tuic-uuid", "pty-key");
+        let alias = state.assign_term_alias("pty-key", None);
+        state.peer_agents.insert(
+            "tuic-uuid".to_string(),
+            PeerAgent {
+                tuic_session: "tuic-uuid".to_string(),
+                mcp_session_id: "mcp-1".to_string(),
+                name: "worker".to_string(),
+                project: None,
+                registered_at: 0,
+            },
+        );
+
+        for reference in ["tuic-uuid", "pty-key", alias.as_str()] {
+            assert_eq!(
+                state.resolve_peer_ref(reference),
+                Some("tuic-uuid".to_string()),
+                "'{reference}' must resolve to the peer that owns that terminal"
+            );
+        }
+        assert_eq!(state.resolve_peer_ref("never-seen"), None);
     }
 
     #[test]

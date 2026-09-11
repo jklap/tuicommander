@@ -271,6 +271,10 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 							agentType: terminal.agentType ?? null,
 							agentSessionId: terminal.agentSessionId ?? null,
 							agentLaunchCommand: terminal.agentLaunchCommand ?? null,
+							// The address other agents already hold. Rust reserves it on
+							// PTY create and moves the repo counter past it, so the next
+							// fresh tab cannot be handed the same name.
+							alias: terminal.alias ?? null,
 						});
 						// Same reason as handleAddTerminalToWorkspace: a restore knows its repo.
 						terminalsStore.setRepoPath(id, repoPath);

@@ -841,6 +841,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					shell: settingsStore.state.shell ?? null,
 					cwd: props.cwd || null,
 					tuic_session: termData?.tuicSession ?? null,
+					alias: termData?.alias ?? null,
 					env: agentConfigsStore.getEnvFlags("claude"),
 					agent_type: termData?.pendingInitCommand ? (termData.agentType ?? null) : null,
 				});

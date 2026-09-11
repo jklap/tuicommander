@@ -534,6 +534,7 @@ pub(super) fn register_pty_session(
     rows: u16,
     cols: u16,
     agent_type: Option<String>,
+    requested_alias: Option<&str>,
 ) {
     let cwd = session.cwd.clone();
     let display_name = session.display_name.clone();
@@ -542,7 +543,7 @@ pub(super) fn register_pty_session(
         .session_maps
         .sessions
         .insert(session_id.to_string(), Mutex::new(session));
-    state.assign_term_alias(session_id);
+    state.assign_term_alias(session_id, requested_alias);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -585,6 +586,16 @@ pub(super) fn register_pty_session(
 ///
 /// Returns `(session_id, cwd_string)` on success. Both `create_session` and
 /// `create_session_with_worktree` delegate here after deriving the cwd and worktree.
+/// What a client asks to keep when it is *restoring* a tab rather than opening a
+/// new one: the PTY key it pre-registered locally, and the alias other agents
+/// already address it by. Both are requests, not commands — each is honoured only
+/// when nothing live holds it.
+#[derive(Default)]
+pub(super) struct RequestedIdentity {
+    pub session_id: Option<String>,
+    pub alias: Option<String>,
+}
+
 pub(super) fn spawn_pty_session(
     state: Arc<AppState>,
     shell: String,
@@ -592,11 +603,11 @@ pub(super) fn spawn_pty_session(
     rows: u16,
     cols: u16,
     worktree: Option<crate::state::WorktreeInfo>,
-    requested_id: Option<String>,
+    requested: RequestedIdentity,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
     // Honor a client-provided id when it is non-empty and not already taken
     // (browser duplicate-tab fix); otherwise mint a fresh one.
-    let session_id = match requested_id {
+    let session_id = match requested.session_id {
         Some(id) if !id.is_empty() && !state.session_maps.sessions.contains_key(&id) => id,
         _ => Uuid::new_v4().to_string(),
     };
@@ -662,6 +673,7 @@ pub(super) fn spawn_pty_session(
         rows,
         cols,
         None,
+        requested.alias.as_deref(),
     );
 
     #[cfg(feature = "desktop")]
@@ -705,7 +717,18 @@ pub(super) async fn create_session(
     let shell = resolve_shell(body.shell);
 
     let spawn = tokio::task::spawn_blocking(move || {
-        spawn_pty_session(state, shell, body.cwd, rows, cols, None, body.session_id)
+        spawn_pty_session(
+            state,
+            shell,
+            body.cwd,
+            rows,
+            cols,
+            None,
+            RequestedIdentity {
+                session_id: body.session_id,
+                alias: body.alias,
+            },
+        )
     })
     .await
     .unwrap_or_else(|error| {
@@ -1012,7 +1035,10 @@ pub(super) async fn create_session_with_worktree(
             rows,
             cols,
             Some(worktree),
-            body.config.session_id,
+            RequestedIdentity {
+                session_id: body.config.session_id,
+                alias: body.config.alias,
+            },
         )
     })
     .await
@@ -3116,7 +3142,7 @@ mod tests {
             24,
             80,
             None,
-            None,
+            super::RequestedIdentity::default(),
         );
 
         let session_id = match result {
@@ -3154,7 +3180,10 @@ mod tests {
             24,
             80,
             None,
-            Some("client-provided-id".to_string()),
+            super::RequestedIdentity {
+                session_id: Some("client-provided-id".to_string()),
+                alias: None,
+            },
         );
         // PTY unavailable in CI — skip gracefully
         if let Ok(id) = result {
@@ -3179,7 +3208,10 @@ mod tests {
             24,
             80,
             None,
-            Some("dup-id".to_string()),
+            super::RequestedIdentity {
+                session_id: Some("dup-id".to_string()),
+                alias: None,
+            },
         ) {
             Ok(id) => id,
             Err(_) => return, // PTY unavailable in CI — skip gracefully
@@ -3192,7 +3224,10 @@ mod tests {
             24,
             80,
             None,
-            Some("dup-id".to_string()),
+            super::RequestedIdentity {
+                session_id: Some("dup-id".to_string()),
+                alias: None,
+            },
         )
         .expect("second spawn should succeed with a fresh id");
         assert_ne!(
