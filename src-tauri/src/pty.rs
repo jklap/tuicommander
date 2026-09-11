@@ -6672,7 +6672,20 @@ impl ChunkProcessor {
                 let vt = vt.lock();
                 (vt.grid_screen_lines() as u16, vt.grid_columns() as u16)
             });
-            crate::pty_capture::record_with_geometry(session_id, data.as_bytes(), capture_geometry);
+            // Elided for images (color-tools plan, Phase 8) — a `.tcap` capture
+            // caps at 512 KB total, and a single image transmission would
+            // otherwise blow that cap outright. `.tcap` is a pure debugging
+            // artifact (AGENTS.md's "capture before you theorise"), unlike
+            // `output_buffers`/`broadcast_to_ws_clients` just above, which is a
+            // real client's live stream and reconnect-replay source and must
+            // never be touched here.
+            let elided_for_capture =
+                crate::image_payload_elision::elide_image_payloads(data.as_bytes());
+            crate::pty_capture::record_with_geometry(
+                session_id,
+                elided_for_capture.as_deref().unwrap_or(data.as_bytes()),
+                capture_geometry,
+            );
         }
 
         raw_stream_events(&mut self.raw_carry, data, &mut events);
@@ -10101,14 +10114,24 @@ pub(crate) fn spawn_reader_thread(
                         // Flight recorder: keep the last PTY_RAW_RING_CAP raw bytes
                         // (pre-transform) so a wild rendering corruption can be
                         // dumped and replayed offline (story 056-7545).
+                        //
+                        // Inline-image payloads (OSC 1337 / Kitty APC) are elided
+                        // to a short placeholder first (color-tools plan, Phase
+                        // 8) — this ring is diagnostic-only, and a single large
+                        // image transmission would otherwise evict most of its
+                        // history. The real parser downstream still processes
+                        // `buf[..n]` itself, unelided.
                         {
+                            let elided =
+                                crate::image_payload_elision::elide_image_payloads(&buf[..n]);
+                            let to_store = elided.as_deref().unwrap_or(&buf[..n]);
                             let ring = state
                                 .grid
                                 .pty_raw_rings
                                 .entry(session_id.clone())
                                 .or_default();
                             let mut ring = ring.lock();
-                            ring.extend(&buf[..n]);
+                            ring.extend(to_store);
                             if ring.len() > PTY_RAW_RING_CAP {
                                 let excess = ring.len() - PTY_RAW_RING_CAP;
                                 ring.drain(..excess);
