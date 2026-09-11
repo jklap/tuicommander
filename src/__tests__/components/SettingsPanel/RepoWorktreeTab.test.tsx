@@ -48,6 +48,12 @@ function makeSettings(overrides: Partial<RepoSettings> = {}): RepoSettings {
 	};
 }
 
+const BASE_REFS = [
+	{ name: "main", kind: "local", is_default: true },
+	{ name: "master", kind: "local", is_default: false },
+	{ name: "develop", kind: "local", is_default: false },
+];
+
 const defaults: RepoDefaults = {
 	baseBranch: "main",
 	copyIgnoredFiles: true,
@@ -97,7 +103,12 @@ describe("RepoWorktreeTab", () => {
 
 	it("shows the global-default option text interpolated with the actual default, and selects it when baseBranch is null", () => {
 		const { container, getByText } = render(() => (
-			<RepoWorktreeTab settings={makeSettings({ baseBranch: null })} defaults={defaults} onUpdate={onUpdate} />
+			<RepoWorktreeTab
+				settings={makeSettings({ baseBranch: null })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+				baseRefs={BASE_REFS}
+			/>
 		));
 		expect(getByText("Use global default (main)")).toBeTruthy();
 		const select = selectByOptionValue(container, "master");
@@ -106,7 +117,12 @@ describe("RepoWorktreeTab", () => {
 
 	it("converts the inherit sentinel back to null when baseBranch is reset to global default", () => {
 		const { container } = render(() => (
-			<RepoWorktreeTab settings={makeSettings({ baseBranch: "master" })} defaults={defaults} onUpdate={onUpdate} />
+			<RepoWorktreeTab
+				settings={makeSettings({ baseBranch: "master" })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+				baseRefs={BASE_REFS}
+			/>
 		));
 		const select = selectByOptionValue(container, "master");
 		fireEvent.change(select, { target: { value: "__inherit__" } });
@@ -115,11 +131,131 @@ describe("RepoWorktreeTab", () => {
 
 	it("passes a concrete branch value through unchanged when baseBranch is overridden", () => {
 		const { container } = render(() => (
-			<RepoWorktreeTab settings={makeSettings({ baseBranch: null })} defaults={defaults} onUpdate={onUpdate} />
+			<RepoWorktreeTab
+				settings={makeSettings({ baseBranch: null })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+				baseRefs={BASE_REFS}
+			/>
 		));
 		const select = selectByOptionValue(container, "master");
 		fireEvent.change(select, { target: { value: "develop" } });
 		expect(onUpdate).toHaveBeenCalledWith("baseBranch", "develop");
+	});
+
+	describe("Branch From: dynamic ref list", () => {
+		it("offers only Automatic plus 'Use global default' when no baseRefs are loaded yet, with no stale warning", () => {
+			const { container, queryByText } = render(() => (
+				<RepoWorktreeTab settings={makeSettings({ baseBranch: null })} defaults={defaults} onUpdate={onUpdate} />
+			));
+			const select = selectByOptionValue(container, "automatic");
+			const values = Array.from(select.options).map((o) => o.value);
+			expect(values).toEqual(["__inherit__", "automatic"]);
+			expect(queryByText(/no longer exists/)).toBeNull();
+		});
+
+		it("groups local and remote refs under their own optgroups, in the order the backend returned them", () => {
+			const { container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: null })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={[
+						{ name: "main", kind: "local", is_default: true },
+						{ name: "feature-x", kind: "local", is_default: false },
+						{ name: "origin/release", kind: "remote", is_default: false },
+					]}
+				/>
+			));
+			const select = selectByOptionValue(container, "main");
+			const groups = Array.from(select.querySelectorAll("optgroup"));
+			expect(groups.map((g) => g.label)).toEqual(["Local", "Remote"]);
+			expect(Array.from(groups[0].querySelectorAll("option")).map((o) => o.value)).toEqual(["main", "feature-x"]);
+			expect(Array.from(groups[1].querySelectorAll("option")).map((o) => o.value)).toEqual(["origin/release"]);
+		});
+
+		it("does not offer master/develop when they don't exist in this repo", () => {
+			const { container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: null })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={[{ name: "trunk", kind: "local", is_default: true }]}
+				/>
+			));
+			const select = selectByOptionValue(container, "trunk");
+			const values = Array.from(select.options).map((o) => o.value);
+			expect(values).not.toContain("master");
+			expect(values).not.toContain("develop");
+		});
+
+		it("excludes a real branch literally named 'automatic' instead of rendering a second option with the same value as the sentinel", () => {
+			const { container } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: null })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={[
+						{ name: "main", kind: "local", is_default: true },
+						{ name: "automatic", kind: "local", is_default: false },
+					]}
+				/>
+			));
+			const select = selectByOptionValue(container, "main");
+			const automaticOptions = Array.from(select.options).filter((o) => o.value === "automatic");
+			expect(automaticOptions).toHaveLength(1);
+			expect(automaticOptions[0].textContent).toBe("Automatic");
+		});
+
+		it("shows a stale-branch option plus a warning when the configured branch no longer exists in a loaded list", () => {
+			const { container, getByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: "removed-branch" })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={BASE_REFS}
+				/>
+			));
+			const select = selectByOptionValue(container, "removed-branch");
+			expect(select.value).toBe("removed-branch");
+			expect(select.selectedOptions[0].textContent).toContain("no longer exists");
+			expect(getByText(/no longer exists in this repo/)).toBeTruthy();
+		});
+
+		it("does not warn about a configured branch while baseRefs is still loading (undefined)", () => {
+			const { queryByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: "removed-branch" })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+				/>
+			));
+			expect(queryByText(/no longer exists/)).toBeNull();
+		});
+
+		it("never warns about the 'automatic' sentinel even when baseRefs is loaded", () => {
+			const { queryByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: "automatic" })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={BASE_REFS}
+				/>
+			));
+			expect(queryByText(/no longer exists/)).toBeNull();
+		});
+
+		it("does not show a stale warning once the configured branch is present in baseRefs", () => {
+			const { queryByText } = render(() => (
+				<RepoWorktreeTab
+					settings={makeSettings({ baseBranch: "develop" })}
+					defaults={defaults}
+					onUpdate={onUpdate}
+					baseRefs={BASE_REFS}
+				/>
+			));
+			expect(queryByText(/no longer exists/)).toBeNull();
+		});
 	});
 
 	it("converts the auto-fetch-interval select value to a number, or null for the inherit option", () => {
