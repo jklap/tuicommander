@@ -61,6 +61,7 @@ import { injectThemeVars, PluginPanel } from "../../components/PluginPanel/Plugi
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { toastsStore } from "../../stores/toasts";
 import { applyAppTheme } from "../../themes";
 
 function makeTab(overrides: Partial<PluginPanelTab> = {}): PluginPanelTab {
@@ -465,6 +466,97 @@ describe("PluginPanel", () => {
 			for (const call of sdkInitCalls) {
 				expect(call[0]).toEqual({ type: "tuic:sdk-init", version: "1.0" });
 			}
+		});
+	});
+
+	describe("tuic:toast SDK message", () => {
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		/** Simulate the iframe posting a message to the host. The handler guards
+		 *  on `event.source === iframeRef.contentWindow`, so this must use the
+		 *  panel's own (real, happy-dom-provided) iframe window as the source —
+		 *  a message with no matching source is silently dropped. */
+		function dispatchFromIframe(iframe: HTMLIFrameElement, data: Record<string, unknown>) {
+			const [, handler] = addEventListenerSpy.mock.calls.find(([event]: [string]) => event === "message")!;
+			(handler as EventListener)(new MessageEvent("message", { data, source: iframe.contentWindow }));
+		}
+
+		it("forwards title/message/level/sound to toastsStore.add", () => {
+			const tab = makeTab();
+			const { container } = render(() => <PluginPanel tab={tab} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+			const addSpy = vi.spyOn(toastsStore, "add");
+
+			dispatchFromIframe(iframe, {
+				type: "tuic:toast",
+				title: "Done",
+				message: "finished",
+				level: "warn",
+				sound: true,
+			});
+
+			expect(addSpy).toHaveBeenCalledWith("Done", "finished", "warn", true);
+		});
+
+		it("defaults message to '' and level to 'info' when omitted", () => {
+			const tab = makeTab();
+			const { container } = render(() => <PluginPanel tab={tab} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+			const addSpy = vi.spyOn(toastsStore, "add");
+
+			dispatchFromIframe(iframe, { type: "tuic:toast", title: "Hi" });
+
+			expect(addSpy).toHaveBeenCalledWith("Hi", "", "info", false);
+		});
+
+		it("falls back to 'info' for an unrecognized level, rather than passing it through", () => {
+			const tab = makeTab();
+			const { container } = render(() => <PluginPanel tab={tab} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+			const addSpy = vi.spyOn(toastsStore, "add");
+
+			dispatchFromIframe(iframe, { type: "tuic:toast", title: "Hi", level: "critical" });
+
+			expect(addSpy).toHaveBeenCalledWith("Hi", "", "info", false);
+		});
+
+		it("coerces a non-boolean sound value to false, not truthy-passthrough", () => {
+			const tab = makeTab();
+			const { container } = render(() => <PluginPanel tab={tab} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+			const addSpy = vi.spyOn(toastsStore, "add");
+
+			dispatchFromIframe(iframe, { type: "tuic:toast", title: "Hi", sound: "yes" });
+
+			expect(addSpy).toHaveBeenCalledWith("Hi", "", "info", false);
+		});
+
+		it("logs a warning and never calls toastsStore.add when title is missing", () => {
+			const tab = makeTab();
+			const { container } = render(() => <PluginPanel tab={tab} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+			const addSpy = vi.spyOn(toastsStore, "add");
+
+			dispatchFromIframe(iframe, { type: "tuic:toast", message: "no title", sound: true });
+
+			expect(addSpy).not.toHaveBeenCalled();
+			expect(mockAppLoggerWarn).toHaveBeenCalledWith("plugin", "tuic:toast missing title");
+		});
+
+		it("ignores a tuic:toast message whose source is not this panel's own iframe", () => {
+			const tab = makeTab();
+			render(() => <PluginPanel tab={tab} />);
+			const addSpy = vi.spyOn(toastsStore, "add");
+
+			const [, handler] = addEventListenerSpy.mock.calls.find(([event]: [string]) => event === "message")!;
+			// No `source` set — a spoofed/foreign message, not this panel's iframe.
+			(handler as EventListener)(
+				new MessageEvent("message", { data: { type: "tuic:toast", title: "Spoofed", sound: true } }),
+			);
+
+			expect(addSpy).not.toHaveBeenCalled();
 		});
 	});
 });
