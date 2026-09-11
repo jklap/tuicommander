@@ -3224,7 +3224,7 @@ cloned repo.
   HEAD, then open the branch switcher again — confirm there is no phantom
   `(HEAD detached at ...`-style entry in the list.
 
-## Inline images (color-tools plan, Phases 1-5 + docs)
+## Inline images (color-tools plan, Phases 1-9 — all phases implemented)
 
 Rust changes here **require a `make dev` restart** to take effect (no hot-reload) — this whole
 section needs a human running the rebuilt app, not just re-running tests.
@@ -3281,11 +3281,19 @@ section needs a human running the rebuilt app, not just re-running tests.
   macOS, and cross-compiling the whole app for `x86_64-pc-windows-gnu` here hits an unrelated
   missing-mingw-toolchain wall before reaching this code at all. Needs a real Windows build and a
   real `t=s` client to verify.
-- [ ] Unicode virtual placeholders (`U=1`, used by image.nvim/snacks.nvim/yazi's modern driver):
-  registration exists but nothing yet recognizes the `U+10EEEE` placeholder characters those tools
-  print, so images from these specific tools/paths will not display even once the frontend
-  renderer lands. Needs its own follow-up implementing the diacritic decode table against a
-  canonical reference (not attempted here — see `kitty.rs`'s module doc comment for why).
+- [ ] Unicode virtual placeholders (`U=1`, color-tools plan, Phase 7) are now implemented:
+  `U+10EEEE` + diacritics + foreground/underline color is recognized during ordinary text output
+  and attached as a real image tile, using the authoritative `rowcolumn-diacritics.txt` table
+  fetched directly from Kitty's own docs (not guessed) and verified end-to-end against the
+  protocol page's own worked examples (2x2 grid, most-significant-byte extension, diacritic-
+  omission inheritance) in `terminal_grid.rs`. Still needs a real-tool pass against a live
+  `make dev` session: image.nvim and snacks.nvim (neovim plugins) and yazi's modern `Kgp` driver
+  are the three target tools that specifically rely on this path rather than ordinary Kitty
+  placements. Also worth checking live: a real client's exact diacritic-omission behavior (does
+  it always send all 2-3 diacritics per cell, or actually rely on the inheritance optimization?),
+  and whether any of the three tools sets colors via a code path (e.g. a terminal-capability
+  fallback) this implementation doesn't yet convert into an id — only `Color::Indexed`/`Color::Spec`
+  (256-color and true-color SGR) are handled; `Color::Named` yields no image id at all.
 - [ ] `tuic imgcat`/`imgls`/`divider` (color-tools plan, Phase 4, `crates/tuic-cli/src/imgcat.rs`):
   unit-tested (sequence construction, tmux passthrough wrapping) and proven end-to-end against our
   own OSC 1337 parser (`real_tuic_divider_cli_output_displays_through_our_own_parser` in

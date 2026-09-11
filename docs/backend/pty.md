@@ -480,13 +480,18 @@ implement the protocol itself.
 - **Chunking**: `m=1` on all but the last sequence; only the *first* chunk
   carries real control data (continuation chunks are `m=`/`q=` only per
   spec), tracked via `pending_kitty_transmission`.
-- **`U=1` Unicode virtual placeholders**: registration only. The real
-  mechanism — recognizing an app-printed `U+10EEEE` placeholder character
-  (with diacritics encoding tile position, image id in the foreground color)
-  during ordinary `input()` and attaching an `ImageCellRef` instead of
-  storing it as a glyph — is not implemented. See `kitty.rs`'s module doc
-  comment for why (the diacritic table is large and easy to get subtly
-  wrong without a canonical reference to verify against).
+- **`U=1` Unicode virtual placeholders** (Phase 7): fully implemented —
+  `Term::input` recognizes an app-printed `U+10EEEE` placeholder character
+  (with diacritics encoding tile row/column/most-significant-id-byte, image
+  id in the foreground color, placement id in the underline color) and
+  attaches an `ImageCellRef` instead of storing it as a glyph, via
+  `try_resolve_unicode_placeholder`. The diacritic table
+  (`kitty::ROWCOL_DIACRITICS`) is transcribed verbatim from Kitty's own
+  authoritative `rowcolumn-diacritics.txt` and verified against the
+  protocol docs' own worked examples (2x2 grid, most-significant-byte,
+  left-neighbor diacritic-omission inheritance) via real end-to-end tests
+  in `terminal_grid.rs`, not just unit-tested in isolation — this is the
+  path image.nvim, snacks.nvim, and yazi's modern driver all actually use.
 - **Known gap**: the Phase 5 frontend renderer covers Kitty placements too
   (any `z` renders in the same above-text layer today — see
   `docs/frontend/terminal-features.md` for the z-index scope), but raw

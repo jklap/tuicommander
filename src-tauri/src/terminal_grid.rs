@@ -5133,6 +5133,142 @@ mod tests {
         assert_eq!(replies, vec!["\x1b_Gi=1;OK\x1b\\".to_string()]);
     }
 
+    /// Unicode virtual placeholders (`U=1`, color-tools plan Phase 7):
+    /// registration via `a=T,U=1,q=2` must store the image but touch no
+    /// cells, exactly like today — the app then prints ordinary text
+    /// (`U+10EEEE` + diacritics + an SGR foreground) which is what actually
+    /// attaches the image tile. This is the real end-to-end path every
+    /// target tool (image.nvim, snacks.nvim, yazi) uses.
+    #[test]
+    fn kitty_unicode_placeholder_registration_touches_no_cells() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3]; // 1x1 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=T,f=24,s=1,v=1,U=1,q=2;{payload}\x1b\\").as_bytes());
+        assert_eq!(
+            grid.image_ref_at(0, 0),
+            None,
+            "U=1 registration must not display anything"
+        );
+        assert_eq!(
+            grid.image_bytes(42).as_deref(),
+            Some(&raw_rgb[..]),
+            "but must still store it"
+        );
+    }
+
+    /// The spec's own worked example: a 2x2 grid of image 42, printed as
+    /// plain SGR-256-color text with row/column diacritics — verified
+    /// against the real end-to-end parser, not just the pure diacritic
+    /// decode logic (already covered in `kitty.rs`'s own unit tests).
+    #[test]
+    fn kitty_unicode_placeholder_2x2_grid_matches_the_specs_own_example() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3 * 2 * 2]; // 2x2 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=T,f=24,s=2,v=2,U=1,q=2;{payload}\x1b\\").as_bytes());
+
+        // printf "\e[38;5;42m\U10EEEE\U0305\U0305\U10EEEE\U0305\U030D\e[39m\n"
+        // printf "\e[38;5;42m\U10EEEE\U030D\U0305\U10EEEE\U030D\U030D\e[39m\n"
+        grid.process(
+            "\x1b[38;5;42m\u{10EEEE}\u{305}\u{305}\u{10EEEE}\u{305}\u{30D}\x1b[39m\r\n".as_bytes(),
+        );
+        grid.process(
+            "\x1b[38;5;42m\u{10EEEE}\u{30D}\u{305}\u{10EEEE}\u{30D}\u{30D}\x1b[39m\r\n".as_bytes(),
+        );
+
+        assert_eq!(
+            grid.image_ref_at(0, 0),
+            Some((42, 42, 0, 0, 0)),
+            "(row 0, col 0)"
+        );
+        assert_eq!(
+            grid.image_ref_at(0, 1),
+            Some((42, 42, 1, 0, 0)),
+            "(row 0, col 1)"
+        );
+        assert_eq!(
+            grid.image_ref_at(1, 0),
+            Some((42, 42, 0, 1, 0)),
+            "(row 1, col 0)"
+        );
+        assert_eq!(
+            grid.image_ref_at(1, 1),
+            Some((42, 42, 1, 1, 0)),
+            "(row 1, col 1)"
+        );
+    }
+
+    /// The underline color encodes the placement id, independent of the
+    /// foreground color's image id.
+    #[test]
+    fn kitty_unicode_placeholder_underline_color_is_the_placement_id() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=T,f=24,s=1,v=1,U=1,q=2;{payload}\x1b\\").as_bytes());
+
+        // SGR 58 sets the underline color (256-color form); placement id 7.
+        grid.process(
+            "\x1b[38;5;42m\x1b[58;5;7m\u{10EEEE}\u{305}\u{305}\x1b[59m\x1b[39m".as_bytes(),
+        );
+        let (image_id, placement_id, ..) = grid.image_ref_at(0, 0).expect("placeholder resolved");
+        assert_eq!(image_id, 42);
+        assert_eq!(placement_id, 7);
+    }
+
+    /// The spec's own most-significant-byte example: image ID
+    /// `33554474 = 42 + (2 << 24)`, encoded via a third diacritic.
+    #[test]
+    fn kitty_unicode_placeholder_third_diacritic_extends_the_image_id() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=33554474,a=T,f=24,s=1,v=1,U=1,q=2;{payload}\x1b\\").as_bytes(),
+        );
+
+        // printf "\e[38;5;42m\U10EEEE\U0305\U0305\U030E\n" (row 0, col 0, msb 2)
+        grid.process("\x1b[38;5;42m\u{10EEEE}\u{305}\u{305}\u{30E}\x1b[39m".as_bytes());
+        let (image_id, ..) = grid.image_ref_at(0, 0).expect("placeholder resolved");
+        assert_eq!(image_id, 33554474);
+    }
+
+    /// Diacritics may be omitted for a contiguous horizontal run of
+    /// placeholder cells — the spec's own inheritance optimization, used by
+    /// real minimalist encoders. A cell inherits row/col+1 from its left
+    /// neighbor only when colors match exactly.
+    #[test]
+    fn kitty_unicode_placeholder_inherits_from_the_left_neighbor_when_diacritics_are_omitted() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3 * 3]; // 3x1 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=T,f=24,s=3,v=1,U=1,q=2;{payload}\x1b\\").as_bytes());
+
+        // Only the first cell carries a row diacritic; the next two rely on
+        // inheritance entirely (2 rows x 3 columns example from the spec).
+        grid.process("\x1b[38;5;42m\u{10EEEE}\u{305}\u{10EEEE}\u{10EEEE}\x1b[39m".as_bytes());
+
+        assert_eq!(grid.image_ref_at(0, 0), Some((42, 42, 0, 0, 0)));
+        assert_eq!(grid.image_ref_at(0, 1), Some((42, 42, 1, 0, 0)));
+        assert_eq!(grid.image_ref_at(0, 2), Some((42, 42, 2, 0, 0)));
+    }
+
+    /// A placeholder referencing an image id nothing ever transmitted must
+    /// be left as ordinary (invisible, since U+10EEEE renders as nothing)
+    /// text — no image ref, no panic.
+    #[test]
+    fn kitty_unicode_placeholder_unknown_image_id_is_left_as_plain_text() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process("\x1b[38;5;99m\u{10EEEE}\u{305}\u{305}\x1b[39m".as_bytes());
+        assert_eq!(grid.image_ref_at(0, 0), None);
+    }
+
     /// `a=t` (transmit only) must store the image without displaying it;
     /// a later `a=p` (place) against the same id then displays it.
     #[test]
