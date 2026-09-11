@@ -1,10 +1,11 @@
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
-import type { NotificationSound } from "../../../notifications";
+import type { NotificationSound, SoundPreset } from "../../../notifications";
 import { appLogger } from "../../../stores/appLogger";
 import { notificationsStore } from "../../../stores/notifications";
 import { isTauri } from "../../../transport";
+import { pathBasename } from "../../../utils/pathUtils";
 import { SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -12,6 +13,23 @@ interface AudioOutputDevice {
 	name: string;
 	is_default: boolean;
 }
+
+/** Custom sound files are decoded natively by rodio (see
+ *  src-tauri/src/notification_sound.rs) — these are the formats its enabled
+ *  Cargo features actually support. */
+const CUSTOM_SOUND_EXTENSIONS = ["wav", "mp3", "ogg", "flac"];
+
+/** Display name for each sound's tone when offered as another event's preset
+ *  — deliberately NOT just "<Event> tone", so it reads as a real alternative
+ *  rather than "sounds like the X event". */
+const PRESET_LABELS: Record<NotificationSound, string> = {
+	question: "Chime",
+	completion: "Arpeggio",
+	error: "Low Tone",
+	warning: "Double-Tap",
+	info: "Pluck",
+	attention: "Callback",
+};
 
 // ---------------------------------------------------------------------------
 // Sound pattern visualizations (inline SVG showing pitch contour)
@@ -214,22 +232,92 @@ export const NotificationsTab: Component = () => {
 						{t("notifications.hint.notificationEvents", "Choose which events play a sound")}
 					</p>
 					<For each={sounds}>
-						{(sound) => (
-							<div class={s.soundRow}>
-								<div class={s.toggle}>
-									<input
-										type="checkbox"
-										checked={notificationsStore.state.config.sounds[sound.key]}
-										onChange={(e) => notificationsStore.setSoundEnabled(sound.key, e.currentTarget.checked)}
-									/>
-									<span>{sound.label}</span>
+						{(sound) => {
+							let selectRef: HTMLSelectElement | undefined;
+							const choice = () => notificationsStore.state.config.sound_choices[sound.key];
+							const otherSounds = sounds.filter((entry) => entry.key !== sound.key);
+
+							async function handlePresetChange(e: Event & { currentTarget: HTMLSelectElement }): Promise<void> {
+								const val = e.currentTarget.value as SoundPreset;
+								if (val === "custom") {
+									try {
+										const { open } = await import("@tauri-apps/plugin-dialog");
+										const picked = await open({
+											multiple: false,
+											filters: [{ name: "Audio", extensions: CUSTOM_SOUND_EXTENSIONS }],
+										});
+										if (typeof picked === "string") {
+											notificationsStore.setSoundChoice(sound.key, { preset: "custom", custom_path: picked });
+											return;
+										}
+									} catch (err) {
+										appLogger.warn("settings", "Failed to open the custom sound file picker", err);
+									}
+									// Canceled, or the picker itself failed — the browser already
+									// flipped the <select>'s own displayed value to "custom"; force
+									// it back since the store (and Solid's reactive `value` binding)
+									// never changed.
+									if (selectRef) selectRef.value = choice().preset;
+								} else {
+									notificationsStore.setSoundChoice(sound.key, { preset: val, custom_path: null });
+								}
+							}
+
+							return (
+								<div class={s.soundRow}>
+									<div class={s.toggle}>
+										<input
+											type="checkbox"
+											checked={notificationsStore.state.config.sounds[sound.key]}
+											onChange={(e) => notificationsStore.setSoundEnabled(sound.key, e.currentTarget.checked)}
+										/>
+										<span>{sound.label}</span>
+									</div>
+									<SoundPatternSvg sound={sound.key} />
+									<select ref={selectRef} value={choice().preset} onChange={handlePresetChange}>
+										<option value="default">{t("notifications.preset.default", "Default")}</option>
+										<For each={otherSounds}>
+											{(other) => <option value={other.key}>{PRESET_LABELS[other.key]}</option>}
+										</For>
+										<Show
+											when={isTauri()}
+											fallback={
+												// Desktop and a browser-mode dev instance share config.json (see
+												// AGENTS.md's isolation caveat), so a custom choice made on desktop
+												// can still be the current value here even though this mode can't
+												// set or use one. Render it as a disabled option so the <select>
+												// always has a matching value instead of silently selecting nothing.
+												<Show when={choice().preset === "custom"}>
+													<option value="custom" disabled>
+														{t("notifications.preset.customDesktopOnly", "Custom file (desktop only)")}
+													</option>
+												</Show>
+											}
+										>
+											<option value="custom">{t("notifications.preset.custom", "Custom file…")}</option>
+										</Show>
+									</select>
+									<button class={s.testBtn} onClick={() => notificationsStore.testSound(sound.key)}>
+										{t("notifications.btn.test", "Test")}
+									</button>
+									<Show when={choice().preset === "custom" && choice().custom_path}>
+										<p class={`${s.hint} ${s.soundCustomFile}`}>
+											{t("notifications.hint.customSound", "Custom: {file}", {
+												file: pathBasename(choice().custom_path!),
+											})}{" "}
+											<button
+												class={s.testBtn}
+												onClick={() =>
+													notificationsStore.setSoundChoice(sound.key, { preset: "default", custom_path: null })
+												}
+											>
+												{t("notifications.btn.resetSound", "Reset to default")}
+											</button>
+										</p>
+									</Show>
 								</div>
-								<SoundPatternSvg sound={sound.key} />
-								<button class={s.testBtn} onClick={() => notificationsStore.testSound(sound.key)}>
-									{t("notifications.btn.test", "Test")}
-								</button>
-							</div>
-						)}
+							);
+						}}
 					</For>
 				</div>
 

@@ -17,11 +17,24 @@ vi.mock("../../stores/notifications", () => ({
 	notificationsStore: {
 		state: {
 			isAvailable: true,
-			config: { enabled: true, volume: 0.5, sounds: { question: true, error: true, completion: true, warning: true } },
+			config: {
+				enabled: true,
+				volume: 0.5,
+				sounds: { question: true, error: true, completion: true, warning: true },
+				sound_choices: {
+					question: { preset: "default", custom_path: null },
+					error: { preset: "default", custom_path: null },
+					completion: { preset: "default", custom_path: null },
+					warning: { preset: "default", custom_path: null },
+					info: { preset: "default", custom_path: null },
+					attention: { preset: "default", custom_path: null },
+				},
+			},
 		},
 		setEnabled: vi.fn(),
 		setVolume: vi.fn(),
 		setSoundEnabled: vi.fn(),
+		setSoundChoice: vi.fn(),
 		testSound: vi.fn(),
 		reset: vi.fn(),
 	},

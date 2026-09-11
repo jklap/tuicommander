@@ -397,10 +397,13 @@ User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`) are intent
   - Warning
   - Info
   - Attention (agent needs you)
+- **Sound source (per event)** — a dropdown next to each per-event toggle picks what plays: **Default** (that event's own built-in tone), another event's tone borrowed as a preset (labeled by its character — Chime, Arpeggio, Low Tone, Double-Tap, Pluck, Callback — rather than which event it's borrowed from), or **Custom file…**, which opens the native file picker (`.wav`/`.mp3`/`.ogg`/`.flac`). A chosen custom file that can't be opened or decoded (moved, deleted, unsupported format) silently falls back to that event's default tone rather than staying silent. Browser/PWA mode can borrow another event's preset but has no filesystem access for a custom file — picking a preset still works there, custom files fall back the same way.
 - **Test buttons** — Test each sound individually. The Test button bypasses the anti-spam rate limit, so rapid A/B volume comparisons always play.
 - **Silence orchestration completions** — Remote HTTP/MCP workers still appear in Activity and update their tab state, but do not play a completion chime. The remote classification survives frontend reloads, and each busy cycle can notify at most once even when idle and process exit arrive separately.
 - **Reset to Defaults** — Restore default notification settings
 - **Keep toasts in the bell** — Each toast is also written to a **MESSAGES** section in the toolbar bell, so a message that faded while you looked at another window stays readable afterwards. The bell entry keeps the toast level (info / warning / error) and its action, if it had one. Turn this off to leave toasts transient. This setting is outside the audio block: the bell is visual, so it stays reachable on a machine with no audio output.
+
+A toast raised with a sound (a failed git operation, a plugin's `tuic.toast()` call, etc.) plays through these same settings, matched by level (info→Info, warn→Warning, error→Error) — the master toggle, per-event toggle, volume, output device, and any preset/custom file you've picked for that event all apply.
 
 **Attention** is the distinct call-back-to-keyboard sound available to agent
 toasts. Native playback and the browser fallback share a triangular G4→G4→E5

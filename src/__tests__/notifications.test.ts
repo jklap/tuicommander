@@ -50,6 +50,7 @@ describe("NotificationManager", () => {
 				sound: "question",
 				volume: 0.5,
 				device: null,
+				choice: { preset: "default", custom_path: null },
 			});
 		});
 
@@ -106,6 +107,7 @@ describe("NotificationManager", () => {
 				sound: "completion",
 				volume: 0.8,
 				device: null,
+				choice: { preset: "default", custom_path: null },
 			});
 		});
 
@@ -122,6 +124,7 @@ describe("NotificationManager", () => {
 				sound: "completion",
 				volume: 0.8,
 				device: null,
+				choice: { preset: "default", custom_path: null },
 			});
 		});
 
@@ -132,6 +135,7 @@ describe("NotificationManager", () => {
 				sound: "question",
 				volume: 0.5,
 				device: "USB Speakers",
+				choice: { preset: "default", custom_path: null },
 			});
 		});
 	});
@@ -241,6 +245,23 @@ describe("NotificationManager", () => {
 		it("setSoundEnabled updates specific sound", () => {
 			manager.setSoundEnabled("question", false);
 			expect(manager.getConfig().sounds.question).toBe(false);
+		});
+
+		it("setSoundChoice updates only the given sound's choice", () => {
+			manager.setSoundChoice("question", { preset: "attention", custom_path: null });
+			expect(manager.getConfig().sound_choices.question).toEqual({ preset: "attention", custom_path: null });
+			expect(manager.getConfig().sound_choices.error).toEqual({ preset: "default", custom_path: null });
+		});
+
+		it("setSoundChoice's choice is forwarded on the next play()", async () => {
+			manager.setSoundChoice("error", { preset: "custom", custom_path: "/Users/me/ding.wav" });
+			await manager.play("error");
+			expect(mockInvoke).toHaveBeenCalledWith("play_notification_sound", {
+				sound: "error",
+				volume: 0.5,
+				device: null,
+				choice: { preset: "custom", custom_path: "/Users/me/ding.wav" },
+			});
 		});
 
 		it("updateConfig merges config", () => {
@@ -356,5 +377,86 @@ describe("browser attention sound", () => {
 		expect(starts.slice(1).map((time, index) => Math.round((time - stops[index]) * 1000))).toEqual([50, 50]);
 		expect(oscillators.map((oscillator) => oscillator.frequency.value)).toEqual([392, 392, 659]);
 		expect(oscillators.map((oscillator) => oscillator.type)).toEqual(["triangle", "triangle", "triangle"]);
+	});
+});
+
+describe("browser preset resolution (Web Audio fallback)", () => {
+	const originalTauriInternals = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+	const originalTauriShim = (globalThis as Record<string, unknown>).__TAURI_SHIM__;
+
+	afterEach(() => {
+		(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = originalTauriInternals;
+		if (originalTauriShim === undefined) {
+			delete (globalThis as Record<string, unknown>).__TAURI_SHIM__;
+		} else {
+			(globalThis as Record<string, unknown>).__TAURI_SHIM__ = originalTauriShim;
+		}
+		vi.unstubAllGlobals();
+	});
+
+	function stubAudioContext() {
+		const oscillators: Array<{ frequency: { value: number }; type: OscillatorType }> = [];
+		vi.stubGlobal(
+			"AudioContext",
+			class {
+				currentTime = 0;
+				state = "running";
+				destination = {};
+				resume = vi.fn();
+				createGain = () => ({ gain: { value: 0 }, connect: vi.fn() });
+				createOscillator = () => {
+					const osc = {
+						frequency: { value: 0 },
+						type: "sine" as OscillatorType,
+						connect: vi.fn(),
+						start: vi.fn(),
+						stop: vi.fn(),
+						onended: null as (() => void) | null,
+					};
+					oscillators.push(osc);
+					return osc;
+				};
+			},
+		);
+		return oscillators;
+	}
+
+	it("a preset borrowed from another sound plays THAT sound's tone frequencies", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true;
+		const oscillators = stubAudioContext();
+		vi.resetModules();
+
+		const { NotificationManager } = await import("../notifications");
+		const manager = new NotificationManager();
+		manager.setSoundChoice("question", { preset: "completion", custom_path: null });
+		await manager.play("question");
+
+		// "completion"'s own tone is [660, 880] — distinct from "question"'s own [880, 1100].
+		expect(oscillators.map((o) => o.frequency.value)).toEqual([660, 880]);
+	});
+
+	it("'custom' has no meaning in the browser — falls back to the sound's own tone", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true;
+		const oscillators = stubAudioContext();
+		vi.resetModules();
+
+		const { NotificationManager } = await import("../notifications");
+		const manager = new NotificationManager();
+		manager.setSoundChoice("question", { preset: "custom", custom_path: "/some/file.wav" });
+		await manager.play("question");
+
+		expect(oscillators.map((o) => o.frequency.value)).toEqual([880, 1100]);
+	});
+
+	it("'default' plays the sound's own tone, unchanged", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true;
+		const oscillators = stubAudioContext();
+		vi.resetModules();
+
+		const { NotificationManager } = await import("../notifications");
+		const manager = new NotificationManager();
+		await manager.play("error");
+
+		expect(oscillators.map((o) => o.frequency.value)).toEqual([440, 330]);
 	});
 });
