@@ -90,6 +90,20 @@ pub enum Event {
 
     /// iTerm2 OSC 1337 `OpenURL=:<base64>` — the decoded URL.
     OpenUrl(String),
+
+    /// An inline-image placement was just created or moved into place
+    /// (color-tools plan, Phase 5 — frontend renderer). Emitted once by
+    /// `reserve_image_footprint` right after it attaches `ImageCellRef`s to
+    /// the grid, carrying everything a renderer needs to paint it without a
+    /// separate lookup: which image, where, how big, and at what z-band.
+    ImagePlacement(ImagePlacementInfo),
+
+    /// Every previously-announced placement should be treated as gone (e.g.
+    /// an alt-screen switch, which by design never scrolls or reserves
+    /// image footprint on the alt screen, or `a=d,d=A/a`). A renderer
+    /// re-hydrates its placement set via a fresh query rather than trying to
+    /// diff against whatever it had before.
+    ImagePlacementsCleared,
 }
 
 impl Debug for Event {
@@ -123,8 +137,33 @@ impl Debug for Event {
             Event::RequestFocus => write!(f, "RequestFocus"),
             Event::RequestAttention(value) => write!(f, "RequestAttention({value})"),
             Event::OpenUrl(url) => write!(f, "OpenUrl({url})"),
+            Event::ImagePlacement(info) => write!(f, "ImagePlacement({info:?})"),
+            Event::ImagePlacementsCleared => write!(f, "ImagePlacementsCleared"),
         }
     }
+}
+
+/// Everything a renderer needs to paint one inline-image placement, carried
+/// on [`Event::ImagePlacement`] (color-tools plan, Phase 5).
+///
+/// `abs_row` is the *eviction-stable* absolute row — `history_base +
+/// grid_relative` at the moment of reservation, the same addressing
+/// convention `terminal_grid.rs`'s `hyperlink_span` already uses for the
+/// identical reason: it only ever grows, so a placement scrolled deep into
+/// history is still identified consistently even after older lines are
+/// evicted from the live `Grid`'s bounded history buffer. Converting it back
+/// to an on-screen row is the transport layer's job (it already tracks
+/// `history_base`/`history_size`/`display_offset` for the binary grid frame),
+/// not this crate's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImagePlacementInfo {
+    pub placement_id: u32,
+    pub image_id: u32,
+    pub abs_row: u32,
+    pub col: u16,
+    pub rows: u16,
+    pub cols: u16,
+    pub z_index: i32,
 }
 
 /// Byte sequences are sent to a `Notify` in response to some events.

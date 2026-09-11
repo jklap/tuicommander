@@ -1227,10 +1227,19 @@ pub(crate) async fn terminal_get_cursor_line(
     vt_read(&state, session_id, |vt| vt.grid_get_cursor_line()).await
 }
 
+/// `(image_id, placement_id, tile_col, tile_row, z_index)` — the shape
+/// `terminal_image_ref_at` answers. Named purely to satisfy clippy's
+/// type-complexity lint; not reused elsewhere.
+type ImageRefTuple = (u32, u32, u16, u16, i32);
+
+/// `(placement_id, image_id, abs_row, col, rows, cols, z_index)` — the shape
+/// `terminal_image_placements` answers, one per placement.
+type ImagePlacementTuple = (u32, u32, u32, u16, u16, u16, i32);
+
 /// Inline-image tile at a viewport position, if any: `(image_id, placement_id,
-/// tile_col, tile_row)`. Mirrors `terminal_hyperlink_at` exactly (color-tools
-/// plan, Phase 1) — Phases 2/3's OSC 1337 / Kitty dispatch handlers are what
-/// actually populate any cell this can find.
+/// tile_col, tile_row, z_index)`. Mirrors `terminal_hyperlink_at` exactly
+/// (color-tools plan, Phase 1) — Phases 2/3's OSC 1337 / Kitty dispatch
+/// handlers are what actually populate any cell this can find.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn terminal_image_ref_at(
@@ -1238,8 +1247,38 @@ pub(crate) async fn terminal_image_ref_at(
     session_id: String,
     row: usize,
     col: usize,
-) -> Result<Option<(u32, u32, u16, u16)>, String> {
+) -> Result<Option<ImageRefTuple>, String> {
     vt_read(&state, session_id, move |vt| vt.grid_image_ref_at(row, col)).await
+}
+
+/// Every current inline-image placement, as `(placement_id, image_id, abs_row,
+/// col, rows, cols, z_index)` tuples — the reconnect/new-client hydration
+/// query a frontend renderer calls once on (re)subscribe, since the live WS/
+/// event-bus placement stream only carries *new* placements from that point
+/// forward (color-tools plan, Phase 5).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn terminal_image_placements(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Vec<ImagePlacementTuple>, String> {
+    vt_read(&state, session_id, move |vt| {
+        vt.grid_image_placements()
+            .into_iter()
+            .map(|p| {
+                (
+                    p.placement_id,
+                    p.image_id,
+                    p.abs_row,
+                    p.col,
+                    p.rows,
+                    p.cols,
+                    p.z_index,
+                )
+            })
+            .collect()
+    })
+    .await
 }
 
 /// Fetch a previously transmitted inline image's raw bytes by id.

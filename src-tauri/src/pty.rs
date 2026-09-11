@@ -6523,6 +6523,45 @@ impl ChunkProcessor {
                         _ => {}
                     },
                     TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {}
+                    TermEvent::ImagePlacement(info) => {
+                        #[cfg(feature = "desktop")]
+                        if let Some(a) = state.app_handle.read().as_ref() {
+                            let _ = a.emit(
+                                &format!("pty-image-placement-{session_id}"),
+                                serde_json::json!({
+                                    "placementId": info.placement_id,
+                                    "imageId": info.image_id,
+                                    "absRow": info.abs_row,
+                                    "col": info.col,
+                                    "rows": info.rows,
+                                    "cols": info.cols,
+                                    "zIndex": info.z_index,
+                                }),
+                            );
+                        }
+                        state.emit_pty_event(crate::state::AppEvent::PtyImagePlacement {
+                            session_id: session_id.to_string(),
+                            placement_id: info.placement_id,
+                            image_id: info.image_id,
+                            abs_row: info.abs_row,
+                            col: info.col,
+                            rows: info.rows,
+                            cols: info.cols,
+                            z_index: info.z_index,
+                        });
+                    }
+                    TermEvent::ImagePlacementsCleared => {
+                        #[cfg(feature = "desktop")]
+                        if let Some(a) = state.app_handle.read().as_ref() {
+                            let _ = a.emit(
+                                &format!("pty-image-placements-cleared-{session_id}"),
+                                serde_json::json!({}),
+                            );
+                        }
+                        state.emit_pty_event(crate::state::AppEvent::PtyImagePlacementsCleared {
+                            session_id: session_id.to_string(),
+                        });
+                    }
                 }
             }
         }
