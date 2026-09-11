@@ -56,11 +56,14 @@ vi.mock("solid-js", async (importOriginal) => {
 	};
 });
 
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
 import { injectThemeVars, PluginPanel } from "../../components/PluginPanel/PluginPanel";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
+import { editorTabsStore } from "../../stores/editorTabs";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { applyAppTheme } from "../../themes";
 
@@ -557,6 +560,325 @@ describe("PluginPanel", () => {
 			);
 
 			expect(addSpy).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("other tuic:* SDK messages", () => {
+		/** Same technique as the tuic:toast block: dispatch a real MessageEvent
+		 *  at the registered window listener, sourced from the panel's own
+		 *  (real, happy-dom-provided) iframe.contentWindow. */
+		function dispatchFromIframe(iframe: HTMLIFrameElement, data: Record<string, unknown>) {
+			const [, handler] = addEventListenerSpy.mock.calls.find(([event]: [string]) => event === "message")!;
+			(handler as EventListener)(new MessageEvent("message", { data, source: iframe.contentWindow }));
+		}
+
+		beforeEach(() => {
+			// Other describe blocks earlier in this file (and background effects
+			// like repo/GitHub polling) also call the mocked invoke — clear its
+			// call history so a "was fs_read_file called" assertion here can't be
+			// polluted by unrelated calls made before this block ran.
+			vi.mocked(tauriInvoke).mockClear();
+		});
+
+		afterEach(() => {
+			vi.restoreAllMocks();
+			repositoriesStore.setActive(null);
+			repositoriesStore._testCancelPendingSave();
+			for (const path of repositoriesStore.getPaths()) {
+				repositoriesStore.remove(path);
+			}
+		});
+
+		describe("tuic:open", () => {
+			it("resolves a relative path against the active repo and opens a markdown tab", () => {
+				repositoriesStore.setActive("/repo-x");
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const addSpy = vi.spyOn(mdTabsStore, "add");
+
+				dispatchFromIframe(iframe, { type: "tuic:open", path: "notes.md" });
+
+				expect(addSpy).toHaveBeenCalledWith("/repo-x", "notes.md");
+			});
+
+			it("pins the tab when data.pinned is set", () => {
+				repositoriesStore.setActive("/repo-x");
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const setPinnedSpy = vi.spyOn(mdTabsStore, "setPinned");
+
+				dispatchFromIframe(iframe, { type: "tuic:open", path: "notes.md", pinned: true });
+
+				expect(setPinnedSpy).toHaveBeenCalledWith(expect.any(String), true);
+			});
+
+			it("logs a warning and opens nothing when path is missing", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const addSpy = vi.spyOn(mdTabsStore, "add");
+
+				dispatchFromIframe(iframe, { type: "tuic:open" });
+
+				expect(addSpy).not.toHaveBeenCalled();
+				expect(mockAppLoggerWarn).toHaveBeenCalledWith("plugin", "tuic:open missing path");
+			});
+
+			it("logs a warning and opens nothing when the path cannot be resolved (no active repo)", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const addSpy = vi.spyOn(mdTabsStore, "add");
+
+				dispatchFromIframe(iframe, { type: "tuic:open", path: "notes.md" });
+
+				expect(addSpy).not.toHaveBeenCalled();
+				expect(mockAppLoggerWarn).toHaveBeenCalledWith(
+					"plugin",
+					expect.stringContaining("tuic:open cannot resolve path"),
+				);
+			});
+		});
+
+		describe("tuic:edit", () => {
+			it("resolves a relative path against the active repo and opens an editor tab at the given line", () => {
+				repositoriesStore.setActive("/repo-x");
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const addSpy = vi.spyOn(editorTabsStore, "add");
+
+				dispatchFromIframe(iframe, { type: "tuic:edit", path: "src/index.ts", line: 42 });
+
+				expect(addSpy).toHaveBeenCalledWith("/repo-x", "src/index.ts", 42);
+			});
+
+			it("passes undefined for line when omitted or zero", () => {
+				repositoriesStore.setActive("/repo-x");
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const addSpy = vi.spyOn(editorTabsStore, "add");
+
+				dispatchFromIframe(iframe, { type: "tuic:edit", path: "src/index.ts" });
+
+				expect(addSpy).toHaveBeenCalledWith("/repo-x", "src/index.ts", undefined);
+			});
+
+			it("logs a warning and opens nothing when path is missing", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const addSpy = vi.spyOn(editorTabsStore, "add");
+
+				dispatchFromIframe(iframe, { type: "tuic:edit" });
+
+				expect(addSpy).not.toHaveBeenCalled();
+				expect(mockAppLoggerWarn).toHaveBeenCalledWith("plugin", "tuic:edit missing path");
+			});
+		});
+
+		describe("tuic:terminal", () => {
+			it("opens a terminal at the given repoPath when the repo is registered", () => {
+				repositoriesStore.add({ path: "/repo-y", displayName: "Repo Y" });
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const addSpy = vi.spyOn(terminalsStore, "add").mockReturnValue("fake-term-id");
+
+				dispatchFromIframe(iframe, { type: "tuic:terminal", repoPath: "/repo-y" });
+
+				expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/repo-y", sessionId: null }));
+			});
+
+			it("logs a warning and opens nothing when repoPath is missing", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const addSpy = vi.spyOn(terminalsStore, "add");
+
+				dispatchFromIframe(iframe, { type: "tuic:terminal" });
+
+				expect(addSpy).not.toHaveBeenCalled();
+				expect(mockAppLoggerWarn).toHaveBeenCalledWith("plugin", "tuic:terminal missing repoPath");
+			});
+
+			it("logs a warning and opens nothing when repoPath is not a registered repo", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const addSpy = vi.spyOn(terminalsStore, "add");
+
+				dispatchFromIframe(iframe, { type: "tuic:terminal", repoPath: "/not-registered" });
+
+				expect(addSpy).not.toHaveBeenCalled();
+				expect(mockAppLoggerWarn).toHaveBeenCalledWith(
+					"plugin",
+					"tuic:terminal repo not in repo list: /not-registered",
+				);
+			});
+		});
+
+		describe("tuic:get-file", () => {
+			it("resolves the path, reads the file over IPC, and posts the content back with the requestId", async () => {
+				repositoriesStore.setActive("/repo-x");
+				vi.mocked(tauriInvoke).mockResolvedValueOnce("file contents");
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const postMessageSpy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+
+				dispatchFromIframe(iframe, { type: "tuic:get-file", path: "notes.md", requestId: "r1" });
+
+				expect(tauriInvoke).toHaveBeenCalledWith("fs_read_file", { repoPath: "/repo-x", file: "notes.md" });
+				await vi.waitFor(() => {
+					expect(postMessageSpy).toHaveBeenCalledWith(
+						{ type: "tuic:get-file-result", requestId: "r1", content: "file contents" },
+						"*",
+					);
+				});
+			});
+
+			it("posts an error back when the IPC read rejects", async () => {
+				repositoriesStore.setActive("/repo-x");
+				vi.mocked(tauriInvoke).mockRejectedValueOnce(new Error("permission denied"));
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const postMessageSpy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+
+				dispatchFromIframe(iframe, { type: "tuic:get-file", path: "notes.md", requestId: "r2" });
+
+				await vi.waitFor(() => {
+					expect(postMessageSpy).toHaveBeenCalledWith(
+						{ type: "tuic:get-file-result", requestId: "r2", error: "Error: permission denied" },
+						"*",
+					);
+				});
+			});
+
+			it("posts an unresolvable-path error synchronously, without ever calling IPC", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const postMessageSpy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+
+				dispatchFromIframe(iframe, { type: "tuic:get-file", path: "notes.md", requestId: "r3" });
+
+				expect(tauriInvoke).not.toHaveBeenCalledWith("fs_read_file", expect.anything());
+				expect(postMessageSpy).toHaveBeenCalledWith(
+					{ type: "tuic:get-file-result", requestId: "r3", error: "Cannot resolve path: notes.md" },
+					"*",
+				);
+			});
+
+			it("logs a warning and does nothing when path or requestId is missing", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				const postMessageSpy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+
+				dispatchFromIframe(iframe, { type: "tuic:get-file", path: "notes.md" }); // no requestId
+
+				expect(postMessageSpy).not.toHaveBeenCalled();
+				expect(mockAppLoggerWarn).toHaveBeenCalledWith("plugin", "tuic:get-file missing path or requestId");
+			});
+		});
+
+		describe("tuic:plugin-message", () => {
+			it("forwards the payload to pluginRegistry.handlePanelMessage for this tab", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+
+				dispatchFromIframe(iframe, { type: "tuic:plugin-message", payload: { foo: 1 } });
+
+				expect(pluginRegistry.handlePanelMessage).toHaveBeenCalledWith("tab-1", { foo: 1 });
+			});
+		});
+
+		describe("tuic:reload-request", () => {
+			it("remounts the (srcdoc-mode) iframe", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const before = container.querySelector("iframe");
+
+				dispatchFromIframe(before as HTMLIFrameElement, { type: "tuic:reload-request" });
+
+				const after = container.querySelector("iframe");
+				expect(after).not.toBe(before);
+			});
+		});
+
+		describe("tuic:context-menu", () => {
+			it("opens the reload context menu at the translated page coordinates", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+
+				dispatchFromIframe(iframe, { type: "tuic:context-menu", x: 10, y: 20 });
+
+				// happy-dom's getBoundingClientRect() is all-zero, so page coords == the
+				// iframe-local ones sent — asserting via the menu's own positioning style
+				// rather than reaching into the component's private `menu` handle.
+				const menuEl = container.querySelector('[style*="left: 10px"][style*="top: 20px"]');
+				expect(menuEl).not.toBeNull();
+			});
+		});
+
+		describe("unrecognized tuic:* command", () => {
+			it("logs a warning naming the unknown command instead of throwing", () => {
+				const tab = makeTab();
+				const { container } = render(() => <PluginPanel tab={tab} />);
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+
+				expect(() => dispatchFromIframe(iframe, { type: "tuic:not-a-real-command" })).not.toThrow();
+				expect(mockAppLoggerWarn).toHaveBeenCalledWith("plugin", "Unknown tuic SDK command: tuic:not-a-real-command");
+			});
+		});
+	});
+
+	describe("system / non-tuic messages", () => {
+		function dispatchFromIframe(iframe: HTMLIFrameElement, data: Record<string, unknown>) {
+			const [, handler] = addEventListenerSpy.mock.calls.find(([event]: [string]) => event === "message")!;
+			(handler as EventListener)(new MessageEvent("message", { data, source: iframe.contentWindow }));
+		}
+
+		it("close-panel for this tab's pluginId calls onClose", () => {
+			const tab = makeTab();
+			const onClose = vi.fn();
+			const { container } = render(() => <PluginPanel tab={tab} onClose={onClose} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+
+			dispatchFromIframe(iframe, { type: "close-panel", pluginId: "test-plugin" });
+
+			expect(onClose).toHaveBeenCalledOnce();
+		});
+
+		it("close-panel for a DIFFERENT pluginId is ignored", () => {
+			const tab = makeTab();
+			const onClose = vi.fn();
+			const { container } = render(() => <PluginPanel tab={tab} onClose={onClose} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+
+			dispatchFromIframe(iframe, { type: "close-panel", pluginId: "some-other-plugin" });
+
+			expect(onClose).not.toHaveBeenCalled();
+		});
+
+		it("a non-tuic, non-close-panel message routes to pluginRegistry.handlePanelMessage as-is", () => {
+			const tab = makeTab();
+			const { container } = render(() => <PluginPanel tab={tab} />);
+			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+
+			dispatchFromIframe(iframe, { type: "custom-plugin-event", value: 42 });
+
+			expect(pluginRegistry.handlePanelMessage).toHaveBeenCalledWith("tab-1", {
+				type: "custom-plugin-event",
+				value: 42,
+			});
 		});
 	});
 });
