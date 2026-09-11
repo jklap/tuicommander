@@ -114,6 +114,103 @@ describe("WorktreeManager", () => {
 		expect(branchTexts[1]).toBe("main");
 	});
 
+	// ── COW workspaces: kind, unpublished count, publish, guarded delete ──
+
+	/// Seed a repo with one clone and one linked worktree, and make
+	/// `count_unpublished_commits` answer `count` for the clone.
+	function seedCloneAndWorktree(count: number) {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		repositoriesStore.setWorkspace("/repo", "feat~aaaa1111", {
+			branchName: "feat",
+			worktreePath: "/repo__cow/feat-1",
+			kind: "cow",
+			parentRepoPath: "/repo",
+		});
+		repositoriesStore.setWorkspace("/repo", "linked", { worktreePath: "/repo__wt/linked" });
+		vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+			if (cmd === "count_unpublished_commits") return count;
+			if (cmd === "detect_orphan_worktrees") return [];
+			return undefined;
+		});
+	}
+
+	async function flush() {
+		await vi.waitFor(() => {
+			expect(vi.mocked(invoke)).toHaveBeenCalledWith("count_unpublished_commits", expect.anything());
+		});
+		// One more tick for the state update the resolved promise schedules.
+		await Promise.resolve();
+		await Promise.resolve();
+	}
+
+	it("marks a clone as a clone and shows what it has not published", async () => {
+		seedCloneAndWorktree(3);
+		worktreeManagerStore.open();
+		const { container } = render(() => <WorktreeManager />);
+		await flush();
+
+		expect(container.textContent).toContain("clone");
+		expect(container.textContent).toContain("3 unpublished");
+		// The linked worktree is neither: it has no clone badge of its own and
+		// nothing to publish, because its objects live in the parent.
+		expect(container.querySelectorAll("[class*='cowBadge']").length).toBe(1);
+		expect(container.querySelectorAll("[class*='unpublishedBadge']").length).toBe(1);
+	});
+
+	it("offers publish on a clone row and nowhere else", async () => {
+		seedCloneAndWorktree(1);
+		const onPublish = vi.fn();
+		worktreeManagerStore.open();
+		const { container } = render(() => (
+			<WorktreeManager
+				actions={{ onOpenTerminal: vi.fn(), onDelete: vi.fn(), onMergeAndArchive: vi.fn(), onPublish }}
+			/>
+		));
+		await flush();
+
+		const publishButtons = Array.from(container.querySelectorAll("button")).filter((b) =>
+			b.title.startsWith("Publish"),
+		);
+		expect(publishButtons.length).toBe(1);
+
+		fireEvent.click(publishButtons[0]);
+		expect(onPublish).toHaveBeenCalledExactlyOnceWith("/repo", "feat~aaaa1111");
+	});
+
+	/// The confirm itself lives on the shared removal path (the coordinator asks
+	/// for the count and the dialog names it), so the sidebar gets the same
+	/// guard. What this row owes the user is the warning BEFORE they click:
+	/// the count on the row, and a title that says the delete can refuse.
+	it("warns on the row itself before the delete is ever clicked", async () => {
+		seedCloneAndWorktree(2);
+		worktreeManagerStore.open();
+		const { container } = render(() => (
+			<WorktreeManager actions={{ onOpenTerminal: vi.fn(), onDelete: vi.fn(), onMergeAndArchive: vi.fn() }} />
+		));
+		await flush();
+
+		expect(container.textContent).toContain("2 unpublished");
+		const cloneDelete = Array.from(container.querySelectorAll("button")).find((b) => b.title.includes("unpublished"));
+		expect(cloneDelete, "the clone's delete button must say the removal can refuse").toBeDefined();
+	});
+
+	it("shows no unpublished warning on a clone with nothing to publish", async () => {
+		seedCloneAndWorktree(0);
+		const onDelete = vi.fn();
+		worktreeManagerStore.open();
+		const { container } = render(() => (
+			<WorktreeManager actions={{ onOpenTerminal: vi.fn(), onDelete, onMergeAndArchive: vi.fn() }} />
+		));
+		await flush();
+
+		expect(container.querySelectorAll("[class*='unpublishedBadge']").length).toBe(0);
+		// Still a clone, and still deletable — straight through, no warning.
+		const cloneDelete = Array.from(container.querySelectorAll("button")).find((b) => b.title.includes("unpublished"));
+		fireEvent.click(cloneDelete!);
+		expect(onDelete).toHaveBeenCalledExactlyOnceWith("/repo", "feat~aaaa1111");
+	});
+
 	// Two rows on one branch, told apart by their directories, each acting on
 	// itself. Before the id keyed these rows, both carried the id
 	// `repoPath::feat` and a batch action ran twice against the same workspace.

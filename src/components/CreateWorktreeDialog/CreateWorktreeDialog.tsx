@@ -1,5 +1,5 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import type { BaseRefOption } from "../../hooks/useRepository";
+import type { BaseRefOption, DirtyPolicy, WorkspaceMode } from "../../hooks/useRepository";
 import { t } from "../../i18n";
 import { registerModal } from "../../stores/modalStack";
 import { validateBranchName } from "../RenameBranchDialog/RenameBranchDialog";
@@ -12,6 +12,13 @@ export interface WorktreeCreateOptions {
 	createBranch: boolean;
 	/** Base ref to create the worktree from (branch name or "HEAD") */
 	baseRef: string;
+	/** Which mechanism to use. `auto` is preselected: the user asked for a
+	 *  workspace, not a mechanism, and `auto` is the one that always produces
+	 *  one. */
+	mode: WorkspaceMode;
+	/** What to do with the parent's uncommitted work in a clone. `inherit` is
+	 *  preselected because doing nothing is free. */
+	dirty: DirtyPolicy;
 }
 
 export interface CreateWorktreeDialogProps {
@@ -104,6 +111,10 @@ const BaseRefDropdown: Component<{
 export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props) => {
 	const [branchName, setBranchName] = createSignal("");
 	const [baseRef, setBaseRef] = createSignal("");
+	// Defaults chosen for cost, not for symmetry: `auto` always yields a
+	// workspace, and `inherit` writes zero blocks.
+	const [mode, setMode] = createSignal<WorkspaceMode>("auto");
+	const [dirty, setDirty] = createSignal<DirtyPolicy>("inherit");
 	const [error, setError] = createSignal<string | null>(null);
 	const [isCreating, setIsCreating] = createSignal(false);
 	let inputRef: HTMLInputElement | undefined;
@@ -178,14 +189,14 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 		}
 
 		const options: WorktreeCreateOptions = isExistingBranch()
-			? { branchName: name, createBranch: false, baseRef: baseRef() }
+			? { branchName: name, createBranch: false, baseRef: baseRef(), mode: mode(), dirty: dirty() }
 			: (() => {
 					const validationError = validateBranchName(name);
 					if (validationError) {
 						setError(validationError);
 						return null!;
 					}
-					return { branchName: name, createBranch: true, baseRef: baseRef() };
+					return { branchName: name, createBranch: true, baseRef: baseRef(), mode: mode(), dirty: dirty() };
 				})();
 		if (!options) return;
 
@@ -254,6 +265,82 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 
 						<Show when={availableBaseRefs().length > 1 && !isExistingBranch()}>
 							<BaseRefDropdown value={baseRef()} options={availableBaseRefs()} onChange={setBaseRef} />
+						</Show>
+
+						<div class={s.mechanismRow}>
+							<label>{t("createWorktree.mode", "Mechanism")}</label>
+							<div class={s.segmented} role="radiogroup" aria-label={t("createWorktree.mode", "Mechanism")}>
+								<For
+									each={
+										[
+											["auto", t("createWorktree.modeAuto", "Auto")],
+											["cow", t("createWorktree.modeCow", "Clone")],
+											["worktree", t("createWorktree.modeWorktree", "Worktree")],
+										] as const
+									}
+								>
+									{([value, label]) => (
+										<button
+											type="button"
+											role="radio"
+											aria-checked={mode() === value}
+											class={`${s.segment} ${mode() === value ? s.segmentActive : ""}`}
+											onClick={() => setMode(value)}
+										>
+											{label}
+										</button>
+									)}
+								</For>
+							</div>
+						</div>
+
+						{/* Only a clone has the parent's uncommitted work to decide about;
+						    a linked worktree starts from a clean checkout either way. */}
+						<Show when={mode() !== "worktree"}>
+							<div class={s.mechanismRow}>
+								<label>{t("createWorktree.dirty", "Parent's changes")}</label>
+								<div class={s.segmented} role="radiogroup" aria-label={t("createWorktree.dirty", "Parent's changes")}>
+									<For
+										each={
+											[
+												["inherit", t("createWorktree.dirtyInherit", "Keep")],
+												["clean_untracked", t("createWorktree.dirtyCleanUntracked", "Drop untracked")],
+												["clean", t("createWorktree.dirtyClean", "Reset")],
+											] as const
+										}
+									>
+										{([value, label]) => (
+											<button
+												type="button"
+												role="radio"
+												aria-checked={dirty() === value}
+												class={`${s.segment} ${dirty() === value ? s.segmentActive : ""}`}
+												onClick={() => setDirty(value)}
+											>
+												{label}
+											</button>
+										)}
+									</For>
+								</div>
+							</div>
+							<div class={s.mechanismHint}>
+								{mode() === "auto"
+									? t(
+											"createWorktree.modeAutoHint",
+											"A copy-on-write clone where the filesystem allows it, a linked worktree otherwise. Build output comes along warm.",
+										)
+									: t(
+											"createWorktree.modeCowHint",
+											"A copy-on-write clone, or an error if this filesystem cannot do one.",
+										)}
+								<Show when={dirty() === "clean"}>
+									{" "}
+									{t(
+										"createWorktree.dirtyCleanHint",
+										"Resetting rewrites every modified file, so those blocks stop being shared — the only option here that costs real disk.",
+									)}
+								</Show>
+							</div>
 						</Show>
 
 						<div class={s.branchList}>

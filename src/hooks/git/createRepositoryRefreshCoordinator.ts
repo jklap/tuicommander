@@ -10,7 +10,17 @@ import type { AgentSeed } from "./agentSeed";
 export interface PendingCreation {
 	repoPath: string;
 	displayName: string;
-	result: { name: string; path: string; workspace_id: string; branch: string; base_repo: string };
+	result: {
+		name: string;
+		path: string;
+		workspace_id: string;
+		branch: string;
+		base_repo: string;
+		/** Which mechanism it got. Absent on the stale-recovery `pending` path,
+		 *  which is always a linked worktree. */
+		kind?: "cow" | "worktree";
+		degraded_reason?: string | null;
+	};
 	agentSeed?: AgentSeed;
 }
 

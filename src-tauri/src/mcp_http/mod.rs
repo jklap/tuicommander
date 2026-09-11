@@ -832,6 +832,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(worktree_routes::publish_workspace_http),
         )
         .route(
+            "/worktrees/unpublished",
+            get(worktree_routes::unpublished_commits_http),
+        )
+        .route(
             "/worktrees/run-script",
             post(worktree_routes::run_setup_script_http),
         )

@@ -109,6 +109,15 @@ describe("useGitOperations", () => {
 			.fn()
 			.mockResolvedValue({ success: true, stashed: false, previous_branch: "main", new_branch: "feature" }),
 		runSetupScript: vi.fn().mockResolvedValue({ exit_code: 0, stdout: "", stderr: "" }),
+		countUnpublishedCommits: vi.fn().mockResolvedValue(0),
+		publishWorkspace: vi.fn().mockResolvedValue({
+			parent_updated: true,
+			parent_error: null,
+			published_commit: "abc1234",
+			origin_pushed: true,
+			origin_error: null,
+			no_op_reason: null,
+		}),
 	};
 
 	const mockPty = {
@@ -680,8 +689,10 @@ describe("useGitOperations", () => {
 			// Default deleteBranchOnRemove is true (from repoDefaults)
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature");
-			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true);
+			// The count travels with the question now: 0 for a linked worktree, which
+			// is what makes the generic wording correct for it.
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", 0);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, false);
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
@@ -712,7 +723,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", false);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", false, false);
 		});
 
 		it("rejects removal of non-worktree branch", async () => {
@@ -2066,7 +2077,7 @@ describe("useGitOperations", () => {
 			// Dialog should NOT be open
 			expect(noPromptGitOps.worktreeDialogState()).toBeNull();
 			// Worktree should be created directly with the auto-generated name
-			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "bold-nexus-042", true, "main");
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "bold-nexus-042", true, "main", "auto", "inherit");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Created worktree bold-nexus-042");
 		});
 
@@ -2117,7 +2128,14 @@ describe("useGitOperations", () => {
 			await noPromptGitOps.handleAddWorktree("/repo");
 
 			// Should use first baseRef option as the base
-			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "cool-ripley-007", true, "develop");
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith(
+				"/repo",
+				"cool-ripley-007",
+				true,
+				"develop",
+				"auto",
+				"inherit",
+			);
 		});
 	});
 
@@ -2139,9 +2157,15 @@ describe("useGitOperations", () => {
 			// Open dialog first
 			await gitOps.handleAddWorktree("/repo");
 			// Confirm creation
-			await gitOps.confirmCreateWorktree({ branchName: "bold-nexus-042", createBranch: true, baseRef: "main" });
+			await gitOps.confirmCreateWorktree({
+				branchName: "bold-nexus-042",
+				createBranch: true,
+				baseRef: "main",
+				mode: "auto" as const,
+				dirty: "inherit" as const,
+			});
 
-			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "bold-nexus-042", true, "main");
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "bold-nexus-042", true, "main", "auto", "inherit");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Created worktree bold-nexus-042");
 		});
 
@@ -2160,9 +2184,15 @@ describe("useGitOperations", () => {
 			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
 
 			await gitOps.handleAddWorktree("/repo");
-			await gitOps.confirmCreateWorktree({ branchName: "develop", createBranch: false, baseRef: "main" });
+			await gitOps.confirmCreateWorktree({
+				branchName: "develop",
+				createBranch: false,
+				baseRef: "main",
+				mode: "auto" as const,
+				dirty: "inherit" as const,
+			});
 
-			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "develop", false, "main");
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "develop", false, "main", "auto", "inherit");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Created worktree develop");
 		});
 
@@ -2184,7 +2214,13 @@ describe("useGitOperations", () => {
 			});
 
 			await gitOps.handleAddWorktree("/repo");
-			await gitOps.confirmCreateWorktree({ branchName: "feat-x", createBranch: false, baseRef: "main" });
+			await gitOps.confirmCreateWorktree({
+				branchName: "feat-x",
+				createBranch: false,
+				baseRef: "main",
+				mode: "auto" as const,
+				dirty: "inherit" as const,
+			});
 
 			// Placeholder branch added with isPreparing=true
 			const branch = repositoriesStore.get("/repo")?.workspaces["feat-x"];
@@ -2205,7 +2241,13 @@ describe("useGitOperations", () => {
 			await gitOps.handleAddWorktree("/repo");
 			// confirmCreateWorktree re-throws so the dialog can show the error
 			await expect(
-				gitOps.confirmCreateWorktree({ branchName: "bold-nexus-042", createBranch: true, baseRef: "main" }),
+				gitOps.confirmCreateWorktree({
+					branchName: "bold-nexus-042",
+					createBranch: true,
+					baseRef: "main",
+					mode: "auto" as const,
+					dirty: "inherit" as const,
+				}),
 			).rejects.toThrow("branch exists");
 
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Failed to create worktree"));
@@ -2227,7 +2269,13 @@ describe("useGitOperations", () => {
 			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
 
 			await gitOps.handleAddWorktree("/repo");
-			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+			await gitOps.confirmCreateWorktree({
+				branchName: "feat-test",
+				createBranch: true,
+				baseRef: "main",
+				mode: "auto" as const,
+				dirty: "inherit" as const,
+			});
 
 			expect(mockRepo.runSetupScript).toHaveBeenCalledWith("npm install", "/repo/wt/feat-test");
 		});
@@ -2246,7 +2294,13 @@ describe("useGitOperations", () => {
 			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
 
 			await gitOps.handleAddWorktree("/repo");
-			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+			await gitOps.confirmCreateWorktree({
+				branchName: "feat-test",
+				createBranch: true,
+				baseRef: "main",
+				mode: "auto" as const,
+				dirty: "inherit" as const,
+			});
 
 			expect(mockRepo.runSetupScript).not.toHaveBeenCalled();
 		});
@@ -2267,7 +2321,13 @@ describe("useGitOperations", () => {
 			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
 
 			await gitOps.handleAddWorktree("/repo");
-			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+			await gitOps.confirmCreateWorktree({
+				branchName: "feat-test",
+				createBranch: true,
+				baseRef: "main",
+				mode: "auto" as const,
+				dirty: "inherit" as const,
+			});
 
 			// Find the terminal created for this worktree
 			const branch = repositoriesStore.get("/repo")?.workspaces["feat-test"];
@@ -2294,7 +2354,13 @@ describe("useGitOperations", () => {
 			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
 
 			await gitOps.handleAddWorktree("/repo");
-			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+			await gitOps.confirmCreateWorktree({
+				branchName: "feat-test",
+				createBranch: true,
+				baseRef: "main",
+				mode: "auto" as const,
+				dirty: "inherit" as const,
+			});
 
 			// Should still create a terminal despite script failure
 			const branch = repositoriesStore.get("/repo")?.workspaces["feat-test"];

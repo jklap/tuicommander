@@ -12,9 +12,11 @@ interface WorktreeRemovalCoordinatorDeps {
 			deleteBranch: boolean,
 			force?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
+		/** Always 0 for a linked worktree. */
+		countUnpublishedCommits: (repoPath: string, workspaceId: string) => Promise<number>;
 	};
 	dialogs: {
-		confirmRemoveWorktree: (branchName: string) => Promise<boolean>;
+		confirmRemoveWorktree: (branchName: string, unpublishedCommits?: number) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
@@ -60,7 +62,22 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		}
 		const branchName = branch.branchName;
 
-		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName);
+		// A clone's commits exist nowhere else, so the question changes: ask how
+		// many would be destroyed before asking whether to destroy them. Counting
+		// is skipped for a linked worktree — the answer is always 0, and it costs
+		// a fetch to learn that.
+		let unpublished = 0;
+		if (branch.kind === "cow") {
+			try {
+				unpublished = await deps.repo.countUnpublishedCommits(repoPath, workspaceId);
+			} catch (err) {
+				// Unknown is not zero. Fall back to asking with the generic
+				// wording rather than silently promising nothing is at stake.
+				appLogger.warn("git", `could not count unpublished commits for ${workspaceId}`, err);
+			}
+		}
+
+		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName, unpublished);
 		if (!confirmed) {
 			clearLock();
 			return;
@@ -101,7 +118,9 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		let shouldRemoveFromStore = false;
 		let shouldClearBranchLabel = true;
 		try {
-			const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch);
+			// The user confirmed knowing the count, so the backend guard would only
+			// bounce a decision that has already been made.
+			const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, unpublished > 0);
 			appLogger.info("git", `handleRemoveWorkspace: remove_worktree SUCCESS`, { workspaceId });
 			shouldRemoveFromStore = true;
 			shouldClearBranchLabel = !outcome?.branch_delete_warning;

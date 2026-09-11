@@ -101,8 +101,26 @@ export function useConfirmDialog() {
 		settle("discard");
 	}
 
-	/** Confirm removing a worktree/branch */
-	async function confirmRemoveWorktree(branchName: string): Promise<boolean> {
+	/** Confirm removing a workspace.
+	 *
+	 *  `unpublishedCommits` is only ever non-zero for a copy-on-write clone,
+	 *  whose commits exist nowhere else — a linked worktree's objects live in
+	 *  the parent and survive the directory. The number goes in the message
+	 *  because "remove?" and "destroy 3 commits?" are different questions. */
+	async function confirmRemoveWorktree(branchName: string, unpublishedCommits = 0): Promise<boolean> {
+		if (unpublishedCommits > 0) {
+			const plural = unpublishedCommits === 1 ? "commit exists" : "commits exist";
+			return await confirm({
+				title: "Destroy unpublished commits?",
+				message:
+					`${unpublishedCommits} ${plural} only in "${branchName}".\n\n` +
+					"This workspace is an independent clone, so removing it destroys them for good. " +
+					"Publish first to keep them.",
+				okLabel: "Delete anyway",
+				cancelLabel: "Cancel",
+				kind: "error",
+			});
+		}
 		return await confirm({
 			title: "Remove worktree?",
 			message: `Remove ${branchName}?\nThis deletes the worktree directory and its local branch.`,

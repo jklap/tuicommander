@@ -313,4 +313,5 @@
 /worktrees/paths
 /worktrees/publish
 /worktrees/run-script
+/worktrees/unpublished
 /worktrees/x

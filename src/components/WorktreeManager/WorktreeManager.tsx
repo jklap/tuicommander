@@ -22,6 +22,9 @@ interface WorktreeRow {
 	repoName: string;
 	/** Which workspace this row IS — what every action addresses. */
 	workspaceId: string;
+	/** How it was built. Read from the record, never inferred from the path:
+	 *  publish and remove behave differently per mechanism. */
+	kind: "cow" | "worktree" | "main";
 	/** What it has checked out. Display, sort and PR lookup only. */
 	branch: string;
 	worktreePath: string;
@@ -50,6 +53,9 @@ export interface WorktreeActions {
 	onOpenTerminal: (repoPath: string, workspaceId: string) => void;
 	onDelete: (repoPath: string, workspaceId: string) => void;
 	onMergeAndArchive: (repoPath: string, workspaceId: string) => void;
+	/** COW rows only: get this workspace's commits into the parent and origin.
+	 *  A linked worktree has nothing to publish, so the button is not shown. */
+	onPublish?: (repoPath: string, workspaceId: string) => void;
 }
 
 export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props) => {
@@ -64,6 +70,14 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 
 	// Orphan worktree detection (with cancellation guard for rapid open/close)
 	const [orphanRows, setOrphanRows] = createSignal<OrphanRow[]>([]);
+
+	/// How many commits exist only in each COW workspace, by row id.
+	///
+	/// Fetched when the manager opens rather than on every repo refresh: each
+	/// count refreshes the parent mirror, so it costs a fetch per clone, and the
+	/// number only matters while this panel is on screen. Absent means "not
+	/// counted yet", which renders as nothing rather than as zero.
+	const [unpublished, setUnpublished] = createSignal<Record<string, number>>({});
 
 	createEffect(() => {
 		if (!isOpen()) {
@@ -131,6 +145,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 					repoPath: repo.path,
 					repoName: repo.displayName || displayName(repo.path),
 					workspaceId,
+					kind: workspace.kind === "cow" ? "cow" : workspace.isMain ? "main" : "worktree",
 					branch: workspace.branchName,
 					worktreePath: workspace.worktreePath,
 					additions: workspace.additions,
@@ -148,6 +163,39 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 		});
 
 		return rows;
+	});
+
+	// Count the unpublished commits of every clone while the panel is open. One
+	// pass per open, cancelled if it closes underneath us.
+	createEffect(() => {
+		if (!isOpen()) {
+			setUnpublished({});
+			return;
+		}
+		const clones = allWorktrees().filter((row) => row.kind === "cow");
+		if (clones.length === 0) return;
+
+		let cancelled = false;
+		void Promise.allSettled(
+			clones.map(async (row) => {
+				const count = await invoke<number>("count_unpublished_commits", {
+					repoPath: row.repoPath,
+					workspaceId: row.workspaceId,
+				});
+				return [row.id, count] as const;
+			}),
+		).then((results) => {
+			if (cancelled) return;
+			const counted: Record<string, number> = {};
+			for (const result of results) {
+				if (result.status === "fulfilled") counted[result.value[0]] = result.value[1];
+				else appLogger.debug("git", "unpublished count failed", result.reason);
+			}
+			setUnpublished(counted);
+		});
+		onCleanup(() => {
+			cancelled = true;
+		});
 	});
 
 	// Unique repos for filter pills
@@ -329,6 +377,21 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 											<Show when={wt.isMain}>
 												<span class={s.mainBadge}>main</span>
 											</Show>
+											{/* Which mechanism, on the row: publish and remove behave
+											    differently, and the directory does not say which. */}
+											<Show when={wt.kind === "cow"}>
+												<span class={s.cowBadge} title="Copy-on-write clone — an independent repository">
+													clone
+												</span>
+											</Show>
+											<Show when={wt.kind === "cow" && (unpublished()[wt.id] ?? 0) > 0}>
+												<span
+													class={s.unpublishedBadge}
+													title="Commits that exist only in this workspace — removing it destroys them"
+												>
+													{unpublished()[wt.id]} unpublished
+												</span>
+											</Show>
 											<Show when={wt.prStatus}>{(pr) => <PrBadge state={pr().state} number={pr().number} />}</Show>
 										</div>
 										{/* Col 4: Stats */}
@@ -354,9 +417,24 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 													>
 														&#x2714;
 													</button>
+													<Show when={wt.kind === "cow" && actions().onPublish}>
+														<button
+															class={s.actionBtn}
+															title="Publish: fetch into the parent repo and push to origin"
+															onClick={() => actions().onPublish?.(wt.repoPath, wt.workspaceId)}
+														>
+															<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+																<path d="M8 1.5 12 6h-2.5v4.5h-3V6H4L8 1.5zM3 12.5h10v1.5H3v-1.5z" />
+															</svg>
+														</button>
+													</Show>
 													<button
 														class={`${s.actionBtn} ${s.actionBtnDanger}`}
-														title="Delete worktree"
+														title={
+															wt.kind === "cow"
+																? "Delete workspace (refuses while commits are unpublished)"
+																: "Delete worktree"
+														}
 														disabled={wt.isMain}
 														onClick={() => actions().onDelete(wt.repoPath, wt.workspaceId)}
 													>

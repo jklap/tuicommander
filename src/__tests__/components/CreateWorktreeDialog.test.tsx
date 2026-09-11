@@ -135,6 +135,10 @@ describe("CreateWorktreeDialog", () => {
 			branchName: "develop",
 			createBranch: false,
 			baseRef: "",
+			// The defaults the dialog opens with, and the pair that always
+			// produces a workspace at zero extra cost.
+			mode: "auto",
+			dirty: "inherit",
 		});
 	});
 
@@ -152,6 +156,8 @@ describe("CreateWorktreeDialog", () => {
 			branchName: "feature/new-thing",
 			createBranch: true,
 			baseRef: "",
+			mode: "auto",
+			dirty: "inherit",
 		});
 	});
 
