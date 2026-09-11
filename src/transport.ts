@@ -247,7 +247,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: "/system/notification-sound",
 			// `device` rides along: notifications.ts always sends it, so dropping it
 			// here would play every browser-mode sound on the default output.
-			body: { sound: args.sound, volume: args.volume, device: args.device ?? null },
+			// `choice` likewise mirrors the desktop command; the server ignores a
+			// `custom` file over HTTP and plays the default tone instead.
+			body: { sound: args.sound, volume: args.volume, device: args.device ?? null, choice: args.choice ?? null },
 		}),
 	},
 	// --- Relay ---

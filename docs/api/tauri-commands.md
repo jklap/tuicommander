@@ -727,7 +727,8 @@ empty result.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `play_notification_sound` | `sound, volume, device?` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) on `device`, or the system default; every tone releases to zero and drains a short silent tail before the output stream closes |
+| `play_notification_sound` | `sound, volume, device, choice` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) at the given volume/device. `choice` selects the source: the sound's own default tone, another sound's tone borrowed as a preset, or a user-supplied audio file (`choice.preset == "custom"`, decoded via `rodio::Decoder`). Fire-and-forget like every other failure mode here — an unopenable/undecodable custom file falls back to the default tone (logged, not surfaced), it never errors. Every tone releases to zero and drains a short silent tail before the output stream closes. HTTP twin `POST /system/notification-sound` honours a borrowed preset but plays the default tone for `custom` |
+| `list_audio_output_devices` | -- | `Vec<AudioOutputDevice>` | Enumerate available audio output devices, marking the system default (enumeration runs off the async worker with a timeout; HTTP twin `GET /audio/output-devices`) |
 | `block_sleep` | -- | `()` | Prevent system sleep |
 | `unblock_sleep` | -- | `()` | Allow system sleep |
 

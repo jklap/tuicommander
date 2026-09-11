@@ -787,12 +787,24 @@ describe("transport", () => {
 					sound: "question",
 					volume: 0.5,
 					device: "Studio Display Speakers",
+					choice: null,
 				});
 			});
 
 			it("sends a null device when the user picked none", () => {
 				const dflt = mapCommandToHttp("play_notification_sound", { sound: "completion", volume: 1, device: null });
-				expect(dflt.body).toEqual({ sound: "completion", volume: 1, device: null });
+				expect(dflt.body).toEqual({ sound: "completion", volume: 1, device: null, choice: null });
+			});
+
+			it("carries the per-sound source choice on play_notification_sound", () => {
+				const choice = { preset: "attention", custom_path: null };
+				const mapped = mapCommandToHttp("play_notification_sound", {
+					sound: "info",
+					volume: 1,
+					device: null,
+					choice,
+				});
+				expect(mapped.body).toEqual({ sound: "info", volume: 1, device: null, choice });
 			});
 		});
 
