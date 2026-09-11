@@ -237,3 +237,73 @@ describe("toastsStore — mirroring into the bell", () => {
 		});
 	});
 });
+
+/** A toast's `sound: true` flag used to trigger a separate, fixed Web Audio
+ *  synth with no connection to Settings > Notifications — muting all sounds,
+ *  picking a different output device, or setting a custom file for Info/
+ *  Warning/Error did nothing for toasts. It now routes through the same
+ *  `notificationManager` the six primary events use. */
+describe("toastsStore — sound routes through the customizable Info/Warning/Error sounds", () => {
+	let toastsStore: typeof import("../../stores/toasts").toastsStore;
+	let notificationManager: typeof import("../../notifications").notificationManager;
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		vi.resetModules();
+		const mod = await import("../../stores/toasts");
+		toastsStore = mod.toastsStore;
+		notificationManager = (await import("../../notifications")).notificationManager;
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	it("sound=true with level info calls notificationManager.playInfo()", () => {
+		testInScope(() => {
+			const spy = vi.spyOn(notificationManager, "playInfo").mockResolvedValue(undefined);
+			toastsStore.add("Done", "", "info", true);
+			expect(spy).toHaveBeenCalledOnce();
+		});
+	});
+
+	it("sound=true with level warn calls notificationManager.playWarning(), not playInfo()", () => {
+		testInScope(() => {
+			const warnSpy = vi.spyOn(notificationManager, "playWarning").mockResolvedValue(undefined);
+			const infoSpy = vi.spyOn(notificationManager, "playInfo").mockResolvedValue(undefined);
+			toastsStore.add("Careful", "", "warn", true);
+			expect(warnSpy).toHaveBeenCalledOnce();
+			expect(infoSpy).not.toHaveBeenCalled();
+		});
+	});
+
+	it("sound=true with level error calls notificationManager.playError()", () => {
+		testInScope(() => {
+			const spy = vi.spyOn(notificationManager, "playError").mockResolvedValue(undefined);
+			toastsStore.add("Broke", "", "error", true);
+			expect(spy).toHaveBeenCalledOnce();
+		});
+	});
+
+	it("sound=false (the default) never calls any play method", () => {
+		testInScope(() => {
+			const infoSpy = vi.spyOn(notificationManager, "playInfo").mockResolvedValue(undefined);
+			const warnSpy = vi.spyOn(notificationManager, "playWarning").mockResolvedValue(undefined);
+			const errorSpy = vi.spyOn(notificationManager, "playError").mockResolvedValue(undefined);
+			toastsStore.add("Quiet", "", "info");
+			expect(infoSpy).not.toHaveBeenCalled();
+			expect(warnSpy).not.toHaveBeenCalled();
+			expect(errorSpy).not.toHaveBeenCalled();
+		});
+	});
+
+	it("a duplicate toast that gets suppressed does not play a second time", () => {
+		testInScope(() => {
+			const spy = vi.spyOn(notificationManager, "playInfo").mockResolvedValue(undefined);
+			toastsStore.add("Repeat", "same", "info", true);
+			toastsStore.add("Repeat", "same", "info", true); // hasVisible() suppresses this one
+			expect(spy).toHaveBeenCalledOnce();
+		});
+	});
+});

@@ -61,6 +61,19 @@ machine-verifiable:
       picking "Custom file…" is not offered at all (no filesystem access
       there).
 
+**Also fixed as part of this pass:** in-app toasts (`toastsStore.add(..., sound=true)` —
+failed stage/unstage/discard/merge in the Git panel, plugin `tuic.toast()`, etc.)
+used to play a separate hardcoded synth with no connection to these settings.
+They now route through `notificationManager.playInfo/playWarning/playError()`
+matched by toast level. Unit-tested (spy assertions on the right method being
+called), but the actual audible result needs a real check:
+- [ ] Disable the "Error" sound in Settings > Notifications, then trigger a
+      failed git operation (e.g. discard a file that's locked/in-use) — should
+      stay silent. Re-enable it and confirm the beep returns.
+- [ ] Set a custom file or borrowed preset for "Warning", then trigger a
+      warning-level toast (e.g. "Path does not exist" from a shortcut) —
+      should play that chosen sound, not the old fixed double-beep.
+
 ## Ghost/stale terminal ids inflating the removal dialog + sidebar dot, chevron auto-spawn (2026-09-10, frontend only — no rebuild/restart needed)
 
 Fixes three related sidebar/worktree-removal bugs Boss reported live:

@@ -1713,7 +1713,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - **Path resolution:** relative paths resolve against active repo; absolute paths match longest repo prefix; `../` traversal outside repo root is blocked
 - **Repository:** `tuic.activeRepo()` returns active repo path; `tuic.onRepoChange(cb)` / `tuic.offRepoChange(cb)` for live updates
 - **Terminal:** `tuic.terminal(repoPath)` — open terminal in repository
-- **UI feedback:** `tuic.toast(title, {message?, level?, sound?})` — native toast notifications with optional sound (info blip, warn double-beep, error descending sweep); `tuic.clipboard(text)` — copy to clipboard from sandboxed iframe
+- **UI feedback:** `tuic.toast(title, {message?, level?, sound?})` — native toast notifications; `sound: true` plays through the same customizable Info/Warning/Error sounds as everything else in Settings > Notifications (master toggle, volume, device, and any preset/custom file chosen for that event), matched to `level`; `tuic.clipboard(text)` — copy to clipboard from sandboxed iframe
 - **Messaging:** `tuic.send(data)` / `tuic.onMessage(cb)` — bidirectional host↔plugin communication
 - **Theme:** `tuic.theme` — current theme as JS object (camelCase CSS vars); `tuic.onThemeChange(cb)` for live updates
 - `<a href="tuic://open/...">` and `<a href="tuic://terminal?repo=...">` links intercepted automatically

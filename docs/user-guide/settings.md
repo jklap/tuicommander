@@ -361,6 +361,8 @@ User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`) are intent
 - **Reset to Defaults** — Restore default notification settings
 - **Keep toasts in the bell** — Each toast is also written to a **MESSAGES** section in the toolbar bell, so a message that faded while you looked at another window stays readable afterwards. The bell entry keeps the toast level (info / warning / error) and its action, if it had one. Turn this off to leave toasts transient. This setting is outside the audio block: the bell is visual, so it stays reachable on a machine with no audio output.
 
+A toast raised with a sound (a failed git operation, a plugin's `tuic.toast()` call, etc.) plays through these same settings, matched by level (info→Info, warn→Warning, error→Error) — the master toggle, per-event toggle, volume, output device, and any preset/custom file you've picked for that event all apply.
+
 **Attention** is the distinct call-back-to-keyboard sound available to agent
 toasts. Native playback and the browser fallback share a triangular G4→G4→E5
 motif with two short knocks and a longer rise; each engine applies its own

@@ -1,4 +1,5 @@
 import { createStore } from "solid-js/store";
+import { notificationManager } from "../notifications";
 import { activityStore } from "./activityStore";
 import { notificationsStore } from "./notifications";
 
@@ -27,64 +28,21 @@ export const DEFAULT_DURATION_MS: Record<Toast["level"], number> = {
 	error: 0,
 };
 
-/** Lazy-initialized AudioContext (created on first sound to satisfy autoplay policy) */
-let audioCtx: AudioContext | null = null;
-
-function getAudioCtx(): AudioContext {
-	if (!audioCtx) audioCtx = new AudioContext();
-	return audioCtx;
-}
-
-/**
- * Play a short synthesized notification sound via Web Audio API.
- *
- * - info:  single soft blip (880 Hz, 80ms)
- * - warn:  double beep (660 Hz, 80ms × 2 with 60ms gap)
- * - error: descending tone (440→220 Hz, 200ms)
- */
-function playSound(level: "info" | "warn" | "error"): void {
-	try {
-		const ctx = getAudioCtx();
-		const now = ctx.currentTime;
-
-		if (level === "info") {
-			const osc = ctx.createOscillator();
-			const gain = ctx.createGain();
-			osc.type = "sine";
-			osc.frequency.setValueAtTime(880, now);
-			gain.gain.setValueAtTime(0.15, now);
-			gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-			osc.connect(gain).connect(ctx.destination);
-			osc.start(now);
-			osc.stop(now + 0.08);
-		} else if (level === "warn") {
-			for (let i = 0; i < 2; i++) {
-				const t = now + i * 0.14;
-				const osc = ctx.createOscillator();
-				const gain = ctx.createGain();
-				osc.type = "sine";
-				osc.frequency.setValueAtTime(660, t);
-				gain.gain.setValueAtTime(0.15, t);
-				gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
-				osc.connect(gain).connect(ctx.destination);
-				osc.start(t);
-				osc.stop(t + 0.08);
-			}
-		} else {
-			// error: descending sweep
-			const osc = ctx.createOscillator();
-			const gain = ctx.createGain();
-			osc.type = "sine";
-			osc.frequency.setValueAtTime(440, now);
-			osc.frequency.exponentialRampToValueAtTime(220, now + 0.2);
-			gain.gain.setValueAtTime(0.18, now);
-			gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
-			osc.connect(gain).connect(ctx.destination);
-			osc.start(now);
-			osc.stop(now + 0.2);
-		}
-	} catch {
-		// AudioContext not available — skip silently
+/** Route a toast's `sound: true` flag through the same customizable Info/
+ *  Warning/Error sounds as everything else in Settings > Notifications —
+ *  respecting the master toggle, per-sound toggle, volume, output device,
+ *  and any preset/custom file chosen for that event — instead of a separate
+ *  fixed synth. Deliberately calls `notificationManager` directly rather
+ *  than `notificationsStore.play()`: the store wrapper also increments the
+ *  dock badge and can fire an OS notification, both meant for the agent-
+ *  attention events (Question/Completion), not routine UI toasts. */
+function playSoundForLevel(level: Toast["level"]): void {
+	if (level === "warn") {
+		void notificationManager.playWarning();
+	} else if (level === "error") {
+		void notificationManager.playError();
+	} else {
+		void notificationManager.playInfo();
 	}
 }
 
@@ -155,7 +113,7 @@ function createToastsStore() {
 			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action, repoPath, sessionId };
 			setState("toasts", (prev) => [...prev, toast]);
 			mirrorToBell(toast);
-			if (sound) playSound(level);
+			if (sound) playSoundForLevel(level);
 			// A non-positive duration means "sticky" — no auto-dismiss timer, so the
 			// toast stays until the user clicks it away.
 			const timeout = durationMs ?? DEFAULT_DURATION_MS[level];
