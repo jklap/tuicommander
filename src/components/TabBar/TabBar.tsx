@@ -16,7 +16,6 @@ import { openPathsAsTabs } from "../../hooks/useFileDrop";
 import { initMouseDrag } from "../../hooks/useMouseDrag";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
-import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { diffTabsStore } from "../../stores/diffTabs";
@@ -30,10 +29,14 @@ import { settingsStore } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
-import { writeClipboard } from "../../utils/clipboard";
+import { copyPathToClipboard, writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
-import { handleOpenUrl } from "../../utils/openUrl";
+import { handleOpenUrl, openLocalPath } from "../../utils/openUrl";
+// Named for its first caller; it is a plain `file://` → path parser and returns
+// null for every other scheme, which is exactly the guard needed here.
+import { parseOsc7Url } from "../../utils/osc7";
 import { computeLeafRects } from "../../utils/paneTreeGeometry";
+import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { ptyCaptureStore } from "../../utils/ptyCapture";
@@ -66,6 +69,20 @@ export const TabBar: Component<TabBarProps> = (props) => {
 	const [dragInvalid, setDragInvalid] = createSignal(false);
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const smartPrompts = useSmartPrompts();
+
+	/** Absolute on-disk path of a file-backed tab.
+	 *
+	 *  The tab stores keep `filePath` RELATIVE to the tab's filesystem root, which
+	 *  is held next to it (`fsRoot`, falling back to `repoPath`); a file opened
+	 *  from outside any repo is already absolute. Copy Path and the file-context
+	 *  Smart Prompts both need the joined path — handing them the bare `filePath`
+	 *  yields `src/foo.ts`, which resolves against whatever the consumer's cwd
+	 *  happens to be. */
+	const tabAbsPath = (root: string | undefined, filePath: string | undefined): string | undefined => {
+		if (!filePath) return undefined;
+		if (isAbsolutePath(filePath)) return filePath;
+		return root ? joinPath(root, filePath) : filePath;
+	};
 
 	/** Append a Smart Prompts submenu to a tab context menu if any file-context
 	 *  prompts exist. Mutates `items` in-place. */
@@ -126,14 +143,12 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			const ids = visibleDiffIds();
 			const idx = ids.indexOf(id);
 			const isPinned = tab?.pinned ?? false;
+			const absPath = tabAbsPath(tab?.repoPath, tab?.filePath);
 			const diffItems: ContextMenuItem[] = [
 				{
 					label: t("tabBar.copyPath", "Copy Path"),
 					action: () => {
-						if (tab?.filePath)
-							writeClipboard(shortenHomePath(tab.filePath)).catch((err) =>
-								appLogger.error("app", "Failed to copy path", err),
-							);
+						if (absPath) copyPathToClipboard(absPath);
 					},
 				},
 				{
@@ -159,7 +174,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					disabled: idx >= ids.length - 1,
 				},
 			];
-			pushFileContextItem(diffItems, tab?.filePath);
+			pushFileContextItem(diffItems, absPath);
 			return diffItems;
 		}
 
@@ -168,23 +183,39 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			const ids = visibleMdIds();
 			const idx = ids.indexOf(id);
 			const isPinned = tab?.pinned ?? false;
-			const hasPath = tab?.type === "file" && tab.filePath;
 			const tabUrl = tab?.type === "plugin-panel" ? (tab as PluginPanelTab).url : undefined;
+			// Three md-tab shapes are backed by a real file and all three should offer
+			// Copy Path. The `file://` panel is the one that reads as memory-only and
+			// is not: `ui action=tab url=file://…` keeps the url on the tab while
+			// PluginPanel reads the file over IPC and renders it as `srcdoc`, because
+			// the iframe sandbox blocks `file://` directly. The document on screen has
+			// no src, so only the url names where it came from.
+			const absPath =
+				tab?.type === "file" || tab?.type === "html-preview"
+					? tabAbsPath(tab.fsRoot || tab.repoPath, tab.filePath)
+					: (parseOsc7Url(tabUrl ?? "") ?? undefined);
 			const mdItems: ContextMenuItem[] = [
-				...(hasPath
+				...(absPath
 					? [
 							{
 								label: t("tabBar.copyPath", "Copy Path"),
-								action: () => {
-									writeClipboard(shortenHomePath(tab.filePath)).catch((err) =>
-										appLogger.error("app", "Failed to copy path", err),
-									);
-								},
+								action: () => copyPathToClipboard(absPath),
 							},
 						]
 					: []),
+				// A `file://` panel goes to the OS default app for the file (a browser,
+				// for the HTML these tabs carry). `handleOpenUrl` rejects every scheme
+				// but http/https/mailto, so routing one through it left the menu item
+				// doing nothing but writing "Blocked URL with disallowed scheme" to
+				// the log.
 				...(tabUrl
-					? [{ label: t("tabBar.openInBrowser", "Open in Browser"), action: () => handleOpenUrl(tabUrl) }]
+					? [
+							{
+								label: t("tabBar.openInBrowser", "Open in Browser"),
+								action: () =>
+									tabUrl.startsWith("file://") && absPath ? openLocalPath(absPath) : handleOpenUrl(tabUrl),
+							},
+						]
 					: []),
 				{
 					label: isPinned ? t("tabBar.unpinTab", "Unpin Tab") : t("tabBar.pinTab", "Pin Tab"),
@@ -210,7 +241,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					disabled: idx >= ids.length - 1,
 				},
 			];
-			pushFileContextItem(mdItems, hasPath ? tab.filePath : undefined);
+			pushFileContextItem(mdItems, absPath);
 			return mdItems;
 		}
 
@@ -219,14 +250,12 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			const ids = visibleEditIds();
 			const idx = ids.indexOf(id);
 			const isPinned = tab?.pinned ?? false;
+			const absPath = tabAbsPath(tab?.fsRoot, tab?.filePath);
 			const editItems: ContextMenuItem[] = [
 				{
 					label: t("tabBar.copyPath", "Copy Path"),
 					action: () => {
-						if (tab?.filePath)
-							writeClipboard(shortenHomePath(tab.filePath)).catch((err) =>
-								appLogger.error("app", "Failed to copy path", err),
-							);
+						if (absPath) copyPathToClipboard(absPath);
 					},
 				},
 				{
@@ -246,7 +275,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					disabled: idx >= ids.length - 1,
 				},
 			];
-			pushFileContextItem(editItems, tab?.filePath);
+			pushFileContextItem(editItems, absPath);
 			return editItems;
 		}
 

@@ -14,12 +14,11 @@ import {
 import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { useRepository } from "../../hooks/useRepository";
 import { t } from "../../i18n";
-import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { cx, globToRegex } from "../../utils";
-import { writeClipboard } from "../../utils/clipboard";
+import { copyPathToClipboard } from "../../utils/clipboard";
 import { pathBasename, pathDirname } from "../../utils/pathUtils";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu";
 import g from "../shared/git-status.module.css";
@@ -306,11 +305,7 @@ export const MarkdownPanel: Component<MarkdownPanelProps> = (props) => {
 		return [
 			{
 				label: t("markdownPanel.copyPath", "Copy Path"),
-				action: () => {
-					writeClipboard(shortenHomePath(`${root}/${entry.path}`)).catch((err) =>
-						appLogger.error("app", "Failed to copy path", err),
-					);
-				},
+				action: () => copyPathToClipboard(`${root}/${entry.path}`),
 			},
 		];
 	};
