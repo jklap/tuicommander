@@ -1542,3 +1542,12 @@ injected seam, because a given `cp` can only ever implement one of the two flags
    badge. Before this change it failed with `cp: invalid option -- 'c'`.
 2. [ ] **On Linux with ext4 (no reflink):** the same creation with **Auto** must
    give a linked worktree and state why it degraded — not an error.
+
+## Orchestrator inbox wake after background probe (Rust — needs `make dev` restart)
+
+1. [ ] Start a managed parent with a child, leave the parent shell visibly ready,
+   and have the child send `RESULT` while the parent still has a pending
+   background-process probe. When the probe settles, the parent must receive the
+   payload-free `agent action=inbox` notice without closing the child or waiting
+   for another lifecycle event. Reading the inbox must return the original
+   `RESULT` payload exactly once.
