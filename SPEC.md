@@ -311,6 +311,68 @@ Features:
 | Ctrl+F | Toggle favorite |
 | Esc | Close drawer |
 
+## Workspaces: linked worktree versus copy-on-write clone
+
+A workspace is a linked worktree or a copy-on-write clone of the whole
+repository directory. Both are created by one entry point
+(`worktree::create_workspace`) and land at the same destination, derived from
+the storage strategy and the sanitized task name; the caller asks for a
+workspace, not for a mechanism.
+
+**Mode.** `auto` (default) takes a clone when every guard and the capability
+probe pass and a linked worktree otherwise, carrying the reason it degraded —
+"you got a worktree" without one is indistinguishable from "you asked for a
+worktree". `cow` fails naming the check that refused, because a caller asking
+for a clone wants the isolation and a silent worktree has different semantics.
+`worktree` forces the previous behaviour and reports no degradation, since that
+is a choice rather than a degradation. The clone guards run for `auto` and
+`cow` only: a linked worktree never had them.
+
+**Capability is measured, never inferred.** Support is decided by a real
+copy-on-write copy of `.git/HEAD`, with a same-volume device-id comparison as a
+cheap pre-filter. A filesystem name says nothing about a specific mount or a
+specific pair of paths.
+
+**Guards refuse; they never repair.** Destination inside the source, a linked
+worktree as source, a bare repo, an in-progress operation marker, or a lock
+held by a live writer each refuse with the reason. Deleting an inherited lock
+or finishing someone else's rebase would turn a torn copy into a
+plausible-looking corrupt one. A *stale* lock is the one exception and is
+dropped in the copy, by the caller, after the copy exists — never in the
+source.
+
+**There is no full-copy fallback.** A `cp -c -R` that fails after the probe
+succeeded means something changed underneath; falling back to a recursive copy
+would silently turn a 19 MB clone into a 12 GB one. A clone whose fixups fail
+is removed rather than handed back looking usable.
+
+**Dirty policy** applies to clones only: `inherit` (default, free),
+`clean_untracked` (`clean -fd`, never `-fdx` — the ignored build output is the
+point of the clone), `clean` (`reset --hard --recurse-submodules` then the same
+clean, the only policy that costs real disk).
+
+**Identity.** A linked worktree's `workspace_id` **is** its branch. A clone's id
+is minted, because two workspaces may sit on the same branch and a branch can
+therefore not name one. Every workspace API is keyed on the id; `kind` is
+persisted on the record so lifecycle code never infers the mechanism from the
+path.
+
+**Publish** exists for clones only — a linked worktree shares its refs with the
+parent. It stages the tip under `refs/tuic/published/<id>` in the parent, then
+fast-forwards `refs/heads/<branch>` with a compare-and-swap against the ref it
+read. Fast-forward only: with two workspaces on one branch a divergent parent
+branch is the normal case, and forcing would orphan whichever side published
+second. A parent branch that is checked out is refused; publish is not an
+implicit checkout. The parent update and the origin push fail and are reported
+independently.
+
+**Removal of a clone is gated, not warned.** Deleting it deletes a repository,
+and unpublished commits — reachable from HEAD and from no remote and no
+mirrored parent ref — exist nowhere else. The gate lives in the shared
+id-addressed removal path, so no transport bypasses it, and `force` defaults to
+false on all three. A parent mirror that fails to refresh makes the count err
+high: refusing a removal that might have been safe is the correct direction.
+
 ## Persistence
 
 Repository state is persisted by the Rust backend in `repositories.json`, in
@@ -354,6 +416,8 @@ Some frontend-only stores persist to localStorage:
       from Tauri IPC and HTTP; no frontend surface yet
 - [x] Multi-agent support through the canonical `AgentType` registry
 - [x] Git worktree management per task
+- [x] Copy-on-write workspaces: mode/dirty on all three transports, publish
+      into parent and origin, removal gated on unpublished commits
 - [x] Agent spawning integration
 - [x] SolidJS migration
 
