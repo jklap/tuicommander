@@ -25,7 +25,7 @@ import { type Component, createEffect, createMemo, createSignal, Match, on, onCl
 import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
-import { isMacOS, shortenHomePath } from "../../platform";
+import { isMacOS } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
@@ -33,7 +33,7 @@ import { referencesStore } from "../../stores/references";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
-import { writeClipboard } from "../../utils/clipboard";
+import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
 import { isAbsolutePath } from "../../utils/pathUtils";
 import { markPerf } from "../../utils/perfTrace";
@@ -933,12 +933,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				items={[
 					{
 						label: t("codeEditor.copyPath", "Copy Path"),
-						action: () => {
-							const fullPath = isExternal() ? props.filePath : `${fsRoot()}/${props.filePath}`;
-							writeClipboard(shortenHomePath(fullPath)).catch((err) =>
-								appLogger.error("app", "Failed to copy path", err),
-							);
-						},
+						action: () => copyPathToClipboard(absPath()),
 					},
 					{
 						label: "Find References (Shift+F12)",

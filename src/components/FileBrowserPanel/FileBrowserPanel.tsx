@@ -5,7 +5,7 @@ import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { invoke, listen } from "../../invoke";
-import { getModifierSymbol, shortenHomePath } from "../../platform";
+import { getModifierSymbol } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { markInternalDragEnd, markInternalDragStart, startNativeDrag } from "../../stores/dragDrop";
@@ -16,7 +16,7 @@ import { uiStore } from "../../stores/ui";
 import type { ContentMatch, DirEntry } from "../../types/fs";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
-import { writeClipboard } from "../../utils/clipboard";
+import { copyPathToClipboard } from "../../utils/clipboard";
 import { isAbsolutePath, joinPath, replaceBasename } from "../../utils/pathUtils";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -931,8 +931,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	const handleCopyPath = (entry: DirEntry) => {
 		const fsRoot = root();
 		if (!fsRoot) return;
-		const fullPath = `${fsRoot}/${entry.path}`;
-		writeClipboard(shortenHomePath(fullPath)).catch((err) => appLogger.error("app", "Failed to copy path", err));
+		copyPathToClipboard(`${fsRoot}/${entry.path}`);
 	};
 
 	const getContextMenuItems = (entry: DirEntry): ContextMenuItem[] => {

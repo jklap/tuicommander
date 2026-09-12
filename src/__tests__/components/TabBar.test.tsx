@@ -3,10 +3,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getModifierSymbol } from "../../platform";
 import type { AwaitingInputType } from "../../stores/terminals";
 
+const mockCopyPathToClipboard = vi.hoisted(() => vi.fn());
 const mockWriteClipboard = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("../../utils/clipboard", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../utils/clipboard")>()),
+	copyPathToClipboard: mockCopyPathToClipboard,
 	writeClipboard: mockWriteClipboard,
+}));
+
+const { mockOpenLocalPath, mockHandleOpenUrl } = vi.hoisted(() => ({
+	mockOpenLocalPath: vi.fn(),
+	mockHandleOpenUrl: vi.fn(),
+}));
+vi.mock("../../utils/openUrl", () => ({
+	openLocalPath: mockOpenLocalPath,
+	handleOpenUrl: mockHandleOpenUrl,
 }));
 
 // Mock Tauri APIs
@@ -1043,6 +1054,163 @@ describe("TabBar", () => {
 		});
 	});
 
+	// The tab stores keep `filePath` RELATIVE to the tab's filesystem root. Copy Path
+	// used to hand the bare `filePath` to the clipboard, so a tab yielded `src/a.ts`
+	// while the File Browser yielded the full path for the same file — useless
+	// anywhere the consumer's cwd is not the repo root.
+	describe("Copy Path copies the absolute path", () => {
+		function setupRepo() {
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { isMain: true, worktreePath: null });
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
+		}
+
+		function clickCopyPath(container: HTMLElement, tabSelector: string) {
+			fireEvent.contextMenu(container.querySelector(tabSelector)!);
+			const item = Array.from(container.querySelectorAll(".menu .item")).find(
+				(i) => i.querySelector(".label")?.textContent === "Copy Path",
+			)!;
+			fireEvent.click(item);
+		}
+
+		const renderTabBar = () =>
+			render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+
+		beforeEach(() => {
+			mockCopyPathToClipboard.mockClear();
+			mockOpenLocalPath.mockClear();
+			mockHandleOpenUrl.mockClear();
+			setupRepo();
+		});
+
+		it("joins a diff tab's relative path onto its repo root", () => {
+			diffTabsStore.add("/repo", "src/file.ts", "M");
+			const { container } = renderTabBar();
+			clickCopyPath(container, ".diffTab");
+			expect(mockCopyPathToClipboard).toHaveBeenCalledWith("/repo/src/file.ts");
+		});
+
+		it("joins a markdown tab's relative path onto its worktree root", () => {
+			mdTabsStore.add("/repo", "docs/readme.md", "/wt/feature");
+			const { container } = renderTabBar();
+			clickCopyPath(container, ".mdTab");
+			expect(mockCopyPathToClipboard).toHaveBeenCalledWith("/wt/feature/docs/readme.md");
+		});
+
+		it("joins an editor tab's relative path onto its fs root", () => {
+			editorTabsStore.add("/repo", "src/main.rs", undefined, { fsRoot: "/wt/feature" });
+			const { container } = renderTabBar();
+			clickCopyPath(container, ".editTab");
+			expect(mockCopyPathToClipboard).toHaveBeenCalledWith("/wt/feature/src/main.rs");
+		});
+
+		// `ui action=tab url=file://…` renders through srcdoc because the iframe
+		// sandbox blocks file://, so the panel looks memory-only. It is not — the
+		// url is the only record of where the document came from.
+		it("recovers the path of a file:// panel tab", () => {
+			mdTabsStore.openUiTab("bench", "Dev benchmark 90d", "", false, "file:///tmp/report%20one.html", false);
+			const { container } = renderTabBar();
+			clickCopyPath(container, ".panelTab");
+			expect(mockCopyPathToClipboard).toHaveBeenCalledWith("/tmp/report one.html");
+		});
+
+		// `handleOpenUrl` allows http/https/mailto only — terminal output is
+		// untrusted — so a file:// panel must go to the OS opener instead, or the
+		// menu item does nothing but log "Blocked URL with disallowed scheme".
+		it("sends a file:// panel to the OS opener, not the URL allowlist", () => {
+			mdTabsStore.openUiTab("bench2", "Report", "", false, "file:///tmp/report.html", false);
+			const { container } = renderTabBar();
+			fireEvent.contextMenu(container.querySelector(".panelTab")!);
+			const item = Array.from(container.querySelectorAll(".menu .item")).find(
+				(i) => i.querySelector(".label")?.textContent === "Open in Browser",
+			)!;
+			fireEvent.click(item);
+			expect(mockOpenLocalPath).toHaveBeenCalledWith("/tmp/report.html");
+			expect(mockHandleOpenUrl).not.toHaveBeenCalled();
+		});
+
+		it("keeps an http panel on the URL allowlist", () => {
+			mdTabsStore.openUiTab("web", "Dashboard", "", false, "http://127.0.0.1:14319", false);
+			const { container } = renderTabBar();
+			fireEvent.contextMenu(container.querySelector(".panelTab")!);
+			const item = Array.from(container.querySelectorAll(".menu .item")).find(
+				(i) => i.querySelector(".label")?.textContent === "Open in Browser",
+			)!;
+			fireEvent.click(item);
+			expect(mockHandleOpenUrl).toHaveBeenCalledWith("http://127.0.0.1:14319");
+			expect(mockOpenLocalPath).not.toHaveBeenCalled();
+		});
+
+		it("offers no Copy Path for a panel tab with inline HTML only", () => {
+			mdTabsStore.openUiTab("inline", "Inline panel", "<p>hi</p>", false, undefined, false);
+			const { container } = renderTabBar();
+			fireEvent.contextMenu(container.querySelector(".panelTab")!);
+			const labels = Array.from(container.querySelectorAll(".menu .item .label")).map((l) => l.textContent);
+			expect(labels).not.toContain("Copy Path");
+		});
+
+		it("leaves an already-absolute path from an external file alone", () => {
+			editorTabsStore.add("/repo", "/etc/hosts");
+			const { container } = renderTabBar();
+			clickCopyPath(container, ".editTab");
+			expect(mockCopyPathToClipboard).toHaveBeenCalledWith("/etc/hosts");
+		});
+	});
+
+	describe("alias context menu item", () => {
+		const renderTabBar = () =>
+			render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+
+		function aliasItem(container: HTMLElement): Element | undefined {
+			fireEvent.contextMenu(container.querySelector(".tab")!);
+			return Array.from(container.querySelectorAll(".menu .item")).find((item) =>
+				item.querySelector(".label")?.textContent?.startsWith("Alias:"),
+			);
+		}
+
+		beforeEach(() => {
+			mockWriteClipboard.mockClear();
+		});
+
+		// The alias is the address another agent has to be told, so it has to be
+		// readable and copyable from the tab that owns it — otherwise it is only
+		// ever visible inside an MCP payload.
+		it("shows the alias and copies it to the clipboard", () => {
+			const id = addTerminal({ name: "Tab 1" });
+			terminalsStore.update(id, { alias: "tu-2" });
+
+			const { container } = renderTabBar();
+			const item = aliasItem(container);
+
+			expect(item?.querySelector(".label")?.textContent).toBe("Alias: tu-2");
+			fireEvent.click(item!);
+			expect(mockWriteClipboard).toHaveBeenCalledWith("tu-2");
+		});
+
+		it("is absent while the session has no alias yet", () => {
+			addTerminal({ name: "Tab 1" });
+			const { container } = renderTabBar();
+			expect(aliasItem(container)).toBeUndefined();
+		});
+	});
+
 	describe("context menu", () => {
 		it("right-click opens context menu", () => {
 			addTerminal({ name: "Tab 1" });
@@ -1324,50 +1492,6 @@ describe("TabBar", () => {
 			fireEvent.click(featureItem!);
 
 			expect(handleMove).toHaveBeenCalledWith(termId, "/repo-wt/feature-a");
-		});
-	});
-	describe("alias context menu item", () => {
-		const renderTabBar = () =>
-			render(() => (
-				<TabBar
-					onTabSelect={() => {}}
-					onTabClose={() => {}}
-					onCloseOthers={() => {}}
-					onCloseToRight={() => {}}
-					onNewTab={() => {}}
-				/>
-			));
-
-		function aliasItem(container: HTMLElement): Element | undefined {
-			fireEvent.contextMenu(container.querySelector(".tab")!);
-			return Array.from(container.querySelectorAll(".menu .item")).find((item) =>
-				item.querySelector(".label")?.textContent?.startsWith("Alias:"),
-			);
-		}
-
-		beforeEach(() => {
-			mockWriteClipboard.mockClear();
-		});
-
-		// The alias is the address another agent has to be told, so it has to be
-		// readable and copyable from the tab that owns it — otherwise it is only
-		// ever visible inside an MCP payload.
-		it("shows the alias and copies it to the clipboard", () => {
-			const id = addTerminal({ name: "Tab 1" });
-			terminalsStore.update(id, { alias: "tu-2" });
-
-			const { container } = renderTabBar();
-			const item = aliasItem(container);
-
-			expect(item?.querySelector(".label")?.textContent).toBe("Alias: tu-2");
-			fireEvent.click(item!);
-			expect(mockWriteClipboard).toHaveBeenCalledWith("tu-2");
-		});
-
-		it("is absent while the session has no alias yet", () => {
-			addTerminal({ name: "Tab 1" });
-			const { container } = renderTabBar();
-			expect(aliasItem(container)).toBeUndefined();
 		});
 	});
 });

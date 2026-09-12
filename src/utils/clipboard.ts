@@ -1,4 +1,6 @@
 import { invoke } from "../invoke";
+import { shortenHomePath } from "../platform";
+import { appLogger } from "../stores/appLogger";
 import { isTauri } from "../transport";
 
 /**
@@ -22,6 +24,19 @@ export async function writeClipboard(text: string): Promise<void> {
 		return;
 	}
 	await navigator.clipboard.writeText(text);
+}
+
+/**
+ * Copy a filesystem path to the clipboard, logging a failure instead of throwing.
+ *
+ * The path is ABSOLUTE and home-shortened to `~/…`. Both halves are load-bearing:
+ * a relative path resolves against whatever cwd the consumer happens to have, and
+ * `~` is what Boss wants to read back. Every "Copy Path" action routes through
+ * here so the two rules hold in one place — callers pass the full path and do not
+ * shorten it themselves.
+ */
+export function copyPathToClipboard(absolutePath: string): void {
+	writeClipboard(shortenHomePath(absolutePath)).catch((err) => appLogger.error("app", "Failed to copy path", err));
 }
 
 /**
