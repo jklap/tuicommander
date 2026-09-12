@@ -1,5 +1,4 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { type Component, createEffect, createSignal, Match, onCleanup, Show, Switch } from "solid-js";
 import { useRepository } from "../../hooks/useRepository";
 import { invoke } from "../../invoke";
@@ -10,6 +9,7 @@ import { type HtmlPreviewTab as HtmlPreviewTabData, mdTabsStore } from "../../st
 import { repositoriesStore } from "../../stores/repositories";
 import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
 import { IFRAME_SCROLLBAR_STYLE, IFRAME_SEARCH_BRIDGE_SCRIPT } from "../../utils/iframeSearch";
+import { openLocalPath } from "../../utils/openUrl";
 import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
 import { buildSearchPattern, type SearchOptions } from "../shared/DomSearchEngine";
 import e from "../shared/editor-header.module.css";
@@ -225,11 +225,7 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 		})();
 	});
 
-	const handleOpenExternal = () => {
-		openPath(absolutePath(props.tab)).catch((err) =>
-			appLogger.error("app", "Failed to open file externally", { path: absolutePath(props.tab), error: String(err) }),
-		);
-	};
+	const handleOpenExternal = () => openLocalPath(absolutePath(props.tab));
 
 	const handleEdit = () => {
 		const { fsRoot, repoPath, filePath } = props.tab;
