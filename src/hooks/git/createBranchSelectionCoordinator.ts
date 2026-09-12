@@ -44,6 +44,15 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		const needsSwitch = activeRepo?.path !== repoPath || activeRepo?.activeWorkspaceId !== workspaceId;
 
 		const branch = repositoriesStore.get(repoPath)?.workspaces[workspaceId];
+		if (!branch) {
+			// The id names no row: the terminal below would join nothing (so it renders
+			// without a tab) and spawn with a null cwd, which the backend reads as the
+			// user's HOME. The repo is known here, so neither has to happen.
+			appLogger.error("git", `handleAddTerminalToWorkspace: "${workspaceId}" names no workspace`, {
+				repoPath,
+				known: Object.keys(repositoriesStore.get(repoPath)?.workspaces ?? {}),
+			});
+		}
 		const termCount = branch?.terminals.length || 0;
 
 		const branchName = branch?.branchName ?? workspaceId;
@@ -57,7 +66,10 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			sessionId: null,
 			fontSize: deps.getDefaultFontSize(),
 			name: tabName,
-			cwd: branch?.worktreePath || null,
+			// `null` here is not "the default directory" — the backend spawns in the
+			// user's HOME. A workspace of this repo belongs in this repo: a linked
+			// worktree has its own path, everything else is the repo checkout.
+			cwd: branch?.worktreePath || repoPath,
 			awaitingInput: null,
 			tuicSession: crypto.randomUUID(),
 		});

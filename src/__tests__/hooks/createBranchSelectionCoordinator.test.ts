@@ -56,26 +56,54 @@ describe("createBranchSelectionCoordinator", () => {
 		});
 	});
 
-	it("does not create a terminal when the spawn budget is exhausted", async () => {
+	/**
+	 * `cwd: null` is not "the default directory" — the backend spawns the PTY in the
+	 * user's HOME. A workspace row whose `worktreePath` was never filled in (a row
+	 * created by `setWorkspace` before the first refresh writes the path) therefore
+	 * opened a terminal on `~` inside a repo tab. Seen live.
+	 */
+	it("spawns in the repo when the workspace carries no worktree path", async () => {
+		await testInScope(async () => {
+			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+			repositoriesStore.setWorkspace("/Gits/alpha", "main");
+
+			const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main");
+
+			expect(terminalsStore.get(id!)?.cwd).toBe("/Gits/alpha");
+		});
+	});
+
+	it("keeps a linked worktree's own path as the cwd", async () => {
+		await testInScope(async () => {
+			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+			repositoriesStore.setWorkspace("/Gits/alpha", "feature", { worktreePath: "/Gits/alpha__wt/feature" });
+
+			const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "feature");
+
+			expect(terminalsStore.get(id!)?.cwd).toBe("/Gits/alpha__wt/feature");
+		});
+	});
+
+	/** The id named a workspace that had been pruned: the terminal joined nothing,
+	 *  so it rendered without a tab, and its cwd fell through to HOME. */
+	it("still spawns in the repo when the workspace id names no row", async () => {
 		await testInScope(async () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
 
-			const messages: string[] = [];
-			const coordinator = createBranchSelectionCoordinator({
-				repo: { getDiffStats: async () => ({ additions: 0, deletions: 0 }) },
-				pty: { canSpawn: async () => false },
-				setStatusInfo: (message) => messages.push(message),
-				getDefaultFontSize: () => 14,
-				setCurrentRepoPath: (() => {}) as never,
-				setCurrentBranch: (() => {}) as never,
-			});
+			const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "branch-that-was-pruned");
 
-			expect(await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main")).toBeUndefined();
-			expect(terminalsStore.getIds()).toHaveLength(0);
-			expect(messages).toEqual(["Max sessions reached (50)"]);
+			expect(terminalsStore.get(id!)?.cwd).toBe("/Gits/alpha");
+			// The row it was asked to join does not exist, so the pointer must not follow it.
+			expect(repositoriesStore.get("/Gits/alpha")?.activeWorkspaceId).not.toBe("branch-that-was-pruned");
 		});
 	});
+
+	/**
+	 * The alias is an address other agents already hold. A restore that drops it
+	 * hands the tab a fresh number, so "notify tu-3" reaches a different terminal
+	 * — or nothing at all — after every restart.
+	 */
 	it("carries a saved alias onto the terminal it restores", async () => {
 		await testInScope(async () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
@@ -100,6 +128,27 @@ describe("createBranchSelectionCoordinator", () => {
 			const restored = terminalsStore.getIds().map((id) => terminalsStore.get(id));
 			expect(restored.map((t) => t?.alias)).toEqual(["al-3"]);
 			expect(restored.map((t) => t?.tuicSession)).toEqual(["tab-uuid"]);
+		});
+	});
+
+	it("does not create a terminal when the spawn budget is exhausted", async () => {
+		await testInScope(async () => {
+			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+
+			const messages: string[] = [];
+			const coordinator = createBranchSelectionCoordinator({
+				repo: { getDiffStats: async () => ({ additions: 0, deletions: 0 }) },
+				pty: { canSpawn: async () => false },
+				setStatusInfo: (message) => messages.push(message),
+				getDefaultFontSize: () => 14,
+				setCurrentRepoPath: (() => {}) as never,
+				setCurrentBranch: (() => {}) as never,
+			});
+
+			expect(await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main")).toBeUndefined();
+			expect(terminalsStore.getIds()).toHaveLength(0);
+			expect(messages).toEqual(["Max sessions reached (50)"]);
 		});
 	});
 });
