@@ -122,6 +122,20 @@ interface RepositoryState {
  */
 type WorkspaceId = string;
 
+// Load-time repair (`workspaceIdentity.ts` `repairIdentity`) TYPE-CHECKS the
+// path and name fields rather than only replacing null/undefined. The document
+// is untrusted input, and the realistic corruption is a shape skew, not a
+// hostile write: `get_worktree_paths` became `{id: {branch, path}}` in one
+// commit, and a WebView still holding the pre-change module wrote the whole
+// record into `worktreePath`. That value round-trips through every later load
+// and reaches `joinPath`, which calls `.replace` on it and takes the app down
+// with an error naming neither the field nor the repo; a non-string
+// `branchName` does the same via `compareBranches` -> `localeCompare` inside
+// the sidebar's sort memo. A corrupt path degrades to `null` — "no separate
+// checkout", which every reader already handles — and the next refresh writes
+// the real value back. Salvaging `.path` out of the object is deliberately not
+// done: it encodes one historical shape and would hide the next one.
+
 interface WorkspaceState {
   workspaceId: WorkspaceId;        // equal to the key that holds this record
   branchName: string;              // NOT a key: two workspaces may share it
@@ -165,7 +179,7 @@ once a COW clone carries a minted id (#728-bc76).
 | Method | Description |
 |--------|-------------|
 | `setWorkspace(repoPath, workspaceId, data)` | Add/update one workspace. `data.branchName` defaults to the id |
-| `setActiveWorkspace(repoPath, workspaceId)` | Set the active workspace |
+| `setActiveWorkspace(repoPath, workspaceId)` | Set the active workspace. **Rejects an id that names no row** and keeps the previous pointer — a dangling one fails later and elsewhere: the sidebar renders no tab row for it, and the next terminal added to that workspace spawns in `$HOME`. `migrateActiveWorkspaceId` drops the same dangling id at load time; this is the live half of that rule |
 | `addTerminalToWorkspace(repoPath, workspaceId, terminalId)` | Link terminal |
 | `removeTerminalFromWorkspace(repoPath, workspaceId, terminalId)` | Unlink terminal |
 | `setRunCommand(repoPath, workspaceId, command)` | Save run command |
