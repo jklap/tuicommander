@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Codex usage is visible in the active agent badge.** Claude and Codex already
+  shared one polled usage ticker, but the general ticker hid that slot on every
+  agent tab while the badge absorbed it only for Claude. A Codex tab therefore
+  hid a valid Codex result on both paths. The badge now absorbs a usage result
+  whose provider label matches the active Claude or Codex tab, opens the
+  matching dashboard on click, and keeps a stale result from the previous
+  provider hidden during an asynchronous switch.
+
 - **A child result no longer waits for another child to close before waking its
   parent.** Mail sent while an orchestrator was working was buffered correctly,
   but an idle shell could still report `working` until its asynchronous

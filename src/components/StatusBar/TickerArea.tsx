@@ -23,7 +23,7 @@ export const TickerArea: Component = () => {
 	onMount(() => document.addEventListener("keydown", handleKeyDown));
 	onCleanup(() => document.removeEventListener("keydown", handleKeyDown));
 
-	// Rotation state — filters out claude-usage on agent tabs so the counter
+	// Rotation state — filters out the shared agent-usage slot on agent tabs so the counter
 	// doesn't show "1/2" when only one visible ticker remains.
 	const rotation = () => {
 		const state = statusBarTicker.getRotationState();
@@ -32,10 +32,11 @@ export const TickerArea: Component = () => {
 		const activeAgent = terminalsStore.getActive()?.agentType;
 		if (!activeAgent) return state;
 
-		// On agent tabs, claude-usage is irrelevant — hide it
+		// The matching Claude/Codex result is absorbed into the agent badge; a stale
+		// result for the other provider must remain hidden during the async switch.
 		if (state.message.pluginId === "claude-usage") return null;
 
-		// Adjust counter to exclude hidden claude-usage messages
+		// Adjust counter to exclude hidden agent-usage messages.
 		const hiddenCount = statusBarTicker.getAll().filter((m) => m.pluginId === "claude-usage").length;
 		if (hiddenCount > 0) {
 			const adjusted = state.total - hiddenCount;

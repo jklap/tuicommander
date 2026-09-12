@@ -3,12 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
 
 // Use vi.hoisted so these are available to vi.mock factories (which are hoisted)
-const { mockGitHubStatus, mockGitHubRefresh, mockGetActive, mockGetBranchPrData, mockIsGitRepo } = vi.hoisted(() => ({
+const {
+	mockGitHubStatus,
+	mockGitHubRefresh,
+	mockGetActive,
+	mockGetBranchPrData,
+	mockIsGitRepo,
+	mockTerminalGetActive,
+} = vi.hoisted(() => ({
 	mockGitHubStatus: vi.fn<() => unknown>(() => null),
 	mockGitHubRefresh: vi.fn(),
 	mockGetActive: vi.fn<() => unknown>(() => null),
 	mockGetBranchPrData: vi.fn<() => unknown>(() => null),
 	mockIsGitRepo: vi.fn<() => boolean>(() => true),
+	mockTerminalGetActive: vi.fn<() => unknown>(() => null),
 }));
 
 vi.mock("../../hooks/useGitHub", () => ({
@@ -31,6 +39,17 @@ vi.mock("../../stores/repositories", () => ({
 		isGitRepo: mockIsGitRepo,
 	},
 }));
+
+vi.mock("../../stores/terminals", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../stores/terminals")>();
+	return {
+		...actual,
+		terminalsStore: {
+			...actual.terminalsStore,
+			getActive: mockTerminalGetActive,
+		},
+	};
+});
 
 vi.mock("../../stores/repoSettings", () => ({
 	repoSettingsStore: {
@@ -84,6 +103,7 @@ vi.mock("../../stores/userActivity", () => ({
 }));
 
 import { StatusBar } from "../../components/StatusBar/StatusBar";
+import { statusBarTicker } from "../../stores/statusBarTicker";
 
 /** Build a mock BranchPrStatus for testing */
 function makePrData(overrides: Record<string, unknown> = {}) {
@@ -144,7 +164,9 @@ describe("StatusBar", () => {
 		vi.clearAllMocks();
 		mockGitHubStatus.mockReturnValue(null);
 		mockGetActive.mockReturnValue(null);
+		mockTerminalGetActive.mockReturnValue(null);
 		mockGetBranchPrData.mockReturnValue(null);
+		statusBarTicker.clear();
 		mockDictationState.enabled = false;
 		mockDictationState.recording = false;
 		mockDictationState.processing = false;
@@ -154,6 +176,7 @@ describe("StatusBar", () => {
 	});
 
 	afterEach(() => {
+		statusBarTicker.clear();
 		vi.useRealTimers();
 	});
 
@@ -162,6 +185,46 @@ describe("StatusBar", () => {
 		const statusInfo = container.querySelector(".info");
 		expect(statusInfo).not.toBeNull();
 		expect(statusInfo!.textContent).toBe("Ready");
+	});
+
+	it("absorbs matching Codex usage into the active agent badge", () => {
+		const openDashboard = vi.fn();
+		mockTerminalGetActive.mockReturnValue({ agentType: "codex", usageLimit: null });
+		statusBarTicker.addMessage({
+			id: "claude-usage:rate",
+			pluginId: "claude-usage",
+			label: "Codex",
+			text: "5h: 42% · week: 18%",
+			priority: 42,
+			ttlMs: 0,
+			onClick: openDashboard,
+		});
+
+		const { container } = render(() => <StatusBar {...defaultProps} />);
+		const badge = container.querySelector(".agentBadge");
+
+		expect(badge?.textContent).toContain("5h: 42% · week: 18%");
+		expect(container.querySelector(".tickerMessage")).toBeNull();
+		fireEvent.click(badge!);
+		expect(openDashboard).toHaveBeenCalledOnce();
+	});
+
+	it("does not show stale Claude usage in an active Codex badge", () => {
+		mockTerminalGetActive.mockReturnValue({ agentType: "codex", usageLimit: null });
+		statusBarTicker.addMessage({
+			id: "claude-usage:rate",
+			pluginId: "claude-usage",
+			label: "Claude",
+			text: "5h: 99% · 7d: 88%",
+			priority: 99,
+			ttlMs: 0,
+		});
+
+		const { container } = render(() => <StatusBar {...defaultProps} />);
+		const badge = container.querySelector(".agentBadge");
+
+		expect(badge?.textContent).toContain("codex");
+		expect(badge?.textContent).not.toContain("5h: 99%");
 	});
 
 	it("calls onToggleMarkdown when MD button clicked", () => {

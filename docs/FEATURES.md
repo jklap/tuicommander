@@ -582,11 +582,11 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - CWD path: shortened with `~/`, click to copy to clipboard (shows "Copied!" feedback)
 - Unified agent badge with priority cascade:
   1. Rate limit warning (highest): count + countdown timer when sessions are rate-limited
-  2. Claude Usage API ticker: live utilization from Anthropic API (click opens dashboard)
+  2. Matching Claude or Codex Usage API ticker: live utilization from the active provider (click opens that provider's dashboard)
   3. PTY usage limit: weekly/session percentage from terminal output detection
   4. Agent name (lowest): icon + name of detected agent
   - Color coding: blue < 70%, yellow 70-89%, red pulsing >= 90%
-  - Claude usage ticker absorbed into badge when active agent is Claude (avoids duplicate display)
+  - The shared usage ticker is absorbed into the badge only when its provider label matches the active Claude or Codex agent; stale results from the previous provider stay hidden during an asynchronous tab switch
 - Shared ticker area: multi-source rotating messages from plugins with source labels, counter badge (1/3 ▸), click-to-cycle, right-click popover, and priority tiers (low/normal/urgent)
 - Update badge: "Update vX.Y.Z" (click to download & install), progress percentage during download
 
@@ -680,9 +680,9 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Color-coded badge in status bar (blue < 70%, yellow 70-89%, red pulsing >= 90%)
 - Integrated into unified agent badge (see section 5.1)
 
-### 6.6 Claude Usage Dashboard
+### 6.6 Claude and Codex Usage Dashboards
 - Native SolidJS component (not a plugin panel — renders as a first-class tab)
-- Opens via status bar agent badge click or `Cmd+Shift+A` action
+- The active Claude or Codex badge opens its matching dashboard; `Cmd+Shift+A` opens Claude Usage
 - **Rate Limits section:** Live utilization bars from Anthropic OAuth usage API
   - 5-Hour, 7-Day, 7-Day Opus, 7-Day Sonnet, 7-Day Cowork buckets
   - Color-coded bars: green < 70%, yellow 70-89%, red >= 90%
@@ -700,6 +700,8 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Rust data layer:** Incremental JSONL parsing of `~/.claude/projects/*/` transcripts
   - File-size-based cache (only new bytes parsed on each scan)
   - Cache persisted to disk as JSON for fast restarts
+- **Codex dashboard:** account rate-limit windows, per-model limits, reset times,
+  plan type, and credit balance from the local Codex credentials/API surface
 
 ### 6.7 Intent Event Tracking
 - Agents declare work phases via `intent: text (Title)` tokens at column 0, colorized dim yellow in terminal output
