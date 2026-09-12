@@ -1,3 +1,4 @@
+import { batch } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testInScope, testInScopeAsync } from "../helpers/store";
 
@@ -254,6 +255,65 @@ describe("repositoriesStore", () => {
 				store.setWorkspace("/repo", "main");
 				store.setActiveWorkspace("/repo", "main");
 				expect(store.get("/repo")!.activeWorkspaceId).toBe("main");
+			});
+		});
+
+		/**
+		 * A pointer at a row that does not exist breaks two things far from here: the
+		 * sidebar renders no tab for the active workspace, and the next terminal is
+		 * created with a null cwd — which the backend spawns in the user's HOME.
+		 * Observed live on a repo whose active id named a workspace that had been
+		 * pruned. The previous pointer at least names a row that exists.
+		 */
+		it("setActiveWorkspace refuses an id that names no workspace", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "main");
+				store.setActiveWorkspace("/repo", "main");
+
+				store.setActiveWorkspace("/repo", "branch-that-was-pruned");
+
+				expect(store.get("/repo")!.activeWorkspaceId).toBe("main");
+			});
+		});
+
+		it("setActiveWorkspace still accepts null — no repo has a workspace on screen", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "main");
+				store.setActiveWorkspace("/repo", "main");
+
+				store.setActiveWorkspace("/repo", null);
+
+				expect(store.get("/repo")!.activeWorkspaceId).toBeNull();
+			});
+		});
+
+		it("setActiveWorkspace accepts a row created in the same batch", () => {
+			// Several callers create the row and activate it back to back; a store read
+			// inside a batch sees the write, so the guard must not reject that order.
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				batch(() => {
+					store.setWorkspace("/repo", "feature", { branchName: "feature" });
+					store.setActiveWorkspace("/repo", "feature");
+				});
+				expect(store.get("/repo")!.activeWorkspaceId).toBe("feature");
+			});
+		});
+
+		it("removing the active workspace repoints rather than dangling", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "main");
+				store.setWorkspace("/repo", "feature");
+				store.setActiveWorkspace("/repo", "feature");
+
+				store.removeWorkspace("/repo", "feature");
+
+				const repo = store.get("/repo")!;
+				expect(repo.activeWorkspaceId).toBe("main");
+				expect(repo.workspaces[repo.activeWorkspaceId!]).toBeDefined();
 			});
 		});
 	});

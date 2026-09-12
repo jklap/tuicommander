@@ -1038,8 +1038,34 @@ function createRepositoriesStore() {
 			save();
 		},
 
-		/** Set active branch for a repo */
+		/**
+		 * Point a repo at the workspace on screen.
+		 *
+		 * The id must name a row that exists. A dangling pointer does not fail where
+		 * it is written — it fails twice, later, in places that name neither this
+		 * call nor the repo: the sidebar renders no tab row for the active workspace
+		 * (terminals stay alive with nothing to click), and `handleAddTerminalToWorkspace`
+		 * reads `workspaces[id]?.worktreePath` off `undefined` and spawns the next
+		 * terminal in the user's HOME directory.
+		 *
+		 * 22 call sites set this, and several pass a branch or a workspace id straight
+		 * off a backend payload — the shape those payloads are keyed on changed under
+		 * them once already. So the check belongs here, once, and keeps the previous
+		 * pointer: it names a row that does exist, which is strictly better than a
+		 * pointer to nothing. `migrateActiveWorkspaceId` drops the same dangling id at
+		 * load time for exactly this reason; this is the live half of that rule.
+		 */
 		setActiveWorkspace(repoPath: string, workspaceId: string | null): void {
+			const repo = state.repositories[repoPath];
+			if (workspaceId !== null && repo && !repo.workspaces[workspaceId]) {
+				appLogger.error("store", `setActiveWorkspace: "${workspaceId}" names no workspace — pointer left alone`, {
+					repoPath,
+					requested: workspaceId,
+					current: repo.activeWorkspaceId,
+					known: Object.keys(repo.workspaces),
+				});
+				return;
+			}
 			setState("repositories", repoPath, "activeWorkspaceId", workspaceId);
 		},
 
