@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { generateWorkspaceId, migrateActiveWorkspaceId, migrateRepoWorkspaces } from "../../stores/workspaceIdentity";
 import type { SavedTerminal } from "../../types";
 import { compareBranches } from "../../utils/branchSort";
+import { joinPath } from "../../utils/pathUtils";
 
 /**
  * A record in the exact shape `repositories.json` holds today, captured from a
@@ -276,6 +277,66 @@ describe("workspace identity migration", () => {
 	it("returns an empty map for a repo that has no entries at all", () => {
 		expect(migrateRepoWorkspaces({})).toEqual({});
 		expect(migrateRepoWorkspaces({ branches: {} })).toEqual({});
+	});
+
+	/**
+	 * The exact record found in a live `repositories.json` after `get_worktree_paths`
+	 * changed from `{branch: path}` to `{id: {branch, path}}`: a WebView still holding
+	 * the pre-change module wrote the whole worktree record into `worktreePath`, and
+	 * it round-tripped through every later load. The app then died on
+	 * `base.replace is not a function` inside `joinPath`, from a FileBrowser render.
+	 */
+	it("drops a worktreePath a shape skew wrote as the whole worktree record", () => {
+		const poisoned = {
+			workspaces: {
+				master: {
+					name: "master",
+					isMain: true,
+					// Not a string — this is what `get_worktree_paths` returns per entry now.
+					worktreePath: { branch: "master", path: "/Users/x/Gits/acme" } as unknown as string,
+					terminals: [],
+					hadTerminals: false,
+					lastActiveTerminal: null,
+					additions: 0,
+					deletions: 0,
+					isMerged: false,
+					lastCommitTs: null,
+				},
+			},
+		};
+
+		const workspace = migrateRepoWorkspaces(poisoned).master;
+
+		expect(workspace.worktreePath).toBeNull();
+		// The crash was one `.replace` away from the record; prove the repaired value
+		// survives the call that threw.
+		expect(() => joinPath(workspace.worktreePath ?? "/Users/x/Gits/acme", "src")).not.toThrow();
+	});
+
+	it("keeps a branchName and parentRepoPath the same skew could corrupt", () => {
+		const poisoned = {
+			workspaces: {
+				"main~a1b2c3d4": {
+					branchName: { name: "main" } as unknown as string,
+					parentRepoPath: { path: "/Users/x/Gits/acme" } as unknown as string,
+					kind: "cow" as const,
+					isMain: false,
+					terminals: [],
+					hadTerminals: false,
+					lastActiveTerminal: null,
+					additions: 0,
+					deletions: 0,
+					isMerged: false,
+					lastCommitTs: null,
+				},
+			},
+		};
+
+		const workspace = migrateRepoWorkspaces(poisoned)["main~a1b2c3d4"];
+
+		expect(workspace.branchName).toBe("main~a1b2c3d4");
+		expect(workspace.parentRepoPath).toBeNull();
+		expect(() => compareBranches(workspace, workspace, undefined, undefined)).not.toThrow();
 	});
 
 	it("lets two workspaces on one branch coexist under different ids", () => {

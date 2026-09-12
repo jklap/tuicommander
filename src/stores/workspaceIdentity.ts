@@ -79,13 +79,34 @@ function repairIdentity(key: WorkspaceId, stored: StoredWorkspace): WorkspaceSta
 	void name;
 	return {
 		...(rest as Omit<WorkspaceState, "workspaceId" | "branchName" | "kind" | "parentRepoPath" | "worktreePath">),
-		workspaceId: rest.workspaceId ?? key,
-		branchName: rest.branchName ?? key,
+		workspaceId: typeof rest.workspaceId === "string" ? rest.workspaceId : key,
+		// A skewed write reaches `compareBranches`, which calls `localeCompare` on
+		// it inside the sidebar's sort memo — the failure this repair exists for.
+		branchName: typeof rest.branchName === "string" ? rest.branchName : key,
 		// Nothing on disk predates COW, so a record is main or it is a worktree.
 		kind: rest.kind ?? (rest.isMain ? "main" : "worktree"),
-		parentRepoPath: rest.parentRepoPath ?? null,
-		worktreePath: rest.worktreePath ?? null,
+		parentRepoPath: asPath(rest.parentRepoPath),
+		worktreePath: asPath(rest.worktreePath),
 	};
+}
+
+/**
+ * A path field as the UI indexes it: a string, or `null` for "none".
+ *
+ * The document is untrusted input, and the realistic corruption is not a hostile
+ * write but a shape skew: `get_worktree_paths` became `{id: {branch, path}}` in
+ * one commit, and a WebView still holding the pre-change module wrote the whole
+ * record into `worktreePath` on its next refresh. That value round-trips through
+ * every later load, and reaches `joinPath` — which calls `.replace` on it and
+ * takes the whole app down with an error naming neither the field nor the repo.
+ *
+ * `null` is what every reader already handles, so a corrupt value degrades to
+ * "this workspace has no separate checkout" and the next refresh writes the real
+ * path back. Salvaging `.path` out of the object is deliberately not done: it
+ * encodes one historical shape and would hide the next one.
+ */
+function asPath(value: unknown): string | null {
+	return typeof value === "string" ? value : null;
 }
 
 /**
