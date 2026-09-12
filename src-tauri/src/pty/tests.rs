@@ -7692,6 +7692,79 @@ fn background_work_defers_declared_completion_without_generic_idle() {
     assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
 }
 
+#[cfg(unix)]
+#[test]
+fn background_probe_settlement_retries_pending_orchestrator_mail_wake() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let parent_id = "parent-background-probe-mail";
+    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    insert_session_with_writer(
+        &state,
+        parent_id,
+        Box::new(RecordingWriter {
+            bytes: Arc::clone(&bytes),
+        }),
+        TtyMode::Raw,
+    );
+    agent_session(&state, parent_id, SHELL_IDLE);
+    {
+        let mut session = state
+            .session_maps
+            .session_states
+            .get_mut(parent_id)
+            .expect("parent session state");
+        session.agent_type = Some("codex".to_string());
+        session.background_probe_turn_epoch = Some(0);
+        session.background_probe_after_generation = Some(0);
+    }
+    state.orchestrator_peers.insert(parent_id.to_string());
+    state.agent_inbox.insert(
+        parent_id.to_string(),
+        std::collections::VecDeque::from([crate::state::AgentMessage {
+            id: "peer-result".to_string(),
+            from_tuic_session: "child".to_string(),
+            from_name: "worker".to_string(),
+            content: "secret child result".to_string(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        }]),
+    );
+
+    assert_eq!(
+        route_registered_orchestrator_mail(&state, parent_id, "peer-result", 1),
+        Some(crate::state::OrchestratorDeliveryAssignment::InboxOnly),
+        "the pending probe must keep the parent working and the payload inbox-only"
+    );
+    assert_eq!(state.orchestrator_wake_needed_through(parent_id), Some(1));
+
+    assert!(set_background_work_for_epoch(
+        &state, parent_id, 0, 1, false
+    ));
+
+    let written = String::from_utf8(bytes.lock().unwrap().clone()).expect("UTF-8 wake");
+    assert!(
+        written.contains("message available"),
+        "wake was not submitted: {written:?}"
+    );
+    assert!(
+        written.contains("agent action=inbox"),
+        "wake omitted the inbox command: {written:?}"
+    );
+    assert!(
+        !written.contains("secret child result"),
+        "the child payload escaped the inbox: {written:?}"
+    );
+    assert_eq!(
+        state.agent_inbox.get(parent_id).unwrap()[0].content,
+        "secret child result"
+    );
+    assert_eq!(
+        state.orchestrator_wake_needed_through(parent_id),
+        Some(1),
+        "the submitted generic notice remains pending until the parent reads the inbox"
+    );
+}
+
 #[test]
 fn cursor_prefix_completion_preserves_background_epoch_release() {
     let state = crate::state::tests_support::make_test_app_state();

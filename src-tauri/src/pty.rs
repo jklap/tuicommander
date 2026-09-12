@@ -2755,13 +2755,13 @@ fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
     drop(session);
 
     let mut parent_dispatch = None;
-    if !active
+    let settled_idle = !active
         && state
             .session_maps
             .shell_states
             .get(session_id)
-            .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_IDLE)
-    {
+            .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_IDLE);
+    if settled_idle {
         let completion = silence_state.drain_pending_suggest_with_epoch();
         match completion {
             Some((turn_epoch, items)) if turn_epoch == observed_turn_epoch => {
@@ -2798,6 +2798,9 @@ fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
     drop(silence_state);
     if let Some(dispatch) = parent_dispatch {
         dispatch_parent_lifecycle(state, dispatch);
+    }
+    if settled_idle {
+        reevaluate_orchestrator_mail_wake(state, session_id);
     }
     true
 }

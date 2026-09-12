@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A child result no longer waits for another child to close before waking its
+  parent.** Mail sent while an orchestrator was working was buffered correctly,
+  but an idle shell could still report `working` until its asynchronous
+  background-process probe settled. That settlement emitted the parent's own
+  lifecycle state without reevaluating its pending inbox wake, so the result
+  stayed invisible until an unrelated child event re-entered the router. The
+  same authoritative probe settlement now submits the coalesced, payload-free
+  inbox notice; result content remains in the FIFO inbox.
+
 - **Copy Path on a tab gave a relative path.** The three tab-bar context menus
   copied `filePath`, which the tab stores keep relative to the tab's filesystem
   root, so the clipboard held `src/foo.ts` — resolving against whatever
