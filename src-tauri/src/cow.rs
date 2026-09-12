@@ -78,6 +78,16 @@ const OPERATION_MARKERS: [&str; 6] = [
     "BISECT_LOG",
 ];
 
+/// The `cp` flags that take a copy-on-write copy, in the order to try them:
+/// macOS `clonefile`, then GNU coreutils reflink.
+///
+/// **Every flag here must FAIL rather than degrade to a byte copy.** That is
+/// what lets the same list serve as the probe and as the clone — `--reflink=auto`
+/// would report support everywhere and silently turn a 19 MB clone into a 12 GB
+/// copy. One list on purpose: the probe deciding a mechanism is available while
+/// the clone cannot issue it is exactly the bug this replaced.
+const COW_COPY_FLAGS: [&str; 2] = ["-c", "--reflink=always"];
+
 /// Can `src` be cloned copy-on-write into `dest_parent`?
 ///
 /// Two checks, and the second is the real one:
@@ -128,11 +138,12 @@ pub(crate) fn probe_cow_support(src: &Path, dest_parent: &Path) -> CowSupport {
     ));
     let _ = std::fs::remove_file(&probe);
 
-    // macOS `cp -c` (clonefile) first, then Linux `cp --reflink=always`. Both
-    // FAIL rather than falling back to a full copy, which is what makes them a
-    // probe: a `cp` that silently degraded would report support everywhere.
-    let cloned = clone_file_with(&["-c"], &head, &probe)
-        || clone_file_with(&["--reflink=always"], &head, &probe);
+    // The same mechanisms the clone itself issues, in the same order: a probe
+    // that answers Supported for a flag `create_cow_workspace` cannot run is
+    // worse than no probe at all.
+    let cloned = COW_COPY_FLAGS
+        .iter()
+        .any(|flag| clone_file_with(&[flag], &head, &probe));
     let _ = std::fs::remove_file(&probe);
 
     if cloned {
@@ -580,22 +591,7 @@ pub(crate) fn create_cow_workspace(
             .map_err(|e| format!("could not create '{}': {e}", parent.display()))?;
     }
 
-    let out = Command::new("cp")
-        .arg("-c")
-        .arg("-R")
-        .arg(src)
-        .arg(dest)
-        .output()
-        .map_err(|e| format!("could not run cp: {e}"))?;
-    if !out.status.success() {
-        // Leave nothing half-copied behind for the next attempt to trip over.
-        let _ = std::fs::remove_dir_all(dest);
-        return Err(format!(
-            "copy-on-write clone of '{}' failed: {}",
-            src.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
+    clone_tree(src, dest)?;
 
     match fixup_clone(src, dest, branch, dirty, guards) {
         Ok(carried_over) => Ok(CowWorkspace {
@@ -615,8 +611,63 @@ pub(crate) fn create_cow_workspace(
     }
 }
 
-/// Everything a raw `cp -c -R` of a repository still needs. None of this is
-/// precautionary — each step fixes something the PoC observed break.
+/// Copy `src` to `dest` copy-on-write, trying each mechanism in
+/// [`COW_COPY_FLAGS`] until one works.
+///
+/// The fallback is not cosmetic: `-c` is an invalid option to GNU `cp` and
+/// `--reflink=always` is an invalid option to macOS `cp`, so a single hardcoded
+/// flag means the probe can answer Supported on a platform where the clone
+/// cannot run at all. That is what happened on Linux — `mode=auto` reported an
+/// error instead of degrading, because the failure arrived after the decision.
+fn clone_tree(src: &Path, dest: &Path) -> Result<(), String> {
+    clone_tree_with(src, dest, |flag| {
+        let out = Command::new("cp")
+            .arg(flag)
+            .arg("-R")
+            .arg(src)
+            .arg(dest)
+            .output()
+            .map_err(|e| format!("could not run cp: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    })
+}
+
+/// [`clone_tree`] with the copy injected.
+///
+/// The machine running the tests can only ever exercise ONE of the two
+/// mechanisms — whichever its `cp` implements — so the ordering, the fallback
+/// and the cleanup between attempts are only testable through this seam.
+fn clone_tree_with(
+    src: &Path,
+    dest: &Path,
+    mut attempt: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut failures = Vec::new();
+    for flag in COW_COPY_FLAGS {
+        match attempt(flag) {
+            Ok(()) => return Ok(()),
+            Err(reason) => failures.push(format!("`cp {flag} -R`: {reason}")),
+        }
+        // Leave nothing half-copied behind for the next attempt to trip over —
+        // the next `cp` would refuse a destination that already exists, and a
+        // torn copy must never survive as something a caller could use.
+        let _ = std::fs::remove_dir_all(dest);
+    }
+
+    Err(format!(
+        "copy-on-write clone of '{}' into '{}' failed: {}",
+        src.display(),
+        dest.display(),
+        failures.join("; ")
+    ))
+}
+
+/// Everything a raw copy-on-write copy of a repository still needs. None of
+/// this is precautionary — each step fixes something the PoC observed break.
 fn fixup_clone(
     src: &Path,
     dest: &Path,
@@ -1557,6 +1608,116 @@ mod tests {
             .run()
             .expect("status")
             .stdout
+    }
+
+    /// The clone must try every mechanism the probe tries. A single hardcoded
+    /// `-c` made the probe answer Supported on Linux — where `-c` is an invalid
+    /// option to GNU `cp` — and the clone then failed AFTER `mode=auto` had
+    /// already committed to it, so the caller got an error instead of a
+    /// worktree.
+    #[test]
+    fn the_clone_falls_back_to_the_next_mechanism_when_the_first_is_rejected() {
+        let temp = TempDir::new().expect("temp");
+        let dest = temp.path().join("dest");
+        let mut tried = Vec::new();
+
+        let result = clone_tree_with(Path::new("/src"), &dest, |flag| {
+            tried.push(flag.to_string());
+            if flag == COW_COPY_FLAGS[0] {
+                Err("cp: illegal option -- c".to_string())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(result.is_ok(), "the second mechanism worked: {result:?}");
+        assert_eq!(
+            tried,
+            COW_COPY_FLAGS.to_vec(),
+            "both mechanisms tried, in the order the probe uses"
+        );
+    }
+
+    #[test]
+    fn the_clone_stops_at_the_first_mechanism_that_works() {
+        let temp = TempDir::new().expect("temp");
+        let mut tried = Vec::new();
+
+        clone_tree_with(Path::new("/src"), &temp.path().join("dest"), |flag| {
+            tried.push(flag.to_string());
+            Ok(())
+        })
+        .expect("the first mechanism worked");
+
+        assert_eq!(
+            tried,
+            vec![COW_COPY_FLAGS[0].to_string()],
+            "a working mechanism must not be followed by a second copy"
+        );
+    }
+
+    /// A caller that cannot clone has to know what was attempted: "clone
+    /// failed" with one flag's error hides the fact that the other mechanism
+    /// was tried too, which is the first thing to check on an unfamiliar
+    /// filesystem.
+    #[test]
+    fn a_clone_that_exhausts_every_mechanism_names_each_one_and_leaves_nothing() {
+        let temp = TempDir::new().expect("temp");
+        let dest = temp.path().join("dest");
+
+        let err = clone_tree_with(Path::new("/src"), &dest, |flag| {
+            std::fs::create_dir_all(dest.join("half")).expect("partial copy");
+            Err(format!("no {flag} here"))
+        })
+        .expect_err("every mechanism refused");
+
+        for flag in COW_COPY_FLAGS {
+            assert!(err.contains(flag), "'{flag}' missing from: {err}");
+        }
+        assert!(
+            !dest.exists(),
+            "a clone that failed must not leave a torn copy a caller could use"
+        );
+    }
+
+    /// The next `cp` refuses a destination that already exists, so a torn copy
+    /// left by a rejected attempt would turn a recoverable fallback into a hard
+    /// failure — and, worse, could survive as something a caller might use.
+    #[test]
+    fn a_partial_copy_is_removed_before_the_next_mechanism_runs() {
+        let temp = TempDir::new().expect("temp");
+        let dest = temp.path().join("dest");
+        let mut existed_on_entry = Vec::new();
+
+        let result = clone_tree_with(Path::new("/src"), &dest, |flag| {
+            existed_on_entry.push(dest.exists());
+            // A copy that died halfway: the directory is there, the content is not.
+            std::fs::create_dir_all(dest.join("half")).expect("partial copy");
+            if flag == COW_COPY_FLAGS[0] {
+                Err("interrupted".to_string())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(
+            existed_on_entry,
+            vec![false, false],
+            "each attempt starts from a destination that does not exist"
+        );
+    }
+
+    #[test]
+    fn every_copy_mechanism_refuses_rather_than_falling_back_to_a_byte_copy() {
+        // `--reflink=auto` is the trap: it degrades silently, so the probe would
+        // report support everywhere and a 19 MB clone would become a 12 GB copy.
+        for flag in COW_COPY_FLAGS {
+            assert!(
+                !flag.contains("auto"),
+                "'{flag}' may fall back to a full copy"
+            );
+        }
     }
 
     /// The fixup this whole mechanism exists for. The parent holds `taken` in a

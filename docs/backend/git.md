@@ -160,10 +160,15 @@ behaviour is in `docs/user-guide/worktrees.md`.
 What matters at the git-command level:
 
 - **Capability is measured.** `probe_cow_support` compares `st_dev` as a cheap
-  pre-filter and then makes a real copy-on-write copy of `.git/HEAD`, trying
-  macOS `cp -c` and then Linux `cp --reflink=always`. A filesystem name is never
-  evidence. Note that `create_cow_workspace` issues `cp -c -R` only, so the
-  clone path itself is macOS-only today even where the probe accepts a reflink.
+  pre-filter and then makes a real copy-on-write copy of `.git/HEAD`. A
+  filesystem name is never evidence.
+- **The probe and the clone read one list of mechanisms**, `COW_COPY_FLAGS`
+  (macOS `cp -c`, then GNU `cp --reflink=always`). They diverged once — the
+  clone hardcoded `-c` — and on Linux the probe therefore answered `Supported`
+  for a copy the clone could not issue, so `mode=auto` returned an error after
+  it had already committed to COW instead of degrading. Every flag in the list
+  must *fail* rather than degrade to a byte copy, which is why
+  `--reflink=auto` is not in it.
 - **The guards read; they never write to the source.** `check_creation_guards`
   refuses on containment, a linked-worktree or bare source, the six operation
   markers (`rebase-merge`, `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`,

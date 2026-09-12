@@ -47,11 +47,11 @@ A clone is not a full copy: the filesystem shares the blocks until something
 rewrites them. Measured on a 12 GB repository: **19 MB of real disk and 26
 seconds**.
 
-Copy-on-write needs filesystem support and both directories on the same volume.
-TUICommander never trusts the filesystem *name* for this — it makes a real
-copy-on-write copy of one file and looks at whether it worked. The clone itself
-is issued as `cp -c`, macOS `clonefile`, so today this is a macOS feature; on
-other platforms creation falls back to a linked worktree or reports the error.
+Copy-on-write needs filesystem support (APFS, Btrfs, XFS with reflink…) and both
+directories on the same volume. TUICommander never trusts the filesystem *name*
+for this — it makes a real copy-on-write copy of one file and looks at whether it
+worked, trying macOS `clonefile` and then a reflink copy. Where neither works,
+**Auto** gives you a linked worktree.
 
 ### When a clone is refused
 
