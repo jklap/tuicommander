@@ -8,6 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Copy Path on a tab gave a relative path.** The three tab-bar context menus
+  copied `filePath`, which the tab stores keep relative to the tab's filesystem
+  root, so the clipboard held `src/foo.ts` — resolving against whatever
+  directory the consumer happened to be in. The same bare value was handed to
+  the file-context Smart Prompts. Every Copy Path now routes through one helper
+  that joins the root the tab already carries and shortens `$HOME` to `~`. Two
+  file-backed tab shapes that never offered the item at all — the HTML preview
+  and a `file://` plugin panel — now do.
+
+- **"Open in Browser" on a `file://` plugin panel did nothing.** It went through
+  the URL allowlist, which exists because terminal output is untrusted and
+  permits only http/https/mailto, so the menu item silently logged "Blocked URL
+  with disallowed scheme". A path the app is already rendering is not untrusted
+  input and now takes its own route to the OS default application.
+
+- **A workspace id that names no row no longer strands the terminals under it.**
+  `setActiveWorkspace` wrote any id it was given, and a dangling one failed
+  later in two places that named neither the call nor the repo: the sidebar
+  rendered no tab row for the active workspace, leaving terminals alive with
+  nothing to click, and the next terminal added to that workspace spawned in
+  `$HOME` instead of the repo. The store now refuses an unknown id and keeps the
+  previous pointer, which at least names a row that exists.
+
+- **A skewed value in `repositories.json` no longer takes the app down on
+  start.** The load-time repair replaced only `null` and `undefined`, so a
+  `worktreePath` holding an object — written by a WebView still running the
+  module from before `get_worktree_paths` changed shape — round-tripped through
+  every later load and reached `joinPath`, which called `.replace` on it. Path
+  and branch fields are now type-checked: a corrupt one degrades to "no separate
+  checkout" and the next refresh writes the real value back.
+
 - **A dictation longer than 30 seconds no longer loses the tail of every
   whisper window.** The final whole-recording pass ran with the flags that suit
   a single streaming window (`single_segment`, `no_timestamps`). Above one 30 s
