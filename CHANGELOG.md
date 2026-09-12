@@ -47,7 +47,196 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Tool output kept in that log is redacted and capped exactly like the tool
   results already stored on messages.
 
+- **Opening a very large file no longer freezes the app.** A 19 MB, 720k-line
+  JSON put every line in the DOM and blocked the main thread for 12 s: the
+  document was installed by dispatching a whole-document replacement into a view
+  whose host is hidden behind the loading placeholder, which defeats CodeMirror's
+  viewport calculation. It is installed as initial state now. Above the
+  large-file threshold the editor opens as plain text with no highlighting and
+  no gutter markers — the guard used to read the *previous* file's size, so a
+  23 MB JSON got full highlighting and 409k gutter markers.
+
+- **A terminal no longer opens as a small black box after a page reload.** Every
+  terminal mounts before layout runs, so the first measurement lands on a 0×0
+  pane and was simply discarded, leaving the canvas at mount-time geometry until
+  a window resize happened to re-measure. A resize also cleared the row map
+  before the PTY had answered, painting one blank frame per geometry change; the
+  old frame now stays until the new one arrives.
+
+- **Terminal output could be reverted by a frame arriving out of order.** Grid
+  frames carried no order and were published after their lock was released, so
+  two could land reversed — and because a delta's damage is consumed when it is
+  cut, painting the loser reverted rows for good. Frames are now stamped inside
+  the producing critical section.
+
+- **Scrolling worked in the desktop app and did nothing in a browser.** The
+  pending scroll target was only ever created by a desktop-only command, so a
+  session no desktop terminal had rendered stored the target nowhere and still
+  answered `{"ok":true}` — and closing the desktop terminal disabled scrolling
+  for an already attached browser.
+
+- **A hung `gh` could stop the window from ever appearing.** Boot ran
+  `gh auth token` synchronously, twice, with no timeout. It now reads only the
+  environment token before the window and resolves the keyring/`gh` chain on a
+  deferred thread with a deadline. The AI scheduler no longer spawns its tick
+  loop at boot with zero jobs, and the knowledge flush skips its dispatch when
+  nothing is dirty.
+
+- **The relay toggle works without a restart.** The client was spawned at boot
+  only when the setting was already on, so there was nothing to receive a later
+  "turn on" — and nothing ever sent on the shutdown channel either. It is
+  supervised now, in both directions, and the backoff ladder comes back down.
+
+- **A chatty SSH tunnel no longer deadlocks at "Connected".** stderr was piped
+  but only drained after the process exited, so a full pipe buffer blocked the
+  child forever and nothing flowed. It is drained while the process runs.
+
+- **Unknown API paths return 404 instead of the app's HTML.** The server also
+  serves the frontend, so every missing route answered `index.html` with a 200:
+  clients read success, failed to parse HTML as a result, and reported a
+  malformed response — which is how nineteen missing routes stayed hidden.
+
+- **Network calls that could hang forever are bounded.** The shared HTTP client
+  was built with no timeout at all, so a dropped VPN left the GitHub poller
+  waiting on a socket that never answers; `Stop` can also preempt an in-flight
+  poll now. Every network git subcommand reachable over HTTP takes the same
+  fetch timeout the direct callers use, and so do PR/conflict fetches and
+  worktree setup scripts. Calls into the mdkb daemon take a deadline and no
+  longer hold the client lock across the round trip, which used to wedge every
+  other caller in the process with them.
+
+- **A file named `UUID.md` no longer marks a repository as conflicted.** The
+  conflict check searched the whole porcelain output for `UU`, `AA` or `DD`
+  without knowing which columns it was looking at; it reads the status field
+  now.
+
+- **A stale `index.lock` is adjudicated by owner instead of by age.** In a
+  linked worktree `.git` is a file, so the sweep's `metadata` call failed and it
+  returned early — silently, in exactly the place TUIC does most of its work.
+  The pointer is followed now, `lsof` is asked who holds the lock before it is
+  reclaimed, and the four possible answers (held, unowned, probe unavailable,
+  probe timed out) are distinguished rather than collapsed into one `None`. A
+  leftover lock in a submodule gitdir — 0 bytes, 11 days old here — is now
+  named in the error instead of failing opaquely.
+
+- **Asking the log viewer for errors no longer comes back empty.** It sliced the
+  ring buffer to the newest N entries and filtered *after*, so a level filter
+  found nothing whenever the newest N were a different level — which is the
+  normal case, and the one query you reach for when something breaks.
+
+- **Five UI preferences were silently discarded on the way to disk.** The
+  frontend sent the outline, references, AI triage, AI chat and file-browser
+  view settings; the backing struct declared none of them, so serde dropped all
+  five without an error and they could never be given back. Three of those
+  panels were also missing from the persistence functions entirely.
+
+- **A plugin re-registering no longer leaks its watchers.** A WebView reload
+  re-runs registration for every loaded plugin, and only the new capability set
+  was inserted — so each reload stranded another copy of every plugin's
+  filesystem watchers, accumulating for the life of the app. The plans plugin
+  also rescans when the active repository changes, instead of keeping the
+  previous repo's plans open forever.
+
+- **Cross-kind tab drag reorder works.** The two store functions that maintain
+  the cross-kind order list had no production caller, so the list was always
+  empty and the reorder silently degenerated to insertion order.
+
+- **A panic in a terminal's reader thread no longer leaves its timers running**,
+  and the resize grace no longer re-arms on every chunk from a full-screen
+  agent. Agent polling timers stop restarting on every tab open or close, which
+  had prevented the 30 s fallback poll from ever firing during tab churn —
+  precisely when session state changes most.
+
+- **Dictation and audio no longer panic on an unusual device.** A 0-channel and
+  a 0 Hz device each aborted the audio thread; two unbounded buffers are
+  bounded; a poisoned limiter no longer stays poisoned. A single terminal cell
+  can no longer absorb combining marks without limit (backported upstream
+  Alacritty fix).
+
+- **The same API error notifies every time, not once per session.** The dedup
+  was re-armed on a parser event that nothing could ever construct, so the
+  branch was unreachable.
+
+- **A quiet AI conversation notices when the client disconnects.** The bridge
+  waited on the next event to fail to send, so a close on an idle conversation
+  went unseen.
+
+- **MCP `initialize` echoes the protocol version the client offered** instead of
+  answering a fixed one, and declares the `tools.listChanged` capability it
+  already honours. OAuth authorization flows run concurrently — a single permit
+  wrapped the whole browser round trip, so a second Authorize click blocked for
+  the full five-minute timeout with no browser, no dialog and no error.
+
+- **Cross-repo search stopped promising a retry nothing would honour.** Under
+  the default indexing strategy an unvisited repo is queued for nothing, so
+  "N still indexing, retry shortly" was false and retrying changed nothing.
+
+- **The Codex dashboard refreshes.** It fetched once on mount with no interval
+  and no cleanup, so the numbers froze until the tab was remounted, and a stale
+  error never cleared.
+
+- **The sidebar no longer contracts when the quick switcher is armed.** Holding
+  the shortcut swaps the actions box for the hint, and the box it replaced was
+  the only thing holding a branch row at its height.
+
+- **A hidden terminal's frame acknowledgement has a wider margin** (300 ms
+  against a 500 ms deadline), because that timer runs on the WebView main
+  thread while the deadline is measured on the backend's clock.
+
+- **Performance:** one `ps` fork per stats refresh instead of one per session,
+  and no session lock held across the walk; one porcelain read per save instead
+  of two; AI-watcher classification moved off the tokio worker with the config
+  persisted outside the lock; the agent-injection Enter gap handed to a thread
+  instead of blocking a tokio worker at three remaining call sites; link
+  detection rect-tested before it runs and URL rows batched.
+
 ### Added
+
+- **A workspace can now be a copy-on-write clone of the whole repository, not
+  only a linked worktree.** Where the filesystem supports it, creating a
+  workspace copies the entire repo directory with `cp -c` (macOS `clonefile`): the
+  result is an *independent repository*, so two workspaces may sit on the same
+  branch, and `node_modules`, `target` and every other ignored build directory
+  arrive warm. Measured on a 12 GB repo: 19 MB of real disk and 26 s. The
+  creation dialog gains a **Mechanism** picker — *Auto* (clone where possible,
+  linked worktree otherwise, saying why it degraded), *Clone* (a clone or an
+  error naming the check that refused), *Worktree* (the previous behaviour) —
+  and a **Parent's changes** picker for what the clone does with the parent's
+  uncommitted work: *Keep* (free, the default), *Drop untracked* (`git clean
+  -fd`, which keeps the ignored build output), *Reset* (the only option that
+  costs real disk — measured 15 MB → 113 MB). The same `mode` and `dirty`
+  fields exist on MCP `repo action=worktree_create` and on the HTTP route, so
+  an agent and the UI create the same thing.
+
+- **A clone is guarded on the way in, and on the way out.** Creation refuses,
+  never repairs: a destination inside the source, a linked worktree as source,
+  a bare repo, an unfinished rebase/merge/cherry-pick/revert/bisect, or a lock
+  held by a live git process each stop the copy with the reason. A *stale* lock
+  does not refuse — it is dropped in the copy, never in the source. Removal is
+  gated on unpublished commits: a clone's commits exist nowhere else, so
+  deleting one destroys them, and the refusal names the count and the way out.
+  The confirmation dialog reports that number on both surfaces that remove a
+  workspace, and a failed count refuses rather than promising nothing is at
+  stake.
+
+- **Publish gets a clone's commits into the parent repo and out to origin.**
+  A clone is a separate repository, so `git merge <branch>` in the parent does
+  not find its work — and silently merges a stale same-named ref instead. The
+  Worktree Manager shows a **Publish** action on clone rows only (a linked
+  worktree shares its refs already), plus a `clone` badge and an *N
+  unpublished* badge. Publishing stages the tip under `refs/tuic/published/<id>`
+  in the parent, then fast-forwards `refs/heads/<branch>` with a
+  compare-and-swap; a divergent or checked-out parent branch is refused with
+  the reason instead of being forced. The parent update and the origin push are
+  reported independently, so an unreachable origin never reads as "publish
+  failed".
+
+- **A workspace created for an agent comes with instructions.** The MCP
+  response says which mechanism it got, how many paths of the parent's work in
+  progress carried over (and that repairing them is not the task), which build
+  directories arrived warm and how large they are (so no install or full build
+  is run to "set up"), and — for a clone — that its commits exist only there
+  until published.
 
 - **One terminal, three addresses.** Every `session` action that takes a
   `session_id`, and `agent action=send`'s `to`, now accept the PTY id, the
@@ -93,6 +282,128 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The binary it launches is a setting, never an argument: no request can choose
   what your machine runs, and correcting the setting takes effect without a
   restart.
+
+- **Settings has a search box.** 123 controls across 13 tabs and 2 sub-panels
+  could only be found by opening each tab in turn. Selecting a result opens the
+  owning tab and scrolls to the field, falling back to its heading when the
+  field is not rendered. The index is committed rather than scanned from the
+  DOM — only one tab is mounted at a time, and mounting the rest would fire CLI
+  status, mdkb status, GitHub probes and audio enumeration on every keystroke —
+  and a drift test re-derives it from the sources, so a setting added without
+  indexing fails CI.
+
+- **The language picker exists, and translation actually works.** `t()` ignored
+  its key and always returned the inline English, with an empty `en.json`
+  behind it: the whole i18n layer was inert. It now reads the active locale map
+  and falls back to the inline string only when the map has none; `en.json` is
+  populated from all 843 call sites (756 keys), byte-identical to the fallbacks
+  it came from, so no rendered English string changed. Settings → General gains
+  the picker, offering only locales that ship a catalogue.
+
+- **The three terminal block-display settings are reachable.** Block
+  timestamps, scrollbar marks and block folding existed in the store with no
+  control, so the only way to change one was to edit `config.json` — which the
+  backend then dropped on the next save. They are toggles in General →
+  Terminal now, with scrollback reflow beside them, and all five are persisted.
+  Block folding also honours its own setting: the check moved into
+  `toggleBlockFold`, where the shortcut, the command palette and any future
+  caller converge, instead of sitting in one of them.
+
+- **A provider card says whether the endpoint answers, not just whether a key
+  is set.** A local Ollama that is not running used to look exactly like one
+  that is. The card carries a Reachable / Not detected indicator and renders
+  the backend's own explanation verbatim; a probe that could not run at all
+  reports unreachable with the error rather than showing nothing.
+
+- **Codex usage dashboard.** The same shape of data the Claude one shows, from
+  the rate-limit endpoint the Codex CLI itself polls and from the daily token
+  history, both reading the OAuth token from `~/.codex/auth.json`. Identity
+  fields — user id, email, account id, the whole profile object — are stripped
+  in the backend before either response leaves it. The usage ticker follows the
+  agent the active terminal is running instead of always showing Claude.
+
+- **Diagnostics can now name what broke.** `GET /diagnostics/memory` reports
+  entry counts for every map that grows with sessions, clients or repos,
+  measured bytes for the four that hold payloads, and the real
+  `phys_footprint_bytes` (resident *plus* compressed — `ps` read 0.52 GB while
+  the process held 40 GB). A tripwire logs that report by itself at 4 GB,
+  always on. The WebView also beats every 5 s, so a blocked main thread is
+  logged after 30 s of silence; and a separate watcher notices the window
+  landing on `about:srcdoc` after a standby memory sweep and navigates back to
+  the app on its own, which no heartbeat can detect because the app is gone
+  rather than blocked.
+
+- **The terminal answers OSC 10/11/12 colour queries** from the resolved theme.
+  An app that asks what it is painted with used to get silence, and a querier
+  with no reply retries forever. Indexed `OSC 4;n;?` queries stay unanswered on
+  purpose — that palette is not tracked, and no fence idiom waits on them.
+
+- **goose gets a ready-screen adapter.** It launches as a long-lived
+  interactive process, so OSC 133 never clears and the tab latched busy for the
+  whole turn; its spinner glyphs and whimsical, reworded messages defeat both
+  generic signals. Detection now keys on the hints at each end — `Ctrl+C to
+  interrupt` while a turn can be interrupted, `Enter to send` when the composer
+  accepts input — captured live on goose 1.49.0 and shipped as fixtures. The
+  interrupt hint is tested first so a working screen is never downgraded, and
+  Ready demands the composer footer rather than merely the absence of a
+  spinner: a false Ready is what lets auto-standby SIGSTOP a live turn.
+
+- **Both dictation speech gates are settings.** The RMS floor was hardcoded low
+  enough for room noise to clear it, which is how Whisper ends up transcribing
+  an empty room; the right value depends on the room and the microphone.
+  `rms_threshold` joins a new `no_speech_threshold`, which uses Whisper's own
+  per-segment no-speech probability and so rejects whatever the model invents,
+  not only the wordings someone remembered to list. Configs written before they
+  existed keep the defaults.
+
+- **Resume finds the conversation again.** Two halves. A tab now binds to its
+  agent through the agent's own pid→session registry (Claude's
+  `sessions/<pid>.json`, grok's `active_sessions.json`) instead of "the newest
+  unclaimed file in the folder" — measured on a live instance, 3 of 6 Claude
+  tabs held no id and one held another tab's, so every tab resumed into the
+  same conversation. And the launch command is rebuilt from the live process's
+  argv and env, because a shell alias is expanded before `exec`: a run config
+  reading `c2` is really `claude --dangerously-skip-permissions` under a
+  different `CLAUDE_CONFIG_DIR`, and resuming with the config's version sent
+  `--resume` to a binary reading the wrong directory.
+
+- **Session state is pushed, not sampled.** `list_active_sessions` ran once a
+  second for as long as any terminal existed. The backend now publishes
+  `session-state-changed` once per real transition on both transports, with the
+  same body the poll returned, so one frontend applier serves both. A push is
+  not a queue, so an SSE reconnect or a `lagged` frame triggers the same
+  catch-up read used at mount.
+
+- **Every `/dictation/*` route, and seven more, now exist.** `dictation_routes`
+  was written but never declared as a module, so it had never been compiled and
+  all twelve handlers answered 404; `shell-family`, `agents/detect-all`,
+  `agents/open-in-app`, `notification-sound`, `relay-status`, `check-update`
+  and `worktrees/run-script` had no route either. Desktop worked over IPC while
+  browser and PWA clients got 404 on all nineteen. The parity gate that should
+  have caught this could not fail — its probe read a 405 from the SPA catch-all
+  as "route present" — and is now split across both languages: Vitest snapshots
+  every `COMMAND_TABLE` path and a Rust test probes each one against the real
+  router.
+
+- **The reason a smart prompt cannot run is clickable.** It reached the user as
+  a `title=` attribute, which can never be. It is a button wired to the
+  Providers settings tab now, with the click prevented from running the prompt
+  it just said was unrunnable.
+
+- **A corrupt config file is kept, and the backups are bounded.** An
+  unparseable `config.json` was replaced with defaults, and because defaults
+  carry empty tokens the document was written back on the same startup — so the
+  broken-but-recoverable file was gone on the first restart, deterministically.
+  It is now preserved as `<name>.corrupt-<uuid>` like every other config file,
+  and the five newest backups per file stem are kept (a count, not an age: a
+  user who comes back a month later would find an age rule had deleted the very
+  file they came for).
+
+- **An AI stream reaches a detached panel.** Detaching unmounts the docked copy,
+  so a stream the main window runs for that terminal — a watcher rule, an
+  automation goal, a terminal context action — rendered nowhere at all. The
+  detached window now receives a projection of it, re-checking the chat id at
+  the receiving end so another terminal's stream stays on another screen.
 
 ### Changed
 

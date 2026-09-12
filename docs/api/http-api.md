@@ -1945,6 +1945,26 @@ out is refused too, with the objects already staged under
 `no_op_reason` is set for a linked worktree, whose refs are shared with the
 parent already.
 
+### Count Unpublished Commits
+
+```
+GET /worktrees/unpublished?repoPath=/path&workspaceId=feature-x~a1b2c3d4
+```
+
+Answers with the number of commits that exist **only** in that workspace —
+reachable from HEAD and from no remote and no mirrored parent ref. Always `0`
+for a linked worktree, whose objects live in the parent and outlive the
+directory, so the caller pays nothing to ask about one.
+
+The parent mirror is refreshed before counting, so a commit published a moment
+ago does not still read as unpublished; that costs a fetch per call, which is
+why the UI counts once per panel open rather than on every repository refresh.
+A refresh that fails is deliberately non-fatal and makes the count err high —
+refusing a removal that might have been safe is the correct direction.
+
+Same implementation as the `count_unpublished_commits` Tauri command, and the
+same number the removal gate and the confirmation dialog use.
+
 ### Generate Worktree Name
 
 ```

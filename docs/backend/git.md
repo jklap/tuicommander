@@ -148,6 +148,48 @@ reclaimed only via the hatch. That is safe rather than merely tolerable: Windows
 refuses to unlink a file another process holds open, so the OS enforces the same rule
 the probe does on unix.
 
+## Copy-on-write workspaces (`cow.rs`)
+
+A workspace is a linked worktree or a block-shared clone of the whole repository
+directory. `worktree::create_workspace` is the single entry point;
+`cow::choose_mechanism` holds the policy (`auto` / `cow` / `worktree`). The
+contract — what refuses, what degrades, what is never repaired — is in SPEC.md →
+*Workspaces: linked worktree versus copy-on-write clone*; the user-facing
+behaviour is in `docs/user-guide/worktrees.md`.
+
+What matters at the git-command level:
+
+- **Capability is measured.** `probe_cow_support` compares `st_dev` as a cheap
+  pre-filter and then makes a real copy-on-write copy of `.git/HEAD`, trying
+  macOS `cp -c` and then Linux `cp --reflink=always`. A filesystem name is never
+  evidence. Note that `create_cow_workspace` issues `cp -c -R` only, so the
+  clone path itself is macOS-only today even where the probe accepts a reflink.
+- **The guards read; they never write to the source.** `check_creation_guards`
+  refuses on containment, a linked-worktree or bare source, the six operation
+  markers (`rebase-merge`, `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`,
+  `REVERT_HEAD`, `BISECT_LOG`), and a lock held by a live writer as judged by
+  the same `git_locks` adjudication documented above. A stale lock is returned
+  as a path *relative* to the source so it can only ever be deleted inside the
+  copy.
+- **The fixups are mandatory, not precautionary.** A raw copy inherits
+  `.git/worktrees` entries pointing at the parent's admin dirs, which block
+  checkout of those branches in the clone; it inherits an fsmonitor setting
+  describing another path; and `clonefile` preserves mtime while changing ino
+  and ctime, so every index entry reads stat-dirty. `fixup_clone` removes the
+  inherited admin entries, sets `gc.auto=0` (a gc rewrites packfiles and takes
+  real disk from ~0 to the full repo size), sets `core.fsmonitor=false`, adds a
+  `parent` remote with an unresolvable push URL, refreshes the index, and checks
+  out the branch with `checkout` when the ref already exists — the clone
+  inherits every ref, so `checkout -b` fails on exactly the case the feature
+  exists for.
+- **Publish** stages the tip under `refs/tuic/published/<id>` in the parent
+  (transfer first, ref policy second), then fast-forwards `refs/heads/<branch>`
+  with a compare-and-swap. `~` is a legal character in a minted workspace id and
+  illegal in a ref name, so `staged_ref` sanitizes it.
+- **Unpublished commits** are `rev-list --count HEAD --not --glob=refs/remotes
+  --glob=refs/parent`, after refreshing the parent mirror. A failed refresh is
+  non-fatal and makes the count err high.
+
 ## Tauri Commands
 
 ### Repository Info
