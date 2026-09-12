@@ -1551,3 +1551,12 @@ injected seam, because a given `cp` can only ever implement one of the two flags
    payload-free `agent action=inbox` notice without closing the child or waiting
    for another lifecycle event. Reading the inbox must return the original
    `RESULT` payload exactly once.
+
+## Codex usage in the active agent badge (frontend — Vite HMR)
+
+1. [ ] With the Usage Dashboard feature enabled, focus a Codex terminal and
+   confirm its `5h`/`7d` utilization appears beside the Codex icon in the bottom
+   status bar, not as a second standalone ticker. Clicking the badge must open
+   the Codex Usage dashboard. Switch directly from a Claude tab and confirm the
+   old Claude percentages never appear under the Codex icon while the Codex poll
+   is in flight.

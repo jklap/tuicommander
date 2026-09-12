@@ -267,18 +267,25 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 						const display = () => AGENT_DISPLAY[agentType()];
 						const ul = () => terminalsStore.getActive()?.usageLimit ?? null;
 						const rl = rateLimitWarning;
-						// When agent is claude, absorb the claude-usage ticker into the badge
-						const claudeTicker = () =>
-							agentType() === "claude" ? statusBarTicker.getAll().find((m) => m.pluginId === "claude-usage") : null;
+						// The shared usage slot follows Claude or Codex. Absorb it only when
+						// its provider label matches this tab; an async provider switch may
+						// briefly leave the previous provider's result in the store.
+						const usageTicker = () => {
+							const provider = agentType();
+							if (provider !== "claude" && provider !== "codex") return null;
+							return statusBarTicker
+								.getAll()
+								.find((message) => message.pluginId === "claude-usage" && message.label?.toLowerCase() === provider);
+						};
 						return (
 							<span
-								class={cx(s.agentBadge, claudeTicker()?.onClick && s.tickerClickable)}
-								onClick={() => claudeTicker()?.onClick?.()}
+								class={cx(s.agentBadge, usageTicker()?.onClick && s.tickerClickable)}
+								onClick={() => usageTicker()?.onClick?.()}
 								title={
 									rl()
 										? `${agentType()} — ${rl()!.count} session(s) rate limited (${rl()!.remaining})`
-										: claudeTicker()
-											? claudeTicker()!.text
+										: usageTicker()
+											? usageTicker()!.text
 											: ul()
 												? `${agentType()} — ${ul()!.percentage}% of ${ul()!.limitType} limit used`
 												: `${t("statusBar.agent", "Agent:")} ${agentType()}`
@@ -289,7 +296,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 								</span>
 								<Switch fallback={<span style={{ color: display().color }}> {agentType()}</span>}>
 									<Match when={rl()}>{(rl) => <span class={s.agentRateLimited}> ⚠ {rl().remaining}</span>}</Match>
-									<Match when={claudeTicker()}>
+									<Match when={usageTicker()}>
 										{(ticker) => (
 											<span
 												class={cx(
@@ -299,7 +306,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 												)}
 											>
 												{" "}
-												{ticker().text.replace(/^Claude:\s*/, "")}
+												{ticker().text.replace(/^(?:Claude|Codex):\s*/, "")}
 											</span>
 										)}
 									</Match>
