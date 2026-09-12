@@ -331,7 +331,10 @@ is a choice rather than a degradation. The clone guards run for `auto` and
 **Capability is measured, never inferred.** Support is decided by a real
 copy-on-write copy of `.git/HEAD`, with a same-volume device-id comparison as a
 cheap pre-filter. A filesystem name says nothing about a specific mount or a
-specific pair of paths.
+specific pair of paths. The probe and the clone try the same mechanisms from one
+shared list, because a probe that accepts a mechanism the clone cannot issue
+turns a degrade into an error raised after the decision was already made — and
+every mechanism on that list must fail rather than degrade to a byte copy.
 
 **Guards refuse; they never repair.** Destination inside the source, a linked
 worktree as source, a bare repo, an in-progress operation marker, or a lock

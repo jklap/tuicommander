@@ -1525,3 +1525,20 @@ regressions even though it has no `--instance` flag.
 4. [ ] **An invalid id fails loudly.** `./tuic-remote --instance Work-Laptop` and
    `--instance default` both exit 1 with `Invalid application instance …` and never
    bind the port.
+
+## COW clone on a reflink filesystem (story `739-f7e8`, 2026-09-12) — **Rust, needs a `make dev` restart. Linux only.**
+
+The clone hardcoded `cp -c`, the macOS `clonefile` flag, while the capability probe
+also accepts GNU `cp --reflink=always`. On Linux the probe therefore answered
+`Supported` for a copy the clone could not issue, and `mode=auto` returned an error
+instead of degrading to a linked worktree. Both now read one shared list.
+
+macOS behaviour is unchanged — `-c` is still tried first — so there is nothing to
+observe here on this machine; the fallback is covered by unit tests through an
+injected seam, because a given `cp` can only ever implement one of the two flags.
+
+1. [ ] **On Linux with Btrfs/XFS (reflink):** create a workspace with Mechanism
+   **Clone** and check that it succeeds and the manager row shows the `clone`
+   badge. Before this change it failed with `cp: invalid option -- 'c'`.
+2. [ ] **On Linux with ext4 (no reflink):** the same creation with **Auto** must
+   give a linked worktree and state why it degraded — not an error.

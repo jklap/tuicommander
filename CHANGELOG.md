@@ -194,7 +194,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **A workspace can now be a copy-on-write clone of the whole repository, not
   only a linked worktree.** Where the filesystem supports it, creating a
-  workspace copies the entire repo directory with `cp -c` (macOS `clonefile`): the
+  workspace copies the entire repo directory block-shared (macOS `clonefile` or
+  a reflink copy): the
   result is an *independent repository*, so two workspaces may sit on the same
   branch, and `node_modules`, `target` and every other ignored build directory
   arrive warm. Measured on a 12 GB repo: 19 MB of real disk and 26 s. The
