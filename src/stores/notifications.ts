@@ -8,6 +8,7 @@ import {
 } from "../notifications";
 import { isTauri } from "../transport";
 import { appLogger } from "./appLogger";
+import { setToastBellMirrorResolver } from "./toasts";
 
 interface PlayOptions {
 	terminalId?: string;
@@ -272,3 +273,5 @@ function createNotificationsStore() {
 }
 
 export const notificationsStore = createNotificationsStore();
+
+setToastBellMirrorResolver(() => notificationsStore.state.config.toasts_in_bell);

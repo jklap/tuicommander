@@ -1,11 +1,10 @@
-import { type Component, For, Show } from "solid-js";
+import type { Component } from "solid-js";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { type Toast, toastsStore } from "../../stores/toasts";
-import { onClickKeyDown } from "../../utils/a11y";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { pathBasename } from "../../utils/pathUtils";
-import styles from "./ToastContainer.module.css";
+import { ToastList } from "./ToastList";
 
 /**
  * Dismiss, and take the user to the terminal that raised the toast when there
@@ -41,41 +40,5 @@ function toastRepoName(toast: Toast): string | null {
 }
 
 export const ToastContainer: Component = () => {
-	return (
-		<div class={styles.container}>
-			<For each={toastsStore.toasts}>
-				{(toast) => (
-					<div
-						class={styles.toast}
-						data-level={toast.level}
-						role="button"
-						tabIndex={0}
-						onClick={() => dismissAndReveal(toast)}
-						onKeyDown={onClickKeyDown(() => dismissAndReveal(toast))}
-					>
-						<span class={styles.level} data-level={toast.level} />
-						<span class={styles.body}>
-							<span class={styles.titleRow}>
-								<Show when={toastRepoName(toast)}>{(name) => <span class={styles.repo}>{name()}</span>}</Show>
-								<span class={styles.title}>{toast.title}</span>
-							</span>
-							{toast.message && <span class={styles.message}>{toast.message}</span>}
-						</span>
-						<Show when={toast.action}>
-							<button
-								class={styles.action}
-								onClick={(e) => {
-									e.stopPropagation();
-									toast.action!.onClick();
-									toastsStore.remove(toast.id);
-								}}
-							>
-								{toast.action!.label}
-							</button>
-						</Show>
-					</div>
-				)}
-			</For>
-		</div>
-	);
+	return <ToastList onDismiss={dismissAndReveal} repoName={toastRepoName} />;
 };
