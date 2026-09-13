@@ -1645,6 +1645,14 @@ mod tests {
         );
     }
 
+    /// The Progress store (`src-tauri/src/progress/`) writes its SQLite database
+    /// and WAL/SHM sidecars under `.tuic/` at the project root and registers them
+    /// in `.git/info/exclude` before its first write (see
+    /// `progress::store::ensure_local_git_excludes`). This is the integration
+    /// point that keeps every Progress report from also triggering a
+    /// `repo-changed` emit and a content-index rebuild: prove the two modules
+    /// actually agree, rather than trusting that the exclude patterns and the
+    /// watcher's ignore sources happen to line up.
     #[test]
     fn progress_store_writes_are_classified_as_noise() {
         use std::process::Command;
@@ -1676,6 +1684,11 @@ mod tests {
 
         let db_path = store.database_path();
         assert!(db_path.exists(), "database must exist after a write");
+        // `ProgressStore` never retains a connection (see `store.rs`), so SQLite
+        // auto-checkpoints and removes the WAL/SHM sidecars once `record` returns.
+        // Classification is purely path-based, so this test names the paths the
+        // sidecars occupy while a writer holds them open, without needing a
+        // lingering connection to keep them on disk.
         let wal_path = Path::new(&format!("{}-wal", db_path.display())).to_path_buf();
         let shm_path = Path::new(&format!("{}-shm", db_path.display())).to_path_buf();
 
@@ -1685,11 +1698,14 @@ mod tests {
             assert_eq!(
                 classify_path(path, &repo, &git_dir, &[], &gi),
                 EventCategory::Noise,
-                "{} must not emit repo-changed or trigger a content-index rebuild",
+                "{} must be excluded so Progress writes never emit repo-changed \
+                 or trigger a content-index rebuild",
                 path.display()
             );
         }
 
+        // A corruption-recovery backup uses the same directory under a
+        // `.corrupt-<uuid>` suffix and must be covered by the same pattern.
         let corrupt_backup = db_path.with_file_name(format!(
             "{}.corrupt-{}",
             db_path.file_name().unwrap().to_string_lossy(),
