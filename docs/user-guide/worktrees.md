@@ -49,7 +49,7 @@ A workspace is built one of two ways. Both land in the same directory (see
 |---|---|---|
 | What it is | A second checkout sharing the repo's `.git` | An independent repository, block-shared with the original |
 | Two workspaces on one branch | Not possible — git refuses | Possible; this is the reason the clone exists |
-| Build output (`node_modules`, `target`) | Empty — you rebuild | Arrives warm, at near-zero disk cost |
+| Build output (`node_modules`, `target`) | Copied in warm, at near-zero disk cost | Arrives warm, at near-zero disk cost |
 | Parent's uncommitted work | Stays in the parent | Carried over by default (configurable) |
 | Where commits live | In the parent repo, shared | **Only in the clone**, until you publish |
 | Removing it | Deletes a checkout; commits survive in the parent | Deletes a repository; unpublished commits are gone |
@@ -57,6 +57,27 @@ A workspace is built one of two ways. Both land in the same directory (see
 A clone is not a full copy: the filesystem shares the blocks until something
 rewrites them. Measured on a 12 GB repository: **19 MB of real disk and 26
 seconds**.
+
+### A linked worktree starts warm too
+
+`git worktree add` checks out the tracked files and nothing else, so every
+ignored build directory is missing and the first build is a full one.
+TUICommander asks git which directories the parent ignores and copies them into
+the new worktree copy-on-write, at the same near-zero disk cost. It is
+language-agnostic — `node_modules`, `target`, `.venv`, `dist`, `vendor` and
+anything else your `.gitignore` covers — and it copies **directories only**: an
+ignored *file* such as `.env` stays where it is, because materialising a
+credential into a new workspace is not a convenience.
+
+A moved cargo target directory keeps its cache. A CMake one does not:
+`CMakeCache.txt` records the directory it was configured in, so anything built
+through CMake (whisper.cpp here) reconfigures and rebuilds in the new worktree.
+
+Warming is best-effort. Git has already produced a complete worktree by the time
+it runs, so a copy that fails costs build time and nothing else — creation still
+succeeds and the response carries a warning naming the directory that stayed
+cold. Measured on this repository: **~38 s for 30 GB across 80k files**
+(`node_modules` 19.5 s, `src-tauri/target` 17.4 s, everything else under 0.3 s).
 
 In the sidebar, a copy-on-write clone uses a cow-head icon while a linked
 worktree uses the fork icon. The Worktree Manager also labels clone rows with a

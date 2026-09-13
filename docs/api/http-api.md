@@ -1911,7 +1911,9 @@ branch, the response reports a reconciliation conflict instead of guessing.
 ```
 
 `instructions` is the model-facing payload: the dirty policy applied and how
-many paths carried over, the warm artifact directories with their sizes and an
+many paths carried over, the warm artifact directories with their sizes (plus
+`warmed_directories`, how many ignored build directories were copied in — always
+`0` for a COW clone, which copied the whole tree in one operation) and an
 explicit instruction not to run an install or a full build, and the isolation
 semantics of the mechanism this workspace actually got. It is byte-identical to
 what MCP `repo action=worktree_create` returns — one value, two carriers — and

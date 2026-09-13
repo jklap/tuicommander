@@ -1951,3 +1951,22 @@ new `cow_workspaces_enabled` sub-flag, both default false.
       `/Users/.../tuicommander/.git/hooks`.
 - [ ] Point `core.hooksPath` at a directory OUTSIDE the repo, clone, and confirm
       the clone kept that path unchanged.
+
+## Linked worktrees start WARM (story `767-3968`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+- [ ] Create a plain linked worktree of this repo (COW flag OFF, `mode=auto`).
+      It must contain `node_modules/` and `src-tauri/target/` straight away, and
+      the MCP/HTTP `instructions` payload must report
+      `warm_artifacts.warmed_directories` > 0.
+- [ ] `git -C <worktree> status` must still work after creation, and the
+      worktree's `.git` must still be a FILE, not a directory.
+- [ ] The ignored top-level FILES must NOT have been copied: no `.env`,
+      `.mcp.json`, `CLAUDE.md` newly appearing in the worktree beyond what the
+      branch tracks.
+- [ ] `plugins/` (a submodule) and `src-tauri/plugins/claude-wakeup/` must not
+      have been double-copied or left half-populated.
+- [ ] Time it. Expect ~38 s on this repo; if it feels worse than a cold build,
+      say so rather than living with it.
+- [ ] Switch Settings → worktree storage to "inside repo" (`.worktrees/`),
+      create a worktree, and confirm creation does not hang or recurse — the
+      destination's own ignored ancestor must be skipped.

@@ -693,7 +693,7 @@ pub(crate) fn create_cow_workspace(
 /// flag means the probe can answer Supported on a platform where the clone
 /// cannot run at all. That is what happened on Linux — `mode=auto` reported an
 /// error instead of degrading, because the failure arrived after the decision.
-fn clone_tree(src: &Path, dest: &Path) -> Result<(), String> {
+pub(crate) fn clone_tree(src: &Path, dest: &Path) -> Result<(), String> {
     clone_tree_with(src, dest, |flag| {
         let mut command = Command::new("cp");
         command.arg(flag).arg("-R").arg(src).arg(dest);
@@ -773,6 +773,178 @@ fn clone_tree_with(
         dest.display(),
         failures.join("; ")
     ))
+}
+
+/// What warming a linked worktree did, for the caller to report.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct WarmingReport {
+    /// Directories actually copied in.
+    pub(crate) warmed: usize,
+    /// Failures only. A deliberate skip is not a warning — it is the design —
+    /// so an empty list means everything that could be warmed was.
+    pub(crate) warnings: Vec<String>,
+}
+
+/// Copy the parent's git-ignored build directories into a freshly created
+/// linked worktree, copy-on-write, so it starts warm instead of cold.
+///
+/// A linked worktree is a clean checkout of a ref, so every ignored directory —
+/// `target/`, `node_modules/`, `.venv/` — is simply absent and the first build
+/// is a full one. Clonefiling them in costs metadata only, and a moved cargo
+/// target dir KEEPS its cache: of 2041 `.fingerprint` dirs exactly one contains
+/// the repo path, and 1696 of 1788 units source from `~/.cargo/registry`, which
+/// does not move. CMake state does NOT survive the move — `whisper-rs-sys` bakes
+/// `CMAKE_CACHEFILE_DIR` into `CMakeCache.txt` — so whisper.cpp reconfigures and
+/// rebuilds in a warmed worktree. That is accepted, not a gap.
+///
+/// **Best-effort, never fatal, and that is the whole difference from
+/// [`create_cow_workspace`].** There the copy IS the workspace, so a failure
+/// must abort. Here git has already produced a complete, valid worktree; a
+/// failed copy leaves it exactly as usable, only cold. Every failure is
+/// therefore a warning and creation still succeeds.
+pub(crate) fn warm_worktree_with(
+    src: &Path,
+    dest: &Path,
+    copy: impl Fn(&Path, &Path) -> Result<(), String>,
+) -> WarmingReport {
+    let mut report = WarmingReport::default();
+
+    let candidates = match ignored_directories(src) {
+        Ok(candidates) => candidates,
+        Err(reason) => {
+            report.warnings.push(format!(
+                "could not ask git which directories are ignored, so '{}' starts cold: {reason}",
+                dest.display()
+            ));
+            return report;
+        }
+    };
+
+    // Both sides resolved before any containment test: `dest` exists by now,
+    // and comparing one canonical path against one symlinked one would answer
+    // "not contained" for a destination that is.
+    let src_root = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
+    let dest_root = std::fs::canonicalize(dest).unwrap_or_else(|_| dest.to_path_buf());
+
+    for relative in candidates {
+        let from = src_root.join(&relative);
+        let to = dest_root.join(&relative);
+
+        // Directories only, and the check is on the link itself rather than its
+        // target. An ignored FILE is left behind on purpose: `.env`, `.envrc`
+        // and credentials files are top-level and ignored in a great many
+        // repos, and materialising a secret into a new workspace nobody asked
+        // to populate is a surprise, not a convenience. A symlinked directory
+        // is skipped for a different reason — this repo's top-level `target` is
+        // a link into a SHARED mbx build view, and copying the link would point
+        // two workspaces at one cargo target dir.
+        match std::fs::symlink_metadata(&from) {
+            Ok(metadata) if metadata.is_dir() => {}
+            _ => continue,
+        }
+
+        // A `.git` inside a candidate means another repository or another
+        // linked worktree, whose admin state describes a path that is not this
+        // one. Copying it produces a checkout that reports someone else's HEAD.
+        if from.join(".git").exists() {
+            continue;
+        }
+
+        // `WorktreeStorage::InsideRepo` and `ClaudeCodeDefault` put the new
+        // worktree UNDER the parent, at `.worktrees/` or `.claude/worktrees/`,
+        // both of which are ignored — so the candidate list contains the
+        // destination's own ancestor and a recursive copy would walk into what
+        // it is writing.
+        if is_inside(&dest_root, &from) || is_inside(&from, &dest_root) {
+            continue;
+        }
+
+        // The branch being checked out may TRACK a path the parent ignores (a
+        // committed `dist/`). Git's checkout already placed it, and `cp -R`
+        // onto an existing directory nests the copy inside it as `dist/dist`.
+        if to.exists() {
+            continue;
+        }
+
+        if let Some(parent) = to.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                report.warnings.push(format!(
+                    "could not prepare '{}' in the new worktree, which starts cold there: {e}",
+                    relative.display()
+                ));
+                continue;
+            }
+        }
+
+        match copy(&from, &to) {
+            Ok(()) => report.warmed += 1,
+            Err(reason) => report.warnings.push(format!(
+                "could not warm '{}' in the new worktree, which starts cold there: {reason}",
+                relative.display()
+            )),
+        }
+    }
+
+    report
+}
+
+/// The git-ignored directories of `src`, ancestors only.
+///
+/// Asked of git rather than hardcoded, so `.venv`, `dist`, `vendor` and whatever
+/// else a project ignores warm on the same terms as `node_modules`. `--directory`
+/// collapses a wholly-ignored directory into ONE entry with a trailing slash; a
+/// directory holding tracked files is never collapsed, and only its ignored
+/// children are listed. That is why this is not restricted to the top level:
+/// this repo's cargo cache is `src-tauri/target`, two levels down, and a
+/// top-level rule would skip the single directory the feature exists for.
+///
+/// `-z` because `core.quotePath` otherwise escapes non-ASCII names into
+/// something that is not a path.
+fn ignored_directories(src: &Path) -> Result<Vec<PathBuf>, String> {
+    let listed = git_cmd(src)
+        .args([
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ])
+        .run()
+        .map_err(|e| format!("git ls-files failed: {e}"))?;
+
+    let mut directories: Vec<&str> = listed
+        .stdout
+        .split('\0')
+        .filter_map(|entry| entry.strip_suffix('/'))
+        .filter(|entry| !entry.is_empty())
+        // Git never lists `.git` here, but a worktree's `.git` is a FILE
+        // pointing at the parent's admin directory and overwriting it destroys
+        // the worktree — so the invariant is stated rather than assumed.
+        .filter(|entry| {
+            !Path::new(entry)
+                .components()
+                .any(|component| component.as_os_str() == ".git")
+        })
+        .collect();
+    // Sorted so an ancestor always precedes its descendants.
+    directories.sort_unstable();
+
+    // Git reports a nested ignored directory separately from its ignored
+    // ancestor (`src-tauri/plugins/` AND `src-tauri/plugins/claude-wakeup/`).
+    // Copying the ancestor already brings the child, and the child's own copy
+    // would then find its destination occupied.
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for directory in directories {
+        if kept.iter().any(|ancestor| {
+            Path::new(directory).starts_with(ancestor)
+        }) {
+            continue;
+        }
+        kept.push(PathBuf::from(directory));
+    }
+
+    Ok(kept)
 }
 
 /// Everything a raw copy-on-write copy of a repository still needs. None of
@@ -4604,5 +4776,256 @@ mod tests {
 
         assert!(err.contains("symlink"), "{err}");
         assert!(cow_workspaces_for(&repo).is_empty());
+    }
+
+    // ---- Warming a linked worktree ------------------------------------------
+
+    /// A plain recursive copy standing in for the clonefile.
+    ///
+    /// What these tests assert is WHICH directories are chosen, not how the
+    /// bytes move. Every filesystem the suite can land on runs this; `cp -c`
+    /// and `cp --reflink=always` each run on only one of the two platforms,
+    /// which is the same reason [`clone_tree_with`] takes its attempt injected.
+    fn plain_copy(from: &Path, to: &Path) -> Result<(), String> {
+        fs::create_dir_all(to).map_err(|e| e.to_string())?;
+        for entry in fs::read_dir(from).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let source = entry.path();
+            let target = to.join(entry.file_name());
+            if source.is_dir() {
+                plain_copy(&source, &target)?;
+            } else {
+                fs::copy(&source, &target).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A parent holding one tracked directory, one ignored directory and one
+    /// ignored FILE, plus a REAL linked worktree of it. Real because the thing
+    /// warming must not damage is the worktree's `.git`, which is a file
+    /// pointing at the parent's admin directory and exists only in a genuine
+    /// `git worktree add`.
+    fn warming_fixture() -> (TempDir, PathBuf, PathBuf) {
+        let (temp, repo, _dest_parent) = setup();
+
+        fs::write(repo.join(".gitignore"), "/build\n/.env\n").expect("write gitignore");
+        fs::create_dir_all(repo.join("src")).expect("tracked dir");
+        fs::write(repo.join("src").join("main.rs"), "fn main() {}").expect("write tracked");
+        git_cmd(&repo).args(["add", "."]).run().expect("git add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "tracked"])
+            .run()
+            .expect("git commit");
+
+        fs::create_dir_all(repo.join("build")).expect("ignored dir");
+        fs::write(repo.join("build").join("artifact.o"), "warm").expect("write artifact");
+        fs::write(repo.join(".env"), "SECRET=1").expect("write ignored file");
+
+        let worktree = temp.path().join("worktrees").join("feature");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                &worktree.to_string_lossy(),
+            ])
+            .run()
+            .expect("linked worktree");
+
+        (temp, repo, worktree)
+    }
+
+    /// `plain_copy`, plus the source of every call, so a test can assert what
+    /// was NOT offered to the copy rather than only what did not arrive.
+    fn recording_copy(
+        log: &std::sync::Mutex<Vec<PathBuf>>,
+    ) -> impl Fn(&Path, &Path) -> Result<(), String> + '_ {
+        move |from, to| {
+            log.lock().expect("copy log").push(from.to_path_buf());
+            plain_copy(from, to)
+        }
+    }
+
+    #[test]
+    fn warming_brings_an_ignored_directory_into_the_worktree() {
+        let (_temp, repo, worktree) = warming_fixture();
+
+        let report = warm_worktree_with(&repo, &worktree, plain_copy);
+
+        assert_eq!(report.warmed, 1, "only `build` is an ignored directory");
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(
+            fs::read_to_string(worktree.join("build").join("artifact.o")).expect("warm artifact"),
+            "warm"
+        );
+    }
+
+    /// Git's own checkout already placed every tracked path, so warming has no
+    /// business touching one — and if it copied over the top of one it would
+    /// overwrite the branch's content with the parent's.
+    #[test]
+    fn warming_leaves_a_tracked_directory_to_git() {
+        let (_temp, repo, worktree) = warming_fixture();
+        // The parent's copy is edited but NOT committed, so an overwrite would
+        // be visible as content the branch never had.
+        fs::write(repo.join("src").join("main.rs"), "// parent edit").expect("dirty the parent");
+        let log = std::sync::Mutex::new(Vec::new());
+
+        warm_worktree_with(&repo, &worktree, recording_copy(&log));
+
+        let copied = log.into_inner().expect("copy log");
+        assert!(
+            !copied.iter().any(|path| path.ends_with("src")),
+            "the tracked directory was offered to the copy: {copied:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(worktree.join("src").join("main.rs")).expect("tracked file"),
+            "fn main() {}",
+            "warming overwrote a tracked file with the parent's uncommitted version"
+        );
+    }
+
+    /// Directories only. A top-level ignored FILE is where `.env`, `.envrc` and
+    /// credentials live, and materialising a secret into a workspace nobody
+    /// asked to populate is a surprise rather than a convenience.
+    #[test]
+    fn warming_never_copies_an_ignored_file() {
+        let (_temp, repo, worktree) = warming_fixture();
+
+        warm_worktree_with(&repo, &worktree, plain_copy);
+
+        assert!(
+            !worktree.join(".env").exists(),
+            "an ignored file was materialised into the new worktree"
+        );
+    }
+
+    /// The worktree's `.git` is a FILE pointing at the parent's admin
+    /// directory. Writing over it does not degrade the worktree, it destroys
+    /// it — so the assertion is that git still answers here, not merely that a
+    /// path still exists.
+    #[test]
+    fn warming_leaves_the_worktree_git_link_intact() {
+        let (_temp, repo, worktree) = warming_fixture();
+
+        warm_worktree_with(&repo, &worktree, plain_copy);
+
+        assert!(
+            worktree.join(".git").is_file(),
+            "the worktree's .git stopped being a link file"
+        );
+        git_cmd(&worktree)
+            .args(["status", "--porcelain"])
+            .run()
+            .expect("the worktree must still be a working tree after warming");
+    }
+
+    /// The copy is not the workspace here: git already produced a complete
+    /// worktree, so a failure costs build time and nothing else. Injected
+    /// rather than reasoned about, because "does not abort" is only shown by an
+    /// abort that had every chance to happen.
+    #[test]
+    fn a_failed_copy_reports_a_cold_directory_instead_of_failing() {
+        let (_temp, repo, worktree) = warming_fixture();
+
+        let report = warm_worktree_with(&repo, &worktree, |_, _| {
+            Err("clonefile refused".to_string())
+        });
+
+        assert_eq!(report.warmed, 0);
+        assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+        let warning = &report.warnings[0];
+        assert!(
+            warning.contains("build") && warning.contains("cold"),
+            "a warning must name the directory and say what it costs: {warning}"
+        );
+        assert!(!worktree.join("build").exists());
+        git_cmd(&worktree)
+            .args(["status", "--porcelain"])
+            .run()
+            .expect("a failed warm must leave a usable worktree");
+    }
+
+    /// Nothing to warm is the normal case for a fresh repo, and it is not a
+    /// problem — a warning there would train the reader to ignore warnings.
+    #[test]
+    fn a_parent_with_no_ignored_directories_warms_nothing_and_says_nothing() {
+        let (temp, repo, _dest_parent) = setup();
+        let worktree = temp.path().join("worktrees").join("feature");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                &worktree.to_string_lossy(),
+            ])
+            .run()
+            .expect("linked worktree");
+
+        let report = warm_worktree_with(&repo, &worktree, |from, _| {
+            panic!("nothing should have been copied, but '{}' was", from.display())
+        });
+
+        assert_eq!(report.warmed, 0);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    }
+
+    /// `WorktreeStorage::InsideRepo` puts the worktree at `.worktrees/` inside
+    /// the parent, which is itself ignored — so the candidate list contains the
+    /// destination's own ancestor and a recursive copy would walk into what it
+    /// is writing.
+    #[test]
+    fn warming_skips_the_ignored_directory_that_holds_the_destination() {
+        let (_temp, repo, _dest_parent) = setup();
+        fs::write(repo.join(".gitignore"), "/.worktrees\n").expect("write gitignore");
+        git_cmd(&repo).args(["add", "."]).run().expect("git add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "ignore worktrees"])
+            .run()
+            .expect("git commit");
+
+        let worktree = repo.join(".worktrees").join("feature");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                &worktree.to_string_lossy(),
+            ])
+            .run()
+            .expect("linked worktree");
+
+        let report = warm_worktree_with(&repo, &worktree, |from, _| {
+            panic!(
+                "'{}' contains the destination and must never be copied",
+                from.display()
+            )
+        });
+
+        assert_eq!(report.warmed, 0);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    }
+
+    /// An ignored directory holding a `.git` is another repository or another
+    /// linked worktree. Its admin state describes a path that is not this one,
+    /// so a copy of it reports someone else's HEAD.
+    #[test]
+    fn warming_skips_an_ignored_directory_that_is_its_own_repository() {
+        let (_temp, repo, worktree) = warming_fixture();
+        git_cmd(&repo.join("build"))
+            .args(["init"])
+            .run()
+            .expect("nested repo");
+
+        let report = warm_worktree_with(&repo, &worktree, |from, _| {
+            panic!("'{}' is a repository and must not be copied", from.display())
+        });
+
+        assert_eq!(report.warmed, 0);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     }
 }
