@@ -18,6 +18,61 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
   5. **MCP invoke/JS** — call Tauri commands, inspect store state, trigger actions programmatically
   Only use `[HUMAN]` when the item genuinely requires real hardware (audio, IME, touch), multi-app interaction (drag to Finder, global hotkey from another app), or timing-sensitive observation that none of the above can capture. When code-verifying, change `[HUMAN]` to `[x]` with a `_(verified: file:line explanation)_` annotation. When code reveals the description is wrong, change to `[ ]` with a `_(NOTE: ...)_` correction.
 
+## The suite skips 15 tests on purpose — classify them, never pin the count
+
+`cargo nextest run --lib` reports 15 skipped. All 15 are `#[ignore]`, each with a
+reason string. None is a `cfg` exclusion and none is a filter artifact, so the
+skips are not missing coverage and not a harness defect: `5171 run, 15 skipped`
+is a **complete** result for what an unattended run can execute.
+
+| Category | Count | Precondition an unattended run cannot meet |
+|---|---|---|
+| Environment | 9 | interactive Keychain (×4), network + GitHub token (×2), authenticated `gh` CLI, downloaded whisper model, real `openpty` |
+| Corpus-driven | 4 | `TUIC_CAPTURE_CORPUS`, `TUIC_DAMAGE_CORPUS`, `TUIC_REPLAY_FILE`, plus 744-138c's evidence capture |
+| Benchmark | 2 | `bench_chunk_path_replay`, `tunnels::audit::tests::bulk_insert_performance` |
+
+**`dump_committed_tcap_fixture_event_sequences_744` is not a pass/fail test.** It
+is an evidence-capture harness for story 744-138c and the comment above it says
+so. Un-ignoring it during a tidy-up of ignored tests is the failure to avoid.
+
+**Re-derive the classification; do not trust a count.** Counting `#[ignore]`
+attributes in the source happens to give 15 today, which is the right answer for
+the wrong reason — it counts one mechanism and cannot see the other two. This
+does discriminate:
+
+```
+cargo nextest list --lib --run-ignored all   ->  5187
+cargo nextest list --lib                     ->  5172
+```
+
+The delta is 15 and the set difference *is* the 15 names. A `cfg`-excluded test
+is absent from **both** lists, so the delta would not close if any were excluded
+that way; a filtered skip would move the second number alone.
+`--run-ignored ignored-only` is stronger still: it lists the set instead of
+implying it by subtraction, and run against both configurations it names the one
+test in the difference rather than leaving a count to interpret.
+
+**Parse that output carefully, because a wrong pattern returns zero and so does
+an empty set.** `nextest list` prints `tuicommander <path>` with no leading
+whitespace; a `grep -E '^\s+\S+::'` written on the assumption that it indents
+returns 0 lines for every configuration, exits 0, and answers a different
+question. That is the same failure as a vacuous `-E` filter and as counting
+`#[ignore]` attributes — a command that ran and told you nothing, in a shape
+indistinguishable from a real result.
+
+**Never assert the skip count.** It breaks the first time someone adds a
+legitimately ignore-worthy test, and it asserts nothing about whether the right
+tests run — green-by-absence one level up. The mechanism is the durable fact;
+the number is not. Note also that the raw totals above drift within a single
+afternoon as agents land tests in a shared tree (5170 → 5171 → 5172 → 5173 on
+2026-09-13, all benign), which is exactly why the re-derivation method belongs
+here and the numbers do not.
+
+`--no-default-features` reports 14, one fewer, because `mod dictation` is
+`#[cfg(feature = "desktop")]` (`lib.rs`) and its ignored test does not exist in
+that build — absent rather than skipped. No `#[ignore]` anywhere is
+`cfg`-conditional, so nothing else moves between the two configurations.
+
 ## Which timing assertions are load-bearing
 
 A test that waits on wall-clock time asserts one of three things, and they are not
@@ -327,13 +382,40 @@ TUIC_SKIP_FIXTURE_GATE=1 git commit ...     # or: git commit --no-verify
 | OSC 777 `notify` | agent's own desktop notification | any agent that emits it, any blocking prompt — but the body decides the confidence: `needs your permission` / `approval required` latch, `is waiting for your input` is low-confidence because Claude also sends it on its 60s idle timer |
 | `Enter to select` footer regex | screen scrape | non-hook agents (dropped for hook-instrumented ones by `suppress_heuristic_question`) |
 
-Busy/idle evidence is ranked `Silence < Screen < Process < Protocol` within one
-submitted-turn epoch. Lower-ranked evidence never closes a turn held busy by a
-protocol signal, and the same rule protects protocol-ranked awaiting state from
-the `question-cleared` screen backstop. A stable Ready screen may recover a lost
-protocol completion only after `PROTOCOL_STALE_TIMEOUT` (five minutes) with no
-PTY output; that exceptional transition logs `activity_source=protocol-stale`
-at warn level so a missing completion hook remains observable.
+Busy/idle evidence is ranked within one submitted-turn epoch. Lower-ranked
+evidence never closes a turn held busy by a protocol signal, and the same rule
+protects protocol-ranked awaiting state from the `question-cleared` screen
+backstop. A stable Ready screen may recover a lost protocol completion only
+after `PROTOCOL_STALE_TIMEOUT` (five minutes) with no PTY output; that
+exceptional transition logs `activity_source=protocol-stale` at warn level so a
+missing completion hook remains observable.
+
+| Rank | What it knows | Recorded by |
+|---|---|---|
+| `Silence` | nothing moved for a while | the silence timer |
+| `Screen` | what the rendered screen currently looks like | ready/working screen adapters, **and OSC 133** — see below |
+| `Process` | the process itself changed | `protocol-stale` only, today (#771-4733) |
+| `Protocol` | this turn began or ended | OSC 7770 `state=`, Codex `notify` turn-complete, a submitted line on a ready-adapter agent |
+
+**Rank is about what a signal knows, not how it travelled. Arriving in an escape
+sequence does not make something Protocol rank.** OSC 133 is the worked example
+and the mistake to not repeat: it is *shell* integration, so `133;C` fires when a
+foreground command starts and `133;D` when it exits — on a long-lived TUI agent,
+once at launch and once at death. It cannot tell one turn from the next, so it
+records at `Screen` rank and a stable Ready screen is allowed to close it.
+Ranking it `Protocol` strands the tab BUSY for the agent's whole lifetime, which
+is issue #535-d4f5.
+
+That distinction is easy to lose because `SilenceState::explicit_busy()` accepts
+`osc133-busy` alongside `hook-busy`. It is a **provenance** predicate — an
+explicit marker set this, rather than inferred screen/activity — and deliberately
+*not* a rank predicate; its sources do not share a rank. Anything deciding
+whether evidence may hold a turn reads `evidence.busy.rank`. Reading
+`explicit_busy()` instead is exactly how a past commit came to widen the
+`note_ready_screen` guard and then invert one of three byte-identical tests to
+match (#745-8ff1). A `SilenceState` carries no agent type, so the three
+`*_recovers_long_lived_shell_busy` tests must always agree; if one of them is
+red, making the trio disagree is never the fix.
 
 The footer regex anchors at **column 0 of the rendered row**, never the trimmed
 text (`is_ink_dialog_footer_row`). A dialog is drawn full-bleed; everything an
