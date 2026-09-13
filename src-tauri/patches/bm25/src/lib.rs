@@ -9,6 +9,7 @@
 mod test_data_loader;
 
 mod embedder;
+mod fxhash;
 mod scorer;
 mod search;
 mod tokenizer;

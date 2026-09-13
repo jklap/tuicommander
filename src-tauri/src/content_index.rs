@@ -2209,6 +2209,44 @@ mod tests {
         );
     }
 
+    /// A snapshot of `make_test_repo()`, captured with `to_snapshot_bytes()`
+    /// *before* fxhash was vendored into `crate::fxhash` (story 758-ff0d). Every
+    /// `token.index` inside it is a fxhash32 hash computed by the real,
+    /// upstream `fxhash` 0.2.1 crate. If the vendored algorithm in
+    /// `patches/bm25/src/fxhash.rs` ever drifts from it, this snapshot still
+    /// decodes (the byte layout hasn't changed) but the token indices stop
+    /// matching the query embedder's, so every search below returns nothing —
+    /// the failure this test exists to catch.
+    const PRE_FXHASH_VENDORING_SNAPSHOT_B64: &str = "VFVJQ0lEWDGamflA0GQAAAAAAAAFAAAABQAAAAAAAAAAAAAACgzSutzW1BgwAAAAAAAAAAYAAABsaWIucnMJAAAApF3WMJXXcD/XkEj6lddwP8E72BeV13A/tolAEpXXcD8ucLq6MrnCPyBSg11Ss6g/LnC6ujK5wj8ucLq6MrnCPyBSg11Ss6g/AQAAAICQCbvc1tQYMwAAAAAAAAAJAAAAUkVBRE1FLm1kBQAAAJ5wuRVlCJY/0MiDIsTDwz/QyIMixMPDP4rO8aBlCJY/v1Nwx2UIlj8CAAAAduu3utzW1BgrAAAAAAAAAAcAAABtYWluLnJzBgAAAIgOqyf4V40/wTvYF/hXjT/q6uV1+FeNP1uAKjH4V40/UGMDP/hXjT/vREmn+FeNPwMAAAAM0wK73NbUGF0AAAAAAAAACQAAAHNlYXJjaC5ycwsAAABJYOdtpzVbP9ZfG8inNVs/L7tiIQnLnT9KSCilpzVbP8E72BenNVs/15otfac1Wz8g/v5HpzVbP+BdR4unNVs/L7tiIQnLnT+KzvGgpzVbP/kcHuCnNVs/BAAAAKgDILvc1tQYQQAAAAAAAAAMAAAAc3JjL3V0aWxzLnJzCAAAAC9GuHqzV30/Cp4QzrNXfT/XkEj6s1d9P8E72BezV30/8e1iarNXfT/gXUeLs1d9P3MBlzOzV30/M9PJSrNXfT8=";
+
+    #[test]
+    fn a_pre_vendoring_snapshot_still_loads_and_searches_the_same() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let bytes = STANDARD
+            .decode(PRE_FXHASH_VENDORING_SNAPSHOT_B64)
+            .expect("fixture is valid base64");
+        assert_eq!(
+            &bytes[..SNAPSHOT_MAGIC.len()],
+            SNAPSHOT_MAGIC,
+            "SNAPSHOT_MAGIC changed — the fxhash vendoring must be bit-identical, not a new layout"
+        );
+
+        let index = ContentIndex::from_snapshot_bytes(&bytes, PathBuf::from("/repo"))
+            .expect("a pre-vendoring snapshot must still decode after the fxhash swap");
+
+        for (query, expected) in [
+            ("search", vec!["README.md", "search.rs"]),
+            ("add", vec!["lib.rs"]),
+            ("project indexing", vec!["README.md"]),
+            ("hello world", vec!["main.rs"]),
+            ("format uppercase", vec![]),
+        ] {
+            let results = index.search(query, 10);
+            let got: Vec<&str> = results.iter().map(|r| r.rel_path.as_str()).collect();
+            assert_eq!(got, expected, "search results changed for {query:?}");
+        }
+    }
+
     #[test]
     fn an_unreadable_snapshot_is_deleted_rather_than_re_read_forever() {
         let data_dir = tempfile::tempdir().unwrap();
