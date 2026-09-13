@@ -2106,6 +2106,68 @@ fn test_codex_v0_146_status_row_with_git_branch_does_not_change_detection() {
     assert!(!crate::chrome::is_working_status_row(STATUS_ROW));
 }
 
+/// The rank decision behind every `*_recovers_long_lived_shell_busy` test
+/// (#745-8ff1), pinned directly so the next person to change it fails a test
+/// rather than a review.
+///
+/// OSC 133 is shell integration, not agent instrumentation: `133;C` fires when
+/// a foreground command starts and `133;D` when it exits, so on a long-lived
+/// TUI agent it is set once at launch and cleared only at death. It is
+/// process-granularity evidence that knows nothing about turns, so it records
+/// at Screen rank and a stable Ready screen is allowed to close it. An agent
+/// hook (OSC 7770) does know about turns, records at Protocol rank, and holds.
+///
+/// Rank is about what the evidence knows, not how it travelled — arriving in an
+/// escape sequence does not make something Protocol rank.
+#[test]
+fn osc133_busy_is_screen_rank_and_yields_to_a_ready_screen() {
+    let aged = || Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+
+    // Shell integration: Screen rank, and the Ready screen closes the turn.
+    let mut shell = SilenceState::new();
+    shell.note_explicit_state(SHELL_BUSY, false);
+    assert_eq!(
+        shell.evidence.busy.map(|b| (b.rank, b.source)),
+        Some((EvidenceRank::Screen, "osc133-busy")),
+        "OSC 133 knows a process started, never that a turn started"
+    );
+    shell.note_real_activity();
+    shell.screen_ready_pending_since = aged();
+    assert!(
+        shell.note_ready_screen(),
+        "a stable Ready screen must close an osc133-held turn (#535-d4f5)"
+    );
+    assert!(shell.idle_confirmed());
+
+    // Agent hook: Protocol rank, and the identical Ready screen does NOT close it.
+    let mut hooked = SilenceState::new();
+    hooked.note_explicit_state(SHELL_BUSY, true);
+    assert_eq!(
+        hooked.evidence.busy.map(|b| (b.rank, b.source)),
+        Some((EvidenceRank::Protocol, "hook-busy")),
+        "an agent hook is turn-granular and outranks the screen"
+    );
+    hooked.note_real_activity();
+    hooked.screen_ready_pending_since = aged();
+    assert!(
+        !hooked.note_ready_screen(),
+        "a Ready screen must never close a turn a protocol signal holds"
+    );
+    assert!(!hooked.idle_confirmed());
+
+    // `explicit_busy()` spans both ranks on purpose: it reports provenance
+    // (an explicit marker set this), NOT authority. Anything deciding whether
+    // evidence may hold a turn must read the rank instead.
+    let mut provenance = SilenceState::new();
+    provenance.note_explicit_state(SHELL_BUSY, false);
+    assert!(provenance.explicit_busy());
+    assert_eq!(
+        provenance.evidence.busy.map(|b| b.rank),
+        Some(EvidenceRank::Screen),
+        "explicit_busy() is true here at Screen rank — it is not a rank test"
+    );
+}
+
 #[test]
 fn test_agent_ready_requires_stable_observation() {
     let mut silence = SilenceState::new();
@@ -2131,12 +2193,19 @@ fn test_grok_ready_composer_recovers_long_lived_shell_busy() {
     let mut silence = SilenceState::new();
     // OSC 133 marks the long-lived `grok` shell command busy. Without a
     // Grok ready-screen adapter this bit survived for the whole process.
+    //
+    // These three assertions were inverted by e17c79b8 and restored by
+    // #745-8ff1. They are byte-identical in setup to the goose and opencode
+    // cases below/above, and a `SilenceState` carries no agent type, so all
+    // three MUST agree — see `osc133_busy_is_screen_rank_and_yields_to_a_ready_screen`
+    // for the rank decision they rest on. If you are here because one of the
+    // three is red, the answer is never to make this trio disagree again.
     silence.note_explicit_state(SHELL_BUSY, false);
     silence.note_real_activity();
     silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
-    assert!(!silence.note_ready_screen());
-    assert!(silence.explicit_busy());
-    assert!(!silence.idle_confirmed());
+    assert!(silence.note_ready_screen());
+    assert!(!silence.explicit_busy());
+    assert!(silence.idle_confirmed());
 }
 
 /// Captured live from grok 0.2.114: the composer moved inside a rounded box, so the old
@@ -2717,6 +2786,152 @@ fn test_declared_completion_turns_stale_working_screen_into_ready_evidence() {
             .load(std::sync::atomic::Ordering::Acquire),
         SHELL_IDLE
     );
+}
+
+/// The measurement `SCREEN_CLASSIFY_CALLS` was built for and never got.
+///
+/// #744-138c claimed the reader chunk path and the silence timer no longer each
+/// classify the screen independently, and added a counter plus a `#[cfg(test)]`
+/// accessor to prove it. The accessor had zero callers, so the claim went
+/// unmeasured and `--all-targets` clippy reported the accessor as dead code.
+/// Deleting it was the wrong fix: it is not dead, it is the only surviving
+/// trace that a de-duplication was asserted and never checked.
+///
+/// Two halves, because the claim has two:
+/// 1. the reader classifies at most once for one chunk, and publishes the
+///    verdict to `cached_screen_activity`;
+/// 2. the timer *reads* that field instead of calling the classifier again —
+///    a structural property of `spawn_silence_timer`, which is an async loop
+///    with no practical unit-test entry point, so it is asserted against the
+///    source the same way `close_pty_never_runs_on_the_ipc_thread` does.
+///
+/// The counter is a process-wide static, so the delta is only meaningful under
+/// a process-per-test runner. That is nextest, which is what this project runs
+/// (AGENTS.md); the bound is deliberately one-sided so a shared-process runner
+/// cannot make it flaky in the other direction.
+#[test]
+fn the_screen_is_classified_once_per_chunk_not_once_per_reader_and_once_per_timer() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "screen-classify-once";
+    agent_session(&state, session_id, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+
+    let before = screen_classify_calls();
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk("working on it\r\n", &silence, session_id, &state);
+    let delta = screen_classify_calls() - before;
+    assert!(
+        delta <= 1,
+        "one chunk must not classify the screen more than once, saw {delta}"
+    );
+
+    // The timer must reuse that verdict rather than produce its own.
+    let source = include_str!("../pty.rs");
+    let at = source
+        .find("fn spawn_silence_timer(")
+        .expect("spawn_silence_timer must exist");
+    let body = &source[at..];
+    let end = body
+        .find("\n}\n")
+        .expect("spawn_silence_timer must be a closed function");
+    let body = &body[..end];
+    assert!(
+        body.contains("cached_screen_activity"),
+        "the silence timer must read the reader's cached verdict"
+    );
+    assert!(
+        !body.contains("detect_agent_screen_activity("),
+        "the silence timer must NOT classify the screen itself — that is the \
+         second call #744-138c removed, and the counter above cannot see it \
+         from a unit test"
+    );
+}
+
+/// #745-8ff1 AC1, at the level the rule actually has to hold: the silence
+/// timer.
+///
+/// The unit tests around `note_ready_screen` prove a Ready *screen* cannot
+/// close a protocol-held turn, but the timer is a second, independent way in —
+/// it reaches `IdleDecision` through `try_timer_idle_transition` and can idle a
+/// session with no screen evidence at all. The guard is
+/// `silence.explicit_busy() && !nested_prompt` (pty.rs:4305); nothing asserted
+/// it, so removing it would have left every `note_ready_screen` test green
+/// while a hook-held turn quietly went idle on the timer.
+///
+/// Both ways in are checked: a Ready screen the protocol hold refuses to
+/// confirm, and no screen classification at all, which is the pure silence
+/// path.
+#[test]
+fn the_silence_timer_cannot_idle_a_protocol_held_turn() {
+    for screen in [AgentScreenActivity::Ready, AgentScreenActivity::Unknown] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "protocol-held-timer";
+        agent_session(&state, session_id, SHELL_BUSY);
+        state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .agent_type = Some("codex".into());
+        let silence = state
+            .session_maps
+            .silence_states
+            .get(session_id)
+            .unwrap()
+            .clone();
+        {
+            let mut silence = silence.lock();
+            silence.note_explicit_state(SHELL_BUSY, true);
+            assert!(silence.hook_busy(), "precondition: Protocol-rank busy");
+            // Aged well past the confirm window: the turn is held by rank, not
+            // by the screen being too fresh to trust.
+            silence.screen_ready_pending_since =
+                Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        }
+
+        let transition = try_timer_idle_transition(
+            &state,
+            &silence,
+            session_id,
+            screen,
+            Some("codex"),
+            Some(0),
+        );
+
+        assert!(
+            !transition.transitioned,
+            "{screen:?}: the timer must not close a turn a protocol signal holds"
+        );
+        assert_eq!(
+            state
+                .session_maps
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(std::sync::atomic::Ordering::Acquire),
+            SHELL_BUSY,
+            "{screen:?}: session must still read BUSY"
+        );
+        assert!(
+            silence.lock().hook_busy(),
+            "{screen:?}: the protocol evidence must survive the timer tick"
+        );
+    }
 }
 
 #[test]
@@ -11488,6 +11703,101 @@ fn codex_0154_runtime_hook_idle_reaches_the_pty_state_machine() {
     let silence = silence.lock();
     assert!(silence.hook_state_seen);
     assert!(silence.explicit_idle());
+}
+
+/// #745-8ff1 AC6(c): a Codex `notify` turn-complete ends in a Protocol-rank
+/// idle — and the two halves of that path actually meet.
+///
+/// Both halves were already covered, separately, and that was the gap.
+/// `codex_0154_runtime_hook_idle_reaches_the_pty_state_machine` proves those
+/// bytes close the turn, from a real capture. `generated_assets_have_protocol_and_ownership_markers`
+/// proves the shipped script mentions the right strings. Neither proves the
+/// sequence the script *prints* is the sequence the state machine *accepts*:
+/// change the `printf` and both stay green while every Codex turn silently
+/// stops closing. So this test takes the literal out of the shipped artifact,
+/// decodes it the way `/bin/sh printf` would, and feeds the result to the real
+/// `ChunkProcessor` — nothing here restates the escape sequence by hand.
+///
+/// Running the script is deliberately not how this is done. It resolves its own
+/// tty from `$PPID` and writes there, so there is nothing to capture, and a
+/// freshly written executable pays a code-signing scan on macOS (AGENTS.md).
+#[test]
+fn codex_notify_turn_complete_emits_the_idle_bytes_the_state_machine_accepts() {
+    let dir = tempfile::TempDir::new().unwrap();
+    crate::agent_hook_launch::regenerate_launch_assets(dir.path()).unwrap();
+    let script = std::fs::read_to_string(dir.path().join("agent-hooks/codex-notify.sh"))
+        .expect("codex notify script must be generated");
+
+    // Exactly one arm may emit, and it must be the turn-complete one: a notify
+    // for any other event must not close the turn.
+    assert_eq!(
+        script.matches("7770;state=idle").count(),
+        1,
+        "only the agent-turn-complete arm may emit idle"
+    );
+    let emit_at = script.find("7770;state=idle").unwrap();
+    let case_at = script
+        .find(r#""type":"agent-turn-complete""#)
+        .expect("script must match the agent-turn-complete payload");
+    assert!(
+        case_at < emit_at,
+        "the idle emit must sit inside the agent-turn-complete case arm"
+    );
+
+    // Pull the printf literal out of the artifact instead of restating it.
+    let start = script.find("printf '").expect("script must printf a marker") + "printf '".len();
+    let end = start
+        + script[start..]
+            .find('\'')
+            .expect("unterminated printf literal");
+    let decoded = script[start..end].replace("\\033", "\x1b").replace("\\\\", "\\");
+
+    // That exact byte sequence, through the real chunk path, must close a turn
+    // a hook-busy is holding — the thing AC6(c) actually asserts.
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "codex-notify-turn-complete";
+    agent_session(&state, session_id, SHELL_BUSY);
+    {
+        let mut session = state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap();
+        session.agent_type = Some("codex".into());
+        session.hook_instrumented = true;
+    }
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    silence.lock().note_explicit_state(SHELL_BUSY, true);
+    assert!(
+        silence.lock().hook_busy(),
+        "precondition: a Protocol-rank hook busy is holding the turn"
+    );
+
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk(&decoded, &silence, session_id, &state);
+
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get(session_id)
+            .unwrap()
+            .load(Ordering::Acquire),
+        SHELL_IDLE,
+        "the notify script's own bytes must drive the session idle"
+    );
+    let silence = silence.lock();
+    assert!(silence.explicit_idle(), "idle must be Protocol rank, not screen");
+    assert!(!silence.hook_busy());
 }
 
 /// An agent quoting an Ink dialog footer inside its own output, captured off a

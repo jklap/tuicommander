@@ -1110,9 +1110,16 @@ enum CurrentChatQuestion {
 ///
 /// Ordering matches #744-138c: wall-clock silence is the weakest signal,
 /// screen-content classification is stronger, a background-process check is
-/// stronger still, and an explicit protocol marker (OSC 133/7770, a
-/// submitted line, a `suggest:`/completion marker, raw output volume) is
+/// stronger still, and a turn-granular protocol marker (OSC 7770, a submitted
+/// line on a ready-adapter agent, a `suggest:`/completion marker) is
 /// authoritative.
+///
+/// Rank is about what a signal *knows*, not how it travelled (#745-8ff1).
+/// OSC 133 is the cautionary case and is deliberately **not** Protocol rank:
+/// it is shell integration, so `133;C` fires when a foreground command starts
+/// and `133;D` when it exits — on a long-lived TUI agent, once at launch and
+/// once at death. It knows a process is running and nothing about turns, so it
+/// records at [`EvidenceRank::Screen`] and a stable Ready screen may close it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum EvidenceRank {
     Silence,
@@ -1554,18 +1561,31 @@ impl SilenceState {
         true
     }
 
-    /// Any recorded busy evidence currently comes from `source` (a Protocol-
-    /// rank explicit marker: `"hook-busy"`/`"osc133-busy"`/`"user-submit"`).
+    /// Any recorded busy evidence currently comes from `source` (one of the
+    /// explicit markers: `"hook-busy"`/`"osc133-busy"`/`"user-submit"`).
     fn busy_source_is(&self, source: &str) -> bool {
         self.evidence.busy.is_some_and(|busy| busy.source == source)
     }
 
-    /// A Protocol-rank explicit busy marker (OSC hook/shell-integration, or a
-    /// submitted line on a ready-adapter agent) is currently in effect. Narrower
-    /// than "any busy evidence": screen/raw-activity evidence is deliberately
+    /// An **explicit** busy marker (OSC hook/shell-integration, or a submitted
+    /// line on a ready-adapter agent) is currently in effect. Narrower than
+    /// "any busy evidence": screen/raw-activity evidence is deliberately
     /// one-shot (see `apply_working_evidence` and the reader chunk path) and
     /// never sets this, exactly as the old `explicit_busy` was never set by
     /// `note_working_screen`/`note_real_activity`.
+    ///
+    /// **This is a provenance predicate, not a rank predicate** — the three
+    /// sources it accepts do not share a rank, and its doc used to claim they
+    /// were all Protocol. They are not: `note_explicit_state` records
+    /// `osc133-busy` at [`EvidenceRank::Screen`], because OSC 133 is *shell*
+    /// integration. `133;C` fires when a foreground command starts and `133;D`
+    /// when it exits, so on a long-lived TUI agent it fires once at launch and
+    /// once at death — process-granularity evidence that knows nothing about
+    /// turns. A caller deciding whether evidence may hold a turn against the
+    /// screen wants `self.evidence.busy.rank`, never this. Reading this as a
+    /// rank test is what produced the contradiction #745-8ff1 settled: it made
+    /// a stuck `osc133-busy` outlive a stable Ready screen for the whole
+    /// process, which is #535-d4f5.
     fn explicit_busy(&self) -> bool {
         matches!(
             self.evidence.busy.map(|b| b.source),
@@ -1680,19 +1700,20 @@ impl SilenceState {
     }
 
     fn note_ready_screen(&mut self) -> bool {
-        // DEFERRED (2026-09-13) — `test_grok_ready_composer_recovers_long_lived_shell_busy`
-        // is red here, and widening this guard is NOT the fix. It and
-        // `goose_ready_screen_recovers_long_lived_shell_busy` /
-        // `test_opencode_ready_screen_recovers_long_lived_shell_busy` build a
-        // byte-identical `SilenceState` (osc133 busy + real activity + an aged
-        // `screen_ready_pending_since`) and then assert OPPOSITE outcomes. A
-        // `SilenceState` carries no agent type, so nothing in here can tell them
-        // apart: accepting `explicit_busy()` sources alongside Protocol rank
-        // turns grok green and the other two red, measured both ways.
-        // It belongs to story 745-8ff1, which owns whether `osc133-busy` is
-        // Protocol rank or Screen rank — `note_explicit_state` ranks it Screen
-        // while `explicit_busy`'s own doc calls it Protocol-rank, and settling
-        // THAT settles all three tests at once.
+        // Only Protocol-rank busy evidence may hold a turn against a stable
+        // Ready screen. Deliberately `== Protocol` and not `>= Screen`: the
+        // ladder is used asymmetrically here, because Process-rank evidence
+        // (child exit, foreground probe) is about the process, not the turn.
+        //
+        // Do NOT widen this to accept `explicit_busy()`'s sources (#745-8ff1).
+        // That set includes `osc133-busy`, which is shell integration and knows
+        // only that a foreground command is running — on a long-lived TUI agent
+        // it is set once at launch and cleared only at exit, so honouring it
+        // here strands the tab BUSY for the whole process (#535-d4f5). The
+        // three `*_recovers_long_lived_shell_busy` tests build a byte-identical
+        // `SilenceState`, and a `SilenceState` carries no agent type, so they
+        // must all agree; widening this guard turns grok green and goose and
+        // opencode red, which moves the contradiction instead of resolving it.
         if self.evidence.busy.is_some_and(|busy| {
             busy.rank == EvidenceRank::Protocol
                 && (busy.source != "user-submit" || !self.evidence.activity_seen)
