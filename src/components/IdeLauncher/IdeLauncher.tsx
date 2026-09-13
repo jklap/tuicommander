@@ -2,8 +2,9 @@ import { type Component, createEffect, createSignal, For, onCleanup, onMount, Sh
 import { invoke } from "../../invoke";
 import { isMacOS } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
+import { IDE_ICON_PATHS } from "../../stores/ideIcons";
 import type { CustomLauncher, IdeType } from "../../stores/settings";
-import { IDE_CATEGORIES, IDE_ICON_PATHS, IDE_NAMES, settingsStore } from "../../stores/settings";
+import { IDE_CATEGORIES, IDE_NAMES, settingsStore } from "../../stores/settings";
 import { isTauri } from "../../transport";
 
 /** Code editors that can open individual files (as opposed to terminals, git clients, etc.) */
