@@ -1,9 +1,9 @@
 import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { McpConfirmHost } from "../components/McpConfirmHost/McpConfirmHost";
-import { ToastContainer } from "../components/ToastContainer/ToastContainer";
 import { appLogger } from "../stores/appLogger";
 import { notesStore } from "../stores/notes";
 import { BottomTabs, type TabId } from "./components/BottomTabs";
+import { MobileToastContainer } from "./components/MobileToastContainer";
 import { QuestionBanner } from "./components/QuestionBanner";
 import { TopBar } from "./components/TopBar";
 import styles from "./MobileApp.module.css";
@@ -159,7 +159,7 @@ export default function MobileApp() {
 			>
 				<SessionDetailScreen session={lastKnownSession()!} sessionExists={sessionExists()} onBack={handleBack} />
 			</Show>
-			<ToastContainer />
+			<MobileToastContainer />
 			<McpConfirmHost />
 		</div>
 	);

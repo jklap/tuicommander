@@ -1,6 +1,12 @@
 import { createStore } from "solid-js/store";
 import { activityStore } from "./activityStore";
-import { notificationsStore } from "./notifications";
+
+let shouldMirrorToBell = () => true;
+
+/** Keep the core toast store independent of desktop notification settings. */
+export function setToastBellMirrorResolver(resolver: () => boolean): void {
+	shouldMirrorToBell = resolver;
+}
 
 export interface Toast {
 	id: number;
@@ -105,7 +111,7 @@ const LEVEL_ICONS: Record<Toast["level"], string> = {
  *  the message is gone before it is read. Mirroring it into the bell keeps it
  *  readable afterwards. Opt out with the "Keep toasts in the bell" setting. */
 function mirrorToBell(toast: Toast): void {
-	if (!notificationsStore.state.config.toasts_in_bell) return;
+	if (!shouldMirrorToBell()) return;
 	activityStore.addItem({
 		id: `toast-${toast.id}`,
 		pluginId: "core",
