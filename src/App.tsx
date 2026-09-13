@@ -433,7 +433,6 @@ const App: Component = () => {
 		setCurrentBranch: gitOps.setCurrentBranch,
 		handleBranchSelect: gitOps.handleBranchSelect,
 		refreshAllBranchStats: gitOps.refreshAllBranchStats,
-		handleWorktreeCreateFailed: gitOps.handleWorktreeCreateFailed,
 		getDefaultFontSize,
 		detectAgents: agentDetection.detectAll,
 		restoreDetachedPanels: detachedPanelBridge.restoreDetachedPanels,
@@ -734,11 +733,6 @@ const App: Component = () => {
 		},
 		onDelete: (repoPath, workspaceId) => {
 			void gitOps.handleRemoveWorkspace(repoPath, workspaceId);
-		},
-		// COW rows only — the manager hides the button for a linked worktree,
-		// whose refs the parent already shares.
-		onPublish: (repoPath, workspaceId) => {
-			void gitOps.publishWorkspace(repoPath, workspaceId);
 		},
 		onMergeAndArchive: (repoPath, workspaceId) => {
 			const repoState = repositoriesStore.get(repoPath);

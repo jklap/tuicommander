@@ -361,8 +361,8 @@ function createPluginRegistry() {
 					displayName: repo.displayName,
 					// The plugin contract is the BRANCH, and it stays that — a plugin
 					// renders a branch name, it never indexes our workspace map. Reading
-					// it off the workspace rather than off the id keeps it true once a
-					// COW workspace's id no longer contains its branch.
+					// it off the workspace rather than inferring it from the id preserves
+					// the plugin contract if workspace identity changes independently.
 					activeBranch: workspace?.branchName ?? null,
 					worktreePath: workspace?.worktreePath ?? null,
 				};

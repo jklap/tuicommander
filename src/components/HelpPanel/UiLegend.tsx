@@ -75,11 +75,6 @@ const SIDEBAR_SYMBOL_LEGEND: BranchIconEntry[] = [
 		description: "Linked git worktree",
 	},
 	{
-		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} isCow branchHasTerminals />,
-		label: "COW clone",
-		description: "Copy-on-write workspace clone",
-	},
-	{
 		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} isShell branchHasTerminals />,
 		label: "Shell",
 		description: "Folder without a git repository",

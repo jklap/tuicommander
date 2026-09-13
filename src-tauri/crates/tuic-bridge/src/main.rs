@@ -79,7 +79,7 @@ fn is_long_workspace_operation(request: &Value) -> bool {
     };
     matches!(
         arguments.get("action").and_then(Value::as_str),
-        Some("worktree_create" | "worktree_remove" | "worktree_publish" | "worktree_unpublished")
+        Some("worktree_create" | "worktree_remove")
     )
 }
 
@@ -1187,11 +1187,6 @@ mod tests {
         let collapsed_workspace_create = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"repo","arguments":{"action":"worktree_create"}}}}"#;
         let workspace_remove = r#"{"method":"tools/call","params":{"name":"repo","arguments":{"action":"worktree_remove"}}}"#;
         let collapsed_workspace_remove = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"repo","arguments":{"action":"worktree_remove"}}}}"#;
-        // Publish runs a fetch + push and unpublished-count refreshes the parent
-        // mirror with a fetch first — both are as network-bound as create/remove,
-        // so they share the same long deadline rather than the ordinary 10s one.
-        let workspace_publish = r#"{"method":"tools/call","params":{"name":"repo","arguments":{"action":"worktree_publish"}}}"#;
-        let workspace_unpublished = r#"{"method":"tools/call","params":{"name":"repo","arguments":{"action":"worktree_unpublished"}}}"#;
         let ui_confirm = r#"{"method":"tools/call","params":{"name":"ui","arguments":{"action":"confirm","title":"Confirm"}}}"#;
         let collapsed_ui_confirm = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"ui","arguments":{"action":"confirm","title":"Confirm"}}}}"#;
         assert_eq!(response_timeout(ordinary).as_secs(), 10);
@@ -1203,8 +1198,6 @@ mod tests {
         assert_eq!(response_timeout(collapsed_workspace_create).as_secs(), 305);
         assert_eq!(response_timeout(workspace_remove).as_secs(), 305);
         assert_eq!(response_timeout(collapsed_workspace_remove).as_secs(), 305);
-        assert_eq!(response_timeout(workspace_publish).as_secs(), 305);
-        assert_eq!(response_timeout(workspace_unpublished).as_secs(), 305);
         assert_eq!(response_timeout(ui_confirm).as_secs(), 305);
         assert_eq!(response_timeout(collapsed_ui_confirm).as_secs(), 305);
     }

@@ -975,16 +975,6 @@ describe("transport", () => {
 			expect(result.path).toBe("/worktrees/feat~a1b2c3d4?repoPath=%2Fr&deleteBranch=true");
 		});
 
-		// Publish is COW-only in effect but id-addressed on both transports: the
-		// backend decides whether there is anything to do, because only it can
-		// tell a clone from a linked worktree (#732-7c18).
-		it("maps publish_workspace to POST addressed by workspace id", () => {
-			const result = mapCommandToHttp("publish_workspace", { repoPath: "/r", workspaceId: "feat~a1b2c3d4" });
-			expect(result.method).toBe("POST");
-			expect(result.path).toBe("/worktrees/publish");
-			expect(result.body).toEqual({ repoPath: "/r", workspaceId: "feat~a1b2c3d4" });
-		});
-
 		// Creation is the one command that takes a branch and no id — the id does
 		// not exist yet. It comes back in the response.
 		it("maps create_worktree to POST carrying the branch name", () => {

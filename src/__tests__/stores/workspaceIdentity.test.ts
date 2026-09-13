@@ -245,35 +245,6 @@ describe("workspace identity migration", () => {
 		expect(sorted[0].branchName).toBe("master");
 	});
 
-	it("never overwrites an id or branch a record already carries", () => {
-		// A COW workspace's branch is not its key; repairing must not flatten it.
-		const cow = {
-			workspaces: {
-				"main~a1b2c3d4": {
-					workspaceId: "main~a1b2c3d4",
-					branchName: "main",
-					kind: "cow" as const,
-					parentRepoPath: "/Users/x/Gits/acme",
-					worktreePath: "/Users/x/Gits/acme__cow/main",
-					isMain: true,
-					terminals: [],
-					hadTerminals: false,
-					lastActiveTerminal: null,
-					additions: 0,
-					deletions: 0,
-					isMerged: false,
-					lastCommitTs: null,
-				},
-			},
-		};
-
-		const workspace = migrateRepoWorkspaces(cow)["main~a1b2c3d4"];
-		expect(workspace.branchName).toBe("main");
-		expect(workspace.kind).toBe("cow");
-		expect(workspace.parentRepoPath).toBe("/Users/x/Gits/acme");
-		expect(workspace.worktreePath).toBe("/Users/x/Gits/acme__cow/main");
-	});
-
 	it("returns an empty map for a repo that has no entries at all", () => {
 		expect(migrateRepoWorkspaces({})).toEqual({});
 		expect(migrateRepoWorkspaces({ branches: {} })).toEqual({});
@@ -319,7 +290,7 @@ describe("workspace identity migration", () => {
 				"main~a1b2c3d4": {
 					branchName: { name: "main" } as unknown as string,
 					parentRepoPath: { path: "/Users/x/Gits/acme" } as unknown as string,
-					kind: "cow" as const,
+					kind: "worktree" as const,
 					isMain: false,
 					terminals: [],
 					hadTerminals: false,
@@ -339,20 +310,6 @@ describe("workspace identity migration", () => {
 		expect(() => compareBranches(workspace, workspace, undefined, undefined)).not.toThrow();
 	});
 
-	it("lets two workspaces on one branch coexist under different ids", () => {
-		const workspaces = migrateRepoWorkspaces(legacyRepoRecord());
-		const second = generateWorkspaceId("feat/shared-identity", Object.keys(workspaces));
-
-		const both = {
-			...workspaces,
-			[second]: { ...workspaces["feat/shared-identity"], workspaceId: second, kind: "cow" as const },
-		};
-
-		expect(Object.keys(both)).toHaveLength(4);
-		const sameBranch = Object.values(both).filter((w) => w.branchName === "feat/shared-identity");
-		expect(sameBranch).toHaveLength(2);
-		expect(new Set(sameBranch.map((w) => w.workspaceId)).size).toBe(2);
-	});
 });
 
 describe("migrateActiveWorkspaceId", () => {

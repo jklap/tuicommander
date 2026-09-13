@@ -2,7 +2,7 @@ import type { Accessor, Setter } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
-import type { WorkspaceKind, WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
+import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import type { RemoveWorktreeResult } from "../useRepository";
 
 interface WorktreeRemovalCoordinatorDeps {
@@ -19,7 +19,6 @@ interface WorktreeRemovalCoordinatorDeps {
 		confirmRemoveWorktree: (
 			branchName: string,
 			status: WorkspaceLifecycleStatus,
-			kind: WorkspaceKind,
 			deleteBranch: boolean,
 		) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
@@ -86,7 +85,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			return;
 		}
 
-		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, branch.kind, deleteBranch);
+		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, deleteBranch);
 		if (!confirmed) {
 			clearLock();
 			return;

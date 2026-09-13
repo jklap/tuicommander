@@ -702,12 +702,6 @@
   opacity: 1;
 }
 
-.lifecyclePublished {
-  background: var(--accent);
-  color: var(--text-on-accent);
-  opacity: 0.9;
-}
-
 .lifecycleMerged {
   background: var(--fg-muted);
   color: var(--bg-primary);

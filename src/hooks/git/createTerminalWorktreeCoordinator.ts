@@ -68,8 +68,7 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 			if (terminalsStore.state.activeId === terminalId) {
 				repositoriesStore.setActiveWorkspace(target.repoPath, target.workspaceId);
 				// `currentBranch` is displayed and fed to git, so it is the BRANCH the
-				// target workspace has checked out — not its id, which for a COW clone
-				// names no ref at all.
+				// target workspace has checked out, rather than inferring it from its id.
 				const targetBranch =
 					repositoriesStore.get(target.repoPath)?.workspaces[target.workspaceId]?.branchName ?? target.workspaceId;
 				deps.setCurrentBranch(targetBranch);

@@ -159,7 +159,7 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 		handleBranchSelect = vi.fn().mockResolvedValue(undefined),
 		workspaceId = BRANCH,
 		branch = BRANCH,
-		kind: "cow" | "worktree" | null = "worktree",
+		kind: "worktree" = "worktree",
 	) {
 		repositoriesStore.add({ path: REPO, displayName: "repo" });
 		repositoriesStore.setWorkspace(REPO, "main", { worktreePath: REPO, isMain: true });
@@ -171,7 +171,7 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 				workspace_id: workspaceId,
 				branch,
 				worktree_path: WORKTREE,
-				...(kind ? { kind } : {}),
+				kind,
 			},
 		});
 		return handleBranchSelect;
@@ -198,40 +198,6 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 
 			expect(repositoriesStore.get(REPO)!.workspaces[BRANCH]?.worktreePath).toBe(WORKTREE);
 			expect(activityStore.getForSection("worktrees").some((i) => i.title === `Worktree: ${BRANCH}`)).toBe(true);
-		});
-	});
-
-	it("records a COW clone as one, so the refresh prune does not mistake it for a deleted worktree", async () => {
-		await testInScopeAsync(async () => {
-			// A clone never appears in the parent's `git worktree list`. The refresh
-			// coordinator skips the prune ONLY on `kind === "cow"`, so a row registered
-			// with the default kind is closed and deleted on the next refresh — and the
-			// session an orchestrator then spawns in it is parked outside every repo.
-			await emitCreated(undefined, "feature~a1b2c3d4", BRANCH, "cow");
-
-			const row = repositoriesStore.get(REPO)!.workspaces["feature~a1b2c3d4"];
-			expect(row?.kind).toBe("cow");
-			expect(row?.parentRepoPath).toBe(REPO);
-		});
-	});
-
-	it("recognizes a COW clone from a legacy event with no kind", async () => {
-		await testInScopeAsync(async () => {
-			await emitCreated(undefined, "feature~a1b2c3d4", BRANCH, null);
-
-			const row = repositoriesStore.get(REPO)!.workspaces["feature~a1b2c3d4"];
-			expect(row?.kind).toBe("cow");
-			expect(row?.parentRepoPath).toBe(REPO);
-		});
-	});
-
-	it("recognizes a linked worktree from a legacy event with no kind", async () => {
-		await testInScopeAsync(async () => {
-			await emitCreated(undefined, BRANCH, BRANCH, null);
-
-			const row = repositoriesStore.get(REPO)!.workspaces[BRANCH];
-			expect(row?.kind).toBe("worktree");
-			expect(row?.parentRepoPath).toBeNull();
 		});
 	});
 

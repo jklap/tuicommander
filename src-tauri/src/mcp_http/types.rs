@@ -194,15 +194,6 @@ pub(super) struct CreateWorktreeRequest {
     pub branch_name: String,
     /// Optional start point (commit/branch). Defaults to HEAD when omitted.
     pub base_ref: Option<String>,
-    /// `auto` (default) takes a copy-on-write clone where it works and a linked
-    /// worktree otherwise; `cow` and `worktree` force one. The caller asks for a
-    /// workspace, so the default is the one that always produces one.
-    #[serde(default)]
-    pub mode: crate::cow::WorkspaceMode,
-    /// What to do with the parent's uncommitted work. `inherit` (default) is
-    /// free; `clean` is measured at 15 MB -> 113 MB on a real repo.
-    #[serde(default)]
-    pub dirty: crate::cow::DirtyPolicy,
 }
 
 #[derive(Deserialize)]
@@ -432,36 +423,6 @@ pub(super) struct WorkspaceIdQuery {
     pub repo_path: String,
     #[serde(rename = "workspaceId")]
     pub workspace_id: String,
-}
-
-#[derive(Deserialize)]
-pub(super) struct PublishWorkspaceRequest {
-    #[serde(rename = "repoPath")]
-    pub repo_path: String,
-    /// Which workspace's commits to publish. Addressed by id: a COW clone is
-    /// invisible to `git worktree list`, so the id is the only handle on it.
-    #[serde(rename = "workspaceId")]
-    pub workspace_id: String,
-}
-
-/// Explicitly adopt a markerless COW clone this backend lost track of. The
-/// request itself is the confirmation — there is no separate force flag,
-/// because adoption never deletes anything and only ever writes the two
-/// `tuicommander.cow.*` markers into the clone's local git config, leaving
-/// HEAD, the index, the working tree, untracked files, refs and remotes
-/// untouched.
-#[derive(Deserialize)]
-pub(super) struct AdoptCowWorkspaceRequest {
-    #[serde(rename = "repoPath")]
-    pub repo_path: String,
-    /// The candidate directory to adopt — an immediate child of the repo's
-    /// configured worktree base.
-    #[serde(rename = "candidatePath")]
-    pub candidate_path: String,
-    /// Reuse a specific id — for retrying an adoption whose registry write
-    /// failed. Omitted mints a fresh one, the same way creation does.
-    #[serde(rename = "workspaceId", default)]
-    pub workspace_id: Option<String>,
 }
 
 #[derive(Deserialize)]

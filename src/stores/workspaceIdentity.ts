@@ -6,8 +6,8 @@ import type { SavedTerminal } from "../types";
  *
  * Existing records carry their branch name as the id (see
  * `migrateRepoWorkspaces`), so the value *looks* parseable — reading a branch
- * back out of it works right up until the first COW workspace, and then it
- * silently returns the wrong branch. Read `WorkspaceState.branchName` instead.
+ * back out of it couples callers to an implementation detail. Read
+ * `WorkspaceState.branchName` instead.
  */
 export type WorkspaceId = string;
 
@@ -16,31 +16,16 @@ export type WorkspaceKind =
 	/** The repository's own checkout. */
 	| "main"
 	/** A linked git worktree: refs and objects shared with the parent. */
-	| "worktree"
-	/** A copy-on-write clone: an independent repository. */
-	| "cow";
+	| "worktree";
 
-export type WorkspaceCommitStatus = "unmerged" | "unpublished" | "published" | "merged" | "unknown";
+export type WorkspaceCommitStatus = "unmerged" | "merged" | "unknown";
 export type WorkspaceRemovalSafety = "safe" | "requires_force" | "unknown";
-
-/**
- * Where a COW workspace's current dirtiness comes from, relative to what it
- * carried over from the parent at creation. `null` means no creation-time
- * baseline was ever recorded — a workspace recovered, adopted, or created
- * before this field existed — and must not be guessed at from current state.
- *
- * Context only, never a removal-safety signal: an inherited-only file is
- * still a file a removal would destroy.
- */
-export type WorkspaceDirtyProvenance = "clean" | "inherited_only" | "changed_since_creation";
 
 /** Backend-authored Git lifecycle verdict for one exact workspace id. */
 export interface WorkspaceLifecycleStatus {
 	dirty: boolean | null;
 	commitStatus: WorkspaceCommitStatus;
-	unpublishedCommits: number | null;
 	removalSafety: WorkspaceRemovalSafety;
-	dirtyProvenance: WorkspaceDirtyProvenance | null;
 	error?: string;
 }
 
@@ -48,14 +33,12 @@ export interface WorkspaceLifecycleStatus {
 export interface WorkspaceState {
 	/** Stable and opaque. Equal to the key that holds this record. */
 	workspaceId: WorkspaceId;
-	/** What is checked out here. NOT a key — two workspaces may share it. */
+	/** What is checked out here. Keep it explicit rather than inferring it from the key. */
 	branchName: string;
 	kind: WorkspaceKind;
-	/** For `kind === "cow"`, the repository this was cloned from. */
 	parentRepoPath: string | null;
 	isMain: boolean; // true for main/master/develop
 	isShell?: boolean; // true for non-git directory shell entries
-	isPreparing?: boolean; // true while stale worktree is being cleaned up and recreated in background
 	isRemoving?: boolean; // true while worktree removal is in progress
 	worktreePath: string | null; // Path to worktree directory (null for main branch)
 	terminals: string[]; // terminal IDs belonging to this workspace
@@ -91,8 +74,8 @@ interface MigratableRepoRecord {
  * Give one stored entry the identity fields the UI indexes without checking.
  *
  * Every field is filled from the key rather than defended at each read site, and
- * a record already carrying one keeps it — a COW workspace's branch is not its
- * key. The `branchName` fill is the sharp one: `compareBranches` calls
+ * a record already carrying one keeps it. The `branchName` fill is the sharp
+ * one: `compareBranches` calls
  * `branchName.localeCompare`, so a missing value throws inside the sidebar's
  * sort memo. Solid turns a throwing memo into an *undefined* one, so the crash
  * surfaces at the reader (`sortedBranches().length`) and names nothing that
@@ -109,7 +92,6 @@ function repairIdentity(key: WorkspaceId, stored: StoredWorkspace): WorkspaceSta
 		// A skewed write reaches `compareBranches`, which calls `localeCompare` on
 		// it inside the sidebar's sort memo — the failure this repair exists for.
 		branchName: typeof rest.branchName === "string" ? rest.branchName : key,
-		// Nothing on disk predates COW, so a record is main or it is a worktree.
 		kind: rest.kind ?? (rest.isMain ? "main" : "worktree"),
 		parentRepoPath: asPath(rest.parentRepoPath),
 		worktreePath: asPath(rest.worktreePath),

@@ -984,20 +984,8 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(worktree_routes::finalize_merged_worktree_http),
         )
         .route(
-            "/worktrees/publish",
-            post(worktree_routes::publish_workspace_http),
-        )
-        .route(
-            "/worktrees/unpublished",
-            get(worktree_routes::unpublished_commits_http),
-        )
-        .route(
             "/worktrees/lifecycle",
             get(worktree_routes::workspace_lifecycle_http),
-        )
-        .route(
-            "/worktrees/adopt",
-            post(worktree_routes::adopt_cow_workspace_http),
         )
         .route(
             "/worktrees/run-script",
@@ -1233,7 +1221,7 @@ pub(crate) fn resolve_mcp_confirm(state: &Arc<AppState>, request_id: &str, confi
 
 /// Wall-clock bound on producing a response. A handler that wedges holds its
 /// connection forever without this; 301 s is above the slowest legitimate
-/// request (a cold COW clone with warm build artifacts) and far below "never".
+/// request (including a cold worktree with warm build artifacts) and far below "never".
 ///
 /// **Must stay strictly greater than every in-handler deadline this layer
 /// wraps**, or this outer bound fires first, drops the inner future, and the

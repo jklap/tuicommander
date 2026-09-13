@@ -23,7 +23,6 @@ import { compareBranches } from "../../utils/branchSort";
 import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { handleOpenUrl } from "../../utils/openUrl";
-import { pathBasename } from "../../utils/pathUtils";
 import { timeSync } from "../../utils/perfTrace";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
@@ -50,7 +49,6 @@ const BRANCH_ICON_CLASSES: Record<string, string> = {
  *  - Main worktree + main branch → star
  *  - Main worktree + non-main branch (after switch) → branch icon
  *  - Linked worktree → worktree fork icon
- *  - Copy-on-write clone → cow head icon
  *  - Shell (non-git dir) → terminal icon
  *  - Question (awaiting input) → "?" (overrides all)
  *
@@ -64,7 +62,6 @@ const BRANCH_ICON_CLASSES: Record<string, string> = {
 export const BranchIcon: Component<{
 	isMainBranch: boolean;
 	isMainWorktree: boolean;
-	isCow?: boolean;
 	isShell?: boolean;
 	hasError?: boolean;
 	hasQuestion?: boolean;
@@ -78,7 +75,6 @@ export const BranchIcon: Component<{
 		if (props.isShell) return "shell";
 		if (props.isMainWorktree && props.isMainBranch) return "star";
 		if (props.isMainWorktree) return "branch";
-		if (props.isCow) return "cow";
 		return "worktree";
 	};
 
@@ -127,25 +123,6 @@ export const BranchIcon: Component<{
 									stroke-width="1.5"
 									stroke-linecap="round"
 								/>
-							</svg>
-						);
-					case "cow":
-						return (
-							<svg viewBox="0 0 64 64" width="13" height="13" fill="none" aria-label="Copy-on-write clone">
-								{/* Cow head grafted onto a git-branch glyph: the head is the source node,
-								    the ring below is the clone and the ring on the branch is its sibling. */}
-								<g fill="currentColor" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-									<path d="M23.2 13.4C19.3 11.1 18.1 7.2 19.6 3.8c.3-.6 1.1-.7 1.5-.2 1.3 1.6 1.1 3.9 2.4 5.5 1.5 1.9 3.5 2.4 5 3.3l-5.3 1z" />
-									<path d="M40.8 13.4c3.9-2.3 5.1-6.2 3.6-9.6-.3-.6-1.1-.7-1.5-.2-1.3 1.6-1.1 3.9-2.4 5.5-1.5 1.9-3.5 2.4-5 3.3l5.3 1z" />
-									<path d="M20.8 15.2c-3.8-1.8-7.3-1.5-9.6.6-.4.4-.4 1 0 1.4 2.5 2.3 6 2.6 9.6 1v-3z" />
-									<path d="M43.2 15.2c3.8-1.8 7.3-1.5 9.6.6.4.4.4 1 0 1.4-2.5 2.3-6 2.6-9.6 1v-3z" />
-									<circle cx="32" cy="20.5" r="11.5" fill="none" stroke-width="4" />
-									<circle cx="27.5" cy="20.5" r="1.65" stroke="none" />
-									<circle cx="36.5" cy="20.5" r="1.65" stroke="none" />
-									<path d="M32 32v16M32 40h15" fill="none" stroke-width="4" />
-									<circle cx="32" cy="53" r="5.5" fill="none" stroke-width="4" />
-									<circle cx="52" cy="40" r="5.5" fill="none" stroke-width="4" />
-								</g>
 							</svg>
 						);
 					default:
@@ -265,7 +242,6 @@ export const BranchItem: Component<{
 	/** Set only when another row of this repo is on the same branch, in which case
 	 *  the branch name alone does not identify the row. Holds the workspace's
 	 *  directory leaf — the one thing that differs. */
-	disambiguator?: string;
 }> = (props) => {
 	const ctxMenu = createContextMenu();
 
@@ -275,7 +251,7 @@ export const BranchItem: Component<{
 
 	/** Hover text: enough to tell two same-branch rows apart without widening the row. */
 	const rowTitle = createMemo(() => {
-		const parts = [branchLabel(), props.branch.branchName, props.disambiguator].filter(Boolean);
+		const parts = [branchLabel(), props.branch.branchName].filter(Boolean);
 		return parts.join(" — ");
 	});
 
@@ -444,8 +420,8 @@ export const BranchItem: Component<{
 		return out;
 	};
 
-	const isPendingOp = () => props.branch.isPreparing || props.branch.isRemoving;
-	const pendingLabel = () => (props.branch.isRemoving ? "Removing…" : "Preparing…");
+	const isPendingOp = () => props.branch.isRemoving;
+	const pendingLabel = () => "Removing…";
 
 	return (
 		<Show
@@ -459,7 +435,6 @@ export const BranchItem: Component<{
 					<BranchIcon
 						isMainBranch={false}
 						isMainWorktree={false}
-						isCow={props.branch.kind === "cow"}
 						isShell={false}
 						hasError={false}
 						hasQuestion={false}
@@ -485,7 +460,6 @@ export const BranchItem: Component<{
 				<BranchIcon
 					isMainBranch={props.branch.isMain}
 					isMainWorktree={props.branch.worktreePath === props.repoPath}
-					isCow={props.branch.kind === "cow"}
 					isShell={props.branch.isShell}
 					hasError={hasError()}
 					hasQuestion={hasQuestion()}
@@ -497,45 +471,26 @@ export const BranchItem: Component<{
 					<span class={s.branchName} onDblClick={handleDoubleClick} title={rowTitle()}>
 						{branchLabel() ?? props.branch.branchName}
 					</span>
-					{/* The sub-label carries whatever the main line is not already
-					    saying: the branch when a custom label replaced it, and — when
-					    a sibling row is on the same branch — the directory, which is
-					    the only thing that tells two same-branch rows apart. */}
-					<Show when={branchLabel() ?? props.disambiguator}>
+					{/* When a custom label replaces the main line, retain the branch
+					    underneath it so Git-facing identity remains visible. */}
+					<Show when={branchLabel()}>
 						<span class={b.subLabel} title={rowTitle()}>
-							{branchLabel() ? props.branch.branchName : props.disambiguator}
+							{props.branch.branchName}
 						</span>
 					</Show>
 				</div>
 				<Show when={props.branch.lifecycleStatus}>
 					{(status) => {
 						const label = () => {
-							if (status().unpublishedCommits) return `${status().unpublishedCommits} unpublished`;
 							if (status().dirty && !(props.branch.additions + props.branch.deletions)) return "Dirty";
-							if (status().commitStatus === "published") return "Published";
 							if (status().commitStatus === "merged" && !props.branch.isMain) return "Merged";
 							if (status().commitStatus === "unknown") return "Unknown";
 							return null;
 						};
 						const title = () => {
 							if (status().error) return status().error;
-							// Context only — never evidence for the removal verdict below,
-							// which stays keyed on `dirty` alone: an inherited file is still
-							// a file a removal would destroy.
-							const provenance =
-								status().dirty && status().dirtyProvenance === "inherited_only"
-									? " (inherited from the parent at creation, not edited here)"
-									: status().dirty && status().dirtyProvenance === "changed_since_creation"
-										? " (includes edits made after creation)"
-										: "";
-							const workingTree = (status().dirty ? "Dirty working tree" : "Clean working tree") + provenance;
-							const commitState = status().unpublishedCommits
-								? `${status().unpublishedCommits} unpublished commit${status().unpublishedCommits === 1 ? "" : "s"}`
-								: status().commitStatus === "published"
-									? "HEAD is published but not merged"
-									: status().commitStatus === "merged"
-										? "HEAD is merged"
-										: "No clone-only commits";
+							const workingTree = status().dirty ? "Dirty working tree" : "Clean working tree";
+							const commitState = status().commitStatus === "merged" ? "HEAD is merged" : "HEAD remains in the parent";
 							const removal =
 								status().removalSafety === "safe" ? "safe to remove" : "destructive confirmation required";
 							return `${workingTree}; ${commitState}; ${removal}`;
@@ -546,9 +501,7 @@ export const BranchItem: Component<{
 									class={`${s.lifecycleBadge} ${
 										status().removalSafety !== "safe"
 											? s.lifecycleRisk
-											: status().commitStatus === "published"
-												? s.lifecyclePublished
-												: s.lifecycleMerged
+											: s.lifecycleMerged
 									}`}
 									title={title()}
 								>
@@ -738,29 +691,6 @@ export const RepoSection: Component<{
 		}),
 	);
 	const canRemoveAny = createMemo(() => sortedBranches().length > 1);
-
-	/** Branches carried by more than one workspace of this repo. Two rows on one
-	 *  branch is the normal shape once a COW clone exists, and until then this set
-	 *  is empty and costs one pass over a handful of rows. */
-	const sharedBranches = createMemo(() => {
-		const seen = new Set<string>();
-		const shared = new Set<string>();
-		for (const workspace of branches()) {
-			if (seen.has(workspace.branchName)) shared.add(workspace.branchName);
-			seen.add(workspace.branchName);
-		}
-		return shared;
-	});
-
-	/** What to show under a row whose branch is not unique: the directory leaf.
-	 *  `undefined` when the branch already identifies the row, so the common case
-	 *  renders exactly as before. */
-	const disambiguatorFor = (workspace: WorkspaceState): string | undefined => {
-		if (!sharedBranches().has(workspace.branchName)) return undefined;
-		const path = workspace.worktreePath;
-		if (!path) return workspace.workspaceId;
-		return pathBasename(path) || workspace.workspaceId;
-	};
 
 	const localBranchNames = createMemo(() => new Set(Object.keys(props.repo.workspaces)));
 	const remoteOnlyPrs = createMemo(() => githubStore.getRemoteOnlyPrs(props.repo.path, localBranchNames()));
@@ -980,7 +910,6 @@ export const RepoSection: Component<{
 									onRemove={() => props.onRemoveBranch(branch.workspaceId)}
 									onRename={() => props.onRenameBranch(branch.branchName)}
 									onCreateBranch={props.onCreateBranch ? () => props.onCreateBranch!(branch.branchName) : undefined}
-									disambiguator={disambiguatorFor(branch)}
 									onSetLabel={(current) => setLabelDialogBranch({ name: branch.branchName, current })}
 									onShowPrDetail={() => props.onShowPrDetail(branch.branchName)}
 									onShowChanges={props.onShowChanges}

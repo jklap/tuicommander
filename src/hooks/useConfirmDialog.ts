@@ -101,31 +101,19 @@ export function useConfirmDialog() {
 		settle("discard");
 	}
 
-	/** Confirm removing a workspace.
-	 *
-	 *  `unpublishedCommits` is only ever non-zero for a copy-on-write clone,
-	 *  whose commits exist nowhere else — a linked worktree's objects live in
-	 *  the parent and survive the directory. The number goes in the message
-	 *  because "remove?" and "destroy 3 commits?" are different questions. */
+	/** Confirm removing a linked worktree. */
 	async function confirmRemoveWorktree(
 		branchName: string,
 		status: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
-		kind: import("../stores/workspaceIdentity").WorkspaceKind,
 		deleteBranch: boolean,
 	): Promise<boolean> {
 		const dirty = status.dirty ? "dirty — uncommitted files will be discarded" : "clean";
 		const commits =
-			status.unpublishedCommits && status.unpublishedCommits > 0
-				? `${status.unpublishedCommits} unpublished commit${status.unpublishedCommits === 1 ? "" : "s"} will be destroyed`
-				: status.commitStatus === "merged"
-					? "HEAD is merged into the default branch"
-					: status.commitStatus === "published"
-						? "HEAD is published, but not merged into the default branch"
-						: "no clone-only commits will be lost";
+			status.commitStatus === "merged"
+				? "HEAD is merged into the default branch"
+				: "commits remain in the parent repository";
 		const branchAction = deleteBranch
-			? kind === "cow"
-				? "Its independent local branch disappears with the clone."
-				: "Git will safely delete the local branch; if it is unmerged, the branch is kept."
+			? "Git will safely delete the local branch; if it is unmerged, the branch is kept."
 			: "The local branch will be kept.";
 		const destructive = status.removalSafety === "requires_force";
 		return await confirm({

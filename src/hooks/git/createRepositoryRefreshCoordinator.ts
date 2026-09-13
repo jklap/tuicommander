@@ -1,18 +1,15 @@
-import { batch, type Setter } from "solid-js";
+import { batch } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { type RepositoryState, repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
-import type { AgentSeed } from "./agentSeed";
 
 interface WorkspaceLifecycleResponse {
 	dirty: boolean | null;
 	commit_status: import("../../stores/workspaceIdentity").WorkspaceCommitStatus;
-	unpublished_commits: number | null;
 	removal_safety: import("../../stores/workspaceIdentity").WorkspaceRemovalSafety;
-	dirty_provenance: import("../../stores/workspaceIdentity").WorkspaceDirtyProvenance | null;
 	error?: string;
 }
 
@@ -25,12 +22,8 @@ export interface PendingCreation {
 		workspace_id: string;
 		branch: string;
 		base_repo: string;
-		/** Which mechanism it got. Absent on the stale-recovery `pending` path,
-		 *  which is always a linked worktree. */
-		kind?: "cow" | "worktree";
-		degraded_reason?: string | null;
+		kind?: "worktree";
 	};
-	agentSeed?: AgentSeed;
 }
 
 interface RepositoryRefreshCoordinatorDeps {
@@ -58,22 +51,11 @@ interface RepositoryRefreshCoordinatorDeps {
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
 	closeTerminalsInWorktree: (worktreePath: string) => Promise<void>;
-	setupNewWorktree: (
-		repoPath: string,
-		result: PendingCreation["result"],
-		displayName: string,
-		agentSeed?: AgentSeed,
-	) => Promise<void>;
-	setCreatingWorktreeRepos: Setter<Set<string>>;
 	setStatusInfo: (message: string) => void;
-	pendingCreations: Map<string, PendingCreation>;
-	pendingKey: (repoPath: string, workspaceId: string) => string;
 }
 
 /** Owns two-phase repository refresh, stale-write guards, cleanup, and creation grace. */
 export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordinatorDeps) {
-	const { pendingCreations, pendingKey } = deps;
-
 	/** Transition a repo from git to shell mode (e.g. .git was removed) */
 	const transitionToShell = (repoPath: string, currentRepo: RepositoryState) => {
 		batch(() => {
@@ -261,13 +243,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			}
 		}
 
-		for (const [branchName, workspace] of Object.entries(currentRepo.workspaces)) {
-			// A COW workspace is an independent clone: `git worktree list` in the
-			// parent has never heard of it, so its absence from `worktreePaths` says
-			// nothing at all. Reading that absence as "removed externally" would make
-			// every refresh close its terminals and delete the row — the one prune
-			// this loop must not perform.
-			if (workspace.kind === "cow") continue;
+		for (const branchName of Object.keys(currentRepo.workspaces)) {
 			if (!(branchName in worktreePaths)) {
 				// Skip branches that a concurrent/recent refresh already handled.
 				// The store removal may not have settled yet (batch scheduled), so
@@ -345,7 +321,6 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			}),
 		);
 
-		const drainedPendings: PendingCreation[] = [];
 		// Freeze-investigation: split the structural batch into body (our
 		// setState loop) vs reactive flush (dependent effects/memos waking).
 		timeBatch(`git.refreshBatch:${repoPath}`, (markBodyEnd) =>
@@ -370,22 +345,8 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 						worktreePath: wt.path,
 						branchName: wt.branch,
 						kind: wt.path === repoPath ? "main" : wt.kind,
-						// A clone can share a branch name while pointing at another
-						// commit. Its exact reachability arrives in Phase 2.
-						isMerged: wt.kind === "cow" ? false : mergedSet.has(wt.branch),
+						isMerged: mergedSet.has(wt.branch),
 					};
-					// Branch finished background preparation — clear placeholder state
-					// and queue the deferred setupNewWorktree (setup script, initial
-					// terminal, runScript) for after the batch commits.
-					if (liveRepo?.workspaces[workspaceId]?.isPreparing) {
-						update.isPreparing = false;
-						const k = pendingKey(repoPath, workspaceId);
-						const pend = pendingCreations.get(k);
-						if (pend) {
-							pendingCreations.delete(k);
-							drainedPendings.push(pend);
-						}
-					}
 					repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 				}
 				// Migrate terminal state from stale activeBranch to its replacement
@@ -399,23 +360,6 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				markBodyEnd();
 			}),
 		);
-
-		// Drain pending creates: their backing worktree directory finally
-		// exists, so it's safe to run the setup script + spawn the initial
-		// terminal. Releases the per-repo creatingWorktreeRepos lock that
-		// confirmCreateWorktree/handleCreateWorktreeFromBranch held open.
-		for (const pend of drainedPendings) {
-			try {
-				await deps.setupNewWorktree(pend.repoPath, pend.result, pend.displayName, pend.agentSeed);
-			} catch (err) {
-				appLogger.error("git", `setupNewWorktree (pending drain) failed for ${pend.result.branch}`, err);
-			}
-			deps.setCreatingWorktreeRepos((prev) => {
-				const next = new Set(prev);
-				next.delete(pend.repoPath);
-				return next;
-			});
-		}
 
 		const updatedRepo = repositoriesStore.get(repoPath);
 		if (!updatedRepo) return;
@@ -436,12 +380,8 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			// Freeze-investigation: same body-vs-flush split for the stats batch.
 			timeBatch(`git.statsBatch:${repoPath}`, (markBodyEnd) =>
 				batch(() => {
-					// Two keys are in play and they are not interchangeable: the git
-					// answers are looked up by DIRECTORY (diff stats) and by BRANCH
-					// (last commit — two workspaces on one branch do share a tip), while
-					// every store write is addressed by the workspace KEY. Writing by
-					// `workspace.branchName` is what puts a COW clone's stats on its
-					// same-branch sibling: no call fails, the wrong row just changes.
+					// Diff stats are keyed by checkout directory, last-commit timestamps
+					// by branch, and store writes by workspace id.
 					for (const [workspaceId, workspace] of Object.entries(currentRepoForStats.workspaces)) {
 						if (!workspace.worktreePath) continue;
 						const ds = stats.diff_stats[workspace.worktreePath];
@@ -456,9 +396,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 								lifecycleStatus: {
 									dirty: lifecycle.dirty,
 									commitStatus: lifecycle.commit_status,
-									unpublishedCommits: lifecycle.unpublished_commits,
 									removalSafety: lifecycle.removal_safety,
-									dirtyProvenance: lifecycle.dirty_provenance,
 									error: lifecycle.error,
 								},
 							});

@@ -4298,7 +4298,7 @@ mod tests {
                 crate::worktree::WorkspaceWorktree {
                     branch: "sentinel-branch".to_string(),
                     path: repo.clone(),
-                    kind: crate::cow::WorkspaceKind::Worktree,
+                    kind: crate::worktree::WorkspaceKind::Worktree,
                 },
             )])),
         );

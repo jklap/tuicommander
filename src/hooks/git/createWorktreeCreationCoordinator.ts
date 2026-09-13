@@ -5,7 +5,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
-import type { BaseRefOption, DirtyPolicy, WorkspaceMode } from "../useRepository";
+import type { BaseRefOption } from "../useRepository";
 import type { AgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
 
@@ -29,9 +29,7 @@ interface WorktreeCreationCoordinatorDeps {
 			branchName: string,
 			createBranch?: boolean,
 			baseRef?: string,
-			mode?: WorkspaceMode,
-			dirty?: DirtyPolicy,
-		) => Promise<PendingCreation["result"] & { status: "ok" | "pending" }>;
+		) => Promise<PendingCreation["result"] & { status: "ok" }>;
 		runSetupScript: (script: string, cwd: string) => Promise<{ exit_code: number; stdout: string; stderr: string }>;
 		getDiffStats: (path: string) => Promise<{ additions: number; deletions: number }>;
 	};
@@ -44,21 +42,17 @@ interface WorktreeCreationCoordinatorDeps {
 	setCreatingWorktreeRepos: Setter<Set<string>>;
 	worktreeDialogState: Accessor<WorktreeDialogState | null>;
 	setWorktreeDialogState: Setter<WorktreeDialogState | null>;
-	pendingCreations: Map<string, PendingCreation>;
-	pendingKey: (repoPath: string, workspaceId: string) => string;
 	markRecentlyCreated: (repoPath: string, workspaceId: string) => void;
 	handleAddTerminalToWorkspace: (repoPath: string, workspaceId: string) => Promise<string | undefined>;
 }
 
-/** Owns worktree creation, pending recreation handoff, setup, and initial terminal seeding. */
+/** Owns worktree creation, setup, and initial terminal seeding. */
 export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordinatorDeps) {
 	const {
 		creatingWorktreeRepos,
 		setCreatingWorktreeRepos,
 		worktreeDialogState,
 		setWorktreeDialogState,
-		pendingCreations,
-		pendingKey,
 		markRecentlyCreated,
 		handleAddTerminalToWorkspace,
 	} = deps;
@@ -94,10 +88,6 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				branchName: suggestedName,
 				createBranch: true,
 				baseRef: baseRefs[0]?.name ?? "HEAD",
-				// Skipping the dialog means taking its defaults, not a different
-				// set: the user turned the prompt off, not the mechanism choice.
-				mode: "auto",
-				dirty: "inherit",
 			});
 			return;
 		}
@@ -119,16 +109,13 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		displayName: string,
 		agentSeed?: AgentSeed,
 	) => {
-		// Keyed by the id the backend minted and reported; `branch` is what the row
-		// displays. The two match for a linked worktree and will not for a COW clone.
+		// Keyed by the id the backend reported; `branch` is display data.
 		markRecentlyCreated(repoPath, result.workspace_id);
 		repositoriesStore.setWorkspace(repoPath, result.workspace_id, {
 			branchName: result.branch,
 			worktreePath: result.path,
-			// Recorded, never inferred: publish and remove behave differently per
-			// mechanism, and the directory does not say which one this is.
 			kind: result.kind ?? "worktree",
-			parentRepoPath: result.kind === "cow" ? repoPath : null,
+			parentRepoPath: null,
 		});
 		repositoriesStore.setActiveWorkspace(repoPath, result.workspace_id);
 
@@ -185,7 +172,6 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		if (creatingWorktreeRepos().has(repoPath)) return;
 		setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
 
-		let pendingHandoff = false;
 		try {
 			deps.setStatusInfo(`Creating worktree ${options.branchName}...`);
 			const result = await deps.repo.createWorktree(
@@ -193,48 +179,22 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				options.branchName,
 				options.createBranch,
 				options.baseRef,
-				options.mode,
-				options.dirty,
 			);
 
 			setWorktreeDialogState(null);
 
-			if (result.status === "pending") {
-				// Stale directory being cleaned up in background — show placeholder
-				// and defer setupNewWorktree until the recreate completes (drained
-				// in refreshAllBranchStats when isPreparing clears).
-				markRecentlyCreated(repoPath, result.workspace_id);
-				repositoriesStore.setWorkspace(repoPath, result.workspace_id, {
-					branchName: result.branch,
-					worktreePath: result.path,
-					isPreparing: true,
-				});
-				repositoriesStore.setActiveWorkspace(repoPath, result.workspace_id);
-				deps.setStatusInfo(`Preparing worktree ${options.branchName}...`);
-				pendingCreations.set(pendingKey(repoPath, result.workspace_id), {
-					repoPath,
-					displayName: options.branchName,
-					result,
-				});
-				// Keep the per-repo create lock held until the background recreate
-				// completes (drainPendingCreation / handleWorktreeCreateFailed).
-				pendingHandoff = true;
-			} else {
-				await setupNewWorktree(repoPath, result, options.branchName);
-			}
+			await setupNewWorktree(repoPath, result, options.branchName);
 		} catch (err) {
 			appLogger.error("git", "Failed to create worktree", err);
 			deps.setStatusInfo(`Failed to create worktree: ${err}`);
 			// Re-throw so the dialog can show the error and stay open
 			throw err;
 		} finally {
-			if (!pendingHandoff) {
-				setCreatingWorktreeRepos((prev) => {
-					const next = new Set(prev);
-					next.delete(repoPath);
-					return next;
-				});
-			}
+			setCreatingWorktreeRepos((prev) => {
+				const next = new Set(prev);
+				next.delete(repoPath);
+				return next;
+			});
 		}
 	};
 
@@ -243,7 +203,6 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		if (creatingWorktreeRepos().has(repoPath)) return;
 		setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
 
-		let pendingHandoff = false;
 		try {
 			const repoState = repositoriesStore.get(repoPath);
 			const existingBranches = repoState ? Object.keys(repoState.workspaces) : [];
@@ -252,40 +211,16 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 			deps.setStatusInfo(`Creating worktree ${cloneName}...`);
 			const result = await deps.repo.createWorktree(repoPath, cloneName, true, branchName);
 
-			if (result.status === "pending") {
-				// Stale directory being cleaned up in background — show placeholder.
-				// Mirrors confirmCreateWorktree: do NOT call setupNewWorktree because
-				// the worktree files don't exist yet (setup script would race against
-				// the background `rm -rf` + recreate). Setup runs after recreate
-				// completes, via drainPendingCreation.
-				markRecentlyCreated(repoPath, result.workspace_id);
-				repositoriesStore.setWorkspace(repoPath, result.workspace_id, {
-					branchName: result.branch,
-					worktreePath: result.path,
-					isPreparing: true,
-				});
-				repositoriesStore.setActiveWorkspace(repoPath, result.workspace_id);
-				deps.setStatusInfo(`Preparing worktree ${cloneName}...`);
-				pendingCreations.set(pendingKey(repoPath, result.workspace_id), {
-					repoPath,
-					displayName: cloneName,
-					result,
-				});
-				pendingHandoff = true;
-			} else {
-				await setupNewWorktree(repoPath, result, cloneName);
-			}
+			await setupNewWorktree(repoPath, result, cloneName);
 		} catch (err) {
 			appLogger.error("git", "Failed to create worktree from branch", err);
 			deps.setStatusInfo(`Failed to create worktree: ${err}`);
 		} finally {
-			if (!pendingHandoff) {
-				setCreatingWorktreeRepos((prev) => {
-					const next = new Set(prev);
-					next.delete(repoPath);
-					return next;
-				});
-			}
+			setCreatingWorktreeRepos((prev) => {
+				const next = new Set(prev);
+				next.delete(repoPath);
+				return next;
+			});
 		}
 	};
 
