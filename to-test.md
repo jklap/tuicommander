@@ -1853,6 +1853,11 @@ Both live in `src-tauri/src/config.rs` / `lib.rs` / `app_instance.rs`, so
 neither is loaded by Vite HMR — `make dev` must be restarted (or `make build`
 for release) before any of this is observable.
 
+0. [x] A repository row is classified as missing only when filesystem metadata
+   returns `NotFound`; permission, invalid-data, and other I/O errors preserve
+   the row. _(verified: `config::tests::only_not_found_metadata_errors_prove_the_path_is_missing`
+   exercises all four error kinds)_
+
 1. [ ] With one or more genuinely stale-temp rows in `repositories.json` (path
    gone, under a temp root, `isGitRepo:false`, one empty shell workspace, no
    user metadata), the sidebar footer shows a red flagged-repo icon with a

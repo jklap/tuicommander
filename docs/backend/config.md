@@ -745,7 +745,9 @@ switched away from looks identical on that one axis.
 
 **Classifier — `classify_stale_temp_repo` (`config.rs`), ALL of:**
 
-1. `std::fs::metadata(path)` fails — the local path does not exist.
+1. `std::fs::metadata(path)` returns `NotFound` — the local path is proven not
+   to exist. Permission and other I/O errors preserve the row because they do
+   not prove absence.
 2. The path falls under a recognized temp root (`recognized_temp_roots()`:
    `std::env::temp_dir()`, `/tmp`, `/private/tmp`, `/var/folders`,
    `/private/var/folders`, `$HOME/Gits/.tmp`).

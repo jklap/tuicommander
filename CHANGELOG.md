@@ -54,10 +54,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **A stale-temp shell repository (empty, non-git, path gone, created under a
   temp root) is now classified server-side and quarantined from the sidebar
   instead of remaining a permanent ghost row.** The classifier
-  (`config.rs`) requires ALL of: the local path is absent, it falls under a
-  recognized temp root, `isGitRepo` is explicitly `false`, there is exactly one
-  shell-only workspace with no terminals/saved terminals/commit or parent
-  state, and no user metadata — any one mismatch leaves the row untouched, so
+  (`config.rs`) requires ALL of: filesystem metadata proves the local path is
+  absent (`NotFound`; permission and other I/O errors preserve it), it falls
+  under a recognized temp root, `isGitRepo` is explicitly `false`, there is
+  exactly one shell-only workspace with no terminals/saved terminals/commit or
+  parent state, and no user metadata — any one mismatch leaves the row untouched, so
   a legitimate offline/unmounted repository is never touched. Repair is
   user-explicit only: the sidebar surfaces a count and a list of exact
   candidates, and confirming writes a timestamped backup before removing

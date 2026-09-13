@@ -3435,6 +3435,10 @@ fn json_is_present_non_null(value: Option<&serde_json::Value>) -> bool {
     !matches!(value, None | Some(serde_json::Value::Null))
 }
 
+fn metadata_error_proves_missing(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound
+}
+
 /// A repository record classifies as a "stale-temp" ghost only when ALL of the
 /// following hold — this mirrors the live-evidence shape of the 15 ghost rows
 /// exactly, and is intentionally an ALL-of test rather than a heuristic score:
@@ -3452,8 +3456,10 @@ fn json_is_present_non_null(value: Option<&serde_json::Value>) -> bool {
 fn classify_stale_temp_repo(path: &str, repo: &serde_json::Value) -> Option<StaleTempCandidate> {
     let obj = repo.as_object()?;
 
-    if std::fs::metadata(path).is_ok() {
-        return None; // local path exists — never a candidate.
+    match std::fs::metadata(path) {
+        Ok(_) => return None, // local path exists — never a candidate.
+        Err(error) if metadata_error_proves_missing(&error) => {}
+        Err(_) => return None, // permission/I/O uncertainty is not proof of absence.
     }
     if !is_under_recognized_temp_root(path) {
         return None;
@@ -6884,6 +6890,23 @@ mod tests {
             classify_stale_temp_repo(&path, &repo).is_none(),
             "a path that still exists on disk must never be swept up"
         );
+    }
+
+    #[test]
+    fn only_not_found_metadata_errors_prove_the_path_is_missing() {
+        assert!(metadata_error_proves_missing(&std::io::Error::from(
+            std::io::ErrorKind::NotFound
+        )));
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::InvalidData,
+            std::io::ErrorKind::Other,
+        ] {
+            assert!(
+                !metadata_error_proves_missing(&std::io::Error::from(kind)),
+                "{kind:?} must preserve the repository row"
+            );
+        }
     }
 
     #[test]
