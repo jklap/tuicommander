@@ -223,6 +223,16 @@ describe("transport", () => {
 	});
 
 	describe("mapCommandToHttp()", () => {
+		it("maps report_progress_event without reshaping its request", () => {
+			const report = { type: "milestone", summary: "HTTP parity works.", workstream: "Progress" };
+			const result = mapCommandToHttp("report_progress_event", { project: "/repo with space", report });
+			expect(result).toEqual({
+				method: "POST",
+				path: "/progress/report?path=%2Frepo%20with%20space",
+				body: report,
+			});
+		});
+
 		it("maps create_pty to POST /sessions", () => {
 			const result = mapCommandToHttp("create_pty", { config: { rows: 24, cols: 80, shell: null, cwd: "/tmp" } });
 			expect(result.method).toBe("POST");

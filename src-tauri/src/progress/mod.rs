@@ -1,7 +1,8 @@
 mod model;
 mod ownership;
+mod service;
 mod store;
 
 pub use model::*;
-pub use ownership::resolve_owning_project;
+pub use service::submit_progress_report;
 pub use store::ProgressStore;

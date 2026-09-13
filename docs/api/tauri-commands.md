@@ -1,5 +1,11 @@
 # Tauri Commands Reference
 
+## Project Progress
+
+| Command | Parameters | Result | Description |
+|---|---|---|---|
+| `report_progress_event` | `project, report` | `{status, revision, eventId?}` | Records a project outcome through the same durable core as MCP and HTTP. |
+
 All commands are invoked from the frontend via `invoke(command, args)`. In browser mode, these map to HTTP endpoints (see [HTTP API](http-api.md)).
 
 ## PTY Session Management (`pty.rs`)

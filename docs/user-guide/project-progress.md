@@ -1,22 +1,21 @@
 # Project Progress
 
-Status: storage foundation implemented; the Progress tool, controls, panel, and
-export described here are not available yet. This page distinguishes the shipped
-project-local persistence layer from the remaining planned interfaces.
+Status: project-local storage and the compact reporting tool are implemented.
+Controls, the panel, and export described below remain planned.
 
 Progress answers: **What meaningfully changed since I last looked?**
 It organizes outcomes by project and workstream: capabilities, decisions,
 discoveries, blockers, and completed objectives. Agent task completion alone does
 not create a milestone.
 
-The planned `progress` tool accepts `type`, `summary`, and an optional `workstream`.
+The `progress` tool accepts `type`, `summary`, and an optional `workstream`.
 It persists the event and shows a toast in one call. Project and source identity
 come from TUICommander. The default tool description is short; the following
 prompt is optional for users who want more control.
 
 ## Optional agent instructions
 
-Copy this block into agent instructions once the Progress feature is available.
+Copy this block into agent instructions when you want the fuller reporting policy.
 Use the live MCP schema for argument names and available management actions.
 
 ```text

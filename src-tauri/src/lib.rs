@@ -373,6 +373,25 @@ fn clear_repo_caches(state: State<'_, Arc<AppState>>, path: String) {
     state.invalidate_repo_caches(&path);
 }
 
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn report_progress_event(
+    state: State<'_, Arc<AppState>>,
+    project: String,
+    report: crate::progress::ProgressReportInput,
+) -> Result<crate::progress::ProgressReceipt, String> {
+    let provenance = crate::progress::ProgressProvenance {
+        workspace_path: Some(project.clone()),
+        ..Default::default()
+    };
+    crate::mcp_http::mcp_transport::report_progress(
+        state.inner(),
+        Some(&project),
+        report,
+        provenance,
+    )
+}
+
 /// Receive a screenshot response from the frontend (captured iframe content).
 /// Pairs with the `screenshot-request` Tauri event emitted by `ui(action=screenshot)`.
 #[cfg(feature = "desktop")]
@@ -1835,6 +1854,7 @@ pub fn run() {
             worktree::run_setup_script,
             clear_caches,
             clear_repo_caches,
+            report_progress_event,
             get_local_ip,
             get_local_ips,
             updater::check_update_channel,

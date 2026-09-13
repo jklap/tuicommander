@@ -32,9 +32,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{
     Json, Router,
-    extract::{Path as AxumPath, State},
+    extract::{ConnectInfo, Extension, Path as AxumPath, Query, State},
 };
 use sha2::{Digest, Sha256};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
@@ -380,6 +381,28 @@ async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>
 /// GET /mcp/upstream-status — returns status + metrics for all upstream MCP servers.
 async fn upstream_status_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(state.mcp.upstream_registry.status_snapshot())
+}
+
+async fn post_progress_report(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<crate::progress::ProgressReportInput>,
+) -> Response {
+    if let Err(resp) = guards::require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    let provenance = crate::progress::ProgressProvenance {
+        workspace_path: Some(q.path.clone()),
+        ..Default::default()
+    };
+    json_result(mcp_transport::report_progress(
+        &state,
+        Some(&q.path),
+        input,
+        provenance,
+    ))
 }
 
 /// Serve plugin data files over HTTP.
@@ -1408,6 +1431,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(config_routes::get_repo_local_config)
                 .post(config_routes::save_repo_local_config_http),
         )
+        .route("/progress/report", post(post_progress_report))
         // Story 066: config / themes / notes / misc stateless parity (loopback)
         .route(
             "/config/branch-label",
@@ -2386,6 +2410,47 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn progress_http_returns_the_shared_durable_receipt_contract() {
+        let project = tempfile::tempdir().unwrap();
+        let state = test_state();
+        let app = build_router(state.clone(), false, true);
+        let body = serde_json::json!({
+            "type": "milestone",
+            "summary": "HTTP transport is equivalent.",
+            "workstream": "Progress"
+        });
+        let mut url = url::Url::parse("http://localhost/progress/report").unwrap();
+        url.query_pairs_mut()
+            .append_pair("path", &project.path().to_string_lossy());
+        let uri = &url[url::Position::BeforePath..];
+        let mut request = Request::post(&uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(receipt["status"], "recorded");
+        assert_eq!(receipt["revision"], 1);
+        assert!(receipt["eventId"].is_string());
+        assert!(receipt.get("event").is_none(), "receipts stay bounded");
+
+        let stored = crate::progress::ProgressStore::open(project.path())
+            .unwrap()
+            .list(None, Some(10))
+            .unwrap();
+        assert_eq!(stored.events.len(), 1);
+        assert_eq!(stored.events[0].id, receipt["eventId"]);
     }
 
     #[tokio::test]

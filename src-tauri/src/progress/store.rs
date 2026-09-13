@@ -1,7 +1,7 @@
 use super::model::{
     DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, NewProgressEvent, ProgressEvent, ProgressKind,
-    ProgressPage, ProgressProvenance, ProjectSnapshot, WorkstreamSnapshot, WorkstreamState,
-    normalize_workstream, validate_workstream_name,
+    ProgressPage, ProgressProvenance, ProgressReceipt, ProgressReportOutcome, ProjectSnapshot,
+    WorkstreamSnapshot, WorkstreamState, normalize_workstream, validate_workstream_name,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SCHEMA_VERSION: i64 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const RETRY_DEDUP_WINDOW_MS: u64 = 60_000;
 const STORE_DIR: &str = ".tuic";
 const STORE_FILE: &str = "progress.sqlite3";
 const RECOVERY_LOCK_FILE: &str = "progress.sqlite3.recovery.lock";
@@ -128,61 +129,51 @@ impl ProgressStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error("begin progress transaction"))?;
-
-        let workstream = match new_event.trimmed_workstream() {
-            Some(name) => Some(resolve_or_create_workstream(&tx, &name)?),
-            None => None,
-        };
-        let revision = bump_revision(&tx)?;
-        let id = uuid::Uuid::now_v7().to_string();
-        let created_at_ms = now_ms()?;
-        let revision_sql = i64_from_u64(revision)?;
-        let created_at_ms_sql = i64_from_u64(created_at_ms)?;
-        let summary = new_event.trimmed_summary();
-        tx.execute(
-            "INSERT INTO events (
-                id, revision, created_at_ms, kind, summary, workstream_id,
-                reporter_id, reporter_name, session_id, workspace_path
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                id,
-                revision_sql,
-                created_at_ms_sql,
-                new_event.kind.as_str(),
-                summary,
-                workstream.as_ref().map(|value| value.id.as_str()),
-                new_event.provenance.reporter_id,
-                new_event.provenance.reporter_name,
-                new_event.provenance.session_id,
-                new_event.provenance.workspace_path,
-            ],
-        )
-        .map_err(db_error("insert progress event"))?;
-        let sequence = u64_from_i64(tx.last_insert_rowid(), "event sequence")?;
-
-        if let Some(workstream) = &workstream {
-            apply_workstream_transition(&tx, workstream, new_event.kind, sequence)?;
-        }
-        if new_event.kind == ProgressKind::Blocked {
-            tx.execute(
-                "INSERT INTO blockers (event_id, workstream_id, active)
-                 VALUES (?1, ?2, 1)",
-                params![id, workstream.as_ref().map(|value| value.id.as_str())],
-            )
-            .map_err(db_error("insert progress blocker"))?;
-        }
-
+        let event = insert_event(&tx, new_event)?;
         tx.commit().map_err(db_error("commit progress event"))?;
-        Ok(ProgressEvent {
-            id,
-            sequence,
-            revision,
-            created_at_ms,
-            kind: new_event.kind,
-            summary,
-            workstream_id: workstream.as_ref().map(|value| value.id.clone()),
-            workstream: workstream.map(|value| value.name),
-            provenance: new_event.provenance.clone(),
+        Ok(event)
+    }
+
+    /// Atomically enforces collection state and exact caller-scoped retry deduplication.
+    pub(crate) fn report(
+        &self,
+        new_event: &NewProgressEvent,
+    ) -> Result<ProgressReportOutcome, String> {
+        new_event.validate()?;
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error("begin progress report transaction"))?;
+        let enabled = tx
+            .query_row(
+                "SELECT collection_enabled FROM project_meta WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(db_error("read progress collection state"))?
+            != 0;
+        if !enabled {
+            let revision = current_revision(&tx)?;
+            tx.commit()
+                .map_err(db_error("commit paused progress report"))?;
+            return Ok(ProgressReportOutcome {
+                receipt: ProgressReceipt::paused(revision),
+                event: None,
+            });
+        }
+        if let Some(event) = find_recent_duplicate(&tx, new_event)? {
+            tx.commit()
+                .map_err(db_error("commit duplicate progress report"))?;
+            return Ok(ProgressReportOutcome {
+                receipt: ProgressReceipt::duplicate(&event),
+                event: Some(event),
+            });
+        }
+        let event = insert_event(&tx, new_event)?;
+        tx.commit().map_err(db_error("commit progress report"))?;
+        Ok(ProgressReportOutcome {
+            receipt: ProgressReceipt::recorded(&event),
+            event: Some(event),
         })
     }
 
@@ -775,6 +766,108 @@ fn apply_workstream_transition(
     Ok(())
 }
 
+fn insert_event(
+    tx: &Transaction<'_>,
+    new_event: &NewProgressEvent,
+) -> Result<ProgressEvent, String> {
+    let workstream = match new_event.trimmed_workstream() {
+        Some(name) => Some(resolve_or_create_workstream(tx, &name)?),
+        None => None,
+    };
+    let revision = bump_revision(tx)?;
+    let id = uuid::Uuid::now_v7().to_string();
+    let created_at_ms = now_ms()?;
+    let summary = new_event.trimmed_summary();
+    tx.execute(
+        "INSERT INTO events (
+            id, revision, created_at_ms, kind, summary, workstream_id,
+            reporter_id, reporter_name, session_id, workspace_path
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            id,
+            i64_from_u64(revision)?,
+            i64_from_u64(created_at_ms)?,
+            new_event.kind.as_str(),
+            summary,
+            workstream.as_ref().map(|value| value.id.as_str()),
+            new_event.provenance.reporter_id,
+            new_event.provenance.reporter_name,
+            new_event.provenance.session_id,
+            new_event.provenance.workspace_path,
+        ],
+    )
+    .map_err(db_error("insert progress event"))?;
+    let sequence = u64_from_i64(tx.last_insert_rowid(), "event sequence")?;
+    if let Some(workstream) = &workstream {
+        apply_workstream_transition(tx, workstream, new_event.kind, sequence)?;
+    }
+    if new_event.kind == ProgressKind::Blocked {
+        tx.execute(
+            "INSERT INTO blockers (event_id, workstream_id, active) VALUES (?1, ?2, 1)",
+            params![id, workstream.as_ref().map(|value| value.id.as_str())],
+        )
+        .map_err(db_error("insert progress blocker"))?;
+    }
+    Ok(ProgressEvent {
+        id,
+        sequence,
+        revision,
+        created_at_ms,
+        kind: new_event.kind,
+        summary,
+        workstream_id: workstream.as_ref().map(|value| value.id.clone()),
+        workstream: workstream.map(|value| value.name),
+        provenance: new_event.provenance.clone(),
+    })
+}
+
+fn find_recent_duplicate(
+    tx: &Transaction<'_>,
+    new_event: &NewProgressEvent,
+) -> Result<Option<ProgressEvent>, String> {
+    let workstream_id = match new_event.trimmed_workstream() {
+        Some(name) => {
+            let normalized = normalize_workstream(&name);
+            match tx
+                .query_row(
+                    "SELECT workstream_id FROM workstream_aliases WHERE normalized_alias = ?1",
+                    [&normalized],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(db_error("resolve duplicate workstream"))?
+            {
+                Some(id) => Some(id),
+                None => return Ok(None),
+            }
+        }
+        None => None,
+    };
+    let cutoff = i64_from_u64(now_ms()?.saturating_sub(RETRY_DEDUP_WINDOW_MS))?;
+    let latest = tx
+        .query_row(
+            "SELECT e.id, e.sequence, e.revision, e.created_at_ms, e.kind,
+                e.summary, e.workstream_id, w.name, e.reporter_id,
+                e.reporter_name, e.session_id, e.workspace_path
+         FROM events e LEFT JOIN workstreams w ON w.id = e.workstream_id
+         WHERE e.reporter_id IS ?1 AND e.session_id IS ?2
+         ORDER BY e.sequence DESC LIMIT 1",
+            params![
+                new_event.provenance.reporter_id,
+                new_event.provenance.session_id,
+            ],
+            row_to_event,
+        )
+        .optional()
+        .map_err(db_error("query recent progress duplicate"))?;
+    Ok(latest.filter(|event| {
+        event.created_at_ms >= cutoff as u64
+            && event.kind == new_event.kind
+            && event.summary == new_event.trimmed_summary()
+            && event.workstream_id == workstream_id
+    }))
+}
+
 fn bump_revision(tx: &Transaction<'_>) -> Result<u64, String> {
     let revision = tx
         .query_row(
@@ -980,6 +1073,7 @@ fn db_error(context: &'static str) -> impl FnOnce(rusqlite::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::ProgressReceiptStatus;
     use std::process::Command;
     use std::sync::{Arc, Barrier};
 
@@ -1647,5 +1741,56 @@ mod tests {
 
         let default_page = store.list(None, None).unwrap();
         assert_eq!(default_page.events.len(), DEFAULT_PAGE_LIMIT);
+    }
+
+    fn reported(summary: &str, reporter: &str) -> NewProgressEvent {
+        NewProgressEvent {
+            kind: ProgressKind::Milestone,
+            summary: summary.to_string(),
+            workstream: Some("Delivery".to_string()),
+            provenance: ProgressProvenance {
+                reporter_id: Some(reporter.to_string()),
+                session_id: Some(format!("{reporter}-session")),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn exact_retry_returns_the_durable_original_event() {
+        let project = git_project();
+        let store = ProgressStore::open(project.path()).unwrap();
+        let first = store.report(&reported("API shipped.", "one")).unwrap();
+        let retry = store.report(&reported("API shipped.", "one")).unwrap();
+        assert_eq!(first.receipt.status, ProgressReceiptStatus::Recorded);
+        assert_eq!(retry.receipt.status, ProgressReceiptStatus::Duplicate);
+        assert_eq!(retry.receipt.event_id, first.receipt.event_id);
+        assert_eq!(store.list(None, Some(10)).unwrap().events.len(), 1);
+    }
+
+    #[test]
+    fn different_reporters_are_not_deduplicated() {
+        let project = git_project();
+        let store = ProgressStore::open(project.path()).unwrap();
+        store.report(&reported("API shipped.", "one")).unwrap();
+        let second = store.report(&reported("API shipped.", "two")).unwrap();
+        assert_eq!(second.receipt.status, ProgressReceiptStatus::Recorded);
+        assert_eq!(store.list(None, Some(10)).unwrap().events.len(), 2);
+    }
+
+    #[test]
+    fn an_intervening_transition_makes_a_repeated_report_new() {
+        let project = git_project();
+        let store = ProgressStore::open(project.path()).unwrap();
+        let milestone = reported("API shipped.", "one");
+        store.report(&milestone).unwrap();
+        let mut blocked = reported("Release approval is pending.", "one");
+        blocked.kind = ProgressKind::Blocked;
+        store.report(&blocked).unwrap();
+
+        let repeated = store.report(&milestone).unwrap();
+
+        assert_eq!(repeated.receipt.status, ProgressReceiptStatus::Recorded);
+        assert_eq!(store.list(None, Some(10)).unwrap().events.len(), 3);
     }
 }

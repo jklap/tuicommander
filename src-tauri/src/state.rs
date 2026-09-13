@@ -334,6 +334,11 @@ pub enum AppEvent {
         repo_path: String,
         payload: serde_json::Value,
     },
+    #[serde(rename = "progress-recorded")]
+    ProgressRecorded {
+        repo_path: String,
+        payload: serde_json::Value,
+    },
     #[allow(dead_code)]
     #[serde(rename = "proposals-ready")]
     ProposalsReady {
@@ -4193,6 +4198,7 @@ impl AppState {
             | AppEvent::DiffTriageProgress { .. }
             | AppEvent::ReviewProgress { .. }
             | AppEvent::ConflictAssistStatus { .. }
+            | AppEvent::ProgressRecorded { .. }
             | AppEvent::ProposalsReady { .. }
             | AppEvent::WorktreeCreateFailed { .. }
             // This accumulator's own output. Feeding it back in would make the

@@ -1910,6 +1910,13 @@ for release) before any of this is observable.
 After rebuilding with `make dev`, confirm the running backend uses the refreshed
 Cargo dependency tree; no frontend HMR reload can load these Rust changes.
 
+## Project Progress reporting (story `750-d656`) — **Rust, needs a `make dev` restart**
+
+After restarting an isolated `make dev` instance, report one milestone through
+the MCP `progress` tool and confirm one `progress-recorded` SSE event appears and
+the event remains available after reconnect. Repeat the exact report within 60
+seconds and confirm the duplicate receipt produces no second event.
+
 ## COW publish no longer outruns the parent (story `767-3968`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
 The origin push moved from the clone to the parent repository and is now gated

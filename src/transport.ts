@@ -675,6 +675,15 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (_args, p) => ({ method: "GET", path: `/config/repo-local-config?path=${p("repoPath")}` }),
 	},
 
+	// --- Project Progress ---
+	report_progress_event: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/progress/report?path=${p("project")}`,
+			body: args.report,
+		}),
+	},
+
 	// --- Config: prompt library ---
 	load_prompt_library: { map: () => ({ method: "GET", path: "/config/prompt-library" }) },
 	save_prompt_library: {
