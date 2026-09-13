@@ -334,6 +334,12 @@ pub enum AppEvent {
         repo_path: String,
         payload: serde_json::Value,
     },
+    /// A Progress event was durably persisted (`progress` MCP tool, or the
+    /// equivalent Tauri command/HTTP route). `repo_path` is the *owning
+    /// project root* the event was written under, which may differ from the
+    /// reporting workspace for a managed linked or nested workspace. Never
+    /// sent for a `duplicate` or `paused` outcome — only a receipt actually
+    /// backed by a new row reaches this bus.
     #[serde(rename = "progress-recorded")]
     ProgressRecorded {
         repo_path: String,
@@ -4200,6 +4206,7 @@ impl AppState {
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProgressRecorded { .. }
             | AppEvent::ProposalsReady { .. }
+            | AppEvent::ProgressRecorded { .. }
             | AppEvent::WorktreeCreateFailed { .. }
             // This accumulator's own output. Feeding it back in would make the
             // session state a function of itself; it is a report, not an input.
