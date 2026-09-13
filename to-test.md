@@ -1924,3 +1924,30 @@ on a successful parent fast-forward. After restarting:
       commit the parent's branch holds.
 - [ ] In a clone's terminal, `git push origin HEAD` must fail with an unusable
       URL (`no-push://…`), not contact the network.
+
+## COW workspaces behind the experimental flag (story `767-3968`, 2026-09-13) — **Rust + frontend, needs a `make dev` restart**
+
+COW workspace creation is now gated on `experimental_features_enabled` AND the
+new `cow_workspaces_enabled` sub-flag, both default false.
+
+- [ ] With the flag OFF, create a workspace with `mode=auto` — it must be a
+      linked worktree and the degraded reason must name the flag and the
+      Settings path, not a filesystem limitation.
+- [ ] With the flag OFF, `repo action=worktree_create mode=cow` must FAIL with
+      the flag named, and must leave no directory behind.
+- [ ] Turn both toggles on in Settings → General → Experimental features, then
+      `mode=auto` must produce a clone again (cow-head icon in the sidebar).
+- [ ] Create a clone with the flag ON, then turn the flag OFF: the clone must
+      still appear in the sidebar and Worktree Manager, and Publish and Remove
+      must both still work on it.
+- [ ] Search "copy-on-write" in the Settings search box — the toggle must be
+      found and it must live under Experimental Features on the General tab.
+
+## COW clones no longer run the parent's git hooks (story `767-3968`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+- [ ] Create a COW clone of this repo (which sets `core.hooksPath` to an
+      absolute path) and run `git config --get core.hooksPath` inside it. It
+      must point at the CLONE's own `.git/hooks`, not at
+      `/Users/.../tuicommander/.git/hooks`.
+- [ ] Point `core.hooksPath` at a directory OUTSIDE the repo, clone, and confirm
+      the clone kept that path unchanged.

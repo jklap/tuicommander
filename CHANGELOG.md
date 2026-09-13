@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Copy-on-write workspaces are now an opt-in experimental feature.** New
+  clones are created only when **Settings → General → Experimental features →
+  Copy-on-write workspaces** is on. With it off, `mode=auto` produces a linked
+  worktree and reports the flag as the reason, while an explicit `mode=cow`
+  fails loudly rather than substituting different isolation semantics. The gate
+  covers creation only: clones that already exist stay listed, publishable and
+  removable either way, so turning the flag off never strands work on disk.
+
 - **Plan Tracker and Stories Ticker are now external plugins.** The former
   compiled built-ins are installed once as ordinary plugin packages during the
   upgrade, preserving existing behavior while making both independently

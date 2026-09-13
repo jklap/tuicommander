@@ -510,26 +510,67 @@ pub(crate) enum Mechanism {
 /// can be CLONED, and a linked worktree is not a clone. Refusing `mode=worktree`
 /// because the source repo has an unfinished rebase would block the one
 /// mechanism that never had that constraint.
+#[allow(dead_code)]
 pub(crate) fn choose_mechanism(
     src: &Path,
     dest: &Path,
     mode: WorkspaceMode,
 ) -> Result<Mechanism, String> {
-    choose_mechanism_with(src, dest, mode, probe_cow_support)
+    choose_mechanism_with(src, dest, mode, cow_creation_enabled(), probe_cow_support)
 }
 
-/// [`choose_mechanism`] with the probe injected, so a test can force the
-/// degrade without needing a second filesystem to fail against.
+/// Whether COW workspace CREATION is turned on for this user.
+///
+/// Both halves of the experimental gate must agree: the master toggle AND the
+/// COW sub-flag. Resolved once per creation, at the top of
+/// [`crate::worktree::create_workspace`], rather than read down here — a
+/// decision this consequential should be a value the whole call can be tested
+/// against, not a hidden read in the middle of it.
+pub(crate) fn cow_creation_enabled() -> bool {
+    let config = crate::config::load_app_config();
+    config.is_experimental_enabled(config.cow_workspaces_enabled)
+}
+
+/// Why a workspace that could have been a clone is not one. Names the flag and
+/// where to turn it on, because "not available here" would otherwise read as a
+/// filesystem limitation the user cannot do anything about.
+const COW_DISABLED_REASON: &str =
+    "copy-on-write workspaces are an experimental feature and are turned off. Enable them in \
+     Settings → General → Experimental features, then 'Copy-on-write workspaces'";
+
+/// [`choose_mechanism`] with the flag and the probe injected, so a test can
+/// force either outcome without needing a second filesystem to fail against.
 pub(crate) fn choose_mechanism_with(
     src: &Path,
     dest: &Path,
     mode: WorkspaceMode,
+    cow_enabled: bool,
     probe: impl Fn(&Path, &Path) -> CowSupport,
 ) -> Result<Mechanism, String> {
     if mode == WorkspaceMode::Worktree {
         return Ok(Mechanism::Worktree {
             degraded_reason: None,
         });
+    }
+
+    // Before the guards and before the probe, on purpose. A feature that is
+    // switched off must cost nothing to have switched off: no repository
+    // inspection, no `clonefile` capability check against the destination
+    // filesystem. It also keeps the refusal honest — "the flag is off" is the
+    // whole reason, and running the guards first could replace it with an
+    // unrelated one the user cannot act on.
+    if !cow_enabled {
+        return match mode {
+            // Explicit `cow` is a request for the isolation semantics, not for
+            // "a workspace". Substituting a linked worktree silently would be
+            // a lie, exactly as it is when the filesystem says no.
+            WorkspaceMode::Cow => Err(format!(
+                "a copy-on-write workspace was requested but {COW_DISABLED_REASON}"
+            )),
+            _ => Ok(Mechanism::Worktree {
+                degraded_reason: Some(COW_DISABLED_REASON.to_string()),
+            }),
+        };
     }
 
     let dest_parent = dest.parent().unwrap_or(dest);
@@ -782,6 +823,7 @@ fn fixup_clone(
     }
     // Inherited fsmonitor state describes the parent's path, not this one.
     config_or_fail(dest, "core.fsmonitor", "false")?;
+    retarget_inherited_hooks_path(src, dest)?;
 
     // Provenance a restart can trust. `repositories.json` is the only registry
     // this workspace is known to, and a crash between the copy landing and that
@@ -848,6 +890,43 @@ const NO_PUSH_URL: &str = "no-push://tuic-workspace-parent";
 /// provenance, not a COW workspace, however much it looks like one.
 const COW_MARKER_WORKSPACE_ID_KEY: &str = "tuicommander.cow.workspace-id";
 const COW_MARKER_PARENT_KEY: &str = "tuicommander.cow.parent";
+
+/// Point an inherited `core.hooksPath` back at the clone's own hooks.
+///
+/// `core.hooksPath` is commonly set to an ABSOLUTE path (this repository's own
+/// `make hooks` does exactly that), and the copy takes it verbatim — so every
+/// hook the clone runs is the PARENT's copy, executed from the parent's
+/// directory. It keeps working by coincidence and stops the moment the parent
+/// moves, its hooks change, or a hook resolves anything relative to where it
+/// lives. Same class as the inherited `core.fsmonitor` above: a setting that
+/// described the parent and travelled anyway.
+///
+/// Only a path INSIDE the parent is repaired. A hooks path the user pointed
+/// somewhere else — a shared hooks directory, a dotfiles checkout — is a
+/// deliberate choice about where hooks come from, and retargeting it would be
+/// this function inventing policy rather than fixing what the copy broke.
+fn retarget_inherited_hooks_path(src: &Path, dest: &Path) -> Result<(), String> {
+    let Some(configured) = read_marker(dest, "core.hooksPath") else {
+        return Ok(());
+    };
+    // Canonicalized on both sides so a symlinked or trailing-slash parent path
+    // is still recognised as being the parent's.
+    let canonical_src = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
+    let canonical_configured =
+        std::fs::canonicalize(&configured).unwrap_or_else(|_| PathBuf::from(&configured));
+    if !canonical_configured.starts_with(&canonical_src) {
+        return Ok(());
+    }
+
+    // Rebased onto this clone rather than unset: unsetting would silently fall
+    // back to `.git/hooks`, which is the right directory only by luck, and
+    // would throw away a parent that deliberately used a subdirectory.
+    let relative = canonical_configured
+        .strip_prefix(&canonical_src)
+        .map_err(|e| format!("could not relocate the inherited hooks path: {e}"))?;
+    let own = dest.join(relative);
+    config_or_fail(dest, "core.hooksPath", &own.to_string_lossy())
+}
 
 fn config_or_fail(repo: &Path, key: &str, value: &str) -> Result<(), String> {
     git_cmd(repo)
@@ -2704,6 +2783,58 @@ mod tests {
         assert_eq!(
             read_config(&workspace.path, "remote.parent.pushurl"),
             NO_PUSH_URL
+        );
+    }
+
+    /// `core.hooksPath` is an ABSOLUTE path in this repository's own config, so
+    /// the copy inherits a pointer into the PARENT's `.git/hooks`. Every hook
+    /// the clone runs is then the parent's copy, read from the parent's
+    /// directory — it keeps working by coincidence and diverges the moment the
+    /// parent's hooks change, or the parent moves, or the hook resolves paths
+    /// relative to where it lives. Same class as the inherited `core.fsmonitor`
+    /// the fixup already neutralises: a setting that described the parent.
+    #[test]
+    fn the_fixup_stops_the_clone_running_the_parents_hooks() {
+        let (_temp, repo, dest_parent) = setup();
+        let parent_hooks = repo.join(".git").join("hooks");
+        git_cmd(&repo)
+            .args(["config", "core.hooksPath", &parent_hooks.to_string_lossy()])
+            .run()
+            .expect("set hooksPath");
+
+        let workspace = clone_into(&repo, &dest_parent.join("clone"), "feature", DirtyPolicy::Inherit);
+
+        let configured = read_config(&workspace.path, "core.hooksPath");
+        assert_ne!(
+            configured,
+            parent_hooks.to_string_lossy(),
+            "the clone runs the parent's hooks"
+        );
+        assert!(
+            configured.is_empty() || Path::new(&configured).starts_with(&workspace.path),
+            "core.hooksPath must name this clone's own hooks, not '{configured}'"
+        );
+    }
+
+    /// A `core.hooksPath` that already points OUTSIDE the parent is the user's
+    /// deliberate choice (a shared hooks directory, a dotfiles repo). The fixup
+    /// must not retarget it — it only repairs the pointer the copy broke.
+    #[test]
+    fn the_fixup_leaves_a_hooks_path_outside_the_parent_alone() {
+        let (temp, repo, dest_parent) = setup();
+        let shared = temp.path().join("shared-hooks");
+        fs::create_dir_all(&shared).expect("hooks dir");
+        git_cmd(&repo)
+            .args(["config", "core.hooksPath", &shared.to_string_lossy()])
+            .run()
+            .expect("set hooksPath");
+
+        let workspace = clone_into(&repo, &dest_parent.join("clone"), "feature", DirtyPolicy::Inherit);
+
+        assert_eq!(
+            read_config(&workspace.path, "core.hooksPath"),
+            shared.to_string_lossy(),
+            "a hooks path the user pointed elsewhere was retargeted"
         );
     }
 

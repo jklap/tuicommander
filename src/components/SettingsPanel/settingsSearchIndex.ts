@@ -124,6 +124,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "general", section: "Experimental Features", label: "AI Chat", labelKey: "general.toggle.aiChat" },
 	{ tab: "general", section: "Experimental Features", label: "AI Triage", labelKey: "general.toggle.aiTriage" },
 	{ tab: "general", section: "Experimental Features", label: "AI Watchers", labelKey: "general.toggle.aiWatchers" },
+	{ tab: "general", section: "Experimental Features", label: "Copy-on-write workspaces", labelKey: "general.toggle.cowWorkspaces" },
 	// tabs/AppearanceTab.tsx
 	{ tab: "appearance", section: "Theme", sectionKey: "appearance.heading.theme" },
 	{ tab: "appearance", section: "Terminal", sectionKey: "appearance.heading.terminal" },

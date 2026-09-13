@@ -34,6 +34,17 @@ Override per-repo in Settings → Repository → Worktree.
 A workspace is built one of two ways. Both land in the same directory (see
 *Worktree Storage Strategies* above); what differs is the isolation you get.
 
+> **Copy-on-write clones are experimental and off by default.** Turn them on in
+> **Settings → General → Experimental features → Copy-on-write workspaces**
+> (the master experimental toggle must be on as well). With the feature off,
+> `mode=auto` gives you a linked worktree and says the flag is why, and an
+> explicit `mode=cow` fails rather than quietly handing back different isolation
+> semantics.
+>
+> The flag gates **creation only**. Clones you already made stay listed,
+> publishable and removable whether the flag is on or off — switching it off
+> never strands work on disk.
+
 | | **Linked worktree** | **Copy-on-write clone** |
 |---|---|---|
 | What it is | A second checkout sharing the repo's `.git` | An independent repository, block-shared with the original |

@@ -257,6 +257,9 @@ cleartext copy does not survive on disk.
 | `experimental_features_enabled` | `bool` | `false` | Master toggle for experimental features |
 | `ai_chat_enabled` | `bool` | `false` | Sub-flag: enable AI Chat panel and shortcuts (requires `experimental_features_enabled`) |
 | `scroll_history_enabled` | `bool` | `false` | Sub-flag: scrollback history overlay on scroll-up in agent mode (requires `experimental_features_enabled`) |
+| `ai_triage_enabled` | `bool` | `false` | Sub-flag: AI diff triage (requires `experimental_features_enabled`) |
+| `ai_watchers_enabled` | `bool` | `false` | Sub-flag: terminal event watchers that trigger AI actions (requires `experimental_features_enabled`) |
+| `cow_workspaces_enabled` | `bool` | `false` | Sub-flag: create new workspaces as copy-on-write clones (requires `experimental_features_enabled`). Gates **creation only** — listing, publishing and removing workspaces that already exist are unaffected, so turning this off never strands work on disk |
 | `ai_terminal_mcp_enabled` | `bool` | `false` | Expose `ai_terminal_*` tools to external MCP clients. Off by default — see [`mcp-http.md`](mcp-http.md#mcp-tools-ai_terminal_-external-agent-surface) |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |

@@ -885,12 +885,17 @@ pub(crate) fn create_workspace(
         base_ref,
         mode,
         dirty,
+        // Resolved once, here, and passed down as a value: the mechanism
+        // decision is then a pure function of its arguments, which is what
+        // makes "the flag is off" testable without a config file.
+        crate::cow::cow_creation_enabled(),
         crate::cow::probe_cow_support,
     )
 }
 
-/// [`create_workspace`] with the COW probe injected, so a test can force the
-/// degrade without a second filesystem to fail against.
+/// [`create_workspace`] with the COW feature flag and the probe injected, so a
+/// test can force either outcome without a config file or a second filesystem
+/// to fail against.
 #[allow(dead_code)]
 pub(crate) fn create_workspace_with(
     worktrees_dir: &Path,
@@ -898,6 +903,7 @@ pub(crate) fn create_workspace_with(
     base_ref: Option<&str>,
     mode: crate::cow::WorkspaceMode,
     dirty: crate::cow::DirtyPolicy,
+    cow_enabled: bool,
     probe: impl Fn(&Path, &Path) -> crate::cow::CowSupport,
 ) -> Result<CreatedWorkspace, String> {
     let src = PathBuf::from(&config.base_repo);
@@ -909,7 +915,7 @@ pub(crate) fn create_workspace_with(
 
     ensure_branch_has_no_workspace(&src, &branch)?;
 
-    match crate::cow::choose_mechanism_with(&src, &dest, mode, probe)? {
+    match crate::cow::choose_mechanism_with(&src, &dest, mode, cow_enabled, probe)? {
         crate::cow::Mechanism::Cow(guards) => {
             // A clone's id is MINTED rather than derived from its branch. Branch
             // ownership is checked above, but ids remain stable if a branch is
@@ -5826,6 +5832,36 @@ branch refs/heads/feat
         CowSupport::Unsupported("no reflink support on this pair of paths".to_string())
     }
 
+    /// `super::create_workspace` with the experimental COW flag forced ON.
+    ///
+    /// COW creation is gated behind a sub-flag that defaults to OFF, and
+    /// `super::create_workspace` resolves that flag from the user's real
+    /// config — so every test below would silently degrade to a linked
+    /// worktree and assert against the wrong mechanism. These tests are about
+    /// what the mechanisms DO; the flag has its own tests, which call
+    /// [`create_workspace_with`] directly and pass the boolean themselves.
+    ///
+    /// Shadowing the glob-imported name rather than renaming 30 call sites is
+    /// deliberate: it states the opt-in once, where a reader of this module
+    /// meets it, instead of scattering a bare `true` through every test.
+    fn create_workspace(
+        worktrees_dir: &Path,
+        config: &WorktreeConfig,
+        base_ref: Option<&str>,
+        mode: WorkspaceMode,
+        dirty: DirtyPolicy,
+    ) -> Result<CreatedWorkspace, String> {
+        create_workspace_with(
+            worktrees_dir,
+            config,
+            base_ref,
+            mode,
+            dirty,
+            true,
+            crate::cow::probe_cow_support,
+        )
+    }
+
     #[test]
     fn auto_produces_a_cow_workspace_where_copy_on_write_works() {
         let (_temp, repo, workspaces) = workspace_fixture();
@@ -5853,6 +5889,170 @@ branch refs/heads/feat
         assert!(created.path.join(".git").is_dir());
     }
 
+    // ── the experimental COW flag ─────────────────────────────────────────
+
+    /// A probe that PANICS. The flag gate runs before the guards and before
+    /// the probe, so with COW switched off this must never be reached — and
+    /// "never reached" is the only way to prove a disabled feature costs
+    /// nothing to have disabled. An assertion on the result could not tell a
+    /// short-circuit apart from a probe that happened to refuse.
+    fn probe_must_not_run(_: &Path, _: &Path) -> CowSupport {
+        panic!("the COW capability probe ran even though the feature is switched off");
+    }
+
+    #[test]
+    fn with_the_flag_off_auto_gives_a_worktree_and_names_the_flag() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let created = create_workspace_with(
+            &workspaces,
+            &workspace_config(&repo, "feature-flagged-off"),
+            None,
+            WorkspaceMode::Auto,
+            DirtyPolicy::Inherit,
+            false,
+            probe_must_not_run,
+        )
+        .expect("auto must degrade, not fail");
+
+        assert_eq!(created.kind, WorkspaceKind::Worktree);
+        let reason = created.degraded_reason.unwrap_or_default();
+        assert!(
+            reason.contains("experimental") && reason.contains("Settings"),
+            "the reason must name the flag and where to turn it on: {reason}"
+        );
+        assert!(created.path.join(".git").is_file(), "not a linked worktree");
+    }
+
+    /// `mode=cow` asks for the isolation semantics, not for "a workspace".
+    /// Substituting a linked worktree silently would be a lie — the same rule
+    /// that already applies when the filesystem says no.
+    #[test]
+    fn with_the_flag_off_mode_cow_fails_loudly_naming_the_flag() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let err = create_workspace_with(
+            &workspaces,
+            &workspace_config(&repo, "feature-strict-off"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+            false,
+            probe_must_not_run,
+        )
+        .expect_err("mode=cow must not silently give a worktree");
+
+        assert!(
+            err.contains("experimental") && err.contains("Settings"),
+            "the failure must name the flag and where to turn it on: {err}"
+        );
+        assert!(
+            !workspaces.join("feature-strict-off").exists(),
+            "a refused creation left a directory behind"
+        );
+    }
+
+    /// `mode=worktree` never wanted a clone, so the flag has nothing to say
+    /// about it — and must not invent a degradation out of a choice.
+    #[test]
+    fn the_flag_does_not_touch_an_explicit_worktree_request() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
+        let (_temp, repo, workspaces) = workspace_fixture();
+
+        let created = create_workspace_with(
+            &workspaces,
+            &workspace_config(&repo, "feature-plain"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+            false,
+            probe_must_not_run,
+        )
+        .expect("an explicit worktree request is unaffected");
+
+        assert_eq!(created.kind, WorkspaceKind::Worktree);
+        assert_eq!(
+            created.degraded_reason, None,
+            "mode=worktree is a choice, not a degradation"
+        );
+    }
+
+    /// The sub-flag alone must not suffice. Someone who turned COW workspaces
+    /// on and later switched the master experimental toggle off has switched
+    /// the feature off, and the resolution must agree with them.
+    #[test]
+    fn the_cow_sub_flag_alone_does_not_enable_the_feature() {
+        let mut config = crate::config::AppConfig::default();
+        config.cow_workspaces_enabled = true;
+        config.experimental_features_enabled = false;
+        assert!(
+            !config.is_experimental_enabled(config.cow_workspaces_enabled),
+            "the sub-flag enabled COW without the master toggle"
+        );
+
+        config.experimental_features_enabled = true;
+        assert!(config.is_experimental_enabled(config.cow_workspaces_enabled));
+
+        config.cow_workspaces_enabled = false;
+        assert!(
+            !config.is_experimental_enabled(config.cow_workspaces_enabled),
+            "the master toggle enabled COW without the sub-flag"
+        );
+    }
+
+    /// The trap this gate must not fall into. The flag gates CREATION only:
+    /// a user who made COW workspaces and then switched the flag off must
+    /// still be able to see, publish and remove them, or turning a flag off
+    /// strands real work on disk.
+    #[test]
+    fn an_existing_cow_workspace_stays_usable_with_the_flag_off() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+
+        // Created with the flag ON, the way the user did before switching it off.
+        let created = create_workspace_with(
+            &workspaces,
+            &workspace_config(&repo, "feature-legacy"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+            true,
+            crate::cow::probe_cow_support,
+        )
+        .expect("the fixture must actually produce a clone");
+        assert_eq!(created.kind, WorkspaceKind::Cow);
+
+        // A commit of its own, so publish and removal both have something to
+        // decide about rather than trivially succeeding.
+        std::fs::write(created.path.join("agent-work.txt"), "work\n").expect("write");
+        git_cmd(&created.path).args(["add", "."]).run().expect("add");
+        git_cmd(&created.path)
+            .args(["commit", "-m", "agent work"])
+            .run()
+            .expect("commit");
+
+        // From here on the feature is OFF. Every lifecycle read and write below
+        // must behave exactly as it did before.
+        let records = crate::cow::cow_workspaces_for(&repo);
+        let record = records
+            .iter()
+            .find(|r| r.workspace_id == created.workspace_id)
+            .expect("listing lost the workspace once the flag went off");
+
+        let outcome = crate::cow::publish_cow_workspace(record).expect("publish must still run");
+        assert!(
+            outcome.parent_updated,
+            "publish was blocked by the creation flag: {:?}",
+            outcome.parent_error
+        );
+
+        crate::cow::remove_cow_workspace(record, false, &workspaces)
+            .expect("removal must still run");
+        assert!(!record.path.exists(), "the workspace was not removed");
+    }
+
     /// The degrade is the whole point of `auto`: the caller asked for a
     /// workspace, and a linked worktree is one.
     #[test]
@@ -5866,6 +6066,7 @@ branch refs/heads/feat
             None,
             WorkspaceMode::Auto,
             DirtyPolicy::Inherit,
+                true,
             probe_unavailable,
         )
         .expect("auto must degrade, not fail");
@@ -5902,6 +6103,7 @@ branch refs/heads/feat
             None,
             WorkspaceMode::Cow,
             DirtyPolicy::Inherit,
+                true,
             probe_unavailable,
         )
         .expect_err("mode=cow must not silently give a worktree");
@@ -6198,6 +6400,7 @@ branch refs/heads/feat
             None,
             WorkspaceMode::Auto,
             DirtyPolicy::Inherit,
+                true,
             probe_unavailable,
         )
         .expect("degrades")

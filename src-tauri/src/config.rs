@@ -805,6 +805,11 @@ pub(crate) struct AppConfig {
     /// Sub-flag: AI Watchers (terminal event watchers)
     #[serde(default)]
     pub(crate) ai_watchers_enabled: bool,
+    /// Sub-flag: copy-on-write workspace CREATION. Gates only the creating
+    /// path — an existing clone stays listable, publishable and removable with
+    /// this off, because turning a flag off must never strand work on disk.
+    #[serde(default)]
+    pub(crate) cow_workspaces_enabled: bool,
     /// Sub-flag: reflow scrollback history on column resize. Keeps scrollback
     /// readable when side panels temporarily narrow the terminal, without
     /// affecting cursor-addressed TUIs on the visible screen.
@@ -1001,6 +1006,7 @@ impl Default for AppConfig {
             ai_chat_enabled: false,
             ai_triage_enabled: false,
             ai_watchers_enabled: false,
+            cow_workspaces_enabled: false,
             scrollback_reflow: true,
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
@@ -4332,6 +4338,7 @@ mod tests {
             ai_chat_enabled: false,
             ai_triage_enabled: false,
             ai_watchers_enabled: false,
+            cow_workspaces_enabled: false,
             scrollback_reflow: true,
             ai_terminal_mcp_enabled: false,
             index_strategy: "active_and_switch".to_string(),
