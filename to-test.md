@@ -1808,26 +1808,63 @@ HTTP `:9877`) in browser mode live in `~/Gits/.tmp/story752/shots/`.
 
 ## Project Progress end-to-end journey (story `755-35c8`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
-The `/progress/*` routes are absent from the backend that is running now
-(a `GET /progress/status` on the live instance returns the SPA index page), so
-the whole journey needs a rebuilt instance.
+The backend half of this journey is **done**, not pending. It ran live on a
+rebuilt debug instance on `:9877` against throwaway projects `/tmp/pe-a` and
+`/tmp/pe-b` (never Boss's repos); the evidence is in the 755-35c8 worklog. The
+header this section used to carry — "the `/progress/*` routes are absent from
+the backend that is running now" — described the state before `edd69ea7` moved
+all ten routes into `shared_routes()`, and is kept here only so a reader who
+remembers it knows it was retired rather than lost.
 
-- [ ] In an isolated `TUIC_APP_INSTANCE`, register two projects. Report events
-      into two workstreams in each, including one `blocked`. Verify the panel
-      shows the right project state in the global scope and in each project
-      scope.
-- [ ] Restart the instance. Verify the history, the workstream states, the
+What is left is the half HTTP cannot observe: the **panel**. A projection that
+is right over the wire and wrong on screen is a real failure mode, and no
+assertion below can be promoted from the backend evidence.
+
+- [x] In an isolated `TUIC_APP_INSTANCE`, register two projects. Report events
+      into two workstreams in each, including one `blocked`.
+      _(verified: two projects stayed separate with their own revision and
+      unread count; "Shadow AI" projected `progressing` with 0 active blockers
+      and "Windows Packaging" `blocked` with 1, from started/milestone/blocked
+      reports.)_
+- [x] Restart the instance. Verify the history, the workstream states, the
       active blockers, and the unread count all survive the restart.
-- [ ] Correct one event and rename one workstream. Report again with the OLD
-      workstream name and verify the event lands in the renamed workstream.
-- [ ] Pause one project, report into it, and verify the receipt says `paused`
-      and no event and no toast appear. Resume and verify the next report is
-      recorded with no backfill.
-- [ ] Clear one project. Verify its history, workstreams, and read state go
+      _(verified: the writing process 71345 was gone and pid 85275 read back 5
+      events in order, both workstream states, revision 8, and `readCursor` 0 /
+      `unreadCount` 5 — the unread cursor survived too.)_
+- [x] Rename one workstream, then report again with the OLD workstream name and
+      verify the event lands in the renamed workstream.
+      _(verified behaviourally, and again through the post-restart process: a
+      report using the pre-rename name landed in workstream `749fd0ff` and
+      created no second workstream, so the aliases are durable.)_
+- [x] Pause one project, report into it, and verify the receipt says `paused`
+      and no event is recorded. Resume and verify the next report is recorded
+      with no backfill.
+      _(verified: paused receipt, no event, no revision bump; resume recorded
+      the next report and did not backfill the paused one.)_
+- [x] Clear one project. Verify its history, workstreams, and read state go
       away, that collection is paused, and that an existing `progress.md` at
       that project root is unchanged.
-- [ ] Preview and export `progress.md` in the remaining project and confirm the
-      Markdown matches the panel.
+      _(verified: revision moved 1→2 rather than resetting, `collectionEnabled`
+      went false in the same transaction, the exported `progress.md` hashed
+      identically before and after, and repeating the clear with the stale
+      `expectedRevision` was refused with `progress_revision_conflict`.)_
+- [x] Preview and export `progress.md` and confirm the Markdown matches the
+      status projection.
+      _(verified: the preview was deterministic, its Markdown matched the status
+      projection including the renamed workstream on historical events, and the
+      write landed 780 bytes at the owning project root.)_
+
+Still owed, and only these — all of them are about what is drawn:
+
+- [ ] Open the Progress panel and confirm the **global scope** shows both
+      projects with the right per-project state, and that switching to each
+      project scope shows that project's workstreams and its blocked one.
+- [ ] Report into a **paused** project while the panel is open: the receipt is
+      already proven to say `paused`, but confirm no toast appears either.
+- [ ] Correct one event through the panel's correction control (edit a summary)
+      and confirm the panel and a fresh export both show the corrected text.
+      This leg was never exercised: the live run covered the workstream rename,
+      not an event correction.
 
 ## Protocol-ranked agent state (story `745-8ff1`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
