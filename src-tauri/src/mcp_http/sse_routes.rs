@@ -282,6 +282,7 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::DiffTriageProgress { .. } => "triage-progress",
         AppEvent::ReviewProgress { .. } => "review-progress",
         AppEvent::ConflictAssistStatus { .. } => "conflict-assist-status",
+        AppEvent::ProgressRecorded { .. } => "progress-recorded",
         AppEvent::ProposalsReady { .. } => "proposals-ready",
         AppEvent::WorktreeCreateFailed { .. } => "worktree-create-failed",
         AppEvent::SessionStateChanged { .. } => "session-state-changed",
@@ -487,6 +488,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::ReviewProgress { repo_path, payload }
         | AppEvent::ConflictAssistStatus { repo_path, payload }
+        | AppEvent::ProgressRecorded { repo_path, payload }
         | AppEvent::ProposalsReady { repo_path, payload } => {
             serde_json::json!({ "repo_path": repo_path, "payload": payload })
         }
@@ -752,6 +754,24 @@ mod tests {
             assert_eq!(body["repo_path"], "/repo");
             assert_eq!(body["payload"], payload);
         }
+    }
+
+    #[test]
+    fn progress_recorded_has_the_same_receipt_and_event_envelope_on_sse() {
+        let payload = serde_json::json!({
+            "receipt": {"status":"recorded", "revision":7, "eventId":"event-7"},
+            "event": {"id":"event-7", "revision":7, "type":"milestone", "summary":"Done."}
+        });
+        let event = AppEvent::ProgressRecorded {
+            repo_path: "/repo".into(),
+            payload: payload.clone(),
+        };
+
+        assert_eq!(event_type_name(&event), "progress-recorded");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({"repo_path":"/repo", "payload":payload})
+        );
     }
 
     #[test]

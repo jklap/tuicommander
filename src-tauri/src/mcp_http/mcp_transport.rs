@@ -1137,6 +1137,15 @@ fn native_tool_definitions() -> serde_json::Value {
             }, "required": ["action"] }
         },
         {
+            "name": "progress",
+            "description": "Record meaningful project outcomes, decisions, discoveries, or blockers. Started/done apply to objectives, not agent tasks. Persists and shows a toast.",
+            "inputSchema": { "type": "object", "properties": {
+                "type": { "type": "string", "enum": ["started", "milestone", "blocked", "done"] },
+                "summary": { "type": "string", "maxLength": 500, "description": "Outcome, not implementation." },
+                "workstream": { "type": "string", "maxLength": 80 }
+            }, "required": ["type", "summary"] }
+        },
+        {
             "name": "ui",
             "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound.\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
             "inputSchema": { "type": "object", "properties": {
@@ -1211,9 +1220,9 @@ fn native_tool_definitions() -> serde_json::Value {
 /// Exposed for handler dispatch and tests.
 pub(crate) const META_TOOL_NAMES: [&str; 3] = ["search_tools", "get_tool_schema", "call_tool"];
 
-/// Speakeasy-style meta-tool definitions. When `collapse_tools: true`,
-/// `merged_tool_definitions()` returns exactly these three tools instead of
-/// the full native + upstream list. The model uses `search_tools` to discover
+/// Speakeasy-style meta-tool definitions. When `collapse_tools: true`, these
+/// three tools replace the full native + upstream list. The model uses
+/// `search_tools` to discover
 /// relevant tools by natural language, `get_tool_schema` to fetch the full
 /// input schema for one, and `call_tool` to execute it.
 ///
@@ -1279,9 +1288,9 @@ fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value {
 
 /// Returns native tools merged with upstream proxy tools (namespaced as `{upstream}__`).
 ///
-/// When `config.collapse_tools: true`, returns exactly 3 meta-tools
-/// (`search_tools`, `get_tool_schema`, `call_tool`) — the Speakeasy pattern for
-/// massive context reduction.
+/// When `config.collapse_tools: true`, returns the 3 meta-tools plus the compact
+/// `progress` tool when it is enabled. Progress stays directly callable because
+/// reporting must not require preliminary discovery calls.
 ///
 /// Otherwise (default), returns native tools filtered by `disabled_native_tools`,
 /// merged with upstream proxy tools. Upstream tools are omitted when no
@@ -1346,7 +1355,17 @@ fn merged_tool_definitions_for_mode(
     force_meta_tools: bool,
 ) -> serde_json::Value {
     if force_meta_tools || state.config.read().collapse_tools {
-        return meta_tool_definitions(state);
+        let mut tools = meta_tool_definitions(state)
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if let Some(progress) = filtered_native_tools(state)
+            .into_iter()
+            .find(|tool| tool["name"] == "progress")
+        {
+            tools.push(progress);
+        }
+        return serde_json::Value::Array(tools);
     }
 
     let mut tools = filtered_native_tools(state);
@@ -1818,6 +1837,7 @@ async fn handle_mcp_tool_call_with_context(
             run_blocking_handler(move || handle_task(&state, addr, &args, sid.as_deref())).await
         }
         "repo" => handle_repo(state, args, is_claude_code).await,
+        "progress" => handle_progress(state, args, mcp_session_id).await,
         "ui" => handle_ui_unified(state, addr, args, mcp_session_id).await,
         "plugin_dev_guide" => {
             serde_json::json!({"content": super::plugin_docs::PLUGIN_DOCS})
@@ -5306,6 +5326,91 @@ fn resolve_mcp_origin_repo_path(
                     .and_then(|m| m.repo_path.clone())
             })
         })
+}
+
+fn parse_progress_report_input(
+    args: &serde_json::Value,
+) -> Result<crate::progress::ProgressReportInput, serde_json::Value> {
+    let kind = args["type"]
+        .as_str()
+        .ok_or_else(|| serde_json::json!({"error": "progress requires 'type'"}))
+        .and_then(|value| {
+            crate::progress::ProgressKind::parse(value)
+                .map_err(|error| serde_json::json!({"error": error}))
+        })?;
+    let summary = args["summary"]
+        .as_str()
+        .ok_or_else(|| serde_json::json!({"error": "progress requires 'summary'"}))?
+        .to_string();
+    Ok(crate::progress::ProgressReportInput {
+        kind,
+        summary,
+        workstream: args["workstream"].as_str().map(str::to_string),
+    })
+}
+
+async fn handle_progress(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let input = match parse_progress_report_input(args) {
+        Ok(input) => input,
+        Err(error) => return error,
+    };
+    let reporter_id = resolve_mcp_origin_session(state, mcp_session_id);
+    let reporter_name = reporter_id
+        .as_ref()
+        .and_then(|id| state.peer_agents.get(id).map(|peer| peer.name.clone()));
+    let session_id = reporter_id
+        .as_ref()
+        .and_then(|id| state.live_pty_for_peer(id));
+    let workspace_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
+    let provenance = crate::progress::ProgressProvenance {
+        reporter_id,
+        reporter_name,
+        session_id,
+        workspace_path: workspace_path.clone(),
+    };
+    let state = state.clone();
+    run_blocking_handler(move || {
+        match report_progress(&state, workspace_path.as_deref(), input, provenance) {
+            Ok(receipt) => to_json_or_error(receipt),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    })
+    .await
+}
+
+pub(crate) fn report_progress(
+    state: &Arc<AppState>,
+    workspace_path: Option<&str>,
+    input: crate::progress::ProgressReportInput,
+    provenance: crate::progress::ProgressProvenance,
+) -> Result<crate::progress::ProgressReceipt, String> {
+    let submitted = crate::progress::submit_progress_report(workspace_path, input, provenance)?;
+    if submitted.receipt.status == crate::progress::ProgressReceiptStatus::Recorded {
+        let event = submitted
+            .event
+            .as_ref()
+            .expect("a recorded progress receipt always carries its committed event");
+        let payload = serde_json::json!({
+            "receipt": &submitted.receipt,
+            "event": event,
+        });
+        let repo_path = submitted.project_root.to_string_lossy().to_string();
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "progress-recorded",
+                serde_json::json!({"repo_path": &repo_path, "payload": &payload}),
+            );
+        }
+        let _ = state
+            .event_bus
+            .send(crate::state::AppEvent::ProgressRecorded { repo_path, payload });
+    }
+    Ok(submitted.receipt)
 }
 
 /// How many HTML tab ids one TUIC session may keep registered for auto-close.
@@ -11922,6 +12027,7 @@ mod tests {
                 "agent",
                 "task",
                 "repo",
+                "progress",
                 "ui",
                 "plugin_dev_guide",
                 "config",
@@ -11940,7 +12046,156 @@ mod tests {
                 "ai_terminal_run_command",
                 "ai_terminal_drive_agent",
             ],
-            "native_tool_definitions must return 8 base tools + 13 ai_terminal_* tools in order"
+            "native_tool_definitions must return 9 base tools + 13 ai_terminal_* tools in order"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_persists_before_emitting_and_exact_retry_emits_nothing() {
+        let project = tempfile::tempdir().unwrap();
+        let state = test_state();
+        let mut events = state.event_bus.subscribe();
+        let input = crate::progress::ProgressReportInput {
+            kind: crate::progress::ProgressKind::Milestone,
+            summary: "Transport parity is verified.".to_string(),
+            workstream: Some("Progress".to_string()),
+        };
+        let provenance = crate::progress::ProgressProvenance {
+            reporter_id: Some("peer-1".to_string()),
+            reporter_name: Some("worker".to_string()),
+            session_id: Some("pty-1".to_string()),
+            workspace_path: Some(project.path().to_string_lossy().to_string()),
+        };
+
+        let first = report_progress(
+            &state,
+            Some(&project.path().to_string_lossy()),
+            input.clone(),
+            provenance.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            first.status,
+            crate::progress::ProgressReceiptStatus::Recorded
+        );
+        assert!(first.event_id.is_some());
+
+        let stored = crate::progress::ProgressStore::open(project.path())
+            .unwrap()
+            .list(None, Some(10))
+            .unwrap();
+        assert_eq!(
+            stored.events.len(),
+            1,
+            "the event must be durable before push"
+        );
+        assert_eq!(stored.events[0].id, first.event_id.as_deref().unwrap());
+        assert_eq!(stored.events[0].provenance, provenance);
+
+        let emitted = events.try_recv().expect("recorded report must emit");
+        match emitted {
+            crate::state::AppEvent::ProgressRecorded { repo_path, payload } => {
+                assert_eq!(
+                    repo_path,
+                    project.path().canonicalize().unwrap().to_string_lossy()
+                );
+                assert_eq!(payload["receipt"]["eventId"], first.event_id.unwrap());
+                assert_eq!(payload["event"]["summary"], "Transport parity is verified.");
+            }
+            other => panic!("expected ProgressRecorded, got {other:?}"),
+        }
+
+        let retry = report_progress(
+            &state,
+            Some(&project.path().to_string_lossy()),
+            input,
+            provenance,
+        )
+        .unwrap();
+        assert_eq!(
+            retry.status,
+            crate::progress::ProgressReceiptStatus::Duplicate
+        );
+        assert_eq!(retry.event_id, Some(stored.events[0].id.clone()));
+        assert!(
+            matches!(
+                events.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "a duplicate receipt must not emit a second notification"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_mcp_derives_registered_provenance_without_inventing_a_pty() {
+        use crate::state::PeerAgent;
+
+        let project = tempfile::tempdir().unwrap();
+        let state = test_state();
+        let mcp_sid = "progress-mcp".to_string();
+        let tuic = "00000000-0000-0000-0000-000000000750".to_string();
+        state.mcp.to_session.insert(mcp_sid.clone(), tuic.clone());
+        state.peer_agents.insert(
+            tuic.clone(),
+            PeerAgent {
+                tuic_session: tuic.clone(),
+                mcp_session_id: mcp_sid.clone(),
+                name: "progress-worker".to_string(),
+                project: Some(project.path().to_string_lossy().to_string()),
+                registered_at: 0,
+            },
+        );
+
+        let receipt = handle_progress(
+            &state,
+            &serde_json::json!({"type":"started", "summary":"Delivery started."}),
+            Some(&mcp_sid),
+        )
+        .await;
+        assert_eq!(receipt["status"], "recorded");
+        let stored = crate::progress::ProgressStore::open(project.path())
+            .unwrap()
+            .list(None, Some(10))
+            .unwrap();
+        assert_eq!(
+            stored.events[0].provenance.reporter_id.as_deref(),
+            Some(tuic.as_str())
+        );
+        assert_eq!(
+            stored.events[0].provenance.reporter_name.as_deref(),
+            Some("progress-worker")
+        );
+        assert_eq!(
+            stored.events[0].provenance.workspace_path.as_deref(),
+            Some(project.path().to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            stored.events[0].provenance.session_id, None,
+            "no PTY identity may be fabricated"
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_progress_is_rejected_by_direct_and_collapsed_dispatch() {
+        let state = test_state();
+        state.config.write().disabled_native_tools = vec!["progress".to_string()];
+        rebuild_tool_search_index(&state);
+        let args = serde_json::json!({"type":"milestone", "summary":"Must not persist."});
+
+        let direct = handle_mcp_tool_call(&state, loopback_addr(), "progress", &args, None).await;
+        assert!(direct["error"].as_str().unwrap().contains("disabled"));
+        let collapsed = handle_call_tool(
+            &state,
+            loopback_addr(),
+            &serde_json::json!({"tool_name":"progress", "arguments": args}),
+            None,
+            None,
+        )
+        .await;
+        assert!(collapsed["error"].as_str().unwrap().contains("disabled"));
+        assert!(
+            !tool_names(&merged_tool_definitions_for_mode(&state, None, true))
+                .contains(&"progress".to_string())
         );
     }
 
@@ -12176,15 +12431,18 @@ mod tests {
     }
 
     #[test]
-    fn merged_tools_collapse_true_returns_exactly_three_meta_tools() {
+    fn merged_tools_collapse_true_keeps_progress_directly_available() {
         let state = test_state();
         state.config.write().collapse_tools = true;
 
         let merged = merged_tool_definitions(&state, None);
         let names = tool_names(&merged);
 
-        assert_eq!(names.len(), 3);
-        assert_eq!(names, vec!["search_tools", "get_tool_schema", "call_tool"]);
+        assert_eq!(names.len(), 4);
+        assert_eq!(
+            names,
+            vec!["search_tools", "get_tool_schema", "call_tool", "progress"]
+        );
     }
 
     #[test]
@@ -12206,7 +12464,7 @@ mod tests {
         let merged = merged_tool_definitions(&state, Some("grok-session"));
         assert_eq!(
             tool_names(&merged),
-            vec!["search_tools", "get_tool_schema", "call_tool"]
+            vec!["search_tools", "get_tool_schema", "call_tool", "progress"]
         );
         assert!(!state.config.read().collapse_tools);
     }
@@ -12290,16 +12548,17 @@ mod tests {
     }
 
     #[test]
-    fn merged_tools_collapse_true_ignores_disabled_native_tools() {
-        // When collapsed, disabled_native_tools has no effect on the returned list —
-        // the 3 meta-tools are always the full response. (Enforcement happens inside
-        // search_tools / call_tool handlers in story 1079/1080.)
+    fn merged_tools_collapse_true_hides_disabled_progress() {
         let state = test_state();
         state.config.write().collapse_tools = true;
-        state.config.write().disabled_native_tools = vec!["session".to_string()];
+        state.config.write().disabled_native_tools = vec!["progress".to_string()];
 
         let merged = merged_tool_definitions(&state, None);
         assert_eq!(tool_names(&merged).len(), 3);
+        assert_eq!(
+            tool_names(&merged),
+            vec!["search_tools", "get_tool_schema", "call_tool"]
+        );
     }
 
     // ── Meta-tool handler tests (story 1079) ───────────────────────────

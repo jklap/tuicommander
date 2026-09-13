@@ -1,5 +1,13 @@
 # HTTP API Reference
 
+## Project Progress
+
+`POST /progress/report?path=<absolute-project-path>` accepts `{ type, summary,
+workstream? }`. `type` is `started`, `milestone`, `blocked`, or `done`. The
+response is a bounded `{ status, revision, eventId? }` receipt. Recorded
+events are published as `progress-recorded` on `/events`; duplicate and paused
+reports emit nothing.
+
 REST API served by the Axum HTTP server when MCP server is enabled. All Tauri commands are accessible as HTTP endpoints.
 
 ## Base URL

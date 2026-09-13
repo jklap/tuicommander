@@ -184,3 +184,73 @@ pub struct ProgressPage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_before_sequence: Option<u64>,
 }
+
+/// Caller-supplied report fields. Provenance is derived by the transport.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressReportInput {
+    #[serde(rename = "type")]
+    pub kind: ProgressKind,
+    pub summary: String,
+    #[serde(default)]
+    pub workstream: Option<String>,
+}
+
+impl ProgressReportInput {
+    pub fn into_event(self, provenance: ProgressProvenance) -> NewProgressEvent {
+        NewProgressEvent {
+            kind: self.kind,
+            summary: self.summary,
+            workstream: self.workstream,
+            provenance,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressReceiptStatus {
+    Recorded,
+    Duplicate,
+    Paused,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressReceipt {
+    pub status: ProgressReceiptStatus,
+    pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+}
+
+impl ProgressReceipt {
+    pub(crate) fn recorded(event: &ProgressEvent) -> Self {
+        Self {
+            status: ProgressReceiptStatus::Recorded,
+            revision: event.revision,
+            event_id: Some(event.id.clone()),
+        }
+    }
+
+    pub(crate) fn duplicate(event: &ProgressEvent) -> Self {
+        Self {
+            status: ProgressReceiptStatus::Duplicate,
+            revision: event.revision,
+            event_id: Some(event.id.clone()),
+        }
+    }
+
+    pub(crate) fn paused(revision: u64) -> Self {
+        Self {
+            status: ProgressReceiptStatus::Paused,
+            revision,
+            event_id: None,
+        }
+    }
+}
+
+pub(crate) struct ProgressReportOutcome {
+    pub receipt: ProgressReceipt,
+    pub event: Option<ProgressEvent>,
+}

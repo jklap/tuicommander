@@ -170,6 +170,7 @@
 /metrics
 /plugins/list
 /process/stats
+/progress/report
 /prompt/execute-api
 /prompt/execute-headless
 /prompt/extract-variables

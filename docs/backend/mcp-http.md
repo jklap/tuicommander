@@ -1,5 +1,14 @@
 # MCP & HTTP Server
 
+## Project Progress reporting
+
+The compact `progress` native tool is available directly in classic and
+collapsed/Grok discovery, and through the meta-tool index, unless disabled by
+`disabled_native_tools`. It
+derives project and provenance from the caller, commits to the owning project's
+store before dual-emitting `progress-recorded`, and suppresses notifications for
+paused collection and exact 60-second retry duplicates.
+
 **Module:** `src-tauri/src/mcp_http/mod.rs`
 
 Optional HTTP/WebSocket server that exposes all Tauri commands as REST endpoints. Enables browser-mode operation and MCP (Model Context Protocol) integration for external AI tools.
@@ -375,7 +384,7 @@ does not add another blanket wrapper.
 
 ### Lazy Tool Discovery (`collapse_tools`)
 
-When `collapse_tools: true` in `config.json` (or via Settings > Services & MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with exactly three meta-tools (the Speakeasy pattern):
+When `collapse_tools: true` in `config.json` (or via Settings > Services & MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:
 
 | Meta-tool | Purpose |
 |-----------|---------|
@@ -383,7 +392,7 @@ When `collapse_tools: true` in `config.json` (or via Settings > Services & MCP >
 | `get_tool_schema` | Returns the full `{name, description, inputSchema}` for a specific tool |
 | `call_tool` | Dispatches to the named tool — routes to the native handler or `proxy_tool_call` for `{upstream}__{tool}` names |
 
-Rationale: a cold tool list of 100+ tools costs ~35k tokens in every agent turn; the 3 meta-tools cost ~500 fixed tokens and the agent fetches schemas on demand. Toggling `collapse_tools` fires `notifications/tools/list_changed` so connected clients refresh their tool cache.
+Rationale: a cold tool list of 100+ tools costs ~35k tokens in every agent turn; the compact surface costs a small fixed budget and the agent fetches other schemas on demand. `progress` stays direct so routine reporting needs no search/schema preflight. Toggling `collapse_tools` fires `notifications/tools/list_changed` so connected clients refresh their tool cache.
 
 TUIC also selects this three-tool surface automatically for an individual Grok
 session when `initialize.clientInfo.name` starts with `grok-shell-`. Grok accepts
@@ -403,7 +412,7 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 ### MCP Native Tools
 
-Eight native tools, organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled.
+Nine native tools, organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled. The enabled `progress` tool is additionally kept on the direct collapsed surface.
 
 | Tool | Actions | Default |
 |------|---------|---------|
