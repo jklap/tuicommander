@@ -10,6 +10,10 @@
  * agent stays on screen rather than blanking — switching to a shell for one
  * command should not wipe the number you were watching.
  *
+ * Until an agent with a usage API has been seen at least once, the ticker stays
+ * empty. There is no default: a Codex-only install must never be told "Claude —
+ * no token", which is the wrong-vendor number this feature exists to avoid.
+ *
  * Called from plugins/index.ts when the `claude-usage` feature is toggled.
  */
 
@@ -88,8 +92,11 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let disposeEffect: (() => void) | null = null;
 let initialized = false;
 
-/** The agent currently on the ticker. Sticky: a shell tab does not clear it. */
-let shownAgent: UsageAgent = "claude";
+/**
+ * The agent currently on the ticker, or null until one is detected.
+ * Sticky once set: a shell tab does not clear it.
+ */
+let shownAgent: UsageAgent | null = null;
 
 /** Guards against a slow poll for the previous agent overwriting the new one. */
 let pollSeq = 0;
@@ -137,9 +144,11 @@ export function initAgentUsage(): void {
 	if (initialized) return;
 	initialized = true;
 
-	shownAgent = activeUsageAgent() ?? "claude";
-	poll(shownAgent);
-	pollTimer = setInterval(() => poll(shownAgent), API_POLL_MS);
+	shownAgent = activeUsageAgent();
+	if (shownAgent) poll(shownAgent);
+	pollTimer = setInterval(() => {
+		if (shownAgent) poll(shownAgent);
+	}, API_POLL_MS);
 
 	// Repoll immediately when the active tab moves to a different usage agent.
 	// Tracked outside a component, so it needs its own reactive root.
@@ -158,6 +167,7 @@ export function initAgentUsage(): void {
 export function destroyAgentUsage(): void {
 	if (!initialized) return;
 	initialized = false;
+	shownAgent = null;
 
 	if (pollTimer) {
 		clearInterval(pollTimer);
