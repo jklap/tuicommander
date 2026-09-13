@@ -4197,6 +4197,11 @@ const SCREEN_VERIFY_ROWS: usize = 20;
 struct TimerIdleTransition {
     transitioned: bool,
     force_cleared_subtasks: bool,
+    /// Read only by tests: it separates a transition the screen confirmed from
+    /// one the silence timer forced, which `transitioned` alone cannot. The
+    /// `cfg_attr` keeps the lint armed in test builds, so the field still goes
+    /// dead-code the moment the last assertion on it disappears.
+    #[cfg_attr(not(test), allow(dead_code))]
     screen_confirms_idle: bool,
     evidence: Option<Evidence>,
 }
