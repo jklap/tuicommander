@@ -208,7 +208,7 @@ libc = "0.2"
 notify = "8"
 gh-token = "0.1"
 keepawake = "0.6"
-tauri-plugin-updater = { version = "2", optional = true }
+tauri-plugin-updater = { version = "~2.11.0", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-deep-link = { version = "2", optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
