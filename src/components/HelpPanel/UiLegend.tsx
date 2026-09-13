@@ -1,4 +1,5 @@
-import { type Component, For } from "solid-js";
+import { type Component, For, type JSX } from "solid-js";
+import { BranchIcon } from "../Sidebar/RepoSection";
 import s from "./UiLegend.module.css";
 
 // ---------------------------------------------------------------------------
@@ -49,10 +50,55 @@ interface SymbolEntry {
 	color?: string;
 }
 
-const SIDEBAR_SYMBOL_LEGEND: SymbolEntry[] = [
-	{ symbol: "\u2731", label: "Main branch", description: "Primary branch (main/master)", color: "var(--warning)" },
-	{ symbol: "\u2387", label: "Feature branch", description: "Feature or topic branch", color: "var(--fg-muted)" },
-	{ symbol: "?", label: "Awaiting input", description: "A terminal needs input", color: "var(--warning)" },
+/** Sidebar row icons. Each entry renders the real `BranchIcon` with the props
+ *  that select its shape, so the legend can never drift from the sidebar. */
+interface BranchIconEntry {
+	icon: () => JSX.Element;
+	label: string;
+	description: string;
+}
+
+const SIDEBAR_SYMBOL_LEGEND: BranchIconEntry[] = [
+	{
+		icon: () => <BranchIcon isMainBranch isMainWorktree branchHasTerminals />,
+		label: "Main branch",
+		description: "Primary branch (main/master)",
+	},
+	{
+		icon: () => <BranchIcon isMainBranch={false} isMainWorktree branchHasTerminals />,
+		label: "Feature branch",
+		description: "Main worktree switched to another branch",
+	},
+	{
+		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} branchHasTerminals />,
+		label: "Worktree",
+		description: "Linked git worktree",
+	},
+	{
+		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} isCow branchHasTerminals />,
+		label: "COW clone",
+		description: "Copy-on-write workspace clone",
+	},
+	{
+		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} isShell branchHasTerminals />,
+		label: "Shell",
+		description: "Folder without a git repository",
+	},
+	{
+		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} hasQuestion branchHasTerminals />,
+		label: "Awaiting input",
+		description: "A terminal needs input",
+	},
+	{
+		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} hasError branchHasTerminals />,
+		label: "Error",
+		description: "API error or agent stuck",
+	},
+	{
+		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} branchHasTerminals={false} />,
+		label: "Idle",
+		description: "No open terminal on this row",
+	},
 ];
 
 interface BadgeEntry {
@@ -149,13 +195,12 @@ export const UiLegend: Component = () => {
 			{/* Sidebar branch icons */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Sidebar Symbols</label>
+				<p class={s.hint}>The icon at the start of each sidebar row</p>
 				<div class={s.grid}>
 					<For each={SIDEBAR_SYMBOL_LEGEND}>
 						{(entry) => (
 							<div class={s.row}>
-								<span class={s.symbol} style={{ color: entry.color }}>
-									{entry.symbol}
-								</span>
+								<span class={s.symbol}>{entry.icon()}</span>
 								<span class={s.label}>{entry.label}</span>
 								<span class={s.desc}>{entry.description}</span>
 							</div>

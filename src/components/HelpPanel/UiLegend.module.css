@@ -55,6 +55,10 @@
   font-weight: 600;
   flex-shrink: 0;
   line-height: 1;
+  /* Sidebar rows embed a real BranchIcon here; center it like a glyph. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .label {
