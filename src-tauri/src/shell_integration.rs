@@ -376,4 +376,276 @@ mod tests {
     fn fish_wrappers_cover_inject_user_override_skip_and_setting_off() {
         assert_wrapper_paths("fish", FISH_INTEGRATION);
     }
+
+    /// Launch the wrappers in a real shell and read back the command line they
+    /// build, for each of inject / skip-when-user-passed / setting-off.
+    ///
+    /// `assert_wrapper_paths` greps the script text, which is why it cannot
+    /// stand in for this: change one wrapper's argument loop from `"$@"` to
+    /// `"$1"` and every literal it looks for survives, yet
+    /// `claude --model opus --settings /user/settings.json` comes out carrying
+    /// a second `--settings` (measured by hand, 2026-09-13). Only a launch
+    /// sees that. The two layers are complements — the grep runs on Windows
+    /// too, where this module does not exist.
+    #[cfg(unix)]
+    mod launch {
+        // Named, not a glob: these constants live two modules up, and a glob of
+        // the parent's own glob is easy to break by accident.
+        use super::super::{BASH_INTEGRATION, FISH_INTEGRATION, ZSH_INTEGRATION};
+        use std::path::{Path, PathBuf};
+        use std::process::Command;
+
+        /// Stand-in for the agent binary: prints the argument list the wrapper
+        /// built, and nothing else.
+        ///
+        /// It is installed as a **symlink to `/bin/echo`**, never as a freshly
+        /// written script. On macOS the first exec of a new executable blocks
+        /// on an exec-time code scan — AGENTS.md, "A freshly written executable
+        /// is not a cheap thing to run" — and this matrix execs one per
+        /// assertion. A symlink resolves to an inode the OS has already vetted:
+        /// measured at ~3ms per exec here against seconds for a new file. Do
+        /// not turn it back into a script to make it print more.
+        const REAL_ECHO: &str = "/bin/echo";
+
+        /// Shell that must be launchable wherever these tests run: it is the
+        /// default `run:` shell on the CI images and ships with macOS, and it
+        /// is also the script the WSL path injects. Its absence is a real
+        /// failure, not an environment quirk, so it is never gated.
+        const REQUIRED_SHELL: &str = "bash";
+
+        /// A `PATH` prefix holding `claude` and `codex` stand-ins.
+        fn agent_bin_dir() -> PathBuf {
+            assert!(
+                Path::new(REAL_ECHO).exists(),
+                "{REAL_ECHO} is missing; the wrapper launch harness needs it"
+            );
+            // Under `target/`, so it is gitignored and survives between runs.
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-agent-bin");
+            std::fs::create_dir_all(&dir).expect("create fake agent bin dir");
+
+            for agent in ["claude", "codex"] {
+                let link = dir.join(agent);
+                if std::fs::read_link(&link).is_ok_and(|target| target == Path::new(REAL_ECHO)) {
+                    continue;
+                }
+                // Stage under a process-unique name and rename over the target,
+                // so tests running in parallel never observe a missing link.
+                let staging = dir.join(format!("{agent}.{}", std::process::id()));
+                let _ = std::fs::remove_file(&staging);
+                std::os::unix::fs::symlink(REAL_ECHO, &staging).expect("stage agent symlink");
+                std::fs::rename(&staging, &link).expect("install agent symlink");
+            }
+            dir
+        }
+
+        /// Write the shell's integration constant where the shell can source it.
+        ///
+        /// Rewritten on every call on purpose: the file is sourced, never
+        /// executed, so there is no scan to amortise, and a stale copy of the
+        /// constant would make every assertion below a lie.
+        fn integration_script(shell: &str) -> PathBuf {
+            let (name, body) = match shell {
+                "bash" => ("tuic-integration.bash", BASH_INTEGRATION),
+                "zsh" => ("tuic-integration.zsh", ZSH_INTEGRATION),
+                "fish" => ("tuic-integration.fish", FISH_INTEGRATION),
+                other => panic!("no integration script for {other}"),
+            };
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-integration-tests");
+            std::fs::create_dir_all(&dir).expect("create integration script dir");
+            let path = dir.join(name);
+            let staging = dir.join(format!("{name}.{}", std::process::id()));
+            std::fs::write(&staging, body).expect("write integration script");
+            std::fs::rename(&staging, &path).expect("install integration script");
+            path
+        }
+
+        /// Flags that stop `shell` from reading the machine's dotfiles.
+        ///
+        /// Without them the assertions below would depend on whoever runs them:
+        /// zsh reads `~/.zshenv` even for `-c`, and fish reads `config.fish`, so
+        /// a dotfile that greets on stderr, or that defines its own `claude`
+        /// alias, would decide the result. The subject here is the integration
+        /// script and nothing else.
+        fn rc_free_flags(shell: &str) -> &'static [&'static str] {
+            match shell {
+                "bash" => &["--noprofile", "--norc"],
+                "zsh" => &["-f"],
+                "fish" => &["--no-config"],
+                other => panic!("no rc-free flags for {other}"),
+            }
+        }
+
+        /// `true` when `shell` can be launched on this machine.
+        ///
+        /// fish is not on the macOS base install nor on the CI images, and
+        /// installing an interpreter is not this test's job. When a gated shell
+        /// is absent its launch assertions do not run and `assert_wrapper_paths`
+        /// is the only cover left — structural, not behavioural. `REQUIRED_SHELL`
+        /// stays out of this gate for exactly that reason.
+        fn shell_present(shell: &str) -> bool {
+            Command::new(shell)
+                .args(rc_free_flags(shell))
+                .arg("-c")
+                .arg("exit 0")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        }
+
+        /// Shells to exercise for one case: every one present here, plus
+        /// `REQUIRED_SHELL` whether or not the probe likes it.
+        fn launchable_shells() -> Vec<&'static str> {
+            let shells: Vec<&'static str> = ["bash", "zsh", "fish"]
+                .into_iter()
+                .filter(|shell| *shell == REQUIRED_SHELL || shell_present(shell))
+                .collect();
+            assert!(
+                shells.contains(&REQUIRED_SHELL),
+                "{REQUIRED_SHELL} must be in the launch matrix"
+            );
+            shells
+        }
+
+        /// Source the integration script in `shell`, run `invocation`, and
+        /// return one entry per command line the wrappers handed to an agent.
+        ///
+        /// Every invocation must parse in bash, zsh **and** fish — that is what
+        /// lets one case description drive the whole matrix.
+        fn wrapper_command_lines(
+            shell: &str,
+            tuic_env: &[(&str, &str)],
+            invocation: &str,
+        ) -> Vec<String> {
+            let script = integration_script(shell);
+            let bin_dir = agent_bin_dir();
+            let path = match std::env::var_os("PATH") {
+                Some(existing) => format!("{}:{}", bin_dir.display(), existing.to_string_lossy()),
+                None => bin_dir.display().to_string(),
+            };
+
+            let mut cmd = Command::new(shell);
+            cmd.args(rc_free_flags(shell))
+                .arg("-c")
+                .arg(format!("source '{}'\n{invocation}", script.display()))
+                .env("PATH", path)
+                // The wrappers are defined only inside a TUIC session.
+                .env("TUIC_SESSION", "wrapper-launch-test")
+                // Start from setting-off, so a case that wants injection has to
+                // ask for it and the off case cannot pass on an inherited value.
+                .env_remove("TUIC_CLAUDE_SETTINGS")
+                .env_remove("TUIC_CODEX_NOTIFY");
+            for (key, value) in tuic_env {
+                cmd.env(key, value);
+            }
+
+            let out = cmd
+                .output()
+                .unwrap_or_else(|err| panic!("launch {shell}: {err}"));
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success(),
+                "{shell} exited {:?}: {stderr}",
+                out.status.code()
+            );
+            // A syntax error in the integration script can still leave the exit
+            // status at zero; the empty stderr is what rules that out.
+            assert!(stderr.is_empty(), "{shell} wrote to stderr: {stderr}");
+
+            String::from_utf8(out.stdout)
+                .expect("shell output is utf-8")
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+
+        /// Run one case across the matrix and compare against `expected`.
+        fn assert_across_shells(
+            case: &str,
+            tuic_env: &[(&str, &str)],
+            invocation: &str,
+            expected: &[&str],
+        ) {
+            for shell in launchable_shells() {
+                let actual = wrapper_command_lines(shell, tuic_env, invocation);
+                assert_eq!(actual, expected, "{shell}: {case}");
+            }
+        }
+
+        const CLAUDE_SETTINGS: &str = "/tuic/agent-hooks/claude.json";
+        const CODEX_NOTIFY: &str = "/tuic/agent-hooks/codex-notify.sh";
+
+        fn signals_on() -> [(&'static str, &'static str); 2] {
+            [
+                ("TUIC_CLAUDE_SETTINGS", CLAUDE_SETTINGS),
+                ("TUIC_CODEX_NOTIFY", CODEX_NOTIFY),
+            ]
+        }
+
+        #[test]
+        fn setting_on_appends_launch_scoped_status_flags() {
+            let claude = format!("--model opus --settings {CLAUDE_SETTINGS}");
+            assert_across_shells(
+                "Claude gets the TUIC settings file appended",
+                &signals_on(),
+                "claude --model opus",
+                &[claude.as_str()],
+            );
+            let codex = format!("exec --full-auto -c notify=[\"{CODEX_NOTIFY}\"]");
+            assert_across_shells(
+                "Codex gets the TUIC notify script appended",
+                &signals_on(),
+                "codex exec --full-auto",
+                &[codex.as_str()],
+            );
+        }
+
+        #[test]
+        fn an_explicit_user_flag_suppresses_injection() {
+            assert_across_shells(
+                "Claude leaves the user's own --settings alone",
+                &signals_on(),
+                "claude --settings /user/settings.json\n\
+                 claude --settings=/user/settings.json\n\
+                 claude --bare\n\
+                 claude --model opus --settings /user/settings.json",
+                &[
+                    "--settings /user/settings.json",
+                    "--settings=/user/settings.json",
+                    "--bare",
+                    // The flag is not the first argument. This is the case a
+                    // grep over the script text cannot see.
+                    "--model opus --settings /user/settings.json",
+                ],
+            );
+            assert_across_shells(
+                "Codex leaves the user's own notify override alone",
+                &signals_on(),
+                "codex -c 'notify=[\"/user/notify.sh\"]' exec\n\
+                 codex -cnotify='[\"/user/notify.sh\"]' exec\n\
+                 codex '--config=notify=[\"/user/notify.sh\"]' exec",
+                &[
+                    "-c notify=[\"/user/notify.sh\"] exec",
+                    "-cnotify=[\"/user/notify.sh\"] exec",
+                    "--config=notify=[\"/user/notify.sh\"] exec",
+                ],
+            );
+        }
+
+        #[test]
+        fn setting_off_leaves_the_command_line_untouched() {
+            assert_across_shells(
+                "Claude is launched exactly as typed",
+                &[],
+                "claude --model opus --dangerously-skip-permissions",
+                &["--model opus --dangerously-skip-permissions"],
+            );
+            assert_across_shells(
+                "Codex is launched exactly as typed",
+                &[],
+                "codex exec --full-auto",
+                &["exec --full-auto"],
+            );
+        }
+    }
 }
