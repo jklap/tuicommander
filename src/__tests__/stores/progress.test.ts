@@ -107,6 +107,37 @@ describe("progressStore", () => {
 		expect(terminalSetActive).toHaveBeenCalledWith("term-1");
 	});
 
+	it("pages backwards from the carried cursor, keeps the filter, and stops at the end of the list", async () => {
+		invokeMock.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "progress_status"
+					? status()
+					: { revision: 4, snapshotCursor: 4, events: [event()], nextBeforeSequence: 4 },
+			),
+		);
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		await store.refreshProject("/repo", false, { blockerOnly: true });
+
+		invokeMock.mockClear();
+		invokeMock.mockResolvedValue({ revision: 4, snapshotCursor: 4, events: [event("older")] });
+		await store.loadMore("/repo");
+
+		// The page request carries the cursor AND the active filter. Dropping either
+		// silently shows the first page again, or shows unfiltered rows below filtered ones.
+		expect(invokeMock).toHaveBeenCalledTimes(1);
+		expect(invokeMock).toHaveBeenCalledWith("progress_list", {
+			project: "/repo",
+			input: { blockerOnly: true, beforeSequence: 4, limit: 50 },
+		});
+		expect(store.state.projects["/repo"].events.map((e) => e.id)).toEqual(["event-1", "older"]);
+
+		// A page with no further cursor is the end: the next call must not ask again.
+		invokeMock.mockClear();
+		await store.loadMore("/repo");
+		expect(invokeMock).not.toHaveBeenCalled();
+	});
+
 	it("keeps command errors visible", async () => {
 		invokeMock.mockRejectedValue(new Error("revision conflict"));
 		const { createProgressStore } = await import("../../stores/progress");
