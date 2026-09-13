@@ -253,6 +253,14 @@ closed provenance. Its controls call the typed Progress commands; the component
 does not derive semantic state. The toolbar bell exposes one aggregate unread row,
 and `progress` in the command palette opens the same panel.
 
+`embedded` drops the side-panel chrome (resize handle, fixed width, left border)
+so the mobile tab can host the same component full-bleed. Docked, the panel sits
+inside `#terminal-container` like every other side panel, so its
+`max-width: 720px` rule fills the terminal area rather than the whole window —
+below that width the minimum width is released and the scope and export rows
+wrap. A window narrow enough to squeeze the terminal area itself is the mobile
+interface's job, not this rule's.
+
 ### ConfirmDialog (`ConfirmDialog/`)
 
 Reusable in-app confirmation dialog that replaces native Tauri `ask()` dialogs (which render as light-mode macOS system sheets). Uses shared `dialog.module.css` for consistent dark-theme styling.

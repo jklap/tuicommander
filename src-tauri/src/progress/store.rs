@@ -19,12 +19,16 @@ const RETRY_DEDUP_WINDOW_MS: u64 = 60_000;
 const STORE_DIR: &str = ".tuic";
 const STORE_FILE: &str = "progress.sqlite3";
 const RECOVERY_LOCK_FILE: &str = "progress.sqlite3.recovery.lock";
-const EXCLUDE_ENTRIES: [&str; 5] = [
+const EXCLUDE_ENTRIES: [&str; 6] = [
     ".tuic/progress.sqlite3",
     ".tuic/progress.sqlite3-wal",
     ".tuic/progress.sqlite3-shm",
     ".tuic/progress.sqlite3.recovery.lock",
     ".tuic/progress.sqlite3*.corrupt-*",
+    // The Markdown export coordinates concurrent writes here. Without this
+    // entry an export left an untracked file in the user's `git status` and
+    // the repository watcher read it as a working-tree change.
+    super::EXPORT_LOCK,
 ];
 
 #[derive(Clone, Debug)]
@@ -117,14 +121,21 @@ impl ProgressStore {
         result
     }
 
-    pub fn project_root(&self) -> &Path {
-        &self.project_root
-    }
-
+    /// Test-support accessor: the repository-watcher and ownership tests need
+    /// the file the store writes. Production reaches the store through
+    /// [`ProgressStore::open`] and never asks where it lives.
+    #[cfg(test)]
     pub fn database_path(&self) -> &Path {
         &self.db_path
     }
 
+    /// Insert an event without the reporting semantics — no pause check, no
+    /// deduplication. This is the fixture writer for tests that need a known
+    /// history, and it is `#[cfg(test)]` precisely because it does what
+    /// production must never do: every transport writes through
+    /// [`ProgressStore::report`], which honours the paused state and collapses
+    /// a caller's retry. Do not promote it back into the production surface.
+    #[cfg(test)]
     pub fn record(&self, new_event: &NewProgressEvent) -> Result<ProgressEvent, String> {
         new_event.validate()?;
         let mut conn = self.connect()?;
@@ -179,47 +190,21 @@ impl ProgressStore {
         })
     }
 
+    /// Unfiltered page, for tests that only care about order and identity.
+    /// It delegates so there is exactly ONE pager in the crate: the duplicate
+    /// implementation this replaced bound its open end as `i64::MAX` while
+    /// `list_filtered` bound `u64::MAX`, and that divergence hid a total
+    /// outage of every cursorless `progress_list` call.
+    #[cfg(test)]
     pub fn list(
         &self,
         before_sequence: Option<u64>,
         limit: Option<usize>,
     ) -> Result<ProgressPage, String> {
-        let conn = self.connect()?;
-        let revision = current_revision(&conn)?;
-        let snapshot_cursor = max_sequence(&conn)?;
-        let limit = limit.unwrap_or(DEFAULT_PAGE_LIMIT).clamp(1, MAX_PAGE_LIMIT);
-        let before = before_sequence
-            .map(i64_from_u64)
-            .transpose()?
-            .unwrap_or(i64::MAX);
-        let mut stmt = conn
-            .prepare(
-                "SELECT e.id, e.sequence, e.revision, e.created_at_ms, e.kind,
-                        e.summary, e.workstream_id, w.name, e.reporter_id,
-                        e.reporter_name, e.session_id, e.workspace_path
-                 FROM events e
-                 LEFT JOIN workstreams w ON w.id = e.workstream_id
-                 WHERE e.sequence < ?1
-                 ORDER BY e.sequence DESC
-                 LIMIT ?2",
-            )
-            .map_err(db_error("prepare progress history query"))?;
-        let rows = stmt
-            .query_map(params![before, limit as i64 + 1], row_to_event)
-            .map_err(db_error("query progress history"))?;
-        let mut events = rows
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(db_error("read progress history"))?;
-        let has_more = events.len() > limit;
-        events.truncate(limit);
-        let next_before_sequence = has_more
-            .then(|| events.last().map(|event| event.sequence))
-            .flatten();
-        Ok(ProgressPage {
-            revision,
-            snapshot_cursor,
-            events,
-            next_before_sequence,
+        self.list_filtered(&ProgressListInput {
+            before_sequence,
+            limit,
+            ..Default::default()
         })
     }
 
@@ -232,9 +217,13 @@ impl ProgressStore {
             .limit
             .unwrap_or(DEFAULT_PAGE_LIMIT)
             .clamp(1, MAX_PAGE_LIMIT);
-        let before = input.before_sequence.unwrap_or(u64::MAX);
+        // The open end of a range that SQLite has to bind is i64::MAX, not
+        // u64::MAX: every value here goes through `i64_from_u64`, which
+        // correctly refuses anything larger, so a u64::MAX default turned
+        // every cursorless page into `progress_value_out_of_range`.
+        let before = input.before_sequence.unwrap_or(i64::MAX as u64);
         let after_ms = input.created_after_ms.unwrap_or(0);
-        let before_ms = input.created_before_ms.unwrap_or(u64::MAX);
+        let before_ms = input.created_before_ms.unwrap_or(i64::MAX as u64);
         let kind = input.kind.map(ProgressKind::as_str);
         let mut stmt = conn.prepare(
             "SELECT e.id, e.sequence, e.revision, e.created_at_ms, e.kind,
@@ -593,50 +582,6 @@ impl ProgressStore {
             blockers,
             events,
         })
-    }
-
-    /// Rename a workstream while retaining every prior normalized name as an
-    /// alias. Transport-level correction commands add revision preconditions;
-    /// this storage primitive keeps the identity and grouping invariant atomic.
-    pub fn rename_workstream(&self, workstream_id: &str, new_name: &str) -> Result<u64, String> {
-        validate_workstream_name(new_name)?;
-        let name = new_name.trim();
-        let normalized = normalize_workstream(name);
-        let mut conn = self.connect()?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db_error("begin workstream rename transaction"))?;
-        let workstream = load_workstream(&tx, workstream_id)?;
-        if let Some(owner) = tx
-            .query_row(
-                "SELECT workstream_id FROM workstream_aliases WHERE normalized_alias = ?1",
-                [&normalized],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(db_error("check progress workstream alias"))?
-            && owner != workstream.id
-        {
-            return Err(format!(
-                "progress_workstream_conflict: '{name}' already identifies another workstream"
-            ));
-        }
-        tx.execute(
-            "UPDATE workstreams SET name = ?1, normalized_name = ?2 WHERE id = ?3",
-            params![name, normalized, workstream.id],
-        )
-        .map_err(db_error("rename progress workstream"))?;
-        tx.execute(
-            "INSERT INTO workstream_aliases (normalized_alias, workstream_id)
-             VALUES (?1, ?2)
-             ON CONFLICT(normalized_alias) DO NOTHING",
-            params![normalized, workstream.id],
-        )
-        .map_err(db_error("retain progress workstream alias"))?;
-        let revision = bump_revision(&tx)?;
-        tx.commit()
-            .map_err(db_error("commit workstream rename transaction"))?;
-        Ok(revision)
     }
 
     fn connect(&self) -> Result<Connection, String> {
@@ -1855,10 +1800,18 @@ mod tests {
                 Some("Shadow AI"),
             ))
             .unwrap();
-        let revision = store
-            .rename_workstream(first.workstream_id.as_deref().unwrap(), "AI Discovery")
+        // Renaming goes through the correction path every transport uses;
+        // there is no second rename entry point to drift away from it.
+        let receipt = store
+            .update(&ProgressUpdateInput {
+                expected_revision: 1,
+                corrections: vec![ProgressCorrection::RenameWorkstream {
+                    workstream_id: first.workstream_id.clone().unwrap(),
+                    name: "AI Discovery".to_string(),
+                }],
+            })
             .unwrap();
-        assert_eq!(revision, 2);
+        assert_eq!(receipt.revision, 2);
 
         let reopened = ProgressStore::open(project.path()).unwrap();
         let through_old_name = reopened
