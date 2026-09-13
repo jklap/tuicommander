@@ -107,26 +107,33 @@ export function useConfirmDialog() {
 	 *  whose commits exist nowhere else — a linked worktree's objects live in
 	 *  the parent and survive the directory. The number goes in the message
 	 *  because "remove?" and "destroy 3 commits?" are different questions. */
-	async function confirmRemoveWorktree(branchName: string, unpublishedCommits = 0): Promise<boolean> {
-		if (unpublishedCommits > 0) {
-			const plural = unpublishedCommits === 1 ? "commit exists" : "commits exist";
-			return await confirm({
-				title: "Destroy unpublished commits?",
-				message:
-					`${unpublishedCommits} ${plural} only in "${branchName}".\n\n` +
-					"This workspace is an independent clone, so removing it destroys them for good. " +
-					"Publish first to keep them.",
-				okLabel: "Delete anyway",
-				cancelLabel: "Cancel",
-				kind: "error",
-			});
-		}
+	async function confirmRemoveWorktree(
+		branchName: string,
+		status: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
+		kind: import("../stores/workspaceIdentity").WorkspaceKind,
+		deleteBranch: boolean,
+	): Promise<boolean> {
+		const dirty = status.dirty ? "dirty — uncommitted files will be discarded" : "clean";
+		const commits =
+			status.unpublishedCommits && status.unpublishedCommits > 0
+				? `${status.unpublishedCommits} unpublished commit${status.unpublishedCommits === 1 ? "" : "s"} will be destroyed`
+				: status.commitStatus === "merged"
+					? "HEAD is merged into the default branch"
+					: status.commitStatus === "published"
+						? "HEAD is published, but not merged into the default branch"
+						: "no clone-only commits will be lost";
+		const branchAction = deleteBranch
+			? kind === "cow"
+				? "Its independent local branch disappears with the clone."
+				: "Git will safely delete the local branch; if it is unmerged, the branch is kept."
+			: "The local branch will be kept.";
+		const destructive = status.removalSafety === "requires_force";
 		return await confirm({
-			title: "Remove worktree?",
-			message: `Remove ${branchName}?\nThis deletes the worktree directory and its local branch.`,
-			okLabel: "Remove",
+			title: destructive ? "Destroy workspace state?" : "Remove workspace?",
+			message: `Remove "${branchName}"?\n\nWorking tree: ${dirty}.\nCommit state: ${commits}.\n${branchAction}`,
+			okLabel: destructive ? "Delete anyway" : "Remove",
 			cancelLabel: "Cancel",
-			kind: "warning",
+			kind: destructive ? "error" : "warning",
 		});
 	}
 

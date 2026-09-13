@@ -33,6 +33,7 @@ interface WorktreeRow {
 	isMain: boolean;
 	prStatus: BranchPrStatus | null;
 	lastCommitTs: number | null;
+	lifecycleStatus?: import("../../stores/workspaceIdentity").WorkspaceLifecycleStatus;
 }
 
 /** Orphan worktree (detached HEAD, branch deleted) */
@@ -70,14 +71,6 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 
 	// Orphan worktree detection (with cancellation guard for rapid open/close)
 	const [orphanRows, setOrphanRows] = createSignal<OrphanRow[]>([]);
-
-	/// How many commits exist only in each COW workspace, by row id.
-	///
-	/// Fetched when the manager opens rather than on every repo refresh: each
-	/// count refreshes the parent mirror, so it costs a fetch per clone, and the
-	/// number only matters while this panel is on screen. Absent means "not
-	/// counted yet", which renders as nothing rather than as zero.
-	const [unpublished, setUnpublished] = createSignal<Record<string, number>>({});
 
 	createEffect(() => {
 		if (!isOpen()) {
@@ -153,6 +146,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 					isMain: workspace.isMain,
 					prStatus: githubStore.getPrStatus(repo.path, workspace.branchName),
 					lastCommitTs: workspace.lastCommitTs ?? null,
+					lifecycleStatus: workspace.lifecycleStatus,
 				});
 			}
 		}
@@ -163,39 +157,6 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 		});
 
 		return rows;
-	});
-
-	// Count the unpublished commits of every clone while the panel is open. One
-	// pass per open, cancelled if it closes underneath us.
-	createEffect(() => {
-		if (!isOpen()) {
-			setUnpublished({});
-			return;
-		}
-		const clones = allWorktrees().filter((row) => row.kind === "cow");
-		if (clones.length === 0) return;
-
-		let cancelled = false;
-		void Promise.allSettled(
-			clones.map(async (row) => {
-				const count = await invoke<number>("count_unpublished_commits", {
-					repoPath: row.repoPath,
-					workspaceId: row.workspaceId,
-				});
-				return [row.id, count] as const;
-			}),
-		).then((results) => {
-			if (cancelled) return;
-			const counted: Record<string, number> = {};
-			for (const result of results) {
-				if (result.status === "fulfilled") counted[result.value[0]] = result.value[1];
-				else appLogger.debug("git", "unpublished count failed", result.reason);
-			}
-			setUnpublished(counted);
-		});
-		onCleanup(() => {
-			cancelled = true;
-		});
 	});
 
 	// Unique repos for filter pills
@@ -384,12 +345,35 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 													clone
 												</span>
 											</Show>
-											<Show when={wt.kind === "cow" && (unpublished()[wt.id] ?? 0) > 0}>
+											<Show when={(wt.lifecycleStatus?.unpublishedCommits ?? 0) > 0}>
 												<span
 													class={s.unpublishedBadge}
 													title="Commits that exist only in this workspace — removing it destroys them"
 												>
-													{unpublished()[wt.id]} unpublished
+													{wt.lifecycleStatus?.unpublishedCommits} unpublished
+												</span>
+											</Show>
+											<Show when={wt.lifecycleStatus?.dirty}>
+												<span class={s.unpublishedBadge} title="Staged, unstaged, or untracked files exist">
+													Dirty
+												</span>
+											</Show>
+											<Show
+												when={
+													wt.lifecycleStatus?.commitStatus === "published" ||
+													wt.lifecycleStatus?.commitStatus === "merged" ||
+													wt.lifecycleStatus?.commitStatus === "unknown"
+												}
+											>
+												<span
+													class={s.lifecycleBadge}
+													title={wt.lifecycleStatus?.error ?? "Backend commit-reachability verdict"}
+												>
+													{wt.lifecycleStatus?.commitStatus === "unknown"
+														? "Unknown"
+														: wt.lifecycleStatus?.commitStatus === "published"
+															? "Published"
+															: "Merged"}
 												</span>
 											</Show>
 											<Show when={wt.prStatus}>{(pr) => <PrBadge state={pr().state} number={pr().number} />}</Show>

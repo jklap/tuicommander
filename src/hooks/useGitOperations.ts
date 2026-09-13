@@ -39,6 +39,7 @@ export interface GitOperationsDeps {
 			merged_branches: string[];
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
+			workspace_statuses: Record<string, unknown>;
 		}>;
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, import("./useRepository").WorkspaceWorktree>;
@@ -47,6 +48,17 @@ export interface GitOperationsDeps {
 		getRepoDiffStats: (repoPath: string) => Promise<{
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
+			workspace_statuses: Record<
+				string,
+				{
+					dirty: boolean | null;
+					commit_status: import("../stores/workspaceIdentity").WorkspaceCommitStatus;
+					unpublished_commits: number | null;
+					removal_safety: import("../stores/workspaceIdentity").WorkspaceRemovalSafety;
+					dirty_provenance: import("../stores/workspaceIdentity").WorkspaceDirtyProvenance | null;
+					error?: string;
+				}
+			>;
 		}>;
 		removeWorktree: (
 			repoPath: string,
@@ -99,6 +111,10 @@ export interface GitOperationsDeps {
 		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
 		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
 		countUnpublishedCommits: (repoPath: string, workspaceId: string) => Promise<number>;
+		getWorkspaceLifecycle: (
+			repoPath: string,
+			workspaceId: string,
+		) => Promise<import("../stores/workspaceIdentity").WorkspaceLifecycleStatus>;
 		publishWorkspace: (repoPath: string, workspaceId: string) => Promise<import("./useRepository").PublishOutcome>;
 		switchBranch: (
 			repoPath: string,
@@ -114,7 +130,12 @@ export interface GitOperationsDeps {
 	};
 	dialogs: {
 		confirmRemoveRepo: (repoName: string) => Promise<boolean>;
-		confirmRemoveWorktree: (branchName: string, unpublishedCommits?: number) => Promise<boolean>;
+		confirmRemoveWorktree: (
+			branchName: string,
+			status: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
+			kind: import("../stores/workspaceIdentity").WorkspaceKind,
+			deleteBranch: boolean,
+		) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (paths: string[]) => Promise<boolean>;

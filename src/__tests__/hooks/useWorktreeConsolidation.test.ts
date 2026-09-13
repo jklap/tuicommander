@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn(() => Promise.resolve(null)),
@@ -25,6 +25,14 @@ describe("worktree consolidation", () => {
 		repoSettingsStore = (await import("../../stores/repoSettings")).repoSettingsStore;
 		terminalsStore = (await import("../../stores/terminals")).terminalsStore;
 		(await import("../../stores/paneLayout")).resetGroupCounter();
+	});
+
+	// `saveRepos`'s debounce schedules a real 500ms setTimeout unconditionally
+	// (the `hydrated` check only gates the eventual callback), so every
+	// `repositoriesStore.add`/`addTerminalToWorkspace` call above leaves one
+	// pending — cancel it or it leaks past the test into vitest's detector.
+	afterEach(() => {
+		repositoriesStore._testCancelPendingSave();
 	});
 
 	const REPO = "/repo/a";

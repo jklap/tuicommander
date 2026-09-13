@@ -7,6 +7,15 @@ import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
 import type { AgentSeed } from "./agentSeed";
 
+interface WorkspaceLifecycleResponse {
+	dirty: boolean | null;
+	commit_status: import("../../stores/workspaceIdentity").WorkspaceCommitStatus;
+	unpublished_commits: number | null;
+	removal_safety: import("../../stores/workspaceIdentity").WorkspaceRemovalSafety;
+	dirty_provenance: import("../../stores/workspaceIdentity").WorkspaceDirtyProvenance | null;
+	error?: string;
+}
+
 export interface PendingCreation {
 	repoPath: string;
 	displayName: string;
@@ -34,6 +43,7 @@ interface RepositoryRefreshCoordinatorDeps {
 		getRepoDiffStats: (repoPath: string) => Promise<{
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
+			workspace_statuses: Record<string, WorkspaceLifecycleResponse>;
 		}>;
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
 		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
@@ -359,7 +369,10 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					const update: Partial<import("../../stores/repositories").WorkspaceState> = {
 						worktreePath: wt.path,
 						branchName: wt.branch,
-						isMerged: mergedSet.has(wt.branch),
+						kind: wt.path === repoPath ? "main" : wt.kind,
+						// A clone can share a branch name while pointing at another
+						// commit. Its exact reachability arrives in Phase 2.
+						isMerged: wt.kind === "cow" ? false : mergedSet.has(wt.branch),
 					};
 					// Branch finished background preparation — clear placeholder state
 					// and queue the deferred setupNewWorktree (setup script, initial
@@ -436,6 +449,20 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 							repositoriesStore.updateWorkspaceStats(repoPath, workspaceId, ds.additions, ds.deletions);
 						}
 						const ts = stats.last_commit_ts?.[workspace.branchName];
+						const lifecycle = stats.workspace_statuses?.[workspaceId];
+						if (lifecycle) {
+							repositoriesStore.setWorkspace(repoPath, workspaceId, {
+								isMerged: lifecycle.commit_status === "merged",
+								lifecycleStatus: {
+									dirty: lifecycle.dirty,
+									commitStatus: lifecycle.commit_status,
+									unpublishedCommits: lifecycle.unpublished_commits,
+									removalSafety: lifecycle.removal_safety,
+									dirtyProvenance: lifecycle.dirty_provenance,
+									error: lifecycle.error,
+								},
+							});
+						}
 						if (ts !== undefined) {
 							// Rust emits Unix seconds (%ct); JS Date.now() uses milliseconds
 							repositoriesStore.setWorkspace(repoPath, workspaceId, {
@@ -582,7 +609,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		if (!repoSettingsStore.getEffective(repoPath)?.autoArchiveMerged) return;
 
 		const mergedLinkedBranches = Object.values(branches).filter(
-			(b) => b.isMerged && b.worktreePath !== null && b.worktreePath !== repoPath,
+			(b) => b.kind === "worktree" && b.isMerged && b.worktreePath !== null && b.worktreePath !== repoPath,
 		);
 		if (mergedLinkedBranches.length === 0) return;
 

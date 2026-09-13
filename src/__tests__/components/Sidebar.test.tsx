@@ -55,6 +55,7 @@ vi.mock("../../stores/repositories", () => ({
 			activeRepoPath: null as string | null,
 			groups: {} as Record<string, unknown>,
 			groupOrder: [] as string[],
+			staleTempCandidates: [] as Array<{ path: string; displayName: string }>,
 		},
 		getActive: mockGetActive,
 		getOrderedRepos: mockGetOrderedRepos,
@@ -1024,6 +1025,122 @@ describe("Sidebar", () => {
 			const delStat = container.querySelector(".statDel");
 			expect(addStat!.textContent).toBe("+10");
 			expect(delStat!.textContent).toBe("-5");
+		});
+
+		it("compacts large stats while retaining exact counts in the tooltip", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 9876,
+							deletions: 2913,
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelector(".statAdd")?.textContent).toBe("+9.9k");
+			expect(container.querySelector(".statDel")?.textContent).toBe("-2.9k");
+			expect(container.querySelector(".branchStats")?.getAttribute("title")).toBe("Tracked line changes: +9876 -2913");
+		});
+
+		it("shows unpublished lifecycle state even when tracked line stats are zero", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						cow: {
+							workspaceId: "cow",
+							branchName: "feature",
+							kind: "cow",
+							isMain: false,
+							worktreePath: "/repo/cow",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							lifecycleStatus: {
+								dirty: true,
+								commitStatus: "unpublished",
+								unpublishedCommits: 5,
+								removalSafety: "requires_force",
+							},
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const lifecycleBadge = container.querySelector(".lifecycleBadge");
+			expect(lifecycleBadge?.textContent).toBe("5 unpublished");
+			expect(lifecycleBadge?.getAttribute("title")).toBe(
+				"Dirty working tree; 5 unpublished commits; destructive confirmation required",
+			);
+			expect(container.querySelector(".branchStats")).toBeNull();
+		});
+
+		it("names inherited dirtiness as context, not as removal-safety evidence", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						cow: {
+							workspaceId: "cow",
+							branchName: "feature",
+							kind: "cow",
+							isMain: false,
+							worktreePath: "/repo/cow",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							lifecycleStatus: {
+								dirty: true,
+								commitStatus: "published",
+								unpublishedCommits: 0,
+								removalSafety: "requires_force",
+								dirtyProvenance: "inherited_only",
+							},
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const lifecycleBadge = container.querySelector(".lifecycleBadge");
+			expect(lifecycleBadge?.textContent).toBe("Dirty");
+			expect(lifecycleBadge?.getAttribute("title")).toBe(
+				"Dirty working tree (inherited from the parent at creation, not edited here); HEAD is published but not merged; destructive confirmation required",
+			);
+		});
+
+		it("names dirtiness changed after creation, distinctly from inherited dirtiness", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						cow: {
+							workspaceId: "cow",
+							branchName: "feature",
+							kind: "cow",
+							isMain: false,
+							worktreePath: "/repo/cow",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							lifecycleStatus: {
+								dirty: true,
+								commitStatus: "published",
+								unpublishedCommits: 0,
+								removalSafety: "requires_force",
+								dirtyProvenance: "changed_since_creation",
+							},
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const lifecycleBadge = container.querySelector(".lifecycleBadge");
+			expect(lifecycleBadge?.getAttribute("title")).toBe(
+				"Dirty working tree (includes edits made after creation); HEAD is published but not merged; destructive confirmation required",
+			);
 		});
 
 		it("does not show StatsBadge when both additions and deletions are 0", () => {

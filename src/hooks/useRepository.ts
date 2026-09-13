@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
+import type { WorkspaceLifecycleStatus } from "../stores/workspaceIdentity";
 import type { RepoInfo } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -54,6 +55,7 @@ export interface RemoveWorktreeResult {
 export interface WorkspaceWorktree {
 	branch: string;
 	path: string;
+	kind: "cow" | "worktree";
 }
 
 /** Which mechanism to use. The caller asks for a workspace, not a mechanism, so
@@ -172,6 +174,26 @@ export function useRepository() {
 	 *  worktree, whose objects live in the parent and outlive the directory. */
 	async function countUnpublishedCommits(repoPath: string, workspaceId: string): Promise<number> {
 		return await invoke<number>("count_unpublished_commits", { repoPath, workspaceId });
+	}
+
+	/** Fresh backend preflight used immediately before removal. */
+	async function getWorkspaceLifecycle(repoPath: string, workspaceId: string): Promise<WorkspaceLifecycleStatus> {
+		const status = await invoke<{
+			dirty: boolean | null;
+			commit_status: WorkspaceLifecycleStatus["commitStatus"];
+			unpublished_commits: number | null;
+			removal_safety: WorkspaceLifecycleStatus["removalSafety"];
+			dirty_provenance: WorkspaceLifecycleStatus["dirtyProvenance"];
+			error?: string;
+		}>("get_workspace_lifecycle", { repoPath, workspaceId });
+		return {
+			dirty: status.dirty,
+			commitStatus: status.commit_status,
+			unpublishedCommits: status.unpublished_commits,
+			removalSafety: status.removal_safety,
+			dirtyProvenance: status.dirty_provenance,
+			error: status.error,
+		};
 	}
 
 	/** Get a workspace's commits into the parent and out to origin. The two
@@ -343,12 +365,13 @@ export function useRepository() {
 		merged_branches: string[];
 		diff_stats: Record<string, { additions: number; deletions: number }>;
 		last_commit_ts: Record<string, number | null>;
+		workspace_statuses: Record<string, unknown>;
 	}> {
 		try {
 			return await invoke("get_repo_summary", { repoPath });
 		} catch (err) {
 			appLogger.warn("git", `Failed to get repo summary for ${repoPath}`, err);
-			return { worktree_paths: {}, merged_branches: [], diff_stats: {}, last_commit_ts: {} };
+			return { worktree_paths: {}, merged_branches: [], diff_stats: {}, last_commit_ts: {}, workspace_statuses: {} };
 		}
 	}
 
@@ -372,13 +395,24 @@ export function useRepository() {
 	async function getRepoDiffStats(repoPath: string): Promise<{
 		diff_stats: Record<string, { additions: number; deletions: number }>;
 		last_commit_ts: Record<string, number | null>;
+		workspace_statuses: Record<
+			string,
+			{
+				dirty: boolean | null;
+				commit_status: import("../stores/workspaceIdentity").WorkspaceCommitStatus;
+				unpublished_commits: number | null;
+				removal_safety: import("../stores/workspaceIdentity").WorkspaceRemovalSafety;
+				dirty_provenance: import("../stores/workspaceIdentity").WorkspaceDirtyProvenance | null;
+				error?: string;
+			}
+		>;
 	}> {
 		try {
 			return await invoke("get_repo_diff_stats", { repoPath });
 		} catch (err) {
 			checkTccError(err, repoPath);
 			appLogger.warn("git", `Failed to get repo diff stats for ${repoPath}`, err);
-			return { diff_stats: {}, last_commit_ts: {} };
+			return { diff_stats: {}, last_commit_ts: {}, workspace_statuses: {} };
 		}
 	}
 
@@ -470,6 +504,7 @@ export function useRepository() {
 		removeWorktree,
 		createWorktree,
 		countUnpublishedCommits,
+		getWorkspaceLifecycle,
 		publishWorkspace,
 		getWorktreePaths,
 		getChangedFiles,
