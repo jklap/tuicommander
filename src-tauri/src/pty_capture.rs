@@ -29,6 +29,10 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Only the decoder reads TUICCAP1, and the decoder is test-only: we write
+/// TUICCAP2 and read the older magic solely to keep the existing fixture corpus
+/// replayable.
+#[cfg(test)]
 const CAPTURE_MAGIC_V1: &[u8] = b"TUICCAP1\n";
 const CAPTURE_MAGIC: &[u8] = b"TUICCAP2\n";
 const GEOMETRY_BYTES: usize = 4; // rows:u16 + cols:u16
@@ -100,10 +104,6 @@ pub(crate) fn set_enabled(enabled: bool, session_filter: Option<String>, dir: Pa
 /// Record one raw chunk. Called from the PTY read path, so it must never panic
 /// and never block on anything but its own short-lived lock: a capture that can
 /// take a session down is worse than no capture.
-pub(crate) fn record(session_id: &str, data: &[u8]) {
-    record_with_geometry(session_id, data, None);
-}
-
 pub(crate) fn record_with_geometry(session_id: &str, data: &[u8], geometry: Option<(u16, u16)>) {
     record_direction(session_id, CaptureDirection::Output, data, geometry);
 }

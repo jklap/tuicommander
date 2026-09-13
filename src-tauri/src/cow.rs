@@ -180,22 +180,30 @@ pub(crate) struct WarmingReport {
     pub(crate) warnings: Vec<String>,
 }
 
+/// Ask git which directories are ignored. A git failure is a warning rather
+/// than an error: the worktree is complete and valid, it just starts cold.
+fn warming_candidates(src: &Path, dest: &Path) -> Result<Vec<PathBuf>, WarmingReport> {
+    ignored_directories(src).map_err(|reason| WarmingReport {
+        warmed: 0,
+        warnings: vec![format!(
+            "could not ask git which directories are ignored, so '{}' starts cold: {reason}",
+            dest.display()
+        )],
+    })
+}
+
 /// Production wrapper. Probe once so a filesystem without clonefile support
 /// produces one useful warning instead of one failure for every ignored tree.
 pub(crate) fn warm_worktree(src: &Path, dest: &Path) -> WarmingReport {
-    let candidates = match ignored_directories(src) {
-        Ok(candidates) if candidates.is_empty() => return WarmingReport::default(),
+    let candidates = match warming_candidates(src, dest) {
         Ok(candidates) => candidates,
-        Err(reason) => {
-            return WarmingReport {
-                warmed: 0,
-                warnings: vec![format!(
-                    "could not ask git which directories are ignored, so '{}' starts cold: {reason}",
-                    dest.display()
-                )],
-            };
-        }
+        Err(report) => return report,
     };
+    if candidates.is_empty() {
+        // Nothing to warm: skip the probe so a non-clonefile filesystem does
+        // not warn about a copy that was never going to happen.
+        return WarmingReport::default();
+    }
     match probe_cow_support(src, dest.parent().unwrap_or(dest)) {
         CowSupport::Supported => warm_candidates(src, dest, candidates, clone_tree),
         CowSupport::Unsupported(reason) => WarmingReport {
@@ -208,24 +216,22 @@ pub(crate) fn warm_worktree(src: &Path, dest: &Path) -> WarmingReport {
     }
 }
 
-/// Copy the parent's git-ignored directories into a linked worktree. A failed
-/// copy leaves a complete, valid, but cold worktree and is therefore a warning.
+/// Copy the parent's git-ignored directories into a linked worktree with an
+/// injected copy primitive. A failed copy leaves a complete, valid, but cold
+/// worktree and is therefore a warning.
+///
+/// Test-only. Production always clonefiles, and the probe that decides whether
+/// it can belongs to `warm_worktree`; this seam exists so the tests can drive
+/// `warm_candidates` with a copy that does not depend on the filesystem.
+#[cfg(test)]
 pub(crate) fn warm_worktree_with(
     src: &Path,
     dest: &Path,
     copy: impl Fn(&Path, &Path) -> Result<(), String>,
 ) -> WarmingReport {
-    let candidates = match ignored_directories(src) {
+    let candidates = match warming_candidates(src, dest) {
         Ok(candidates) => candidates,
-        Err(reason) => {
-            return WarmingReport {
-                warmed: 0,
-                warnings: vec![format!(
-                    "could not ask git which directories are ignored, so '{}' starts cold: {reason}",
-                    dest.display()
-                )],
-            };
-        }
+        Err(report) => return report,
     };
     warm_candidates(src, dest, candidates, copy)
 }
