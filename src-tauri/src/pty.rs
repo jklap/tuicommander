@@ -1146,7 +1146,6 @@ pub(crate) struct Evidence {
 /// observations, reset by any other evidence — see `record_idle`).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TurnEvidence {
-    epoch: u64,
     busy: Option<Evidence>,
     idle: Option<Evidence>,
     awaiting: Option<Evidence>,
