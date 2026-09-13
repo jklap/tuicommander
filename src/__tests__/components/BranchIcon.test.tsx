@@ -8,6 +8,12 @@ function iconClass(el: HTMLElement | null): string {
 }
 
 describe("BranchIcon color", () => {
+	it("renders a distinct cow icon for copy-on-write clones", () => {
+		const { container } = render(() => (
+			<BranchIcon isMainBranch={false} isMainWorktree={false} isCow branchHasTerminals={true} />
+		));
+		expect(container.querySelector('svg[aria-label="Copy-on-write clone"]')).not.toBeNull();
+	});
 	it("a worktree with no open terminal is idle (grey), even if the repo has tabs elsewhere", () => {
 		const { container } = render(() => (
 			<BranchIcon isMainBranch={false} isMainWorktree={false} branchHasTerminals={false} />
