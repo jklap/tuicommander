@@ -246,9 +246,17 @@ pub async fn basic_auth_middleware(
         .get::<axum_server_dual_protocol::Protocol>()
         .is_some_and(|p| matches!(p, axum_server_dual_protocol::Protocol::Tls));
 
-    // Fast path: valid session cookie skips bcrypt entirely
+    // Fast path: valid session cookie skips bcrypt entirely.
+    // The cookie is re-issued on every hit so the expiry slides: with an absolute
+    // Max-Age a phone was logged out exactly `session_token_duration_secs` (1 day
+    // by default) after scanning the QR, even while in constant use, and fell back
+    // to the Basic Auth prompt because the SPA stores the token nowhere.
     if has_valid_session_cookie(&req, &session_token) {
-        return next.run(req).await;
+        let mut response = next.run(req).await;
+        if let Ok(val) = session_cookie_value(&session_token, token_duration_secs, is_tls).parse() {
+            response.headers_mut().insert(header::SET_COOKIE, val);
+        }
+        return response;
     }
 
     // Primary remote auth: valid ?token=<session_token> in URL.
@@ -681,6 +689,51 @@ mod tests {
     fn sweep_empty_map_is_noop() {
         let map: dashmap::DashMap<IpAddr, (u32, std::time::Instant)> = dashmap::DashMap::new();
         assert_eq!(sweep_expired_rate_limits(&map, 300), 0);
+    }
+
+    /// A phone authenticates once by scanning the QR and then never sends the
+    /// token again — the SPA stores it nowhere, so the cookie is the whole
+    /// session. With an absolute `Max-Age` the device was logged out exactly
+    /// `session_token_duration_secs` after the scan (1 day by default) even
+    /// while in daily use, and fell back to the Basic Auth prompt. Every
+    /// cookie-authenticated request must therefore re-issue the cookie.
+    #[tokio::test]
+    async fn cookie_fast_path_slides_the_expiry() {
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state
+            .config
+            .write()
+            .services
+            .auth
+            .session_token_duration_secs = 86400;
+
+        let app = axum::Router::new()
+            .route("/ping", axum::routing::get(|| async { "pong" }))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                basic_auth_middleware,
+            ));
+
+        // A public address: neither the desktop loopback bypass nor the LAN
+        // bypass may carry this request — only the cookie.
+        let req = Request::get("/ping")
+            .header(header::COOKIE, "tui-session=test-token")
+            .extension(ConnectInfo(SocketAddr::from(([203, 0, 113, 5], 51234))))
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("a cookie-authenticated request must refresh the cookie")
+            .to_str()
+            .unwrap();
+        assert!(cookie.contains("tui-session=test-token"), "got {cookie}");
+        assert!(cookie.contains("Max-Age=86400"), "got {cookie}");
     }
 
     #[test]
