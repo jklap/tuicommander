@@ -1,5 +1,6 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { ActionEntry } from "../../actions/actionRegistry";
+import { appLogger } from "../../stores/appLogger";
 import { commandPaletteStore } from "../../stores/commandPalette";
 import { registerModal } from "../../stores/modalStack";
 import { paneLayoutStore } from "../../stores/paneLayout";
@@ -103,6 +104,30 @@ export function isBrowserCommandPaletteAction(action: ActionEntry): boolean {
 	return BROWSER_ACTION_IDS.has(action.id) || BROWSER_ACTION_PREFIXES.some((prefix) => action.id.startsWith(prefix));
 }
 
+/**
+ * `ActionEntry.label` is typed `string`, but the list is assembled from data this
+ * process does not fully control — a repo record read from disk, or a plugin
+ * action registered across the iframe/postMessage boundary — so a corrupt or
+ * missing label can still reach here as `undefined`. `baseSort` below calls
+ * `.localeCompare` on every label unconditionally; an invalid one used to crash
+ * the whole palette (and, via the ErrorBoundary, the app) instead of just that
+ * one row (#763-d219). Logged once per offending id so a corrupt source is
+ * visible without spamming on every keystroke's re-sort.
+ */
+const loggedInvalidLabelActionIds = new Set<string>();
+
+function sanitizedActionLabel(action: ActionEntry): string {
+	if (typeof action.label === "string" && action.label.length > 0) return action.label;
+	if (!loggedInvalidLabelActionIds.has(action.id)) {
+		loggedInvalidLabelActionIds.add(action.id);
+		appLogger.error("app", "Command palette action has an invalid label; falling back to its id", {
+			id: action.id,
+			label: action.label,
+		});
+	}
+	return action.id || "(unnamed action)";
+}
+
 export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 	const [selectedIndex, setSelectedIndex] = createSignal(0);
 	let inputRef: HTMLInputElement | undefined;
@@ -111,9 +136,13 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 	const isOpen = () => commandPaletteStore.state.isOpen;
 	const mode = () => commandPaletteStore.mode();
 	const searchQuery = () => commandPaletteStore.searchQuery();
-	const availableActions = createMemo(() =>
-		props.browserMode ? props.actions.filter(isBrowserCommandPaletteAction) : props.actions,
-	);
+	const availableActions = createMemo(() => {
+		const base = props.browserMode ? props.actions.filter(isBrowserCommandPaletteAction) : props.actions;
+		return base.map((action) => {
+			const label = sanitizedActionLabel(action);
+			return label === action.label ? action : { ...action, label };
+		});
+	});
 
 	/**
 	 * Rebuild the BM25 index whenever the action list changes. The corpus is

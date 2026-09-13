@@ -19,6 +19,7 @@ import { GroupSection } from "./GroupSection";
 import { ParkedReposPopover } from "./ParkedReposPopover";
 import { RepoSection } from "./RepoSection";
 import s from "./Sidebar.module.css";
+import { StaleTempRepairPopover } from "./StaleTempRepairPopover";
 import { useSidebarDragDrop } from "./useSidebarDragDrop";
 
 export interface SidebarProps {
@@ -144,6 +145,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
 	// Parked repos popover state
 	const [parkedPopoverVisible, setParkedPopoverVisible] = createSignal(false);
+	const [staleTempPopoverVisible, setStaleTempPopoverVisible] = createSignal(false);
 	const parkedCount = createMemo(() => repositoriesStore.getParkedRepos().length);
 
 	// Reset manual flag whenever target is cleared (prevents orphaned flag)
@@ -572,6 +574,21 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 							<span class={s.parkedBadge}>{parkedCount()}</span>
 						</button>
 					</Show>
+					<Show when={repositoriesStore.state.staleTempCandidates.length > 0}>
+						<button
+							class={s.footerAction}
+							onClick={() => setStaleTempPopoverVisible((v) => !v)}
+							title={t("sidebar.staleTempRepos", "Stale repositories awaiting repair")}
+							style={{ position: "relative", color: "var(--error)" }}
+						>
+							<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+								<path d="M8 1.5l6.5 11.5H1.5L8 1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+								<path d="M8 6v3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+								<circle cx="8" cy="11.2" r="0.7" fill="currentColor" />
+							</svg>
+							<span class={s.parkedBadge}>{repositoriesStore.state.staleTempCandidates.length}</span>
+						</button>
+					</Show>
 					<Show when={tunnelsStore.state.profiles.length > 0}>
 						{(() => {
 							const connectedCount = () =>
@@ -634,6 +651,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 						if (branch) props.onBranchSelect(repoPath, branch);
 					}}
 				/>
+			</Show>
+
+			{/* Stale-temp repair popover (#763-d219) */}
+			<Show when={staleTempPopoverVisible()}>
+				<StaleTempRepairPopover onClose={() => setStaleTempPopoverVisible(false)} />
 			</Show>
 
 			{/* PR detail popover (triggered from PrStateBadge click) */}
