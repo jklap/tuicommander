@@ -7,15 +7,25 @@
 # diff run (`--in-diff`); a full-tree run is N mutants x one incremental build
 # of the lib crate and is deliberately not offered.
 #
-# Runs `--in-place` in a disposable `git archive` export under .tmp/ instead of
-# the copy cargo-mutants makes by default: `tauri::generate_context!` needs
-# `../dist` next to src-tauri, which a copy of the workspace root does not have,
-# and the copy would land in $TMPDIR where every freshly built test binary is
-# scanned on exec. `--in-place` implies one job, which is also the budget.
+# Runs `--in-place` in a disposable local CLONE under .tmp/ instead of the copy
+# cargo-mutants makes by default: `tauri::generate_context!` needs `../dist`
+# next to src-tauri, which a copy of the workspace root does not have, and the
+# copy would land in $TMPDIR where every freshly built test binary is scanned
+# on exec. `--in-place` implies one job, which is also the budget.
 #
-# An export, not a worktree: a detached worktree is an "orphan" to a running
+# A clone, not a worktree: a detached worktree is an "orphan" to a running
 # TUICommander, and its orphan cleanup removes it on the next repo refresh —
-# mid-run, with the mutant applied.
+# mid-run, with the mutant applied. A clone is an independent repository, absent
+# from .git/worktrees, so that cleanup cannot see it.
+#
+# A clone, not `git archive`, because twelve tests in git.rs call
+# get_commit_log and friends on `env!("CARGO_MANIFEST_DIR")/..` — the repository
+# they sit in. get_commit_log rejects a path that is not a repository rather
+# than letting git discover one upward, so in a plain export the BASELINE test
+# run failed on `get_commit_log_count_clamped_to_500` and no mutant was tested.
+# `--local` hardlinks the object store, so the real history costs almost
+# nothing. Those tests asserting against their own checkout is a separate
+# problem this script only works around.
 set -euo pipefail
 
 RANGE="${1:-HEAD~1}"
@@ -41,10 +51,13 @@ if ! grep -q '^+++ b/.*\.rs$' "$DIFF"; then
   echo "no Rust changes in $RANGE..HEAD"; exit 0
 fi
 
-# A fresh export every run: an interrupted run leaves a mutant applied, and
-# there is no git checkout to restore it from.
-rm -rf "$SRC" && mkdir -p "$SRC"
-git -C "$ROOT" archive HEAD | tar -x -C "$SRC"
+# A fresh clone every run: an interrupted run leaves a mutant applied in the
+# working tree, and starting from a known-clean checkout is cheaper to reason
+# about than restoring one.
+rm -rf "$SRC"
+# `--local` hardlinks the object store: the 145 MB of history costs no copy.
+git clone --local --quiet "$ROOT" "$SRC"
+git -C "$SRC" checkout --quiet --detach "$(git -C "$ROOT" rev-parse HEAD)"
 # generate_context! embeds ../dist; tauri-build checks the gitignored sidecar.
 mkdir -p "$SRC/dist" "$SRC/src-tauri/binaries"
 cp -R "$ROOT/dist/." "$SRC/dist/"
