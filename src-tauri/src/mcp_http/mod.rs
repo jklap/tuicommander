@@ -2528,6 +2528,123 @@ mod tests {
         assert_eq!(json["ok"], true);
     }
 
+    /// Every `/progress/*` route, with a body its extractors accept.
+    ///
+    /// The bodies must be VALID. An extractor runs before the handler, so a
+    /// malformed one answers 422 without ever reaching the auth check — and a
+    /// mutant that removes the auth check answers 422 too. The test would then
+    /// pass against both and prove nothing.
+    fn progress_routes() -> Vec<(&'static str, &'static str, serde_json::Value)> {
+        vec![
+            ("GET", "/progress/status", serde_json::Value::Null),
+            ("POST", "/progress/pause", serde_json::Value::Null),
+            ("POST", "/progress/resume", serde_json::Value::Null),
+            (
+                "POST",
+                "/progress/delete",
+                serde_json::json!({"eventIds": []}),
+            ),
+            (
+                "POST",
+                "/progress/clear",
+                serde_json::json!({"expectedRevision": 0}),
+            ),
+            (
+                "POST",
+                "/progress/update",
+                serde_json::json!({"expectedRevision": 0, "corrections": []}),
+            ),
+            (
+                "POST",
+                "/progress/read",
+                serde_json::json!({"snapshotCursor": 0}),
+            ),
+            (
+                "POST",
+                "/progress/export",
+                serde_json::json!({"operation": "preview"}),
+            ),
+        ]
+    }
+
+    fn progress_request(
+        method: &str,
+        path: &str,
+        body: &serde_json::Value,
+        addr: std::net::SocketAddr,
+    ) -> Request<Body> {
+        let url = format!("{path}?path=/nonexistent-project-for-routing-only");
+        let builder = Request::builder().method(method).uri(url);
+        let mut req = if body.is_null() {
+            builder.body(Body::empty()).expect("build request")
+        } else {
+            builder
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("build request with body")
+        };
+        req.extensions_mut().insert(ConnectInfo(addr));
+        req
+    }
+
+    /// `edd69ea7` moved the Progress routes into `shared_routes()` so a
+    /// `tuic-remote` daemon serves them, and asserted in prose that "auth is
+    /// unchanged". Nothing tested it: `progress_auth` had no test anywhere, and
+    /// mutating it to `None` — always authorised — survived the whole suite.
+    #[tokio::test]
+    async fn every_progress_route_rejects_a_remote_unauthenticated_caller() {
+        // TEST-NET-3, so it can never be mistaken for loopback.
+        let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
+        for (method, path, body) in progress_routes() {
+            let app = build_router(test_state(), false, true);
+            let resp = app
+                .oneshot(progress_request(method, path, &body, remote))
+                .await
+                .expect("router responds");
+            assert_eq!(
+                resp.status(),
+                StatusCode::FORBIDDEN,
+                "{method} {path} must reject an unauthenticated non-loopback caller"
+            );
+        }
+    }
+
+    /// Kills the ten "replace the handler with `Default::default()`" mutants,
+    /// which the route-parity gate cannot: that gate PATCH-probes for route
+    /// EXISTENCE, so a route wired to a stub returning an empty 200 passes it.
+    ///
+    /// An empty body is the whole signal — `Response::default()` is 200 with no
+    /// bytes, while a handler that ran returns either its payload or
+    /// `{"error": ...}` from `err_500`. The project path does not exist on
+    /// purpose: which of the two it returns is the store's business, and
+    /// asserting it here would duplicate the store's own tests.
+    #[tokio::test]
+    async fn every_progress_route_runs_its_handler_for_a_loopback_caller() {
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        for (method, path, body) in progress_routes() {
+            let app = build_router(test_state(), false, true);
+            let resp = app
+                .oneshot(progress_request(method, path, &body, local))
+                .await
+                .expect("router responds");
+            let status = resp.status();
+            assert_ne!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{method} {path} must not reject a loopback caller"
+            );
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .expect("read body");
+            assert!(
+                !bytes.is_empty(),
+                "{method} {path} answered {status} with an empty body — the handler did not run"
+            );
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .unwrap_or_else(|e| panic!("{method} {path} answered {status}, not JSON: {e}"));
+        }
+    }
+
     #[tokio::test]
     async fn progress_http_returns_the_shared_durable_receipt_contract() {
         let project = tempfile::tempdir().unwrap();
