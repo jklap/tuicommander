@@ -29,6 +29,7 @@
 | Plugins and MCP | [Plugins](user-guide/plugins.md) · [MCP Proxy Hub](user-guide/mcp-proxy.md) |
 | Remote, mobile, and browser modes | [TUICommander Modes](user-guide/modes.md) · [Remote Access](user-guide/remote-access.md) |
 | Setup and recovery | [Getting Started](user-guide/getting-started.md) · [Troubleshooting](user-guide/troubleshooting.md) |
+| Project history | [Project Progress](user-guide/project-progress.md) |
 
 ---
 
@@ -2163,3 +2164,12 @@ The one binary this may launch is the `ego_executable` setting, read at each
 connect. It is not an argument of any command or route, so no request — local
 or remote — can choose what the host runs. An empty setting refuses every
 connect rather than failing later inside a spawn.
+
+## 27. Project Progress
+
+- Dedicated global or per-project panel in desktop, browser, and mobile PWA
+- Since-last-visit, Today, Blockers, Completed, current workstream, and chronological views
+- Backend projections, bounded pagination, frozen per-project read watermarks, and visible unavailable-project errors
+- Aggregate notification-bell unread count plus exactly one live toast; Progress events are not duplicated into MESSAGES
+- Pause/resume, selected delete, clear-and-pause, event/workstream corrections and merges, blocker resolution, explicit state changes, and mark-viewed controls
+- Provenance keeps closed sources readable and opens a terminal only when the exact recorded session remains live

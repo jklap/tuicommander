@@ -524,6 +524,18 @@ the exact failure the paragraph above describes.
 ### contextMenuActionsStore (`contextMenuActionsStore.ts`)
 Dynamic context menu action registration.
 
+### progressStore (`progress.ts`)
+
+Transport-neutral presentation state for Project Progress. It fetches bounded
+backend pages and authoritative status projections per registered project, retains
+the watermark captured when a panel scope opens, and refreshes from
+`repositoriesStore.getRevision()` plus `progress-recorded` push/resync signals.
+Live presentation is deduplicated by durable event ID. A Progress toast opts out
+of the generic MESSAGES mirror because the bell has its own aggregate Progress row.
+Mutation failures remain on the affected project instead of being rendered as an
+empty feed. Provenance navigation succeeds only while its exact session ID still
+maps to a terminal.
+
 ### errorLog (`errorLog.ts`)
 Error ring buffer and error panel state.
 

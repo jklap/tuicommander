@@ -153,6 +153,7 @@ function createToastsStore() {
 			durationMs?: number,
 			repoPath?: string,
 			sessionId?: string,
+			mirrorInBell = true,
 		) {
 			if (this.hasVisible(title, message, level, repoPath)) {
 				return -1;
@@ -160,7 +161,7 @@ function createToastsStore() {
 			const id = nextId++;
 			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action, repoPath, sessionId };
 			setState("toasts", (prev) => [...prev, toast]);
-			mirrorToBell(toast);
+			if (mirrorInBell) mirrorToBell(toast);
 			if (sound) playSound(level);
 			// A non-positive duration means "sticky" — no auto-dismiss timer, so the
 			// toast stays until the user clicks it away.

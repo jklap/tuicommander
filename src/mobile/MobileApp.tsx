@@ -17,6 +17,7 @@ import { useVersionCheck } from "./useVersionCheck";
 // Eager imports dragged the settings store and the whole i18n string table into
 // the initial mobile graph, which is what pushed mobile.html over its gzip budget.
 const ActivityScreen = lazy(() => import("./screens/ActivityScreen").then((m) => ({ default: m.ActivityScreen })));
+const ProgressPanel = lazy(() => import("../components/ProgressPanel").then((m) => ({ default: m.ProgressPanel })));
 const SettingsScreen = lazy(() => import("./screens/SettingsScreen").then((m) => ({ default: m.SettingsScreen })));
 
 // Register service worker for push notifications (only on HTTPS or localhost)
@@ -147,6 +148,9 @@ export default function MobileApp() {
 								</Match>
 								<Match when={activeTab() === "activity"}>
 									<ActivityScreen onNavigateSession={navigateToSession} />
+								</Match>
+								<Match when={activeTab() === "progress"}>
+									<ProgressPanel embedded />
 								</Match>
 								<Match when={activeTab() === "settings"}>
 									<SettingsScreen isConnected={error() === null} />

@@ -11,6 +11,7 @@ import { GitPanel } from "./GitPanel/GitPanel";
 import { MarkdownPanel } from "./MarkdownPanel";
 import { NotesPanel } from "./NotesPanel";
 import { OutlinePanel } from "./OutlinePanel";
+import { ProgressPanel } from "./ProgressPanel";
 import { ReferencesPanel } from "./ReferencesPanel";
 
 export interface PanelOrchestratorProps {
@@ -77,6 +78,8 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 			<Show when={uiStore.state.aiTriagePanelVisible}>
 				<AiTriagePanel visible={true} repoPath={props.repoPath} onClose={() => uiStore.toggleAiTriagePanel()} />
 			</Show>
+
+			<ProgressPanel />
 		</>
 	);
 };
