@@ -1150,6 +1150,24 @@ mod tests {
 
     /// Restores an env var on drop, so a failed assertion cannot leak
     /// process-global state into whatever test runs next.
+    ///
+    /// Dropping restores the value but does not make the window safe: the
+    /// environment is per-*process*, so under `cargo test` — one process, a
+    /// thread pool — two of these guards overlap and each reads the other's
+    /// value. Every test that builds one therefore carries
+    /// `#[serial_test::serial]`, and that attribute is load-bearing, not
+    /// decoration. So does every test that merely *reads* the chain — a reader
+    /// racing a writer fails just as hard, which is how
+    /// `resolve_for_github_com_delegates_to_existing_chain` still broke after
+    /// only the three writers were serialised. They share the crate-wide default
+    /// key on purpose: a named key would have put the readers in a different
+    /// group and reopened exactly that gap.
+    ///
+    /// `cargo nextest run` hides all of this by giving each test its own
+    /// process, which is why these failed together under `cargo test --lib` and
+    /// passed 25/25 under nextest. Serialising is the fix rather than a mask
+    /// here because `std::env` is shared by definition — there is no concurrent
+    /// version of it to assert against.
     struct EnvVar(&'static str, Option<String>);
 
     impl EnvVar {
@@ -1229,6 +1247,7 @@ mod tests {
     /// subprocess at all. The returned token is the same either way — the spawn
     /// is the only difference, and it is the whole cost of the chain.
     #[test]
+    #[serial_test::serial]
     fn a_set_gh_token_never_spawns_the_cli() {
         let _gh = EnvVar::set("GH_TOKEN", "ghp_env_wins");
         let _github = EnvVar::unset("GITHUB_TOKEN");
@@ -1249,6 +1268,7 @@ mod tests {
     /// That is what makes a wedged `gh` unable to hold the window back: the
     /// window never waits on a process that was never started.
     #[test]
+    #[serial_test::serial]
     fn the_boot_path_spawns_nothing_even_with_no_env_token() {
         let _gh = EnvVar::unset("GH_TOKEN");
         let _github = EnvVar::unset("GITHUB_TOKEN");
@@ -1275,6 +1295,7 @@ mod tests {
     /// reads two env vars and sends, so 30s cannot fire for any reason but the
     /// nudge being gone, and it stays well inside nextest's 120s kill.
     #[tokio::test]
+    #[serial_test::serial]
     async fn the_deferred_probe_nudges_the_poller_once_the_token_lands() {
         let _gh = EnvVar::set("GH_TOKEN", "ghp_deferred_nudge");
         let _github = EnvVar::unset("GITHUB_TOKEN");

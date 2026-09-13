@@ -178,6 +178,7 @@ pub(super) async fn create_worktree_shared(
                 workspace_id: workspace_id.clone(),
                 branch: branch_name.clone(),
                 worktree_path: wt_path.clone(),
+                kind: workspace.kind,
             });
             let mut setup_script = None;
             let mut setup_script_error = None;
@@ -412,6 +413,25 @@ pub(super) async fn unpublished_commits_http(Query(q): Query<WorkspaceIdQuery>) 
     }
 }
 
+/// `GET /worktrees/lifecycle?repoPath=&workspaceId=` — fresh removal preflight
+/// and the HTTP twin of `get_workspace_lifecycle`.
+pub(super) async fn workspace_lifecycle_http(Query(q): Query<WorkspaceIdQuery>) -> Response {
+    if let Err(e) = validate_repo_path(&q.repo_path) {
+        return e.into_response();
+    }
+    let res = tokio::task::spawn_blocking(move || {
+        crate::worktree::inspect_workspace_lifecycle(
+            std::path::Path::new(&q.repo_path),
+            &q.workspace_id,
+        )
+    })
+    .await;
+    match res {
+        Ok(status) => (StatusCode::OK, Json(status)).into_response(),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}
+
 /// `POST /worktrees/publish` — the HTTP half of `publish_workspace`.
 ///
 /// Shares `publish_workspace_impl` with the Tauri command, so the two-step
@@ -427,6 +447,35 @@ pub(super) async fn publish_workspace_http(Json(body): Json<PublishWorkspaceRequ
     // Blocking: a publish runs a fetch and a push.
     let res = tokio::task::spawn_blocking(move || {
         crate::worktree::publish_workspace_impl(&repo_path, &workspace_id)
+    })
+    .await;
+    match res {
+        Ok(r) => json_result(r),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}
+
+/// `POST /worktrees/adopt` — the HTTP half of the desktop `adopt_cow_workspace`
+/// command. Shares `adopt_cow_workspace_impl` with it and with the MCP `repo`
+/// action, so "what counts as a valid adoption" is answered once.
+pub(super) async fn adopt_cow_workspace_http(
+    Json(body): Json<AdoptCowWorkspaceRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    let AdoptCowWorkspaceRequest {
+        repo_path,
+        candidate_path,
+        workspace_id,
+    } = body;
+    let res = tokio::task::spawn_blocking(move || {
+        crate::worktree::adopt_cow_workspace_impl(
+            &repo_path,
+            &candidate_path,
+            workspace_id.as_deref(),
+        )
+        .map(|record| crate::worktree::adopted_workspace_json(&record))
     })
     .await;
     match res {

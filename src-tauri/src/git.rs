@@ -1450,6 +1450,9 @@ pub(crate) struct RepoStructure {
 pub(crate) struct RepoDiffStats {
     diff_stats: HashMap<String, DiffStats>,
     last_commit_ts: HashMap<String, Option<i64>>,
+    /// Authoritative lifecycle state keyed by opaque workspace id. Path-keyed
+    /// diff_stats remains for existing clients; a path cannot identify one row.
+    workspace_statuses: HashMap<String, crate::worktree::WorkspaceLifecycleStatus>,
 }
 
 /// Aggregate repo snapshot returned by `get_repo_summary`.
@@ -1468,6 +1471,7 @@ pub(crate) struct RepoSummary {
     /// Branch-keyed on purpose: the answer is a property of the ref, so two
     /// workspaces on one branch share the entry.
     last_commit_ts: HashMap<String, Option<i64>>,
+    workspace_statuses: HashMap<String, crate::worktree::WorkspaceLifecycleStatus>,
 }
 
 /// Get the unix timestamp of the last commit on each branch using a single
@@ -1554,12 +1558,18 @@ pub(crate) async fn get_repo_summary_impl(
     // per-worktree fan-out — multiplied across repos on repo-changed bursts —
     // is bounded to MONITORING_GIT_CONCURRENCY concurrent refreshes instead of
     // spiking git pipes past the FD limit (EMFILE) and storming CPU/IPC.
-    let paths: Vec<String> = worktree_paths.values().map(|w| w.path.clone()).collect();
-    let mut diff_handles = Vec::with_capacity(paths.len());
-    for path in paths {
+    let entries: Vec<_> = worktree_paths
+        .iter()
+        .map(|(id, workspace)| (id.clone(), workspace.clone()))
+        .collect();
+    let mut diff_handles = Vec::with_capacity(entries.len());
+    for (workspace_id, workspace) in entries {
+        let base_repo = repo_path.clone();
         diff_handles.push(tokio::task::spawn_blocking(move || {
-            let stats = git_reads().diff_stats(Path::new(&path), None);
-            (path, stats)
+            let stats = git_reads().diff_stats(Path::new(&workspace.path), None);
+            let lifecycle =
+                crate::worktree::inspect_workspace_lifecycle(Path::new(&base_repo), &workspace_id);
+            (workspace_id, workspace.path, stats, lifecycle)
         }));
     }
 
@@ -1572,11 +1582,13 @@ pub(crate) async fn get_repo_summary_impl(
     });
 
     let mut diff_stats = HashMap::new();
+    let mut workspace_statuses = HashMap::new();
     for handle in diff_handles {
-        let (path, stats) = handle
+        let (workspace_id, path, stats, lifecycle) = handle
             .await
             .map_err(|e| format!("spawn_blocking error: {e}"))?;
         diff_stats.insert(path, stats);
+        workspace_statuses.insert(workspace_id, lifecycle);
     }
 
     let last_commit_ts = ts_handle
@@ -1588,6 +1600,7 @@ pub(crate) async fn get_repo_summary_impl(
         merged_branches,
         diff_stats,
         last_commit_ts,
+        workspace_statuses,
     })
 }
 
@@ -1645,13 +1658,18 @@ pub(crate) async fn get_repo_diff_stats_impl(
     // Need worktree paths to know which directories to diff. Phase 1
     // (`get_repo_structure`) of this same refresh already read them.
     let worktree_paths = cached_worktree_paths(state, repo_path.clone()).await?;
-
-    let paths: Vec<String> = worktree_paths.values().map(|w| w.path.clone()).collect();
-    let mut diff_handles = Vec::with_capacity(paths.len());
-    for path in paths {
+    let entries: Vec<_> = worktree_paths
+        .iter()
+        .map(|(id, workspace)| (id.clone(), workspace.clone()))
+        .collect();
+    let mut diff_handles = Vec::with_capacity(entries.len());
+    for (workspace_id, workspace) in entries {
+        let base_repo = repo_path.clone();
         diff_handles.push(tokio::task::spawn_blocking(move || {
-            let stats = git_reads().diff_stats(Path::new(&path), None);
-            (path, stats)
+            let stats = git_reads().diff_stats(Path::new(&workspace.path), None);
+            let lifecycle =
+                crate::worktree::inspect_workspace_lifecycle(Path::new(&base_repo), &workspace_id);
+            (workspace_id, workspace.path, stats, lifecycle)
         }));
     }
 
@@ -1664,11 +1682,13 @@ pub(crate) async fn get_repo_diff_stats_impl(
     });
 
     let mut diff_stats = HashMap::new();
+    let mut workspace_statuses = HashMap::new();
     for handle in diff_handles {
-        let (path, stats) = handle
+        let (workspace_id, path, stats, lifecycle) = handle
             .await
             .map_err(|e| format!("spawn_blocking error: {e}"))?;
         diff_stats.insert(path, stats);
+        workspace_statuses.insert(workspace_id, lifecycle);
     }
 
     let last_commit_ts = ts_handle
@@ -1678,6 +1698,7 @@ pub(crate) async fn get_repo_diff_stats_impl(
     Ok(RepoDiffStats {
         diff_stats,
         last_commit_ts,
+        workspace_statuses,
     })
 }
 
@@ -4277,6 +4298,7 @@ mod tests {
                 crate::worktree::WorkspaceWorktree {
                     branch: "sentinel-branch".to_string(),
                     path: repo.clone(),
+                    kind: crate::cow::WorkspaceKind::Worktree,
                 },
             )])),
         );

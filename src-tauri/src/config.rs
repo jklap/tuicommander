@@ -21,16 +21,55 @@ pub(crate) fn set_config_dir_override(dir: PathBuf) -> impl Drop {
     let lock = CONFIG_DIR_EXCLUSIVE
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    *CONFIG_DIR_OVERRIDE.lock().unwrap() = Some(dir);
-    struct Guard {
-        _lock: std::sync::MutexGuard<'static, ()>,
+    *lock_config_dir_override() = Some(dir);
+    ConfigDirGuard { _lock: lock }
+}
+
+/// `CONFIG_DIR_OVERRIDE.lock()`, tolerating poison. The mutex guards nothing
+/// but an `Option<PathBuf>` swap — there is no half-written invariant a panic
+/// mid-write could leave behind — so recovering is strictly safer than a
+/// second `.unwrap()` panicking on top of the first.
+///
+/// That second panic is not hypothetical: `config_dir_in_a_test_refuses_the_real_user_directory`
+/// deliberately panics while `CONFIG_DIR_OVERRIDE.lock().unwrap()`'s temporary
+/// guard is still alive (chained into `.clone().expect(...)`), which poisons
+/// the mutex as the guard drops during unwind. `ConfigDirGuard::drop` then ran
+/// on the way out and called `.lock().unwrap()` on that now-poisoned mutex —
+/// a panic inside a `Drop` impl that is *itself* running because of an
+/// earlier panic, which Rust treats as unrecoverable and aborts the whole
+/// process (SIGABRT) rather than unwinding. One `#[should_panic]` test that
+/// exercises the panic path this way was enough to take down the entire test
+/// binary and every test still in flight in it — not a handful of
+/// assertions, the process itself.
+#[cfg(test)]
+fn lock_config_dir_override() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
+    CONFIG_DIR_OVERRIDE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Take the same exclusive lock `set_config_dir_override` takes, but leave the
+/// override unset — the only way to observe the no-override branch of
+/// `config_dir` without racing a test that did set one.
+#[cfg(test)]
+pub(crate) fn without_config_dir_override() -> impl Drop {
+    let lock = CONFIG_DIR_EXCLUSIVE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *lock_config_dir_override() = None;
+    ConfigDirGuard { _lock: lock }
+}
+
+#[cfg(test)]
+struct ConfigDirGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for ConfigDirGuard {
+    fn drop(&mut self) {
+        *lock_config_dir_override() = None;
     }
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            *CONFIG_DIR_OVERRIDE.lock().unwrap() = None;
-        }
-    }
-    Guard { _lock: lock }
 }
 
 /// Get the config directory using platform-appropriate location.
@@ -2790,12 +2829,13 @@ fn validate_keyed_value(
 /// every save into a conflict. Measured 2026-08-31: `ego` went 331 -> 357
 /// additions in 70 seconds while 29 consecutive saves were rejected, wedging
 /// unrelated intent — registering a repository — behind a number nobody edited.
-const DERIVED_BRANCH_FIELDS: [&str; 5] = [
+const DERIVED_BRANCH_FIELDS: [&str; 6] = [
     "additions",
     "deletions",
     "isMerged",
     "lastActiveTerminal",
     "lastCommitTs",
+    "lifecycleStatus",
 ];
 
 /// Both keys a repository record can hold its entries under.
@@ -3157,6 +3197,502 @@ pub(crate) fn replace_repositories_for_test(config: serde_json::Value) -> Result
     ConfigFile::<serde_json::Value>::at_path(repository_file()).save(&config)
 }
 
+/// Two repo-path spellings the COW reader (`same_path` in `cow.rs`) would
+/// treat as one repository — symlinks and trailing slashes resolved, exactly
+/// the same way.
+fn same_repo_path(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The single existing `repos` key naming the same repository as `repo_path`,
+/// tolerating a different spelling of the same directory the way the COW
+/// reader already does.
+///
+/// `Ok(None)` means no existing key names this repository — the caller is free
+/// to insert a new one. `Ok(Some(key))` means exactly one does. More than one
+/// is refused rather than guessed at: two entries in `repositories.json` that
+/// canonicalize to the same directory is a document a prior bug or a hand-edit
+/// already put into an ambiguous state, and silently merging into one of them
+/// — or duplicating a third — would drop or duplicate whichever entry loses
+/// the coin flip.
+fn find_equivalent_repo_key(
+    repos: &serde_json::Map<String, serde_json::Value>,
+    repo_path: &str,
+) -> Result<Option<String>, String> {
+    // The exact key is collected alongside every other canonically-equivalent
+    // key (not returned early) so that an exact match sitting next to a
+    // symlink/canonical duplicate of the same repository is still detected as
+    // ambiguous, instead of the exact spelling silently winning the coin flip.
+    let mut matches: Vec<&String> = repos
+        .keys()
+        .filter(|key| same_repo_path(key, repo_path))
+        .collect();
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(Some(matches.remove(0).clone())),
+        _ => Err(format!(
+            "'{repo_path}' resolves to the same repository as {} existing entries in \
+             repositories.json ({}) — refusing to guess which one is authoritative",
+            matches.len(),
+            matches
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// Canonicalize `repo_path` for use as a brand-new `repos` key, falling back to
+/// the path as given when it does not (yet) exist on disk — a canonicalization
+/// failure is not a reason to refuse registering a workspace.
+fn canonical_repo_key(repo_path: &str) -> String {
+    std::fs::canonicalize(repo_path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| repo_path.to_string())
+}
+
+/// Insert or replace one workspace's row directly, bypassing the two-step CAS
+/// delta protocol above: the caller (COW workspace creation/recovery in
+/// `cow.rs`) just created a directory on disk and holds no client-side copy of
+/// the surrounding repository record to diff against. The correct base state is
+/// "whatever is on disk right now", read inside the same file lock as the
+/// write — `update_with_strict` is that primitive, entered directly instead of
+/// through `save_repositories_request`'s before/after delta.
+///
+/// A repository record or `workspaces` map that does not exist yet is created
+/// rather than treated as an error: the repo may never have been opened in any
+/// window (an MCP client can create a workspace under a repo path the UI has
+/// never seen), and a missing container is not corruption. A wrong *type* for
+/// either — a document actually holding something other than an object where
+/// one belongs — is corruption, and is refused rather than papered over.
+///
+/// Keyed on the same notion of "this repository" the COW reader uses, not on
+/// `repo_path`'s exact spelling: an existing entry reached through a symlink or
+/// a different trailing slash is reused rather than duplicated, and a brand
+/// new entry is filed under the canonical path so it is the one every future
+/// lookup — canonical or not — agrees on.
+pub(crate) fn upsert_workspace_record(
+    repo_path: &str,
+    workspace_id: &str,
+    record: serde_json::Value,
+) -> Result<(), String> {
+    let file: ConfigFile<serde_json::Value> = ConfigFile::at_path(repository_file());
+    file.update_with_strict(|doc| {
+        if doc.is_null() {
+            *doc = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let root = doc
+            .as_object_mut()
+            .ok_or_else(|| "repositories.json root must be an object".to_string())?;
+        let repos = root
+            .entry("repos")
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| "'repos' must be an object".to_string())?;
+        let key = match find_equivalent_repo_key(repos, repo_path)? {
+            Some(existing) => existing,
+            None => canonical_repo_key(repo_path),
+        };
+        let repo = repos
+            .entry(key.clone())
+            .or_insert_with(|| serde_json::json!({"path": key}))
+            .as_object_mut()
+            .ok_or_else(|| format!("repository record for '{repo_path}' must be an object"))?;
+        let workspaces = repo
+            .entry("workspaces")
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| "'workspaces' must be an object".to_string())?;
+        let changed = workspaces.get(workspace_id) != Some(&record);
+        if changed {
+            workspaces.insert(workspace_id.to_string(), record);
+        }
+        Ok(((), changed))
+    })
+}
+
+/// Drop one workspace's row directly, the removal-side twin of
+/// [`upsert_workspace_record`]. Idempotent: a row, a `workspaces` map, a repo
+/// record, or the whole document being absent already is not an error — it is
+/// exactly the state a successful cleanup leaves behind — so every level short-
+/// circuits to "nothing changed" instead. A wrong type at any level is still
+/// refused: that is corruption, not absence.
+///
+/// Resolved through the same [`find_equivalent_repo_key`] lookup `upsert_workspace_record`
+/// uses, so a removal addressed by a different (but equivalent) spelling than
+/// the one the row was filed under still finds and drops it, rather than
+/// silently no-op'ing while the row it meant to remove survives under its
+/// original key.
+pub(crate) fn remove_workspace_record(repo_path: &str, workspace_id: &str) -> Result<(), String> {
+    let file: ConfigFile<serde_json::Value> = ConfigFile::at_path(repository_file());
+    file.update_with_strict(|doc| {
+        if doc.is_null() {
+            return Ok(((), false));
+        }
+        let root = doc
+            .as_object_mut()
+            .ok_or_else(|| "repositories.json root must be an object".to_string())?;
+        let Some(repos) = root.get_mut("repos") else {
+            return Ok(((), false));
+        };
+        let repos = repos
+            .as_object_mut()
+            .ok_or_else(|| "'repos' must be an object".to_string())?;
+        let Some(key) = find_equivalent_repo_key(repos, repo_path)? else {
+            return Ok(((), false));
+        };
+        let repo = repos
+            .get_mut(&key)
+            .expect("find_equivalent_repo_key returned a key it just found in this map");
+        let repo = repo
+            .as_object_mut()
+            .ok_or_else(|| format!("repository record for '{repo_path}' must be an object"))?;
+        let Some(workspaces) = repo.get_mut("workspaces") else {
+            return Ok(((), false));
+        };
+        let workspaces = workspaces
+            .as_object_mut()
+            .ok_or_else(|| "'workspaces' must be an object".to_string())?;
+        let removed = workspaces.remove(workspace_id).is_some();
+        Ok(((), removed))
+    })
+}
+
+/// Roots this project's own tooling and agent worktrees have been observed
+/// writing throwaway shell-repo rows under — story 763-d219's live evidence:
+/// 15 ghost rows under macOS temp roots and `$HOME/Gits/.tmp`. Deliberately a
+/// fixed, narrow allowlist: a path outside these roots never qualifies as a
+/// stale-temp candidate no matter how empty the rest of its record looks,
+/// because a legitimate repository that is merely offline, unmounted, or on a
+/// different drive must survive the classifier unchanged.
+fn recognized_temp_roots() -> Vec<PathBuf> {
+    let mut roots = vec![std::env::temp_dir()];
+    for root in [
+        "/tmp",
+        "/private/tmp",
+        "/var/folders",
+        "/private/var/folders",
+    ] {
+        roots.push(PathBuf::from(root));
+    }
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join("Gits").join(".tmp"));
+    }
+    roots
+}
+
+/// `Path::starts_with` compares path COMPONENTS, so it does not collapse a
+/// `..` the way the filesystem would: `/tmp/../legit`'s components are
+/// `[RootDir, "tmp", ParentDir, "legit"]`, and that sequence still literally
+/// starts with `[RootDir, "tmp"]` even though the path it names is `/legit`,
+/// entirely outside any temp root. The candidate path never exists on disk
+/// (that is the first classifier check), so it cannot be `canonicalize`d to
+/// resolve the traversal honestly — refusing to classify any path containing
+/// a `..` component is the only safe answer, not a false negative to worry
+/// about: a legitimate repository's registered path is never written with a
+/// literal `..` in it in the first place.
+fn is_under_recognized_temp_root(path: &str) -> bool {
+    let candidate = PathBuf::from(path);
+    if candidate
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+    recognized_temp_roots()
+        .iter()
+        .any(|root| !root.as_os_str().is_empty() && candidate.starts_with(root))
+}
+
+/// One candidate the classifier found — enough for the frontend to preview
+/// and name the exact scope before the user confirms a repair (see
+/// `repair_stale_temp_repositories_request`, which re-validates every path
+/// named here against the document on disk before touching anything).
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct StaleTempCandidate {
+    pub(crate) path: String,
+    #[serde(rename = "displayName")]
+    pub(crate) display_name: String,
+}
+
+fn json_is_absent_or_empty_array(value: Option<&serde_json::Value>) -> bool {
+    match value {
+        None => true,
+        Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::Array(a)) => a.is_empty(),
+        Some(_) => false,
+    }
+}
+
+fn json_is_present_non_null(value: Option<&serde_json::Value>) -> bool {
+    !matches!(value, None | Some(serde_json::Value::Null))
+}
+
+/// A repository record classifies as a "stale-temp" ghost only when ALL of the
+/// following hold — this mirrors the live-evidence shape of the 15 ghost rows
+/// exactly, and is intentionally an ALL-of test rather than a heuristic score:
+/// a record failing even one check is left alone, so a legitimate repository
+/// entry (offline, unmounted, or simply not yet reconnected) always survives.
+///
+/// 1. The local path does not exist.
+/// 2. The path falls under a [`recognized_temp_roots`] root.
+/// 3. `isGitRepo` is explicitly `false` (never merely absent/true).
+/// 4. There is exactly one workspace, and it is shell-only: no live or saved
+///    terminals, no last-active terminal, no diffstat/commit/merge state, no
+///    parent, no run command, no CI auto-heal.
+/// 5. The repository carries no user metadata: default UI booleans
+///    (`collapsed`/`parked` false), and no `connectionId`/`initials`.
+fn classify_stale_temp_repo(path: &str, repo: &serde_json::Value) -> Option<StaleTempCandidate> {
+    let obj = repo.as_object()?;
+
+    if std::fs::metadata(path).is_ok() {
+        return None; // local path exists — never a candidate.
+    }
+    if !is_under_recognized_temp_root(path) {
+        return None;
+    }
+    if obj.get("isGitRepo").and_then(|v| v.as_bool()) != Some(false) {
+        return None;
+    }
+
+    let workspaces = obj.get("workspaces")?.as_object()?;
+    if workspaces.len() != 1 {
+        return None;
+    }
+    let (_, workspace) = workspaces.iter().next()?;
+    let ws = workspace.as_object()?;
+
+    // Require the workspace to say EXPLICITLY that it is shell-only — absent
+    // or `false` both survive. `isShell` is the one positive signal the
+    // classifier has that a workspace was never a real checkout; every other
+    // check here is a negative absence test, so this one stays strict on
+    // purpose rather than defaulting an unmarked record into "probably fine".
+    if ws.get("isShell").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    if !json_is_absent_or_empty_array(ws.get("terminals")) {
+        return None;
+    }
+    if !json_is_absent_or_empty_array(ws.get("savedTerminals")) {
+        return None;
+    }
+    if json_is_present_non_null(ws.get("lastActiveTerminal")) {
+        return None;
+    }
+    if json_is_present_non_null(ws.get("parentRepoPath")) {
+        return None;
+    }
+    if json_is_present_non_null(ws.get("runCommand")) {
+        return None;
+    }
+    if json_is_present_non_null(ws.get("ciAutoHeal")) {
+        return None;
+    }
+    if json_is_present_non_null(ws.get("lastCommitTs")) {
+        return None;
+    }
+    let additions = ws.get("additions").and_then(|v| v.as_i64()).unwrap_or(0);
+    let deletions = ws.get("deletions").and_then(|v| v.as_i64()).unwrap_or(0);
+    if additions != 0 || deletions != 0 {
+        return None;
+    }
+    if ws.get("isMerged").and_then(|v| v.as_bool()) == Some(true) {
+        return None;
+    }
+
+    if obj.get("collapsed").and_then(|v| v.as_bool()) == Some(true) {
+        return None;
+    }
+    if obj.get("parked").and_then(|v| v.as_bool()) == Some(true) {
+        return None;
+    }
+    if json_is_present_non_null(obj.get("connectionId")) {
+        return None;
+    }
+    if obj
+        .get("initials")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty())
+    {
+        return None;
+    }
+
+    let display_name = obj
+        .get("displayName")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(path)
+        .to_string();
+    Some(StaleTempCandidate {
+        path: path.to_string(),
+        display_name,
+    })
+}
+
+fn classify_all_stale_temp_repos(document: &serde_json::Value) -> Vec<StaleTempCandidate> {
+    let Some(repos) = document.get("repos").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let mut candidates: Vec<StaleTempCandidate> = repos
+        .iter()
+        .filter_map(|(path, repo)| classify_stale_temp_repo(path, repo))
+        .collect();
+    candidates.sort_by(|a, b| a.path.cmp(&b.path));
+    candidates
+}
+
+/// Preview the exact scope a repair would touch, without mutating anything.
+/// Reads `repositories.json` fresh from disk so the preview always reflects
+/// the current document, whichever client last wrote it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn list_stale_temp_repository_candidates() -> Vec<StaleTempCandidate> {
+    classify_all_stale_temp_repos(&load_repositories())
+}
+
+/// What a repair actually did — named exactly, so a caller (and its tests)
+/// can assert on the scope rather than trust a bare success flag.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct StaleTempRepairSummary {
+    pub(crate) removed: Vec<String>,
+    #[serde(rename = "backupPath")]
+    pub(crate) backup_path: String,
+}
+
+/// User-explicit repair: remove exactly the rows named in `paths`, and only
+/// those rows, from `repositories.json` — never an implicit/global sweep of
+/// every non-existent path.
+///
+/// Re-validates EVERY requested path against the classifier using the
+/// document as it stands on disk *right now*, inside the same file lock as
+/// the write. A path that no longer classifies (reconnected, edited, or never
+/// stale to begin with — a stale preview, a race with another client, or a
+/// caller that skipped the preview) fails the WHOLE request before anything
+/// is written: this is one versioned transactional delta, not a best-effort
+/// sweep, so a partially-stale request must not silently repair the rest.
+///
+/// An exact backup of the pre-repair document is written to
+/// `repositories.repair-backup-<UTC timestamp>.json` in the config directory
+/// before the mutation. That backup is deliberately a human recovery artifact
+/// for *after* a successful repair the user wants to undo — it is not what
+/// makes a *failed* write safe. `ConfigFile::write_atomic` (temp file +
+/// fsync + rename) already guarantees a failed write never partially
+/// overwrites the live document, so there is nothing to "restore" in that
+/// case: the original file was never touched. Recorded as a deliberate design
+/// trade-off in story 763-d219's worklog rather than layering a second,
+/// redundant restore-on-failure path on top of an already-atomic write.
+pub(crate) fn repair_stale_temp_repositories_request(
+    paths: Vec<String>,
+) -> Result<StaleTempRepairSummary, String> {
+    if paths.is_empty() {
+        return Err("repair_stale_temp_repositories: no paths named".to_string());
+    }
+    // Dedupe up front, preserving first-occurrence order: a caller repeating a
+    // path (a double-click, a retried request) must not echo it twice in
+    // `summary.removed`, and downstream this is the single list every other
+    // step iterates — no second place that could disagree on how many rows
+    // this request actually names.
+    let mut seen = std::collections::HashSet::with_capacity(paths.len());
+    let paths: Vec<String> = paths
+        .into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .collect();
+    let requested: std::collections::HashSet<&str> = paths.iter().map(String::as_str).collect();
+
+    let file: ConfigFile<serde_json::Value> = ConfigFile::at_path(repository_file());
+    file.update_with_strict(|doc| {
+        if doc.is_null() {
+            *doc = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let root = doc
+            .as_object_mut()
+            .ok_or_else(|| "repositories.json root must be an object".to_string())?;
+        let repos = root
+            .get("repos")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut invalid = Vec::new();
+        for path in &paths {
+            let matches_now = repos
+                .get(path.as_str())
+                .is_some_and(|repo| classify_stale_temp_repo(path, repo).is_some());
+            if !matches_now {
+                invalid.push(path.clone());
+            }
+        }
+        if !invalid.is_empty() {
+            return Err(format!(
+                "repair refused — no longer a stale-temp candidate on disk (reload and retry): {}",
+                invalid.join(", ")
+            ));
+        }
+
+        // Backup taken from the exact document this repair is about to mutate,
+        // written before any mutation, inside the same file lock — no window
+        // where a concurrent writer could land between backup and mutation.
+        let backup_json = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
+        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+        let backup_path = config_dir().join(format!("repositories.repair-backup-{timestamp}.json"));
+        persist_atomic(&backup_path, backup_json.as_bytes())?;
+
+        let root = doc.as_object_mut().expect("validated as an object above");
+        if let Some(repos) = root.get_mut("repos").and_then(|v| v.as_object_mut()) {
+            for path in &paths {
+                repos.remove(path);
+            }
+        }
+        if let Some(order) = root.get_mut("repoOrder").and_then(|v| v.as_array_mut()) {
+            order.retain(|v| v.as_str().is_none_or(|p| !requested.contains(p)));
+        }
+        if let Some(groups) = root.get_mut("groups").and_then(|v| v.as_object_mut()) {
+            for group in groups.values_mut() {
+                if let Some(order) = group
+                    .as_object_mut()
+                    .and_then(|g| g.get_mut("repoOrder"))
+                    .and_then(|v| v.as_array_mut())
+                {
+                    order.retain(|v| v.as_str().is_none_or(|p| !requested.contains(p)));
+                }
+            }
+        }
+        if let Some(active) = root.get("activeRepoPath").and_then(|v| v.as_str())
+            && requested.contains(active)
+        {
+            root.insert("activeRepoPath".to_string(), serde_json::Value::Null);
+        }
+
+        Ok((
+            StaleTempRepairSummary {
+                removed: paths.clone(),
+                backup_path: backup_path.to_string_lossy().to_string(),
+            },
+            true,
+        ))
+    })
+}
+
+/// Desktop IPC twin of `POST /config/repositories/stale-temp` — see
+/// `save_repositories` above for why the state param exists: a successful
+/// repair is a document change every other open window must re-read.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn repair_stale_temp_repositories(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    paths: Vec<String>,
+) -> Result<StaleTempRepairSummary, String> {
+    let summary = repair_stale_temp_repositories_request(paths)?;
+    state.notify_repositories_changed();
+    Ok(summary)
+}
+
 // Pane layout (schema owned by frontend)
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_pane_layout() -> serde_json::Value {
@@ -3379,6 +3915,85 @@ mod tests {
         save_repositories_request(config)
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    /// #763-d219 — between 2026-09-11 and 2026-09-13, fifteen `tempfile` roots
+    /// (`/private/var/folders/…/T/.tmpXXXXXX` and `~/Gits/.tmp/.tmpXXXXXX`)
+    /// appeared as repositories in Boss's real `repositories.json`. They got
+    /// there because `config_dir` used to fall back to the *user's* directory
+    /// whenever a test forgot `set_config_dir_override`: the leak was silent,
+    /// so every such test wrote its disposable fixture into production state.
+    ///
+    /// A test build must never be able to name that directory, with or
+    /// without an explicit override. A first attempt made the no-override
+    /// branch panic instead, which is loud but reintroduced a worse failure
+    /// mode: a `#[should_panic]` test exercising exactly this panic poisoned
+    /// `CONFIG_DIR_OVERRIDE` on unwind (a temporary `MutexGuard` was still
+    /// alive through the panicking expression) and a subsequent
+    /// `.lock().unwrap()` on it during `Drop` aborted the whole process
+    /// (SIGABRT), and — independently — any test that set its own override
+    /// via an `isolated_config()`-style helper and THEN called a shared
+    /// helper that also tried to set one self-deadlocked on
+    /// `CONFIG_DIR_EXCLUSIVE`, which is not reentrant. `test_fallback_config_dir`
+    /// is the fix: a safe, process-scoped, non-production fallback rather
+    /// than a panic — see its own doc comment for why silent-but-safe beats
+    /// loud-but-fragile here.
+    #[test]
+    fn config_dir_in_a_test_never_names_the_real_user_directory() {
+        let _exclusive = without_config_dir_override();
+        let resolved = config_dir();
+        assert!(
+            resolved.starts_with(std::env::temp_dir()),
+            "with no override in scope, config_dir() must resolve under the OS temp \
+             directory, never the platform config directory: got {}",
+            resolved.display()
+        );
+    }
+
+    /// Root's audit requirement for #763-d219: prove the fallback and the real
+    /// platform directory can never coincide, not just assume it from where
+    /// the fallback happens to be constructed. `dirs::config_dir()` is a pure
+    /// lookup (no side effects, no directory creation) — safe to call directly
+    /// here without going through the guarded `config_dir()` wrapper.
+    #[test]
+    fn fallback_config_dir_is_never_the_real_directory() {
+        let _exclusive = without_config_dir_override();
+        let fallback = config_dir();
+        if let Some(real_platform_dir) = dirs::config_dir() {
+            assert_ne!(
+                fallback,
+                real_platform_dir.join("com.tuic.commander"),
+                "the test fallback must never equal the real platform config directory"
+            );
+        }
+        if let Some(home) = dirs::home_dir() {
+            assert_ne!(
+                fallback,
+                home.join(".tuicommander"),
+                "the test fallback must never equal the legacy dotdir fallback either"
+            );
+        }
+    }
+
+    /// The fallback is a `OnceLock` — the same value every time within one
+    /// process, which is exactly the "no override, but consistent within this
+    /// test" behavior a test relying on repeated `config_dir()` calls needs.
+    #[test]
+    fn fallback_config_dir_is_stable_across_calls_in_the_same_process() {
+        let _exclusive = without_config_dir_override();
+        assert_eq!(config_dir(), config_dir());
+    }
+
+    /// The guard the test above uses must actually restore the override, or it
+    /// would poison every test that runs after it in the same process.
+    #[test]
+    fn clearing_the_override_does_not_outlive_its_guard() {
+        let dir = TempDir::new().expect("temp dir");
+        {
+            let _cleared = without_config_dir_override();
+        }
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        assert_eq!(config_dir(), dir.path());
     }
 
     /// Helper: run load/save with a temp directory to avoid touching real config.
@@ -6198,6 +6813,836 @@ mod tests {
         assert_eq!(
             saved["repos"]["/ego"]["branches"]["master"]["additions"],
             357
+        );
+    }
+
+    // ── Stale-temp repository classifier / repair (#763-d219) ─────────────
+
+    /// A nonexistent path guaranteed to fall under a recognized temp root on
+    /// any machine running this test — `std::env::temp_dir()` itself, not a
+    /// hardcoded `/tmp`, so it matches whatever this OS/CI actually resolves.
+    fn stale_temp_candidate_path() -> String {
+        std::env::temp_dir()
+            .join("tuic-763-d219-stale-repo-does-not-exist")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn shell_workspace_json() -> serde_json::Value {
+        serde_json::json!({
+            "workspaceId": "main",
+            "branchName": "main",
+            "kind": "main",
+            "isMain": false,
+            "isShell": true,
+            "parentRepoPath": null,
+            "worktreePath": null,
+            "terminals": [],
+            "savedTerminals": [],
+            "hadTerminals": false,
+            "lastActiveTerminal": null,
+            "additions": 0,
+            "deletions": 0,
+            "isMerged": false,
+            "lastCommitTs": null,
+        })
+    }
+
+    /// A repository record matching every criterion of the classifier —
+    /// mutate a clone of this in each "survives" test to flip exactly one
+    /// criterion and prove it alone is enough to spare the row.
+    fn stale_temp_repo_json(path: &str) -> serde_json::Value {
+        serde_json::json!({
+            "path": path,
+            "displayName": "stale-repo",
+            "initials": "",
+            "isGitRepo": false,
+            "expanded": true,
+            "collapsed": false,
+            "parked": false,
+            "workspaces": { "main": shell_workspace_json() },
+            "activeWorkspaceId": "main",
+        })
+    }
+
+    #[test]
+    fn classifies_a_ghost_matching_every_criterion() {
+        let path = stale_temp_candidate_path();
+        let repo = stale_temp_repo_json(&path);
+        let candidate =
+            classify_stale_temp_repo(&path, &repo).expect("must classify as stale-temp");
+        assert_eq!(candidate.path, path);
+        assert_eq!(candidate.display_name, "stale-repo");
+    }
+
+    #[test]
+    fn survives_when_the_local_path_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_string_lossy().to_string();
+        let repo = stale_temp_repo_json(&path);
+        assert!(
+            classify_stale_temp_repo(&path, &repo).is_none(),
+            "a path that still exists on disk must never be swept up"
+        );
+    }
+
+    #[test]
+    fn survives_outside_a_recognized_temp_root() {
+        // Nonexistent, non-git, empty-shell — everything a real ghost looks
+        // like — except it is not under a temp root. A legitimate repository
+        // on an unmounted drive or a machine the user is away from looks
+        // exactly like this, and must survive.
+        let path = "/Users/boss/Gits/offline-project-not-mounted-right-now".to_string();
+        let repo = stale_temp_repo_json(&path);
+        assert!(classify_stale_temp_repo(&path, &repo).is_none());
+    }
+
+    #[test]
+    fn survives_when_is_git_repo_is_not_explicitly_false() {
+        let path = stale_temp_candidate_path();
+        let mut repo = stale_temp_repo_json(&path);
+        repo.as_object_mut().unwrap().remove("isGitRepo");
+        assert!(classify_stale_temp_repo(&path, &repo).is_none());
+    }
+
+    #[test]
+    fn survives_a_repo_with_more_than_one_workspace() {
+        let path = stale_temp_candidate_path();
+        let mut repo = stale_temp_repo_json(&path);
+        repo["workspaces"]["feature"] = shell_workspace_json();
+        assert!(classify_stale_temp_repo(&path, &repo).is_none());
+    }
+
+    #[test]
+    fn survives_a_workspace_with_a_live_terminal() {
+        let path = stale_temp_candidate_path();
+        let mut repo = stale_temp_repo_json(&path);
+        repo["workspaces"]["main"]["terminals"] = serde_json::json!(["term-1"]);
+        assert!(classify_stale_temp_repo(&path, &repo).is_none());
+    }
+
+    #[test]
+    fn survives_a_workspace_with_saved_terminals() {
+        let path = stale_temp_candidate_path();
+        let mut repo = stale_temp_repo_json(&path);
+        repo["workspaces"]["main"]["savedTerminals"] = serde_json::json!([{"agentType": null}]);
+        assert!(classify_stale_temp_repo(&path, &repo).is_none());
+    }
+
+    #[test]
+    fn survives_a_workspace_with_diffstat_or_commit_state() {
+        let path = stale_temp_candidate_path();
+        let mut repo = stale_temp_repo_json(&path);
+        repo["workspaces"]["main"]["additions"] = serde_json::json!(3);
+        assert!(classify_stale_temp_repo(&path, &repo).is_none());
+
+        let mut repo2 = stale_temp_repo_json(&path);
+        repo2["workspaces"]["main"]["lastCommitTs"] = serde_json::json!(1_726_000_000);
+        assert!(classify_stale_temp_repo(&path, &repo2).is_none());
+    }
+
+    #[test]
+    fn survives_a_repo_with_a_connection_id_or_initials() {
+        let path = stale_temp_candidate_path();
+        let mut repo = stale_temp_repo_json(&path);
+        repo["connectionId"] = serde_json::json!("remote-1");
+        assert!(classify_stale_temp_repo(&path, &repo).is_none());
+
+        let mut repo2 = stale_temp_repo_json(&path);
+        repo2["initials"] = serde_json::json!("MP");
+        assert!(classify_stale_temp_repo(&path, &repo2).is_none());
+    }
+
+    #[test]
+    fn survives_a_parked_repo() {
+        let path = stale_temp_candidate_path();
+        let mut repo = stale_temp_repo_json(&path);
+        repo["parked"] = serde_json::json!(true);
+        assert!(
+            classify_stale_temp_repo(&path, &repo).is_none(),
+            "a repo the user deliberately parked is never a ghost"
+        );
+    }
+
+    #[test]
+    fn survives_when_is_shell_is_missing() {
+        let path = stale_temp_candidate_path();
+        let mut repo = stale_temp_repo_json(&path);
+        repo["workspaces"]["main"]
+            .as_object_mut()
+            .unwrap()
+            .remove("isShell");
+        assert!(
+            classify_stale_temp_repo(&path, &repo).is_none(),
+            "isShell must be explicitly true, never merely absent"
+        );
+    }
+
+    #[test]
+    fn survives_when_is_shell_is_false() {
+        let path = stale_temp_candidate_path();
+        let mut repo = stale_temp_repo_json(&path);
+        repo["workspaces"]["main"]["isShell"] = serde_json::json!(false);
+        assert!(classify_stale_temp_repo(&path, &repo).is_none());
+    }
+
+    #[test]
+    fn survives_a_path_traversal_out_of_the_temp_root() {
+        // Lexically starts with the temp root by component prefix, but a `..`
+        // component means it does not actually resolve under it.
+        let escaped = std::env::temp_dir()
+            .join("..")
+            .join("legit-project")
+            .to_string_lossy()
+            .to_string();
+        let repo = stale_temp_repo_json(&escaped);
+        assert!(
+            classify_stale_temp_repo(&escaped, &repo).is_none(),
+            "a path containing `..` must never be treated as living under a temp root"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn repair_removes_only_the_named_stale_temp_rows_and_writes_a_backup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let ghost_path = stale_temp_candidate_path();
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                "/keep": seed_repo_with_diffstat(12, "keep-me"),
+                (ghost_path.clone()): stale_temp_repo_json(&ghost_path),
+            },
+            "repoOrder": ["/keep", ghost_path.clone()],
+            "activeRepoPath": ghost_path.clone(),
+            "groups": {
+                "g1": { "id": "g1", "name": "Group", "color": "", "collapsed": false, "repoOrder": [ghost_path.clone()] }
+            },
+            "groupOrder": ["g1"],
+        }))
+        .expect("seed repositories");
+
+        let summary = repair_stale_temp_repositories_request(vec![ghost_path.clone()])
+            .expect("repair must succeed for a genuinely stale row");
+        assert_eq!(summary.removed, vec![ghost_path.clone()]);
+        assert!(
+            std::path::Path::new(&summary.backup_path).is_file(),
+            "backup file must exist at the returned path"
+        );
+
+        let saved = load_repositories();
+        assert!(saved["repos"].get(ghost_path.as_str()).is_none());
+        assert!(saved["repos"].get("/keep").is_some());
+        assert!(
+            !saved["repoOrder"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == &serde_json::json!(ghost_path)),
+            "removed row must leave repoOrder"
+        );
+        assert_eq!(saved["activeRepoPath"], serde_json::Value::Null);
+        assert!(
+            !saved["groups"]["g1"]["repoOrder"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == &serde_json::json!(ghost_path)),
+            "removed row must leave every group's repoOrder too"
+        );
+
+        let backup: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary.backup_path).unwrap()).unwrap();
+        assert!(
+            backup["repos"].get(ghost_path.as_str()).is_some(),
+            "backup must hold the exact pre-repair document"
+        );
+        assert!(backup["repos"].get("/keep").is_some());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn repair_refuses_the_whole_batch_when_one_path_no_longer_classifies() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let ghost_a = stale_temp_candidate_path();
+        let ghost_b = format!("{ghost_a}-b");
+        let mut repo_b = stale_temp_repo_json(&ghost_b);
+        repo_b["isGitRepo"] = serde_json::json!(true); // reconnected since the preview
+        replace_repositories_for_test(serde_json::json!({
+            "repos": { (ghost_a.clone()): stale_temp_repo_json(&ghost_a), (ghost_b.clone()): repo_b },
+            "repoOrder": [ghost_a.clone(), ghost_b.clone()], "groups": {}, "groupOrder": [],
+        }))
+        .expect("seed repositories");
+
+        let error = repair_stale_temp_repositories_request(vec![ghost_a.clone(), ghost_b.clone()])
+            .expect_err("a request naming even one non-stale row must be refused entirely");
+        assert!(error.contains(ghost_b.as_str()), "{error}");
+
+        let saved = load_repositories();
+        assert!(
+            saved["repos"].get(ghost_a.as_str()).is_some(),
+            "the still-stale row must survive an all-or-nothing refusal, not be removed alone"
+        );
+        assert!(saved["repos"].get(ghost_b.as_str()).is_some());
+    }
+
+    #[test]
+    fn repair_rejects_an_empty_request() {
+        repair_stale_temp_repositories_request(vec![])
+            .expect_err("must refuse an empty repair request rather than no-op silently");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn repair_dedupes_a_repeated_path_in_the_request() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let ghost = stale_temp_candidate_path();
+        replace_repositories_for_test(serde_json::json!({
+            "repos": { (ghost.clone()): stale_temp_repo_json(&ghost) },
+            "repoOrder": [ghost.clone()], "groups": {}, "groupOrder": [],
+        }))
+        .expect("seed repositories");
+
+        let summary = repair_stale_temp_repositories_request(vec![ghost.clone(), ghost.clone()])
+            .expect("repair must succeed");
+
+        assert_eq!(
+            summary.removed,
+            vec![ghost],
+            "a path repeated in the request must be echoed exactly once, not once per occurrence"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn repair_refuses_a_row_that_was_never_stale() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/legit": seed_repo_with_diffstat(1, "legit")},
+            "repoOrder": ["/legit"], "groups": {}, "groupOrder": [],
+        }))
+        .expect("seed repositories");
+
+        repair_stale_temp_repositories_request(vec!["/legit".to_string()])
+            .expect_err("a legitimate repository must never be repaired away");
+
+        let saved = load_repositories();
+        assert!(saved["repos"].get("/legit").is_some());
+    }
+
+    // ── upsert_workspace_record / remove_workspace_record ────────────────
+    //
+    // The direct read-modify-write primitive `cow.rs` registers and
+    // unregisters COW workspaces through — bypassing the keyed CAS delta
+    // above because that caller (a freshly created or deleted clone) has no
+    // client-side copy of the surrounding repository record to diff against.
+
+    #[test]
+    #[serial_test::serial]
+    fn upsert_workspace_record_creates_the_repo_and_workspaces_containers_when_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        upsert_workspace_record(
+            "/repo",
+            "feature~aaaa1111",
+            serde_json::json!({
+                "branchName": "feature",
+                "worktreePath": "/repo__cow/feature",
+                "kind": "cow",
+                "parentRepoPath": "/repo",
+            }),
+        )
+        .expect("register into a document with no prior row for this repo");
+
+        let saved = load_repositories();
+        let workspace = &saved["repos"]["/repo"]["workspaces"]["feature~aaaa1111"];
+        assert_eq!(workspace["branchName"], "feature");
+        assert_eq!(workspace["kind"], "cow");
+        assert_eq!(workspace["worktreePath"], "/repo__cow/feature");
+        assert_eq!(workspace["parentRepoPath"], "/repo");
+    }
+
+    /// A window's own pending edits to sibling data (a different repo, or a
+    /// different field on the same repo) must survive a registration that
+    /// only ever touches its own workspace id — this is a read-modify-write
+    /// under the file lock, not a whole-document replace.
+    #[test]
+    #[serial_test::serial]
+    fn upsert_workspace_record_does_not_disturb_unrelated_repos_or_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                "/repo": {
+                    "path": "/repo",
+                    "displayName": "kept",
+                    "workspaces": {
+                        "main": { "branchName": "main", "kind": "main", "worktreePath": "/repo" }
+                    }
+                },
+                "/other": { "path": "/other", "workspaces": {} }
+            },
+            "repoOrder": ["/repo", "/other"],
+            "groups": {},
+            "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        upsert_workspace_record(
+            "/repo",
+            "feature~aaaa1111",
+            serde_json::json!({
+                "branchName": "feature",
+                "worktreePath": "/repo__cow/feature",
+                "kind": "cow",
+                "parentRepoPath": "/repo",
+            }),
+        )
+        .expect("register alongside unrelated data");
+
+        let saved = load_repositories();
+        assert_eq!(saved["repos"]["/repo"]["displayName"], "kept");
+        assert_eq!(
+            saved["repos"]["/repo"]["workspaces"]["main"]["branchName"],
+            "main"
+        );
+        assert!(
+            saved["repos"]["/other"].is_object(),
+            "unrelated repo survives"
+        );
+        assert_eq!(
+            saved["repos"]["/repo"]["workspaces"]["feature~aaaa1111"]["kind"],
+            "cow"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn upsert_workspace_record_on_a_corrupt_file_refuses_and_backs_up_rather_than_overwrites() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = dir.path().join("repositories.json");
+        fs::write(&path, "{ not json").expect("seed corrupt file");
+
+        let error = upsert_workspace_record(
+            "/repo",
+            "feature~aaaa1111",
+            serde_json::json!({"branchName": "feature", "kind": "cow"}),
+        )
+        .expect_err("a corrupt document must refuse rather than silently reset to empty");
+        assert!(!error.is_empty());
+        assert!(
+            !path.exists(),
+            "the strict loader moves a corrupt file aside rather than leaving it in place"
+        );
+        let backups: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
+            .collect();
+        assert_eq!(
+            backups.len(),
+            1,
+            "the corrupt content is preserved, not lost"
+        );
+        assert_eq!(fs::read_to_string(backups[0].path()).unwrap(), "{ not json");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn remove_workspace_record_drops_only_the_named_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                "/repo": {
+                    "path": "/repo",
+                    "workspaces": {
+                        "main": { "branchName": "main", "kind": "main", "worktreePath": "/repo" },
+                        "feature~aaaa1111": {
+                            "branchName": "feature", "kind": "cow",
+                            "worktreePath": "/repo__cow/feature", "parentRepoPath": "/repo"
+                        }
+                    }
+                }
+            },
+            "repoOrder": ["/repo"], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+
+        remove_workspace_record("/repo", "feature~aaaa1111").expect("drop the cow row");
+
+        let saved = load_repositories();
+        let workspaces = &saved["repos"]["/repo"]["workspaces"];
+        assert!(
+            workspaces.get("feature~aaaa1111").is_none(),
+            "the removed row is gone: {workspaces}"
+        );
+        assert_eq!(
+            workspaces["main"]["branchName"], "main",
+            "sibling row untouched"
+        );
+    }
+
+    /// The removal-side twin of the create-time crash window: a directory can
+    /// already be gone (removed, or never registered) by the time cleanup
+    /// runs, and that must be a no-op, not an error — the caller's next step
+    /// is "make sure the row is gone", which it already is.
+    #[test]
+    #[serial_test::serial]
+    fn remove_workspace_record_is_idempotent_when_nothing_is_there_to_remove() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        remove_workspace_record("/repo", "feature~aaaa1111")
+            .expect("no document at all is a no-op");
+
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {"/repo": {"path": "/repo", "workspaces": {}}},
+            "repoOrder": ["/repo"], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed repositories");
+        remove_workspace_record("/repo", "feature~aaaa1111")
+            .expect("an absent row in an existing document is also a no-op");
+        remove_workspace_record("/no-such-repo", "feature~aaaa1111")
+            .expect("an absent repo is also a no-op");
+    }
+
+    /// Two independent registrations racing under the same file lock: neither
+    /// must lose the other's row. `update_with_strict` serializes the two
+    /// read-modify-write cycles, so the second writer's mutation always
+    /// starts from a document that already has the first writer's row.
+    #[test]
+    #[serial_test::serial]
+    fn concurrent_registrations_for_different_workspaces_both_survive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = ["one~aaaa0001", "two~aaaa0002"]
+            .into_iter()
+            .map(|id| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    upsert_workspace_record(
+                        "/repo",
+                        id,
+                        serde_json::json!({"branchName": id, "kind": "cow"}),
+                    )
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().expect("both registrations succeed");
+        }
+
+        let saved = load_repositories();
+        let workspaces = &saved["repos"]["/repo"]["workspaces"];
+        assert!(workspaces["one~aaaa0001"].is_object(), "{workspaces}");
+        assert!(workspaces["two~aaaa0002"].is_object(), "{workspaces}");
+    }
+
+    // ── canonical repo keys: symlinks and alternate spellings ────────────
+    //
+    // `cow.rs`'s reader (`same_path`) treats a repo reached through a symlink
+    // or a different trailing slash as the same repository the writer must
+    // agree on. These tests use real directories under a tempdir (rather than
+    // a synthetic path like "/repo") because `canonicalize` is what makes two
+    // spellings equal, and it needs something on disk to resolve.
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn upsert_workspace_record_reuses_an_existing_entry_reached_through_a_symlink() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let real_repo = dir.path().join("real-repo");
+        fs::create_dir_all(&real_repo).expect("real repo dir");
+        let linked_repo = dir.path().join("linked-repo");
+        std::os::unix::fs::symlink(&real_repo, &linked_repo).expect("symlink");
+
+        upsert_workspace_record(
+            &real_repo.to_string_lossy(),
+            "feature~aaaa1111",
+            serde_json::json!({"branchName": "feature", "kind": "cow"}),
+        )
+        .expect("first registration, under the canonical spelling");
+        upsert_workspace_record(
+            &linked_repo.to_string_lossy(),
+            "other~bbbb2222",
+            serde_json::json!({"branchName": "other", "kind": "cow"}),
+        )
+        .expect("second registration, addressed through the symlink");
+
+        let saved = load_repositories();
+        let repos = saved["repos"].as_object().expect("repos object");
+        assert_eq!(
+            repos.len(),
+            1,
+            "a symlinked spelling must reuse the existing entry, not duplicate it: {repos:?}"
+        );
+        let canonical_key = std::fs::canonicalize(&real_repo)
+            .expect("canonical")
+            .to_string_lossy()
+            .to_string();
+        let workspaces = &saved["repos"][&canonical_key]["workspaces"];
+        assert!(workspaces["feature~aaaa1111"].is_object(), "{workspaces}");
+        assert!(
+            workspaces["other~bbbb2222"].is_object(),
+            "the second write must have landed on the same entry: {workspaces}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn remove_workspace_record_finds_a_row_filed_under_a_different_spelling() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let real_repo = dir.path().join("real-repo");
+        fs::create_dir_all(&real_repo).expect("real repo dir");
+        let linked_repo = dir.path().join("linked-repo");
+        std::os::unix::fs::symlink(&real_repo, &linked_repo).expect("symlink");
+
+        upsert_workspace_record(
+            &real_repo.to_string_lossy(),
+            "feature~aaaa1111",
+            serde_json::json!({"branchName": "feature", "kind": "cow"}),
+        )
+        .expect("register under the canonical spelling");
+
+        // Addressed by the symlinked spelling — a different string than the
+        // key the row is actually filed under.
+        remove_workspace_record(&linked_repo.to_string_lossy(), "feature~aaaa1111")
+            .expect("remove must resolve the equivalent key rather than no-op");
+
+        let saved = load_repositories();
+        let canonical_key = std::fs::canonicalize(&real_repo)
+            .expect("canonical")
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            saved["repos"][&canonical_key]["workspaces"]["feature~aaaa1111"].is_null(),
+            "the row must be gone, not stranded under its original key: {saved}"
+        );
+    }
+
+    /// Unrelated fields on the repo record, and a concurrent registration for
+    /// a different workspace, must both survive a removal that resolves
+    /// through a different spelling than the row's own key.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn remove_workspace_record_through_an_alternate_spelling_preserves_unrelated_data() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let real_repo = dir.path().join("real-repo");
+        fs::create_dir_all(&real_repo).expect("real repo dir");
+        let linked_repo = dir.path().join("linked-repo");
+        std::os::unix::fs::symlink(&real_repo, &linked_repo).expect("symlink");
+
+        upsert_workspace_record(
+            &real_repo.to_string_lossy(),
+            "feature~aaaa1111",
+            serde_json::json!({"branchName": "feature", "kind": "cow"}),
+        )
+        .expect("register the row to be removed");
+        upsert_workspace_record(
+            &real_repo.to_string_lossy(),
+            "sibling~cccc3333",
+            serde_json::json!({"branchName": "sibling", "kind": "cow"}),
+        )
+        .expect("register an unrelated concurrent workspace");
+
+        remove_workspace_record(&linked_repo.to_string_lossy(), "feature~aaaa1111")
+            .expect("remove through the symlinked spelling");
+
+        let saved = load_repositories();
+        let canonical_key = std::fs::canonicalize(&real_repo)
+            .expect("canonical")
+            .to_string_lossy()
+            .to_string();
+        let workspaces = &saved["repos"][&canonical_key]["workspaces"];
+        assert!(
+            workspaces["feature~aaaa1111"].is_null(),
+            "the targeted row is gone: {workspaces}"
+        );
+        assert!(
+            workspaces["sibling~cccc3333"].is_object(),
+            "the unrelated concurrent workspace survives: {workspaces}"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn upsert_workspace_record_files_a_brand_new_entry_under_its_canonical_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let real_repo = dir.path().join("real-repo");
+        fs::create_dir_all(&real_repo).expect("real repo dir");
+        let noncanonical = real_repo.join(".").join("..").join("real-repo");
+
+        upsert_workspace_record(
+            &noncanonical.to_string_lossy(),
+            "feature~aaaa1111",
+            serde_json::json!({"branchName": "feature", "kind": "cow"}),
+        )
+        .expect("register a brand new entry");
+
+        let saved = load_repositories();
+        let canonical_key = std::fs::canonicalize(&real_repo)
+            .expect("canonical")
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            saved["repos"][&canonical_key]["workspaces"]["feature~aaaa1111"].is_object(),
+            "a new row must be filed under the canonical path, not the spelling it arrived under: {saved}"
+        );
+        assert_eq!(
+            saved["repos"][&canonical_key]["path"], canonical_key,
+            "the repo record's own 'path' field must also be canonical"
+        );
+    }
+
+    /// Two entries that already canonicalize to the same repository — the
+    /// state a prior bug or a hand-edit could have already produced — must be
+    /// refused as ambiguous rather than merged into one or picked between.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn upsert_workspace_record_refuses_an_already_ambiguous_document() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let real_repo = dir.path().join("real-repo");
+        fs::create_dir_all(&real_repo).expect("real repo dir");
+        let linked_repo = dir.path().join("linked-repo");
+        std::os::unix::fs::symlink(&real_repo, &linked_repo).expect("symlink");
+        let canonical_key = std::fs::canonicalize(&real_repo)
+            .expect("canonical")
+            .to_string_lossy()
+            .to_string();
+        let linked_repo_str = linked_repo.to_string_lossy().to_string();
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                canonical_key.clone(): {"path": canonical_key, "workspaces": {}},
+                linked_repo_str.clone(): {"path": linked_repo_str, "workspaces": {}}
+            },
+            "repoOrder": [], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed an already-ambiguous document");
+
+        let err = upsert_workspace_record(
+            &real_repo.to_string_lossy(),
+            "feature~aaaa1111",
+            serde_json::json!({"branchName": "feature", "kind": "cow"}),
+        )
+        .expect_err("an already-ambiguous document must be refused, not resolved by guessing");
+
+        assert!(err.contains("resolves to the same repository"), "{err}");
+    }
+
+    /// The same ambiguity as `upsert_workspace_record_refuses_an_already_ambiguous_document`,
+    /// but reached through the *exact* spelling of one of the two duplicate
+    /// entries rather than a third spelling that resolves to neither key
+    /// verbatim. The old resolver special-cased an exact `contains_key` hit as
+    /// an immediate, unambiguous answer — short-circuiting before it ever
+    /// scanned for a symlink/canonical duplicate filed under a different key.
+    /// That let an exact-key call silently pick the exact entry and ignore its
+    /// alias instead of refusing.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn upsert_workspace_record_refuses_ambiguity_when_the_exact_key_is_one_of_the_duplicates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let real_repo = dir.path().join("real-repo");
+        fs::create_dir_all(&real_repo).expect("real repo dir");
+        let linked_repo = dir.path().join("linked-repo");
+        std::os::unix::fs::symlink(&real_repo, &linked_repo).expect("symlink");
+        let canonical_key = std::fs::canonicalize(&real_repo)
+            .expect("canonical")
+            .to_string_lossy()
+            .to_string();
+        let linked_repo_str = linked_repo.to_string_lossy().to_string();
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                canonical_key.clone(): {"path": canonical_key, "workspaces": {}},
+                linked_repo_str.clone(): {"path": linked_repo_str, "workspaces": {}}
+            },
+            "repoOrder": [], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed an already-ambiguous document");
+
+        // Addressed by the *exact* string one of the two rows is filed under.
+        let err = upsert_workspace_record(
+            &canonical_key,
+            "feature~aaaa1111",
+            serde_json::json!({"branchName": "feature", "kind": "cow"}),
+        )
+        .expect_err(
+            "an exact-key hit must not short-circuit past a coexisting alias of the same repo",
+        );
+        assert!(err.contains("resolves to the same repository"), "{err}");
+
+        let saved = load_repositories();
+        assert!(
+            saved["repos"][&canonical_key]["workspaces"]["feature~aaaa1111"].is_null(),
+            "the refused write must not have mutated either entry: {saved}"
+        );
+        assert!(
+            saved["repos"][&linked_repo_str]["workspaces"]
+                .as_object()
+                .map(|w| w.is_empty())
+                .unwrap_or(false),
+            "the refused write must not have mutated either entry: {saved}"
+        );
+    }
+
+    /// Same setup as above but exercising `remove_workspace_record`: an
+    /// exact-key removal must also refuse rather than silently dropping from
+    /// (or no-op'ing against) whichever of the two duplicate entries the exact
+    /// spelling happens to name.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn remove_workspace_record_refuses_ambiguity_when_the_exact_key_is_one_of_the_duplicates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let real_repo = dir.path().join("real-repo");
+        fs::create_dir_all(&real_repo).expect("real repo dir");
+        let linked_repo = dir.path().join("linked-repo");
+        std::os::unix::fs::symlink(&real_repo, &linked_repo).expect("symlink");
+        let canonical_key = std::fs::canonicalize(&real_repo)
+            .expect("canonical")
+            .to_string_lossy()
+            .to_string();
+        let linked_repo_str = linked_repo.to_string_lossy().to_string();
+        replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                canonical_key.clone(): {
+                    "path": canonical_key,
+                    "workspaces": {"feature~aaaa1111": {"branchName": "feature", "kind": "cow"}}
+                },
+                linked_repo_str.clone(): {"path": linked_repo_str, "workspaces": {}}
+            },
+            "repoOrder": [], "groups": {}, "groupOrder": []
+        }))
+        .expect("seed an already-ambiguous document with a row to (not) remove");
+
+        let err = remove_workspace_record(&canonical_key, "feature~aaaa1111").expect_err(
+            "an exact-key hit must not short-circuit past a coexisting alias of the same repo",
+        );
+        assert!(err.contains("resolves to the same repository"), "{err}");
+
+        let saved = load_repositories();
+        assert!(
+            saved["repos"][&canonical_key]["workspaces"]["feature~aaaa1111"].is_object(),
+            "the refused removal must not have mutated the row it targeted: {saved}"
         );
     }
 
