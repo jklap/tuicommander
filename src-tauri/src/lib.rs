@@ -89,6 +89,7 @@ pub(crate) mod plugins;
 #[cfg(feature = "desktop")]
 mod press_and_hold;
 pub(crate) mod process_env;
+pub(crate) mod progress;
 pub(crate) mod prompt;
 pub(crate) mod provider_registry;
 pub(crate) mod pty;

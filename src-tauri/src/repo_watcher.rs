@@ -1646,6 +1646,63 @@ mod tests {
     }
 
     #[test]
+    fn progress_store_writes_are_classified_as_noise() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+
+        let store = crate::progress::ProgressStore::open(&repo).unwrap();
+        store
+            .record(&crate::progress::NewProgressEvent {
+                kind: crate::progress::ProgressKind::Milestone,
+                summary: "Watcher-storm regression coverage recorded.".to_string(),
+                workstream: None,
+                provenance: crate::progress::ProgressProvenance::default(),
+            })
+            .unwrap();
+
+        let db_path = store.database_path();
+        assert!(db_path.exists(), "database must exist after a write");
+        let wal_path = Path::new(&format!("{}-wal", db_path.display())).to_path_buf();
+        let shm_path = Path::new(&format!("{}-shm", db_path.display())).to_path_buf();
+
+        let git_dir = repo.join(".git");
+        let gi = build_ignore(&repo, &git_dir);
+        for path in [&db_path.to_path_buf(), &wal_path, &shm_path] {
+            assert_eq!(
+                classify_path(path, &repo, &git_dir, &[], &gi),
+                EventCategory::Noise,
+                "{} must not emit repo-changed or trigger a content-index rebuild",
+                path.display()
+            );
+        }
+
+        let corrupt_backup = db_path.with_file_name(format!(
+            "{}.corrupt-{}",
+            db_path.file_name().unwrap().to_string_lossy(),
+            uuid::Uuid::new_v4()
+        ));
+        assert_eq!(
+            classify_path(&corrupt_backup, &repo, &git_dir, &[], &gi),
+            EventCategory::Noise,
+            "preserved corrupt database backups must also stay noise"
+        );
+    }
+
+    #[test]
     fn test_classify_noise_gitignored() {
         let root = Path::new("/repo");
         let git = Path::new("/repo/.git");
