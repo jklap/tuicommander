@@ -7483,6 +7483,15 @@ mod tests {
         let config_dir = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
 
+        // COW creation is experimental and OFF by default, and this test goes
+        // through the real transport, so it opts in the way a user does rather
+        // than bypassing the gate. Written into the temp config dir above, so
+        // it can never touch whoever runs the suite's real settings.
+        let mut app_config = crate::config::AppConfig::default();
+        app_config.experimental_features_enabled = true;
+        app_config.cow_workspaces_enabled = true;
+        crate::config::save_app_config(app_config).expect("opt in to COW workspaces");
+
         // Probe the exact same capability check `create_workspace_with` runs
         // (same src, same dest_parent resolution) BEFORE asking for the
         // clone. This is what makes a skip here honest: a missing filesystem
