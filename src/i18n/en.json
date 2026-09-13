@@ -743,6 +743,7 @@
 	"sidebar.repoOptions": "Repository options",
 	"sidebar.settings": "Settings",
 	"sidebar.showDismissed": "Show",
+	"sidebar.staleTempRepos": "Stale repositories awaiting repair",
 	"sidebar.switchBranch": "Switch Branch",
 	"sidebar.viewDiff": "View PR diff",
 	"sidebar.worktree": "Worktree",

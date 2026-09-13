@@ -1048,7 +1048,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove";
+const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_adopt, worktree_publish, worktree_unpublished";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
@@ -1120,18 +1120,20 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a workspace. Requires path. Optional: branch, base_ref, spawn_session, mode, dirty. The response carries the isolation semantics of the workspace you got — read it.\n- worktree_remove: Remove worktree. Requires path, workspace_id.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a workspace. Requires path. Optional: branch, base_ref, spawn_session, mode, dirty. The response carries the isolation semantics of the workspace you got — read it.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- worktree_adopt: Explicitly register a copy-on-write clone this backend lost track of (no provenance markers, so worktree_list/worktree_remove refuse to trust it on sight). Requires path, candidate_path. The call itself is confirmation — it never deletes anything, and the only change it makes to the clone is writing its two provenance markers into local git config; HEAD, the index, the working tree, untracked files, refs and remotes are untouched. Optional: workspace_id, to reuse a specific id when retrying a call whose registration failed.\n- worktree_unpublished: How many commits exist only in this workspace (reachable from HEAD, from no remote and no mirrored parent ref). Requires path, workspace_id. Always 0 for a linked worktree, whose objects already live in the parent.\n- worktree_publish: Get a workspace's commits into the parent repo and out to origin. Requires path, workspace_id. Reuses the same safe staging-ref implementation as the Tauri command and the HTTP route: the parent update is fast-forward only, refuses a branch checked out in the parent, and never force-merges a divergent same-named parent ref. Reports parent_updated/parent_error and origin_pushed/origin_error independently — a missing/unreachable origin does not undo a parent update. A linked worktree returns no_op_reason instead: its refs are already shared with the parent.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove" },
-                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove)" },
-                "workspace_id": { "type": "string", "description": "Opaque workspace id from action=worktree_list (action=worktree_remove required). Never a branch name: two workspaces may share a branch." },
+                "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_adopt, worktree_publish, worktree_unpublished" },
+                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_adopt, worktree_publish, worktree_unpublished)" },
+                "workspace_id": { "type": "string", "description": "Opaque workspace id from action=worktree_list — never guess it from a branch name (required for action=worktree_remove, worktree_publish, worktree_unpublished). For a linked worktree the id happens to equal the branch, but a COW clone's id is minted independently of its branch, so two workspaces can share a branch while holding different ids; always read the id worktree_list returns rather than assuming one. For action=worktree_adopt (optional), reuse a specific id instead of minting one — for retrying a call whose registration failed." },
+                "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty or unpublished workspace state; obtain user confirmation before setting it." },
                 "filter": { "type": "string", "description": "Issue filter, default 'assigned' (action=issues)" },
                 "issue_number": { "type": "integer", "description": "Issue number (action=close_issue/reopen_issue, required)" },
                 "branch": { "type": "string", "description": "Branch name (action=worktree_create optional)" },
                 "mode": { "type": "string", "enum": ["auto", "cow", "worktree"], "description": "action=worktree_create optional, default auto. 'auto' takes a copy-on-write clone of the whole repo directory where the filesystem allows it (independent repo, two workspaces may share a branch, node_modules/target arrive warm) and a linked worktree otherwise; 'cow' fails if COW is unavailable; 'worktree' forces the linked worktree. The response says which you got and, if it degraded, why." },
                 "dirty": { "type": "string", "enum": ["inherit", "clean_untracked", "clean"], "description": "action=worktree_create optional, default inherit. What to do with the parent's uncommitted work in a COW clone. 'inherit' is free and carries it over; 'clean_untracked' removes untracked files but KEEPS ignored build output; 'clean' resets everything and costs real disk (measured 15 MB -> 113 MB). Ask for 'clean' only if the task needs a pristine tree." },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
-                "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" }
+                "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" },
+                "candidate_path": { "type": "string", "description": "Absolute path to the candidate directory to adopt (action=worktree_adopt, required). Must be an immediate child of the repo's configured worktree base." }
             }, "required": ["action"] }
         },
         {
@@ -3404,15 +3406,22 @@ async fn handle_worktree(
                     return serde_json::json!({"error": "Action 'worktree_remove' requires 'workspace_id' parameter"});
                 }
             };
-            let archive = crate::worktree::resolve_archive_script(&path);
-            match crate::worktree::remove_worktree_by_workspace_id(
-                &path,
-                &workspace_id,
-                true,
-                archive.as_deref(),
-                false,
-            ) {
-                Ok(outcome) => {
+            let force = args["force"].as_bool().unwrap_or(false);
+            let path_for_remove = path.clone();
+            let workspace_id_for_remove = workspace_id.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let archive = crate::worktree::resolve_archive_script(&path_for_remove);
+                crate::worktree::remove_worktree_by_workspace_id(
+                    &path_for_remove,
+                    &workspace_id_for_remove,
+                    true,
+                    archive.as_deref(),
+                    force,
+                )
+            })
+            .await;
+            match result {
+                Ok(Ok(outcome)) => {
                     state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
                         repo_path: path.clone(),
                         workspace_id: workspace_id.clone(),
@@ -3420,7 +3429,95 @@ async fn handle_worktree(
                     });
                     worktree_remove_success_response(outcome.branch_delete_warning)
                 }
-                Err(e) => serde_json::json!({"error": e}),
+                Ok(Err(e)) => serde_json::json!({"error": e}),
+                Err(e) => serde_json::json!({
+                    "error": format!("worktree removal task failed to complete: {e}")
+                }),
+            }
+        }
+        "worktree_adopt" => {
+            let path = match require_path(args, "worktree_adopt") {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let candidate_path = match args["candidate_path"].as_str() {
+                Some(c) => c.to_string(),
+                None => {
+                    return serde_json::json!({"error": "Action 'worktree_adopt' requires 'candidate_path' parameter"});
+                }
+            };
+            let workspace_id = args["workspace_id"].as_str().map(|s| s.to_string());
+            let result = tokio::task::spawn_blocking(move || {
+                crate::worktree::adopt_cow_workspace_impl(
+                    &path,
+                    &candidate_path,
+                    workspace_id.as_deref(),
+                )
+            })
+            .await;
+            match result {
+                Ok(Ok(record)) => crate::worktree::adopted_workspace_json(&record),
+                Ok(Err(e)) => serde_json::json!({"error": e}),
+                Err(e) => serde_json::json!({
+                    "error": format!("workspace adoption task failed to complete: {e}")
+                }),
+            }
+        }
+        "worktree_unpublished" => {
+            let path = match require_path(args, "worktree_unpublished") {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let workspace_id = match args["workspace_id"].as_str() {
+                Some(w) => w.to_string(),
+                None => {
+                    return serde_json::json!({"error": "Action 'worktree_unpublished' requires 'workspace_id' parameter"});
+                }
+            };
+            // Blocking: counting refreshes the parent mirror first (a fetch).
+            let result = tokio::task::spawn_blocking(move || {
+                crate::worktree::unpublished_commits_impl(&path, &workspace_id)
+            })
+            .await;
+            match result {
+                Ok(Ok(count)) => serde_json::json!(count),
+                Ok(Err(e)) => serde_json::json!({"error": e}),
+                Err(e) => serde_json::json!({
+                    "error": format!("unpublished-commit count task failed to complete: {e}")
+                }),
+            }
+        }
+        "worktree_publish" => {
+            let path = match require_path(args, "worktree_publish") {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let workspace_id = match args["workspace_id"].as_str() {
+                Some(w) => w.to_string(),
+                None => {
+                    return serde_json::json!({"error": "Action 'worktree_publish' requires 'workspace_id' parameter"});
+                }
+            };
+            // Blocking: a publish runs a fetch and a push, same as the HTTP route.
+            let result = tokio::task::spawn_blocking(move || {
+                crate::worktree::publish_workspace_impl(&path, &workspace_id)
+            })
+            .await;
+            match result {
+                Ok(Ok(outcome)) => to_json_or_error(outcome),
+                Ok(Err(e)) => serde_json::json!({"error": e}),
+                Err(e) => serde_json::json!({
+                    "error": format!("publish task failed to complete: {e}")
+                }),
             }
         }
         other => serde_json::json!({"error": format!(
@@ -6139,9 +6236,12 @@ async fn handle_repo(
         "prs" | "status" | "issues" | "close_issue" | "reopen_issue" => {
             handle_github(state, args).await
         }
-        "worktree_list" | "worktree_create" | "worktree_remove" => {
-            handle_worktree(state, args, is_claude_code).await
-        }
+        "worktree_list"
+        | "worktree_create"
+        | "worktree_remove"
+        | "worktree_adopt"
+        | "worktree_publish"
+        | "worktree_unpublished" => handle_worktree(state, args, is_claude_code).await,
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
         )}),
@@ -7158,6 +7258,24 @@ mod tests {
         assert_eq!(warned["branch_delete_warning"], "branch retained");
     }
 
+    #[test]
+    fn native_mcp_worktree_remove_uses_the_blocking_pool() {
+        let source = include_str!("mcp_transport.rs");
+        let at = source
+            .find("\"worktree_remove\" => {")
+            .expect("worktree_remove action");
+        let body = &source[at..(at + 2_000).min(source.len())];
+        assert!(
+            body.contains("tokio::task::spawn_blocking"),
+            "recursive COW deletion and git safety checks must not park a Tokio worker"
+        );
+        assert!(
+            body.contains("let force = args[\"force\"].as_bool().unwrap_or(false)")
+                && body.contains("archive.as_deref(),\n                    force,"),
+            "native MCP removal must default force to false and forward an explicit true"
+        );
+    }
+
     #[tokio::test]
     async fn github_dispatch_reports_missing_and_unknown_actions() {
         let state = test_state();
@@ -7233,7 +7351,14 @@ mod tests {
     async fn repo_dispatch_still_routes_worktree_actions() {
         let state = test_state();
 
-        for action in ["worktree_list", "worktree_create", "worktree_remove"] {
+        for action in [
+            "worktree_list",
+            "worktree_create",
+            "worktree_remove",
+            "worktree_adopt",
+            "worktree_publish",
+            "worktree_unpublished",
+        ] {
             let response = handle_repo(&state, &serde_json::json!({"action": action}), false).await;
             let error = response["error"].as_str().unwrap();
             assert!(
@@ -7245,6 +7370,235 @@ mod tests {
                 "{action} must reach the path check in handle_worktree: {error}"
             );
         }
+    }
+
+    /// `worktree_publish` and `worktree_unpublished` both need a `workspace_id`,
+    /// same as `worktree_remove` — checked once `path` clears validation.
+    #[tokio::test]
+    async fn worktree_publish_and_unpublished_require_a_workspace_id() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().to_string();
+
+        for action in ["worktree_publish", "worktree_unpublished"] {
+            let response = handle_repo(
+                &state,
+                &serde_json::json!({"action": action, "path": path}),
+                false,
+            )
+            .await;
+            assert!(
+                response["error"].as_str().unwrap().contains("workspace_id"),
+                "{action} must require workspace_id: {response}"
+            );
+        }
+    }
+
+    /// Same parity contract the HTTP routes document: an unknown workspace id
+    /// reports an error rather than silently doing nothing, for both the
+    /// read-only count and the publish action.
+    #[tokio::test]
+    async fn worktree_publish_and_unpublished_report_an_unknown_workspace() {
+        let state = test_state();
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            crate::git_cli::git_cmd(&repo)
+                .args(args)
+                .run()
+                .expect("git setup");
+        }
+        std::fs::write(repo.join("README.md"), "# Test").unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["commit", "-m", "initial"])
+            .run()
+            .unwrap();
+        let path = repo.to_string_lossy().to_string();
+
+        for action in ["worktree_publish", "worktree_unpublished"] {
+            let response = handle_repo(
+                &state,
+                &serde_json::json!({
+                    "action": action,
+                    "path": path,
+                    "workspace_id": "does-not-exist~deadbeef",
+                }),
+                false,
+            )
+            .await;
+            assert!(
+                response["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("No workspace found"),
+                "{action} must report the missing workspace: {response}"
+            );
+        }
+    }
+
+    /// Full lifecycle through the MCP `repo` tool: create a COW workspace,
+    /// commit unique content only it has, observe it as unpublished, publish
+    /// it, and prove the commit is reachable in the parent afterwards. This is
+    /// the same guarantee `docs/api/http-api.md` documents for the HTTP route
+    /// and `count_unpublished_commits`/`publish_workspace` document for the
+    /// Tauri commands — one implementation behind all three transports.
+    #[tokio::test]
+    async fn mcp_repo_publishes_a_cow_workspace_end_to_end() {
+        let state = test_state();
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            crate::git_cli::git_cmd(&repo)
+                .args(args)
+                .run()
+                .expect("git setup");
+        }
+        std::fs::write(repo.join("README.md"), "# Test").unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["commit", "-m", "initial"])
+            .run()
+            .unwrap();
+        let repo_path = repo.to_string_lossy().to_string();
+
+        // COW workspaces register themselves into `repositories.json`, so this
+        // test needs its own config dir rather than touching Boss's real one.
+        let config_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+
+        // Probe the exact same capability check `create_workspace_with` runs
+        // (same src, same dest_parent resolution) BEFORE asking for the
+        // clone. This is what makes a skip here honest: a missing filesystem
+        // capability is the only thing allowed to short-circuit the test.
+        // Without it, `worktree_create` returning ANY error — including a real
+        // regression in the clone path — silently "passed" this test, which is
+        // exactly the gap the audit flagged (#760-c29f, #762-e45a).
+        let worktrees_dir =
+            crate::worktree::resolve_worktree_dir_for_repo(&repo, &state.worktrees_dir);
+        let cow_support = crate::cow::probe_cow_support(&repo, &worktrees_dir);
+
+        let created = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_create",
+                "path": repo_path,
+                "branch": "feature-mcp-publish",
+                "mode": "cow",
+            }),
+            false,
+        )
+        .await;
+        if let Some(err) = created.get("error") {
+            assert!(
+                !cow_support.is_supported(),
+                "worktree_create failed ({err}) even though probe_cow_support just \
+                 confirmed COW is available for this exact src/dest pair — that is a \
+                 real regression, not an environment limitation, and must fail the test"
+            );
+            eprintln!(
+                "Skipping: probe_cow_support confirmed COW is unavailable here ({:?}); \
+                 nothing else in this test can run without a clone",
+                cow_support.reason()
+            );
+            return;
+        }
+        let workspace_id = created["workspace_id"]
+            .as_str()
+            .expect("workspace_id in create response")
+            .to_string();
+        let workspace_path =
+            std::path::PathBuf::from(created["worktree_path"].as_str().expect("worktree_path"));
+
+        std::fs::write(workspace_path.join("unique.txt"), "unique content").unwrap();
+        crate::git_cli::git_cmd(&workspace_path)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&workspace_path)
+            .args(["commit", "-m", "unique commit"])
+            .run()
+            .unwrap();
+        let workspace_tip = crate::git_cli::git_cmd(&workspace_path)
+            .args(["rev-parse", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+
+        let unpublished_before = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_unpublished",
+                "path": repo_path,
+                "workspace_id": workspace_id,
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(
+            unpublished_before.as_u64(),
+            Some(1),
+            "expected exactly the one unique commit to read as unpublished: {unpublished_before}"
+        );
+
+        let published = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_publish",
+                "path": repo_path,
+                "workspace_id": workspace_id,
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(published["parent_updated"], true, "{published}");
+        assert_eq!(published["published_commit"], workspace_tip);
+
+        let parent_tip = crate::git_cli::git_cmd(&repo)
+            .args(["rev-parse", "refs/heads/feature-mcp-publish"])
+            .run()
+            .expect("parent branch must exist after publish")
+            .stdout
+            .trim()
+            .to_string();
+        assert_eq!(
+            parent_tip, workspace_tip,
+            "the unique commit must be reachable in the parent after publish"
+        );
+
+        let unpublished_after = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_unpublished",
+                "path": repo_path,
+                "workspace_id": workspace_id,
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(
+            unpublished_after.as_u64(),
+            Some(0),
+            "a published commit must stop counting as unpublished: {unpublished_after}"
+        );
     }
 
     // The parent module's `test_state` was already this function, byte for byte:
@@ -11705,6 +12059,9 @@ mod tests {
             "worktree_list",
             "worktree_create",
             "worktree_remove",
+            "worktree_adopt",
+            "worktree_publish",
+            "worktree_unpublished",
         ] {
             assert!(
                 action_desc.contains(action),
@@ -11719,6 +12076,17 @@ mod tests {
         assert!(
             params["filter"].is_object(),
             "action=issues needs its filter parameter: {params}"
+        );
+        assert!(
+            params["candidate_path"].is_object(),
+            "action=worktree_adopt needs its candidate_path parameter: {params}"
+        );
+        assert!(
+            params["workspace_id"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("worktree_publish"),
+            "workspace_id's description must name worktree_publish as a consumer: {params}"
         );
     }
 
@@ -13809,6 +14177,32 @@ mod tests {
     }
 
     // --- ui(action=confirm): answerable from any client, not just the desktop ---
+
+    /// Story 760: `REQUEST_TIMEOUT` (`mcp_http/mod.rs`) wraps the whole router,
+    /// including this handler, through `with_server_limits`. Both constants used
+    /// to read 300s — a tie the scheduler could resolve either way — so the
+    /// outer layer could win and hand the caller a bare 408 instead of this
+    /// handler's own `{confirmed:false, reason:...}` body. Asserting the
+    /// ordering directly means a future edit that reintroduces a tie, or drops
+    /// REQUEST_TIMEOUT below CONFIRM_TIMEOUT, fails the build rather than only
+    /// production.
+    #[test]
+    fn request_timeout_beats_every_in_handler_deadline() {
+        assert!(
+            crate::mcp_http::REQUEST_TIMEOUT > CONFIRM_TIMEOUT,
+            "the router's outer timeout must never race the confirm handler's own \
+             deadline: REQUEST_TIMEOUT={:?}, CONFIRM_TIMEOUT={:?}",
+            crate::mcp_http::REQUEST_TIMEOUT,
+            CONFIRM_TIMEOUT,
+        );
+        assert!(
+            crate::mcp_http::REQUEST_TIMEOUT.as_millis() as u64 > WAIT_EFFECTIVE_MAX_MS,
+            "the router's outer timeout must also clear the longest session/agent \
+             wait this server actually runs: REQUEST_TIMEOUT={:?}, WAIT_EFFECTIVE_MAX_MS={}ms",
+            crate::mcp_http::REQUEST_TIMEOUT,
+            WAIT_EFFECTIVE_MAX_MS,
+        );
+    }
 
     /// Wait for `handle_confirm` to publish its request, and return the id.
     ///

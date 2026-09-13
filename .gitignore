@@ -103,3 +103,7 @@ __pycache__/
 .wiz/
 .codex/**
 .mdkb/**
+ORCHESTRATOR.md
+
+# Vitest run cache
+.vitest/

@@ -11,6 +11,7 @@ mod ipc;
 mod mcp;
 
 use clap::{Parser, Subcommand};
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -274,6 +275,15 @@ fn cmd_open(path: Option<String>, _wait: bool, goto: Option<String>) -> Result<(
     // Check if path is a directory → open as repo, file → open in editor
     let metadata = std::fs::metadata(actual_path);
     if metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false) {
+        // Registration is permanent; a temp directory is not. Refuse rather than
+        // leave a row the user must later hunt down (#763-d219).
+        if is_disposable_root(Path::new(actual_path), &disposable_roots()) {
+            return Err(format!(
+                "Refusing to register \"{actual_path}\" as a repository: it is inside a temporary \
+                 directory, which the OS deletes while the sidebar entry stays behind forever.\n\
+                 For a shell there instead: tuic new {actual_path}"
+            ));
+        }
         // A directory is a REPO, not a terminal: hand it to the app, which adds it
         // to the sidebar if it is new (asking first) and activates it. Creating a
         // PTY here instead — as this used to — left the sidebar untouched, which is
@@ -1026,6 +1036,44 @@ fn resolve_path(path: &str) -> String {
         .unwrap_or(absolute)
 }
 
+/// Directories a repository can never legitimately be registered from.
+///
+/// `tuic <dir>` registers the directory in `repositories.json` *permanently* —
+/// the sidebar keeps it across restarts. Handed a temp directory, that is a row
+/// pointing at something the OS deletes, and it outlives every trace of who
+/// created it: fifteen such rows accumulated in Boss's config between
+/// 2026-09-11 and 2026-09-13 (#763-d219).
+///
+/// The check lives in the CLI, not in the app, on purpose. `std::env::temp_dir`
+/// reads `TMPDIR`/`TEMP` from *this* process, so it resolves to the caller's
+/// shell — which is how `~/Gits/.tmp` (this repo's own `TMPDIR` convention for
+/// Rust suites) is caught. The app process has a different `TMPDIR` and cannot
+/// see it.
+fn disposable_roots() -> Vec<PathBuf> {
+    let mut roots = vec![std::env::temp_dir()];
+    #[cfg(unix)]
+    roots.push(PathBuf::from("/tmp"));
+    roots
+        .into_iter()
+        .flat_map(|root| {
+            // Keep both forms: on macOS `/var/folders/…` canonicalizes to
+            // `/private/var/folders/…`, and a caller can hand us either.
+            std::fs::canonicalize(&root)
+                .ok()
+                .into_iter()
+                .chain(std::iter::once(root))
+        })
+        .collect()
+}
+
+/// `true` when `path` is one of `roots` or lives below it. Compares components,
+/// never string prefixes — `/tmpfoo` is not inside `/tmp`.
+fn is_disposable_root(path: &Path, roots: &[PathBuf]) -> bool {
+    let canonical = std::fs::canonicalize(path);
+    let candidate: &Path = canonical.as_deref().unwrap_or(path);
+    roots.iter().any(|root| candidate.starts_with(root))
+}
+
 /// Windows canonicalization yields verbatim paths (`\\?\C:\src`). The app stores
 /// and displays plain paths, so drop the prefix to keep both sides comparable.
 fn strip_verbatim(path: &str) -> String {
@@ -1273,8 +1321,9 @@ fn remove_with_elevation(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_send_parts, capture_query, resolve_path, session_status, short_id, short_repo,
-        strip_verbatim, translate_keys, truncate, without_flag,
+        Path, PathBuf, agent_send_parts, capture_query, disposable_roots, is_disposable_root,
+        resolve_path, session_status, short_id, short_repo, strip_verbatim, translate_keys,
+        truncate, without_flag,
     };
     use serde_json::json;
 
@@ -1356,6 +1405,62 @@ mod tests {
     fn resolve_path_keeps_paths_that_do_not_exist_yet() {
         let resolved = resolve_path("/definitely/not/here/new-file.rs");
         assert_eq!(resolved, "/definitely/not/here/new-file.rs");
+    }
+
+    // #763-d219 — `tuic <dir>` registers a repository permanently. The fifteen
+    // rows it left in Boss's `repositories.json` were all temp roots, so the
+    // shapes below are the ones actually observed on disk, not invented.
+    #[test]
+    fn a_temp_root_and_everything_under_it_is_disposable() {
+        let roots = vec![
+            PathBuf::from("/private/var/folders/3h/abc/T"),
+            PathBuf::from("/Users/dev/Gits/.tmp"),
+        ];
+
+        for observed in [
+            "/private/var/folders/3h/abc/T/.tmpmq7MuH",
+            "/private/var/folders/3h/abc/T/.tmpmq7MuH/nested/deeper",
+            "/Users/dev/Gits/.tmp/.tmpcDMEC4",
+            // The root itself is no more registrable than its children.
+            "/private/var/folders/3h/abc/T",
+            "/Users/dev/Gits/.tmp",
+        ] {
+            assert!(
+                is_disposable_root(Path::new(observed), &roots),
+                "{observed} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_real_repository_is_not_disposable() {
+        let roots = vec![PathBuf::from("/tmp"), PathBuf::from("/Users/dev/Gits/.tmp")];
+
+        for keeper in [
+            "/Users/dev/Gits/personal/tuicommander",
+            // Shares a string prefix with a root but is a sibling of it, not a
+            // child. A `starts_with` on strings would refuse these.
+            "/tmpfoo",
+            "/Users/dev/Gits/.tmpfiles/repo",
+        ] {
+            assert!(
+                !is_disposable_root(Path::new(keeper), &roots),
+                "{keeper} should be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn disposable_roots_follow_this_process_tmpdir() {
+        // The whole reason the check lives in the CLI: it reads the *caller's*
+        // TMPDIR, which is what `~/Gits/.tmp` runs under in this repo.
+        let roots = disposable_roots();
+        let temp = std::env::temp_dir();
+        assert!(
+            is_disposable_root(&temp.join("scratch-repo"), &roots),
+            "a directory under {} was not recognised; roots were {roots:?}",
+            temp.display()
+        );
     }
 
     #[test]

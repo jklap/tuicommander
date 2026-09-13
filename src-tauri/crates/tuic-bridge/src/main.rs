@@ -21,6 +21,9 @@ static TUIC_SESSION_ENV: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("TUIC_SESSION").ok().filter(|s| !s.is_empty()));
 
 const MCP_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const WORKSPACE_OPERATION_RESPONSE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(305);
+const CONFIRM_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(305);
 const LEGACY_PROTOCOL_VERSION: &str = "2025-11-25";
 const MCP_WAIT_DEFAULT_MS: u64 = 60_000;
 const MCP_WAIT_MAX_MS: u64 = 300_000;
@@ -59,10 +62,55 @@ fn wait_timeout_ms(request: &Value) -> Option<u64> {
     )
 }
 
+fn is_long_workspace_operation(request: &Value) -> bool {
+    let name = request.pointer("/params/name").and_then(Value::as_str);
+    let outer = request.pointer("/params/arguments");
+    let arguments = match (name, outer) {
+        (Some("repo"), Some(arguments)) => arguments,
+        (Some("call_tool"), Some(arguments))
+            if arguments.get("tool_name").and_then(Value::as_str) == Some("repo") =>
+        {
+            match arguments.get("arguments") {
+                Some(arguments) => arguments,
+                None => return false,
+            }
+        }
+        _ => return false,
+    };
+    matches!(
+        arguments.get("action").and_then(Value::as_str),
+        Some("worktree_create" | "worktree_remove" | "worktree_publish" | "worktree_unpublished")
+    )
+}
+
+fn is_ui_confirmation(request: &Value) -> bool {
+    let name = request.pointer("/params/name").and_then(Value::as_str);
+    let outer = request.pointer("/params/arguments");
+    let arguments = match (name, outer) {
+        (Some("ui"), Some(arguments)) => arguments,
+        (Some("call_tool"), Some(arguments))
+            if arguments.get("tool_name").and_then(Value::as_str) == Some("ui") =>
+        {
+            match arguments.get("arguments") {
+                Some(arguments) => arguments,
+                None => return false,
+            }
+        }
+        _ => return false,
+    };
+    arguments.get("action").and_then(Value::as_str) == Some("confirm")
+}
+
 fn response_timeout(body: &str) -> std::time::Duration {
     let Ok(request) = serde_json::from_str::<Value>(body) else {
         return MCP_RESPONSE_TIMEOUT;
     };
+    if is_long_workspace_operation(&request) {
+        return WORKSPACE_OPERATION_RESPONSE_TIMEOUT;
+    }
+    if is_ui_confirmation(&request) {
+        return CONFIRM_RESPONSE_TIMEOUT;
+    }
     wait_timeout_ms(&request)
         .map(|timeout| {
             std::time::Duration::from_millis(timeout.saturating_add(MCP_WAIT_RESPONSE_MARGIN_MS))
@@ -1127,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_delivery_regression_wait_response_timeout_tracks_requested_server_deadline() {
+    fn mcp_delivery_regression_long_response_timeouts_match_server_deadlines() {
         let ordinary =
             r#"{"method":"tools/call","params":{"name":"session","arguments":{"action":"list"}}}"#;
         let direct_wait =
@@ -1135,11 +1183,30 @@ mod tests {
         let collapsed_wait = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"session","arguments":{"action":"wait","timeout_ms":120000}}}}"#;
         let capped_wait = r#"{"method":"tools/call","params":{"name":"agent","arguments":{"action":"wait","timeout_ms":999999}}}"#;
         let short_wait = r#"{"method":"tools/call","params":{"name":"session","arguments":{"action":"wait","timeout_ms":1}}}"#;
+        let workspace_create = r#"{"method":"tools/call","params":{"name":"repo","arguments":{"action":"worktree_create"}}}"#;
+        let collapsed_workspace_create = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"repo","arguments":{"action":"worktree_create"}}}}"#;
+        let workspace_remove = r#"{"method":"tools/call","params":{"name":"repo","arguments":{"action":"worktree_remove"}}}"#;
+        let collapsed_workspace_remove = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"repo","arguments":{"action":"worktree_remove"}}}}"#;
+        // Publish runs a fetch + push and unpublished-count refreshes the parent
+        // mirror with a fetch first — both are as network-bound as create/remove,
+        // so they share the same long deadline rather than the ordinary 10s one.
+        let workspace_publish = r#"{"method":"tools/call","params":{"name":"repo","arguments":{"action":"worktree_publish"}}}"#;
+        let workspace_unpublished = r#"{"method":"tools/call","params":{"name":"repo","arguments":{"action":"worktree_unpublished"}}}"#;
+        let ui_confirm = r#"{"method":"tools/call","params":{"name":"ui","arguments":{"action":"confirm","title":"Confirm"}}}"#;
+        let collapsed_ui_confirm = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"ui","arguments":{"action":"confirm","title":"Confirm"}}}}"#;
         assert_eq!(response_timeout(ordinary).as_secs(), 10);
         assert_eq!(response_timeout(direct_wait).as_secs(), 65);
         assert_eq!(response_timeout(collapsed_wait).as_secs(), 125);
         assert_eq!(response_timeout(capped_wait).as_secs(), 305);
         assert_eq!(response_timeout(short_wait).as_millis(), 5_001);
+        assert_eq!(response_timeout(workspace_create).as_secs(), 305);
+        assert_eq!(response_timeout(collapsed_workspace_create).as_secs(), 305);
+        assert_eq!(response_timeout(workspace_remove).as_secs(), 305);
+        assert_eq!(response_timeout(collapsed_workspace_remove).as_secs(), 305);
+        assert_eq!(response_timeout(workspace_publish).as_secs(), 305);
+        assert_eq!(response_timeout(workspace_unpublished).as_secs(), 305);
+        assert_eq!(response_timeout(ui_confirm).as_secs(), 305);
+        assert_eq!(response_timeout(collapsed_ui_confirm).as_secs(), 305);
     }
 
     #[tokio::test]

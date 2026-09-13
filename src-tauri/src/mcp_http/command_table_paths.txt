@@ -107,6 +107,7 @@
 /config/repo-settings
 /config/repo-settings/has-custom
 /config/repositories
+/config/repositories/stale-temp
 /config/slot-test
 /config/themes
 /config/ui-prefs
@@ -307,9 +308,11 @@
 /watchers/hot-repos
 /watchers/repo
 /worktrees
+/worktrees/adopt
 /worktrees/dir
 /worktrees/finalize
 /worktrees/generate-name
+/worktrees/lifecycle
 /worktrees/paths
 /worktrees/publish
 /worktrees/run-script

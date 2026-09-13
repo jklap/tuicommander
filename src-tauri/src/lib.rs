@@ -1190,6 +1190,16 @@ fn boot_repo_paths(repositories: &serde_json::Value) -> Vec<String> {
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Must run before the first `config::config_dir()` read (below) — see
+    // `app_instance::select_app_instance_from_env` for why this exists: a
+    // debug/test build launched with `TUIC_APP_INSTANCE=<id>` gets its own
+    // isolated config directory instead of sharing Boss's production
+    // `repositories.json` (#763-d219).
+    if let Err(e) = app_instance::select_app_instance_from_env() {
+        eprintln!("Invalid {}: {e}", app_instance::APP_INSTANCE_ENV_VAR);
+        std::process::exit(1);
+    }
+
     // Install the rustls CryptoProvider before anything touches TLS.
     // With both `ring` and `aws-lc-rs` features active, rustls cannot
     // auto-detect which provider to use and panics at runtime.
@@ -1531,6 +1541,16 @@ pub fn run() {
             }
             themes::start_theme_watcher(themes_dir, app_state);
 
+            // Former built-ins are seeded once as ordinary uninstallable plugins.
+            // Seed before the watcher starts so startup does not emit redundant
+            // hot-reload events for packages the frontend has not loaded yet.
+            if let Err(e) = plugins::seed_externalized_builtin_plugins(&config::config_dir()) {
+                tracing::warn!(
+                    source = "plugins",
+                    "Failed to seed externalized plugins: {e}"
+                );
+            }
+
             // Start plugin directory watcher for hot-reload
             plugins::start_plugin_watcher(app.handle());
 
@@ -1722,6 +1742,7 @@ pub fn run() {
             agent_session::claude_project_dir,
             worktree::remove_worktree,
             worktree::check_worktree_dirty,
+            worktree::get_workspace_lifecycle,
             worktree::delete_local_branch,
             agent::detect_installed_ides,
             worktree::create_worktree,
@@ -1803,6 +1824,7 @@ pub fn run() {
             worktree::merge_and_archive_worktree,
             worktree::finalize_merged_worktree,
             worktree::publish_workspace,
+            worktree::adopt_cow_workspace,
             worktree::count_unpublished_commits,
             worktree::list_local_branches,
             worktree::list_base_ref_options,
@@ -1864,6 +1886,8 @@ pub fn run() {
             config::save_repo_defaults,
             boot_commands::load_repositories_async,
             config::save_repositories,
+            config::list_stale_temp_repository_candidates,
+            config::repair_stale_temp_repositories,
             config::load_pane_layout,
             config::save_pane_layout,
             boot_commands::load_prompt_library_async,
