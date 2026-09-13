@@ -106,12 +106,12 @@ fn config_dir_falls_back_to_home_only_when_platform_base_is_absent() {
 }
 
 #[test]
-fn only_the_default_instance_allows_legacy_migration() {
-    assert!(AppInstance::default().allows_legacy_migration());
+fn only_the_unnamed_instance_is_default() {
+    assert!(AppInstance::default().is_default());
     assert!(
         !AppInstance::named(NAMED_ID)
             .expect("named instance")
-            .allows_legacy_migration()
+            .is_default()
     );
 }
 

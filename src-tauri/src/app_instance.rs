@@ -60,9 +60,17 @@ impl AppInstance {
         VAULT_USER
     }
 
-    /// Whether this instance may import state from historical global namespaces.
-    pub fn allows_legacy_migration(&self) -> bool {
+    /// Whether this is the default (unnamed) instance — the identity every
+    /// pre-existing installation runs as. Named instances are always freshly
+    /// created, so only the default instance ever has historical global state
+    /// (legacy config/vault namespaces) worth checking for.
+    pub fn is_default(&self) -> bool {
         self.id.is_none()
+    }
+
+    /// Return the stable identifier for a named instance, when one is active.
+    pub fn named_id(&self) -> Option<&str> {
+        self.id.as_deref()
     }
 }
 
