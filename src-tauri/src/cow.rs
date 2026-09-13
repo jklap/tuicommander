@@ -766,6 +766,20 @@ fn fixup_clone(
         .args(["remote", "add", "parent", &src.to_string_lossy()])
         .run();
     config_or_fail(dest, "remote.parent.pushurl", NO_PUSH_URL)?;
+    // The inherited `origin` gets the same treatment, and for a stronger
+    // reason: publish drives origin FROM THE PARENT, after the parent has
+    // accepted the work. A clone that can push `origin` itself can put a
+    // history on the shared remote that the parent refused — so "the clone
+    // must not reach origin" is made an invariant here rather than left as an
+    // instruction. Only when an `origin` actually came across: writing the key
+    // otherwise would invent a half-configured remote out of nothing.
+    if git_cmd(dest)
+        .args(["remote", "get-url", "origin"])
+        .run()
+        .is_ok()
+    {
+        config_or_fail(dest, "remote.origin.pushurl", NO_PUSH_URL)?;
+    }
     // Inherited fsmonitor state describes the parent's path, not this one.
     config_or_fail(dest, "core.fsmonitor", "false")?;
 
@@ -1546,18 +1560,39 @@ pub(crate) fn publish_cow_workspace(record: &CowRecord) -> Result<PublishOutcome
         }
     }
 
-    // Step 2: origin. Independent of step 1 on purpose — the commits reaching
+    // Step 2: origin. It reports independently of step 1 — the commits reaching
     // the parent is worth reporting even when the network is down, and a
-    // failure here must not roll back what already landed.
-    if git_cmd(&record.path)
+    // failure here must not roll back what already landed — but it is not
+    // independent of step 1's VERDICT. The parent's fast-forward check is the
+    // only place divergence is adjudicated; pushing after it refused would put
+    // on the shared remote exactly the history the parent rejected, which is
+    // strictly worse than the local refusal it just produced.
+    if !outcome.parent_updated {
+        outcome.origin_error = Some(format!(
+            "not pushed: the parent did not accept this publish ({}). Origin must never move \
+             ahead of the parent that refused it — resolve the parent side and publish again.",
+            outcome
+                .parent_error
+                .as_deref()
+                .unwrap_or("no parent update was made")
+        ));
+        return Ok(outcome);
+    }
+
+    // Pushed FROM THE PARENT, and the accepted parent ref rather than the
+    // clone's live branch: the clone may have moved on since the ancestry check
+    // (or, under a projected publish, never held the history that was
+    // accepted), so pushing its branch would send something the parent never
+    // agreed to. The clone's own `origin` is unpushable by construction.
+    if git_cmd(&record.parent_repo)
         .args(["remote", "get-url", "origin"])
         .run()
         .is_err()
     {
-        outcome.origin_error = Some("the workspace has no 'origin' remote".to_string());
+        outcome.origin_error = Some("the parent repository has no 'origin' remote".to_string());
         return Ok(outcome);
     }
-    match git_cmd(&record.path)
+    match git_cmd(&record.parent_repo)
         .args([
             "push",
             "origin",
@@ -3109,6 +3144,108 @@ mod tests {
             rev(&repo, "refs/heads/feature").is_some(),
             "the parent update was rolled back"
         );
+    }
+
+    /// A bare repo the parent knows as `origin`, created BEFORE the clone so
+    /// the copy inherits the remote exactly as a real workspace does.
+    fn with_origin(temp: &TempDir, repo: &Path) -> PathBuf {
+        let origin = temp.path().join("origin.git");
+        git_cmd(temp.path())
+            .args(["init", "--bare", &origin.to_string_lossy()])
+            .run()
+            .expect("bare origin");
+        git_cmd(repo)
+            .args(["remote", "add", "origin", &origin.to_string_lossy()])
+            .run()
+            .expect("remote add origin");
+        origin
+    }
+
+    /// The P1 failure: the parent REFUSED the fast-forward, and origin advanced
+    /// anyway to a history the parent rejected. Origin is the shared truth —
+    /// it must never move ahead of the parent that vetoed the move.
+    #[test]
+    fn publish_does_not_reach_origin_when_the_parent_refuses() {
+        let (temp, repo, _dest_parent) = setup();
+        let origin = with_origin(&temp, &repo);
+        let record = published_fixture(&temp, &repo, "feature", 1);
+
+        // The parent gains its own divergent `feature`, then moves off it so
+        // this is about divergence rather than the checked-out guard.
+        git_cmd(&repo)
+            .args(["checkout", "-b", "feature"])
+            .run()
+            .expect("branch");
+        fs::write(repo.join("parent-side.txt"), "parent\n").expect("write");
+        git_cmd(&repo).args(["add", "."]).run().expect("add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "parent-side work"])
+            .run()
+            .expect("commit");
+        git_cmd(&repo)
+            .args(["checkout", "--detach"])
+            .run()
+            .expect("detach");
+
+        let outcome = publish_cow_workspace(&record).expect("publish reports rather than throwing");
+
+        assert!(!outcome.parent_updated, "the fixture must make it refuse");
+        assert!(
+            !outcome.origin_pushed,
+            "origin was pushed after the parent refused: {outcome:?}"
+        );
+        assert_eq!(
+            rev(&origin, "refs/heads/feature"),
+            None,
+            "origin advanced to a history the parent rejected"
+        );
+        assert!(
+            outcome
+                .origin_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("parent"),
+            "the origin error must name the parent as the reason: {:?}",
+            outcome.origin_error
+        );
+    }
+
+    /// Once the parent accepts, origin gets the commit the PARENT holds — the
+    /// push runs from the parent, so the two can never disagree.
+    #[test]
+    fn publish_pushes_the_accepted_parent_ref_to_origin() {
+        let (temp, repo, _dest_parent) = setup();
+        let origin = with_origin(&temp, &repo);
+        let record = published_fixture(&temp, &repo, "feature", 1);
+
+        let outcome = publish_cow_workspace(&record).expect("publish runs");
+
+        assert!(outcome.parent_updated, "{:?}", outcome.parent_error);
+        assert!(outcome.origin_pushed, "{:?}", outcome.origin_error);
+        assert_eq!(
+            rev(&origin, "refs/heads/feature"),
+            rev(&repo, "refs/heads/feature"),
+            "origin and the parent disagree about what was published"
+        );
+    }
+
+    /// "The clone must not reach origin" is an invariant, not an instruction:
+    /// the clone's own `origin` is given the same unpushable URL `parent` gets.
+    #[test]
+    fn a_clone_cannot_push_to_origin_by_itself() {
+        let (temp, repo, _dest_parent) = setup();
+        with_origin(&temp, &repo);
+        let record = published_fixture(&temp, &repo, "feature", 1);
+
+        assert_eq!(
+            read_marker(&record.path, "remote.origin.pushurl").as_deref(),
+            Some(NO_PUSH_URL),
+            "the clone can push straight to origin, bypassing the parent"
+        );
+        git_cmd(&record.path)
+            .args(["push", "origin", "refs/heads/feature:refs/heads/feature"])
+            .run()
+            .expect_err("the clone pushed to origin");
     }
 
     #[test]

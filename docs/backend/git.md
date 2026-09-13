@@ -197,7 +197,12 @@ What matters at the git-command level:
 - **Publish** stages the tip under `refs/tuic/published/<id>` in the parent
   (transfer first, ref policy second), then fast-forwards `refs/heads/<branch>`
   with a compare-and-swap. `~` is a legal character in a minted workspace id and
-  illegal in a ref name, so `staged_ref` sanitizes it.
+  illegal in a ref name, so `staged_ref` sanitizes it. The origin push is then
+  run **from the parent**, on the ref the parent accepted, and only when the
+  compare-and-swap succeeded: the fast-forward check is the single place
+  divergence is adjudicated, so pushing past a refusal would put on the shared
+  remote exactly the history the parent rejected. The clone's own `origin` gets
+  the same unresolvable push URL as `parent`, which makes that an invariant.
 - **Unpublished commits** are `rev-list --count HEAD --not --glob=refs/remotes
   --glob=refs/parent`, after refreshing and pruning the parent mirror. A failed
   refresh makes the lifecycle unknown and refuses removal; stale refs can

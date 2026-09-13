@@ -17,6 +17,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Publishing a clone no longer pushes to origin after the parent refused it.**
+  The origin push now runs from the parent repository, on the ref the parent
+  accepted, and only when the fast-forward compare-and-swap succeeded — so a
+  divergent or checked-out parent branch stops the push instead of letting the
+  shared remote advance to a history the parent rejected. A clone's own `origin`
+  remote is now given the same unusable push URL as its `parent` remote, so
+  publish is the only path to origin by construction rather than by convention.
+
 - **COW rows no longer make `0/0` look equivalent to safe or merged.** The
   backend now publishes one exact-workspace lifecycle verdict to the sidebar,
   Worktree Manager, IPC, and HTTP: dirty files, unpublished commits, published
