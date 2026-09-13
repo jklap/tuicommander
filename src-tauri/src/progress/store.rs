@@ -1553,16 +1553,18 @@ fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProgressEvent> {
     })
 }
 
+/// Keep the store files out of the project's Git status.
+///
+/// This is housekeeping, not a prerequisite: a project root outside any Git
+/// repository has nothing to pollute, so a failing `rev-parse` means "no
+/// excludes to write" and never blocks [`ProgressStore::open`].
 fn ensure_local_git_excludes(project_root: &Path) -> Result<(), String> {
-    let git_dir = crate::git_cli::git_cmd(project_root)
+    let Ok(git_dir) = crate::git_cli::git_cmd(project_root)
         .args(["rev-parse", "--git-common-dir"])
         .run()
-        .map_err(|error| {
-            format!(
-                "progress_store_unavailable: cannot resolve Git metadata for '{}': {error}",
-                project_root.display()
-            )
-        })?;
+    else {
+        return Ok(());
+    };
     let git_dir = PathBuf::from(git_dir.stdout.trim());
     let git_dir = if git_dir.is_absolute() {
         git_dir
@@ -2123,6 +2125,58 @@ mod tests {
             .run()
             .unwrap();
         assert!(status.stdout.trim().is_empty(), "{}", status.stdout);
+    }
+
+    /// The first page a caller asks for carries no cursor at all, so the open
+    /// end of each range comes from the defaults. SQLite stores signed 64-bit
+    /// integers, so a `u64::MAX` default cannot be bound and turned every
+    /// cursorless listing — the Progress panel's first request for every
+    /// project — into `progress_value_out_of_range`.
+    #[test]
+    fn listing_without_a_cursor_returns_the_first_page() {
+        let project = git_project();
+        let store = ProgressStore::open(project.path()).unwrap();
+        let recorded = store
+            .record(&event(
+                ProgressKind::Milestone,
+                "A cursorless first page must list this.",
+                Some("Progress"),
+            ))
+            .unwrap();
+        let page = store
+            .list_filtered(&ProgressListInput {
+                limit: Some(50),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(page.events, vec![recorded]);
+    }
+
+    /// The excludes are housekeeping for a repository that does not exist
+    /// here, so a project root outside Git must still record Progress. A hard
+    /// failure made every non-repository workspace unable to report at all.
+    #[test]
+    fn a_project_root_outside_git_records_without_excludes() {
+        let project = tempfile::tempdir().unwrap();
+        let store = ProgressStore::open(project.path()).unwrap();
+        let recorded = store
+            .record(&event(
+                ProgressKind::Milestone,
+                "A folder outside Git still reports.",
+                Some("Progress"),
+            ))
+            .unwrap();
+        assert_eq!(store.list(None, Some(10)).unwrap().events.len(), 1);
+        assert_eq!(
+            ProgressStore::open(project.path())
+                .unwrap()
+                .list(None, Some(10))
+                .unwrap()
+                .events[0]
+                .id,
+            recorded.id,
+            "reopening the same non-repository root must find the same store"
+        );
     }
 
     #[test]

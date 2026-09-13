@@ -36,7 +36,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	plugins: { dynamic: 1, orphans: 0 },
 	"smart-prompts": { dynamic: 4, orphans: 11 },
 	providers: { dynamic: 3, orphans: 0 },
-	agents: { dynamic: 7, orphans: 1 },
+	// 8th: the per-agent "Native status signals" toggle, which sits in the same
+	// runtime-rendered card as "Install hooks globally" and so cannot have a
+	// static scroll target either.
+	agents: { dynamic: 8, orphans: 1 },
 	"ai-chat": { dynamic: 2, orphans: 0 },
 };
 

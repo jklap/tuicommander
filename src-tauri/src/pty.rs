@@ -1681,6 +1681,19 @@ impl SilenceState {
     }
 
     fn note_ready_screen(&mut self) -> bool {
+        // DEFERRED (2026-09-13) — `test_grok_ready_composer_recovers_long_lived_shell_busy`
+        // is red here, and widening this guard is NOT the fix. It and
+        // `goose_ready_screen_recovers_long_lived_shell_busy` /
+        // `test_opencode_ready_screen_recovers_long_lived_shell_busy` build a
+        // byte-identical `SilenceState` (osc133 busy + real activity + an aged
+        // `screen_ready_pending_since`) and then assert OPPOSITE outcomes. A
+        // `SilenceState` carries no agent type, so nothing in here can tell them
+        // apart: accepting `explicit_busy()` sources alongside Protocol rank
+        // turns grok green and the other two red, measured both ways.
+        // It belongs to story 745-8ff1, which owns whether `osc133-busy` is
+        // Protocol rank or Screen rank — `note_explicit_state` ranks it Screen
+        // while `explicit_busy`'s own doc calls it Protocol-rank, and settling
+        // THAT settles all three tests at once.
         if self.evidence.busy.is_some_and(|busy| {
             busy.rank == EvidenceRank::Protocol
                 && (busy.source != "user-submit" || !self.evidence.activity_seen)
@@ -3767,7 +3780,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
-    let Some(_agent_type) = agent_type else {
+    let Some(agent_type) = agent_type else {
         if let Some(sl) = state.session_maps.silence_states.get(session_id) {
             let mut silence = sl.lock();
             silence.note_user_submission(false);
@@ -3794,12 +3807,14 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
             state.note_marker(session_id, crate::state::MarkerKind::TurnSubmitted);
         }
         after_epoch();
-        let protocol_instrumented = state
-            .session_maps
-            .session_states
-            .get(session_id)
-            .is_some_and(|session| session.hook_instrumented);
-        silence.note_user_submission(protocol_instrumented);
+        // The gate is the ready-screen adapter, NOT `hook_instrumented`: those
+        // are different properties and swapping them regressed every
+        // ready-adapter agent that runs without hooks. A Protocol-rank
+        // "user-submit" needs something that can later retract it, and the
+        // adapter is that something — a hook-instrumented agent emits its own
+        // hook-busy anyway, so gating on hooks both misses the agents that need
+        // this evidence and is redundant for the ones that do not.
+        silence.note_user_submission(has_ready_screen_adapter(Some(&agent_type)));
         silence.reset_suggest_memory();
         stamp_last_output_now(state, session_id, now_epoch_ms());
         let prev = state
@@ -3884,7 +3899,18 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
     hook_state: bool,
     before_transaction: F,
 ) {
-    if hook_state && matches!(target, SHELL_BUSY | SHELL_IDLE) {
+    // A hook busy/idle transition proves the agent is no longer blocked on a
+    // question, so it retracts the awaiting badge. Emit ONLY when a badge is
+    // actually set: the badge is sticky state, not a stream, so this is an edge
+    // — one event per real clear, never one per transition.
+    let clears_awaiting = hook_state
+        && matches!(target, SHELL_BUSY | SHELL_IDLE)
+        && state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_some_and(|session| session.awaiting_input);
+    if clears_awaiting {
         state.emit_pty_event(crate::state::AppEvent::PtyParsed {
             session_id: session_id.to_string(),
             parsed: serde_json::json!({ "type": "protocol-question-cleared" }).into(),
