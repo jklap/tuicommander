@@ -234,7 +234,7 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
     // keychain, circuit breaker open) can never lose a secret from both locations
     // (#116-1cb4). Named instances never inspect that global namespace.
     let mut to_delete: Vec<(&str, &str)> = Vec::new();
-    if instance.allows_legacy_migration() {
+    if instance.is_default() {
         for &(service, user) in LEGACY_ENTRIES {
             if let Ok(Some(value)) = read_keyring_entry(service, user) {
                 let cred = match (service, user) {
@@ -276,7 +276,7 @@ pub(crate) fn get(cred: Credential<'_>) -> Result<Option<String>, String> {
 
     // Lazy migration for dynamic keys only (MCP upstreams aren't in LEGACY_ENTRIES).
     // Static credentials are swept in load() — no extra keychain prompts.
-    if crate::app_instance::current_app_instance().allows_legacy_migration()
+    if crate::app_instance::current_app_instance().is_default()
         && matches!(cred, Credential::McpUpstream(_))
         && let Some((service, user)) = cred.legacy_entry()
         && let Some(value) = read_keyring_entry(service, user)?
@@ -319,7 +319,7 @@ pub(crate) fn delete(cred: Credential<'_>) -> Result<(), String> {
 #[cfg(not(feature = "desktop"))]
 pub(crate) fn probe_named_vault_read() -> Result<(), String> {
     let instance = crate::app_instance::current_app_instance();
-    if instance.allows_legacy_migration() {
+    if instance.is_default() {
         return Ok(());
     }
 
@@ -354,13 +354,8 @@ mod dev_store {
         let home = dirs::home_dir().expect("Cannot determine home directory");
         let instance = crate::app_instance::current_app_instance();
         let mut dir = home.join(".tuicommander-dev");
-        if !instance.allows_legacy_migration() {
-            dir = dir.join("instances").join(
-                instance
-                    .vault_service()
-                    .strip_prefix("tuicommander-instance-")
-                    .expect("named vault service prefix"),
-            );
+        if let Some(id) = instance.named_id() {
+            dir = dir.join("instances").join(id);
         }
         std::fs::create_dir_all(&dir).ok();
         dir.join("credentials.json")

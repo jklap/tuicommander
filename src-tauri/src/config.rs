@@ -47,16 +47,69 @@ pub(crate) fn set_config_dir_override(dir: PathBuf) -> impl Drop {
 ///   3. `~/.tuicommander/` (legacy dotdir)
 pub(crate) fn config_dir() -> PathBuf {
     #[cfg(test)]
-    if let Some(dir) = CONFIG_DIR_OVERRIDE.lock().unwrap().clone() {
-        return dir;
+    {
+        if let Some(dir) = lock_config_dir_override().clone() {
+            return dir;
+        }
+        return test_fallback_config_dir().clone();
     }
+    #[cfg(not(test))]
+    {
+        resolve_real_config_dir()
+    }
+}
+
+/// A test build never gets to name the user's real config directory, with or
+/// without an explicit [`set_config_dir_override`]. It used to: the override
+/// was optional and a test that forgot it read and wrote Boss's live
+/// `config.json`/`repositories.json` in silence — which is how fifteen
+/// `tempfile` roots became permanent repository rows (#763-d219).
+///
+/// This is deliberately a silent, process-wide fallback rather than a panic.
+/// A panic was tried first and reproducibly deadlocked or aborted the full
+/// `cargo nextest run --lib` suite: any test whose call chain reaches
+/// `config_dir()` without having set its own override — dozens across
+/// `state.rs`/`worktree.rs`, most not touching `repositories.json` at all and
+/// having no reason to care where it lives — either failed outright, or (for
+/// the handful that ALSO call an `isolated_config()`-style helper on the same
+/// thread first) self-deadlocked on `CONFIG_DIR_EXCLUSIVE`, which is not
+/// reentrant. A test author who genuinely needs an isolated, known directory
+/// still gets one via `set_config_dir_override`, unaffected by this fallback;
+/// this path exists only for the call chains that never asked and never
+/// checked. `fallback_config_dir_is_never_the_real_directory` proves the two
+/// can never coincide.
+///
+/// One directory per PROCESS, not per test or per thread: `cargo nextest`
+/// already runs one test per process, and `cargo test`'s in-process threads
+/// sharing this path is a test-vs-test file collision at worst — the same
+/// class of risk `make_test_app_state`'s own per-call `data_dir` comment
+/// already accepts for its SQLite file, and strictly safer than any test
+/// reaching real user data. A thread-local fallback was considered and
+/// rejected: code under test that offloads work to `spawn_blocking` (e.g.
+/// `finalize_merged_worktree`, `merge_and_archive_worktree`) runs on a
+/// different OS thread than the test itself, and a thread-local override set
+/// on the test's own thread would not be visible there — reintroducing the
+/// exact "forgot to set it" gap on a thread the test can't reach to fix.
+#[cfg(test)]
+fn test_fallback_config_dir() -> &'static PathBuf {
+    static FALLBACK: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    FALLBACK.get_or_init(|| {
+        std::env::temp_dir().join(format!("tuic-test-fallback-{}", std::process::id()))
+    })
+}
+
+/// The real, platform-derived config directory. Unreachable in a test build —
+/// `config_dir` panics before it gets here — but kept compiled so the migration
+/// it performs cannot rot behind a `cfg`.
+#[cfg_attr(test, allow(dead_code))]
+fn resolve_real_config_dir() -> PathBuf {
     let platform_dir = dirs::config_dir();
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let instance = crate::app_instance::current_app_instance();
     let new_dir = instance.config_dir_from(platform_dir.as_deref(), &home);
 
     // Migrate if our config file is missing (the dir may already exist from Tauri's window-state plugin)
-    if instance.allows_legacy_migration() && !new_dir.join(APP_CONFIG_FILE).exists() {
+    if instance.is_default() && !new_dir.join(APP_CONFIG_FILE).exists() {
         // Try migrating from legacy dirs (newest first): tuicommander, tui-commander, ~/.tuicommander
         let candidates = [
             platform_dir.as_ref().map(|d| d.join("tuicommander")),
