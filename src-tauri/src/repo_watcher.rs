@@ -1694,7 +1694,15 @@ mod tests {
 
         let git_dir = repo.join(".git");
         let gi = build_ignore(&repo, &git_dir);
-        for path in [&db_path.to_path_buf(), &wal_path, &shm_path] {
+        // The Markdown export coordinates concurrent writes with a lock file in
+        // the same directory, so it belongs to the same exclude contract.
+        let export_lock = repo.join(crate::progress::EXPORT_LOCK);
+        for path in [
+            &db_path.to_path_buf(),
+            &wal_path,
+            &shm_path,
+            &export_lock,
+        ] {
             assert_eq!(
                 classify_path(path, &repo, &git_dir, &[], &gi),
                 EventCategory::Noise,
@@ -1715,6 +1723,14 @@ mod tests {
             classify_path(&corrupt_backup, &repo, &git_dir, &[], &gi),
             EventCategory::Noise,
             "preserved corrupt database backups must also stay noise"
+        );
+
+        // The exported Markdown is the opposite case: it is the user's own
+        // versionable artifact, so writing it must reach the working tree.
+        assert_eq!(
+            classify_path(&repo.join("progress.md"), &repo, &git_dir, &[], &gi),
+            EventCategory::WorkingTree,
+            "the Markdown export is a user artifact, not runtime state"
         );
     }
 

@@ -367,8 +367,14 @@ the original operation succeeded without data loss.
 
 The implementation contract and story sequence are maintained in
 `plans/project-progress.md`. Storage, reporting, management, presentation, unread
-state, and safe manual Markdown export are implemented; instruction-cost work and
-the final reporting evaluation remain tracked separately.
+state, and safe manual Markdown export are implemented. The reporting-quality
+evaluation of the short default against the optional prompt is recorded in
+[Progress reporting evaluation](docs/evaluations/progress-reporting.md);
+MCP instruction-cost work remains tracked separately.
+
+Periodic inference, approximate workstream discovery, generated summaries,
+issue-tracker and remote-synchronization integrations, scheduled exports, and
+Markdown import stay outside this version by decision, not by omission.
 
 ## Persistence
 

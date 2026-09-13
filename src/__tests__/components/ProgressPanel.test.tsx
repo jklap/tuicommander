@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 import { ProgressPanel } from "../../components/ProgressPanel";
+import { progressStore } from "../../stores/progress";
 
 const { longSummary, correct, openSource } = vi.hoisted(() => ({
 	longSummary: "A validated outcome remains readable even when its recorded source session has already closed. ".repeat(
@@ -96,5 +97,22 @@ describe("ProgressPanel", () => {
 		await fireEvent.click(screen.getByText("Preview progress.md"));
 		expect(screen.getByText("# Project Progress: Example")).toBeTruthy();
 		expect(screen.getByText("Export progress.md")).toBeTruthy();
+	});
+
+	it("writes the previewed snapshot and discards a preview the options invalidate", async () => {
+		render(() => <ProgressPanel embedded />);
+		await fireEvent.click(screen.getByText("Preview progress.md"));
+		// Changing the options makes the shown snapshot unwritable: the export
+		// button must go, not stay armed with the previous rendering.
+		await fireEvent.click(screen.getByLabelText("Include source metadata"));
+		expect(screen.queryByText("Export progress.md")).toBeNull();
+
+		await fireEvent.click(screen.getByText("Preview progress.md"));
+		await fireEvent.click(screen.getByText("Export progress.md"));
+		expect(progressStore.writeExport).toHaveBeenCalledWith(
+			"/repo",
+			expect.objectContaining({ snapshotId: "sha256:preview", snapshotTimeMs: 1000, snapshotRevision: 4 }),
+			true,
+		);
 	});
 });

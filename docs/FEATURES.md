@@ -2159,6 +2159,11 @@ connect rather than failing later inside a spawn.
 
 ## 27. Project Progress
 
+- Outcome history modelled as Project → Workstream → Milestone; agent task lifecycle is deliberately not an outcome
+- Compact MCP `progress` tool (`type`, `summary`, optional `workstream`) that persists the event and causes its toast in one call, and stays directly callable in collapsed tool mode
+- Durable receipt of `recorded`, `duplicate`, or `paused`; a 60-second retry window absorbs identical repeats without a second event or toast
+- Exact workstream grouping on the whitespace-collapsed, lower-cased label, with persisted rename aliases; no approximate or model-based grouping
+- Project-owned SQLite store at `<owning-project-root>/.tuic/progress.sqlite3`, excluded through `.git/info/exclude`, with corrupt-database preservation under `.corrupt-<uuid>` and a validated empty replacement that never masquerades as the original history
 - Dedicated global or per-project panel in desktop, browser, and mobile PWA
 - Since-last-visit, Today, Blockers, Completed, current workstream, and chronological views
 - Backend projections, bounded pagination, frozen per-project read watermarks, and visible unavailable-project errors

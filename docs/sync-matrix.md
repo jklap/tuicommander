@@ -326,8 +326,29 @@ its Git-exclude/watcher interaction:
 | `src-tauri/src/progress/store.rs` | Schema, migrations, recovery, and SQLite locking behavior |
 | `src-tauri/src/progress/ownership.rs` | Registered and nested workspace ownership resolution |
 | `src-tauri/src/progress/model.rs` | Event/workstream types and validation limits |
-| `src-tauri/src/repo_watcher.rs` | Progress paths must continue to classify as noise |
+| `src-tauri/src/progress/export.rs` | Markdown rendering, snapshot identity, and target-safety rules |
+| `src-tauri/src/repo_watcher.rs` | Progress paths must continue to classify as noise; the export lock is one of them |
 | `docs/backend/config.md` | Progress Storage section |
+| `docs/api/http-api.md` | Project Progress section, including the export request shapes |
+| `docs/api/tauri-commands.md` | Progress command table rows |
+| `docs/user-guide/project-progress.md` | Controls, export, and storage section |
+
+### Project Progress (panel)
+
+When modifying the Progress panel, its store, or the surfaces that open it:
+
+| File | What to update |
+|------|----------------|
+| `src/components/ProgressPanel/` | Views, controls, empty/paused/unavailable rendering, `embedded` mobile mode |
+| `src/stores/progress.ts` | Fetch, dedup, frozen watermark, live presentation |
+| `src/actions/actionRegistry.ts` | The `progress` action, and the browser allowlist in `CommandPalette.tsx` |
+| `src/components/Toolbar/Toolbar.tsx` | The aggregate unread bell row |
+| `src/mobile/MobileApp.tsx` | The lazy Progress tab |
+| `docs/frontend/components.md` | ProgressPanel entry |
+| `docs/frontend/stores.md` | progressStore entry |
+| `docs/user-guide/command-palette.md` | Project Progress action |
+| `docs/user-guide/project-progress.md` | The Progress panel section |
+| `docs/FEATURES.md` | Project history row |
 
 ### Git & Worktree Integration
 When modifying git operations, worktree logic, or GitHub API:

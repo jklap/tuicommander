@@ -10,7 +10,11 @@ use super::{
 };
 
 const EXPORT_FILE: &str = "progress.md";
-const EXPORT_LOCK: &str = ".tuic/progress-export.lock";
+/// Project-local coordination file for concurrent writes. It is runtime state,
+/// so `ProgressStore` registers it in `.git/info/exclude` with the database:
+/// an export must not add an untracked file to the user's `git status`, and the
+/// repository watcher must keep classifying it as noise.
+pub(crate) const EXPORT_LOCK: &str = ".tuic/progress-export.lock";
 
 pub(crate) struct ExportWorkstream {
     pub id: String,
@@ -53,26 +57,22 @@ pub(crate) fn progress_export(
     let store = ProgressStore::open(&project_root)?;
     let data = store.export_data()?;
     let markdown = render(&project_root, &data, snapshot_time_ms, &options)?;
-    let snapshot_id = snapshot_id(data.revision, snapshot_time_ms, &options, &markdown);
+    let snapshot = Snapshot {
+        id: snapshot_id(data.revision, snapshot_time_ms, &options, &markdown),
+        revision: data.revision,
+        time_ms: snapshot_time_ms,
+        markdown,
+    };
     if expected_snapshot
         .as_deref()
-        .is_some_and(|expected| expected != snapshot_id)
+        .is_some_and(|expected| expected != snapshot.id)
     {
         return Err("progress_export_snapshot_changed: previewed snapshot is no longer current; preview again".into());
     }
     let target = project_root.join(EXPORT_FILE);
     let existing = inspect_target(&target)?;
     if !write {
-        return Ok(receipt(
-            &project_root,
-            &target,
-            snapshot_id,
-            data.revision,
-            snapshot_time_ms,
-            markdown,
-            existing,
-            false,
-        ));
+        return Ok(receipt(&project_root, &target, snapshot, existing, false));
     }
     let lock_path = project_root.join(EXPORT_LOCK);
     let lock = OpenOptions::new()
@@ -103,17 +103,8 @@ pub(crate) fn progress_export(
             (None, true, None) => return Err("progress_export_invalid_request: replace requires expectedContent from preview".into()),
             (None, false, None) => {}
         }
-        atomic_replace(&target, markdown.as_bytes())?;
-        Ok(receipt(
-            &project_root,
-            &target,
-            snapshot_id,
-            data.revision,
-            snapshot_time_ms,
-            markdown,
-            current,
-            true,
-        ))
+        atomic_replace(&target, snapshot.markdown.as_bytes())?;
+        Ok(receipt(&project_root, &target, snapshot, current, true))
     })();
     let unlock = lock.unlock().map_err(|error| {
         format!(
@@ -128,23 +119,29 @@ pub(crate) fn progress_export(
     }
 }
 
+/// One rendered snapshot: preview and write carry exactly the same four
+/// values, which is what lets a write prove it is the previewed one.
+struct Snapshot {
+    id: String,
+    revision: u64,
+    time_ms: u64,
+    markdown: String,
+}
+
 fn receipt(
     root: &Path,
     target: &Path,
-    snapshot_id: String,
-    revision: u64,
-    time: u64,
-    markdown: String,
+    snapshot: Snapshot,
     existing: Option<String>,
     written: bool,
 ) -> ProgressExportReceipt {
     ProgressExportReceipt {
         project_root: root.to_string_lossy().into_owned(),
         path: target.to_string_lossy().into_owned(),
-        snapshot_id,
-        snapshot_revision: revision,
-        snapshot_time_ms: time,
-        markdown,
+        snapshot_id: snapshot.id,
+        snapshot_revision: snapshot.revision,
+        snapshot_time_ms: snapshot.time_ms,
+        markdown: snapshot.markdown,
         file_exists: existing.is_some(),
         existing_content: existing,
         written,
@@ -232,7 +229,7 @@ fn render_event(
         "Blocked".to_string()
     } else {
         let raw = event.kind.as_str();
-        format!("{}{}", &raw[..1].to_uppercase(), &raw[1..])
+        format!("{}{}", raw[..1].to_uppercase(), &raw[1..])
     };
     out.push_str(&format!(
         "- {} — **{}** · {}: {}",
@@ -266,8 +263,7 @@ fn render_event(
 fn escape(value: &str) -> String {
     value
         .replace('\\', "\\\\")
-        .replace('\r', " ")
-        .replace('\n', " ")
+        .replace(['\r', '\n'], " ")
         .replace('|', "\\|")
         .replace('*', "\\*")
         .replace('_', "\\_")
@@ -324,12 +320,21 @@ fn atomic_replace(target: &Path, content: &[u8]) -> Result<(), String> {
         .prefix(".progress.md.")
         .tempfile_in(parent)
         .map_err(|error| {
-            format!("progress_export_write_failed: cannot create temporary export: {error}")
+            // Name the directory ourselves: a read-only or unavailable project
+            // root is the common cause here, and the reader needs to know
+            // WHICH root. The io error names the temporary file at best.
+            format!(
+                "progress_export_write_failed: cannot create temporary export in '{}': {error}",
+                parent.display()
+            )
         })?;
     temp.write_all(content)
         .and_then(|_| temp.as_file().sync_all())
         .map_err(|error| {
-            format!("progress_export_write_failed: cannot write temporary export: {error}")
+            format!(
+                "progress_export_write_failed: cannot write temporary export in '{}': {error}",
+                parent.display()
+            )
         })?;
     if let Ok(metadata) = fs::metadata(target) {
         temp.as_file()
@@ -541,6 +546,93 @@ mod tests {
             assert_eq!(snapshot.snapshot_revision, count);
         }
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn source_metadata_is_excluded_unless_the_snapshot_requests_it() {
+        let root = project();
+        record(
+            root.path(),
+            ProgressKind::Milestone,
+            "Shipped the export.",
+            Some("Export"),
+        );
+        let plain = preview(root.path(), false);
+        assert!(plain.markdown.contains("Shipped the export."));
+        assert!(!plain.markdown.contains("source:"));
+        assert!(!plain.markdown.contains("Agent"));
+        assert!(!plain.markdown.contains("/tmp/work"));
+        let annotated = preview(root.path(), true);
+        assert!(annotated.markdown.contains("source: Agent \\*One\\*; /tmp/work"));
+        // Options are part of the snapshot identity, so a preview taken with one
+        // option set can never be written back with another.
+        assert_ne!(plain.snapshot_id, annotated.snapshot_id);
+    }
+
+    #[test]
+    fn writing_preserves_recorded_state_and_adds_only_progress_md_to_the_repository() {
+        let root = project();
+        record(
+            root.path(),
+            ProgressKind::Milestone,
+            "Recorded before the export.",
+            Some("Export"),
+        );
+        let store = ProgressStore::open(root.path()).unwrap();
+        let status_before = store.status().unwrap();
+        let events_before = store.list(None, Some(50)).unwrap().events;
+
+        let preview = preview(root.path(), false);
+        assert!(progress_export(root.path().into(), write_input(&preview, false))
+            .unwrap()
+            .written);
+
+        assert_eq!(status_before, store.status().unwrap());
+        assert_eq!(events_before, store.list(None, Some(50)).unwrap().events);
+        // The export writes one visible artifact. Its lock file is runtime state
+        // and must not surface as an untracked change, and nothing is staged.
+        let porcelain = crate::git_cli::git_cmd(root.path())
+            .args(["status", "--porcelain", "--untracked-files=all"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            porcelain.stdout.lines().collect::<Vec<_>>(),
+            vec!["?? progress.md"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_project_root_is_reported_by_name_without_writing() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = project();
+        record(
+            root.path(),
+            ProgressKind::Milestone,
+            "Recorded while the root was writable.",
+            None,
+        );
+        let preview = preview(root.path(), false);
+        let original = fs::metadata(root.path()).unwrap().permissions();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let error = progress_export(root.path().into(), write_input(&preview, false)).unwrap_err();
+        fs::set_permissions(root.path(), original).unwrap();
+
+        // The message must name the directory the export could not write to,
+        // in text this crate builds. Asserting only that the root appears
+        // somewhere passed for the wrong reason: `tempfile` appends `at path
+        // "<temp file>"` to the io error, and the root is a prefix of that
+        // temp file — an incidental formatting detail of a dependency, which
+        // would take the assertion with it if the temp file ever moved.
+        assert_eq!(
+            error.split(": Permission denied").next().unwrap(),
+            format!(
+                "progress_export_write_failed: cannot create temporary export in '{}'",
+                root.path().display()
+            ),
+            "a read-only root must be named by us, not by an io error: {error}"
+        );
+        assert!(!root.path().join(EXPORT_FILE).exists());
     }
 
     #[cfg(unix)]

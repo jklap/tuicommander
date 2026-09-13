@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Project Progress answers "what changed since I last looked?"** Agents
+  record outcomes — capabilities, decisions, discoveries, blockers, completed
+  objectives — through one compact MCP `progress` call that persists the event
+  and shows its toast together; starting or finishing an agent task is
+  deliberately not an outcome. History belongs to the project, in a SQLite
+  store at its own root that local Git excludes cover, so closing a session or
+  deleting a temporary workspace never takes it away. A dedicated panel, opened
+  from the command palette or the notification bell, shows all projects or one:
+  since last visit, today, blockers, completed, and full history, with
+  provenance on demand. Collection can be paused and resumed per project,
+  events can be deleted, corrected, merged or re-grouped, and clearing a
+  project pauses it in the same transaction. There is no inference job and no
+  background model: grouping is exact and every sentence in the panel is one an
+  agent wrote. The optional fuller reporting prompt, and the measured
+  comparison against the short default, are in the user guide.
+- **Progress exports a readable `progress.md` when you ask it to.** One
+  deterministic snapshot of the owning project — revision, UTC time, workstream
+  states, open blockers and dated history, with source metadata off by default —
+  is previewed in the panel before anything is written. Writing succeeds only
+  while that same snapshot is current, replacing an existing file needs the
+  exact content the preview returned, and a hand edit, a removal, a symlink or a
+  directory at the target is refused instead of overwritten. The write is atomic
+  and touches nothing else: no Git staging, no change to collection or read
+  state, no scheduled re-export, and the Markdown is never read back in.
+
 ### Changed
 
 - **Workspace creation now has one mechanism: linked Git worktrees.** The

@@ -49,7 +49,17 @@ pub(crate) fn resolve_owning_project_in(
                 .map(Path::new)
                 .map(canonical_if_present)
                 .unwrap_or_else(|| repo_root.clone());
-            workspace_parents.insert(workspace_path, parent);
+            // The main workspace of a repository records the repository itself
+            // as its worktree, so it maps the project root onto the project
+            // root. That self-edge carries no ownership information, and
+            // following it below would look exactly like a two-node cycle —
+            // which made every registered project report
+            // `project_unavailable` and left the Progress panel showing
+            // nothing but errors. Drop it here so the cycle check stays strict
+            // for real cycles.
+            if workspace_path != parent {
+                workspace_parents.insert(workspace_path, parent);
+            }
         }
     }
 
@@ -128,8 +138,11 @@ mod tests {
             }
         });
 
+        // The store canonicalizes its root, so the export reports the resolved
+        // path — on macOS `/var/…` is a symlink to `/private/var/…`.
+        let canonical_root = root.path().canonicalize().unwrap();
         let owner = resolve_owning_project_in(&leaf.path().to_string_lossy(), &doc).unwrap();
-        assert_eq!(owner, root.path().canonicalize().unwrap());
+        assert_eq!(owner, canonical_root);
         let preview = super::super::export::progress_export(
             owner,
             crate::progress::ProgressExportInput::Preview {
@@ -137,10 +150,32 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(preview.project_root, root.path().to_string_lossy());
+        assert_eq!(preview.project_root, canonical_root.to_string_lossy());
         assert_eq!(
             preview.path,
-            root.path().join("progress.md").to_string_lossy()
+            canonical_root.join("progress.md").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn a_main_workspace_owns_itself() {
+        // Every registered repository has a main workspace whose `worktreePath`
+        // is the repository root and whose `parentRepoPath` is absent, so the
+        // parent falls back to that same root.
+        let root = tempfile::tempdir().unwrap();
+        let doc = json!({
+            "repos": {
+                root.path().to_string_lossy(): {
+                    "workspaces": {
+                        "master": { "worktreePath": root.path(), "isMain": true }
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            resolve_owning_project_in(&root.path().to_string_lossy(), &doc).unwrap(),
+            root.path().canonicalize().unwrap()
         );
     }
 
