@@ -291,7 +291,7 @@ curl -X POST localhost:9876/diagnostics/capture -H 'content-type: application/js
 curl localhost:9876/diagnostics/capture         # state + bytes written per session
 ```
 
-Captures land in `<config dir>/captures/<session-id>.tcap`, capped at 512 KB each. The framed format preserves output/input direction, original chunk boundaries, ordering, and monotonic timestamps. Legacy `.raw` fixtures remain readable as output-only captures.
+Captures land in `<config dir>/captures/<session-id>.tcap`, capped at 512 KB each. TUICCAP2 preserves the initial terminal rows/columns plus output/input direction, original chunk boundaries, ordering, and monotonic timestamps. The decoder remains backward-compatible with geometry-less TUICCAP1 and legacy output-only `.raw` fixtures; a faithful replay of either old format must supply the observed geometry explicitly rather than silently assuming 41x128.
 Off by default (one relaxed atomic load per chunk when off) — code in
 `src-tauri/src/pty_capture.rs`.
 
@@ -326,6 +326,14 @@ TUIC_SKIP_FIXTURE_GATE=1 git commit ...     # or: git commit --no-verify
 | OSC 7770 `state=awaiting` | TUIC hook | hook-instrumented agents, **only** on `PreToolUse(AskUserQuestion)` |
 | OSC 777 `notify` | agent's own desktop notification | any agent that emits it, any blocking prompt — but the body decides the confidence: `needs your permission` / `approval required` latch, `is waiting for your input` is low-confidence because Claude also sends it on its 60s idle timer |
 | `Enter to select` footer regex | screen scrape | non-hook agents (dropped for hook-instrumented ones by `suppress_heuristic_question`) |
+
+Busy/idle evidence is ranked `Silence < Screen < Process < Protocol` within one
+submitted-turn epoch. Lower-ranked evidence never closes a turn held busy by a
+protocol signal, and the same rule protects protocol-ranked awaiting state from
+the `question-cleared` screen backstop. A stable Ready screen may recover a lost
+protocol completion only after `PROTOCOL_STALE_TIMEOUT` (five minutes) with no
+PTY output; that exceptional transition logs `activity_source=protocol-stale`
+at warn level so a missing completion hook remains observable.
 
 The footer regex anchors at **column 0 of the rendered row**, never the trimmed
 text (`is_ink_dialog_footer_row`). A dialog is drawn full-bleed; everything an

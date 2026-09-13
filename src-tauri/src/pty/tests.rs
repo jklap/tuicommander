@@ -2134,9 +2134,9 @@ fn test_grok_ready_composer_recovers_long_lived_shell_busy() {
     silence.note_explicit_state(SHELL_BUSY, false);
     silence.note_real_activity();
     silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
-    assert!(silence.note_ready_screen());
-    assert!(!silence.explicit_busy());
-    assert!(silence.idle_confirmed());
+    assert!(!silence.note_ready_screen());
+    assert!(silence.explicit_busy());
+    assert!(!silence.idle_confirmed());
 }
 
 /// Captured live from grok 0.2.114: the composer moved inside a rounded box, so the old
@@ -2363,7 +2363,7 @@ fn test_only_interpreters_take_the_argv0_detour() {
 }
 
 #[test]
-fn test_old_ready_prompt_cannot_cancel_new_submission_before_activity() {
+fn protocol_submission_requires_post_submit_consumption_before_ready_screen() {
     let mut silence = SilenceState::new();
     silence.note_user_submission(true);
     silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
@@ -2374,20 +2374,21 @@ fn test_old_ready_prompt_cannot_cancel_new_submission_before_activity() {
     silence.note_real_activity();
     silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(silence.note_ready_screen());
+    assert!(!silence.explicit_busy());
     assert!(silence.idle_confirmed());
 }
 
 #[test]
-fn test_stable_ready_prompt_recovers_missed_hook_idle_after_activity() {
+fn stable_ready_prompt_does_not_recover_a_missed_hook_idle() {
     let mut silence = SilenceState::new();
     silence.note_user_submission(true);
     silence.note_explicit_state(SHELL_BUSY, true);
     silence.note_real_activity();
     silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
-    assert!(silence.note_ready_screen());
-    assert!(!silence.explicit_busy());
-    assert!(!silence.hook_busy());
-    assert!(silence.idle_confirmed());
+    assert!(!silence.note_ready_screen());
+    assert!(silence.explicit_busy());
+    assert!(silence.hook_busy());
+    assert!(!silence.idle_confirmed());
 }
 
 #[test]
@@ -2409,7 +2410,7 @@ fn test_fresh_hook_busy_blocks_ready_after_prior_recovery() {
     silence.note_explicit_state(SHELL_BUSY, true);
     silence.note_real_activity();
     silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
-    assert!(silence.note_ready_screen());
+    assert!(!silence.note_ready_screen());
 
     silence.note_explicit_state(SHELL_BUSY, true);
     silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
@@ -2417,6 +2418,77 @@ fn test_fresh_hook_busy_blocks_ready_after_prior_recovery() {
     assert!(silence.explicit_busy());
     assert!(silence.hook_busy());
     assert!(!silence.idle_confirmed());
+}
+
+#[test]
+fn screen_only_submission_keeps_ready_adapter_fallback() {
+    let mut silence = SilenceState::new();
+    silence.note_user_submission(false);
+    silence.note_real_activity();
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    assert!(silence.note_ready_screen());
+    assert!(silence.idle_confirmed());
+}
+
+#[test]
+fn protocol_busy_requires_both_old_signal_and_old_output_to_be_stale() {
+    let mut silence = SilenceState::new();
+    silence.note_explicit_state(SHELL_BUSY, true);
+    silence.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT);
+    assert!(
+        !silence.protocol_busy_is_stale(),
+        "fresh output keeps the hold"
+    );
+    silence.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    assert!(silence.protocol_busy_is_stale());
+}
+
+#[test]
+fn protocol_stale_recovery_requires_a_ready_screen_for_the_full_timeout() {
+    let mut silence = SilenceState::new();
+    silence.note_explicit_state(SHELL_BUSY, true);
+    silence.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    silence.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    assert!(!silence.protocol_busy_is_stale(), "no Ready observation");
+    assert!(
+        !silence.note_ready_screen(),
+        "the first Ready starts the clock"
+    );
+    assert!(!silence.protocol_busy_is_stale(), "fresh Ready observation");
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT);
+    assert!(silence.protocol_busy_is_stale());
+}
+
+#[test]
+fn protocol_busy_parks_suggest_without_downgrading_working_screen() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "protocol-suggest";
+    agent_session(&state, session_id, SHELL_BUSY);
+    let lifecycle = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    {
+        let mut lifecycle = lifecycle.lock();
+        lifecycle.note_explicit_state(SHELL_BUSY, true);
+        lifecycle.mark_suggest_candidate(vec!["Review diff".into()], 0);
+    }
+    assert_eq!(
+        completion_adjusted_screen_activity(
+            &state,
+            &lifecycle,
+            session_id,
+            AgentScreenActivity::Working,
+        ),
+        AgentScreenActivity::Working
+    );
+    assert_eq!(
+        lifecycle.lock().drain_pending_suggest(),
+        Some(vec!["Review diff".into()])
+    );
 }
 
 #[test]
@@ -11053,7 +11125,15 @@ fn agent_prompt_fixture(name: &str) -> Vec<u8> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("src/fixtures/agent_prompts")
         .join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("missing fixture {}: {e}", path.display()))
+    std::fs::read(&path).unwrap_or_else(|primary_error| {
+        let supplied = std::env::var_os("TUIC_CAPTURE_FIXTURE_DIR")
+            .map(std::path::PathBuf::from)
+            .map(|dir| dir.join(name));
+        supplied
+            .as_deref()
+            .and_then(|fallback| std::fs::read(fallback).ok())
+            .unwrap_or_else(|| panic!("missing fixture {}: {primary_error}", path.display()))
+    })
 }
 
 #[test]
@@ -11101,8 +11181,10 @@ fn historical_scenario_matrix_is_well_formed_and_fixture_backed() {
 /// prove one: goose repaints its footer in place with `\r\x1b[2K`, and asserting
 /// on raw bytes would pass on output no terminal would ever display.
 fn replay_final_screen(bytes: &[u8]) -> Vec<String> {
-    let mut vt_log = crate::state::VtLogBuffer::new(41, 128, 2000);
-    for record in crate::pty_capture::decode(bytes).expect("valid capture") {
+    let capture = crate::pty_capture::decode_capture(bytes).expect("valid capture");
+    let (rows, cols) = capture.geometry.unwrap_or((41, 128));
+    let mut vt_log = crate::state::VtLogBuffer::new(rows, cols, 2000);
+    for record in capture.records {
         if record.direction == crate::pty_capture::CaptureDirection::Output {
             vt_log.process(&record.data);
         }
@@ -11204,13 +11286,15 @@ fn replay_capture_measured(
 ) -> (Vec<ParsedEvent>, CaptureStats) {
     use crate::state::VtLogBuffer;
 
-    let mut vt_log = VtLogBuffer::new(41, 128, 2000);
+    let capture = crate::pty_capture::decode_capture(bytes).expect("valid capture");
+    let (rows, cols) = capture.geometry.unwrap_or((41, 128));
+    let mut vt_log = VtLogBuffer::new(rows, cols, 2000);
     let mut parser = crate::output_parser::OutputParser::new();
     let mut input = crate::input_line_buffer::InputLineBuffer::new();
     let mut carry = String::new();
     let mut events = Vec::new();
     let mut stats = CaptureStats::default();
-    for record in crate::pty_capture::decode(bytes).expect("valid capture") {
+    for record in capture.records {
         stats.bytes += record.data.len();
         match record.direction {
             crate::pty_capture::CaptureDirection::Output => {
@@ -11261,6 +11345,145 @@ fn replay_capture_measured(
         }
     }
     (events, stats)
+}
+
+/// Replay a real Codex turn at its recorded 63x160 geometry and at the
+/// capture's monotonic timestamps. A Ready classification is only known to be
+/// false retrospectively, when a later frame restores Codex's Working row.
+/// Protocol-ranked submission evidence must keep the turn BUSY throughout
+/// that interval, regardless of the adapter's transient verdict.
+fn assert_codex_false_ready_capture(name: &str, expected_variant: &str) {
+    let bytes = agent_prompt_fixture(name);
+    let capture = crate::pty_capture::decode_capture(&bytes).expect("valid capture");
+    let geometry = capture.geometry.unwrap_or((63, 160));
+    assert_eq!(geometry, (63, 160), "{name}: wrong capture geometry");
+    let mut vt = crate::state::VtLogBuffer::new(geometry.0, geometry.1, 2000);
+    let mut silence = SilenceState::new();
+    silence.note_user_submission(true);
+    let mut ready_candidate: Option<(u64, Vec<String>)> = None;
+    let mut false_ready_screen = None;
+    let mut saw_variant = false;
+
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        vt.process(&record.data);
+        let screen = vt.screen_rows();
+        saw_variant |= screen.iter().any(|row| row.contains(expected_variant));
+        match detect_agent_screen_activity(Some("codex"), &screen) {
+            AgentScreenActivity::Working => {
+                if let Some((_, candidate)) = ready_candidate.take() {
+                    false_ready_screen = Some(candidate);
+                }
+                silence.note_working_screen();
+            }
+            AgentScreenActivity::Ready if false_ready_screen.is_none() => {
+                let (first_ready_us, _) =
+                    ready_candidate.get_or_insert_with(|| (record.elapsed_us, screen.clone()));
+                let stable_for = record.elapsed_us.saturating_sub(*first_ready_us);
+                silence.screen_ready_pending_since =
+                    Some(std::time::Instant::now() - std::time::Duration::from_micros(stable_for));
+                assert!(
+                    !silence.note_ready_screen(),
+                    "{name}: a Ready screen overrode Protocol busy at {record:?}"
+                );
+            }
+            AgentScreenActivity::Ready | AgentScreenActivity::Unknown => {}
+            AgentScreenActivity::Interrupted => {
+                panic!("{name}: capture unexpectedly contains an interrupted turn")
+            }
+        }
+        if false_ready_screen.is_none() {
+            assert!(silence.explicit_busy(), "{name}: lost BUSY during replay");
+        }
+    }
+
+    let false_ready_screen = false_ready_screen.unwrap_or_else(|| {
+        panic!("{name}: no Ready classification was followed by resumed Working")
+    });
+    assert!(
+        saw_variant,
+        "{name}: expected variant {expected_variant:?}; false Ready rows: {false_ready_screen:#?}"
+    );
+}
+
+#[test]
+fn codex_0154_false_ready_real_captures_stay_protocol_busy() {
+    for (fixture, variant) in [
+        (
+            "codex-0.154-mid-turn-false-ready.tcap",
+            "background terminal running",
+        ),
+        (
+            "codex-0.154-background-terminal-false-ready.tcap",
+            "Enter to select",
+        ),
+    ] {
+        assert_codex_false_ready_capture(fixture, variant);
+    }
+}
+
+/// Real Codex 0.154 `codex exec` PTY transcript captured by the #746 runtime
+/// proof. The framed fixture preserves the source transcript byte-for-byte:
+/// `codex-pty.typescript` SHA-256
+/// f935c77442e3c7e1d29f336021cc5c882c9e855bc43cd87e1a141430713a2124.
+/// Its notify payload SHA-256 was
+/// 5895c3bb3f9223af1409a6ca2c941d7881bd5ce8d92c5031f6470eb0e48fdf14.
+#[test]
+fn codex_0154_runtime_hook_idle_reaches_the_pty_state_machine() {
+    let bytes = agent_prompt_fixture("codex-0.154-runtime-hook-idle.tcap");
+    let capture = crate::pty_capture::decode_capture(&bytes).expect("valid framed capture");
+    assert_eq!(capture.geometry, None, "typescript did not record geometry");
+    assert_eq!(capture.records.len(), 1, "transcript is one observed PTY write");
+    assert_eq!(capture.records[0].data.len(), 53_289);
+    assert!(
+        capture.records[0]
+            .data
+            .ends_with(b"\x1b]7770;state=idle\x1b\\"),
+        "runtime transcript lost its terminal OSC 7770 idle marker"
+    );
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "codex-0154-runtime-hook-idle";
+    agent_session(&state, session_id, SHELL_BUSY);
+    {
+        let mut session = state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap();
+        session.agent_type = Some("codex".into());
+        session.hook_instrumented = true;
+    }
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        let chunk = std::str::from_utf8(&record.data).expect("captured Codex PTY is UTF-8");
+        processor.process_chunk(chunk, &silence, session_id, &state);
+    }
+
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get(session_id)
+            .unwrap()
+            .load(Ordering::Acquire),
+        SHELL_IDLE
+    );
+    let silence = silence.lock();
+    assert!(silence.hook_state_seen);
+    assert!(silence.explicit_idle());
 }
 
 /// An agent quoting an Ink dialog footer inside its own output, captured off a
@@ -11749,6 +11972,56 @@ async fn confident_awaiting_is_never_retracted() {
         !await_session(&state, "s1", |s| !s.awaiting_input).await,
         "a confident question must survive the retraction"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn protocol_awaiting_clears_on_protocol_busy_and_idle() {
+    for (session_id, target, label) in [
+        ("protocol-clear-busy", SHELL_BUSY, "busy"),
+        ("protocol-clear-idle", SHELL_IDLE, "idle"),
+    ] {
+        let state = accumulating_state(session_id);
+        state.session_maps.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(if target == SHELL_BUSY {
+                SHELL_IDLE
+            } else {
+                SHELL_BUSY
+            }),
+        );
+        state.session_maps.silence_states.insert(
+            session_id.to_string(),
+            Arc::new(Mutex::new(SilenceState::new())),
+        );
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: serde_json::json!({
+                "type": "question",
+                "prompt_text": "approval required",
+                "confident": true,
+            })
+            .into(),
+        });
+        assert!(await_session(&state, session_id, |s| s.awaiting_input).await);
+
+        transition_explicit_shell_state_with_hook(&state, session_id, target, label, true, || {});
+        assert!(
+            await_session(&state, session_id, |s| !s.awaiting_input
+                && s.question_text.is_none())
+            .await,
+            "{label} must clear Protocol awaiting"
+        );
+        assert_eq!(
+            state
+                .session_maps
+                .silence_states
+                .get(session_id)
+                .unwrap()
+                .lock()
+                .awaiting_rank(),
+            None
+        );
+    }
 }
 
 /// A live choice prompt owns its own resolution (`resolve_choice_prompt_input`

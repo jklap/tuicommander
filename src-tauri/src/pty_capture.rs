@@ -29,7 +29,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const CAPTURE_MAGIC: &[u8] = b"TUICCAP1\n";
+const CAPTURE_MAGIC_V1: &[u8] = b"TUICCAP1\n";
+const CAPTURE_MAGIC: &[u8] = b"TUICCAP2\n";
+const GEOMETRY_BYTES: usize = 4; // rows:u16 + cols:u16
 const RECORD_HEADER_BYTES: usize = 13; // direction:u8 + elapsed_us:u64 + len:u32
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +46,15 @@ pub(crate) struct CaptureRecord {
     pub(crate) direction: CaptureDirection,
     pub(crate) elapsed_us: u64,
     pub(crate) data: Vec<u8>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DecodedCapture {
+    /// Terminal dimensions in effect when the first record was written.
+    /// TUICCAP1 and legacy raw fixtures did not carry this metadata.
+    pub(crate) geometry: Option<(u16, u16)>,
+    pub(crate) records: Vec<CaptureRecord>,
 }
 
 /// Per-session cap. Comfortably covers a full screen repaint plus the prompt
@@ -90,17 +101,34 @@ pub(crate) fn set_enabled(enabled: bool, session_filter: Option<String>, dir: Pa
 /// and never block on anything but its own short-lived lock: a capture that can
 /// take a session down is worse than no capture.
 pub(crate) fn record(session_id: &str, data: &[u8]) {
-    record_direction(session_id, CaptureDirection::Output, data);
+    record_with_geometry(session_id, data, None);
+}
+
+pub(crate) fn record_with_geometry(session_id: &str, data: &[u8], geometry: Option<(u16, u16)>) {
+    record_direction(session_id, CaptureDirection::Output, data, geometry);
 }
 
 /// Record bytes written by the user/remote transport to the PTY. Keeping input
 /// in the same timeline is what makes bare-Enter and timer/input races
 /// reproducible; raw agent output alone cannot encode the missing CLEAR event.
 pub(crate) fn record_input(session_id: &str, data: &[u8]) {
-    record_direction(session_id, CaptureDirection::Input, data);
+    record_input_with_geometry(session_id, data, None);
 }
 
-fn record_direction(session_id: &str, direction: CaptureDirection, data: &[u8]) {
+pub(crate) fn record_input_with_geometry(
+    session_id: &str,
+    data: &[u8],
+    geometry: Option<(u16, u16)>,
+) {
+    record_direction(session_id, CaptureDirection::Input, data, geometry);
+}
+
+fn record_direction(
+    session_id: &str,
+    direction: CaptureDirection,
+    data: &[u8],
+    geometry: Option<(u16, u16)>,
+) {
     if !is_enabled() {
         return;
     }
@@ -130,11 +158,17 @@ fn record_direction(session_id: &str, direction: CaptureDirection, data: &[u8]) 
             if file.write_all(CAPTURE_MAGIC).is_err() {
                 return;
             }
+            let (rows, cols) = geometry.unwrap_or((0, 0));
+            if file.write_all(&rows.to_le_bytes()).is_err()
+                || file.write_all(&cols.to_le_bytes()).is_err()
+            {
+                return;
+            }
             tracing::info!("[capture] recording {session_id} to {}", path.display());
             state
                 .files
                 .entry(session_id.to_string())
-                .or_insert((file, CAPTURE_MAGIC.len() as u64))
+                .or_insert((file, (CAPTURE_MAGIC.len() + GEOMETRY_BYTES) as u64))
         }
     };
     if entry.1 >= MAX_CAPTURE_BYTES {
@@ -159,14 +193,37 @@ fn record_direction(session_id: &str, direction: CaptureDirection, data: &[u8]) 
 /// real read/write boundaries.
 #[cfg(test)]
 pub(crate) fn decode(bytes: &[u8]) -> Result<Vec<CaptureRecord>, String> {
-    if !bytes.starts_with(CAPTURE_MAGIC) {
-        return Ok(vec![CaptureRecord {
-            direction: CaptureDirection::Output,
-            elapsed_us: 0,
-            data: bytes.to_vec(),
-        }]);
+    Ok(decode_capture(bytes)?.records)
+}
+
+/// Decode records plus capture metadata. TUICCAP1 remains byte-compatible and
+/// reports unknown geometry; raw fixtures remain one output record.
+#[cfg(test)]
+pub(crate) fn decode_capture(bytes: &[u8]) -> Result<DecodedCapture, String> {
+    if !bytes.starts_with(CAPTURE_MAGIC) && !bytes.starts_with(CAPTURE_MAGIC_V1) {
+        return Ok(DecodedCapture {
+            geometry: None,
+            records: vec![CaptureRecord {
+                direction: CaptureDirection::Output,
+                elapsed_us: 0,
+                data: bytes.to_vec(),
+            }],
+        });
     }
-    let mut cursor = CAPTURE_MAGIC.len();
+    let (mut cursor, geometry) = if bytes.starts_with(CAPTURE_MAGIC) {
+        if bytes.len() < CAPTURE_MAGIC.len() + GEOMETRY_BYTES {
+            return Err("truncated capture geometry".to_string());
+        }
+        let cursor = CAPTURE_MAGIC.len();
+        let rows = u16::from_le_bytes(bytes[cursor..cursor + 2].try_into().unwrap());
+        let cols = u16::from_le_bytes(bytes[cursor + 2..cursor + 4].try_into().unwrap());
+        (
+            cursor + GEOMETRY_BYTES,
+            (rows > 0 && cols > 0).then_some((rows, cols)),
+        )
+    } else {
+        (CAPTURE_MAGIC_V1.len(), None)
+    };
     let mut records = Vec::new();
     while cursor < bytes.len() {
         if bytes.len() - cursor < RECORD_HEADER_BYTES {
@@ -191,7 +248,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Vec<CaptureRecord>, String> {
         });
         cursor = end;
     }
-    Ok(records)
+    Ok(DecodedCapture { geometry, records })
 }
 
 /// Start or stop the tap on the canonical capture directory, and report the new
@@ -257,7 +314,7 @@ mod tests {
         let dir = std::env::temp_dir().join("tuic-capture-test-disabled");
         let _ = std::fs::remove_dir_all(&dir);
         set_enabled(false, None, dir.clone());
-        record("session-a", b"hello");
+        record_with_geometry("session-a", b"hello", Some((24, 80)));
         assert!(!dir.exists());
     }
 
@@ -268,10 +325,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         set_enabled(true, Some("wanted".into()), dir.clone());
 
-        record("wanted", b"\x1b]777;notify;Claude Code;waiting\x07");
-        record("other", b"must not be recorded");
+        record_with_geometry(
+            "wanted",
+            b"\x1b]777;notify;Claude Code;waiting\x07",
+            Some((63, 160)),
+        );
+        record_with_geometry("other", b"must not be recorded", Some((24, 80)));
         // Overrun the cap in one oversized chunk.
-        record("wanted", &vec![b'x'; (MAX_CAPTURE_BYTES + 1024) as usize]);
+        record_with_geometry(
+            "wanted",
+            &vec![b'x'; (MAX_CAPTURE_BYTES + 1024) as usize],
+            Some((63, 160)),
+        );
         set_enabled(false, None, dir.clone());
 
         let wanted = std::fs::read(dir.join("wanted.tcap")).expect("filtered session recorded");
@@ -297,11 +362,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         set_enabled(true, None, dir.clone());
-        record("s", b"first run");
+        record_with_geometry("s", b"first run", Some((24, 80)));
         set_enabled(false, None, dir.clone());
 
         set_enabled(true, None, dir.clone());
-        record("s", b"second");
+        record_with_geometry("s", b"second", Some((24, 80)));
         set_enabled(false, None, dir.clone());
 
         let bytes = std::fs::read(dir.join("s.tcap")).unwrap();
@@ -317,9 +382,9 @@ mod tests {
         let dir = std::env::temp_dir().join("tuic-capture-test-framed");
         let _ = std::fs::remove_dir_all(&dir);
         set_enabled(true, Some("s".into()), dir.clone());
-        record("s", b"question?");
-        record_input("s", b"\r");
-        record("s", b"working");
+        record_with_geometry("s", b"question?", Some((63, 160)));
+        record_input_with_geometry("s", b"\r", Some((63, 160)));
+        record_with_geometry("s", b"working", Some((63, 160)));
         set_enabled(false, None, dir.clone());
 
         let records = decode(&std::fs::read(dir.join("s.tcap")).unwrap()).unwrap();
@@ -335,6 +400,31 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].elapsed_us <= pair[1].elapsed_us)
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capture_exposes_geometry_and_decodes_tuiccap1() {
+        let _guard = TEST_LOCK.lock();
+        let dir = std::env::temp_dir().join("tuic-capture-test-geometry");
+        let _ = std::fs::remove_dir_all(&dir);
+        set_enabled(true, Some("s".into()), dir.clone());
+        record_with_geometry("s", b"frame", Some((63, 160)));
+        set_enabled(false, None, dir.clone());
+
+        let decoded = decode_capture(&std::fs::read(dir.join("s.tcap")).unwrap()).unwrap();
+        assert_eq!(decoded.geometry, Some((63, 160)));
+        assert_eq!(decoded.records[0].data, b"frame");
+
+        let mut v1 = CAPTURE_MAGIC_V1.to_vec();
+        v1.push(CaptureDirection::Output as u8);
+        v1.extend_from_slice(&7_u64.to_le_bytes());
+        v1.extend_from_slice(&3_u32.to_le_bytes());
+        v1.extend_from_slice(b"old");
+        let decoded = decode_capture(&v1).unwrap();
+        assert_eq!(decoded.geometry, None);
+        assert_eq!(decoded.records[0].elapsed_us, 7);
+        assert_eq!(decoded.records[0].data, b"old");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
