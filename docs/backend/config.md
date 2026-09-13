@@ -259,7 +259,6 @@ cleartext copy does not survive on disk.
 | `scroll_history_enabled` | `bool` | `false` | Sub-flag: scrollback history overlay on scroll-up in agent mode (requires `experimental_features_enabled`) |
 | `ai_triage_enabled` | `bool` | `false` | Sub-flag: AI diff triage (requires `experimental_features_enabled`) |
 | `ai_watchers_enabled` | `bool` | `false` | Sub-flag: terminal event watchers that trigger AI actions (requires `experimental_features_enabled`) |
-| `cow_workspaces_enabled` | `bool` | `false` | Sub-flag: create new workspaces as copy-on-write clones (requires `experimental_features_enabled`). Gates **creation only** — listing, publishing and removing workspaces that already exist are unaffected, so turning this off never strands work on disk |
 | `ai_terminal_mcp_enabled` | `bool` | `false` | Expose `ai_terminal_*` tools to external MCP clients. Off by default — see [`mcp-http.md`](mcp-http.md#mcp-tools-ai_terminal_-external-agent-surface) |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
@@ -676,65 +675,6 @@ purpose — see `credentials.rs`'s debug-only credential store.)
 
 **Commands:** `load_repositories()`, `save_repositories(config)`
 
-**A second write path exists, entered directly rather than through the delta
-protocol above: `config::upsert_workspace_record(repo_path, workspace_id,
-record)` / `remove_workspace_record(repo_path, workspace_id)`.** Both are
-read-modify-write under the same `ConfigFile::update_with_strict` lock the
-delta protocol uses, but skip its before/after CAS — their only caller
-(`cow.rs`, creating or deleting a COW clone) has no client-side copy of the
-surrounding repository record to diff against, so the correct base state is
-simply whatever is on disk right now, read inside the same file lock as the
-write.
-
-Both resolve `repo_path` against the existing `repos` keys through the same
-canonical-equivalence check `cow.rs`'s reader (`same_path`) already applies,
-not an exact string match: an existing entry reached through a symlink or a
-different trailing slash is reused rather than duplicated, and removal through
-such a spelling still finds and drops the row rather than silently no-op'ing
-while it survives under its original key. A brand-new entry is filed under its
-canonicalized path so every later lookup agrees on one spelling. More than one
-existing key already canonicalizing to the same repository — a state a prior
-bug or a hand-edit could have produced — is refused as ambiguous rather than
-merged or guessed between.
-
-This is what closes the crash window #756-cf6d was written against:
-before it, a COW clone existed on disk the moment `create_cow_workspace`
-returned, but nothing durable knew about it until the frontend's own
-`setWorkspace` + debounced save reached `save_repositories`, so a crash in
-between left a real clone `repositories.json` had never heard of.
-`register_cow_workspace`/`unregister_cow_workspace` in `cow.rs` are the only
-callers, invoked from `worktree::create_workspace_with` and
-`remove_worktree_by_workspace_id` — before either can report success. A write
-here still moves the document these CAS baselines are diffed against, so a
-subsequent frontend save that duplicates the same row hits the ordinary
-"already applied" no-op path in `apply_keyed_repository_mutations`, or — if the
-row differs in some field the backend does not set (`terminals`,
-`additions`, …) — an ordinary conflict that the frontend's existing
-reload-and-rebase recovery (`persistRepositoryMutation`) already resolves; no
-new client-side handling was needed. Neither function calls
-`notify_repositories_changed()` — that stays the caller's job on the transports
-that have an `AppState` to announce from — so a registration this path makes is
-picked up by other windows on their next read (e.g. the next
-`worktree-created`/`worktree-removed` event those same callers already emit),
-not immediately broadcast.
-
-Recovery is the read-only counterpart: `cow::recover_cow_workspaces(parent_repo,
-worktrees_dir, taken_ids, taken_paths)`, called from
-`worktree::get_worktree_paths` (the listing path every transport shares), scans
-the immediate children of `worktrees_dir` for a directory carrying every marker
-`create_cow_workspace` writes into a clone's own git config
-(`tuicommander.cow.workspace-id`, `tuicommander.cow.parent`, plus the existing
-`remote.parent.pushurl` no-push evidence) and — only once every marker matches,
-including the parent — registers it through `upsert_workspace_record` if it is
-not already known. A directory without every marker is never adopted, on
-purpose: this is also how a markerless COW clone made before this recovery
-existed stays invisible rather than being silently trusted. The scan itself
-never writes to, deletes, or otherwise touches a candidate directory or its
-`.git` — canonicalizes each entry to reject a symlink escaping the worktree
-base, and rejects a candidate whose id or path the caller already has (a linked
-worktree, or an already-registered COW record) rather than aliasing one row
-onto two directories.
-
 #### Stale-temp repository repair (#763-d219)
 
 Live evidence: 15 hydrated `repositories.json` rows pointed at paths under macOS
@@ -950,9 +890,9 @@ added by the following plan step.
 
 The database lives at `<owning-project-root>/.tuic/progress.sqlite3` with its
 SQLite sidecars. Ownership resolution starts from an authoritative registered
-project and follows recorded linked, COW, and nested workspace parent records;
+project and follows recorded linked and nested workspace parent records;
 it never uses the focused UI repository or a bare CWD. Unbound callers fail
-with `project_required`, and an inherited COW copy is not a second authority.
+with `project_required`.
 
 Schema version 2 stores project revision, persistent collection/read-cursor
 state, workstreams and rename aliases, events with monotonic sequence numbers

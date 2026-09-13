@@ -29,36 +29,7 @@ Configure where worktrees are stored (Settings → Git & GitHub → Worktree Def
 
 Override per-repo in Settings → Repository → Worktree.
 
-## Two Mechanisms: Worktree or Clone
-
-A workspace is built one of two ways. Both land in the same directory (see
-*Worktree Storage Strategies* above); what differs is the isolation you get.
-
-> **Copy-on-write clones are experimental and off by default.** Turn them on in
-> **Settings → General → Experimental features → Copy-on-write workspaces**
-> (the master experimental toggle must be on as well). With the feature off,
-> `mode=auto` gives you a linked worktree and says the flag is why, and an
-> explicit `mode=cow` fails rather than quietly handing back different isolation
-> semantics.
->
-> The flag gates **creation only**. Clones you already made stay listed,
-> publishable and removable whether the flag is on or off — switching it off
-> never strands work on disk.
-
-| | **Linked worktree** | **Copy-on-write clone** |
-|---|---|---|
-| What it is | A second checkout sharing the repo's `.git` | An independent repository, block-shared with the original |
-| Two workspaces on one branch | Not possible — git refuses | Possible; this is the reason the clone exists |
-| Build output (`node_modules`, `target`) | Copied in warm, at near-zero disk cost | Arrives warm, at near-zero disk cost |
-| Parent's uncommitted work | Stays in the parent | Carried over by default (configurable) |
-| Where commits live | In the parent repo, shared | **Only in the clone**, until you publish |
-| Removing it | Deletes a checkout; commits survive in the parent | Deletes a repository; unpublished commits are gone |
-
-A clone is not a full copy: the filesystem shares the blocks until something
-rewrites them. Measured on a 12 GB repository: **19 MB of real disk and 26
-seconds**.
-
-### A linked worktree starts warm too
+## Warm Linked Worktrees
 
 `git worktree add` checks out the tracked files and nothing else, so every
 ignored build directory is missing and the first build is a full one.
@@ -79,34 +50,11 @@ succeeds and the response carries a warning naming the directory that stayed
 cold. Measured on this repository: **~38 s for 30 GB across 80k files**
 (`node_modules` 19.5 s, `src-tauri/target` 17.4 s, everything else under 0.3 s).
 
-In the sidebar, a copy-on-write clone uses a cow-head icon while a linked
-worktree uses the fork icon. The Worktree Manager also labels clone rows with a
-`clone` badge. Both surfaces use the same backend lifecycle snapshot: `Dirty`,
-`N unpublished`, `Published`, `Merged`, or `Unknown`. `Published` means the tip
-exists in a parent or remote ref; it does not mean the default branch contains
-it. Large tracked-line counts are compacted in the sidebar (`9.9k`), with the
-exact count in the tooltip.
-
-Copy-on-write needs filesystem support (APFS, Btrfs, XFS with reflink…) and both
+Copy-on-write warming needs filesystem support (APFS, Btrfs, XFS with reflink…) and both
 directories on the same volume. TUICommander never trusts the filesystem *name*
 for this — it makes a real copy-on-write copy of one file and looks at whether it
 worked, trying macOS `clonefile` and then a reflink copy. Where neither works,
-**Auto** gives you a linked worktree.
-
-### When a clone is refused
-
-These stop a clone with the reason stated; `Auto` then falls back to a linked
-worktree, `Clone` reports the error:
-
-- the destination sits inside the source repository (the copy would walk into
-  itself — this is what the **Inside repo** and **Claude Code default** storage
-  strategies do)
-- the source is itself a linked worktree, not a primary checkout
-- the source is a bare repository
-- a rebase, merge, cherry-pick, revert, or bisect is in progress
-- a lock is held by a live git process
-
-A *stale* lock is not a refusal: it is left out of the copy instead.
+creation still succeeds with one warning and a cold worktree.
 
 ## Creating Worktrees
 
@@ -117,44 +65,18 @@ Click `+` next to a repository name. A dialog opens where you can:
 - Select an existing branch from the list
 - Choose a "Start from" base ref (default branch, or any local branch)
 - Generate a random sci-fi name
-- Pick the **Mechanism** and, for a clone, what happens to the **Parent's
-  changes** (see below)
-
-#### Mechanism
-
-| Option | What it does |
-|--------|--------------|
-| **Auto** (default) | A copy-on-write clone where the filesystem and the repository allow it, a linked worktree otherwise — telling you why it degraded |
-| **Clone** | A copy-on-write clone, or an error naming the check that refused. Use it when you specifically need the isolation |
-| **Worktree** | A linked worktree even where a clone is available |
-
-#### Parent's changes (clone only)
-
-What the clone does with work you have not committed in the parent repository.
-The picker is hidden when Mechanism is **Worktree**, because a linked worktree
-is a fresh checkout and carries nothing over.
-
-| Option | What it does | Cost |
-|--------|--------------|------|
-| **Keep** (default) | The parent's modified and untracked files are simply there | Free — nothing is written |
-| **Drop untracked** | `git clean -fd`: removes untracked files but **keeps** ignored build output | Metadata only |
-| **Reset** | `git reset --hard --recurse-submodules` then the same clean — a pristine tree | The only option that costs real disk: every rewritten block stops being shared (measured 15 MB → 113 MB) |
 
 ### From the `+` Button (instant mode)
 
-When "Prompt on create" is off (Settings → Git & GitHub → Worktree Defaults), clicking `+` instantly creates a worktree with an auto-generated name based on the default branch. Skipping the dialog takes its defaults — Mechanism **Auto**, Parent's changes **Keep** — not a different set.
+When "Prompt on create" is off (Settings → Git & GitHub → Worktree Defaults), clicking `+` instantly creates a linked worktree with an auto-generated name based on the default branch.
 
 ### From Branch Right-Click (quick-clone)
 
 Right-click any non-main branch without a worktree → **Create Worktree**. This creates a new branch named `{source}--{random-name}` based on the selected branch, with a worktree directory.
 
-### What a path that does not choose gets
-
-**Auto**, with **Keep** — the backend's own defaults, which is why the dialog
-preselects them. That applies to the quick-clone above, to the instant `+`, and
-to the auto-fix worktree created from a GitHub issue: each one asks for a
-workspace without naming a mechanism, so each gets a copy-on-write clone where
-the repository and filesystem allow it and a linked worktree otherwise.
+Every creation path uses the same linked-worktree implementation. The parent’s
+tracked and untracked changes stay in the parent; only Git-ignored directories
+are considered for warming.
 
 ## Worktree Settings
 
@@ -211,36 +133,6 @@ Right-click a terminal tab → **Move to Worktree** to move it to a different wo
 
 Also available via **Command Palette** — type "move to worktree" to see available targets for the active terminal.
 
-## Publishing a Clone
-
-A clone is an independent repository, so its commits exist **only there** until
-they are published. Running `git merge <branch>` in the parent does not find
-them — and if the parent has a branch with the same name, it silently merges
-that stale ref instead.
-
-**Publish** appears on clone rows in the Worktree Manager (and nowhere else: a
-linked worktree shares its refs with the parent already). It does two things,
-reported separately:
-
-1. **Into the parent** — the workspace tip is staged under
-   `refs/tuic/published/<id>` in the parent repository, then
-   `refs/heads/<branch>` is fast-forwarded to it. Fast-forward only: a parent
-   branch that has diverged, or that the parent currently has checked out, is
-   refused with the reason rather than forced.
-2. **Out to origin** — a push, run **from the parent repository** and only after
-   step 1 succeeded. An unreachable origin is reported on its own, so it never
-   reads as "the parent did not get it"; a parent that *refused* the update,
-   however, stops the push, because origin must never move ahead of the parent
-   that vetoed the move. What reaches origin is the ref the parent accepted, not
-   the clone's live branch — the clone may have moved on since.
-
-The clone cannot reach origin by itself: its `origin` remote is given the same
-unpushable push URL as its `parent` remote, so "publish is the only transfer
-path" is an invariant rather than an instruction.
-
-Because the objects are transferred before the ref moves, retrying a refused
-publish costs no transfer.
-
 ## Removing Worktrees
 
 - **Sidebar `×` button** on a non-main branch — Removes worktree and branch entry
@@ -253,20 +145,10 @@ Removing a worktree:
 3. Removes the branch entry from the sidebar
 4. If branch deletion was requested but `git branch -d` keeps the branch because it is not safely merged, shows a status message that the worktree was removed and the branch was kept
 
-### Removing a clone
-
-Deleting a clone deletes a repository, so anything it holds and has not
-published is gone. Immediately before removal, TUICommander refreshes one
-backend verdict for the exact workspace id. The confirmation separately names
-working-tree dirtiness, unpublished commits, and whether `HEAD` is published or
-merged. Dirty files or unpublished clone commits require an explicit
-destructive confirmation; `Unknown` blocks removal. The backend repeats its
-guards during deletion, so a workspace that changes after the dialog is kept
-visible and reports the refusal.
-
-A clone whose directory no longer looks like a repository is also refused, so a
-stale record cannot authorise deleting whatever now sits at that path. A
-workspace that is already gone is dropped silently.
+Immediately before removal, TUICommander refreshes the backend lifecycle verdict
+for the exact workspace id. Dirty files require an explicit destructive
+confirmation; `Unknown` blocks removal. Commits live in the parent object store,
+and safe branch deletion keeps an unmerged branch instead of discarding it.
 
 ## Worktree Manager Panel
 
@@ -276,9 +158,7 @@ Open the Worktree Manager with `Cmd+Shift+W` (or via the Command Palette → "Wo
 
 Each worktree row displays:
 - **Branch name** and **repository badge**
-- **`clone` badge** — the workspace is a copy-on-write clone, not a linked worktree. The directory does not say which, and publish and remove behave differently
-- **Current branch name** — clone rows read the branch from the clone itself, so a branch renamed inside the clone is reflected after refresh
-- **Lifecycle badges** — dirty working-tree state and exact commit reachability (`N unpublished`, `Published`, `Merged`, or `Unknown`), from the same progressive refresh used by the sidebar
+- **Lifecycle badges** — dirty working-tree state and whether the worktree is `Merged` or `Unknown`, from the same progressive refresh used by the sidebar
 - **Dirty status** — file additions/deletions, or "clean"
 - **PR state** — open (with PR number), merged, or closed
 - **Last commit timestamp** — relative time since last activity
@@ -296,7 +176,6 @@ Orphan worktrees (detached HEAD or deleted branch) appear at the bottom with a w
 
 Each worktree row has action buttons (visible on the right):
 - **`>_`** — Open a terminal in the worktree directory
-- **Publish** — Clone rows only: fetch this workspace's commits into the parent repository and push them to origin
 - **`✔`** — Merge the branch into main and archive (disabled for main branches)
 - **`✕`** — Delete the worktree and branch (disabled for main branches)
 
@@ -312,18 +191,10 @@ Use the **Select All** checkbox in the toolbar to toggle all non-main worktrees.
 
 AI agents connected via MCP can create worktrees using `repo action=worktree_create`.
 
-It takes the same two choices the dialog offers: `mode` (`auto` | `cow` |
-`worktree`, default `auto`) and `dirty` (`inherit` | `clean_untracked` |
-`clean`, default `inherit`). The response says which mechanism it got and, if
-it degraded, why.
-
 Because nothing enforces how an agent treats a workspace, the response also
-carries instructions: how many paths of the parent's work in progress came
-along (and that repairing them is not the task), which build directories
-arrived warm and how large they are (so the agent does not run an install or a
-full build to "set up"), and — for a clone — that its commits exist only there,
-that the parent cannot see the branch, and that `git merge` in the parent would
-silently take a stale same-named ref.
+carries instructions stating that tracked changes were not carried over,
+identifying warmed build directories, and explaining that refs and objects are
+shared with the parent.
 
 When TUICommander receives a worktree creation event while the active terminal is running an agent, the confirmation offers **Open Worktree**. Accepting selects an existing terminal in the new worktree or creates one when needed. The running agent stays in its original terminal, branch, and working directory; TUICommander does not relabel or interrupt it.
 
@@ -339,31 +210,6 @@ CC should spawn a subagent (Agent tool) with the suggested prompt. The subagent 
 ### Other MCP Clients
 
 Non-Claude Code MCP clients receive the standard `{worktree_path, branch}` response without the `cc_agent_hint` field. These clients can change into the worktree directory directly.
-
-### Publishing and Checking Unpublished Commits (AI Agents)
-
-A copy-on-write clone is an independent repository: commits made inside it exist
-only there until something moves them back. `repo action=worktree_unpublished`
-(requires `path`, the `workspace_id` from `worktree_list`) reports how many
-commits are reachable from the clone's `HEAD` and nowhere else — not on any
-remote, not on the parent's mirrored ref for that branch. It is always `0` for
-a linked worktree, whose objects already live in the parent.
-
-`repo action=worktree_publish` (same two required fields) lands those commits
-in the parent repo and pushes them to origin, using the exact same safe
-staging-ref mechanism as the **Publish** button in the Worktree Manager and the
-HTTP route — one implementation behind all three surfaces. It only ever
-fast-forwards the parent branch: publishing is refused, not forced, if that
-branch is checked out in the parent (or one of its other linked worktrees) or
-if the parent has commits the clone does not, so an agent can never overwrite
-someone else's work by merging a stale same-named ref. The parent update and
-the origin push are reported independently, so a missing or unreachable origin
-does not undo a parent update that already landed. Publishing a linked worktree
-is a no-op — its refs are already shared with the parent.
-
-Both actions run on TUICommander's blocking pool, and the local MCP bridge
-grants them the same generous response window as `worktree_create` and
-`worktree_remove`, since publishing also pushes over the network.
 
 ## External Worktree Detection
 

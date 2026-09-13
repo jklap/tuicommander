@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Workspace creation now has one mechanism: linked Git worktrees.** The
+  experimental whole-repository copy-on-write workspace path, its adopt,
+  publish, recovery, and lifecycle projections, and the `mode`/`dirty` fields
+  on Tauri, HTTP, and MCP creation requests have been removed. Linked
+  worktrees still arrive warm: Git-ignored directories are copied with the
+  existing copy-on-write primitive when the filesystem supports it. Parent
+  tracked changes are deliberately not inherited.
+
 - **Project Progress can now export a safe, versionable `progress.md`.** The
   project panel previews one deterministic backend snapshot and writes it only
   while both the database snapshot and existing-file content still match.
@@ -17,14 +25,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Claude and Codex status signals are launch-scoped and on by default.** TUIC adds a private Claude settings file or Codex notify adapter only to processes launched inside TUIC. Explicit CLI overrides win, Codex still calls the user's existing notify command, and each agent has an independent off switch. Global hook installation remains explicit for agents without a launch-scoped route.
 
-- **Copy-on-write workspaces are now an opt-in experimental feature.** New
-  clones are created only when **Settings → General → Experimental features →
-  Copy-on-write workspaces** is on. With it off, `mode=auto` produces a linked
-  worktree and reports the flag as the reason, while an explicit `mode=cow`
-  fails loudly rather than substituting different isolation semantics. The gate
-  covers creation only: clones that already exist stay listed, publishable and
-  removable either way, so turning the flag off never strands work on disk.
-
 - **Plan Tracker and Stories Ticker are now external plugins.** The former
   compiled built-ins are installed once as ordinary plugin packages during the
   upgrade, preserving existing behavior while making both independently
@@ -33,22 +33,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stores directly.
 
 ### Fixed
-
-- **Publishing a clone no longer pushes to origin after the parent refused it.**
-  The origin push now runs from the parent repository, on the ref the parent
-  accepted, and only when the fast-forward compare-and-swap succeeded — so a
-  divergent or checked-out parent branch stops the push instead of letting the
-  shared remote advance to a history the parent rejected. A clone's own `origin`
-  remote is now given the same unusable push URL as its `parent` remote, so
-  publish is the only path to origin by construction rather than by convention.
-
-- **COW rows no longer make `0/0` look equivalent to safe or merged.** The
-  backend now publishes one exact-workspace lifecycle verdict to the sidebar,
-  Worktree Manager, IPC, and HTTP: dirty files, unpublished commits, published
-  but unmerged tips, merged tips, and unknown inspection state stay distinct.
-  Removal refreshes that verdict, blocks unknown state, requires explicit force
-  for dirty or unpublished data, and keeps the row visible if the backend later
-  refuses. Large sidebar line counts are compacted with exact tooltip values.
 
 - **Plugins can no longer read legacy MCP-upstream credentials.** The
   `credentials:read` guard now rejects the historical `tuicommander-mcp`
@@ -95,10 +79,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   same named-instance machinery `tuic-remote --instance` already had, so a
   throwaway verification run no longer has to share `repositories.json` with
   Boss's production instance.
-- **COW workspaces now remain visible with live branch, diff, and PR status data.**
-  Repository refreshes include registered clones in the Gix worktree snapshot
-  and read each clone's current branch, so clone rows no longer appear clean or
-  lose their PR badge after work done in an isolated workspace.
 - **`tuic <dir>` no longer registers a temporary directory as a repository.**
   Registration is permanent, so a temp path became a sidebar row pointing at
   something the OS later deletes — fifteen such rows accumulated over two days
@@ -148,65 +128,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   password now writes the username too, falling back to `admin` when the field is
   blank, and clearing the username while a password is set no longer disables
   authentication silently.
-- **MCP forced workspace removal now honors `force=true`.** The native `repo
-  worktree_remove` schema and handler previously omitted the parameter and
-  always invoked the shared removal core with `force=false`, making confirmed
-  cleanup of a dirty or unpublished COW impossible through the managed tool.
-- **Copy-on-write clones have their own cow icon in the sidebar.** They no
-  longer look identical to linked Git worktrees when several workspaces share a
-  repository; the existing state colors and attention overrides still apply.
-- **Managed COW removal no longer times out while continuing in the background
-  or silently deletes uncommitted work.** The native MCP path ran recursive
-  deletion inline and inherited the bridge's generic 10-second response limit;
-  removing a warm 51 GB APFS clone took 22 seconds, so the caller received an
-  error before the backend removed it. Removal now uses the blocking pool and
-  the 305-second workspace-operation deadline. Non-forced COW removal also
-  refuses staged, unstaged, and untracked changes before checking unpublished
-  commits.
-- **The managed `repo` MCP tool can now publish a COW workspace and read its
-  unpublished-commit count.** Both existed for Tauri IPC and HTTP but were
-  never wired into the MCP tool that created the clone in the first place, so
-  a managed worker had no way to inspect or land its own independent commits
-  through the same protocol — and risked falling back to a plain `git merge
-  <branch>` in the parent, which silently takes the stale same-named ref
-  instead. `repo action=worktree_publish` and `repo action=worktree_unpublished`
-  reuse the exact same safe staging-ref implementation as the other two
-  transports, including the refusal of a checked-out or diverged parent
-  branch; the local MCP bridge grants both the same 305-second deadline as
-  `worktree_create`/`worktree_remove`, since both make at least one network
-  fetch.
-- **A COW clone can no longer go missing from the sidebar after a crash.**
-  Creation used to return success once the clone existed on disk, leaving only
-  the frontend's own save to record it in `repositories.json` — a crash in that
-  window left a real, warm clone the app had never heard of. The backend now
-  registers the workspace itself, inside the same locked write the rest of
-  `repositories.json` already uses, before it can report success; a failure to
-  register keeps the clone on disk and reports a recoverable error rather than
-  deleting it. Every clone also carries its own workspace id and parent repo in
-  its git config, so listing a repository now heals a row lost to the old crash
-  window (or a hand-restored backup) by re-adopting any clone whose markers it
-  recognizes — never a directory without them. Removal is the mirror image: the
-  row is dropped only after the directory is confirmed gone, and a failure to
-  drop it is reported rather than silently leaving a stale row behind.
-- **COW workspace removal no longer trusts a `repositories.json` row on its
-  own.** A hand-edited, stale, or forged `kind: "cow"` row could make removal
-  run `remove_dir_all` against an arbitrary directory — even with `force`,
-  which was only ever meant to waive the dirty/unpublished-commit prompts.
-  Removal now re-validates a row against the directory it names — the same
-  provenance markers, parent-remote evidence, and canonical-containment checks
-  recovery already required, plus a real (non-symlink) `.git` and an on-disk
-  workspace id that matches the row — immediately before deleting anything,
-  unconditionally. A markerless clone (including one made before this backend
-  wrote provenance markers) is refused by both recovery and removal alike; the
-  new `repo action=worktree_adopt` (also `POST /worktrees/adopt` and the
-  desktop `adopt_cow_workspace` command) is the only way to register one, and
-  the call itself is the confirmation — it validates parent-remote provenance
-  and containment, then writes only the same markers creation would have, never
-  touching the index, working tree, refs, HEAD, untracked files, or remotes.
-  Repository records are now also looked up and filed under their canonical
-  path, so a repo reached through a symlink or a different trailing slash
-  reuses its existing entry instead of a second, disagreeing one.
-
 - **Post-merge cleanup no longer freezes the window while it runs.** Each step of
   the dialog — switch branch, delete the local branch, archive or delete the
   worktree, close the branch's terminals — called a command that ran inline on
@@ -457,52 +378,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **A workspace can now be a copy-on-write clone of the whole repository, not
-  only a linked worktree.** Where the filesystem supports it, creating a
-  workspace copies the entire repo directory block-shared (macOS `clonefile` or
-  a reflink copy): the
-  result is an *independent repository*, so two workspaces may sit on the same
-  branch, and `node_modules`, `target` and every other ignored build directory
-  arrive warm. Measured on a 12 GB repo: 19 MB of real disk and 26 s. The
-  creation dialog gains a **Mechanism** picker — *Auto* (clone where possible,
-  linked worktree otherwise, saying why it degraded), *Clone* (a clone or an
-  error naming the check that refused), *Worktree* (the previous behaviour) —
-  and a **Parent's changes** picker for what the clone does with the parent's
-  uncommitted work: *Keep* (free, the default), *Drop untracked* (`git clean
-  -fd`, which keeps the ignored build output), *Reset* (the only option that
-  costs real disk — measured 15 MB → 113 MB). The same `mode` and `dirty`
-  fields exist on MCP `repo action=worktree_create` and on the HTTP route, so
-  an agent and the UI create the same thing.
-
-- **A clone is guarded on the way in, and on the way out.** Creation refuses,
-  never repairs: a destination inside the source, a linked worktree as source,
-  a bare repo, an unfinished rebase/merge/cherry-pick/revert/bisect, or a lock
-  held by a live git process each stop the copy with the reason. A *stale* lock
-  does not refuse — it is dropped in the copy, never in the source. Removal is
-  gated on unpublished commits: a clone's commits exist nowhere else, so
-  deleting one destroys them, and the refusal names the count and the way out.
-  The confirmation dialog reports that number on both surfaces that remove a
-  workspace, and a failed count refuses rather than promising nothing is at
-  stake.
-
-- **Publish gets a clone's commits into the parent repo and out to origin.**
-  A clone is a separate repository, so `git merge <branch>` in the parent does
-  not find its work — and silently merges a stale same-named ref instead. The
-  Worktree Manager shows a **Publish** action on clone rows only (a linked
-  worktree shares its refs already), plus a `clone` badge and an *N
-  unpublished* badge. Publishing stages the tip under `refs/tuic/published/<id>`
-  in the parent, then fast-forwards `refs/heads/<branch>` with a
-  compare-and-swap; a divergent or checked-out parent branch is refused with
-  the reason instead of being forced. The parent update and the origin push are
-  reported independently, so an unreachable origin never reads as "publish
-  failed".
-
 - **A workspace created for an agent comes with instructions.** The MCP
-  response says which mechanism it got, how many paths of the parent's work in
-  progress carried over (and that repairing them is not the task), which build
-  directories arrived warm and how large they are (so no install or full build
-  is run to "set up"), and — for a clone — that its commits exist only there
-  until published.
+  response says it is a linked worktree, that refs and objects are shared with
+  the parent, which ignored build directories arrived warm and how large they
+  are (so no install or full build is run to "set up"), and that tracked parent
+  changes are not carried over.
 
 - **One terminal, three addresses.** Every `session` action that takes a
   `session_id`, and `agent action=send`'s `to`, now accept the PTY id, the

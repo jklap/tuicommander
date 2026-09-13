@@ -69,7 +69,7 @@ Both `build_router` and `build_remote_router` pass their assembled routes throug
 
 | Limit | Value | Response | Why |
 |-------|-------|----------|-----|
-| `TimeoutLayer` | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes a cold COW clone carrying warm build artifacts and remains far below "never" |
+| `TimeoutLayer` | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
 | `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB | `413 Payload Too Large` | Bounds how much any route will buffer |
 
 **301 s, not 300 s — the layer must outlast every deadline it wraps.**
@@ -189,10 +189,8 @@ serving a configuration the disk disagrees with. See
 |--------|------|-------------|
 | `POST` | `/worktrees` | Create worktree |
 | `DELETE` | `/worktrees` | Remove worktree |
-| `GET` | `/worktrees/paths?path=` | Get linked and persisted COW workspace paths for repo, keyed by workspace id and carrying `kind` |
+| `GET` | `/worktrees/paths?path=` | Get linked-worktree paths for a repo, keyed by workspace id and carrying `kind` |
 | `GET` | `/worktrees/lifecycle?repoPath=&workspaceId=` | Fresh dirty/commit/removal-safety verdict for one exact workspace; unknown fails closed |
-| `GET` | `/worktrees/unpublished?repoPath=&workspaceId=` | Count commits that exist only in the named workspace |
-| `POST` | `/worktrees/publish` | Safely publish a COW tip into the parent and origin |
 | `POST` | `/worktrees/run-script` | Run a setup script in a directory; returns exit code and captured output |
 
 ### Dictation and Desktop Integration
@@ -425,7 +423,7 @@ Nine native tools, organized by domain. Two (`config`, `debug`) are hidden by de
 | `session` | list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
-| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_adopt, worktree_publish, worktree_unpublished | Enabled |
+| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove | Enabled |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `config` | get, save | Disabled |
@@ -711,11 +709,12 @@ Tauri events and `/events` SSE.
 MCP `repo action=worktree_create` uses the same creation path as HTTP
 `POST /worktrees`, including `base_repo` validation, stale-worktree recovery,
 cache invalidation, `worktree-created` SSE/Tauri events, setup-script result
-reporting, and — for a COW clone — durable registration in `repositories.json`
-before the tool call can return success (#756-cf6d; see `docs/api/http-api.md`
-§ Create Worktree and `docs/backend/config.md` § Repositories for the
-registration and self-healing-recovery details, which are identical on this
-transport since both call the same shared core).
+reporting, and best-effort copy-on-write warming of Git-ignored directories.
+Every created workspace is a linked worktree: Git refs and objects remain
+shared with the parent, while `instructions.warm_artifacts.warmed_directories`
+reports how many ignored directories arrived warm. Parent tracked changes are
+not copied. See `docs/api/http-api.md` § Create Worktree; both transports call
+the same shared core.
 
 When the MCP client identifies as Claude Code (detected via `clientInfo.name` at initialize time), the `repo action=worktree_create` response includes an additional `cc_agent_hint` field:
 
@@ -738,75 +737,15 @@ Non-Claude Code MCP clients do not receive this field.
 
 MCP `repo action=worktree_remove` returns `{ "ok": true }` on full success. It
 runs on the blocking pool and the local MCP bridge allows up to 305 seconds for
-the response, matching slow removal of independent COW clones with warm build
-artifacts. A non-forced COW removal refuses staged, unstaged, or untracked work
-as well as unpublished commits, preserving both the directory and its
-`repositories.json` row. Once a COW clone's directory is actually deleted, its
-row is dropped in the same call; a failure to drop it is reported as its own
-explicit error rather than left as a silent stale row.
+the response, covering linked worktrees with large ignored build artifacts.
+Non-forced removal refuses staged, unstaged, or untracked work. The optional
+MCP `force` boolean defaults to `false`; `true` is the explicit,
+confirmation-gated authority to discard that worktree-only state.
 
-The optional MCP `force` boolean defaults to
-`false`; `true` is the explicit, confirmation-gated authority to discard either
-class of workspace-only state. When `delete_branch=true` and safe branch
+When `delete_branch=true` and safe branch
 deletion fails after a linked worktree is removed, the action still succeeds
 with `branch_delete_warning` populated so clients can report that the worktree
 was removed but the branch was kept.
-
-Removal re-validates a COW row against the directory it names — provenance
-markers, parent-remote evidence, canonical containment in the configured
-worktree base, a real (non-symlink) `.git`, and an on-disk workspace id
-matching the row — immediately before deleting anything, unconditionally.
-`force` never waives this: a hand-edited, stale, or forged `kind: "cow"` row
-is refused even with `force=true`, which only waives the dirty/unpublished
-prompts above. See `docs/backend/config.md` § Repositories for the shared
-validator recovery and removal both run through.
-
-### MCP Tool: `repo` — Worktree Adopt
-
-`repo action=worktree_adopt` (requires `path`, `candidate_path`; optional
-`workspace_id`) explicitly registers a markerless COW clone this backend lost
-track of — the case recovery's self-heal will never adopt on its own, and the
-only way one of the pre-existing markerless clones from #756-cf6d could be
-registered without being recreated. The call itself is the confirmation: it
-runs the read-only validation described in `docs/api/http-api.md` § Adopt COW
-Workspace (canonical immediate-child containment, a real `.git`, parent-remote
-provenance, a checked-out branch, no id/path collision) and only once every
-check passes does it write anything — the same two provenance markers creation
-itself writes, nothing else. It never touches the index, the working tree,
-refs, HEAD, untracked files, or any remote. Identical implementation
-(`worktree::adopt_cow_workspace_impl`) behind this action, `POST
-/worktrees/adopt`, and the desktop `adopt_cow_workspace` command.
-
-### MCP Tool: `repo` — Worktree Publish and Unpublished Count
-
-`repo action=worktree_unpublished` (requires `path`, `workspace_id`) returns
-the number of commits that exist only in that workspace — reachable from HEAD
-and from no remote and no mirrored parent ref. Always `0` for a linked
-worktree, whose objects already live in the parent. Identical implementation
-(`worktree::unpublished_commits_impl`) behind this action, `GET
-/worktrees/unpublished`, and the desktop `count_unpublished_commits` command —
-see `docs/api/http-api.md` § Count Unpublished Commits for the parent-mirror
-refresh this runs first.
-
-`repo action=worktree_publish` (requires `path`, `workspace_id`) gets a
-workspace's commits into the parent repo and out to origin, reusing the exact
-same safe staging-ref implementation (`worktree::publish_workspace_impl` →
-`cow::publish_cow_workspace`) as the Tauri command and the HTTP route — one
-implementation behind all three transports, so none of them can drift into
-merging the stale same-named parent ref a plain `git merge <branch>` would
-pick up instead. The parent update is **fast-forward only** and is refused,
-with the objects already staged under `refs/tuic/published/<workspace-id>` so
-a retry costs no transfer, when the target branch is checked out in the
-parent or one of its linked worktrees, or when the parent's branch carries
-commits this workspace does not have. The two steps — parent and origin — are
-reported independently (`parent_updated`/`parent_error`,
-`origin_pushed`/`origin_error`): a missing or unreachable origin does not roll
-back a parent update that already landed. A linked worktree returns
-`no_op_reason` instead of running any of this, since its refs are already
-shared with the parent. Both actions run on the blocking pool, and the local
-MCP bridge grants them the same 305-second deadline as `worktree_create`/
-`worktree_remove` — both do at least one network fetch, and publish does a
-push as well.
 
 ## Upstream MCP Proxy
 
