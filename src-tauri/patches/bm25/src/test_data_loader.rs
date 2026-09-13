@@ -1,3 +1,11 @@
+// TUICommander patch: `data/` and `snapshots/` are vendored from the upstream
+// git repository (Michael-JB/bm25, tag v2.3.2), NOT from the published crate.
+// `Cargo.toml` carries `exclude = ["/data/**", "/snapshots/**"]`, so the .crate
+// this fork was imported from could never contain them, and the eight tests that
+// read them — the two below plus the six `it_matches_snapshot_*` — failed with
+// `NotFound` from the day of the import until 2026-09-13. Re-vendoring the fork
+// from crates.io will silently delete them again; copy these two directories
+// back from upstream git when that happens.
 #[cfg(test)]
 pub mod tests {
     use std::{fs::File, io::BufReader};
