@@ -1,5 +1,5 @@
+use crate::fxhash::{hash, hash32, hash64};
 use crate::tokenizer::Tokenizer;
-use fxhash::{hash, hash32, hash64};
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
 use std::{
