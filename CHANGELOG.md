@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Plugins can no longer read legacy MCP-upstream credentials.** The
+  `credentials:read` guard now rejects the historical `tuicommander-mcp`
+  keychain service through the same constant used by credential migration,
+  while plugin-owned service names remain readable.
+
 - **Codex usage is visible in the active agent badge.** Claude and Codex already
   shared one polled usage ticker, but the general ticker hid that slot on every
   agent tab while the badge absorbed it only for Claude. A Codex tab therefore
