@@ -1560,3 +1560,7 @@ injected seam, because a given `cp` can only ever implement one of the two flags
    the Codex Usage dashboard. Switch directly from a Claude tab and confirm the
    old Claude percentages never appear under the Codex icon while the Codex poll
    is in flight.
+## Rust dependency tree refresh (story `757-9ee7`) — **Rust, needs a `make dev` restart**
+
+After rebuilding with `make dev`, confirm the running backend uses the refreshed
+Cargo dependency tree; no frontend HMR reload can load these Rust changes.
