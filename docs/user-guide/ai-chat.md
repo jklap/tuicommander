@@ -55,7 +55,7 @@ the terminal's live view, which cannot cross a window boundary.
 
 ## Providers
 
-AI Chat speaks to four provider families plus a custom endpoint. Switch in `Settings > AI Chat > Provider`:
+AI Chat calls whichever model the **Main** slot points at. Providers, their models and the slots all live in `Settings > Providers` — see [Settings — Providers Tab](settings.md#providers-tab) for the full form. Sixteen provider types are selectable there; these are the common ones:
 
 | Provider | Default base URL | Notes |
 |----------|------------------|-------|
@@ -74,7 +74,7 @@ AI Chat speaks to four provider families plus a custom endpoint. Switch in `Sett
 | Generate commands, review diffs | Qwen3-Coder 14B | Sonnet, GPT-4o |
 | Agent loop (tool calling) | DeepSeek R1 32B, Qwen 27B | Sonnet, Opus |
 
-API keys are stored in the OS keyring under service `tuicommander-ai-chat` — never written to disk in plaintext.
+API keys are stored in the OS keyring, one entry per provider under the key `provider/<provider-id>` — never written to disk in plaintext, and never part of `providers.json`. A key left over from the single-provider era (keyring service `tuicommander-ai-chat`) is migrated on first load.
 
 ### Local MLX models (Apple Silicon)
 
@@ -92,7 +92,7 @@ pipx install mlx-lm
 mlx_lm.server --model mlx-community/Qwen2.5-Coder-3B-Instruct-4bit --port 8899
 ```
 
-In `Settings > AI Chat > Providers`, add a **Custom** provider with base URL `http://127.0.0.1:8899/v1/` and model name `mlx-community/Qwen2.5-Coder-3B-Instruct-4bit`. Assign it to the **Triage** slot.
+In `Settings > Providers`, add a **Custom** provider with base URL `http://127.0.0.1:8899/v1/` and model name `mlx-community/Qwen2.5-Coder-3B-Instruct-4bit`. Assign it to the **Triage** slot.
 
 Benchmark (M4): ~120 tok/s generation vs ~98 tok/s for the same model via Ollama GGUF.
 
