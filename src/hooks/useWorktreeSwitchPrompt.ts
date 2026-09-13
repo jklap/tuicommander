@@ -14,21 +14,12 @@ interface WorktreeSwitchDeps {
 
 interface WorktreeCreatedPayload {
 	repo_path: string;
-	/** Which workspace was born — the store key. For a linked worktree this
-	 *  equals the branch, but a COW clone's id is minted, so it is read from the
-	 *  event and never derived from `branch` (#727-2085). */
+	/** Which workspace was born — the store key. */
 	workspace_id: string;
 	/** Display only. */
 	branch: string;
 	worktree_path: string;
-	/** Which mechanism the backend used. Recorded on the row, never inferred:
-	 *  a COW clone is absent from the parent's `git worktree list`, and the
-	 *  refresh prune reads that absence as "removed externally" for every kind
-	 *  but `cow`. */
-	/** Optional only for events emitted by a pre-1.7.7 backend that is still
-	 *  running while the frontend hot-reloads. Those backends still expose the
-	 *  authoritative id contract: linked worktree id === branch, COW id !== branch. */
-	kind?: "cow" | "worktree";
+	kind: "worktree";
 }
 
 interface WorktreeRemovedPayload {
@@ -146,7 +137,6 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 
 	listen<WorktreeCreatedPayload>("worktree-created", (event) => {
 		const { repo_path, workspace_id, branch, worktree_path, kind } = event.payload;
-		const workspaceKind = kind ?? (workspace_id === branch ? "worktree" : "cow");
 		const switchToWorktree = () => {
 			switchToCreatedWorktree(deps, repo_path, workspace_id, branch, worktree_path).catch((err) =>
 				appLogger.warn("git", `Failed to switch to worktree "${branch}"`, err),
@@ -158,17 +148,12 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		// Guarded on repo existence so we don't create a half-formed repo entry for a
 		// worktree on a repo that isn't open in the sidebar.
 		if (repositoriesStore.get(repo_path)) {
-			// Keyed by the id the backend minted; the branch travels as data. The
-			// two are the same string for a linked worktree and will not be for a
-			// COW clone, so the key must come off `workspace_id`.
-			// Same record `setupNewWorktree` writes for an in-app creation. Without
-			// `kind` the row defaults to "worktree" and the next refresh closes its
-			// terminals and deletes it — a clone is not in `git worktree list`.
+			// Same record `setupNewWorktree` writes for an in-app creation.
 			repositoriesStore.setWorkspace(repo_path, workspace_id, {
 				branchName: branch,
 				worktreePath: worktree_path,
-				kind: workspaceKind,
-				parentRepoPath: workspaceKind === "cow" ? repo_path : null,
+				kind,
+				parentRepoPath: null,
 			});
 		}
 		const label = worktreeLabel(worktree_path);

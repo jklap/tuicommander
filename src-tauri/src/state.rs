@@ -61,9 +61,7 @@ impl PendingInjection {
 /// Wire payload of `worktree-created`, on both transports.
 ///
 /// The workspace is named by its id; `branch` rides along for display only. A
-/// consumer that wants the branch reads this field — it must never parse the id
-/// back into one, because a COW clone's id is minted and shares nothing with its
-/// branch (see `worktree::workspace_id_of_worktree`).
+/// consumer that wants the branch reads this field rather than parsing the id.
 ///
 /// Typed rather than a hand-written `json!` at each emit site: the desktop
 /// `emit` and the SSE arm serialize this same struct, so the two transports
@@ -74,12 +72,8 @@ pub(crate) struct WorktreeCreatedPayload {
     pub(crate) workspace_id: String,
     pub(crate) branch: String,
     pub(crate) worktree_path: String,
-    /// Which mechanism produced the checkout. The frontend persists it on the
-    /// workspace row, and its refresh prune keeps a row absent from
-    /// `git worktree list` ONLY when the row says `cow` — a clone never appears
-    /// there. Left out, every MCP/HTTP-created clone was pruned on the next
-    /// refresh and the sessions spawned in it were parked outside every repo.
-    pub(crate) kind: crate::cow::WorkspaceKind,
+    /// Workspace kind, kept explicit on the shared event payload.
+    pub(crate) kind: crate::worktree::WorkspaceKind,
 }
 
 /// Wire payload of `worktree-removed`, on both transports.
@@ -350,15 +344,6 @@ pub enum AppEvent {
     ProposalsReady {
         repo_path: String,
         payload: serde_json::Value,
-    },
-    /// Background recreation of a stale worktree directory failed. Emitted on the
-    /// bus (SSE) AND the Tauri window so browser/PWA/remote clients learn the
-    /// outcome, not just the desktop app.
-    #[serde(rename = "worktree-create-failed")]
-    WorktreeCreateFailed {
-        repo_path: String,
-        branch: String,
-        reason: String,
     },
     /// A session's derived lifecycle state moved (working / idle / awaiting).
     ///
@@ -1884,10 +1869,6 @@ pub struct AppState {
     /// Repos whose content index build is currently in-flight (shared by
     /// `ensure_index` and `rebuild_index` to prevent duplicate concurrent builds).
     pub(crate) index_in_flight: Arc<DashSet<String>>,
-    /// Stale-dir worktree recreate tasks in-flight. Key: `${base_repo}::${task_name}`.
-    /// Prevents double-spawn racing on the same path when a user triggers two
-    /// concurrent create_worktree calls before the first background recreate finishes.
-    pub(crate) worktree_recreate_in_flight: Arc<DashSet<String>>,
     /// Global semaphore limiting concurrent index builds to 1. Prevents startup
     /// pre-warm from spawning N simultaneous BM25 builds that saturate the CPU.
     pub(crate) index_build_sem: Arc<tokio::sync::Semaphore>,
@@ -2869,7 +2850,6 @@ impl AppState {
             content_indices: DashMap::new(),
             indexer_throttle: Arc::new(crate::content_index::IndexerThrottle::default()),
             index_in_flight: Arc::new(DashSet::new()),
-            worktree_recreate_in_flight: Arc::new(DashSet::new()),
             index_build_sem: Arc::new(tokio::sync::Semaphore::new(1)),
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             loaded_plugins: DashMap::new(),
@@ -4213,7 +4193,6 @@ impl AppState {
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProgressRecorded { .. }
             | AppEvent::ProposalsReady { .. }
-            | AppEvent::WorktreeCreateFailed { .. }
             // This accumulator's own output. Feeding it back in would make the
             // session state a function of itself; it is a report, not an input.
             | AppEvent::SessionStateChanged { .. }
@@ -5024,23 +5003,20 @@ pub(crate) mod tests_support {
 mod worktree_event_payloads {
     use super::*;
 
-    /// A branch that is NOT the id. Every assertion below uses this pair, because
-    /// with `workspace_id == branch` — which is what a linked worktree has — a
-    /// payload that quietly reported the branch under both names would pass.
     fn created() -> WorktreeCreatedPayload {
         WorktreeCreatedPayload {
             repo_path: "/repo".to_string(),
-            workspace_id: "feature-x~a1b2c3d4".to_string(),
+            workspace_id: "feature/x".to_string(),
             branch: "feature/x".to_string(),
             worktree_path: "/repo__wt/feature-x".to_string(),
-            kind: crate::cow::WorkspaceKind::Cow,
+            kind: crate::worktree::WorkspaceKind::Worktree,
         }
     }
 
     fn removed() -> WorktreeRemovedPayload {
         WorktreeRemovedPayload {
             repo_path: "/repo".to_string(),
-            workspace_id: "feature-x~a1b2c3d4".to_string(),
+            workspace_id: "feature/x".to_string(),
             branch: "feature/x".to_string(),
         }
     }
@@ -5054,10 +5030,10 @@ mod worktree_event_payloads {
             serde_json::to_value(created()).unwrap(),
             serde_json::json!({
                 "repo_path": "/repo",
-                "workspace_id": "feature-x~a1b2c3d4",
+                "workspace_id": "feature/x",
                 "branch": "feature/x",
                 "worktree_path": "/repo__wt/feature-x",
-                "kind": "cow",
+                "kind": "worktree",
             })
         );
     }
@@ -5068,7 +5044,7 @@ mod worktree_event_payloads {
             serde_json::to_value(removed()).unwrap(),
             serde_json::json!({
                 "repo_path": "/repo",
-                "workspace_id": "feature-x~a1b2c3d4",
+                "workspace_id": "feature/x",
                 "branch": "feature/x",
             })
         );

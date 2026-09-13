@@ -564,15 +564,6 @@ export const GeneralTab: Component = () => {
 					)}
 				/>
 
-				<SettingToggle
-					checked={settingsStore.state.cowWorkspacesEnabled}
-					onChange={(v) => settingsStore.setCowWorkspacesEnabled(v)}
-					label={t("general.toggle.cowWorkspaces", "Copy-on-write workspaces")}
-					hint={t(
-						"general.hint.cowWorkspaces",
-						"Create new workspaces as copy-on-write clones of the whole repository instead of linked worktrees. Workspaces you already created stay usable either way.",
-					)}
-				/>
 			</Show>
 		</div>
 	);

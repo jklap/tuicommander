@@ -14,7 +14,7 @@ import { resolveRepoOwnerIn, unregisteredRepoRootFor } from "../../utils/repoOwn
 
 function branch(name: string, worktreePath: string | null, isMain = false): WorkspaceState {
 	return {
-		// Pre-COW records key themselves by branch name, so the id is the name.
+		// Branch-derived records key themselves by branch name, so the id is the name.
 		workspaceId: name,
 		branchName: name,
 		kind: isMain ? "main" : "worktree",

@@ -18,7 +18,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 			branchName: string,
 			createBranch?: boolean,
 			baseRef?: string,
-		) => Promise<PendingCreation["result"] & { status: "ok" | "pending" }>;
+		) => Promise<PendingCreation["result"] & { status: "ok" }>;
 		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
 		mergeAndArchiveWorktree: (
 			repoPath: string,
@@ -58,9 +58,6 @@ interface WorktreeWorkflowCoordinatorDeps {
 		hasDirtyFiles: boolean;
 		worktreeDirty: boolean;
 	} | null>;
-	pendingCreations: Map<string, PendingCreation>;
-	pendingKey: (repoPath: string, branchName: string) => string;
-	markRecentlyCreated: (repoPath: string, branchName: string) => void;
 	setupNewWorktree: (
 		repoPath: string,
 		result: PendingCreation["result"],
@@ -76,16 +73,13 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		creatingWorktreeRepos,
 		setCreatingWorktreeRepos,
 		setMergePendingCtx,
-		pendingCreations,
-		pendingKey,
-		markRecentlyCreated,
 		setupNewWorktree,
 		refreshAllBranchStats,
 	} = deps;
 
 	/** Auto-fix an issue: create a fresh `autofix/issue-<n>` worktree off the
 	 *  default branch and launch the default agent in it seeded with `prompt`.
-	 *  Mirrors confirmCreateWorktree's create + pending/error handling; the agent
+	 *  Mirrors confirmCreateWorktree's create/error handling; the agent
 	 *  seed is threaded into setupNewWorktree so the terminal's agentType +
 	 *  pendingInitCommand are set in the same window the runScript path uses. */
 	const handleAutofixIssue = async (repoPath: string, issueNumber: number, prompt: string) => {
@@ -95,7 +89,6 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		const branch = autofixBranchName(issueNumber);
 		const agentSeed = buildAgentSeed(prompt);
 
-		let pendingHandoff = false;
 		try {
 			// Fork the auto-fix branch off the repo's default branch (main/master).
 			const baseRefs = await deps.repo.listBaseRefOptions(repoPath);
@@ -104,37 +97,16 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 			deps.setStatusInfo(`Creating auto-fix worktree ${branch}...`);
 			const result = await deps.repo.createWorktree(repoPath, branch, true, base);
 
-			if (result.status === "pending") {
-				// Stale directory being cleaned in background — show placeholder and
-				// defer setupNewWorktree (with the seed) until the recreate completes.
-				markRecentlyCreated(repoPath, result.branch);
-				repositoriesStore.setWorkspace(repoPath, result.branch, {
-					worktreePath: result.path,
-					isPreparing: true,
-				});
-				repositoriesStore.setActiveWorkspace(repoPath, result.branch);
-				deps.setStatusInfo(`Preparing auto-fix worktree ${branch}...`);
-				pendingCreations.set(pendingKey(repoPath, result.branch), {
-					repoPath,
-					displayName: branch,
-					result,
-					agentSeed,
-				});
-				pendingHandoff = true;
-			} else {
-				await setupNewWorktree(repoPath, result, branch, agentSeed);
-			}
+			await setupNewWorktree(repoPath, result, branch, agentSeed);
 		} catch (err) {
 			appLogger.error("git", "Failed to create auto-fix worktree", err);
 			deps.setStatusInfo(`Failed to create auto-fix worktree: ${err}`);
 		} finally {
-			if (!pendingHandoff) {
-				setCreatingWorktreeRepos((prev) => {
-					const next = new Set(prev);
-					next.delete(repoPath);
-					return next;
-				});
-			}
+			setCreatingWorktreeRepos((prev) => {
+				const next = new Set(prev);
+				next.delete(repoPath);
+				return next;
+			});
 		}
 	};
 

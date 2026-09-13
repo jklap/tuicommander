@@ -155,18 +155,15 @@ describe("useConfirmDialog", () => {
 				{
 					dirty: false,
 					commitStatus: "unmerged",
-					unpublishedCommits: 0,
 					removalSafety: "safe",
-					dirtyProvenance: null,
 				},
-				"worktree",
 				true,
 			);
 
 			expect(dialog.dialogState()).toEqual({
 				title: "Remove workspace?",
 				message:
-					'Remove "feature-x"?\n\nWorking tree: clean.\nCommit state: no clone-only commits will be lost.\nGit will safely delete the local branch; if it is unmerged, the branch is kept.',
+					'Remove "feature-x"?\n\nWorking tree: clean.\nCommit state: commits remain in the parent repository.\nGit will safely delete the local branch; if it is unmerged, the branch is kept.',
 				confirmLabel: "Remove",
 				cancelLabel: "Cancel",
 				kind: "warning",
@@ -182,16 +179,13 @@ describe("useConfirmDialog", () => {
 				"feature-y",
 				{
 					dirty: true,
-					commitStatus: "unpublished",
-					unpublishedCommits: 2,
+					commitStatus: "unmerged",
 					removalSafety: "requires_force",
-					dirtyProvenance: "inherited_only",
 				},
-				"cow",
 				true,
 			);
 			expect(dialog.dialogState()?.title).toBe("Destroy workspace state?");
-			expect(dialog.dialogState()?.message).toContain("2 unpublished commits will be destroyed");
+			expect(dialog.dialogState()?.message).toContain("uncommitted files will be discarded");
 			dialog.handleClose();
 			expect(await promise).toBe(false);
 		});

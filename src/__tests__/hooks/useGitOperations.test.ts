@@ -111,20 +111,10 @@ describe("useGitOperations", () => {
 			.fn()
 			.mockResolvedValue({ success: true, stashed: false, previous_branch: "main", new_branch: "feature" }),
 		runSetupScript: vi.fn().mockResolvedValue({ exit_code: 0, stdout: "", stderr: "" }),
-		countUnpublishedCommits: vi.fn().mockResolvedValue(0),
 		getWorkspaceLifecycle: vi.fn().mockResolvedValue({
 			dirty: false,
 			commitStatus: "unmerged",
-			unpublishedCommits: 0,
 			removalSafety: "safe",
-		}),
-		publishWorkspace: vi.fn().mockResolvedValue({
-			parent_updated: true,
-			parent_error: null,
-			published_commit: "abc1234",
-			origin_pushed: true,
-			origin_error: null,
-			no_op_reason: null,
 		}),
 	};
 
@@ -697,12 +687,10 @@ describe("useGitOperations", () => {
 			// Default deleteBranchOnRemove is true (from repoDefaults)
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			// The count travels with the question now: 0 for a linked worktree, which
-			// is what makes the generic wording correct for it.
+			// The fresh lifecycle verdict travels with the removal question.
 			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith(
 				"feature",
 				expect.objectContaining({ removalSafety: "safe" }),
-				"worktree",
 				true,
 			);
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, false);
@@ -1445,56 +1433,6 @@ describe("useGitOperations", () => {
 			expect(repo?.workspaces["main"]?.lastActiveTerminal).toBe(t2);
 		});
 
-		// A COW workspace is an independent clone, so `git worktree list` in the
-		// parent never reports it. The prune reads "absent from worktree_paths" as
-		// "removed externally", which for this row would mean closing a live agent's
-		// terminals and deleting the only record of where its work is.
-		it("keeps a cow workspace that git worktree list cannot see", async () => {
-			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
-			repositoriesStore.setWorkspace("/repo", "feat~aaaa1111", {
-				branchName: "feat",
-				worktreePath: "/repo__cow/feat-1",
-				kind: "cow",
-			});
-			mockSummary({
-				worktree_paths: wtPaths({ main: "/repo" }),
-				merged_branches: [],
-				diff_stats: {},
-				last_commit_ts: {},
-			});
-
-			await gitOps.refreshAllBranchStats("/repo");
-
-			expect(repositoriesStore.get("/repo")?.workspaces["feat~aaaa1111"]).toBeDefined();
-		});
-
-		// Stats are looked up by directory and branch but WRITTEN by workspace id.
-		// Writing them by `branchName` puts the clone's numbers on whichever row is
-		// keyed by the bare branch — no call fails, the wrong row just changes.
-		it("writes stats to the workspace that owns the directory, not to its same-branch sibling", async () => {
-			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setWorkspace("/repo", "feat", { worktreePath: "/repo__wt/feat" });
-			repositoriesStore.setWorkspace("/repo", "feat~aaaa1111", {
-				branchName: "feat",
-				worktreePath: "/repo__cow/feat-1",
-				kind: "cow",
-			});
-			mockSummary({
-				worktree_paths: wtPaths({ feat: "/repo__wt/feat" }),
-				merged_branches: [],
-				diff_stats: { "/repo__cow/feat-1": { additions: 41, deletions: 9 } },
-				last_commit_ts: {},
-			});
-
-			await gitOps.refreshAllBranchStats("/repo");
-
-			const workspaces = repositoriesStore.get("/repo")!.workspaces;
-			expect(workspaces["feat~aaaa1111"]?.additions).toBe(41);
-			expect(workspaces["feat~aaaa1111"]?.deletions).toBe(9);
-			expect(workspaces.feat?.additions).toBe(0);
-		});
-
 		it("scopes to a single repo when a path is given — other repos untouched", async () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "A" });
 			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
@@ -1798,31 +1736,29 @@ describe("useGitOperations", () => {
 	});
 
 	describe("refreshAllBranchStats — progressive loading", () => {
-		it("applies lifecycle status by workspace id, not by shared branch name", async () => {
+		it("applies lifecycle status by workspace id", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
 			mockRepo.getRepoStructure.mockResolvedValue({
 				worktree_paths: {
 					main: { branch: "main", path: "/repo", kind: "worktree" },
-					"cow-a": { branch: "shared", path: "/repo/cow-a", kind: "cow" },
-					"cow-b": { branch: "shared", path: "/repo/cow-b", kind: "cow" },
+					"feature-a": { branch: "feature-a", path: "/repo/wt-a", kind: "worktree" },
+					"feature-b": { branch: "feature-b", path: "/repo/wt-b", kind: "worktree" },
 				},
-				merged_branches: ["shared"],
+				merged_branches: ["feature-b"],
 			});
 			mockRepo.getRepoDiffStats.mockResolvedValue({
 				diff_stats: {},
-				last_commit_ts: { shared: 1700000000 },
+				last_commit_ts: { "feature-a": 1700000000, "feature-b": 1700000000 },
 				workspace_statuses: {
-					"cow-a": {
+					"feature-a": {
 						dirty: false,
-						commit_status: "unpublished",
-						unpublished_commits: 2,
-						removal_safety: "requires_force",
+						commit_status: "unmerged",
+						removal_safety: "safe",
 					},
-					"cow-b": {
+					"feature-b": {
 						dirty: false,
 						commit_status: "merged",
-						unpublished_commits: 0,
 						removal_safety: "safe",
 					},
 				},
@@ -1831,10 +1767,10 @@ describe("useGitOperations", () => {
 			await gitOps.refreshAllBranchStats();
 
 			const repo = repositoriesStore.get("/repo");
-			expect(repo?.workspaces["cow-a"]?.lifecycleStatus?.unpublishedCommits).toBe(2);
-			expect(repo?.workspaces["cow-a"]?.isMerged).toBe(false);
-			expect(repo?.workspaces["cow-b"]?.lifecycleStatus?.commitStatus).toBe("merged");
-			expect(repo?.workspaces["cow-b"]?.isMerged).toBe(true);
+			expect(repo?.workspaces["feature-a"]?.lifecycleStatus?.commitStatus).toBe("unmerged");
+			expect(repo?.workspaces["feature-a"]?.isMerged).toBe(false);
+			expect(repo?.workspaces["feature-b"]?.lifecycleStatus?.commitStatus).toBe("merged");
+			expect(repo?.workspaces["feature-b"]?.isMerged).toBe(true);
 		});
 
 		it("Phase 1 updates worktreePath before Phase 2 runs", async () => {
@@ -1939,7 +1875,6 @@ describe("useGitOperations", () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirty: null,
 				commitStatus: "unknown",
-				unpublishedCommits: null,
 				removalSafety: "unknown",
 				error: "parent ref unavailable",
 			});
@@ -1956,20 +1891,19 @@ describe("useGitOperations", () => {
 		it("passes force only after confirming destructive state", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirty: true,
-				commitStatus: "unpublished",
-				unpublishedCommits: 3,
+				commitStatus: "unmerged",
 				removalSafety: "requires_force",
 			});
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setWorkspace("/repo", "cow-id", {
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				branchName: "feature",
-				kind: "cow",
-				worktreePath: "/repo/cow",
+				kind: "worktree",
+				worktreePath: "/repo/wt",
 			});
 
-			await gitOps.handleRemoveWorkspace("/repo", "cow-id");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "cow-id", true, true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true);
 		});
 
 		it("closes branch terminals before removing", async () => {
@@ -2167,7 +2101,7 @@ describe("useGitOperations", () => {
 			// Dialog should NOT be open
 			expect(noPromptGitOps.worktreeDialogState()).toBeNull();
 			// Worktree should be created directly with the auto-generated name
-			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "bold-nexus-042", true, "main", "auto", "inherit");
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "bold-nexus-042", true, "main");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Created worktree bold-nexus-042");
 		});
 
@@ -2223,8 +2157,6 @@ describe("useGitOperations", () => {
 				"cool-ripley-007",
 				true,
 				"develop",
-				"auto",
-				"inherit",
 			);
 		});
 	});
@@ -2251,11 +2183,9 @@ describe("useGitOperations", () => {
 				branchName: "bold-nexus-042",
 				createBranch: true,
 				baseRef: "main",
-				mode: "auto" as const,
-				dirty: "inherit" as const,
 			});
 
-			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "bold-nexus-042", true, "main", "auto", "inherit");
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "bold-nexus-042", true, "main");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Created worktree bold-nexus-042");
 		});
 
@@ -2278,48 +2208,10 @@ describe("useGitOperations", () => {
 				branchName: "develop",
 				createBranch: false,
 				baseRef: "main",
-				mode: "auto" as const,
-				dirty: "inherit" as const,
 			});
 
-			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "develop", false, "main", "auto", "inherit");
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "develop", false, "main");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Created worktree develop");
-		});
-
-		it("handles pending status: shows placeholder with isPreparing=true, no setup script", async () => {
-			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
-			repoSettingsStore.getOrCreate("/repo", "Repo");
-			repoSettingsStore.update("/repo", { setupScript: "npm install" });
-
-			mockRepo.generateWorktreeName.mockResolvedValue("feat-x");
-			mockRepo.listLocalBranches.mockResolvedValue(["main"]);
-			mockRepo.createWorktree.mockResolvedValue({
-				status: "pending",
-				name: "feat-x",
-				path: "/repo/.worktrees/feat-x",
-				workspace_id: "feat-x",
-				branch: "feat-x",
-				base_repo: "/repo",
-			});
-
-			await gitOps.handleAddWorktree("/repo");
-			await gitOps.confirmCreateWorktree({
-				branchName: "feat-x",
-				createBranch: false,
-				baseRef: "main",
-				mode: "auto" as const,
-				dirty: "inherit" as const,
-			});
-
-			// Placeholder branch added with isPreparing=true
-			const branch = repositoriesStore.get("/repo")?.workspaces["feat-x"];
-			expect(branch?.isPreparing).toBe(true);
-			expect(branch?.worktreePath).toBe("/repo/.worktrees/feat-x");
-
-			// Setup script must NOT run for pending — backend hasn't created files yet
-			expect(mockRepo.runSetupScript).not.toHaveBeenCalled();
-			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Preparing worktree"));
 		});
 
 		it("reports error on worktree creation failure", async () => {
@@ -2335,8 +2227,6 @@ describe("useGitOperations", () => {
 					branchName: "bold-nexus-042",
 					createBranch: true,
 					baseRef: "main",
-					mode: "auto" as const,
-					dirty: "inherit" as const,
 				}),
 			).rejects.toThrow("branch exists");
 
@@ -2363,8 +2253,6 @@ describe("useGitOperations", () => {
 				branchName: "feat-test",
 				createBranch: true,
 				baseRef: "main",
-				mode: "auto" as const,
-				dirty: "inherit" as const,
 			});
 
 			expect(mockRepo.runSetupScript).toHaveBeenCalledWith("npm install", "/repo/wt/feat-test");
@@ -2388,8 +2276,6 @@ describe("useGitOperations", () => {
 				branchName: "feat-test",
 				createBranch: true,
 				baseRef: "main",
-				mode: "auto" as const,
-				dirty: "inherit" as const,
 			});
 
 			expect(mockRepo.runSetupScript).not.toHaveBeenCalled();
@@ -2415,8 +2301,6 @@ describe("useGitOperations", () => {
 				branchName: "feat-test",
 				createBranch: true,
 				baseRef: "main",
-				mode: "auto" as const,
-				dirty: "inherit" as const,
 			});
 
 			// Find the terminal created for this worktree
@@ -2448,8 +2332,6 @@ describe("useGitOperations", () => {
 				branchName: "feat-test",
 				createBranch: true,
 				baseRef: "main",
-				mode: "auto" as const,
-				dirty: "inherit" as const,
 			});
 
 			// Should still create a terminal despite script failure
@@ -2535,36 +2417,6 @@ describe("useGitOperations", () => {
 			expect(terminalsStore.get(termId)?.pendingInitCommand).toBeNull();
 		});
 
-		it("handles pending status: shows placeholder with isPreparing=true, no setup script", async () => {
-			// Stale-dir cleanup races against setup script: when backend returns
-			// status:"pending", the worktree files don't exist yet, so calling
-			// setupNewWorktree (npm install etc.) would race with the background
-			// `rm -rf` + recreate.
-			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveWorkspace("/repo", "main");
-			repoSettingsStore.getOrCreate("/repo", "Repo");
-			repoSettingsStore.update("/repo", { setupScript: "npm ci" });
-
-			mockRepo.generateCloneBranchName.mockResolvedValue("main--wt-42");
-			mockRepo.createWorktree.mockResolvedValue({
-				status: "pending",
-				name: "main--wt-42",
-				path: "/repo/wt/main--wt-42",
-				workspace_id: "main--wt-42",
-				branch: "main--wt-42",
-				base_repo: "/repo",
-			});
-
-			await gitOps.handleCreateWorktreeFromBranch("/repo", "main");
-
-			const branch = repositoriesStore.get("/repo")?.workspaces["main--wt-42"];
-			expect(branch?.isPreparing).toBe(true);
-			expect(branch?.worktreePath).toBe("/repo/wt/main--wt-42");
-			expect(mockRepo.runSetupScript).not.toHaveBeenCalled();
-			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Preparing worktree"));
-		});
 	});
 
 	describe("executeRunCommand", () => {

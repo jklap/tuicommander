@@ -407,21 +407,8 @@
   margin-left: auto;
 }
 
-/* Copy-on-write clone. Same shape as .mainBadge — it answers the same kind of
-   question about the row — with the accent colour, because the distinction it
-   marks changes what publish and delete do. */
-.cowBadge {
-  font-size: var(--font-2xs);
-  color: var(--accent);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--accent);
-  padding: 1px 6px;
-  border-radius: var(--radius-md);
-}
-
-/* Commits that exist nowhere else. Warning-coloured because it is the one
-   number on this row whose meaning is "deleting this loses work". */
-.unpublishedBadge {
+/* Dirty worktree warning. */
+.dirtyBadge {
   font-size: var(--font-2xs);
   font-family: var(--font-ui);
   font-weight: 600;

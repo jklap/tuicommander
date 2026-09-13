@@ -67,7 +67,6 @@ interface RustAppConfig {
 	ai_chat_enabled?: boolean;
 	ai_triage_enabled?: boolean;
 	ai_watchers_enabled?: boolean;
-	cow_workspaces_enabled?: boolean;
 	scrollback_reflow?: boolean;
 	cursor_style?: string;
 	terminal_renderer?: string;
@@ -304,7 +303,6 @@ interface SettingsStoreState {
 	aiChatEnabled: boolean;
 	aiTriageEnabled: boolean;
 	aiWatchersEnabled: boolean;
-	cowWorkspacesEnabled: boolean;
 	scrollbackReflow: boolean;
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
@@ -357,7 +355,6 @@ function createSettingsStore() {
 		aiChatEnabled: false,
 		aiTriageEnabled: false,
 		aiWatchersEnabled: false,
-		cowWorkspacesEnabled: false,
 		scrollbackReflow: true,
 		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
 		terminalRenderer: "webgl",
@@ -426,7 +423,6 @@ function createSettingsStore() {
 		config.ai_chat_enabled = state.aiChatEnabled;
 		config.ai_triage_enabled = state.aiTriageEnabled;
 		config.ai_watchers_enabled = state.aiWatchersEnabled;
-		config.cow_workspaces_enabled = state.cowWorkspacesEnabled;
 		config.scrollback_reflow = state.scrollbackReflow;
 		config.cursor_style = state.cursorStyle;
 		config.terminal_renderer = state.terminalRenderer;
@@ -531,10 +527,6 @@ function createSettingsStore() {
 				setState("aiChatEnabled", config.ai_chat_enabled ?? false);
 				setState("aiTriageEnabled", config.ai_triage_enabled ?? false);
 				setState("aiWatchersEnabled", config.ai_watchers_enabled ?? false);
-				setState(
-					"cowWorkspacesEnabled",
-					config.cow_workspaces_enabled ?? false,
-				);
 				setState("scrollbackReflow", config.scrollback_reflow ?? true);
 				const cs = config.cursor_style;
 				setState("cursorStyle", cs === "block" || cs === "underline" ? cs : "bar");
@@ -779,10 +771,6 @@ function createSettingsStore() {
 			save();
 		},
 
-		setCowWorkspacesEnabled(enabled: boolean): void {
-			setState("cowWorkspacesEnabled", enabled);
-			save();
-		},
 
 		setScrollbackReflow(enabled: boolean): void {
 			setState("scrollbackReflow", enabled);
@@ -865,12 +853,6 @@ function createSettingsStore() {
 			return state.experimentalFeaturesEnabled && state.aiWatchersEnabled;
 		},
 
-		// Gates CREATION only. An existing clone stays listable, publishable
-		// and removable with this off — turning a flag off must not strand
-		// work that is already on disk.
-		isCowWorkspacesEnabled(): boolean {
-			return state.experimentalFeaturesEnabled && state.cowWorkspacesEnabled;
-		},
 	};
 
 	return {

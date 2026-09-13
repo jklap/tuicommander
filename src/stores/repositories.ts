@@ -1097,10 +1097,8 @@ function createRepositoriesStore() {
 		 * The second argument is the map KEY, never a branch to look up. For
 		 * everything that exists today the two are the same string — the identity
 		 * migration minted `workspaceId = branchName` so nothing persisted moved —
-		 * and that is exactly why the parameter is named for the key: a caller
-		 * holding a branch off git output and a caller holding an id off a
-		 * workspace record are indistinguishable at the call site otherwise, and
-		 * only the second one stays correct once a COW clone carries a minted id.
+		 * and that is exactly why the parameter is named for the key: callers
+		 * should not couple workspace identity to a display branch name.
 		 *
 		 * `branchName` in `data` is what is checked out. Absent, it defaults to the
 		 * id, which is right for every row created from a branch.
@@ -1279,12 +1277,8 @@ function createRepositoriesStore() {
 		 * while `workspaceId` still held the old one, and every consumer that
 		 * reads `ws.workspaceId` then addressed a key that no longer existed.
 		 *
-		 * DEFERRED (2026-09-10) — a COW workspace's id is minted and must NOT move
-		 * when its branch is renamed; only its `branchName` should change, and a
-		 * rename should reach EVERY workspace on that branch rather than one. No
-		 * COW workspace can exist yet (the registry arrives with #729-983e), and
-		 * guessing the shape now would mean writing the fan-out with nothing to
-		 * test it against.
+		 * Linked worktrees cannot share a branch, so the branch-derived id and map
+		 * key move together.
 		 */
 		renameBranch(repoPath: string, oldName: string, newName: string): void {
 			const repo = state.repositories[repoPath];

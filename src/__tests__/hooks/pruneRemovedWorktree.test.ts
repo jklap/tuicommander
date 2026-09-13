@@ -116,38 +116,6 @@ describe("pruneRemovedWorktree", () => {
 		});
 	});
 
-	// The removal event names ONE workspace. Two workspaces can sit on one branch
-	// (that is the point of a COW clone), so a prune that resolved anything by
-	// branch would take the sibling's terminals down with it — and the sibling is
-	// a live agent in a different directory.
-	it("leaves a same-branch sibling and its terminals untouched", async () => {
-		await testInScopeAsync(async () => {
-			store.add({ path: REPO, displayName: "repo" });
-			store.setWorkspace(REPO, "main", { worktreePath: REPO, isMain: true });
-			store.setWorkspace(REPO, "feat~aaaa1111", {
-				branchName: "feat",
-				worktreePath: "/repo__cow/feat-1",
-				kind: "cow",
-			});
-			store.setWorkspace(REPO, "feat~bbbb2222", {
-				branchName: "feat",
-				worktreePath: "/repo__cow/feat-2",
-				kind: "cow",
-			});
-			store.addTerminalToWorkspace(REPO, "feat~aaaa1111", "term-doomed");
-			store.addTerminalToWorkspace(REPO, "feat~bbbb2222", "term-survivor");
-			const closeTerminals = vi.fn().mockResolvedValue(undefined);
-
-			await prune(REPO, "feat~aaaa1111", closeTerminals);
-
-			expect(closeTerminals).toHaveBeenCalledExactlyOnceWith(REPO, "feat~aaaa1111");
-			expect(store.get(REPO)!.workspaces["feat~aaaa1111"]).toBeUndefined();
-			const survivor = store.get(REPO)!.workspaces["feat~bbbb2222"];
-			expect(survivor?.terminals).toEqual(["term-survivor"]);
-			expect(survivor?.branchName).toBe("feat");
-		});
-	});
-
 	it("clears activeBranch when the removed worktree was the active one", async () => {
 		await testInScopeAsync(async () => {
 			seedRepo();

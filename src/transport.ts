@@ -1579,33 +1579,6 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			},
 		}),
 	},
-	count_unpublished_commits: {
-		map: (_args, p) => ({
-			method: "GET",
-			path: `/worktrees/unpublished?repoPath=${p("repoPath")}&workspaceId=${p("workspaceId")}`,
-		}),
-	},
-	publish_workspace: {
-		map: (args) => ({
-			method: "POST",
-			path: "/worktrees/publish",
-			body: {
-				repoPath: args.repoPath,
-				workspaceId: args.workspaceId,
-			},
-		}),
-	},
-	adopt_cow_workspace: {
-		map: (args) => ({
-			method: "POST",
-			path: "/worktrees/adopt",
-			body: {
-				repoPath: args.repoPath,
-				candidatePath: args.candidatePath,
-				workspaceId: args.workspaceId,
-			},
-		}),
-	},
 	checkout_remote_branch: {
 		map: (args) => ({
 			method: "POST",

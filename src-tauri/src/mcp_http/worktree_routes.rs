@@ -17,8 +17,7 @@ pub(super) struct CreatedWorktree {
     /// (#734-ca73) — there is no enforcement layer behind it.
     pub instructions: serde_json::Value,
     /// The id the caller must use to address this workspace afterwards — removal,
-    /// dirtiness and finalize all take an id. Reported rather than left implicit:
-    /// a caller cannot re-derive it, because for a COW clone it is not the branch.
+    /// dirtiness and finalize all take an id.
     pub workspace_id: String,
     pub branch: String,
     pub setup_script: Option<serde_json::Value>,
@@ -84,8 +83,6 @@ pub(super) async fn create_worktree_http(
         body.base_repo.clone(),
         body.branch_name.clone(),
         body.base_ref.clone(),
-        body.mode,
-        body.dirty,
     )
     .await
     {
@@ -100,9 +97,8 @@ pub(super) async fn create_worktree_http(
         // model reading it over MCP and the client reading it over HTTP need
         // the same isolation semantics (#734-ca73).
         "instructions": &created.instructions,
-        // How the caller addresses this workspace from here on. `branch` is what
-        // is checked out; the two match for a linked worktree and will not for a
-        // COW clone, so both are reported.
+        // How the caller addresses this workspace from here on. `branch` remains
+        // explicit display data even though linked worktree ids currently match it.
         "workspace_id": &created.workspace_id,
         "branch": created.worktree.branch,
         "base_repo": created.worktree.base_repo.to_string_lossy(),
@@ -122,8 +118,6 @@ pub(super) async fn create_worktree_shared(
     base_repo: String,
     branch_name: String,
     base_ref: Option<String>,
-    mode: crate::cow::WorkspaceMode,
-    dirty: crate::cow::DirtyPolicy,
 ) -> Result<CreatedWorktree, (StatusCode, Json<serde_json::Value>)> {
     validate_repo_path(&base_repo)?;
     // Model provides only branch_name and optionally base_ref (start point).
@@ -146,13 +140,7 @@ pub(super) async fn create_worktree_shared(
     let config_bg = config.clone();
     let worktrees_dir_bg = worktrees_dir.clone();
     let result = match tokio::task::spawn_blocking(move || {
-        crate::worktree::create_workspace(
-            &worktrees_dir_bg,
-            &config_bg,
-            base_ref.as_deref(),
-            mode,
-            dirty,
-        )
+        crate::worktree::create_workspace(&worktrees_dir_bg, &config_bg, base_ref.as_deref())
     })
     .await
     {
@@ -396,91 +384,21 @@ pub(super) async fn merge_pr_via_github_http(
     }
 }
 
-/// `GET /worktrees/unpublished?repoPath=&workspaceId=` — the HTTP half of
-/// `count_unpublished_commits`.
-pub(super) async fn unpublished_commits_http(Query(q): Query<WorkspaceIdQuery>) -> Response {
-    if let Err(e) = validate_repo_path(&q.repo_path) {
-        return e.into_response();
-    }
-    // Blocking: counting refreshes the parent mirror first.
-    let res = tokio::task::spawn_blocking(move || {
-        crate::worktree::unpublished_commits_impl(&q.repo_path, &q.workspace_id)
-    })
-    .await;
-    match res {
-        Ok(r) => json_result(r),
-        Err(e) => err_500(&format!("task panic: {e}")),
-    }
-}
-
-/// `GET /worktrees/lifecycle?repoPath=&workspaceId=` — fresh removal preflight
-/// and the HTTP twin of `get_workspace_lifecycle`.
+/// Fresh linked-worktree removal preflight.
 pub(super) async fn workspace_lifecycle_http(Query(q): Query<WorkspaceIdQuery>) -> Response {
-    if let Err(e) = validate_repo_path(&q.repo_path) {
-        return e.into_response();
+    if let Err(error) = validate_repo_path(&q.repo_path) {
+        return error.into_response();
     }
-    let res = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         crate::worktree::inspect_workspace_lifecycle(
             std::path::Path::new(&q.repo_path),
             &q.workspace_id,
         )
     })
     .await;
-    match res {
+    match result {
         Ok(status) => (StatusCode::OK, Json(status)).into_response(),
-        Err(e) => err_500(&format!("task panic: {e}")),
-    }
-}
-
-/// `POST /worktrees/publish` — the HTTP half of `publish_workspace`.
-///
-/// Shares `publish_workspace_impl` with the Tauri command, so the two-step
-/// outcome (parent, then origin) has one implementation and one shape.
-pub(super) async fn publish_workspace_http(Json(body): Json<PublishWorkspaceRequest>) -> Response {
-    if let Err(e) = validate_repo_path(&body.repo_path) {
-        return e.into_response();
-    }
-    let PublishWorkspaceRequest {
-        repo_path,
-        workspace_id,
-    } = body;
-    // Blocking: a publish runs a fetch and a push.
-    let res = tokio::task::spawn_blocking(move || {
-        crate::worktree::publish_workspace_impl(&repo_path, &workspace_id)
-    })
-    .await;
-    match res {
-        Ok(r) => json_result(r),
-        Err(e) => err_500(&format!("task panic: {e}")),
-    }
-}
-
-/// `POST /worktrees/adopt` — the HTTP half of the desktop `adopt_cow_workspace`
-/// command. Shares `adopt_cow_workspace_impl` with it and with the MCP `repo`
-/// action, so "what counts as a valid adoption" is answered once.
-pub(super) async fn adopt_cow_workspace_http(
-    Json(body): Json<AdoptCowWorkspaceRequest>,
-) -> Response {
-    if let Err(e) = validate_repo_path(&body.repo_path) {
-        return e.into_response();
-    }
-    let AdoptCowWorkspaceRequest {
-        repo_path,
-        candidate_path,
-        workspace_id,
-    } = body;
-    let res = tokio::task::spawn_blocking(move || {
-        crate::worktree::adopt_cow_workspace_impl(
-            &repo_path,
-            &candidate_path,
-            workspace_id.as_deref(),
-        )
-        .map(|record| crate::worktree::adopted_workspace_json(&record))
-    })
-    .await;
-    match res {
-        Ok(r) => json_result(r),
-        Err(e) => err_500(&format!("task panic: {e}")),
+        Err(error) => err_500(&format!("task panic: {error}")),
     }
 }
 

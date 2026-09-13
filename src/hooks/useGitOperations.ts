@@ -14,7 +14,7 @@ import { isTauri, rpc } from "../transport";
 import type { RepoInfo } from "../types";
 import { findOrphanTerminals } from "../utils/terminalOrphans";
 import { createBranchSelectionCoordinator } from "./git/createBranchSelectionCoordinator";
-import { createRepositoryRefreshCoordinator, type PendingCreation } from "./git/createRepositoryRefreshCoordinator";
+import { createRepositoryRefreshCoordinator } from "./git/createRepositoryRefreshCoordinator";
 import { createTerminalWorktreeCoordinator } from "./git/createTerminalWorktreeCoordinator";
 import { createWorktreeCreationCoordinator } from "./git/createWorktreeCreationCoordinator";
 import { createWorktreeRemovalCoordinator } from "./git/createWorktreeRemovalCoordinator";
@@ -53,9 +53,7 @@ export interface GitOperationsDeps {
 				{
 					dirty: boolean | null;
 					commit_status: import("../stores/workspaceIdentity").WorkspaceCommitStatus;
-					unpublished_commits: number | null;
 					removal_safety: import("../stores/workspaceIdentity").WorkspaceRemovalSafety;
-					dirty_provenance: import("../stores/workspaceIdentity").WorkspaceDirtyProvenance | null;
 					error?: string;
 				}
 			>;
@@ -72,7 +70,7 @@ export interface GitOperationsDeps {
 			createBranch?: boolean,
 			baseRef?: string,
 		) => Promise<{
-			status: "ok" | "pending";
+			status: "ok";
 			name: string;
 			path: string;
 			workspace_id: string;
@@ -110,12 +108,10 @@ export interface GitOperationsDeps {
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
 		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
 		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
-		countUnpublishedCommits: (repoPath: string, workspaceId: string) => Promise<number>;
 		getWorkspaceLifecycle: (
 			repoPath: string,
 			workspaceId: string,
 		) => Promise<import("../stores/workspaceIdentity").WorkspaceLifecycleStatus>;
-		publishWorkspace: (repoPath: string, workspaceId: string) => Promise<import("./useRepository").PublishOutcome>;
 		switchBranch: (
 			repoPath: string,
 			branchName: string,
@@ -133,7 +129,6 @@ export interface GitOperationsDeps {
 		confirmRemoveWorktree: (
 			branchName: string,
 			status: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
-			kind: import("../stores/workspaceIdentity").WorkspaceKind,
 			deleteBranch: boolean,
 		) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
@@ -172,14 +167,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	// Key: `${repoPath}::${branchName}` — prevents concurrent remove calls for same branch
 	const [removingBranches, setRemovingBranches] = createSignal<Set<string>>(new Set());
 
-	// Pending creates whose Rust background recreation is still in-flight. When the
-	// async create_worktree returned status:'pending', we deferred running the
-	// setup script / spawning the initial terminal until the worktree files
-	// actually exist. The refresh handler drains this map once `isPreparing` is
-	// cleared for a branch (success path). On `worktree-create-failed` (Rust
-	// error path) the entry is removed without running setup.
-	const pendingCreations = new Map<string, PendingCreation>(); // key: `${repoPath}::${branchName}`
-	const pendingKey = (repoPath: string, branchName: string) => `${repoPath}::${branchName}`;
 	const [worktreeDialogState, setWorktreeDialogState] = createSignal<{
 		repoPath: string;
 		suggestedName: string;
@@ -208,12 +195,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		dialogs: deps.dialogs,
 		closeTerminal: deps.closeTerminal,
 		closeTerminalsInWorktree: (worktreePath) => closeTerminalsInWorktree(worktreePath),
-		setupNewWorktree: (repoPath, result, displayName, agentSeed) =>
-			setupNewWorktree(repoPath, result, displayName, agentSeed),
-		setCreatingWorktreeRepos,
 		setStatusInfo: deps.setStatusInfo,
-		pendingCreations,
-		pendingKey,
 	});
 
 	const { handleAddTerminalToWorkspace, handleBranchSelect, handleBranchSelectInner } =
@@ -481,8 +463,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			setCreatingWorktreeRepos,
 			worktreeDialogState,
 			setWorktreeDialogState,
-			pendingCreations,
-			pendingKey,
 			markRecentlyCreated,
 			handleAddTerminalToWorkspace,
 		});
@@ -505,9 +485,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		creatingWorktreeRepos,
 		setCreatingWorktreeRepos,
 		setMergePendingCtx,
-		pendingCreations,
-		pendingKey,
-		markRecentlyCreated,
 		setupNewWorktree,
 		refreshAllBranchStats,
 	});
@@ -690,44 +667,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	};
 
 	/** Handle branch switch request from sidebar. Checks terminal safety, then calls Rust. */
-	/**
-	 * Publish a COW workspace, reporting the two steps separately.
-	 *
-	 * The parent getting the commits and origin getting them are different
-	 * facts, and a single "published" toast would hide the case that matters:
-	 * the work is safe in the parent while origin was unreachable.
-	 */
-	const publishWorkspace = async (repoPath: string, workspaceId: string) => {
-		const branch = repositoriesStore.branchNameFor(repoPath, workspaceId);
-		deps.setStatusInfo(`Publishing ${branch}...`);
-		try {
-			const outcome = await deps.repo.publishWorkspace(repoPath, workspaceId);
-			if (outcome.no_op_reason) {
-				deps.setStatusInfo(`${branch}: nothing to publish — refs are shared with the parent`);
-				return outcome;
-			}
-			const parent = outcome.parent_updated ? "parent updated" : `parent NOT updated (${outcome.parent_error})`;
-			const origin = outcome.origin_pushed ? "pushed to origin" : `origin NOT pushed (${outcome.origin_error})`;
-			deps.setStatusInfo(`${branch}: ${parent}; ${origin}`);
-			// A refusal is the backend doing its job, not a crash — but the user
-			// has to see which half failed, so it is logged as well as shown.
-			if (!outcome.parent_updated || !outcome.origin_pushed) {
-				appLogger.warn("git", `publish ${branch} partially failed`, outcome);
-			}
-			repositoriesStore.bumpGitRevision(repoPath);
-			return outcome;
-		} catch (err) {
-			appLogger.error("git", `Failed to publish ${branch}`, err);
-			deps.setStatusInfo(`Failed to publish ${branch}: ${err}`);
-			return null;
-		}
-	};
-
 	const handleSwitchBranch = async (repoPath: string, branchName: string) => {
 		const repo = repositoriesStore.get(repoPath);
 		if (!repo) return;
 
-		// Pre-flight: check for busy terminals on the main worktree
 		const mainWorktreeBranches = Object.values(repo.workspaces).filter((b) => b.worktreePath === repoPath);
 		for (const branch of mainWorktreeBranches) {
 			for (const termId of branch.terminals) {
@@ -739,11 +682,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			}
 		}
 
-		// git stderr that means a stale/contended index.lock — these are recoverable
-		// (the lock is auto-cleared once stale), so the error dialog offers a retry.
 		const isLockError = (msg: string) => /index\.lock|could not write index|another git process/i.test(msg);
-
-		// Stash + switch, then migrate branch entries and refresh. Throws on failure.
 		const stashAndSwitch = async () => {
 			const result = await deps.repo.switchBranch(repoPath, branchName, { stash: true });
 			deps.setStatusInfo(`Switched to ${result.new_branch} (changes stashed)`);
@@ -753,19 +692,14 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 		try {
 			const result = await deps.repo.switchBranch(repoPath, branchName);
-			if (result.stashed) {
-				deps.setStatusInfo(`Switched to ${result.new_branch} (changes stashed)`);
-			} else {
-				deps.setStatusInfo(`Switched to ${result.new_branch}`);
-			}
-			// Migrate all main-worktree branches into the new branch entry, then remove stale ones
+			deps.setStatusInfo(
+				result.stashed ? `Switched to ${result.new_branch} (changes stashed)` : `Switched to ${result.new_branch}`,
+			);
 			migrateMainWorktreeBranches(repoPath, result.new_branch);
-			// Refresh branch stats to pick up the new HEAD
 			await refreshAllBranchStatsAndLists();
 		} catch (err) {
 			const errMsg = String(err);
 			if (errMsg === "dirty" || errMsg.includes("dirty")) {
-				// Dirty working tree — ask user to stash
 				const confirmed = await deps.dialogs.confirmStashAndSwitch?.(branchName);
 				if (!confirmed) return;
 				try {
@@ -815,25 +749,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			writePty: deps.pty.write,
 		});
 
-	/** Handle the `worktree-create-failed` event emitted by the Rust background
-	 *  recreate task. Drops the pending creation (no setup), removes the
-	 *  placeholder from the store, releases the per-repo create lock, and
-	 *  surfaces the error to the user. */
-	const handleWorktreeCreateFailed = (payload: { repoPath: string; branch: string; reason: string }) => {
-		const { repoPath, branch, reason } = payload;
-		appLogger.error("git", `Worktree creation failed`, payload);
-		pendingCreations.delete(pendingKey(repoPath, branch));
-		repositoriesStore.removeWorkspace(repoPath, branch);
-		setCreatingWorktreeRepos((prev) => {
-			const next = new Set(prev);
-			next.delete(repoPath);
-			return next;
-		});
-		deps.setStatusInfo(`Failed to create worktree ${branch}: ${reason}`);
-	};
-
 	return {
-		publishWorkspace,
 		currentRepoPath,
 		setCurrentRepoPath,
 		currentBranch,
@@ -871,7 +787,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setWorktreeDialogState,
 		creatingWorktreeRepos,
 		removingBranches,
-		handleWorktreeCreateFailed,
 		handleNewTab,
 		handleRunCommand,
 		executeRunCommand,

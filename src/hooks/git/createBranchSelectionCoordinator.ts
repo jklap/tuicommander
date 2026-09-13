@@ -29,7 +29,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 	let branchSelectQueue: Promise<void> = Promise.resolve();
 
 	/** `workspaceId` is the row the terminal joins. The branch it displays comes
-	 *  off that row's record — a COW clone's id is not a name to show a user. */
+	 *  from that row's record rather than being inferred from the map key. */
 	const handleAddTerminalToWorkspace = async (repoPath: string, workspaceId: string) => {
 		const canSpawn = await deps.pty.canSpawn();
 		if (!canSpawn) {

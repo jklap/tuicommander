@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use crate::git::{BlameLine, BranchDetail, CommitLogEntry, DiffStats};
-use crate::git_cli::git_cmd;
 use crate::git_graph::RawCommit;
 
 /// Staged / changed working-tree counts derived from `status --porcelain=v2`.
@@ -750,14 +749,13 @@ impl GitReads for GixGitReads {
             && let Ok(main_repo) = gix::open(main_wd)
             && let Some(branch) = branch_of(&main_repo)
         {
-            // Identity migration: a git worktree's workspace id IS its branch.
-            // Only minted COW ids differ, and gix never reports those.
+            // A git worktree's workspace id currently is its branch.
             map.insert(
                 branch.clone(),
                 crate::worktree::WorkspaceWorktree {
                     branch,
                     path: real(main_wd),
-                    kind: crate::cow::WorkspaceKind::Worktree,
+                    kind: crate::worktree::WorkspaceKind::Worktree,
                 },
             );
         }
@@ -783,37 +781,12 @@ impl GitReads for GixGitReads {
                     crate::worktree::WorkspaceWorktree {
                         branch,
                         path,
-                        kind: crate::cow::WorkspaceKind::Worktree,
+                        kind: crate::worktree::WorkspaceKind::Worktree,
                     },
                 );
             }
         }
 
-        // COW clones are independent repositories, so gix's worktrees() cannot
-        // discover them from the parent repository. Their persisted records are
-        // the authoritative inventory; refresh the branch from the clone's
-        // HEAD so a branch rename made inside the clone is reflected in every
-        // consumer of this map (stats, PR badges, and workspace actions).
-        for record in crate::cow::cow_workspaces_for(repo) {
-            if !record.path.exists() {
-                continue;
-            }
-            let branch = git_cmd(&record.path)
-                .args(["branch", "--show-current"])
-                .run()
-                .ok()
-                .map(|out| out.stdout.trim().to_string())
-                .filter(|branch| !branch.is_empty())
-                .unwrap_or(record.branch);
-            map.insert(
-                record.workspace_id,
-                crate::worktree::WorkspaceWorktree {
-                    branch,
-                    path: real(&record.path),
-                    kind: crate::cow::WorkspaceKind::Cow,
-                },
-            );
-        }
         Ok(map)
     }
 
@@ -1366,50 +1339,6 @@ mod tests {
         let b = gix.worktree_paths(&repo).unwrap();
         assert_eq!(a, b, "worktree_paths gix != cli\ncli={a:#?}\ngix={b:#?}");
         assert!(a.contains_key("main") && a.contains_key("wt-branch"));
-    }
-
-    #[test]
-    fn gix_worktree_paths_includes_cow_and_refreshes_its_branch() {
-        let (_guard, repo) = fixture_repo();
-        let config = tempfile::tempdir().unwrap();
-        let config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
-        let cow_dir = tempfile::tempdir().unwrap();
-        let cow_path = cow_dir.path().join("clone");
-        run_git(
-            &repo,
-            &["clone", "--local", ".", cow_path.to_str().unwrap()],
-        );
-        run_git(&cow_path, &["checkout", "-b", "actual-branch"]);
-        let workspace_id = "stale-branch~12345678";
-        std::fs::write(
-            config.path().join("repositories.json"),
-            serde_json::json!({
-                "repos": {
-                    repo.to_string_lossy(): {
-                        "workspaces": {
-                            workspace_id: {
-                                "branchName": "stale-branch",
-                                "kind": "cow",
-                                "worktreePath": cow_path,
-                                "parentRepoPath": repo,
-                            }
-                        }
-                    }
-                }
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        let map = GixGitReads::new().worktree_paths(&repo).unwrap();
-        let cow = map.get(workspace_id).expect("COW clone is listed");
-        assert_eq!(cow.kind, crate::cow::WorkspaceKind::Cow);
-        assert_eq!(cow.branch, "actual-branch");
-        assert_eq!(
-            cow.path,
-            std::fs::canonicalize(&cow_path).unwrap().to_string_lossy()
-        );
-        drop(config_guard);
     }
 
     /// Init a fresh, empty repo with one committed `a.txt` and return guard+path.

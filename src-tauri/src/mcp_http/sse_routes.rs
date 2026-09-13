@@ -284,7 +284,6 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::ConflictAssistStatus { .. } => "conflict-assist-status",
         AppEvent::ProgressRecorded { .. } => "progress-recorded",
         AppEvent::ProposalsReady { .. } => "proposals-ready",
-        AppEvent::WorktreeCreateFailed { .. } => "worktree-create-failed",
         AppEvent::SessionStateChanged { .. } => "session-state-changed",
     }
 }
@@ -491,16 +490,6 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         | AppEvent::ProgressRecorded { repo_path, payload }
         | AppEvent::ProposalsReady { repo_path, payload } => {
             serde_json::json!({ "repo_path": repo_path, "payload": payload })
-        }
-        AppEvent::WorktreeCreateFailed {
-            repo_path,
-            branch,
-            reason,
-        } => {
-            // camelCase keys mirror the Tauri window `worktree-create-failed`
-            // event so the same frontend `handleWorktreeCreateFailed` consumes
-            // both transports unchanged.
-            serde_json::json!({ "repoPath": repo_path, "branch": branch, "reason": reason })
         }
         AppEvent::SessionStateChanged { session_id, state } => {
             // Built by the same function the desktop window emit uses, so the
@@ -772,27 +761,6 @@ mod tests {
             event_payload(&event),
             serde_json::json!({"repo_path":"/repo", "payload":payload})
         );
-    }
-
-    #[test]
-    fn worktree_create_failed_uses_camelcase_matching_window_event() {
-        // The background stale-dir recreation dual-emits this on the bus (SSE)
-        // AND the Tauri window. The SSE payload MUST use the same camelCase keys
-        // as the window `worktree-create-failed` event so the frontend
-        // `handleWorktreeCreateFailed({ repoPath, branch, reason })` consumes
-        // both transports unchanged.
-        let event = AppEvent::WorktreeCreateFailed {
-            repo_path: "/repo".into(),
-            branch: "feat-x".into(),
-            reason: "recreation failed: boom".into(),
-        };
-        assert_eq!(event_type_name(&event), "worktree-create-failed");
-        let body = event_payload(&event);
-        assert_eq!(body["repoPath"], "/repo");
-        assert_eq!(body["branch"], "feat-x");
-        assert_eq!(body["reason"], "recreation failed: boom");
-        // No snake_case leakage that a browser handler wouldn't read.
-        assert!(body.get("repo_path").is_none());
     }
 
     /// A browser learns a session's lifecycle from this arm; the desktop learns
