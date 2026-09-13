@@ -631,6 +631,98 @@ describe("repositoriesStore", () => {
 			});
 		});
 
+		// #763-d219: a repo record with a missing/blank displayName reached the
+		// Command Palette as `label: undefined`, and `baseSort` crashed the whole
+		// app on `undefined.localeCompare`. `normalizeLoadedRepo` must sanitize it
+		// on every path a record enters the store — hydrate here, adoption below.
+		describe("displayName sanitization (#763-d219)", () => {
+			it.each([
+				["missing", undefined],
+				["null", null],
+				["a number", 42],
+				["blank", ""],
+				["whitespace-only", "   "],
+			])("falls back to a path-derived name when displayName is %s", async (_label, badDisplayName) => {
+				mockInvoke.mockResolvedValueOnce({
+					repos: {
+						"/tmp/shell-repos/xyz-workspace": {
+							path: "/tmp/shell-repos/xyz-workspace",
+							displayName: badDisplayName,
+							initials: "",
+							isGitRepo: false,
+							workspaces: {},
+							activeWorkspaceId: null,
+						},
+					},
+				});
+				const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+				await testInScopeAsync(async () => {
+					await store.hydrate();
+					const repo = store.get("/tmp/shell-repos/xyz-workspace");
+					expect(repo).toBeDefined();
+					expect(repo!.displayName).toBe("xyz-workspace");
+					expect(typeof repo!.displayName).toBe("string");
+					expect(warnSpy).toHaveBeenCalledWith(
+						"[store]",
+						"Repository record had an invalid displayName; using path-derived fallback",
+						expect.objectContaining({ path: "/tmp/shell-repos/xyz-workspace" }),
+					);
+				});
+
+				warnSpy.mockRestore();
+			});
+
+			it("normalizes a Windows-style path the same way", async () => {
+				mockInvoke.mockResolvedValueOnce({
+					repos: {
+						"C:\\Users\\boss\\AppData\\Local\\Temp\\shell-repo": {
+							path: "C:\\Users\\boss\\AppData\\Local\\Temp\\shell-repo",
+							displayName: undefined,
+							initials: "",
+							isGitRepo: false,
+							workspaces: {},
+							activeWorkspaceId: null,
+						},
+					},
+				});
+				const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+				await testInScopeAsync(async () => {
+					await store.hydrate();
+					const repo = store.get("C:\\Users\\boss\\AppData\\Local\\Temp\\shell-repo");
+					expect(repo!.displayName).toBe("shell-repo");
+				});
+
+				warnSpy.mockRestore();
+			});
+
+			it("leaves a valid displayName untouched", async () => {
+				mockInvoke.mockResolvedValueOnce({
+					repos: {
+						"/repo": {
+							path: "/repo",
+							displayName: "My Repo",
+							initials: "MR",
+							workspaces: {},
+							activeWorkspaceId: null,
+						},
+					},
+				});
+
+				await testInScopeAsync(async () => {
+					await store.hydrate();
+					expect(store.get("/repo")!.displayName).toBe("My Repo");
+				});
+			});
+
+			// The adopt-path regression (a remote client's write coming back through
+			// the `repositories-changed` broadcast) lives in
+			// repositoriesRemoteSync.test.ts, which already mocks the Tauri
+			// `listen` used by that path — see "sanitizes a displayName the
+			// remote client wrote" there.
+		});
+
 		it("handles hydration failure gracefully", async () => {
 			mockInvoke.mockRejectedValueOnce(new Error("load failed"));
 			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1777,6 +1869,119 @@ describe("repositoriesStore", () => {
 				// repoOrder is empty, but the repos still surface via the group
 				expect(store.state.repoOrder).toEqual([]);
 				expect(store.getAllReposOrdered().map((r) => r.path)).toEqual(["/repo-a", "/repo-b"]);
+			});
+		});
+	});
+
+	// #763-d219 — the classifier itself lives in Rust (`config.rs`); this store
+	// only fetches its verdict and quarantines the named paths, so these tests
+	// drive `refreshStaleTempCandidates`/`repairStaleTemp` through a mocked
+	// `invoke` rather than asserting on any frontend-side classification logic.
+	describe("stale-temp repositories (#763-d219)", () => {
+		it("refreshStaleTempCandidates() populates the candidate list from the backend", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockImplementationOnce((cmd: string) => {
+					if (cmd === "list_stale_temp_repository_candidates") {
+						return Promise.resolve([{ path: "/tmp/ghost", displayName: "ghost" }]);
+					}
+					return Promise.resolve(undefined);
+				});
+				await store.refreshStaleTempCandidates();
+				expect(store.getStaleTempCandidates()).toEqual([{ path: "/tmp/ghost", displayName: "ghost" }]);
+			});
+		});
+
+		it("logs via appLogger and leaves the list untouched when the backend call fails", async () => {
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+			await testInScopeAsync(async () => {
+				mockInvoke.mockImplementationOnce((cmd: string) => {
+					if (cmd === "list_stale_temp_repository_candidates") return Promise.reject(new Error("boom"));
+					return Promise.resolve(undefined);
+				});
+				await store.refreshStaleTempCandidates();
+				expect(store.getStaleTempCandidates()).toEqual([]);
+				expect(errorSpy).toHaveBeenCalledWith(
+					"[store]",
+					"Failed to list stale-temp repository candidates",
+					expect.any(Error),
+				);
+			});
+			errorSpy.mockRestore();
+		});
+
+		it("getGroupedLayout() and getOrderedRepos() quarantine classified candidates out of the sidebar", async () => {
+			await testInScopeAsync(async () => {
+				store.add({ path: "/legit", displayName: "Legit" });
+				store.add({ path: "/tmp/ghost", displayName: "ghost-fallback" });
+				mockInvoke.mockImplementationOnce((cmd: string) => {
+					if (cmd === "list_stale_temp_repository_candidates") {
+						return Promise.resolve([{ path: "/tmp/ghost", displayName: "ghost-fallback" }]);
+					}
+					return Promise.resolve(undefined);
+				});
+				await store.refreshStaleTempCandidates();
+
+				expect(store.getOrderedRepos().map((r) => r.path)).toEqual(["/legit"]);
+				const layout = store.getGroupedLayout();
+				expect(layout.ungrouped.map((r) => r.path)).toEqual(["/legit"]);
+
+				// The repo record itself is untouched — quarantine hides it from
+				// these two listings only, it never deletes anything.
+				expect(store.get("/tmp/ghost")).toBeDefined();
+			});
+		});
+
+		it("repairStaleTemp() sends exactly the given paths and drops only the removed ones from the candidate list", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockImplementationOnce((cmd: string) => {
+					if (cmd === "list_stale_temp_repository_candidates") {
+						return Promise.resolve([
+							{ path: "/tmp/ghost-1", displayName: "ghost-1" },
+							{ path: "/tmp/ghost-2", displayName: "ghost-2" },
+						]);
+					}
+					return Promise.resolve(undefined);
+				});
+				await store.refreshStaleTempCandidates();
+
+				mockInvoke.mockImplementationOnce((cmd: string, args: unknown) => {
+					if (cmd === "repair_stale_temp_repositories") {
+						expect(args).toEqual({ paths: ["/tmp/ghost-1"] });
+						return Promise.resolve({
+							removed: ["/tmp/ghost-1"],
+							backupPath: "/config/repositories.repair-backup-x.json",
+						});
+					}
+					return Promise.resolve(undefined);
+				});
+				const summary = await store.repairStaleTemp(["/tmp/ghost-1"]);
+
+				expect(summary.removed).toEqual(["/tmp/ghost-1"]);
+				expect(store.getStaleTempCandidates().map((c) => c.path)).toEqual(["/tmp/ghost-2"]);
+			});
+		});
+
+		it("repairStaleTemp() propagates a backend refusal without touching the candidate list", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockImplementationOnce((cmd: string) => {
+					if (cmd === "list_stale_temp_repository_candidates") {
+						return Promise.resolve([{ path: "/tmp/ghost-1", displayName: "ghost-1" }]);
+					}
+					return Promise.resolve(undefined);
+				});
+				await store.refreshStaleTempCandidates();
+
+				mockInvoke.mockImplementationOnce((cmd: string) => {
+					if (cmd === "repair_stale_temp_repositories") {
+						return Promise.reject(new Error("no longer a stale-temp candidate on disk"));
+					}
+					return Promise.resolve(undefined);
+				});
+
+				await expect(store.repairStaleTemp(["/tmp/ghost-1"])).rejects.toThrow(
+					"no longer a stale-temp candidate on disk",
+				);
+				expect(store.getStaleTempCandidates().map((c) => c.path)).toEqual(["/tmp/ghost-1"]);
 			});
 		});
 	});

@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { AGENT_TYPES } from "../agents";
 import { invoke, listen } from "../invoke";
 import type { SavedTerminal } from "../types";
-import { pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
+import { pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 import { markPerf } from "../utils/perfTrace";
 import { type RepoOwner, resolveRepoOwnerIn } from "../utils/repoOwnership";
 import { appLogger } from "./appLogger";
@@ -49,6 +49,31 @@ export interface RepositoryState {
 	connectionId?: string;
 }
 
+/**
+ * A repository row the backend classifier found stale: a non-existent local
+ * path under a recognized temp root, holding nothing but an empty shell
+ * workspace (#763-d219). Quarantined from the normal sidebar listing —
+ * `getGroupedLayout`/`getOrderedRepos` both exclude it — until an explicit
+ * `repairStaleTemp` call removes it; never deleted implicitly.
+ */
+export interface StaleTempCandidate {
+	path: string;
+	displayName: string;
+}
+
+/** Paths currently quarantined by the stale-temp classifier (#763-d219) —
+ *  shared by `getGroupedLayout` and `getOrderedRepos`, the two listings that
+ *  must exclude them. */
+function quarantinedPaths(candidates: StaleTempCandidate[]): Set<string> {
+	return new Set(candidates.map((c) => c.path));
+}
+
+/** What `repairStaleTemp` actually did, from the backend's own transactional write. */
+export interface StaleTempRepairSummary {
+	removed: string[];
+	backupPath: string;
+}
+
 /** A named, colored group of repositories */
 export interface RepoGroup {
 	id: string;
@@ -77,6 +102,11 @@ interface RepositoriesStoreState {
 	groupOrder: string[]; // display order of group IDs
 	/** True while a branch switch is in progress — TabBar holds previous tabs */
 	branchSwitching: boolean;
+	/** Backend-classified stale-temp ghost rows, quarantined from the sidebar
+	 *  pending an explicit repair (#763-d219). Populated by
+	 *  `refreshStaleTempCandidates`, never computed on the frontend — see
+	 *  AGENTS.md "Architecture". */
+	staleTempCandidates: StaleTempCandidate[];
 }
 
 /** Grouped layout returned by getGroupedLayout() */
@@ -199,6 +229,21 @@ function serializableRepo(repo: RepositoryState): RepositoryState {
  * compare-and-swap does not read the migration as a competing edit.
  */
 function normalizeLoadedRepo(repo: RepositoryState): void {
+	// A record persisted (or adopted from another client) can carry a missing,
+	// non-string, or blank `displayName` — every consumer (sidebar, Command Palette
+	// sort/labels) reads it as always-present text, and `CommandPalette`'s
+	// `baseSort` crashes the whole app on `undefined.localeCompare` (#763-d219).
+	// The path-derived fallback is deterministic across restarts/clients, unlike a
+	// random or counter-based placeholder, and cross-platform via `pathBasename`.
+	if (typeof repo.displayName !== "string" || repo.displayName.trim() === "") {
+		const fallback = pathBasename(repo.path) || repo.path || "Unnamed Repository";
+		appLogger.warn("store", "Repository record had an invalid displayName; using path-derived fallback", {
+			path: repo.path,
+			displayName: repo.displayName,
+			fallback,
+		});
+		repo.displayName = fallback;
+	}
 	if (repo.collapsed === undefined) repo.collapsed = false;
 	if (repo.expanded === undefined) repo.expanded = true;
 	if (repo.parked === undefined) repo.parked = false;
@@ -284,6 +329,7 @@ const DERIVED_BRANCH_FIELDS = [
 	"additions",
 	"deletions",
 	"isMerged",
+	"lifecycleStatus",
 	"lastActiveTerminal",
 	"lastCommitTs",
 	// Persisted, but session state all the same: it suppresses auto-spawn after the
@@ -334,6 +380,7 @@ function withLiveBranchFields(fresh: RepositoryState, live: RepositoryState | un
 			additions: liveBranch.additions,
 			deletions: liveBranch.deletions,
 			isMerged: liveBranch.isMerged,
+			lifecycleStatus: liveBranch.lifecycleStatus,
 			lastActiveTerminal: liveBranch.lastActiveTerminal,
 			lastCommitTs: liveBranch.lastCommitTs,
 			ciAutoHeal:
@@ -600,6 +647,7 @@ function createRepositoriesStore() {
 		groups: {},
 		groupOrder: [],
 		branchSwitching: false,
+		staleTempCandidates: [],
 	});
 
 	// Inverse index: terminal ID → repo path (O(1) lookup instead of O(repos*workspaces*terminals)).
@@ -893,10 +941,60 @@ function createRepositoriesStore() {
 				hydrated = true;
 				syncHotRepos(state.repositories);
 				startRemoteSync();
+				// Awaited, not fire-and-forget: `hydrate()` is itself awaited before
+				// the sidebar renders (`useAppInit.ts`), so a fire-and-forget call
+				// here would let a stale-temp ghost row paint for one IPC round trip
+				// before quarantine caught up to it — exactly the permanent-ghost-row
+				// flash this story exists to remove, just delayed by a frame instead
+				// of avoided.
+				await this.refreshStaleTempCandidates();
 			} catch (err) {
 				appLogger.error("store", "Failed to hydrate repositories", err);
 				// hydrated stays false — saves are blocked to prevent data loss
 			}
+		},
+
+		/**
+		 * Re-read the backend's stale-temp classification (#763-d219). The
+		 * classifier itself lives entirely in Rust (`config.rs`) — this only
+		 * fetches its verdict and quarantines the named paths from
+		 * `getGroupedLayout`/`getOrderedRepos`, never computes it here.
+		 */
+		async refreshStaleTempCandidates(): Promise<void> {
+			try {
+				const candidates = await invoke<StaleTempCandidate[]>("list_stale_temp_repository_candidates");
+				// A malformed/unmocked response (undefined, not an array) must never
+				// corrupt this field to a non-array — every read of it downstream
+				// (`getGroupedLayout`, `getOrderedRepos`) assumes an array.
+				setState("staleTempCandidates", Array.isArray(candidates) ? candidates : []);
+			} catch (err) {
+				appLogger.error("store", "Failed to list stale-temp repository candidates", err);
+			}
+		},
+
+		/** Current stale-temp candidates, quarantined from the sidebar pending repair. */
+		getStaleTempCandidates(): StaleTempCandidate[] {
+			return state.staleTempCandidates;
+		},
+
+		/**
+		 * User-explicit repair (#763-d219): remove exactly `paths` from
+		 * `repositories.json`. The backend re-validates every path against the
+		 * live on-disk document and refuses the whole request if any no longer
+		 * matches — this call does not, and must not, decide that on its own.
+		 *
+		 * Does not touch `state.repositories` directly: a successful repair
+		 * fires the same `repositories-changed` broadcast a remote client's
+		 * edit would, and the existing `adoptRemoteRepositories` path removes
+		 * the rows from every window (including this one) exactly as it
+		 * would for any other client's write — one removal path, not two.
+		 * Only the quarantine list updates immediately, for instant feedback
+		 * in the confirming window without waiting on that round trip.
+		 */
+		async repairStaleTemp(paths: string[]): Promise<StaleTempRepairSummary> {
+			const summary = await invoke<StaleTempRepairSummary>("repair_stale_temp_repositories", { paths });
+			setState("staleTempCandidates", (list) => list.filter((c) => !summary.removed.includes(c.path)));
+			return summary;
 		},
 
 		/** Add a repository */
@@ -1390,9 +1488,12 @@ function createRepositoriesStore() {
 			return Object.values(state.repositories).filter((r) => r.parked);
 		},
 
-		/** Get ordered repo paths (excludes parked repos) */
+		/** Get ordered repo paths (excludes parked repos and quarantined stale-temp ghosts) */
 		getOrderedRepos(): RepositoryState[] {
-			return state.repoOrder.map((path) => state.repositories[path]).filter((r) => r && !r.parked);
+			const quarantined = quarantinedPaths(state.staleTempCandidates);
+			return state.repoOrder
+				.map((path) => state.repositories[path])
+				.filter((r) => r && !r.parked && !quarantined.has(r.path));
 		},
 
 		/** Reorder terminals within the active branch */
@@ -1660,11 +1761,14 @@ function createRepositoriesStore() {
 		 *  wrapper whenever it still describes the same group and the same repo
 		 *  proxies, so an untouched group survives a change to its neighbour. */
 		getGroupedLayout(): GroupedLayout {
+			const quarantined = quarantinedPaths(state.staleTempCandidates);
 			const groups = state.groupOrder
 				.map((gid) => state.groups[gid])
 				.filter(Boolean)
 				.map((group) => {
-					const repos = group.repoOrder.map((path) => state.repositories[path]).filter((r) => r && !r.parked);
+					const repos = group.repoOrder
+						.map((path) => state.repositories[path])
+						.filter((r) => r && !r.parked && !quarantined.has(r.path));
 					const cached = groupLayoutCache.get(group.id);
 					if (cached && cached.group === group && sameRefs(cached.repos, repos)) return cached;
 					const entry = { group, repos };
@@ -1683,7 +1787,7 @@ function createRepositoriesStore() {
 			const ungrouped = state.repoOrder
 				.filter((path) => !groupedPaths.has(path))
 				.map((path) => state.repositories[path])
-				.filter((r) => r && !r.parked);
+				.filter((r) => r && !r.parked && !quarantined.has(r.path));
 
 			if (!lastLayout || !sameRefs(lastLayout.groups, groups) || !sameRefs(lastLayout.ungrouped, ungrouped)) {
 				lastLayout = {

@@ -116,8 +116,7 @@ describe("WorktreeManager", () => {
 
 	// ── COW workspaces: kind, unpublished count, publish, guarded delete ──
 
-	/// Seed a repo with one clone and one linked worktree, and make
-	/// `count_unpublished_commits` answer `count` for the clone.
+	/// Seed a repo with the lifecycle snapshot repository refresh already read.
 	function seedCloneAndWorktree(count: number) {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
@@ -126,10 +125,16 @@ describe("WorktreeManager", () => {
 			worktreePath: "/repo__cow/feat-1",
 			kind: "cow",
 			parentRepoPath: "/repo",
+			lifecycleStatus: {
+				dirty: false,
+				commitStatus: count > 0 ? "unpublished" : "published",
+				unpublishedCommits: count,
+				removalSafety: count > 0 ? "requires_force" : "safe",
+				dirtyProvenance: null,
+			},
 		});
 		repositoriesStore.setWorkspace("/repo", "linked", { worktreePath: "/repo__wt/linked" });
 		vi.mocked(invoke).mockImplementation(async (cmd: string) => {
-			if (cmd === "count_unpublished_commits") return count;
 			if (cmd === "detect_orphan_worktrees") return [];
 			return undefined;
 		});
@@ -137,10 +142,8 @@ describe("WorktreeManager", () => {
 
 	async function flush() {
 		await vi.waitFor(() => {
-			expect(vi.mocked(invoke)).toHaveBeenCalledWith("count_unpublished_commits", expect.anything());
+			expect(vi.mocked(invoke)).toHaveBeenCalledWith("detect_orphan_worktrees", expect.anything());
 		});
-		// One more tick for the state update the resolved promise schedules.
-		await Promise.resolve();
 		await Promise.resolve();
 	}
 

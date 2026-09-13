@@ -426,7 +426,19 @@
   font-family: var(--font-ui);
   font-weight: 600;
   color: var(--warning);
-  background: rgba(255, 200, 50, 0.15);
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+.lifecycleBadge {
+  font-size: var(--font-2xs);
+  font-family: var(--font-ui);
+  font-weight: 600;
+  color: var(--fg-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
   padding: 1px 6px;
   border-radius: var(--radius-pill);
   white-space: nowrap;

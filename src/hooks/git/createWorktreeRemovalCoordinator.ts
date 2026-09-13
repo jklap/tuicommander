@@ -2,6 +2,7 @@ import type { Accessor, Setter } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
+import type { WorkspaceKind, WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import type { RemoveWorktreeResult } from "../useRepository";
 
 interface WorktreeRemovalCoordinatorDeps {
@@ -12,11 +13,15 @@ interface WorktreeRemovalCoordinatorDeps {
 			deleteBranch: boolean,
 			force?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
-		/** Always 0 for a linked worktree. */
-		countUnpublishedCommits: (repoPath: string, workspaceId: string) => Promise<number>;
+		getWorkspaceLifecycle: (repoPath: string, workspaceId: string) => Promise<WorkspaceLifecycleStatus>;
 	};
 	dialogs: {
-		confirmRemoveWorktree: (branchName: string, unpublishedCommits?: number) => Promise<boolean>;
+		confirmRemoveWorktree: (
+			branchName: string,
+			status: WorkspaceLifecycleStatus,
+			kind: WorkspaceKind,
+			deleteBranch: boolean,
+		) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
@@ -62,22 +67,26 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		}
 		const branchName = branch.branchName;
 
-		// A clone's commits exist nowhere else, so the question changes: ask how
-		// many would be destroyed before asking whether to destroy them. Counting
-		// is skipped for a linked worktree — the answer is always 0, and it costs
-		// a fetch to learn that.
-		let unpublished = 0;
-		if (branch.kind === "cow") {
-			try {
-				unpublished = await deps.repo.countUnpublishedCommits(repoPath, workspaceId);
-			} catch (err) {
-				// Unknown is not zero. Fall back to asking with the generic
-				// wording rather than silently promising nothing is at stake.
-				appLogger.warn("git", `could not count unpublished commits for ${workspaceId}`, err);
-			}
+		const effective = repoSettingsStore.getEffective(repoPath);
+		const deleteBranch = effective?.deleteBranchOnRemove ?? true;
+		let lifecycle: WorkspaceLifecycleStatus;
+		try {
+			lifecycle = await deps.repo.getWorkspaceLifecycle(repoPath, workspaceId);
+		} catch (err) {
+			appLogger.warn("git", `workspace lifecycle preflight failed for ${workspaceId}`, err);
+			deps.setStatusInfo(`Cannot verify whether ${branchName} is safe to remove`);
+			clearLock();
+			return;
+		}
+		if (lifecycle.removalSafety === "unknown") {
+			deps.setStatusInfo(
+				`Cannot verify whether ${branchName} is safe to remove: ${lifecycle.error ?? "unknown state"}`,
+			);
+			clearLock();
+			return;
 		}
 
-		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName, unpublished);
+		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, branch.kind, deleteBranch);
 		if (!confirmed) {
 			clearLock();
 			return;
@@ -103,8 +112,6 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			}
 		}
 
-		const effective = repoSettingsStore.getEffective(repoPath);
-		const deleteBranch = effective?.deleteBranchOnRemove ?? true;
 		appLogger.info("git", `handleRemoveWorkspace: invoking remove_worktree`, {
 			repoPath,
 			workspaceId,
@@ -120,7 +127,12 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		try {
 			// The user confirmed knowing the count, so the backend guard would only
 			// bounce a decision that has already been made.
-			const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, unpublished > 0);
+			const outcome = await deps.repo.removeWorktree(
+				repoPath,
+				workspaceId,
+				deleteBranch,
+				lifecycle.removalSafety === "requires_force",
+			);
 			appLogger.info("git", `handleRemoveWorkspace: remove_worktree SUCCESS`, { workspaceId });
 			shouldRemoveFromStore = true;
 			shouldClearBranchLabel = !outcome?.branch_delete_warning;
@@ -184,12 +196,14 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 				clearLock();
 				return;
 			} else {
-				appLogger.error("git", `handleRemoveWorkspace: remove_worktree FAILED — branch will be removed from UI only`, {
+				appLogger.error("git", `handleRemoveWorkspace: remove_worktree FAILED — workspace kept`, {
 					workspaceId,
 					reason,
 				});
-				shouldRemoveFromStore = true;
-				deps.setStatusInfo(`Removed ${branchName} from UI (worktree removal failed)`);
+				deps.setStatusInfo(`Failed to remove ${branchName}: ${reason}`);
+				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
+				clearLock();
+				return;
 			}
 		}
 

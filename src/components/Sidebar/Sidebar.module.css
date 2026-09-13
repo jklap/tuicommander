@@ -679,7 +679,8 @@
   white-space: nowrap;
 }
 
-.mergedBadge {
+.mergedBadge,
+.lifecycleBadge {
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
@@ -693,6 +694,23 @@
   background: var(--fg-muted);
   color: var(--bg-primary);
   opacity: 0.7;
+}
+
+.lifecycleRisk {
+  background: var(--attention);
+  color: var(--bg-primary);
+  opacity: 1;
+}
+
+.lifecyclePublished {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  opacity: 0.9;
+}
+
+.lifecycleMerged {
+  background: var(--fg-muted);
+  color: var(--bg-primary);
 }
 
 /* PR state badge */
@@ -1031,6 +1049,37 @@
   align-items: center;
   justify-content: center;
   pointer-events: none;
+}
+
+/* Stale-temp repair popover (#763-d219) */
+.staleTempActions {
+  padding: 6px 8px 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+
+.staleTempRepairButton {
+  width: 100%;
+  background: var(--error);
+  color: var(--text-on-error);
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 6px 8px;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.staleTempRepairButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.staleTempError {
+  margin-top: 6px;
+  color: var(--error);
+  font-size: var(--font-2xs);
+  white-space: normal;
 }
 
 /* GitHub badge always visible (replaces broken :has() with LightningCSS Modules) */

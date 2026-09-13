@@ -21,6 +21,14 @@ interface WorktreeCreatedPayload {
 	/** Display only. */
 	branch: string;
 	worktree_path: string;
+	/** Which mechanism the backend used. Recorded on the row, never inferred:
+	 *  a COW clone is absent from the parent's `git worktree list`, and the
+	 *  refresh prune reads that absence as "removed externally" for every kind
+	 *  but `cow`. */
+	/** Optional only for events emitted by a pre-1.7.7 backend that is still
+	 *  running while the frontend hot-reloads. Those backends still expose the
+	 *  authoritative id contract: linked worktree id === branch, COW id !== branch. */
+	kind?: "cow" | "worktree";
 }
 
 interface WorktreeRemovedPayload {
@@ -137,7 +145,8 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 	let unlistenRemoved: (() => void) | null = null;
 
 	listen<WorktreeCreatedPayload>("worktree-created", (event) => {
-		const { repo_path, workspace_id, branch, worktree_path } = event.payload;
+		const { repo_path, workspace_id, branch, worktree_path, kind } = event.payload;
+		const workspaceKind = kind ?? (workspace_id === branch ? "worktree" : "cow");
 		const switchToWorktree = () => {
 			switchToCreatedWorktree(deps, repo_path, workspace_id, branch, worktree_path).catch((err) =>
 				appLogger.warn("git", `Failed to switch to worktree "${branch}"`, err),
@@ -152,7 +161,15 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 			// Keyed by the id the backend minted; the branch travels as data. The
 			// two are the same string for a linked worktree and will not be for a
 			// COW clone, so the key must come off `workspace_id`.
-			repositoriesStore.setWorkspace(repo_path, workspace_id, { branchName: branch, worktreePath: worktree_path });
+			// Same record `setupNewWorktree` writes for an in-app creation. Without
+			// `kind` the row defaults to "worktree" and the next refresh closes its
+			// terminals and deletes it — a clone is not in `git worktree list`.
+			repositoriesStore.setWorkspace(repo_path, workspace_id, {
+				branchName: branch,
+				worktreePath: worktree_path,
+				kind: workspaceKind,
+				parentRepoPath: workspaceKind === "cow" ? repo_path : null,
+			});
 		}
 		const label = worktreeLabel(worktree_path);
 		activityStore.addItem({

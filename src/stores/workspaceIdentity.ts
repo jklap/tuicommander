@@ -20,6 +20,30 @@ export type WorkspaceKind =
 	/** A copy-on-write clone: an independent repository. */
 	| "cow";
 
+export type WorkspaceCommitStatus = "unmerged" | "unpublished" | "published" | "merged" | "unknown";
+export type WorkspaceRemovalSafety = "safe" | "requires_force" | "unknown";
+
+/**
+ * Where a COW workspace's current dirtiness comes from, relative to what it
+ * carried over from the parent at creation. `null` means no creation-time
+ * baseline was ever recorded — a workspace recovered, adopted, or created
+ * before this field existed — and must not be guessed at from current state.
+ *
+ * Context only, never a removal-safety signal: an inherited-only file is
+ * still a file a removal would destroy.
+ */
+export type WorkspaceDirtyProvenance = "clean" | "inherited_only" | "changed_since_creation";
+
+/** Backend-authored Git lifecycle verdict for one exact workspace id. */
+export interface WorkspaceLifecycleStatus {
+	dirty: boolean | null;
+	commitStatus: WorkspaceCommitStatus;
+	unpublishedCommits: number | null;
+	removalSafety: WorkspaceRemovalSafety;
+	dirtyProvenance: WorkspaceDirtyProvenance | null;
+	error?: string;
+}
+
 /** One workspace with its terminals. */
 export interface WorkspaceState {
 	/** Stable and opaque. Equal to the key that holds this record. */
@@ -40,6 +64,8 @@ export interface WorkspaceState {
 	additions: number;
 	deletions: number;
 	isMerged: boolean; // true when branch is fully merged into the repo's main branch
+	/** Derived on refresh; never persisted as user intent or trusted for deletion. */
+	lifecycleStatus?: WorkspaceLifecycleStatus;
 	lastCommitTs: number | null; // Unix timestamp of last commit on this branch
 	runCommand?: string; // Saved run command for this workspace
 	savedTerminals?: SavedTerminal[]; // Persisted terminal metadata for session restore

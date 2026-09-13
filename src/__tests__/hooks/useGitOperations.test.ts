@@ -34,8 +34,10 @@ function resetStores() {
  *  branch -> path object. Under the identity migration a git worktree's
  *  workspace id IS its branch, so the key is reused as the id and the branch
  *  travels as a field on the value (#726-5ac7). */
-function wtPaths(byBranch: Record<string, string>): Record<string, { branch: string; path: string }> {
-	return Object.fromEntries(Object.entries(byBranch).map(([branch, path]) => [branch, { branch, path }]));
+function wtPaths(byBranch: Record<string, string>): Record<string, { branch: string; path: string; kind: "worktree" }> {
+	return Object.fromEntries(
+		Object.entries(byBranch).map(([branch, path]) => [branch, { branch, path, kind: "worktree" }]),
+	);
 }
 
 describe("buildAgentSeed", () => {
@@ -110,6 +112,12 @@ describe("useGitOperations", () => {
 			.mockResolvedValue({ success: true, stashed: false, previous_branch: "main", new_branch: "feature" }),
 		runSetupScript: vi.fn().mockResolvedValue({ exit_code: 0, stdout: "", stderr: "" }),
 		countUnpublishedCommits: vi.fn().mockResolvedValue(0),
+		getWorkspaceLifecycle: vi.fn().mockResolvedValue({
+			dirty: false,
+			commitStatus: "unmerged",
+			unpublishedCommits: 0,
+			removalSafety: "safe",
+		}),
 		publishWorkspace: vi.fn().mockResolvedValue({
 			parent_updated: true,
 			parent_error: null,
@@ -691,7 +699,12 @@ describe("useGitOperations", () => {
 
 			// The count travels with the question now: 0 for a linked worktree, which
 			// is what makes the generic wording correct for it.
-			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", 0);
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith(
+				"feature",
+				expect.objectContaining({ removalSafety: "safe" }),
+				"worktree",
+				true,
+			);
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, false);
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
@@ -1785,6 +1798,45 @@ describe("useGitOperations", () => {
 	});
 
 	describe("refreshAllBranchStats — progressive loading", () => {
+		it("applies lifecycle status by workspace id, not by shared branch name", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: {
+					main: { branch: "main", path: "/repo", kind: "worktree" },
+					"cow-a": { branch: "shared", path: "/repo/cow-a", kind: "cow" },
+					"cow-b": { branch: "shared", path: "/repo/cow-b", kind: "cow" },
+				},
+				merged_branches: ["shared"],
+			});
+			mockRepo.getRepoDiffStats.mockResolvedValue({
+				diff_stats: {},
+				last_commit_ts: { shared: 1700000000 },
+				workspace_statuses: {
+					"cow-a": {
+						dirty: false,
+						commit_status: "unpublished",
+						unpublished_commits: 2,
+						removal_safety: "requires_force",
+					},
+					"cow-b": {
+						dirty: false,
+						commit_status: "merged",
+						unpublished_commits: 0,
+						removal_safety: "safe",
+					},
+				},
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			const repo = repositoriesStore.get("/repo");
+			expect(repo?.workspaces["cow-a"]?.lifecycleStatus?.unpublishedCommits).toBe(2);
+			expect(repo?.workspaces["cow-a"]?.isMerged).toBe(false);
+			expect(repo?.workspaces["cow-b"]?.lifecycleStatus?.commitStatus).toBe("merged");
+			expect(repo?.workspaces["cow-b"]?.isMerged).toBe(true);
+		});
+
 		it("Phase 1 updates worktreePath before Phase 2 runs", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
@@ -1871,15 +1923,53 @@ describe("useGitOperations", () => {
 	});
 
 	describe("handleRemoveWorkspace (backend failure)", () => {
-		it("cleans up UI even when backend removal fails", async () => {
+		it("keeps the workspace visible when backend removal fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error("git error"));
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
-			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("worktree removal failed"));
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.isRemoving).toBe(false);
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Failed to remove feature: git error");
+		});
+
+		it("blocks removal when lifecycle safety is unknown", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirty: null,
+				commitStatus: "unknown",
+				unpublishedCommits: null,
+				removalSafety: "unknown",
+				error: "parent ref unavailable",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).not.toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
+		});
+
+		it("passes force only after confirming destructive state", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirty: true,
+				commitStatus: "unpublished",
+				unpublishedCommits: 3,
+				removalSafety: "requires_force",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "cow-id", {
+				branchName: "feature",
+				kind: "cow",
+				worktreePath: "/repo/cow",
+			});
+
+			await gitOps.handleRemoveWorkspace("/repo", "cow-id");
+
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "cow-id", true, true);
 		});
 
 		it("closes branch terminals before removing", async () => {

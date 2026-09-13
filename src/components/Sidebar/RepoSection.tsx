@@ -50,6 +50,7 @@ const BRANCH_ICON_CLASSES: Record<string, string> = {
  *  - Main worktree + main branch → star
  *  - Main worktree + non-main branch (after switch) → branch icon
  *  - Linked worktree → worktree fork icon
+ *  - Copy-on-write clone → cow head icon
  *  - Shell (non-git dir) → terminal icon
  *  - Question (awaiting input) → "?" (overrides all)
  *
@@ -63,6 +64,7 @@ const BRANCH_ICON_CLASSES: Record<string, string> = {
 export const BranchIcon: Component<{
 	isMainBranch: boolean;
 	isMainWorktree: boolean;
+	isCow?: boolean;
 	isShell?: boolean;
 	hasError?: boolean;
 	hasQuestion?: boolean;
@@ -76,6 +78,7 @@ export const BranchIcon: Component<{
 		if (props.isShell) return "shell";
 		if (props.isMainWorktree && props.isMainBranch) return "star";
 		if (props.isMainWorktree) return "branch";
+		if (props.isCow) return "cow";
 		return "worktree";
 	};
 
@@ -126,6 +129,25 @@ export const BranchIcon: Component<{
 								/>
 							</svg>
 						);
+					case "cow":
+						return (
+							<svg viewBox="0 0 64 64" width="13" height="13" fill="none" aria-label="Copy-on-write clone">
+								{/* Cow head grafted onto a git-branch glyph: the head is the source node,
+								    the ring below is the clone and the ring on the branch is its sibling. */}
+								<g fill="currentColor" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M23.2 13.4C19.3 11.1 18.1 7.2 19.6 3.8c.3-.6 1.1-.7 1.5-.2 1.3 1.6 1.1 3.9 2.4 5.5 1.5 1.9 3.5 2.4 5 3.3l-5.3 1z" />
+									<path d="M40.8 13.4c3.9-2.3 5.1-6.2 3.6-9.6-.3-.6-1.1-.7-1.5-.2-1.3 1.6-1.1 3.9-2.4 5.5-1.5 1.9-3.5 2.4-5 3.3l5.3 1z" />
+									<path d="M20.8 15.2c-3.8-1.8-7.3-1.5-9.6.6-.4.4-.4 1 0 1.4 2.5 2.3 6 2.6 9.6 1v-3z" />
+									<path d="M43.2 15.2c3.8-1.8 7.3-1.5 9.6.6.4.4.4 1 0 1.4-2.5 2.3-6 2.6-9.6 1v-3z" />
+									<circle cx="32" cy="20.5" r="11.5" fill="none" stroke-width="4" />
+									<circle cx="27.5" cy="20.5" r="1.65" stroke="none" />
+									<circle cx="36.5" cy="20.5" r="1.65" stroke="none" />
+									<path d="M32 32v16M32 40h15" fill="none" stroke-width="4" />
+									<circle cx="32" cy="53" r="5.5" fill="none" stroke-width="4" />
+									<circle cx="52" cy="40" r="5.5" fill="none" stroke-width="4" />
+								</g>
+							</svg>
+						);
 					default:
 						return (
 							<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
@@ -139,6 +161,12 @@ export const BranchIcon: Component<{
 };
 
 /** Stats badge component - shows additions/deletions */
+function compactStat(value: number): string {
+	if (value < 1000) return String(value);
+	const compact = (value / 1000).toFixed(value < 10_000 ? 1 : 0);
+	return `${compact.replace(/\.0$/, "")}k`;
+}
+
 export const StatsBadge: Component<{
 	additions: number;
 	deletions: number;
@@ -147,14 +175,15 @@ export const StatsBadge: Component<{
 	<Show when={props.additions > 0 || props.deletions > 0}>
 		<div
 			class={s.branchStats}
+			title={`Tracked line changes: +${props.additions} -${props.deletions}`}
 			role={props.onClick ? "button" : undefined}
 			tabIndex={props.onClick ? 0 : undefined}
 			onClick={props.onClick}
 			onKeyDown={props.onClick ? onClickKeyDown((e) => props.onClick!(e)) : undefined}
 			style={props.onClick ? { cursor: "pointer" } : undefined}
 		>
-			<span class={s.statAdd}>+{props.additions}</span>
-			<span class={s.statDel}>-{props.deletions}</span>
+			<span class={s.statAdd}>+{compactStat(props.additions)}</span>
+			<span class={s.statDel}>-{compactStat(props.deletions)}</span>
 		</div>
 	</Show>
 );
@@ -430,6 +459,7 @@ export const BranchItem: Component<{
 					<BranchIcon
 						isMainBranch={false}
 						isMainWorktree={false}
+						isCow={props.branch.kind === "cow"}
 						isShell={false}
 						hasError={false}
 						hasQuestion={false}
@@ -455,6 +485,7 @@ export const BranchItem: Component<{
 				<BranchIcon
 					isMainBranch={props.branch.isMain}
 					isMainWorktree={props.branch.worktreePath === props.repoPath}
+					isCow={props.branch.kind === "cow"}
 					isShell={props.branch.isShell}
 					hasError={hasError()}
 					hasQuestion={hasQuestion()}
@@ -476,17 +507,56 @@ export const BranchItem: Component<{
 						</span>
 					</Show>
 				</div>
-				<Show
-					when={
-						props.branch.isMerged &&
-						!props.branch.isMain &&
-						!props.branch.terminals.length &&
-						!(props.branch.additions + props.branch.deletions)
-					}
-				>
-					<span class={s.mergedBadge} title="Branch is merged into main">
-						Merged
-					</span>
+				<Show when={props.branch.lifecycleStatus}>
+					{(status) => {
+						const label = () => {
+							if (status().unpublishedCommits) return `${status().unpublishedCommits} unpublished`;
+							if (status().dirty && !(props.branch.additions + props.branch.deletions)) return "Dirty";
+							if (status().commitStatus === "published") return "Published";
+							if (status().commitStatus === "merged" && !props.branch.isMain) return "Merged";
+							if (status().commitStatus === "unknown") return "Unknown";
+							return null;
+						};
+						const title = () => {
+							if (status().error) return status().error;
+							// Context only — never evidence for the removal verdict below,
+							// which stays keyed on `dirty` alone: an inherited file is still
+							// a file a removal would destroy.
+							const provenance =
+								status().dirty && status().dirtyProvenance === "inherited_only"
+									? " (inherited from the parent at creation, not edited here)"
+									: status().dirty && status().dirtyProvenance === "changed_since_creation"
+										? " (includes edits made after creation)"
+										: "";
+							const workingTree = (status().dirty ? "Dirty working tree" : "Clean working tree") + provenance;
+							const commitState = status().unpublishedCommits
+								? `${status().unpublishedCommits} unpublished commit${status().unpublishedCommits === 1 ? "" : "s"}`
+								: status().commitStatus === "published"
+									? "HEAD is published but not merged"
+									: status().commitStatus === "merged"
+										? "HEAD is merged"
+										: "No clone-only commits";
+							const removal =
+								status().removalSafety === "safe" ? "safe to remove" : "destructive confirmation required";
+							return `${workingTree}; ${commitState}; ${removal}`;
+						};
+						return (
+							<Show when={label()}>
+								<span
+									class={`${s.lifecycleBadge} ${
+										status().removalSafety !== "safe"
+											? s.lifecycleRisk
+											: status().commitStatus === "published"
+												? s.lifecyclePublished
+												: s.lifecycleMerged
+									}`}
+									title={title()}
+								>
+									{label()}
+								</span>
+							</Show>
+						);
+					}}
 				</Show>
 				<Show when={pr()}>
 					<span

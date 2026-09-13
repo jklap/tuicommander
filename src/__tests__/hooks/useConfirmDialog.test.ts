@@ -150,11 +150,23 @@ describe("useConfirmDialog", () => {
 
 	describe("confirmRemoveWorktree()", () => {
 		it("shows dialog with correct message and resolves true on confirm", async () => {
-			const promise = dialog.confirmRemoveWorktree("feature-x");
+			const promise = dialog.confirmRemoveWorktree(
+				"feature-x",
+				{
+					dirty: false,
+					commitStatus: "unmerged",
+					unpublishedCommits: 0,
+					removalSafety: "safe",
+					dirtyProvenance: null,
+				},
+				"worktree",
+				true,
+			);
 
 			expect(dialog.dialogState()).toEqual({
-				title: "Remove worktree?",
-				message: "Remove feature-x?\nThis deletes the worktree directory and its local branch.",
+				title: "Remove workspace?",
+				message:
+					'Remove "feature-x"?\n\nWorking tree: clean.\nCommit state: no clone-only commits will be lost.\nGit will safely delete the local branch; if it is unmerged, the branch is kept.',
 				confirmLabel: "Remove",
 				cancelLabel: "Cancel",
 				kind: "warning",
@@ -166,7 +178,20 @@ describe("useConfirmDialog", () => {
 		});
 
 		it("returns false when user cancels", async () => {
-			const promise = dialog.confirmRemoveWorktree("feature-y");
+			const promise = dialog.confirmRemoveWorktree(
+				"feature-y",
+				{
+					dirty: true,
+					commitStatus: "unpublished",
+					unpublishedCommits: 2,
+					removalSafety: "requires_force",
+					dirtyProvenance: "inherited_only",
+				},
+				"cow",
+				true,
+			);
+			expect(dialog.dialogState()?.title).toBe("Destroy workspace state?");
+			expect(dialog.dialogState()?.message).toContain("2 unpublished commits will be destroyed");
 			dialog.handleClose();
 			expect(await promise).toBe(false);
 		});
