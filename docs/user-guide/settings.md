@@ -37,7 +37,7 @@ Two limits are deliberate:
 | **Show scrollbar marks** | Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began. Covers the **history** markers only — the blue/red block ticks and the green user-prompt ticks. Orange search-match ticks are not affected: they are the result of a search you just ran, not a display preference. Enabled by default. |
 | **Reflow scrollback on resize** | Re-wrap scrollback history when the terminal changes width, so output written at the old width stays readable after a side panel opens or closes. Turn it off to leave history lines as they were written and truncate them to the new width instead. The visible screen is never reflowed either way — cursor-addressed TUIs redraw themselves. Enabled by default; a change applies to sessions already open. |
 | **Repository defaults** | Base branch, file handling, setup/run scripts applied to new repos |
-| **Experimental Features** | Master toggle for experimental features. When enabled, shows sub-toggles: **AI Chat** (AI Chat panel, shortcuts, command palette entry), **Scroll History** (scrollback overlay with search when scrolling up in agent mode). |
+| **Experimental Features** | Master toggle for experimental features. When enabled, shows sub-toggles: **AI Chat** (AI Chat panel, shortcuts, command palette entry), **Scroll History** (scrollback overlay with search when scrolling up in agent mode), **AI Triage** (diff classification), **AI Watchers** (terminal event watchers), **Copy-on-write workspaces** (new workspaces become full repository clones instead of linked worktrees; workspaces you already created stay usable when it is off). |
 
 ## Appearance Tab
 
