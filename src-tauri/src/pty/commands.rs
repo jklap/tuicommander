@@ -519,19 +519,28 @@ pub(crate) fn get_kitty_flags(state: State<'_, Arc<AppState>>, session_id: Strin
 /// Close a PTY session with graceful shutdown and optional worktree cleanup.
 /// Sends Ctrl-C (0x03) and waits briefly for the process to exit cleanly
 /// before forcibly dropping handles.
+///
+/// Async + `spawn_blocking` because that wait is two `sleep` loops of up to
+/// 100 ms each, and the worktree cleanup is a recursive delete. Inline on the
+/// IPC thread — the macOS main thread — closing a workspace's terminals one by
+/// one froze the WebView for the sum of those waits.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn close_pty(
+pub(crate) async fn close_pty(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     cleanup_worktree: bool,
 ) -> Result<(), String> {
-    if let Some(worktree) = close_pty_core(&state, &session_id, cleanup_worktree)
-        && let Err(e) = remove_worktree_internal(&worktree, false)
-    {
-        tracing::warn!("Failed to cleanup worktree: {e}");
-    }
-    Ok(())
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(worktree) = close_pty_core(&state, &session_id, cleanup_worktree)
+            && let Err(e) = remove_worktree_internal(&worktree, false)
+        {
+            tracing::warn!("Failed to cleanup worktree: {e}");
+        }
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))
 }
 
 /// Get the foreground process of a PTY session and classify it as a known agent.

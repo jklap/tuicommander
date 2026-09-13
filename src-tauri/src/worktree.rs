@@ -1524,9 +1524,15 @@ pub(crate) fn delete_local_branch_impl(
 /// linked worktree directory by detaching its HEAD before removing the branch
 /// ref. Used by the post-merge cleanup dialog when the user unchecks the
 /// "Archive/Delete worktree" step.
+///
+/// Async + `spawn_blocking` because the body runs `git branch -d` and may
+/// remove a whole worktree directory. A plain `fn` command runs inline on the
+/// IPC thread — the macOS main thread — so it froze the WebView for the length
+/// of the delete. Its HTTP twin already offloaded; see
+/// `docs/backend/command-threading.md`.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn delete_local_branch(
+pub(crate) async fn delete_local_branch(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     branch_name: String,
@@ -2203,16 +2209,25 @@ pub(crate) fn switch_branch_impl(
 }
 
 /// Switch the checked-out branch (Tauri command).
+///
+/// Async + `spawn_blocking`: a checkout stashes, rewrites the working tree and
+/// can wait on an index lock. Inline on the IPC thread that is a frozen WebView
+/// for the whole operation — see `docs/backend/command-threading.md`.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn switch_branch(
+pub(crate) async fn switch_branch(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     branch_name: String,
     force: bool,
     stash: bool,
 ) -> Result<SwitchBranchResult, String> {
-    switch_branch_impl(state.inner(), repo_path, branch_name, force, stash)
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        switch_branch_impl(&state, repo_path, branch_name, force, stash)
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
 }
 
 /// Create a local branch tracking a remote branch and switch to it.
@@ -2464,22 +2479,32 @@ pub(crate) fn finalize_merged_worktree_impl(
 }
 
 /// Finalize a pending merge by archiving/deleting the worktree (Tauri command).
+///
+/// Async + `spawn_blocking`: archiving moves a directory and deleting removes
+/// one, both unbounded. `finalize_merged_worktree_http` already offloaded, so
+/// the same work froze the WebView over IPC and not over HTTP — the drift
+/// `docs/backend/command-threading.md` exists to prevent.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn finalize_merged_worktree(
+pub(crate) async fn finalize_merged_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     workspace_id: String,
     action: String,
     force: Option<bool>,
 ) -> Result<MergeArchiveResult, String> {
-    finalize_merged_worktree_impl(
-        state.inner(),
-        repo_path,
-        workspace_id,
-        action,
-        force.unwrap_or(false),
-    )
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        finalize_merged_worktree_impl(
+            &state,
+            repo_path,
+            workspace_id,
+            action,
+            force.unwrap_or(false),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
 }
 
 /// Merge a worktree branch into a target branch, then archive or delete the worktree.
@@ -2792,6 +2817,42 @@ mod tests {
     use std::fs;
     use std::process::Command;
     use tempfile::TempDir;
+
+    /// The post-merge cleanup dialog runs these one after another, and each was
+    /// a plain `fn` command: a checkout, a branch delete that can take a whole
+    /// worktree with it, and an archive that moves a directory. A plain `fn`
+    /// runs inline on the IPC thread — the macOS main thread — so pressing
+    /// Execute froze the WebView for the length of every step. Their HTTP twins
+    /// in `mcp_http/worktree_routes.rs` were already on the blocking pool, which
+    /// is exactly the transport drift `docs/backend/command-threading.md` names.
+    ///
+    /// `adopt_cow_workspace` joined this list later: its `git worktree list`
+    /// call, `repositories.json` read and local git config write were still a
+    /// plain `fn` on the IPC thread while `adopt_cow_workspace_http` was
+    /// already on the blocking pool.
+    #[test]
+    fn post_merge_cleanup_commands_never_run_on_the_ipc_thread() {
+        let source = include_str!("worktree.rs");
+        for command in [
+            "switch_branch",
+            "delete_local_branch",
+            "finalize_merged_worktree",
+            "adopt_cow_workspace",
+        ] {
+            let signature = format!("pub(crate) async fn {command}(");
+            let at = source.find(&signature).unwrap_or_else(|| {
+                panic!("{command} must be async: a plain fn command runs on the macOS main thread")
+            });
+            // Async alone only moves the work to a Tokio worker; the body still
+            // runs git subprocesses and recursive deletes, so it needs the
+            // blocking pool as well.
+            let body = &source[at..(at + 800).min(source.len())];
+            assert!(
+                body.contains("spawn_blocking"),
+                "{command} awaits blocking git work and must hand it to spawn_blocking"
+            );
+        }
+    }
 
     fn setup_test_repo() -> TempDir {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
