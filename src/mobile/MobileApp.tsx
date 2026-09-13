@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { McpConfirmHost } from "../components/McpConfirmHost/McpConfirmHost";
 import { ToastContainer } from "../components/ToastContainer/ToastContainer";
 import { appLogger } from "../stores/appLogger";
@@ -7,13 +7,17 @@ import { BottomTabs, type TabId } from "./components/BottomTabs";
 import { QuestionBanner } from "./components/QuestionBanner";
 import { TopBar } from "./components/TopBar";
 import styles from "./MobileApp.module.css";
-import { ActivityScreen } from "./screens/ActivityScreen";
 import { SessionDetailScreen } from "./screens/SessionDetailScreen";
 import { SessionsScreen } from "./screens/SessionsScreen";
-import { SettingsScreen } from "./screens/SettingsScreen";
 import { useMobileNotifications } from "./useMobileNotifications";
 import { useSessions } from "./useSessions";
 import { useVersionCheck } from "./useVersionCheck";
+
+// Both screens sit behind a bottom-tab tap; the app always opens on "sessions".
+// Eager imports dragged the settings store and the whole i18n string table into
+// the initial mobile graph, which is what pushed mobile.html over its gzip budget.
+const ActivityScreen = lazy(() => import("./screens/ActivityScreen").then((m) => ({ default: m.ActivityScreen })));
+const SettingsScreen = lazy(() => import("./screens/SettingsScreen").then((m) => ({ default: m.SettingsScreen })));
 
 // Register service worker for push notifications (only on HTTPS or localhost)
 if (
