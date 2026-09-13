@@ -150,6 +150,13 @@ interface WorkspaceState {
   additions: number;
   deletions: number;
   isMerged: boolean;               // Fully merged into main branch
+  lifecycleStatus?: {
+    dirty: boolean | null;
+    commitStatus: "unmerged" | "unpublished" | "published" | "merged" | "unknown";
+    unpublishedCommits: number | null;
+    removalSafety: "safe" | "requires_force" | "unknown";
+    error?: string;
+  };                               // derived, workspace-id keyed, never deletion authority
   lastCommitTs: number | null;     // Unix timestamp of last commit
   runCommand?: string;
   savedTerminals?: SavedTerminal[];
@@ -157,6 +164,11 @@ interface WorkspaceState {
   layout?: TabLayout;              // Split layout persisted per-branch
 }
 ```
+
+`lifecycleStatus` is populated by progressive refresh from the backend's
+`workspace_statuses` map. It is preserved as live derived state when another
+window writes the repository document and excluded from intent comparisons.
+Removal never trusts the cached value: it requests a fresh backend preflight.
 
 ### Actions
 

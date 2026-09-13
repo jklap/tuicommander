@@ -10,7 +10,15 @@ REST API served by the Axum HTTP server when MCP server is enabled. All Tauri co
 ## Authentication
 
 - **MCP mode (localhost):** No authentication
-- **Remote access mode:** HTTP Basic Auth with configured username/password
+- **Remote access mode:** HTTP Basic Auth with configured username/password, or
+  the `?token=` session token the QR code embeds.
+
+Both halves of the credential pair are required: `validate_basic_auth`
+(`mcp_http/auth.rs`) reports `NotConfigured` when either the username or the
+password hash is empty, and the server then answers **every** Basic Auth attempt
+with `401` and the body `Scan the QR code or authenticate with Basic Auth` — the
+same response a request with no `Authorization` header gets. A 401 carrying that
+body while credentials were sent means the pair is incomplete, not wrong.
 
 ## Server Limits
 
@@ -18,9 +26,12 @@ Every route on both the desktop and remote routers is subject to two bounds
 (`with_server_limits` in `mcp_http/mod.rs`):
 
 - **`408 Request Timeout`** — a handler that has not produced a response within
-  120 s is cut off. This bounds time-to-response only: SSE (`/events`) and
-  WebSocket endpoints return their headers immediately and then stream for as
-  long as they like, unaffected.
+  301 s is cut off. This includes slow COW creation with warm build artifacts
+  while still bounding a wedged handler. 301 s is a deliberate 1 s margin above
+  `ui action=confirm`'s own 300 s answer window, so that handler's own timeout
+  body always wins the race instead of a bare 408 (`docs/backend/mcp-http.md` →
+  "Server Limits"). SSE (`/events`) and WebSocket endpoints return their
+  headers immediately and then stream for as long as they like, unaffected.
 - **`413 Payload Too Large`** — a request body over 2 MB is refused rather than
   buffered.
 
@@ -554,7 +565,7 @@ Returns `{ "worktree_paths": { "branch": "/path", ... }, "merged_branches": ["br
 GET /repo/diff-stats/batch?path=/path/to/repo
 ```
 
-Returns `{ "diff_stats": { "/path": { "additions": N, "deletions": N }, ... }, "last_commit_ts": { "branch": N, ... } }`. Slow path — computes per-worktree diff stats and last commit timestamps.
+Returns `{ "diff_stats": { "/path": { "additions": N, "deletions": N }, ... }, "last_commit_ts": { "branch": N, ... }, "workspace_statuses": { "workspace-id": { "dirty": true, "commit_status": "unpublished", "unpublished_commits": 3, "removal_safety": "requires_force" } } }`. Slow path — computes per-worktree diff stats, timestamps, and lifecycle verdicts. Lifecycle entries are keyed by opaque workspace id, never branch name.
 
 ### Local Branches
 
@@ -1233,6 +1244,32 @@ baseline. A delta that was already applied changes nothing on disk and is not
 announced. See `docs/backend/config.md` for what a receiving client is allowed to
 adopt.
 
+### Stale-temp Repository Repair (#763-d219)
+
+```
+GET  /config/repositories/stale-temp
+POST /config/repositories/stale-temp
+```
+
+`GET` returns `StaleTempCandidate[]` (`{path, displayName}`) — a read-only
+preview, re-classified against the live document on every call, of rows that
+match ALL of: local path absent, path under a recognized OS/project temp root,
+`isGitRepo: false`, exactly one shell-only workspace with no terminals/saved
+terminals/parent/commit state, and no user metadata (see `docs/backend/config.md`
+for the exact classifier). Never mutates.
+
+`POST` body `{"paths": ["/tmp/…", …]}` — the user-explicit repair. Re-validates
+every named path against the classifier on the document as it stands on disk
+*right now*; if even one no longer matches, the whole request is rejected with
+`400 Bad Request` and nothing is written (no implicit or partial deletion). On
+success it writes an exact pre-repair backup (`repositories.repair-backup-<UTC
+timestamp>.json`) in the config directory, removes the validated rows from
+`repos`/`repoOrder`/every group's `repoOrder` (and clears `activeRepoPath` if it
+pointed at a removed row) in one write, returns `StaleTempRepairSummary`
+(`{removed, backupPath}`), and broadcasts `repositories-changed` like `PUT
+/config/repositories`. Requires local-or-authenticated like every other
+mutating config route.
+
 ### Prompt Library
 
 ```
@@ -1846,8 +1883,8 @@ before invoking git, matching MCP `repo action=worktree_create` validation.
 
 `mode` (`auto` | `cow` | `worktree`, default `auto`) chooses the mechanism.
 `auto` takes a copy-on-write clone of the whole repo directory where the
-filesystem and the repo shape allow it — an independent repository, so two
-workspaces may sit on one branch and `node_modules`/`target` arrive warm — and a
+filesystem and the repo shape allow it — an independent repository where
+`node_modules`/`target` arrive warm — and a
 linked worktree otherwise, reporting why. `cow` fails when COW is unavailable,
 naming the check. `worktree` forces the old behaviour.
 
@@ -1855,6 +1892,11 @@ naming the check. `worktree` forces the old behaviour.
 happens to the parent's uncommitted work in a clone. `inherit` writes zero
 blocks. `clean_untracked` removes untracked files but KEEPS ignored build
 output. `clean` resets everything and costs real disk — measured 15 MB → 113 MB.
+
+The first managed checkout of a branch fixes its mechanism. Creation refuses a
+parallel COW when a linked worktree already owns the branch, and refuses a
+parallel linked worktree when a persisted COW owns it. If both sources claim the
+branch, the response reports a reconciliation conflict instead of guessing.
 
 `201` returns:
 
@@ -1883,10 +1925,21 @@ identity migration) and will not for a COW clone. MCP
 `repo action=worktree_create` returns the same two fields.
 
 Creation announces itself on both transports as `worktree-created`
-(`{ repo_path, workspace_id, branch, worktree_path }`) and removal as
+(`{ repo_path, workspace_id, branch, worktree_path, kind }`, `kind` being
+`"cow"` or `"worktree"`) and removal as
 `worktree-removed` (`{ repo_path, workspace_id, branch }`) — the desktop Tauri
 event and the `/events` SSE frame serialize the same struct, so the field names
 are identical by construction. Payload table: `docs/sync-matrix.md`.
+
+A COW clone is durably registered in `repositories.json` before this returns
+`201` — not left for the frontend's own save, which used to be the only writer
+and left a crash-sized window where a real clone existed with nothing durable
+naming it (#756-cf6d). If registration itself fails, the clone is **not**
+deleted — the response is `500` naming the registration failure explicitly, and
+the clone stays on disk for a retry or the recovery pass below to pick up.
+Removal is the mirror image: the row is dropped only once the directory is
+confirmed gone, and a failure to drop it is its own explicit `500` rather than
+a silently stale row.
 
 ### Worktrees Base Directory
 
@@ -1902,13 +1955,76 @@ Returns the base directory where worktrees are created.
 GET /worktrees/paths?path=/path/to/repo
 ```
 
-Returns `{ "<workspace-id>": { "branch": "feature-x", "path": "/worktree/path" }, ... }`.
+Returns `{ "<workspace-id>": { "branch": "feature-x", "path": "/worktree/path", "kind": "worktree" | "cow" }, ... }`.
 
 Keyed by opaque workspace id, never by branch — two workspaces may sit on one
 branch, so a branch-keyed map collapses them and a client asking for one gets the
 other's directory (#726-5ac7). For a git worktree the id **is** the branch (the
 identity migration), so nothing persisted moves; only a COW clone carries a
-minted id. Nothing may parse the id back into a branch: read the `branch` field.
+minted id. Persisted COW rows are merged with Git's linked-worktree list because
+Git cannot report independent clones. Nothing may parse the id back into a
+branch: read the `branch` field.
+
+Before merging, this route self-heals: any immediate child of the repo's
+worktree directory that carries every marker a COW clone's own git config is
+given at creation (its minted workspace id, its canonical parent path, and the
+existing no-push parent-remote evidence) and is not already registered gets
+registered here, so a row lost to the crash window above — or restored from an
+old backup — reappears without a separate recovery call. A directory missing
+even one marker is never adopted, including a COW clone made before this
+recovery existed; there is no safe way to tell those apart from an arbitrary
+directory, so they stay invisible rather than being guessed at.
+
+Removal (`DELETE /worktrees/:workspaceId` on a COW workspace) re-runs this same
+validation against the directory the row names immediately before deleting
+anything, unconditionally — a hand-edited, stale, or otherwise forged
+`kind: "cow"` row is refused even with `force=true`, which only ever waives the
+dirty-workspace/unpublished-commit prompts, never provenance. The same check
+also requires a real (non-symlink) `.git` directory and that the row's
+workspace id matches the one recorded on disk.
+
+### Adopt COW Workspace
+
+```
+POST /worktrees/adopt
+Content-Type: application/json
+
+{ "repoPath": "/path", "candidatePath": "/path__wt/legacy-clone", "workspaceId": null }
+```
+
+Explicitly registers a markerless COW clone this backend lost track of (or
+never marked in the first place, if made before the marker-based recovery
+above existed) — the one case the self-heal above will never adopt on its own.
+The request itself is the confirmation: there is no separate `force` flag,
+because adoption never deletes anything, and the only change it makes to the
+clone is writing its two provenance markers into local git config — HEAD, the
+index, the working tree, untracked files, refs and remotes are untouched.
+
+Validates, in order: `candidatePath` canonicalizes to an immediate,
+non-symlink child of the repo's configured worktree base; it has a real
+(non-symlink) `.git` directory; its `parent` remote's `pushurl` is the same
+no-push sentinel every COW clone carries and that remote's `url` resolves to
+`repoPath`; it is on a branch (not detached); and it collides with no
+already-known workspace id or path (linked worktrees and existing COW rows
+alike). Only once every check passes does it write anything, and what it
+writes is exactly the two provenance markers creation itself would have
+written — nothing to the index, the working tree, refs, HEAD, untracked files,
+or any remote.
+
+`workspaceId` is optional: omitted, a fresh id is minted the same way creation
+mints one; supplied, that id is used instead (refused if already taken) —
+primarily for retrying a call whose registry write failed after the markers
+were already written, which is idempotent.
+
+`200` returns:
+
+```json
+{ "workspaceId": "legacy-clone~a1b2c3d4", "branch": "legacy-clone", "path": "/path__wt/legacy-clone" }
+```
+
+Identical shape and identical implementation
+(`worktree::adopt_cow_workspace_impl`) behind the HTTP route, the desktop
+`adopt_cow_workspace` Tauri command, and MCP `repo action=worktree_adopt`.
 
 ### Publish Workspace
 
@@ -1920,8 +2036,9 @@ Content-Type: application/json
 ```
 
 Gets a workspace's commits into the parent repo and out to origin. Identical
-shape and identical response to the `publish_workspace` Tauri command — one
-implementation (`worktree::publish_workspace_impl`) behind both.
+shape and identical response to the `publish_workspace` Tauri command and MCP
+`repo action=worktree_publish` — one implementation
+(`worktree::publish_workspace_impl`) behind all three.
 
 ```json
 {
@@ -1959,11 +2076,26 @@ directory, so the caller pays nothing to ask about one.
 The parent mirror is refreshed before counting, so a commit published a moment
 ago does not still read as unpublished; that costs a fetch per call, which is
 why the UI counts once per panel open rather than on every repository refresh.
-A refresh that fails is deliberately non-fatal and makes the count err high —
-refusing a removal that might have been safe is the correct direction.
+A refresh that fails returns an error. The caller must treat that as unknown
+and refuse removal: stale refs can under-count as well as over-count.
 
-Same implementation as the `count_unpublished_commits` Tauri command, and the
-same number the removal gate and the confirmation dialog use.
+Same implementation as the `count_unpublished_commits` Tauri command and MCP
+`repo action=worktree_unpublished`, and the same number the removal gate and
+the confirmation dialog use.
+
+### Workspace Lifecycle Preflight
+
+```
+GET /worktrees/lifecycle?repoPath=/path&workspaceId=feature-x~a1b2c3d4
+```
+
+Returns a fresh `{ dirty, commit_status, unpublished_commits,
+removal_safety, error? }` verdict for one exact workspace. `commit_status` is
+`unmerged`, `unpublished`, `published`, `merged`, or `unknown`; published is
+recoverable but not necessarily integrated into the default branch.
+`removal_safety` is `safe`, `requires_force`, or `unknown`. An inspection
+failure is returned as an `unknown` verdict and must never be treated as zero or
+safe. This is the HTTP twin of `get_workspace_lifecycle`.
 
 ### Generate Worktree Name
 
@@ -2013,11 +2145,17 @@ DELETE /worktrees/:workspaceId?repoPath=/path&deleteBranch=true
 Query parameters:
 - `repoPath` (required) -- base repository path
 - `deleteBranch` (optional, default `true`) -- when `true`, also deletes the local git branch
-- `force` (optional, default `false`) -- when `true`, uses forced worktree removal and forced branch deletion
+- `force` (optional, default `false`) -- when `true`, permits discarding dirty or unpublished COW state, or uses forced linked-worktree removal and branch deletion
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 
-Returns `{ "ok": true, "branch_delete_warning": null }` on full success. When `deleteBranch=true` and `git branch -d` refuses to delete the branch after the worktree is removed, the request still succeeds with `branch_delete_warning` set so clients can report the partial outcome.
+Returns `{ "ok": true, "branch_delete_warning": null }` on full success. A
+non-forced COW removal refuses staged, unstaged, or untracked changes before it
+checks for unpublished commits; deleting an independent clone must not silently
+discard either class of work. When `deleteBranch=true` and `git branch -d`
+refuses to delete the branch after a linked worktree is removed, the request
+still succeeds with `branch_delete_warning` set so clients can report the
+partial outcome.
 
 ## Push Notification Endpoints
 

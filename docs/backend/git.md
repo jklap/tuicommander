@@ -157,6 +157,13 @@ contract — what refuses, what degrades, what is never repaired — is in SPEC.
 *Workspaces: linked worktree versus copy-on-write clone*; the user-facing
 behaviour is in `docs/user-guide/worktrees.md`.
 
+The GitReads worktree snapshot includes both linked worktrees and registered COW
+clones. Because a COW clone is an independent repository, Gix cannot discover it
+from the parent repository; its persisted record supplies the path and the
+clone's current `HEAD` supplies the branch. This keeps progressive structure and
+diff-stat refreshes, as well as branch-keyed PR badges, aligned after a branch is
+renamed inside a clone.
+
 What matters at the git-command level:
 
 - **Capability is measured.** `probe_cow_support` compares `st_dev` as a cheap
@@ -192,8 +199,9 @@ What matters at the git-command level:
   with a compare-and-swap. `~` is a legal character in a minted workspace id and
   illegal in a ref name, so `staged_ref` sanitizes it.
 - **Unpublished commits** are `rev-list --count HEAD --not --glob=refs/remotes
-  --glob=refs/parent`, after refreshing the parent mirror. A failed refresh is
-  non-fatal and makes the count err high.
+  --glob=refs/parent`, after refreshing and pruning the parent mirror. A failed
+  refresh makes the lifecycle unknown and refuses removal; stale refs can
+  under-count as well as over-count.
 
 ## Tauri Commands
 
@@ -219,9 +227,16 @@ What matters at the git-command level:
 
 | Command | Signature | Description |
 |---------|-----------|-------------|
-| `get_repo_summary` | `(repo_path: String) -> RepoSummary` | Aggregate snapshot: worktree paths, merged branches, diff stats, timestamps |
+| `get_repo_summary` | `(repo_path: String) -> RepoSummary` | Aggregate snapshot: worktree paths, merged branches, diff stats, timestamps, workspace lifecycle |
 | `get_repo_structure` | `(repo_path: String) -> RepoStructure` | Fast: worktree paths + merged branches only |
-| `get_repo_diff_stats` | `(repo_path: String) -> RepoDiffStats` | Slow: per-worktree diff stats + last commit timestamps |
+| `get_repo_diff_stats` | `(repo_path: String) -> RepoDiffStats` | Slow: per-worktree diff stats, last commit timestamps, and workspace-id lifecycle verdicts |
+
+Lifecycle is backend-authored from the exact checkout `HEAD`. COW status
+refreshes its mirrored parent refs, counts commits excluded by every parent or
+remote ref, and distinguishes published from default-branch ancestry. Linked
+worktrees use the same dirty/merged/removal vocabulary, while their unpublished
+count is always zero because the parent owns their objects. Any failed check
+serializes as `unknown`, never as clean or safe.
 
 The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. Refresh is single-flight per repository: concurrent requests join the active run and coalesce into one trailing rerun. This guarantees that sustained filesystem events cannot repeatedly cancel Phase 1 and leave deleted worktrees in the persisted sidebar cache. `get_repo_summary` remains for backward compatibility.
 

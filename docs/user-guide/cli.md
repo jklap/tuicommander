@@ -41,6 +41,21 @@ tuic diff old.rs new.rs
 
 A directory is treated as a **repo**, not as a terminal: it lands in the sidebar and becomes the active repo. A folder TUICommander does not know yet is confirmed once in the app before it is added — after that, `tuic .` activates it silently. Use `tuic new` when what you want is a shell.
 
+### Temporary directories are refused
+
+`tuic <dir>` registers the directory **permanently** — the sidebar keeps it across restarts. A temporary directory therefore becomes a row that points at something the operating system later deletes, and nothing records who added it. `tuic` refuses such a path instead:
+
+```
+$ tuic "$TMPDIR/scratch"
+Refusing to register "/var/folders/.../T/scratch" as a repository: it is inside a
+temporary directory, which the OS deletes while the sidebar entry stays behind forever.
+For a shell there instead: tuic new /var/folders/.../T/scratch
+```
+
+A path is refused when it is at or below the temp root of **the shell you run `tuic` from** (`TMPDIR` on macOS and Linux, `TEMP`/`TMP` on Windows) or below `/tmp`. Running the check in the CLI rather than in the app is what makes a custom `TMPDIR` — for example the `~/Gits/.tmp` this repository's Rust suites use — count as temporary; the app process has a different one and cannot see yours.
+
+Only registration is refused. `tuic new <dir>` still opens a shell in a temporary directory, because a session is disposable in the same way the directory is.
+
 ### Using as $EDITOR
 
 ```bash

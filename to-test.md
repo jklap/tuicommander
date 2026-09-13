@@ -1494,9 +1494,11 @@ fields that answered a question nobody asked.
 3. [ ] **The alias survives a restart.** Note a tab's alias, quit the app, start it
    again, and check `session action=list`: the restored tab must hold the same alias,
    and a new session in that repo must get the next free number rather than reusing it.
-4. [ ] **Tab context menu copies the alias.** Right-click a terminal tab that has an
+4. [x] **Tab context menu copies the alias.** Right-click a terminal tab that has an
    alias. The menu shows `Alias: tu-1` under a separator; clicking it puts the alias
-   on the clipboard. A tab with no alias shows no such item.
+   on the clipboard. A tab with no alias shows no such item. _(verified: story
+   `761-c847` retains event-before-binding aliases in `terminalsStore`; the focused
+   store, listener, and TabBar tests pass 214/214)_
 5. [ ] **`is_caller` marks the right tab.** From an agent running in a TUIC tab, call
    `session action=list`: exactly the caller's own session carries `is_caller: true`.
 6. [ ] **Reading a dead session still works.** Let a session's process exit, then call
@@ -1543,6 +1545,58 @@ injected seam, because a given `cp` can only ever implement one of the two flags
 2. [ ] **On Linux with ext4 (no reflink):** the same creation with **Auto** must
    give a linked worktree and state why it degraded — not an error.
 
+## Mobile PWA lazy screens + IDE-icon split (2026-09-12) — frontend only, Vite HMR picks it up
+
+`pnpm build` was failing on `main`: `dist/mobile.html` weighed 117 378 gzip bytes
+against the 100 KB budget in `scripts/report-frontend-bundles.mjs`. Two causes, both
+desktop weight leaking into the mobile initial load graph:
+
+- `MobileApp.tsx` imported `ActivityScreen` and `SettingsScreen` eagerly although the
+  app always opens on the `sessions` tab. Both are `lazy()` now.
+- `IDE_ICON_PATHS` (33 inlined IDE/terminal SVGs) lived in `stores/settings.ts`, which
+  mobile reaches through `ToastContainer` -> `stores/terminals` -> `stores/settings`.
+  Moved to `stores/ideIcons.ts`; only `IdeLauncher` reads it.
+
+Result: 101 941 gzip bytes, **459 bytes under budget**. The margin is thin on purpose
+— see the note below.
+
+1. [ ] **Mobile PWA still boots and the bottom tabs work.** Open `/mobile.html`, tap
+   **Activity** and **Settings**: both must render (they now arrive over a second
+   request). A blank tab means the `lazy()` chunk failed to load.
+2. [ ] **The IDE launcher still shows its icons.** Desktop, Settings -> the IDE picker:
+   all 33 entries must show their logo, not a broken-image glyph.
+3. [ ] **Deep link into a session still works** (`/mobile/session/<id>`) —
+   `SessionDetailScreen` is deliberately still eager.
+
+**Known, not fixed:** mobile still pulls `stores/settings.ts` and with it the whole
+`i18n/en.json` string table (13 KB gzip) although no mobile component calls `t()`.
+The chain is `ToastContainer` / `utils/activitySnapshot` / `stores/toasts` ->
+`stores/notifications` -> `stores/terminals` -> `stores/settings`. Cutting the
+`terminals -> settings` edge would take ~26 KB gzip off mobile and give the budget
+real headroom, but it is a core-store refactor and needs Boss's approval first.
+
+## worktree-created carries `kind` (Rust — needs `make dev` restart)
+
+An MCP/HTTP-created COW clone was registered with the default `kind: "worktree"`, so
+the next `refreshAllBranchStats` closed its terminals and deleted the row (it is not
+in the parent's `git worktree list`); a session spawned in it afterwards raised
+"Tab parked outside your repos" for a registered repo (seen on `ego`, 2026-09-12).
+
+1. [ ] `repo action=worktree_create` on a repo where COW works: the new row stays in
+   the sidebar after the next repo-changed refresh and `repositories.json` shows
+   `"kind": "cow"` with `parentRepoPath` set.
+2. [ ] Spawn a session with cwd inside that clone: it lands under the repo, no
+   "Tab parked outside your repos" toast.
+3. [ ] `POST /sessions/worktree` (linked worktree) still registers `"kind": "worktree"`.
+4. [ ] Create a fresh throwaway COW through managed `repo action=worktree_create`.
+   The call must finish before the server's own 301 s `REQUEST_TIMEOUT`, which is
+   what actually bounds the operation — the local bridge's 305 s wait is only
+   transport slack on top of that, not extra time the operation itself gets;
+   `repo action=worktree_list` must return its minted `workspace_id` with
+   `kind: "cow"`, and `repo action=worktree_remove` must remove that exact id
+   without changing the parent checkout or its dirty state. Preserve the current
+   `verify-cow-kind-*` and `restore-cow-smoke-*` artifacts; they are failure evidence.
+
 ## Orchestrator inbox wake after background probe (Rust — needs `make dev` restart)
 
 1. [ ] Start a managed parent with a child, leave the parent shell visibly ready,
@@ -1560,6 +1614,292 @@ injected seam, because a given `cp` can only ever implement one of the two flags
    the Codex Usage dashboard. Switch directly from a Claude tab and confirm the
    old Claude percentages never appear under the Codex icon while the Codex poll
    is in flight.
+
+## Plan and Stories external-plugin migration (Rust — needs `make dev` restart)
+
+1. [ ] After restarting, Settings → Plugins → Installed lists Plan Tracker and
+   Stories Ticker as ordinary external plugins, with no Built-in badge.
+2. [ ] In a repository with `plans/` and `stories/`, a newly created Markdown
+   plan opens in a pinned background tab and the status ticker shows the open
+   story count.
+3. [ ] Uninstall Plan Tracker, restart again, and confirm it is not recreated.
+   Reinstall it from Browse after the `plan.zip` release asset is published.
+
+## Project Progress corrupt-store recovery (Rust — needs `make dev` restart)
+
+1. [ ] After the Project Progress reporting surface is wired, use a throwaway
+   registered Git repository with invalid bytes at `.tuic/progress.sqlite3`.
+   The first report must return `progress_store_recovered`, name a preserved
+   `.corrupt-<uuid>` database artifact with the original bytes, and require a
+   retry. Repeat with existing `-wal` and `-shm` sidecars and confirm all three
+   named artifacts retain their exact original bytes under one unique recovery
+   suffix. The retry must persist into a validated schema-v1 replacement and read
+   the new event after another restart; it must not claim the empty replacement
+   is the original history. Two simultaneous first reports must perform exactly
+   one recovery: one reports recovery, the other succeeds against the replacement,
+   and every later startup succeeds.
+
+## Post-merge cleanup runs without freezing the window (2026-09-12) — **Rust, needs a `make dev` restart.**
+
+`switch_branch`, `delete_local_branch`, `finalize_merged_worktree` and `close_pty`
+were plain `fn` Tauri commands, so they ran inline on the macOS main thread. All
+four now run on the blocking pool. Their HTTP twins were already correct, so this
+is only observable in the desktop app.
+
+1. [ ] **The window stays alive during Execute.** Open the post-merge cleanup
+   dialog on a branch that has at least two terminals, check every step, press
+   Execute: the spinner must animate, the sidebar must stay scrollable and the
+   window must keep redrawing for the whole run. Before this change the whole
+   WebView was frozen — cursor included — until the last step returned.
+2. [ ] **The steps still report in order.** Each row must go running → done one
+   at a time, with the same success/error wording as before; a failing step must
+   still stop the ones after it.
+3. [ ] **Closing a tab is still immediate and complete.** Close a terminal
+   normally: the tab disappears, the process dies (no orphan `claude`/shell in
+   `ps`), and a worktree-cleanup close still removes the directory.
+## Managed COW removal timeout and dirty guard (2026-09-12) — **Rust, needs `make dev` restart**
+
+1. [ ] Create a fresh managed COW containing warm build artifacts, leave its
+   working tree clean, then remove it through MCP `repo action=worktree_remove`.
+   The call must return `{ "ok": true }` even when recursive deletion takes more
+   than 10 seconds; the UI and other MCP requests must remain responsive.
+2. [ ] Add an untracked file inside a throwaway COW and call non-forced removal.
+   It must refuse with `uncommitted changes`, keep the directory and registration,
+   and preserve the file. Confirmed force removal may then delete it.
+3. [ ] After confirmation, call MCP `repo action=worktree_remove` with
+   `force=true` for that purpose-created dirty COW. It must remove the clone and
+   registration; the same call without `force` must continue to refuse it.
+4. [ ] Confirm a COW row uses the cow-head icon in the sidebar while a linked
+   worktree beside it keeps the fork icon.
+
+## Remote-access credentials cannot be half configured (2026-09-12) — frontend only, Vite HMR picks it up
+
+Boss's config held a password hash with an empty username, which made the server
+answer every Basic Auth attempt from the phone with 401. The live config is
+already repaired (`username: "admin"`); these checks cover the UI that produced it.
+
+1. [ ] In Settings → Services → Remote Access, clear the Username field, type a
+   password and press Tab. The Username field must fill in with `admin` by itself
+   and `GET http://localhost:9876/config` must report that username — not `""`.
+2. [ ] With a password set, clear the Username field and press Tab: it must snap
+   back to `admin` instead of saving an empty username.
+3. [ ] With no password set, an empty Username field must stay empty (it is only
+   forced when a credential pair exists).
+4. [ ] From the phone, open the LAN URL and log in with the saved username and
+   password: the Basic Auth prompt must accept them and not reappear.
+
+## COW workspace registration and recovery (story `756-cf6d`, 2026-09-13) — **Rust, needs `make dev` restart**
+
+Creation used to report success as soon as the clone existed on disk; only the
+frontend's own `setWorkspace` + debounced save ever wrote it into
+`repositories.json`, so a crash between the two left a real, warm clone the app
+had never heard of. The backend now registers before it can report success, and
+every clone carries its own workspace id + parent repo in its git config so a
+lost row can be re-adopted safely on the next listing — but only for a clone
+this backend itself marked; a markerless directory (including a COW clone made
+before this fix shipped) is never silently adopted.
+
+A follow-up review found removal trusted a persisted `repositories.json` row on
+its own — a forged, hand-edited, or stale `kind: "cow"` row could make
+`remove_dir_all` run against an arbitrary directory, even with `force`. Removal
+now re-validates a row against the directory it names (same marker + remote
+checks as recovery, plus a real, non-symlink `.git` and an on-disk workspace id
+that matches the row) immediately before deleting anything, unconditionally —
+`force` only ever waives the dirty/unpublished-commit prompts. A markerless
+clone is refused by both recovery and removal alike; the only way to register
+one now is the new explicit `repo action=worktree_adopt` (also `POST
+/worktrees/adopt` and the desktop `adopt_cow_workspace` command), which never
+deletes anything and only ever writes its two provenance markers into the
+candidate's local git config — HEAD, the index, the working tree, untracked
+files, refs, and remotes are untouched — validating parent-remote provenance
+before writing anything.
+
+1. [x] Create a fresh throwaway COW through the managed create path (MCP
+   `repo action=worktree_create` or `POST /worktrees` with `mode=cow`). The row
+   must appear in `repositories.json` (`kind: "cow"`, `parentRepoPath` set)
+   immediately — before the frontend's own save could have run. _(verified:
+   isolated `tuic-remote --instance cow-p0-e2e` returned HTTP 201 and the row,
+   including `kind: "cow"` and `parentRepoPath`, was already present on disk)_
+2. [x] With that COW registered, manually delete its row from `repositories.json`
+   (simulating the old crash window) without touching the directory, then trigger
+   a repo refresh (switch away and back, or restart the app). The row must
+   reappear with the same workspace id, sourced from the clone's own git config.
+   _(verified: `worktree::tests::get_worktree_paths_recovers_a_cow_clone_missing_from_repositories_json`
+   exercises the lost-row path with the production listing composition; the
+   isolated runtime additionally preserved the same id across a process restart)_
+3. [x] Drop an unrelated, unmarked git repository directly inside the same
+   worktrees directory (no `tuicommander.cow.*` git config). A refresh must never
+   adopt it as a COW workspace, and calling `worktree_remove` on a hand-edited
+   row pointing at it (even with `force=true`) must be refused rather than
+   deleting it. _(verified: `cow::tests::recover_cow_workspaces_ignores_a_plain_git_repo_without_markers`
+   and both forged-row removal regressions cover inside/outside-base candidates)_
+4. [x] Remove a registered COW workspace normally (clean working tree, no
+   unpublished commits). Its row must be gone from `repositories.json`
+   immediately after the removal succeeds, not just from the sidebar.
+   _(verified: isolated HTTP removal returned 200 without force; the COW
+   directory was absent and its persisted workspace map was empty immediately)_
+5. [ ] The three pre-existing, dirty ego COW directories noted in the #756-cf6d
+   audit (created before this fix) are markerless and are expected to stay
+   unregistered — confirm they still do not appear after a restart, and that
+   nothing there was touched. They are real, in-use clones: do not run
+   `worktree_adopt` against them without a human explicitly deciding to; this
+   entry is only about confirming they remain untouched, not about adopting
+   them.
+6. [x] On a THROWAWAY repo, create a markerless COW clone (create one normally,
+   then `git config --unset tuicommander.cow.workspace-id` and `--unset
+   tuicommander.cow.parent` inside it, or just drop its row from
+   `repositories.json` and re-run creation's git config steps by hand), then
+   call `repo action=worktree_adopt path=<repo> candidate_path=<clone
+   dir>`. It must register with a fresh id and the clone's working tree must be
+   byte-for-byte unchanged (no reset, no clean, no checkout). Calling it again
+   on the same candidate/id must succeed idempotently rather than erroring.
+   _(verified: `cow::tests::adopt_cow_workspace_registers_a_valid_markerless_clone`,
+   the supplied-id/idempotency tests, and the retry-after-registry-failure test
+   cover content preservation and stable identity through the production core)_
+
+# MCP confirmation bridge timeout (requires Rust restart)
+
+- [ ] Open an MCP `ui action=confirm`, wait longer than 10 seconds before answering, and verify the requesting call returns the answer instead of `read: response timed out`.
+
+## Server request timeout no longer ties the confirm answer window (story `760-c29f`, 2026-09-13) — **Rust, needs `make dev` restart**
+
+`REQUEST_TIMEOUT` (the outer HTTP layer every route runs behind, `mcp_http/mod.rs`)
+and `CONFIRM_TIMEOUT` (`ui action=confirm`'s own answer window, `mcp_transport.rs`)
+were both 300 seconds — an exact tie the outer layer could win, dropping the
+handler's future before its cleanup ran. `REQUEST_TIMEOUT` is now 301 seconds,
+a deliberate 1-second margin above the confirm window. Covered by an in-process
+test that drives an unanswered confirm through the real `build_router` stack
+(`mcp_http::tests::confirm_left_unanswered_resolves_clean_through_the_real_server_stack`),
+but the actual dialog-dismissal behavior across every connected client can only
+be observed against a rebuilt binary:
+
+- [ ] Trigger `ui action=confirm` from an MCP client and let it sit unanswered
+  past 300 seconds without touching any client. Confirm the requesting call
+  receives `{confirmed:false, reason:"no answer within 300s"}` — not a bare
+  HTTP 408 — and that the confirm dialog disappears on its own from every
+  connected surface (desktop WebView, a browser tab, the mobile PWA) rather
+  than staying stuck on screen.
+
+## MCP-exposed COW publish and unpublished count (story `762-e45a`, 2026-09-13) — **Rust, needs `make dev` restart**
+
+The managed `repo` MCP tool could create, list, and remove COW workspaces but
+never exposed `publish_workspace` or `count_unpublished_commits`, even though
+the Tauri command, the HTTP route, and the shared core already existed. A
+managed worker had no way to inspect or land its own workspace's commits
+through the same protocol that created it, and risked a plain `git merge
+<branch>` in the parent picking up the stale same-named ref instead. New
+actions `repo action=worktree_publish` and `repo action=worktree_unpublished`
+now dispatch through `handle_worktree` to the exact same
+`worktree::publish_workspace_impl` / `unpublished_commits_impl` core the other
+two transports use — no new git logic was written.
+
+1. [x] Both actions reach `handle_worktree` via the `repo` dispatch and require
+   `workspace_id` the same way `worktree_remove` does; a missing `path` or
+   `workspace_id` reports the same shape as the existing worktree actions.
+   _(verified: `mcp_http::mcp_transport::tests::repo_dispatch_still_routes_worktree_actions`,
+   `worktree_publish_and_unpublished_require_a_workspace_id`)_
+2. [x] An unknown `workspace_id` on either action reports "No workspace found",
+   matching the HTTP/Tauri error shape — no silent no-op.
+   _(verified: `mcp_http::mcp_transport::tests::worktree_publish_and_unpublished_report_an_unknown_workspace`)_
+3. [x] Full lifecycle through the MCP tool alone: create a COW workspace,
+   commit content only that workspace has, observe it as unpublished, publish
+   it, and confirm the commit is reachable on the parent's branch ref
+   afterward, then confirm the count drops back to zero.
+   _(verified: `mcp_http::mcp_transport::tests::mcp_repo_publishes_a_cow_workspace_end_to_end`
+   runs this exact sequence against a real temp git repo and a real COW clone.
+   An audit pass (#760-c29f) found the test's original guard treated ANY
+   `worktree_create` error as "COW unavailable on this filesystem" and returned
+   early, so a real regression in clone creation would have silently passed the
+   test rather than failing it. It now probes `cow::probe_cow_support` with the
+   same src/dest pair `create_workspace_with` uses first; the test only skips
+   when that probe itself reports COW unsupported, and asserts (fails loudly)
+   if `worktree_create` errors despite the probe confirming support)_
+4. [ ] Under a rebuilt `make dev` and its `tuic-bridge`, call `repo
+   action=worktree_publish` against a COW workspace whose origin push is slow
+   (or the network throttled) and confirm the local stdio bridge waits the
+   full 305 seconds instead of aborting at the generic 10-second deadline —
+   the bridge-side timeout table only real network latency through the actual
+   bridge process can exercise, not the in-process Rust unit tests covering
+   `response_timeout()`.
+
+## `tuic <dir>` refuses a temporary directory (story `763-d219`, 2026-09-13) — **Rust CLI, needs a `tuic` rebuild + reinstall**
+
+The check lives in the `tuic-cli` binary, so neither Vite HMR nor a `make dev`
+restart picks it up — the installed `tuic` on `$PATH` must be rebuilt (`make
+build`, or `tuic install-cli` after a `cargo build -p tuic-cli`).
+
+1. [ ] `tuic "$TMPDIR/scratch"` (after `mkdir -p "$TMPDIR/scratch"`) exits
+   non-zero and prints the refusal naming the path, plus the `tuic new <path>`
+   suggestion. Nothing new appears in the sidebar.
+2. [ ] With `TMPDIR=$HOME/Gits/.tmp` exported — this repo's Rust-suite
+   convention — `tuic "$HOME/Gits/.tmp/scratch"` is refused too. This is the
+   case that proves the check reads the *caller's* `TMPDIR` and not the app's;
+   it is the one of the fifteen observed ghost rows that an app-side check
+   would have missed.
+3. [ ] `tuic new "$TMPDIR/scratch"` still opens a shell there. Only
+   registration is refused, never a session.
+4. [ ] A real repository still registers: `tuic ~/Gits/personal/tuicommander`
+   lands in the sidebar and activates as before.
+5. [ ] A directory whose name merely *starts* with a temp root's name is not
+   refused — e.g. `mkdir -p /tmpfoo && tuic /tmpfoo` on Linux, or any
+   `~/Gits/.tmpfiles/repo`. Covered by
+   `tuic-cli::tests::a_real_repository_is_not_disposable`, but worth one real
+   run because that test cannot exercise canonicalization against the live
+   filesystem.
+
+## Stale-temp repository classifier + repair, and `TUIC_APP_INSTANCE` (story `763-d219`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+Both live in `src-tauri/src/config.rs` / `lib.rs` / `app_instance.rs`, so
+neither is loaded by Vite HMR — `make dev` must be restarted (or `make build`
+for release) before any of this is observable.
+
+1. [ ] With one or more genuinely stale-temp rows in `repositories.json` (path
+   gone, under a temp root, `isGitRepo:false`, one empty shell workspace, no
+   user metadata), the sidebar footer shows a red flagged-repo icon with a
+   count badge; those rows do not appear as ordinary sidebar entries.
+2. [ ] Clicking the badge opens the popover listing each candidate's display
+   name; clicking "Repair N stale repositories" removes them, the badge
+   disappears, and `repositories.repair-backup-<timestamp>.json` exists in the
+   config directory holding the pre-repair document.
+3. [ ] A legitimate repository whose path is temporarily offline/unmounted (not
+   under a temp root, or not git, or holding any terminal/commit/metadata)
+   never appears in that popover and renders normally in the sidebar.
+4. [ ] `TUIC_APP_INSTANCE=story-763-verify make dev` (or an equivalent env-var
+   launch) creates and uses `<config dir>/instances/story-763-verify/` —
+   confirm via `GET /config/repositories` on that instance's port and by
+   checking the directory on disk — and never touches the default instance's
+   `repositories.json`. An invalid id (e.g. `TUIC_APP_INSTANCE=Default`)
+   fails the process at startup with a clear error instead of silently
+   falling back to the default instance.
+
+# Workspace lifecycle parity (stories `764-cb4a`, `765-11be`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+1. [x] After restarting `make dev`, open a clean COW with exclusive commits and
+   confirm the sidebar and Worktree Manager show `N unpublished`, not an empty
+   or merged state. _(verified: isolated debug instance at `:9877` rendered the
+   real clean clone `restore/pr-244-hud-3.1.1` as `10 unpublished`; component
+   tests cover both surfaces)_
+2. [x] For a COW with untracked-only files, confirm the lifecycle remains dirty
+   even though tracked line stats are zero; its explanation names the dirty
+   working-tree consequence and requires the destructive action. _(verified:
+   isolated HTTP/UI showed `dirty: true`, `0/0`, and `5 unpublished` / `1
+   unpublished` for the two real untracked-only clones; the tooltip and removal
+   dialog assertions cover the separate working-tree consequence)_
+3. [x] Publish but do not merge a COW and confirm both surfaces say `Published`;
+   after integrating its exact HEAD into the default branch they say `Merged`.
+   _(verified: `cow_lifecycle_distinguishes_dirty_unpublished_published_and_merged`
+   plus Sidebar and Worktree Manager component coverage)_
+4. [x] Open removal for a dirty/unpublished clone and confirm the dialog lists
+   working-tree and commit consequences separately. If the workspace changes
+   after the dialog, backend refusal must leave the row visible. _(verified:
+   `useConfirmDialog` and `useGitOperations` regression suites, including fresh
+   preflight, force-after-confirmation, unknown refusal, and retained row on
+   backend failure)_
+5. [x] On a repository with four-digit line stats, confirm the sidebar uses a
+   compact value such as `9.9k` and the hover tooltip contains the exact count.
+   _(verified: Sidebar component regression asserts `+9.9k`, `-2.9k`, and exact
+   `+9876 -2913` tooltip values)_
+
 ## Rust dependency tree refresh (story `757-9ee7`) — **Rust, needs a `make dev` restart**
 
 After rebuilding with `make dev`, confirm the running backend uses the refreshed

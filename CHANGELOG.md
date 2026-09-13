@@ -6,12 +6,189 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Plan Tracker and Stories Ticker are now external plugins.** The former
+  compiled built-ins are installed once as ordinary plugin packages during the
+  upgrade, preserving existing behavior while making both independently
+  uninstallable and updateable from the plugin catalog. Plan file opening now
+  uses a capability-gated background-tab host API instead of importing app
+  stores directly.
+
 ### Fixed
+
+- **COW rows no longer make `0/0` look equivalent to safe or merged.** The
+  backend now publishes one exact-workspace lifecycle verdict to the sidebar,
+  Worktree Manager, IPC, and HTTP: dirty files, unpublished commits, published
+  but unmerged tips, merged tips, and unknown inspection state stay distinct.
+  Removal refreshes that verdict, blocks unknown state, requires explicit force
+  for dirty or unpublished data, and keeps the row visible if the backend later
+  refuses. Large sidebar line counts are compacted with exact tooltip values.
 
 - **Plugins can no longer read legacy MCP-upstream credentials.** The
   `credentials:read` guard now rejects the historical `tuicommander-mcp`
   keychain service through the same constant used by credential migration,
   while plugin-owned service names remain readable.
+
+- **The bundled BM25 search index no longer depends on the unmaintained
+  `fxhash` crate (RUSTSEC-2025-0057).** The ~90 lines it used (`FxHasher`,
+  `FxHasher32`, `FxHasher64` and the `hash`/`hash32`/`hash64` free functions)
+  are now vendored directly into the `bm25` fork, with the upstream
+  `byteorder` reads replaced by `u32`/`u64::from_ne_bytes`. The algorithm is
+  bit-identical — pinned by a golden-vector test against the real crate and a
+  fixture snapshot captured before the change — so every existing
+  content-index snapshot on disk still loads and searches exactly as before.
+
+- **A hydrated repository with a missing or blank display name no longer crashes
+  the whole app.** `normalizeLoadedRepo` now sanitizes it to a deterministic
+  path-derived fallback at the persistence boundary (load and remote adoption
+  alike), and the Command Palette's own sort no longer trusts a malformed
+  action's label — it falls back to the action's id and logs the offender once
+  via `appLogger` instead of spamming on every keystroke's re-sort.
+- **The crash screen now copies the complete diagnostic, and desktop/mobile
+  share one implementation.** A shared `CrashScreen` component (used by both
+  `ErrorBoundary`s) copies the exact rendered message plus the full stack
+  through `src/utils/clipboard.ts`, shows a visible "Copied"/"Copy failed"
+  state, and logs a copy failure via `appLogger` rather than `console`. Reload
+  is unchanged.
+- **A stale-temp shell repository (empty, non-git, path gone, created under a
+  temp root) is now classified server-side and quarantined from the sidebar
+  instead of remaining a permanent ghost row.** The classifier
+  (`config.rs`) requires ALL of: the local path is absent, it falls under a
+  recognized temp root, `isGitRepo` is explicitly `false`, there is exactly one
+  shell-only workspace with no terminals/saved terminals/commit or parent
+  state, and no user metadata — any one mismatch leaves the row untouched, so
+  a legitimate offline/unmounted repository is never touched. Repair is
+  user-explicit only: the sidebar surfaces a count and a list of exact
+  candidates, and confirming writes a timestamped backup before removing
+  precisely those rows in one transactional write (refusing the whole request
+  if any named row no longer classifies as stale). No implicit or global
+  deletion.
+- **A debug/test desktop launch can now get its own isolated config directory.**
+  `TUIC_APP_INSTANCE=<id>` (read once at the very top of `run()`) reuses the
+  same named-instance machinery `tuic-remote --instance` already had, so a
+  throwaway verification run no longer has to share `repositories.json` with
+  Boss's production instance.
+- **COW workspaces now remain visible with live branch, diff, and PR status data.**
+  Repository refreshes include registered clones in the Gix worktree snapshot
+  and read each clone's current branch, so clone rows no longer appear clean or
+  lose their PR badge after work done in an isolated workspace.
+- **`tuic <dir>` no longer registers a temporary directory as a repository.**
+  Registration is permanent, so a temp path became a sidebar row pointing at
+  something the OS later deletes — fifteen such rows accumulated over two days
+  with nothing recording where they came from. `tuic` now refuses a directory
+  at or below the temp root of the shell it runs in (`TMPDIR`, `TEMP`/`TMP`) or
+  below `/tmp`, and points at `tuic new <dir>` for a shell there instead. The
+  check lives in the CLI rather than the app precisely so a custom `TMPDIR`
+  counts as temporary. Existing rows are unaffected; remove them with the
+  sidebar's **Remove Repository**.
+- **A Rust unit test can no longer read or write the real config directory.**
+  `config_dir()` silently fell back to the user's platform directory when a
+  test omitted `set_config_dir_override`, which is how disposable fixtures
+  reached the live `repositories.json`. It now falls back to a safe,
+  process-scoped temp directory instead — deliberately not a panic, which
+  reproducibly deadlocked or aborted parts of the full test suite (a
+  non-reentrant guard mutex, and a poison-on-panic interaction) rather than
+  isolating cleanly.
+- **The crash screen no longer leaks its copy-feedback timer.** The two-second
+  reset that returns the "Copy error" button to idle had no cleanup, so it
+  fired against a disposed signal when the boundary tore the tree down.
+- **Fresh terminal tabs now retain their session alias.** The backend could emit
+  `term-alias-assigned` before the frontend associated the new PTY session with
+  its tab, so the event was discarded: the tooltip fell back to `Terminal N`
+  and the context menu had no alias to copy even though MCP already listed it.
+  Early alias events are now retained until that session binding exists.
+- **MCP confirmation calls now allow the full answer window.** The stdio bridge
+  previously aborted `ui confirm` after its generic 10-second response timeout,
+  even though the server correctly waits up to 300 seconds for an answer. The
+  bridge now reserves the server window plus five seconds of transport margin.
+- **An unanswered MCP confirmation now reports its own timeout instead of a
+  bare 408.** The HTTP server's outer request timeout and the confirm
+  handler's own answer-window timeout were both 300 seconds, so the outer
+  layer could win the race, drop the handler's future before its cleanup ran,
+  and hand the caller `408 Request Timeout` instead of the documented
+  `{confirmed:false, reason:"no answer within 300s"}` body — dropping the
+  future also meant the pending `confirm_responses` entry leaked and no
+  `McpConfirmResolved` event told any client to dismiss the dialog, so it
+  stayed on screen after the caller had already moved on. The server's outer
+  timeout is now 301 seconds, a deliberate 1-second margin over the confirm
+  window (itself 4 seconds under the local bridge's 305-second wait), so the
+  handler's own timeout always resolves first.
+- **Remote devices can log in with Basic Auth again.** Settings → Services saved
+  the remote-access password on its own, so a password could be stored while the
+  username stayed empty. An empty username makes the server report the
+  credentials as not configured and answer every attempt with 401, while the
+  field still showed the `admin` placeholder that reads like a default. Saving a
+  password now writes the username too, falling back to `admin` when the field is
+  blank, and clearing the username while a password is set no longer disables
+  authentication silently.
+- **MCP forced workspace removal now honors `force=true`.** The native `repo
+  worktree_remove` schema and handler previously omitted the parameter and
+  always invoked the shared removal core with `force=false`, making confirmed
+  cleanup of a dirty or unpublished COW impossible through the managed tool.
+- **Copy-on-write clones have their own cow icon in the sidebar.** They no
+  longer look identical to linked Git worktrees when several workspaces share a
+  repository; the existing state colors and attention overrides still apply.
+- **Managed COW removal no longer times out while continuing in the background
+  or silently deletes uncommitted work.** The native MCP path ran recursive
+  deletion inline and inherited the bridge's generic 10-second response limit;
+  removing a warm 51 GB APFS clone took 22 seconds, so the caller received an
+  error before the backend removed it. Removal now uses the blocking pool and
+  the 305-second workspace-operation deadline. Non-forced COW removal also
+  refuses staged, unstaged, and untracked changes before checking unpublished
+  commits.
+- **The managed `repo` MCP tool can now publish a COW workspace and read its
+  unpublished-commit count.** Both existed for Tauri IPC and HTTP but were
+  never wired into the MCP tool that created the clone in the first place, so
+  a managed worker had no way to inspect or land its own independent commits
+  through the same protocol — and risked falling back to a plain `git merge
+  <branch>` in the parent, which silently takes the stale same-named ref
+  instead. `repo action=worktree_publish` and `repo action=worktree_unpublished`
+  reuse the exact same safe staging-ref implementation as the other two
+  transports, including the refusal of a checked-out or diverged parent
+  branch; the local MCP bridge grants both the same 305-second deadline as
+  `worktree_create`/`worktree_remove`, since both make at least one network
+  fetch.
+- **A COW clone can no longer go missing from the sidebar after a crash.**
+  Creation used to return success once the clone existed on disk, leaving only
+  the frontend's own save to record it in `repositories.json` — a crash in that
+  window left a real, warm clone the app had never heard of. The backend now
+  registers the workspace itself, inside the same locked write the rest of
+  `repositories.json` already uses, before it can report success; a failure to
+  register keeps the clone on disk and reports a recoverable error rather than
+  deleting it. Every clone also carries its own workspace id and parent repo in
+  its git config, so listing a repository now heals a row lost to the old crash
+  window (or a hand-restored backup) by re-adopting any clone whose markers it
+  recognizes — never a directory without them. Removal is the mirror image: the
+  row is dropped only after the directory is confirmed gone, and a failure to
+  drop it is reported rather than silently leaving a stale row behind.
+- **COW workspace removal no longer trusts a `repositories.json` row on its
+  own.** A hand-edited, stale, or forged `kind: "cow"` row could make removal
+  run `remove_dir_all` against an arbitrary directory — even with `force`,
+  which was only ever meant to waive the dirty/unpublished-commit prompts.
+  Removal now re-validates a row against the directory it names — the same
+  provenance markers, parent-remote evidence, and canonical-containment checks
+  recovery already required, plus a real (non-symlink) `.git` and an on-disk
+  workspace id that matches the row — immediately before deleting anything,
+  unconditionally. A markerless clone (including one made before this backend
+  wrote provenance markers) is refused by both recovery and removal alike; the
+  new `repo action=worktree_adopt` (also `POST /worktrees/adopt` and the
+  desktop `adopt_cow_workspace` command) is the only way to register one, and
+  the call itself is the confirmation — it validates parent-remote provenance
+  and containment, then writes only the same markers creation would have, never
+  touching the index, working tree, refs, HEAD, untracked files, or remotes.
+  Repository records are now also looked up and filed under their canonical
+  path, so a repo reached through a symlink or a different trailing slash
+  reuses its existing entry instead of a second, disagreeing one.
+
+- **Post-merge cleanup no longer freezes the window while it runs.** Each step of
+  the dialog — switch branch, delete the local branch, archive or delete the
+  worktree, close the branch's terminals — called a command that ran inline on
+  the IPC thread, which on macOS is the main thread, so the whole WebView was
+  locked for the length of the git work. All four now run on the blocking pool,
+  matching what their HTTP equivalents already did. Closing terminals was the
+  worst of them: it waited up to 200 ms per session, so the freeze grew with the
+  number of tabs on the branch.
 
 - **Codex usage is visible in the active agent badge.** Claude and Codex already
   shared one polled usage ticker, but the general ticker hid that slot on every
@@ -20,6 +197,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   whose provider label matches the active Claude or Codex tab, opens the
   matching dashboard on click, and keeps a stale result from the previous
   provider hidden during an asynchronous switch.
+
+- **The usage ticker no longer assumes Claude.** The polled provider defaulted to
+  Claude whenever no agent tab was active, which on startup is every install. A
+  Codex-only user therefore saw a Claude reading — in practice `Claude · no
+  token`, since there are no Claude credentials to read — until a Codex tab was
+  focused, the exact wrong-vendor number the shared slot exists to prevent. The
+  poll now stays silent until a Claude or Codex tab is seen, and remains sticky
+  on that provider afterwards, so switching to a shell still keeps the number on
+  screen.
 
 - **A child result no longer waits for another child to close before waking its
   parent.** Mail sent while an orchestrator was working was buffered correctly,

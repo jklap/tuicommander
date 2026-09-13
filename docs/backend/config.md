@@ -23,6 +23,18 @@ internal hyphens allowed), and `default` is reserved. A named instance never
 runs the default or legacy file migrations and never falls back to those
 locations when its own files are absent.
 
+The desktop binary has no `--instance` flag of its own (Tauri's own CLI/single-instance
+plugin already owns argv there), but reuses the same `AppInstance::named` selection
+via the `TUIC_APP_INSTANCE` env var, read once at the very top of `run()` in
+`lib.rs`, before any `config_dir()` call. `TUIC_APP_INSTANCE=<id> make dev` (or any
+debug/test launch) gets the same isolated `instances/<id>/` namespace `tuic-remote
+--instance <id>` gets — an actual code-enforced boundary rather than a documented
+risk, closing the gap in AGENTS.md's "Isolation caveat" where a second debug
+instance previously shared `repositories.json` with Boss's production instance with
+nothing but discipline preventing a throwaway test repo from being persisted there
+(#763-d219). An invalid or already-selected id fails the process at startup rather
+than silently falling back to the default instance.
+
 The credential namespace follows the same immutable selection. The default
 vault remains keyring service `tuicommander`, user `vault`; a named instance
 uses service `tuicommander-instance-<id>`, user `vault`. Named instances never
@@ -33,6 +45,10 @@ a keyring error as an empty vault or fall back to a file. Debug builds retain th
 file-backed credential adapter, scoped below the selected instance directory.
 Instance selection precedes `--set-password`, so password setup writes only to
 the selected namespace.
+
+Desktop verification may also set `TUIC_PORT=<port>` to choose the process-local
+HTTP listener port without changing `config.json`; an occupied port still uses the
+existing next-port retry.
 
 **For the default instance, debug and release builds share this one directory**
 — `config_dir()` never branches on `cfg!(debug_assertions)`. The single-instance lock is release-only
@@ -47,6 +63,59 @@ becoming ordered whole-document overwrites. `repositories.json` used to be the
 one exception, seeded into a separate `~/.tuicommander-dev/` directory on first
 debug run; that seeding path is gone and it now lives here like everything
 else (see below).
+
+### A Rust test can never name the real directory
+
+In a `cfg(test)` build `config_dir()` returns the override set by
+`set_config_dir_override(dir)` when one is in scope, and otherwise a safe,
+process-scoped fallback under the OS temp directory
+(`test_fallback_config_dir`, a `OnceLock` computed once per test process:
+`<temp_dir>/tuic-test-fallback-<pid>`) — **never** the user's platform config
+directory, with or without an explicit override.
+
+It used to fall back to the user's platform directory instead, so a test that
+forgot the override read and wrote Boss's live `config.json` and
+`repositories.json` in silence. That silence is what let fifteen `tempfile`
+roots become permanent repository rows (#763-d219): the damage was
+indistinguishable from normal operation until someone diffed the file.
+
+A first fix made the no-override branch **panic** instead of falling back —
+correct in isolation, but it reproducibly broke the full `cargo nextest run
+--lib` suite two different ways: (1) a `#[should_panic]` test exercising that
+exact panic poisoned the guarding mutex on unwind (a temporary `MutexGuard`
+was still alive through the panicking expression), and a later `Drop` call
+locking the poisoned mutex aborted the whole process (SIGABRT) instead of
+unwinding; and (2) any test that already held an explicit override (via an
+`isolated_config()`-style helper) and then called a shared helper that also
+tried to set one self-deadlocked, because the guarding mutex is not reentrant.
+The silent process-scoped fallback removes both failure modes: nothing needs
+the exclusive lock unless a test deliberately wants one, and dozens of
+call chains that reach `config_dir()` without caring where it lives (most not
+touching `repositories.json` at all) get a safe, stable-within-the-process
+answer instead of a panic or a hang. `config_dir_in_a_test_never_names_the_real_user_directory`
+and `fallback_config_dir_is_never_the_real_directory` (`config.rs`) prove the
+fallback and the real directory can never coincide.
+
+A thread-local fallback was considered and rejected: code under test that
+offloads work to `spawn_blocking` (`finalize_merged_worktree`,
+`merge_and_archive_worktree`) runs on a different OS thread than the test
+itself, so a thread-local override set on the test's thread would not be
+visible there — reintroducing the same gap on a thread the test can't reach.
+
+`without_config_dir_override()` takes the same exclusive lock while
+deliberately leaving the override unset — the one way to observe the fallback
+branch without racing a concurrent test that did set an override. It is not an
+escape hatch.
+
+This guard covers unit tests only. Integration tests under `src-tauri/tests/`
+compile the library without `cfg(test)`, and `make dev` is not a test at all —
+both isolate with `TUIC_APP_INSTANCE=<id>` as described above.
+
+The `plugins/` subdirectory holds external plugin packages. Version 1.7.7
+externalizes Plan Tracker and Stories Ticker by seeding `plugins/plan/` and
+`plugins/stories-ticker/` once. The root marker
+`.externalized-plan-stories-v1` records completion: existing packages are never
+overwritten, and removing either seeded package after migration is permanent.
 
 ## Core Functions
 
@@ -512,8 +581,9 @@ A stale mutation of the same repository, group, active selection, or order is
 rejected with a deterministic conflict instead of overwriting the newer value.
 
 **Derived branch fields are exempt from that check.** `additions`, `deletions`,
-`isMerged`, `lastActiveTerminal` and `lastCommitTs` (`DERIVED_BRANCH_FIELDS` in
-`config.rs`) are a cache each client recomputes from the repository itself, on
+`isMerged`, `lastActiveTerminal`, `lastCommitTs` and `lifecycleStatus`
+(`DERIVED_BRANCH_FIELDS` in `config.rs`) are a cache each client recomputes from
+the repository itself, on
 its own refresh cadence — two windows legitimately hold two different values at
 the same instant, so comparing them turns every save into a conflict. Measured
 2026-08-31: `ego` moved 331 → 357 additions in 70 seconds while 29 consecutive
@@ -602,6 +672,128 @@ this document. (`~/.tuicommander-dev/` itself still exists for an unrelated
 purpose — see `credentials.rs`'s debug-only credential store.)
 
 **Commands:** `load_repositories()`, `save_repositories(config)`
+
+**A second write path exists, entered directly rather than through the delta
+protocol above: `config::upsert_workspace_record(repo_path, workspace_id,
+record)` / `remove_workspace_record(repo_path, workspace_id)`.** Both are
+read-modify-write under the same `ConfigFile::update_with_strict` lock the
+delta protocol uses, but skip its before/after CAS — their only caller
+(`cow.rs`, creating or deleting a COW clone) has no client-side copy of the
+surrounding repository record to diff against, so the correct base state is
+simply whatever is on disk right now, read inside the same file lock as the
+write.
+
+Both resolve `repo_path` against the existing `repos` keys through the same
+canonical-equivalence check `cow.rs`'s reader (`same_path`) already applies,
+not an exact string match: an existing entry reached through a symlink or a
+different trailing slash is reused rather than duplicated, and removal through
+such a spelling still finds and drops the row rather than silently no-op'ing
+while it survives under its original key. A brand-new entry is filed under its
+canonicalized path so every later lookup agrees on one spelling. More than one
+existing key already canonicalizing to the same repository — a state a prior
+bug or a hand-edit could have produced — is refused as ambiguous rather than
+merged or guessed between.
+
+This is what closes the crash window #756-cf6d was written against:
+before it, a COW clone existed on disk the moment `create_cow_workspace`
+returned, but nothing durable knew about it until the frontend's own
+`setWorkspace` + debounced save reached `save_repositories`, so a crash in
+between left a real clone `repositories.json` had never heard of.
+`register_cow_workspace`/`unregister_cow_workspace` in `cow.rs` are the only
+callers, invoked from `worktree::create_workspace_with` and
+`remove_worktree_by_workspace_id` — before either can report success. A write
+here still moves the document these CAS baselines are diffed against, so a
+subsequent frontend save that duplicates the same row hits the ordinary
+"already applied" no-op path in `apply_keyed_repository_mutations`, or — if the
+row differs in some field the backend does not set (`terminals`,
+`additions`, …) — an ordinary conflict that the frontend's existing
+reload-and-rebase recovery (`persistRepositoryMutation`) already resolves; no
+new client-side handling was needed. Neither function calls
+`notify_repositories_changed()` — that stays the caller's job on the transports
+that have an `AppState` to announce from — so a registration this path makes is
+picked up by other windows on their next read (e.g. the next
+`worktree-created`/`worktree-removed` event those same callers already emit),
+not immediately broadcast.
+
+Recovery is the read-only counterpart: `cow::recover_cow_workspaces(parent_repo,
+worktrees_dir, taken_ids, taken_paths)`, called from
+`worktree::get_worktree_paths` (the listing path every transport shares), scans
+the immediate children of `worktrees_dir` for a directory carrying every marker
+`create_cow_workspace` writes into a clone's own git config
+(`tuicommander.cow.workspace-id`, `tuicommander.cow.parent`, plus the existing
+`remote.parent.pushurl` no-push evidence) and — only once every marker matches,
+including the parent — registers it through `upsert_workspace_record` if it is
+not already known. A directory without every marker is never adopted, on
+purpose: this is also how a markerless COW clone made before this recovery
+existed stays invisible rather than being silently trusted. The scan itself
+never writes to, deletes, or otherwise touches a candidate directory or its
+`.git` — canonicalizes each entry to reject a symlink escaping the worktree
+base, and rejects a candidate whose id or path the caller already has (a linked
+worktree, or an already-registered COW record) rather than aliasing one row
+onto two directories.
+
+#### Stale-temp repository repair (#763-d219)
+
+Live evidence: 15 hydrated `repositories.json` rows pointed at paths under macOS
+temp roots or `$HOME/Gits/.tmp` that no longer existed on disk — throwaway shell
+repos a prior session or agent worktree run created and never cleaned up. Each
+was non-git, held exactly one shell-only workspace, and carried no terminals,
+saved terminals, diffstat, commit, parent, or user metadata: a maximally
+"empty" record, which is exactly why a missing path alone is not sufficient
+evidence — a legitimate repository on an unmounted drive or a machine the user
+switched away from looks identical on that one axis.
+
+**Classifier — `classify_stale_temp_repo` (`config.rs`), ALL of:**
+
+1. `std::fs::metadata(path)` fails — the local path does not exist.
+2. The path falls under a recognized temp root (`recognized_temp_roots()`:
+   `std::env::temp_dir()`, `/tmp`, `/private/tmp`, `/var/folders`,
+   `/private/var/folders`, `$HOME/Gits/.tmp`).
+3. `isGitRepo` is explicitly `false` (never merely absent or `true`).
+4. Exactly one workspace, and it is shell-only: no live or saved terminals, no
+   last-active terminal, no diffstat/commit/merge state, no parent, no run
+   command, no CI auto-heal.
+5. No user metadata on the repo record itself: `collapsed`/`parked` are their
+   defaults (`false`), and no `connectionId`/non-empty `initials`.
+
+Any single failing check leaves the record untouched — this is an ALL-of test,
+not a heuristic score, so a legitimate offline/unmounted/renamed repository
+always survives.
+
+**Commands** (IPC + `GET`/`POST /config/repositories/stale-temp` HTTP twin):
+
+- `list_stale_temp_repository_candidates()` — read-only preview; re-classifies
+  the on-disk document fresh on every call, never a cached list.
+- `repair_stale_temp_repositories(paths)` — the only mutating path, and the
+  only place implicit or global deletion is refused: it takes the exact paths
+  the user confirmed and re-validates every one of them against the classifier
+  using the document as it stands on disk *inside the same file lock* as the
+  write. If even one no longer classifies (reconnected, edited since the
+  preview, or never stale to begin with), the **entire** request is rejected
+  before anything is written — one versioned transactional delta, not a
+  best-effort sweep. On success it writes an exact pre-repair backup to
+  `repositories.repair-backup-<UTC timestamp>.json` in the config directory,
+  then removes the validated rows from `repos`, `repoOrder`, every group's
+  `repoOrder`, and clears `activeRepoPath` if it pointed at a removed row — all
+  inside `ConfigFile::update_with_strict`'s file lock, then calls
+  `notify_repositories_changed()` like `save_repositories`.
+
+**Why there is no separate restore-on-failure path:** `ConfigFile::write_atomic`
+(temp file + fsync + rename) already guarantees a failed write never partially
+overwrites the live document — the original is simply untouched. The backup
+file is therefore a *human* recovery artifact for undoing a repair that
+succeeded but was unwanted, not a mechanism this code needs to invoke itself on
+a write failure. Recorded as a deliberate design trade-off in story
+763-d219's worklog rather than layering a second, redundant recovery path on
+top of a write that is already atomic.
+
+**Frontend:** classified candidates are hidden from the sidebar's normal repo
+list (quarantined, never silently deleted) pending an explicit repair; see
+`repositoriesStore` (`refreshStaleTempCandidates`/`repairStaleTemp`,
+`src/stores/repositories.ts`) and the discoverable repair entry point — a red
+flagged-repo icon with a count badge in the sidebar footer, opening
+`StaleTempRepairPopover` (`src/components/Sidebar/StaleTempRepairPopover.tsx`),
+next to the existing parked-repositories popover.
 
 ### Prompt Library (`prompt-library.json`)
 
