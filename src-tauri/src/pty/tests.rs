@@ -3,6 +3,25 @@ use super::*;
 // the config; tests that only exercise the grid construct it directly.
 use crate::state::VtLogBuffer;
 
+/// Closing a workspace's terminals is a loop over `close_pty`, and its body
+/// waits on two 100 ms `sleep` deadlines per session before it may also delete
+/// a worktree. As a plain `fn` command that ran inline on the IPC thread — the
+/// macOS main thread — so the post-merge cleanup dialog froze the WebView for
+/// the sum of those waits. See `docs/backend/command-threading.md`.
+#[test]
+fn close_pty_never_runs_on_the_ipc_thread() {
+    let source = include_str!("commands.rs");
+    let signature = "pub(crate) async fn close_pty(";
+    let at = source
+        .find(signature)
+        .expect("close_pty must be async: a plain fn command runs on the macOS main thread");
+    let body = &source[at..(at + 600).min(source.len())];
+    assert!(
+        body.contains("spawn_blocking"),
+        "close_pty waits on process exit and must hand that wait to the blocking pool"
+    );
+}
+
 fn fixture_rows(fixture: &str) -> Vec<String> {
     fixture
         .trim_end_matches('\n')
