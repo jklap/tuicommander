@@ -1,5 +1,10 @@
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
-import { type ProgressEvent, type ProgressKind, progressStore } from "../../stores/progress";
+import {
+	type ProgressEvent,
+	type ProgressExportReceipt,
+	type ProgressKind,
+	progressStore,
+} from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import s from "./ProgressPanel.module.css";
@@ -54,6 +59,10 @@ export function ProgressPanel(props: ProgressPanelProps = {}) {
 	const [view, setView] = createSignal<View>("since");
 	const [selected, setSelected] = createSignal<Set<string>>(new Set());
 	const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
+	const [exportPreview, setExportPreview] = createSignal<ProgressExportReceipt | null>(null);
+	const [includeProvenance, setIncludeProvenance] = createSignal(false);
+	const [exportBusy, setExportBusy] = createSignal(false);
+	const [exportError, setExportError] = createSignal<string | null>(null);
 	createEffect(
 		on(
 			() => [scope(), view()] as const,
@@ -217,6 +226,40 @@ export function ProgressPanel(props: ProgressPanelProps = {}) {
 		]);
 	}
 
+	async function previewProgress(): Promise<void> {
+		const project = scope();
+		if (project === "global") return;
+		setExportBusy(true);
+		setExportError(null);
+		try {
+			setExportPreview(await progressStore.previewExport(project, includeProvenance()));
+		} catch (error) {
+			setExportError(error instanceof Error ? error.message : String(error));
+		} finally {
+			setExportBusy(false);
+		}
+	}
+
+	async function writeProgress(): Promise<void> {
+		const project = scope();
+		const preview = exportPreview();
+		if (project === "global" || !preview) return;
+		if (
+			preview.fileExists &&
+			!window.confirm(`Replace ${preview.path}? Changes made after this preview will be preserved.`)
+		)
+			return;
+		setExportBusy(true);
+		setExportError(null);
+		try {
+			setExportPreview(await progressStore.writeExport(project, preview, includeProvenance()));
+		} catch (error) {
+			setExportError(error instanceof Error ? error.message : String(error));
+		} finally {
+			setExportBusy(false);
+		}
+	}
+
 	return (
 		<Show when={props.embedded || progressStore.panelVisible()}>
 			<aside
@@ -249,6 +292,8 @@ export function ProgressPanel(props: ProgressPanelProps = {}) {
 						onChange={(event) => {
 							setScope(event.currentTarget.value);
 							setSelected(new Set<string>());
+							setExportPreview(null);
+							setExportError(null);
 						}}
 						aria-label="Progress scope"
 					>
@@ -350,6 +395,44 @@ export function ProgressPanel(props: ProgressPanelProps = {}) {
 							</div>
 						</section>
 					)}
+				</Show>
+				<Show when={scope() !== "global"}>
+					<section class={s.exportCard} aria-label="Progress export">
+						<div class={s.exportControls}>
+							<label>
+								<input
+									type="checkbox"
+									checked={includeProvenance()}
+									onChange={(event) => {
+										setIncludeProvenance(event.currentTarget.checked);
+										setExportPreview(null);
+									}}
+								/>
+								Include source metadata
+							</label>
+							<button disabled={exportBusy()} onClick={() => void previewProgress()}>
+								{exportBusy() ? "Working…" : "Preview progress.md"}
+							</button>
+						</div>
+						<Show when={exportError()}>{(error) => <div class={s.exportError}>{error()}</div>}</Show>
+						<Show when={exportPreview()}>
+							{(preview) => (
+								<div class={s.preview}>
+									<div>
+										<span>Revision {preview().snapshotRevision}</span>
+										<button disabled={exportBusy() || preview().written} onClick={() => void writeProgress()}>
+											{preview().written
+												? "Exported"
+												: preview().fileExists
+													? "Replace progress.md"
+													: "Export progress.md"}
+										</button>
+									</div>
+									<pre>{preview().markdown}</pre>
+								</div>
+							)}
+						</Show>
+					</section>
 				</Show>
 				<div class={s.content}>
 					<For each={scopedProjects()}>

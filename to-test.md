@@ -1996,7 +1996,17 @@ new `cow_workspaces_enabled` sub-flag, both default false.
       provenance, pagination, and destructive confirmation text remain usable.
 - [ ] While the panel is open, report another event and verify the displayed
       watermark stays frozen, the later event remains unread, and exactly one
-      toast appears without a duplicate MESSAGES row.
+  toast appears without a duplicate MESSAGES row.
+
+## Project Progress export (story `753-9998`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE`, select a project in the
+  Progress panel, preview `progress.md`, and export it. Verify the preview remains
+  usable at desktop and narrow/mobile widths and the file appears at the owning
+  project root rather than the active worker workspace.
+- [ ] Preview an existing `progress.md`, edit it externally, then choose Replace.
+  Verify the stale write is refused and the external edit remains unchanged;
+  preview again and confirm explicit replacement succeeds.
 
 ## Protocol-ranked agent state (story `745-8ff1`, 2026-09-13) — **Rust, needs a `make dev` restart**
 

@@ -67,3 +67,10 @@ pub fn progress_read(
 ) -> Result<ProgressMutationReceipt, String> {
     store(project)?.acknowledge_read(input.snapshot_cursor)
 }
+
+pub fn progress_export(
+    project: &str,
+    input: ProgressExportInput,
+) -> Result<ProgressExportReceipt, String> {
+    super::export::progress_export(resolve_owning_project(Some(project))?, input)
+}

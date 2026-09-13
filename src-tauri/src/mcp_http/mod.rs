@@ -494,6 +494,17 @@ async fn post_progress_read(
     }
     json_result(crate::progress::progress_read(&q.path, input))
 }
+async fn post_progress_export(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(input): Json<crate::progress::ProgressExportInput>,
+) -> Response {
+    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_export(&q.path, input))
+}
 
 /// Serve plugin data files over HTTP.
 /// Reuses the same sandboxed read logic as the Tauri `read_plugin_data` command.
@@ -1530,6 +1541,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/progress/clear", post(post_progress_clear))
         .route("/progress/update", post(post_progress_update))
         .route("/progress/read", post(post_progress_read))
+        .route("/progress/export", post(post_progress_export))
         // Story 066: config / themes / notes / misc stateless parity (loopback)
         .route(
             "/config/branch-label",

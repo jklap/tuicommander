@@ -429,7 +429,7 @@ markers), a checked-out branch, and no id/path collision — only once every
 check passes does it write anything, and what it writes is exactly the two
 markers creation itself would have written.
 
-## Project Progress (Planned)
+## Project Progress
 
 Progress records meaningful project changes as Project → Workstream → Milestone.
 Events are `started`, `milestone`, `blocked`, and `done`; they describe outcomes,
@@ -453,7 +453,9 @@ caller must retry explicitly; recovery must never make an empty history look lik
 the original operation succeeded without data loss.
 
 The implementation contract and story sequence are maintained in
-`plans/project-progress.md`. This feature is planned, not implemented.
+`plans/project-progress.md`. Storage, reporting, management, presentation, unread
+state, and safe manual Markdown export are implemented; instruction-cost work and
+the final reporting evaluation remain tracked separately.
 
 ## Persistence
 

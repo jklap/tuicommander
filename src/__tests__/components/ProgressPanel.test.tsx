@@ -63,6 +63,17 @@ vi.mock("../../stores/progress", () => ({
 		correct,
 		isSourceLive: () => false,
 		openSource,
+		previewExport: vi.fn().mockResolvedValue({
+			projectRoot: "/repo",
+			path: "/repo/progress.md",
+			snapshotId: "sha256:preview",
+			snapshotRevision: 4,
+			snapshotTimeMs: 1000,
+			markdown: "# Project Progress: Example",
+			fileExists: false,
+			written: false,
+		}),
+		writeExport: vi.fn(),
 		close: vi.fn(),
 	},
 }));
@@ -78,5 +89,12 @@ describe("ProgressPanel", () => {
 		expect((closed as HTMLButtonElement).disabled).toBe(true);
 		await fireEvent.click(closed);
 		expect(openSource).not.toHaveBeenCalled();
+	});
+
+	it("previews the selected project export before enabling the write", async () => {
+		render(() => <ProgressPanel embedded />);
+		await fireEvent.click(screen.getByText("Preview progress.md"));
+		expect(screen.getByText("# Project Progress: Example")).toBeTruthy();
+		expect(screen.getByText("Export progress.md")).toBeTruthy();
 	});
 });

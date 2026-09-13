@@ -1,7 +1,7 @@
 # Project Progress
 
-Status: project-local storage, the compact reporting tool, and project controls
-are implemented. The panel and export described below remain planned.
+Status: project-local storage, reporting, controls, panel, and manual Markdown
+export are implemented.
 
 Progress answers: **What meaningfully changed since I last looked?**
 It organizes outcomes by project and workstream: capabilities, decisions,
@@ -54,7 +54,7 @@ Delete, clear, reorganize, resolve blockers, or export only when the user asks.
 Never mark done beyond the scope that was verified.
 ```
 
-## Planned controls and storage
+## Controls, export, and storage
 
 - **Progress panel:** What changed, Today, Blockers, Completed, current project
   state, and timeline. Provenance is expandable. The existing notification bell
@@ -68,8 +68,12 @@ Never mark done beyond the scope that was verified.
   Existing `progress.md` exports remain unchanged; they are separate files.
 - **Corrections:** rename/merge workstreams or events, edit summaries, move events,
   resolve blockers, and explicitly complete or reopen a workstream.
-- **Export:** preview and explicitly write `<project-root>/progress.md`. Replacing
-  an existing file requires an explicit choice. Export does not commit or push.
+- **Export:** choose one project, optionally include source metadata, and preview
+  the complete `<owning-project-root>/progress.md` before writing. The preview
+  identifies its database revision and snapshot time. Writing succeeds only if
+  that same snapshot is still current. Replacing an existing regular file
+  requires explicit confirmation and the exact content returned by the preview;
+  a human edit, removal, symlink, or directory at the target is refused.
 
 The authoritative store will be `<project-root>/.tuic/progress.sqlite3`. Managed
 workspaces report to their owning project's store, so removing a temporary
@@ -77,6 +81,15 @@ workspace does not remove project history. The database is local runtime state,
 excluded from Git; Markdown is the portable, optionally versioned export.
 Editing that export does not change the stored history. No background model is
 required to collect, group, display, or export explicit reports.
+
+The Markdown is deterministic English for its snapshot and options. It includes
+the project, UTC snapshot revision/time, collection and workstream states, active
+blockers, and dated history. Source metadata is off by default; when enabled it
+is limited to available reporter, workspace, and session identifiers. Transcript
+text, commands, credentials, and tokens are never exported. Writing uses a
+same-directory temporary file and atomic replacement, preserving the original on
+failure. Export does not pause or clear collection, change read state, stage,
+commit, push, import Markdown edits, or schedule later exports.
 
 Controls are project-scoped across MCP `repo` actions, Tauri IPC, and HTTP.
 Delete always names event IDs; clear names one project and supplies its current

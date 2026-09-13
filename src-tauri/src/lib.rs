@@ -449,6 +449,14 @@ fn progress_read(
     progress::progress_read(&project, input)
 }
 
+#[tauri::command]
+fn progress_export(
+    project: String,
+    input: progress::ProgressExportInput,
+) -> Result<progress::ProgressExportReceipt, String> {
+    progress::progress_export(&project, input)
+}
+
 /// Receive a screenshot response from the frontend (captured iframe content).
 /// Pairs with the `screenshot-request` Tauri event emitted by `ui(action=screenshot)`.
 #[cfg(feature = "desktop")]
@@ -1927,6 +1935,7 @@ pub fn run() {
             progress_clear,
             progress_update,
             progress_read,
+            progress_export,
             get_local_ip,
             get_local_ips,
             updater::check_update_channel,

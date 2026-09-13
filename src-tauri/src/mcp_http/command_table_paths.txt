@@ -173,6 +173,7 @@
 /process/stats
 /progress/clear
 /progress/delete
+/progress/export
 /progress/list
 /progress/pause
 /progress/read

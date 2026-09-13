@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Project Progress can now export a safe, versionable `progress.md`.** The
+  project panel previews one deterministic backend snapshot and writes it only
+  while both the database snapshot and existing-file content still match.
+  Exports target the owning project root, optionally include bounded provenance,
+  refuse symlinks/directories, and use atomic replacement without changing
+  Progress state or Git.
+
 - **Claude and Codex status signals are launch-scoped and on by default.** TUIC adds a private Claude settings file or Codex notify adapter only to processes launched inside TUIC. Explicit CLI overrides win, Codex still calls the user's existing notify command, and each agent has an independent off switch. Global hook installation remains explicit for agents without a launch-scoped route.
 
 - **Copy-on-write workspaces are now an opt-in experimental feature.** New

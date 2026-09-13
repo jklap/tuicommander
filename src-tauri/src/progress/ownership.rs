@@ -128,9 +128,19 @@ mod tests {
             }
         });
 
+        let owner = resolve_owning_project_in(&leaf.path().to_string_lossy(), &doc).unwrap();
+        assert_eq!(owner, root.path().canonicalize().unwrap());
+        let preview = super::super::export::progress_export(
+            owner,
+            crate::progress::ProgressExportInput::Preview {
+                options: Default::default(),
+            },
+        )
+        .unwrap();
+        assert_eq!(preview.project_root, root.path().to_string_lossy());
         assert_eq!(
-            resolve_owning_project_in(&leaf.path().to_string_lossy(), &doc).unwrap(),
-            root.path().canonicalize().unwrap()
+            preview.path,
+            root.path().join("progress.md").to_string_lossy()
         );
     }
 
@@ -182,6 +192,19 @@ mod tests {
             .unwrap()
             .events;
         assert_eq!(events, vec![original]);
+        let preview = super::super::export::progress_export(
+            root.path().canonicalize().unwrap(),
+            crate::progress::ProgressExportInput::Preview {
+                options: Default::default(),
+            },
+        )
+        .unwrap();
+        assert!(
+            preview
+                .markdown
+                .contains("The owning project retains its history.")
+        );
+        assert!(!workspace.path().join("progress.md").exists());
     }
 
     #[test]
