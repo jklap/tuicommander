@@ -591,6 +591,54 @@ describe("initApp", () => {
 		expect(deps.stores.startPolling).toHaveBeenCalled();
 	});
 
+	describe("term-alias-assigned event", () => {
+		// Story 761-c847: Terminal.tsx creates the tab locally (sessionId null),
+		// awaits PTY creation, then calls terminalsStore.setSessionId — so the
+		// backend's alias-assignment event for a freshly spawned session can
+		// arrive before that bind exists. The listener must delegate to the
+		// store's race-safe applyAlias() rather than resolving the terminal id
+		// itself via getTerminalForSession, which would silently drop the event.
+		function captureAliasAssigned() {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { session_id: string; alias: string } }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "term-alias-assigned") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return () => cb;
+		}
+
+		it("retains an alias event that arrives before the session is bound to a terminal", async () => {
+			const getCb = captureAliasAssigned();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			// Mirrors Terminal.tsx's initSession: the tab exists before the PTY
+			// session id is known.
+			const id = terminalsStore.add(makeTerminal({ name: "Fresh tab" }));
+
+			// Backend assigns the alias and emits the event before setSessionId runs.
+			getCb()!({ payload: { session_id: "sess-fresh", alias: "tc-9" } });
+			expect(terminalsStore.get(id)?.alias).toBeNull();
+
+			// setSessionId establishes the binding — the retained alias applies now.
+			terminalsStore.setSessionId(id, "sess-fresh");
+			expect(terminalsStore.get(id)?.alias).toBe("tc-9");
+		});
+
+		it("applies an alias event that arrives after the session is already bound", async () => {
+			const getCb = captureAliasAssigned();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const id = terminalsStore.add(makeTerminal({ name: "Bound tab" }));
+			terminalsStore.setSessionId(id, "sess-bound");
+
+			getCb()!({ payload: { session_id: "sess-bound", alias: "tc-10" } });
+			expect(terminalsStore.get(id)?.alias).toBe("tc-10");
+		});
+	});
+
 	it("refreshes all branch stats", async () => {
 		const deps = createMockDeps();
 		await initApp(deps);
