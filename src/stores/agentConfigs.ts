@@ -25,6 +25,7 @@ interface AgentConfigsState {
 			intent_tab_title?: boolean;
 			suggest_followups?: boolean;
 			hook_instrumentation?: boolean;
+			native_status_signals?: boolean;
 		}
 	>;
 	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
@@ -306,6 +307,20 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 						s.agents[type] = { run_configs: [] };
 					}
 					s.agents[type].hook_instrumentation = value;
+				}),
+			);
+		},
+
+		/** Missing is deliberately on: launch-scoped signals are the safe default. */
+		getNativeStatusSignals(type: AgentType): boolean {
+			return state.agents[type]?.native_status_signals ?? true;
+		},
+
+		syncNativeStatusSignals(type: AgentType, value: boolean): void {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+					s.agents[type].native_status_signals = value;
 				}),
 			);
 		},

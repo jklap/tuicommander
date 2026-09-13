@@ -620,6 +620,8 @@ const AgentRow: Component<{
 	const configs = () => configStore.getRunConfigs(props.agentType);
 	const supportsMcp = () => MCP_SUPPORT[props.agentType];
 	const supportsHooks = () => HOOK_SUPPORT[props.agentType];
+	const supportsLaunchSignals = () => props.agentType === "claude" || props.agentType === "codex";
+	const supportsGlobalHooks = () => ["gemini", "grok", "opencode"].includes(props.agentType);
 
 	const loadMcpStatus = async () => {
 		if (!supportsMcp() || !isTauri()) return;
@@ -652,6 +654,20 @@ const AgentRow: Component<{
 			await loadHookState();
 		} catch (err) {
 			appLogger.error("config", `Hook instrumentation toggle failed for ${props.agentType}`, err);
+		} finally {
+			setHookLoading(false);
+		}
+	};
+
+	const handleNativeStatusToggle = async () => {
+		if (hookLoading()) return;
+		setHookLoading(true);
+		try {
+			const next = !configStore.getNativeStatusSignals(props.agentType);
+			await invoke("set_agent_native_status_signals", { agentType: props.agentType, enabled: next });
+			configStore.syncNativeStatusSignals(props.agentType, next);
+		} catch (err) {
+			appLogger.error("config", `Native status signal toggle failed for ${props.agentType}`, err);
 		} finally {
 			setHookLoading(false);
 		}
@@ -781,8 +797,28 @@ const AgentRow: Component<{
 						<p class={s.hint}>Inject "continue" on 5xx errors with backoff (5s, 15s, 30s)</p>
 					</div>
 
-					{/* Native-hook state instrumentation (Claude/Gemini) */}
-					<Show when={supportsHooks()}>
+					<Show when={supportsLaunchSignals()}>
+						<div class={a.expandedSection}>
+							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+								<input
+									type="checkbox"
+									checked={configStore.getNativeStatusSignals(props.agentType)}
+									disabled={hookLoading()}
+									onChange={handleNativeStatusToggle}
+								/>
+								<span>Native status signals</span>
+								<span class={a.badge} data-type="mcp">
+									Signals: at launch
+								</span>
+							</label>
+							<p class={s.hint}>
+								Adds process-scoped status integration only to agents launched inside TUIC. Applies on next launch.
+							</p>
+						</div>
+					</Show>
+
+					{/* Explicit global installation remains available only where launch-scoped integration is unavailable. */}
+					<Show when={supportsHooks() && supportsGlobalHooks()}>
 						<div class={a.expandedSection}>
 							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 								<input
@@ -791,7 +827,7 @@ const AgentRow: Component<{
 									disabled={hookLoading()}
 									onChange={handleHookToggle}
 								/>
-								<span>Use native agent hooks for status</span>
+								<span>Install hooks globally</span>
 								<Show when={hookState() === "installed" || hookState() === "outdated"}>
 									<span class={a.badge} data-type={hookState() === "outdated" ? "notfound" : "mcp"}>
 										{hookState() === "outdated" ? "Hooks: re-enable" : "Hooks installed"}

@@ -82,6 +82,7 @@
 /config/activity
 /config/agents
 /config/agents/x/hook-instrumentation
+/config/agents/x/native-status-signals
 /config/ai-prompts
 /config/branch-label
 /config/clear-caches

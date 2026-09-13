@@ -939,29 +939,35 @@ pub(crate) async fn spawn_agent(
             let mut cmd = CommandBuilder::new(&spawn_binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
-            // If custom args are provided, use them directly
+            let mut launch_args = Vec::new();
             if let Some(ref args) = spawn_agent_config.args {
-                for arg in args {
-                    cmd.arg(arg);
-                }
+                launch_args.extend(args.iter().cloned());
             } else {
                 // Default Claude-style args for backward compatibility
                 if spawn_agent_config.print_mode {
-                    cmd.arg("--print");
+                    launch_args.push("--print".to_string());
                 }
 
                 if let Some(ref format) = spawn_agent_config.output_format {
-                    cmd.arg("--output-format");
-                    cmd.arg(format);
+                    launch_args.push("--output-format".to_string());
+                    launch_args.push(format.clone());
                 }
 
                 if let Some(ref model) = spawn_agent_config.model {
-                    cmd.arg("--model");
-                    cmd.arg(model);
+                    launch_args.push("--model".to_string());
+                    launch_args.push(model.clone());
                 }
 
                 // Add prompt
-                cmd.arg(&spawn_agent_config.prompt);
+                launch_args.push(spawn_agent_config.prompt.clone());
+            }
+            let agent_type = spawn_agent_config.agent_type.as_deref().unwrap_or("claude");
+            for arg in crate::agent_hook_launch::augment_args(
+                agent_type,
+                &launch_args,
+                &crate::config::config_dir(),
+            ) {
+                cmd.arg(arg);
             }
 
             if let Some(ref cwd) = spawn_agent_config.cwd {

@@ -352,6 +352,8 @@ When adding config fields or settings UI:
 | `docs/FEATURES.md` | Section 11 (Settings) |
 
 ### Agent Detection
+
+Launch-scoped Claude/Codex status changes must keep `agent_hook_launch.rs`, `shell_integration.rs`, direct/MCP spawn assembly, agent config types, Settings, HTTP/Tauri transport parity, the route snapshot, AI-agent/config/settings docs, FEATURES and CHANGELOG synchronized.
 When adding agents or changing detection logic:
 
 | File | What to update |

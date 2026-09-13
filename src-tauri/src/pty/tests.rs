@@ -11980,7 +11980,7 @@ fn question_suppress_resolves_from_agent_config() {
     };
     agents.agents.insert("claude".into(), enabled);
     let disabled = AgentSettings {
-        hook_instrumentation: Some(false),
+        native_status_signals: Some(false),
         ..Default::default()
     };
     agents.agents.insert("codex".into(), disabled);

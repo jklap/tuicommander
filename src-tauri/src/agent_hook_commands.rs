@@ -167,6 +167,30 @@ pub(crate) fn get_agent_hook_state(agent_type: String) -> String {
     }
 }
 
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn get_agent_native_status_signals(agent_type: String) -> bool {
+    crate::agent_hook_launch::enabled(&agent_type)
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn set_agent_native_status_signals(
+    agent_type: String,
+    enabled: bool,
+) -> Result<(), String> {
+    if !matches!(agent_type.as_str(), "claude" | "codex") {
+        return Err(format!(
+            "native status signals are unsupported for '{agent_type}'"
+        ));
+    }
+    let mut config = crate::config::load_agents_config();
+    config
+        .agents
+        .entry(agent_type)
+        .or_default()
+        .native_status_signals = Some(enabled);
+    crate::config::save_agents_config(config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

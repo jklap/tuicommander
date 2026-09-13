@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Claude and Codex status signals are launch-scoped and on by default.** TUIC adds a private Claude settings file or Codex notify adapter only to processes launched inside TUIC. Explicit CLI overrides win, Codex still calls the user's existing notify command, and each agent has an independent off switch. Global hook installation remains explicit for agents without a launch-scoped route.
+
 - **Copy-on-write workspaces are now an opt-in experimental feature.** New
   clones are created only when **Settings → General → Experimental features →
   Copy-on-write workspaces** is on. With it off, `mode=auto` produces a linked

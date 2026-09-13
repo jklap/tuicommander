@@ -843,6 +843,8 @@ Custom keyboard shortcut overrides.
 
 ### Agents Config (`agents.json`)
 
+Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
+
 **Type:** `AgentsConfig`
 
 Per-agent run configurations (custom commands, arguments, environment variables).

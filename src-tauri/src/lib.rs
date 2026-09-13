@@ -10,6 +10,7 @@ pub(crate) mod agent_hook;
 pub(crate) mod agent_hook_codex;
 pub(crate) mod agent_hook_commands;
 pub(crate) mod agent_hook_installer;
+pub(crate) mod agent_hook_launch;
 pub(crate) mod agent_hook_opencode;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
@@ -1338,6 +1339,13 @@ pub fn run() {
 
     let data_dir = config::config_dir();
 
+    if let Err(error) = agent_hook_launch::regenerate_launch_assets(&data_dir) {
+        tracing::error!(
+            source = "agent_hooks",
+            "Failed to generate launch-scoped agent status assets: {error}"
+        );
+    }
+
     let mut app_state = AppState::new(data_dir, worktrees_dir, config.clone(), log_buffer);
     *app_state.github.token.get_mut() = github_token;
     *app_state.github.token_source.get_mut() = github_token_source;
@@ -1992,6 +2000,8 @@ pub fn run() {
             config::save_agents_config,
             agent_hook_commands::set_agent_hook_instrumentation,
             agent_hook_commands::get_agent_hook_state,
+            agent_hook_commands::get_agent_native_status_signals,
+            agent_hook_commands::set_agent_native_status_signals,
             agent_mcp::get_agent_mcp_status,
             agent_mcp::install_agent_mcp,
             agent_mcp::remove_agent_mcp,
