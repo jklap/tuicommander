@@ -683,6 +683,14 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: args.report,
 		}),
 	},
+	progress_status: { map: (_args, p) => ({ method: "GET", path: `/progress/status?path=${p("project")}` }) },
+	progress_list: { map: (args, p) => ({ method: "POST", path: `/progress/list?path=${p("project")}`, body: args.input }) },
+	progress_pause: { map: (_args, p) => ({ method: "POST", path: `/progress/pause?path=${p("project")}` }) },
+	progress_resume: { map: (_args, p) => ({ method: "POST", path: `/progress/resume?path=${p("project")}` }) },
+	progress_delete: { map: (args, p) => ({ method: "POST", path: `/progress/delete?path=${p("project")}`, body: args.input }) },
+	progress_clear: { map: (args, p) => ({ method: "POST", path: `/progress/clear?path=${p("project")}`, body: args.input }) },
+	progress_update: { map: (args, p) => ({ method: "POST", path: `/progress/update?path=${p("project")}`, body: args.input }) },
+	progress_read: { map: (args, p) => ({ method: "POST", path: `/progress/read?path=${p("project")}`, body: args.input }) },
 
 	// --- Config: prompt library ---
 	load_prompt_library: { map: () => ({ method: "GET", path: "/config/prompt-library" }) },

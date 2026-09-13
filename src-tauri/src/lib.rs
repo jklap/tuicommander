@@ -392,6 +392,62 @@ fn report_progress_event(
     )
 }
 
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_status(project: String) -> Result<progress::ProgressStatus, String> {
+    progress::progress_status(&project)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_list(
+    project: String,
+    input: progress::ProgressListInput,
+) -> Result<progress::ProgressPage, String> {
+    progress::progress_list(&project, input)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_pause(project: String) -> Result<progress::ProgressMutationReceipt, String> {
+    progress::progress_pause(&project)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_resume(project: String) -> Result<progress::ProgressMutationReceipt, String> {
+    progress::progress_resume(&project)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_delete(
+    project: String,
+    input: progress::ProgressDeleteInput,
+) -> Result<progress::ProgressMutationReceipt, String> {
+    progress::progress_delete(&project, input)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_clear(
+    project: String,
+    input: progress::ProgressClearInput,
+) -> Result<progress::ProgressMutationReceipt, String> {
+    progress::progress_clear(&project, input)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_update(
+    project: String,
+    input: progress::ProgressUpdateInput,
+) -> Result<progress::ProgressMutationReceipt, String> {
+    progress::progress_update(&project, input)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_read(
+    project: String,
+    input: progress::ProgressReadInput,
+) -> Result<progress::ProgressMutationReceipt, String> {
+    progress::progress_read(&project, input)
+}
+
 /// Receive a screenshot response from the frontend (captured iframe content).
 /// Pairs with the `screenshot-request` Tauri event emitted by `ui(action=screenshot)`.
 #[cfg(feature = "desktop")]
@@ -1855,6 +1911,14 @@ pub fn run() {
             clear_caches,
             clear_repo_caches,
             report_progress_event,
+            progress_status,
+            progress_list,
+            progress_pause,
+            progress_resume,
+            progress_delete,
+            progress_clear,
+            progress_update,
+            progress_read,
             get_local_ip,
             get_local_ips,
             updater::check_update_channel,

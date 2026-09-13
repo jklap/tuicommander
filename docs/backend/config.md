@@ -952,9 +952,11 @@ project and follows recorded linked, COW, and nested workspace parent records;
 it never uses the focused UI repository or a bare CWD. Unbound callers fail
 with `project_required`, and an inherited COW copy is not a second authority.
 
-Schema version 1 stores project revision state, workstreams and rename aliases,
-events with monotonic sequence numbers and UUIDv7 ids, and independently active
-blockers. Sequence and revision values are not reused after deletion or clear.
+Schema version 2 stores project revision, persistent collection/read-cursor
+state, workstreams and rename aliases, events with monotonic sequence numbers
+and UUIDv7 ids, independently active blockers, and preserved source snapshots
+for merged events. Sequence and revision values are not reused after deletion
+or clear.
 Each operation opens a fresh SQLite connection in WAL mode with a five-second
 busy timeout, leaving SQLite locking as the cross-thread and cross-process
 serialization boundary.

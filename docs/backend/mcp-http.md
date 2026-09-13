@@ -9,6 +9,12 @@ derives project and provenance from the caller, commits to the owning project's
 store before dual-emitting `progress-recorded`, and suppresses notifications for
 paused collection and exact 60-second retry duplicates.
 
+The `repo` tool exposes `progress_status`, `progress_list`, `progress_pause`,
+`progress_resume`, `progress_delete`, `progress_clear`, `progress_update`, and
+`progress_read`. Every action requires `path`; action-specific data is carried
+in the typed `input` object. Destructive actions never infer the active project.
+HTTP and Tauri call the same blocking storage functions.
+
 **Module:** `src-tauri/src/mcp_http/mod.rs`
 
 Optional HTTP/WebSocket server that exposes all Tauri commands as REST endpoints. Enables browser-mode operation and MCP (Model Context Protocol) integration for external AI tools.

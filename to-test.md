@@ -1931,7 +1931,6 @@ on a successful parent fast-forward. After restarting:
       commit the parent's branch holds.
 - [ ] In a clone's terminal, `git push origin HEAD` must fail with an unusable
       URL (`no-push://…`), not contact the network.
-
 ## COW workspaces behind the experimental flag (story `767-3968`, 2026-09-13) — **Rust + frontend, needs a `make dev` restart**
 
 COW workspace creation is now gated on `experimental_features_enabled` AND the
@@ -1977,3 +1976,8 @@ new `cow_workspaces_enabled` sub-flag, both default false.
 - [ ] Switch Settings → worktree storage to "inside repo" (`.worktrees/`),
       create a worktree, and confirm creation does not hang or recurse — the
       destination's own ignored ancestor must be skipped.
+
+- [ ] After restarting `make dev`, verify Project Progress HTTP controls on the
+      isolated test instance: pause rejects reports, resume accepts only new reports,
+      and clear leaves an existing `progress.md` untouched. _(Rust backend change;
+      requires restart to load.)_

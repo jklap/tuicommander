@@ -1,7 +1,9 @@
 use super::model::{
-    DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, NewProgressEvent, ProgressEvent, ProgressKind,
-    ProgressPage, ProgressProvenance, ProgressReceipt, ProgressReportOutcome, ProjectSnapshot,
-    WorkstreamSnapshot, WorkstreamState, normalize_workstream, validate_workstream_name,
+    DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MAX_SUMMARY_CHARS, NewProgressEvent, ProgressCorrection,
+    ProgressEvent, ProgressKind, ProgressListInput, ProgressMutationReceipt, ProgressPage,
+    ProgressProvenance, ProgressReceipt, ProgressReportOutcome, ProgressStatus,
+    ProgressUpdateInput, ProjectSnapshot, WorkstreamSnapshot, WorkstreamState,
+    normalize_workstream, validate_workstream_name,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -11,7 +13,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const RETRY_DEDUP_WINDOW_MS: u64 = 60_000;
 const STORE_DIR: &str = ".tuic";
@@ -184,6 +186,7 @@ impl ProgressStore {
     ) -> Result<ProgressPage, String> {
         let conn = self.connect()?;
         let revision = current_revision(&conn)?;
+        let snapshot_cursor = max_sequence(&conn)?;
         let limit = limit.unwrap_or(DEFAULT_PAGE_LIMIT).clamp(1, MAX_PAGE_LIMIT);
         let before = before_sequence
             .map(i64_from_u64)
@@ -214,8 +217,232 @@ impl ProgressStore {
             .flatten();
         Ok(ProgressPage {
             revision,
+            snapshot_cursor,
             events,
             next_before_sequence,
+        })
+    }
+
+    pub fn list_filtered(&self, input: &ProgressListInput) -> Result<ProgressPage, String> {
+        let conn = self.connect()?;
+        let revision = current_revision(&conn)?;
+        let snapshot_cursor = max_sequence(&conn)?;
+        let read_cursor = read_cursor(&conn)?;
+        let limit = input
+            .limit
+            .unwrap_or(DEFAULT_PAGE_LIMIT)
+            .clamp(1, MAX_PAGE_LIMIT);
+        let before = input.before_sequence.unwrap_or(u64::MAX);
+        let after_ms = input.created_after_ms.unwrap_or(0);
+        let before_ms = input.created_before_ms.unwrap_or(u64::MAX);
+        let kind = input.kind.map(ProgressKind::as_str);
+        let mut stmt = conn.prepare(
+            "SELECT e.id, e.sequence, e.revision, e.created_at_ms, e.kind,
+                    e.summary, e.workstream_id, w.name, e.reporter_id,
+                    e.reporter_name, e.session_id, e.workspace_path
+             FROM events e LEFT JOIN workstreams w ON w.id = e.workstream_id
+             WHERE e.sequence < ?1 AND e.created_at_ms >= ?2 AND e.created_at_ms <= ?3
+               AND (?4 IS NULL OR e.workstream_id = ?4)
+               AND (?5 IS NULL OR e.kind = ?5)
+               AND (?6 = 0 OR e.sequence > ?7)
+               AND (?8 = 0 OR EXISTS (SELECT 1 FROM blockers b WHERE b.event_id=e.id AND b.active=1))
+             ORDER BY e.sequence DESC LIMIT ?9"
+        ).map_err(db_error("prepare filtered progress query"))?;
+        let rows = stmt
+            .query_map(
+                params![
+                    i64_from_u64(before)?,
+                    i64_from_u64(after_ms)?,
+                    i64_from_u64(before_ms)?,
+                    input.workstream_id,
+                    kind,
+                    input.unread_only.unwrap_or(false) as i64,
+                    i64_from_u64(read_cursor)?,
+                    input.blocker_only.unwrap_or(false) as i64,
+                    limit as i64 + 1
+                ],
+                row_to_event,
+            )
+            .map_err(db_error("query filtered progress history"))?;
+        let mut events = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error("read filtered progress history"))?;
+        let has_more = events.len() > limit;
+        events.truncate(limit);
+        let next_before_sequence = has_more
+            .then(|| events.last().map(|e| e.sequence))
+            .flatten();
+        Ok(ProgressPage {
+            revision,
+            snapshot_cursor,
+            events,
+            next_before_sequence,
+        })
+    }
+
+    pub fn status(&self) -> Result<ProgressStatus, String> {
+        let snapshot = self.snapshot()?;
+        let conn = self.connect()?;
+        let snapshot_cursor = max_sequence(&conn)?;
+        let read_cursor = read_cursor(&conn)?;
+        let unread_count = conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE sequence > ?1",
+                [i64_from_u64(read_cursor)?],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(db_error("count unread progress events"))?;
+        Ok(ProgressStatus {
+            project_root: snapshot.project_root,
+            revision: snapshot.revision,
+            snapshot_cursor,
+            read_cursor,
+            unread_count: u64_from_i64(unread_count, "unread count")?,
+            collection_enabled: snapshot.collection_enabled,
+            workstreams: snapshot.workstreams,
+            project_blockers: snapshot.project_blockers,
+        })
+    }
+
+    pub fn set_collection_enabled(&self, enabled: bool) -> Result<ProgressMutationReceipt, String> {
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error("begin progress collection transaction"))?;
+        let current = tx
+            .query_row(
+                "SELECT collection_enabled FROM project_meta WHERE id=1",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(db_error("read progress collection state"))?
+            != 0;
+        let revision = if current == enabled {
+            current_revision(&tx)?
+        } else {
+            tx.execute(
+                "UPDATE project_meta SET collection_enabled=?1 WHERE id=1",
+                [enabled as i64],
+            )
+            .map_err(db_error("update progress collection state"))?;
+            bump_revision(&tx)?
+        };
+        tx.commit()
+            .map_err(db_error("commit progress collection transaction"))?;
+        Ok(ProgressMutationReceipt {
+            revision,
+            affected: usize::from(current != enabled),
+        })
+    }
+
+    pub fn delete_events(&self, event_ids: &[String]) -> Result<ProgressMutationReceipt, String> {
+        if event_ids.is_empty() {
+            return Err("progress_invalid_request: eventIds must not be empty".into());
+        }
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error("begin progress delete transaction"))?;
+        for id in event_ids {
+            let exists = tx
+                .query_row("SELECT 1 FROM events WHERE id=?1", [id], |_| Ok(()))
+                .optional()
+                .map_err(db_error("validate progress event id"))?
+                .is_some();
+            if !exists {
+                return Err(format!(
+                    "progress_event_not_found: event '{id}' does not belong to this project"
+                ));
+            }
+        }
+        let mut affected = 0;
+        for id in event_ids {
+            affected += tx
+                .execute("DELETE FROM events WHERE id=?1", [id])
+                .map_err(db_error("delete progress event"))?;
+        }
+        recompute_all_workstreams(&tx)?;
+        let revision = bump_revision(&tx)?;
+        tx.commit()
+            .map_err(db_error("commit progress delete transaction"))?;
+        Ok(ProgressMutationReceipt { revision, affected })
+    }
+
+    pub fn clear(&self, expected_revision: u64) -> Result<ProgressMutationReceipt, String> {
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error("begin progress clear transaction"))?;
+        require_revision(&tx, expected_revision)?;
+        let affected = tx
+            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get::<_, i64>(0))
+            .map_err(db_error("count progress events"))?;
+        tx.execute_batch("DELETE FROM events; DELETE FROM workstreams; UPDATE project_meta SET read_cursor=0, collection_enabled=0 WHERE id=1;")
+            .map_err(db_error("clear project progress"))?;
+        let revision = bump_revision(&tx)?;
+        tx.commit()
+            .map_err(db_error("commit progress clear transaction"))?;
+        Ok(ProgressMutationReceipt {
+            revision,
+            affected: usize::try_from(affected).unwrap_or(usize::MAX),
+        })
+    }
+
+    pub fn acknowledge_read(&self, cursor: u64) -> Result<ProgressMutationReceipt, String> {
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error("begin progress read transaction"))?;
+        let maximum = max_sequence(&tx)?;
+        if cursor > maximum {
+            return Err(format!(
+                "progress_invalid_cursor: snapshot cursor {cursor} exceeds project cursor {maximum}"
+            ));
+        }
+        let old = read_cursor(&tx)?;
+        let next = old.max(cursor);
+        tx.execute(
+            "UPDATE project_meta SET read_cursor=?1 WHERE id=1",
+            [i64_from_u64(next)?],
+        )
+        .map_err(db_error("acknowledge progress snapshot"))?;
+        tx.commit()
+            .map_err(db_error("commit progress read transaction"))?;
+        Ok(ProgressMutationReceipt {
+            revision: current_revision(&conn)?,
+            affected: usize::from(next != old),
+        })
+    }
+
+    pub fn update(&self, input: &ProgressUpdateInput) -> Result<ProgressMutationReceipt, String> {
+        if input.corrections.is_empty() {
+            return Err("progress_invalid_request: corrections must not be empty".into());
+        }
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error("begin progress update transaction"))?;
+        require_revision(&tx, input.expected_revision)?;
+        for correction in &input.corrections {
+            apply_correction(&tx, correction)?;
+        }
+        recompute_all_workstreams(&tx)?;
+        // Explicit state is intentionally applied after derived recomputation.
+        for correction in &input.corrections {
+            if let ProgressCorrection::SetWorkstreamState {
+                workstream_id,
+                state,
+            } = correction
+            {
+                set_workstream_state(&tx, workstream_id, *state)?;
+            }
+        }
+        let revision = bump_revision(&tx)?;
+        tx.commit()
+            .map_err(db_error("commit progress update transaction"))?;
+        Ok(ProgressMutationReceipt {
+            revision,
+            affected: input.corrections.len(),
         })
     }
 
@@ -390,7 +617,7 @@ impl ProgressStore {
         }
         if version == SCHEMA_VERSION {
             validate_schema(&conn)?;
-        } else {
+        } else if version == 0 {
             let application_tables = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
@@ -404,7 +631,23 @@ impl ProgressStore {
                     "progress_store_corrupt: unversioned database contains {application_tables} unexpected table(s)"
                 ));
             }
-        }
+        } else {
+            // A version number alone is not proof of a valid legacy schema.
+            // Reject malformed v1 databases before the migration path can turn
+            // their missing-table error into an ordinary storage failure.
+            for query in [
+                "SELECT revision, collection_enabled FROM project_meta LIMIT 0",
+                "SELECT id FROM workstreams LIMIT 0",
+                "SELECT id FROM events LIMIT 0",
+                "SELECT event_id FROM blockers LIMIT 0",
+            ] {
+                conn.prepare(query).map_err(|error| {
+                    format!(
+                        "progress_store_corrupt: legacy schema version {version} has an invalid table shape: {error}"
+                    )
+                })?;
+            }
+        } // Valid older schemas are migrated by the normal read-write connection.
         Ok(())
     }
 
@@ -556,9 +799,10 @@ fn migrate(conn: &Connection) -> Result<(), String> {
              CREATE TABLE project_meta (
                  id INTEGER PRIMARY KEY CHECK (id = 1),
                  revision INTEGER NOT NULL CHECK (revision >= 0),
-                 collection_enabled INTEGER NOT NULL CHECK (collection_enabled IN (0, 1))
+                 collection_enabled INTEGER NOT NULL CHECK (collection_enabled IN (0, 1)),
+                 read_cursor INTEGER NOT NULL DEFAULT 0 CHECK (read_cursor >= 0)
              );
-             INSERT INTO project_meta (id, revision, collection_enabled) VALUES (1, 0, 1);
+             INSERT INTO project_meta (id, revision, collection_enabled, read_cursor) VALUES (1, 0, 1, 0);
              CREATE TABLE workstreams (
                  id TEXT PRIMARY KEY NOT NULL,
                  name TEXT NOT NULL,
@@ -589,13 +833,34 @@ fn migrate(conn: &Connection) -> Result<(), String> {
              CREATE TABLE blockers (
                  event_id TEXT PRIMARY KEY NOT NULL REFERENCES events(id) ON DELETE CASCADE,
                  workstream_id TEXT REFERENCES workstreams(id) ON DELETE CASCADE,
-                 active INTEGER NOT NULL CHECK (active IN (0, 1))
+                 active INTEGER NOT NULL CHECK (active IN (0, 1)),
+                 manually_resolved INTEGER NOT NULL DEFAULT 0 CHECK (manually_resolved IN (0, 1))
              );
              CREATE INDEX blockers_active_workstream ON blockers(active, workstream_id);
-             PRAGMA user_version = 1;
+             CREATE TABLE merged_event_sources (
+                 target_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                 source_event_id TEXT NOT NULL,
+                 source_event_json TEXT NOT NULL,
+                 PRIMARY KEY(target_event_id, source_event_id)
+             );
+             PRAGMA user_version = 2;
              COMMIT;",
         )
         .map_err(db_error("create progress schema"))?;
+    } else if version == 1 {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             ALTER TABLE project_meta ADD COLUMN read_cursor INTEGER NOT NULL DEFAULT 0 CHECK (read_cursor >= 0);
+             ALTER TABLE blockers ADD COLUMN manually_resolved INTEGER NOT NULL DEFAULT 0 CHECK (manually_resolved IN (0, 1));
+             CREATE TABLE merged_event_sources (
+                 target_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                 source_event_id TEXT NOT NULL,
+                 source_event_json TEXT NOT NULL,
+                 PRIMARY KEY(target_event_id, source_event_id)
+             );
+             PRAGMA user_version = 2;
+             COMMIT;"
+        ).map_err(db_error("migrate progress schema to version 2"))?;
     }
     Ok(())
 }
@@ -623,6 +888,7 @@ fn validate_schema(conn: &Connection) -> Result<(), String> {
         "workstream_aliases",
         "events",
         "blockers",
+        "merged_event_sources",
     ] {
         let present = conn
             .query_row(
@@ -640,11 +906,12 @@ fn validate_schema(conn: &Connection) -> Result<(), String> {
         }
     }
     for query in [
-        "SELECT revision, collection_enabled FROM project_meta LIMIT 0",
+        "SELECT revision, collection_enabled, read_cursor FROM project_meta LIMIT 0",
         "SELECT id, name, normalized_name, state, last_nonblocked_state, updated_sequence FROM workstreams LIMIT 0",
         "SELECT normalized_alias, workstream_id FROM workstream_aliases LIMIT 0",
         "SELECT sequence, id, revision, created_at_ms, kind, summary, workstream_id, reporter_id, reporter_name, session_id, workspace_path FROM events LIMIT 0",
-        "SELECT event_id, workstream_id, active FROM blockers LIMIT 0",
+        "SELECT event_id, workstream_id, active, manually_resolved FROM blockers LIMIT 0",
+        "SELECT target_event_id, source_event_id, source_event_json FROM merged_event_sources LIMIT 0",
     ] {
         conn.prepare(query).map_err(|error| {
             format!("progress_store_corrupt: schema version {SCHEMA_VERSION} has an invalid table shape: {error}")
@@ -888,6 +1155,291 @@ fn current_revision(conn: &Connection) -> Result<u64, String> {
         )
         .map_err(db_error("read progress revision"))?;
     u64_from_i64(revision, "project revision")
+}
+
+fn max_sequence(conn: &Connection) -> Result<u64, String> {
+    let value = conn
+        .query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(db_error("read progress snapshot cursor"))?;
+    u64_from_i64(value, "snapshot cursor")
+}
+
+fn read_cursor(conn: &Connection) -> Result<u64, String> {
+    let value = conn
+        .query_row(
+            "SELECT read_cursor FROM project_meta WHERE id=1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(db_error("read progress acknowledgement cursor"))?;
+    u64_from_i64(value, "read cursor")
+}
+
+fn require_revision(tx: &Transaction<'_>, expected: u64) -> Result<(), String> {
+    let actual = current_revision(tx)?;
+    if actual != expected {
+        return Err(format!(
+            "progress_revision_conflict: expected revision {expected}, current revision is {actual}"
+        ));
+    }
+    Ok(())
+}
+
+fn require_event(tx: &Transaction<'_>, id: &str) -> Result<ProgressEvent, String> {
+    tx.query_row(
+        "SELECT e.id,e.sequence,e.revision,e.created_at_ms,e.kind,e.summary,e.workstream_id,w.name,e.reporter_id,e.reporter_name,e.session_id,e.workspace_path FROM events e LEFT JOIN workstreams w ON w.id=e.workstream_id WHERE e.id=?1",
+        [id], row_to_event,
+    ).optional().map_err(db_error("load progress event"))?
+        .ok_or_else(|| format!("progress_event_not_found: event '{id}' does not belong to this project"))
+}
+
+fn apply_correction(tx: &Transaction<'_>, correction: &ProgressCorrection) -> Result<(), String> {
+    match correction {
+        ProgressCorrection::EditSummary { event_id, summary } => {
+            super::model::validate_text("summary", summary, MAX_SUMMARY_CHARS)?;
+            require_event(tx, event_id)?;
+            tx.execute(
+                "UPDATE events SET summary=?1 WHERE id=?2",
+                params![summary.trim(), event_id],
+            )
+            .map_err(db_error("edit progress summary"))?;
+        }
+        ProgressCorrection::MoveEvent {
+            event_id,
+            workstream_id,
+        } => {
+            require_event(tx, event_id)?;
+            if let Some(id) = workstream_id {
+                load_workstream(tx, id)?;
+            }
+            tx.execute(
+                "UPDATE events SET workstream_id=?1 WHERE id=?2",
+                params![workstream_id, event_id],
+            )
+            .map_err(db_error("move progress event"))?;
+            tx.execute(
+                "UPDATE blockers SET workstream_id=?1 WHERE event_id=?2",
+                params![workstream_id, event_id],
+            )
+            .map_err(db_error("move progress blocker"))?;
+        }
+        ProgressCorrection::RenameWorkstream {
+            workstream_id,
+            name,
+        } => rename_workstream_tx(tx, workstream_id, name)?,
+        ProgressCorrection::MergeWorkstreams {
+            source_workstream_ids,
+            target_workstream_id,
+        } => {
+            if source_workstream_ids.is_empty() {
+                return Err(
+                    "progress_invalid_request: sourceWorkstreamIds must not be empty".into(),
+                );
+            }
+            load_workstream(tx, target_workstream_id)?;
+            for source in source_workstream_ids {
+                if source == target_workstream_id {
+                    return Err(
+                        "progress_invalid_request: a workstream cannot merge into itself".into(),
+                    );
+                }
+                let row = load_workstream(tx, source)?;
+                tx.execute(
+                    "UPDATE events SET workstream_id=?1 WHERE workstream_id=?2",
+                    params![target_workstream_id, source],
+                )
+                .map_err(db_error("merge progress events"))?;
+                tx.execute(
+                    "UPDATE blockers SET workstream_id=?1 WHERE workstream_id=?2",
+                    params![target_workstream_id, source],
+                )
+                .map_err(db_error("merge progress blockers"))?;
+                tx.execute(
+                    "UPDATE workstream_aliases SET workstream_id=?1 WHERE workstream_id=?2",
+                    params![target_workstream_id, source],
+                )
+                .map_err(db_error("merge workstream aliases"))?;
+                tx.execute("DELETE FROM workstreams WHERE id=?1", [source])
+                    .map_err(db_error("delete merged workstream"))?;
+                let _ = row;
+            }
+        }
+        ProgressCorrection::MergeEvents {
+            source_event_ids,
+            target_event_id,
+        } => {
+            if source_event_ids.is_empty() {
+                return Err("progress_invalid_request: sourceEventIds must not be empty".into());
+            }
+            require_event(tx, target_event_id)?;
+            for source in source_event_ids {
+                if source == target_event_id {
+                    return Err(
+                        "progress_invalid_request: an event cannot merge into itself".into(),
+                    );
+                }
+                let event = require_event(tx, source)?;
+                let json = serde_json::to_string(&event)
+                    .map_err(|e| format!("progress_store_error: serialize merged source: {e}"))?;
+                tx.execute("INSERT INTO merged_event_sources(target_event_id,source_event_id,source_event_json) VALUES(?1,?2,?3)", params![target_event_id, source, json]).map_err(db_error("preserve merged progress source"))?;
+                tx.execute("DELETE FROM events WHERE id=?1", [source])
+                    .map_err(db_error("delete merged progress event"))?;
+            }
+        }
+        ProgressCorrection::ResolveBlocker { event_id } => {
+            let event = require_event(tx, event_id)?;
+            if event.kind != ProgressKind::Blocked {
+                return Err(format!(
+                    "progress_invalid_request: event '{event_id}' is not a blocker"
+                ));
+            }
+            let changed = tx
+                .execute(
+                    "UPDATE blockers SET active=0, manually_resolved=1 WHERE event_id=?1 AND active=1",
+                    [event_id],
+                )
+                .map_err(db_error("resolve progress blocker"))?;
+            if changed == 0 {
+                return Err(format!(
+                    "progress_invalid_request: blocker '{event_id}' is already resolved"
+                ));
+            }
+        }
+        ProgressCorrection::SetWorkstreamState { workstream_id, .. } => {
+            load_workstream(tx, workstream_id)?;
+        }
+    }
+    Ok(())
+}
+
+fn rename_workstream_tx(tx: &Transaction<'_>, id: &str, new_name: &str) -> Result<(), String> {
+    validate_workstream_name(new_name)?;
+    let row = load_workstream(tx, id)?;
+    let normalized = normalize_workstream(new_name.trim());
+    if let Some(owner) = tx
+        .query_row(
+            "SELECT workstream_id FROM workstream_aliases WHERE normalized_alias=?1",
+            [&normalized],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(db_error("check workstream alias"))?
+        && owner != id
+    {
+        return Err(format!(
+            "progress_workstream_conflict: '{}' already identifies another workstream",
+            new_name.trim()
+        ));
+    }
+    tx.execute(
+        "UPDATE workstreams SET name=?1,normalized_name=?2 WHERE id=?3",
+        params![new_name.trim(), normalized, id],
+    )
+    .map_err(db_error("rename progress workstream"))?;
+    tx.execute("INSERT INTO workstream_aliases(normalized_alias,workstream_id) VALUES(?1,?2) ON CONFLICT(normalized_alias) DO NOTHING", params![normalized,row.id]).map_err(db_error("retain progress workstream alias"))?;
+    Ok(())
+}
+
+fn recompute_all_workstreams(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute(
+        "UPDATE blockers SET active = CASE WHEN manually_resolved=1 THEN 0 ELSE 1 END",
+        [],
+    )
+    .map_err(db_error("reset derived progress blockers"))?;
+    let ids = tx
+        .prepare("SELECT id FROM workstreams")
+        .map_err(db_error("prepare workstream recompute"))?
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(db_error("query workstreams for recompute"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(db_error("read workstreams for recompute"))?;
+    for id in ids {
+        recompute_workstream(tx, &id)?;
+    }
+    Ok(())
+}
+
+fn recompute_workstream(tx: &Transaction<'_>, id: &str) -> Result<(), String> {
+    let mut state = WorkstreamState::Started;
+    let mut last = WorkstreamState::Started;
+    let mut updated = 0u64;
+    let mut blockers = 0u64;
+    let mut stmt = tx.prepare("SELECT e.sequence,e.kind,COALESCE(b.active,0) FROM events e LEFT JOIN blockers b ON b.event_id=e.id WHERE e.workstream_id=?1 ORDER BY e.sequence").map_err(db_error("prepare projection recompute"))?;
+    let rows = stmt
+        .query_map([id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(db_error("query projection events"))?;
+    for row in rows {
+        let (sequence, kind, active) = row.map_err(db_error("read projection event"))?;
+        updated = u64_from_i64(sequence, "event sequence")?;
+        match ProgressKind::parse(&kind)? {
+            ProgressKind::Blocked if active != 0 => {
+                blockers += 1;
+                state = WorkstreamState::Blocked;
+            }
+            ProgressKind::Blocked => {}
+            ProgressKind::Done => {
+                state = WorkstreamState::Done;
+                last = WorkstreamState::Done;
+                blockers = 0;
+                tx.execute("UPDATE blockers SET active=0 WHERE workstream_id=?1 AND event_id IN (SELECT id FROM events WHERE sequence <= ?2)", params![id, sequence])
+                    .map_err(db_error("recompute completed blockers"))?;
+            }
+            ProgressKind::Started if blockers == 0 => {
+                state = WorkstreamState::Started;
+                last = WorkstreamState::Started;
+            }
+            ProgressKind::Started => state = WorkstreamState::Blocked,
+            ProgressKind::Milestone if blockers > 0 => state = WorkstreamState::Blocked,
+            ProgressKind::Milestone if state != WorkstreamState::Done => {
+                state = WorkstreamState::Progressing;
+                last = WorkstreamState::Progressing;
+            }
+            ProgressKind::Milestone => {}
+        }
+    }
+    if blockers > 0 {
+        state = WorkstreamState::Blocked;
+    }
+    tx.execute(
+        "UPDATE workstreams SET state=?1,last_nonblocked_state=?2,updated_sequence=?3 WHERE id=?4",
+        params![state.as_str(), last.as_str(), i64_from_u64(updated)?, id],
+    )
+    .map_err(db_error("store recomputed workstream"))?;
+    Ok(())
+}
+
+fn set_workstream_state(
+    tx: &Transaction<'_>,
+    id: &str,
+    state: WorkstreamState,
+) -> Result<(), String> {
+    load_workstream(tx, id)?;
+    match state {
+        WorkstreamState::Blocked => {
+            return Err(
+                "progress_invalid_request: blocked state comes from active blockers".into(),
+            );
+        }
+        WorkstreamState::Done => {
+            tx.execute("UPDATE blockers SET active=0 WHERE workstream_id=?1", [id])
+                .map_err(db_error("resolve completed workstream blockers"))?;
+        }
+        _ => {}
+    }
+    tx.execute(
+        "UPDATE workstreams SET state=?1,last_nonblocked_state=?1 WHERE id=?2",
+        params![state.as_str(), id],
+    )
+    .map_err(db_error("set progress workstream state"))?;
+    Ok(())
 }
 
 fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProgressEvent> {
@@ -1792,5 +2344,71 @@ mod tests {
 
         assert_eq!(repeated.receipt.status, ProgressReceiptStatus::Recorded);
         assert_eq!(store.list(None, Some(10)).unwrap().events.len(), 3);
+    }
+
+    #[test]
+    fn pause_persists_and_resume_only_accepts_future_reports() {
+        let project = git_project();
+        let store = ProgressStore::open(project.path()).unwrap();
+        store.set_collection_enabled(false).unwrap();
+        drop(store);
+        let reopened = ProgressStore::open(project.path()).unwrap();
+        let paused = reopened
+            .report(&reported("Missed while paused.", "one"))
+            .unwrap();
+        assert_eq!(paused.receipt.status, ProgressReceiptStatus::Paused);
+        assert!(reopened.list(None, Some(10)).unwrap().events.is_empty());
+        reopened.set_collection_enabled(true).unwrap();
+        assert_eq!(
+            reopened
+                .report(&reported("Future report.", "one"))
+                .unwrap()
+                .receipt
+                .status,
+            ProgressReceiptStatus::Recorded
+        );
+        assert_eq!(reopened.list(None, Some(10)).unwrap().events.len(), 1);
+    }
+
+    #[test]
+    fn clear_preserves_monotonic_ids_pauses_and_rejects_stale_revision() {
+        let project = git_project();
+        let store = ProgressStore::open(project.path()).unwrap();
+        let old = store
+            .record(&event(ProgressKind::Milestone, "Old.", Some("Arc")))
+            .unwrap();
+        assert!(
+            store
+                .clear(0)
+                .unwrap_err()
+                .starts_with("progress_revision_conflict:")
+        );
+        let cleared = store.clear(old.revision).unwrap();
+        assert!(cleared.revision > old.revision);
+        assert!(!store.status().unwrap().collection_enabled);
+        store.set_collection_enabled(true).unwrap();
+        let new = store
+            .record(&event(ProgressKind::Milestone, "New.", Some("Arc")))
+            .unwrap();
+        assert!(new.sequence > old.sequence);
+    }
+
+    #[test]
+    fn viewed_cursor_converges_without_acknowledging_later_or_other_projects() {
+        let first = git_project();
+        let second = git_project();
+        let a = ProgressStore::open(first.path()).unwrap();
+        let b = ProgressStore::open(second.path()).unwrap();
+        a.record(&event(ProgressKind::Milestone, "Viewed.", None))
+            .unwrap();
+        let cursor = a.list(None, Some(10)).unwrap().snapshot_cursor;
+        a.record(&event(ProgressKind::Milestone, "Later.", None))
+            .unwrap();
+        b.record(&event(ProgressKind::Milestone, "Other project.", None))
+            .unwrap();
+        a.acknowledge_read(cursor).unwrap();
+        a.acknowledge_read(cursor).unwrap();
+        assert_eq!(a.status().unwrap().unread_count, 1);
+        assert_eq!(b.status().unwrap().unread_count, 1);
     }
 }

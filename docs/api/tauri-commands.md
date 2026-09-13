@@ -5,6 +5,13 @@
 | Command | Parameters | Result | Description |
 |---|---|---|---|
 | `report_progress_event` | `project, report` | `{status, revision, eventId?}` | Records a project outcome through the same durable core as MCP and HTTP. |
+| `progress_status` | `project` | `ProgressStatus` | Reads collection, revision, snapshot/read cursors, unread count, workstreams and blockers. |
+| `progress_list` | `project, input` | `ProgressPage` | Reads a bounded typed page and its snapshot cursor. |
+| `progress_pause` / `progress_resume` | `project` | `ProgressMutationReceipt` | Changes collection state without stopping agents or backfill. |
+| `progress_delete` | `project, input.eventIds` | `ProgressMutationReceipt` | Deletes explicit event IDs from one project. |
+| `progress_clear` | `project, input.expectedRevision` | `ProgressMutationReceipt` | Atomically clears one project and pauses collection. |
+| `progress_update` | `project, input` | `ProgressMutationReceipt` | Applies revision-guarded typed corrections atomically. |
+| `progress_read` | `project, input.snapshotCursor` | `ProgressMutationReceipt` | Acknowledges exactly the viewed snapshot watermark. |
 
 All commands are invoked from the frontend via `invoke(command, args)`. In browser mode, these map to HTTP endpoints (see [HTTP API](http-api.md)).
 

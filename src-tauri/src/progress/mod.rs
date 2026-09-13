@@ -4,5 +4,6 @@ mod service;
 mod store;
 
 pub use model::*;
-pub use service::submit_progress_report;
+pub use service::*;
+#[allow(unused_imports)]
 pub use store::ProgressStore;
