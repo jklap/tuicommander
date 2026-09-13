@@ -315,6 +315,19 @@ When modifying remote connection config, storage, or transport routing:
 | `docs/FEATURES.md` | Section 24 (Remote Connection Manager) |
 | `docs/user-guide/remote-access.md` | Remote Connection Manager section |
 
+### Project Progress (storage)
+
+When modifying the project-owned Progress store, its ownership resolution, or
+its Git-exclude/watcher interaction:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/progress/store.rs` | Schema, migrations, recovery, and SQLite locking behavior |
+| `src-tauri/src/progress/ownership.rs` | Registered and nested workspace ownership resolution |
+| `src-tauri/src/progress/model.rs` | Event/workstream types and validation limits |
+| `src-tauri/src/repo_watcher.rs` | Progress paths must continue to classify as noise |
+| `docs/backend/config.md` | Progress Storage section |
+
 ### Git & Worktree Integration
 When modifying git operations, worktree logic, or GitHub API:
 
