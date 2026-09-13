@@ -74,6 +74,12 @@ pub(crate) struct WorktreeCreatedPayload {
     pub(crate) workspace_id: String,
     pub(crate) branch: String,
     pub(crate) worktree_path: String,
+    /// Which mechanism produced the checkout. The frontend persists it on the
+    /// workspace row, and its refresh prune keeps a row absent from
+    /// `git worktree list` ONLY when the row says `cow` — a clone never appears
+    /// there. Left out, every MCP/HTTP-created clone was pruned on the next
+    /// refresh and the sessions spawned in it were parked outside every repo.
+    pub(crate) kind: crate::cow::WorkspaceKind,
 }
 
 /// Wire payload of `worktree-removed`, on both transports.
@@ -4918,6 +4924,7 @@ mod worktree_event_payloads {
             workspace_id: "feature-x~a1b2c3d4".to_string(),
             branch: "feature/x".to_string(),
             worktree_path: "/repo__wt/feature-x".to_string(),
+            kind: crate::cow::WorkspaceKind::Cow,
         }
     }
 
@@ -4941,6 +4948,7 @@ mod worktree_event_payloads {
                 "workspace_id": "feature-x~a1b2c3d4",
                 "branch": "feature/x",
                 "worktree_path": "/repo__wt/feature-x",
+                "kind": "cow",
             })
         );
     }
