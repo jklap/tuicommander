@@ -509,6 +509,38 @@ pub(super) async fn put_agent_hook_instrumentation(
     }
 }
 
+pub(super) async fn get_agent_native_status_signals(
+    Path(agent): Path<String>,
+) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "enabled": crate::agent_hook_commands::get_agent_native_status_signals(agent),
+    }))
+}
+
+pub(super) async fn put_agent_native_status_signals(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Path(agent): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp;
+    }
+    let Some(enabled) = body.get("enabled").and_then(serde_json::Value::as_bool) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "enabled must be a boolean"})),
+        );
+    };
+    match crate::agent_hook_commands::set_agent_native_status_signals(agent, enabled) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
 // --- Provider Registry ---
 
 pub(super) async fn get_provider_registry() -> impl IntoResponse {

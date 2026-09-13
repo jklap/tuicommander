@@ -373,6 +373,8 @@ export interface AgentSettingsConfig {
 	 * disabling removes only TUIC's entries. Undefined/false = heuristics (default).
 	 */
 	hook_instrumentation?: boolean;
+	/** Launch-scoped native status signals. Undefined means enabled. */
+	native_status_signals?: boolean;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */

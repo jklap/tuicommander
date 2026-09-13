@@ -34,6 +34,19 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
+  claude() {
+    local a; for a in "$@"; do
+      case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
+    done
+    if [[ -n "$TUIC_CLAUDE_SETTINGS" ]]; then command claude "$@" --settings "$TUIC_CLAUDE_SETTINGS"; else command claude "$@"; fi
+  }
+  codex() {
+    local a prev; for a in "$@"; do
+      if [[ "$prev" == "-c" && "$a" == notify=* ]] || [[ "$a" == -cnotify=* || "$a" == --config=notify=* ]]; then command codex "$@"; return; fi
+      prev="$a"
+    done
+    if [[ -n "$TUIC_CODEX_NOTIFY" ]]; then command codex "$@" -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"; else command codex "$@"; fi
+  }
   goose() {
     local a; for a in "$@"; do
       case "$a" in --name|-n|--resume|-r) command goose "$@"; return;; esac
@@ -74,6 +87,19 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
+  claude() {
+    local a; for a in "$@"; do
+      case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
+    done
+    if [[ -n "$TUIC_CLAUDE_SETTINGS" ]]; then command claude "$@" --settings "$TUIC_CLAUDE_SETTINGS"; else command claude "$@"; fi
+  }
+  codex() {
+    local a prev; for a in "$@"; do
+      if [[ "$prev" == "-c" && "$a" == notify=* ]] || [[ "$a" == -cnotify=* || "$a" == --config=notify=* ]]; then command codex "$@"; return; fi
+      prev="$a"
+    done
+    if [[ -n "$TUIC_CODEX_NOTIFY" ]]; then command codex "$@" -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"; else command codex "$@"; fi
+  }
   goose() {
     local a; for a in "$@"; do
       case "$a" in --name|-n|--resume|-r) command goose "$@"; return;; esac
@@ -106,6 +132,36 @@ function tuic_suggest; printf '\e]7770;suggest=%s\a' (string join " " $argv); en
 function tuic_intent;  printf '\e]7770;intent=%s\a' (string join " " $argv); end
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if set -q TUIC_SESSION
+  function claude --wraps claude
+    for a in $argv
+      switch $a
+        case --settings '--settings=*' --bare
+          command claude $argv; return
+      end
+    end
+    if set -q TUIC_CLAUDE_SETTINGS
+      command claude $argv --settings $TUIC_CLAUDE_SETTINGS
+    else
+      command claude $argv
+    end
+  end
+  function codex --wraps codex
+    set -l prev
+    for a in $argv
+      if test "$prev" = -c; and string match -q 'notify=*' -- $a
+        command codex $argv; return
+      end
+      if string match -q -- '-cnotify=*' $a; or string match -q -- '--config=notify=*' $a
+        command codex $argv; return
+      end
+      set prev $a
+    end
+    if set -q TUIC_CODEX_NOTIFY
+      command codex $argv -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"
+    else
+      command codex $argv
+    end
+  end
   function goose --wraps goose
     for a in $argv
       switch $a
@@ -145,6 +201,18 @@ pub(crate) fn inject(app_data_dir: &Path, shell: &str, cmd: &mut portable_pty::C
     let base = app_data_dir.join("shell-integration");
     if std::fs::create_dir_all(&base).is_err() {
         return;
+    }
+    if crate::agent_hook_launch::enabled("claude") {
+        cmd.env(
+            "TUIC_CLAUDE_SETTINGS",
+            app_data_dir.join("agent-hooks/claude.json"),
+        );
+    }
+    if crate::agent_hook_launch::enabled("codex") {
+        cmd.env(
+            "TUIC_CODEX_NOTIFY",
+            app_data_dir.join("agent-hooks/codex-notify.sh"),
+        );
     }
 
     if crate::pty::is_wsl_shell(shell) {
@@ -250,4 +318,62 @@ fn zdotdir_path_str(p: &Path) -> String {
 
 fn script_path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_wrapper_paths(shell: &str, script: &str) {
+        let claude_inject = script
+            .matches("--settings \"$TUIC_CLAUDE_SETTINGS\"")
+            .count()
+            + script.matches("--settings $TUIC_CLAUDE_SETTINGS").count();
+        let codex_inject = script
+            .matches("notify=[\\\"$TUIC_CODEX_NOTIFY\\\"]")
+            .count();
+        assert_eq!(claude_inject, 1, "{shell}: inject Claude settings once");
+        assert_eq!(codex_inject, 1, "{shell}: inject Codex notify once");
+
+        assert!(
+            script.contains("--settings=*"),
+            "{shell}: skip explicit Claude --settings=value"
+        );
+        assert!(
+            script.contains("--settings"),
+            "{shell}: skip explicit Claude --settings value"
+        );
+        assert!(
+            script.contains("--bare"),
+            "{shell}: skip Claude injection in bare mode"
+        );
+        assert!(
+            script.contains("notify=*"),
+            "{shell}: skip explicit Codex notify override"
+        );
+
+        assert!(
+            script.contains("else\n      command claude") || script.contains("else command claude"),
+            "{shell}: Claude setting-off passthrough"
+        );
+        assert!(
+            script.contains("else\n      command codex") || script.contains("else command codex"),
+            "{shell}: Codex setting-off passthrough"
+        );
+    }
+
+    #[test]
+    fn bash_wrappers_cover_inject_user_override_skip_and_setting_off() {
+        assert_wrapper_paths("bash", BASH_INTEGRATION);
+    }
+
+    #[test]
+    fn zsh_wrappers_cover_inject_user_override_skip_and_setting_off() {
+        assert_wrapper_paths("zsh", ZSH_INTEGRATION);
+    }
+
+    #[test]
+    fn fish_wrappers_cover_inject_user_override_skip_and_setting_off() {
+        assert_wrapper_paths("fish", FISH_INTEGRATION);
+    }
 }

@@ -731,6 +731,20 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { enabled: args.enabled },
 		}),
 	},
+	get_agent_native_status_signals: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/config/agents/${p("agentType")}/native-status-signals`,
+			transform: (data) => (data as { enabled: boolean }).enabled,
+		}),
+	},
+	set_agent_native_status_signals: {
+		map: (args, p) => ({
+			method: "PUT",
+			path: `/config/agents/${p("agentType")}/native-status-signals`,
+			body: { enabled: args.enabled },
+		}),
+	},
 
 	// --- Plugin data ---
 	// Tauri contract is Option<String>: missing key → null. The route 404s on miss,

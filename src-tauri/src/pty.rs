@@ -4777,10 +4777,19 @@ pub(crate) fn hook_instrumented_for(
     agents: &crate::config::AgentsConfig,
     agent_type: Option<&str>,
 ) -> bool {
-    agent_type
-        .and_then(|at| agents.agents.get(at))
-        .and_then(|s| s.hook_instrumentation)
-        .unwrap_or(false)
+    let Some(agent_type) = agent_type else {
+        return false;
+    };
+    let settings = agents.agents.get(agent_type);
+    if matches!(agent_type, "claude" | "codex") {
+        settings
+            .and_then(|s| s.native_status_signals)
+            .unwrap_or(true)
+    } else {
+        settings
+            .and_then(|s| s.hook_instrumentation)
+            .unwrap_or(false)
+    }
 }
 
 /// Events carried by the RAW byte stream, before any VT rendering — sequences

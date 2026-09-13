@@ -60,7 +60,11 @@ For unrecognized agents, silence-based detection kicks in — if the terminal st
 
 ## Native Hook Instrumentation
 
-Instead of inferring busy/idle/waiting from terminal output, TUICommander can drive an agent's status directly from the agent's **own hook system**. Enable it per agent in **Settings → Agents → (expand an agent) → "Use native agent hooks for status"**.
+Claude and Codex status signals are enabled by default and scoped to each TUIC launch. Claude receives an additional `--settings <config-dir>/agent-hooks/claude.json`; Codex receives `-c notify=["<config-dir>/agent-hooks/codex-notify.sh"]`. Existing explicit overrides win. The Codex adapter emits idle on `agent-turn-complete` and then chains the user's configured `notify` command with the original JSON payload. No global agent configuration is written by this default path.
+
+Disable this per agent with **Settings → Agents → Native status signals** to restore screen-only heuristics. Gemini, Grok, and OpenCode retain a separate, explicit **Install hooks globally** toggle.
+
+Instead of inferring busy/idle/waiting from terminal output, TUICommander can drive an agent's status directly from the agent's **own hook system**.
 
 When enabled, TUIC writes small shell hooks into the agent's settings file that emit `OSC 7770;state=…` on each lifecycle event (busy on prompt/tool start, `awaiting` on an approval/question prompt, idle on stop). The session state then follows the hooks precisely, and the heuristic question-detection above is suppressed for that agent (the silence-idle backstop stays on, so a crashed agent still recovers from "busy").
 

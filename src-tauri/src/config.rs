@@ -1509,6 +1509,9 @@ pub(crate) struct AgentSettings {
     /// disabling removes only TUIC's entries. None/false = heuristics (default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) hook_instrumentation: Option<bool>,
+    /// Launch-scoped native status signals. Missing means enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) native_status_signals: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -5273,6 +5276,7 @@ mod tests {
                 intent_tab_title: Some(false),
                 suggest_followups: None,
                 hook_instrumentation: None,
+                native_status_signals: None,
             },
         );
         let loaded: AgentsConfig = round_trip_in_dir(dir.path(), "agents.json", &agents);

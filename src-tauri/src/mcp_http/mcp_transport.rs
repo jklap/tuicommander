@@ -3769,6 +3769,7 @@ fn handle_agent_with_parent_cwd(
             // Initial prompt withheld from argv for prefill-only TUIs (codex):
             // queued into pending_injections after session registration below.
             let mut deferred_initial_prompt: Option<String> = None;
+            let mut launch_args: Vec<String> = Vec::new();
 
             if let Some(raw_args) = args.get("args").and_then(|a| a.as_array()) {
                 // Explicit args remain authoritative when they contain
@@ -3795,9 +3796,7 @@ fn handle_agent_with_parent_cwd(
                     Err(e) => return serde_json::json!({"error": e}),
                 };
                 deferred_initial_prompt = deferred;
-                for arg in &final_args {
-                    cmd.arg(arg);
-                }
+                launch_args.extend(final_args);
             } else if let Some(ref rc) = resolved {
                 if let Some(ref rc_args) = rc.args {
                     // Run config matched: user-authored argv remains authoritative.
@@ -3818,9 +3817,7 @@ fn handle_agent_with_parent_cwd(
                         Ok(m) => m,
                         Err(e) => return serde_json::json!({"error": e}),
                     };
-                    for arg in &final_args {
-                        cmd.arg(arg);
-                    }
+                    launch_args.extend(final_args);
                 } else {
                     // No run config args: use the built-in per-agent template
                     // (mirrors the shipped frontend spawnArgs) so cross-agent
@@ -3846,9 +3843,7 @@ fn handle_agent_with_parent_cwd(
                                     Err(e) => return serde_json::json!({"error": e}),
                                 };
                             deferred_initial_prompt = deferred;
-                            for arg in &final_args {
-                                cmd.arg(arg);
-                            }
+                            launch_args.extend(final_args);
                         }
                         None => {
                             return serde_json::json!({"error": format!(
@@ -3876,23 +3871,31 @@ fn handle_agent_with_parent_cwd(
                         Err(e) => return serde_json::json!({"error": e}),
                     };
                     deferred_initial_prompt = deferred;
-                    for arg in &final_args {
-                        cmd.arg(arg);
-                    }
+                    launch_args.extend(final_args);
                 } else {
                     if args["print_mode"].as_bool().unwrap_or(false) {
-                        cmd.arg("--print");
+                        launch_args.push("--print".to_string());
                     }
                     if let Some(format) = args["output_format"].as_str() {
-                        cmd.arg("--output-format");
-                        cmd.arg(format);
+                        launch_args.push("--output-format".to_string());
+                        launch_args.push(format.to_string());
                     }
                     if let Some(model) = args["model"].as_str() {
-                        cmd.arg("--model");
-                        cmd.arg(model);
+                        launch_args.push("--model".to_string());
+                        launch_args.push(model.to_string());
                     }
-                    cmd.arg(&effective_prompt);
+                    launch_args.push(effective_prompt.clone());
                 }
+            }
+            if let Some(agent_type) = effective_agent_type.as_deref() {
+                launch_args = crate::agent_hook_launch::augment_args(
+                    agent_type,
+                    &launch_args,
+                    &crate::config::config_dir(),
+                );
+            }
+            for arg in launch_args {
+                cmd.arg(arg);
             }
             if let Some(ref cwd) = effective_cwd {
                 cmd.cwd(crate::cli::expand_tilde(cwd));

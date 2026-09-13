@@ -1606,6 +1606,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
                 .put(config_routes::put_agent_hook_instrumentation),
         )
         .route(
+            "/config/agents/{agent}/native-status-signals",
+            get(config_routes::get_agent_native_status_signals)
+                .put(config_routes::put_agent_native_status_signals),
+        )
+        .route(
             "/config/provider-registry",
             get(config_routes::get_provider_registry).put(config_routes::put_provider_registry),
         )

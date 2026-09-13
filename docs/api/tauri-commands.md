@@ -209,6 +209,8 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 | `save_keybindings` | `config` | `()` | Save keybinding overrides |
 | `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs |
 | `save_agents_config` | `config` | `()` | Save per-agent run configs |
+| `get_agent_native_status_signals` | `agent_type` | `bool` | Read the default-on Claude/Codex launch-scoped status setting |
+| `set_agent_native_status_signals` | `agent_type`, `enabled` | `()` | Change launch-scoped status injection for future sessions |
 | `load_activity` | -- | `ActivityConfig` | Load activity dashboard state |
 | `save_activity` | `config` | `()` | Save activity dashboard state |
 | `load_repo_local_config` | `repo_path` | `RepoLocalConfig?` | Read `.tuic.json` from repo root; returns null if absent or malformed |

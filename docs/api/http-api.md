@@ -1159,6 +1159,8 @@ Intentionally NOT mapped (no frontend `invoke()` caller — YAGNI): `load_app_co
 follow-up): `set_ansi_colors` (PTY ring-buffer state), the `mdkb_*` daemon commands,
 `install_agent_mcp`/`remove_agent_mcp` (config-file writes, also no caller).
 
+`GET /config/agents/{agent}/native-status-signals` returns `{ "enabled": boolean }`. `PUT` accepts the same boolean field for Claude or Codex and changes launch behavior for new sessions only. The existing `/hook-instrumentation` route remains the explicit global installer.
+
 ### Provider keyring + slot/ollama checks (story 072)
 
 Browser/PWA parity for provider API-key storage (the OS keyring is proxied through

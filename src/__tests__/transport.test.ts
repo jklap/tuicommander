@@ -684,6 +684,17 @@ describe("transport", () => {
 			expect(result.body).toEqual({ enabled: true });
 		});
 
+		it("maps native status signal commands with exact GET/PUT parity", () => {
+			const get = mapCommandToHttp("get_agent_native_status_signals", { agentType: "claude" });
+			expect(get.method).toBe("GET");
+			expect(get.path).toBe("/config/agents/claude/native-status-signals");
+			expect(get.transform?.({ enabled: true })).toBe(true);
+			const put = mapCommandToHttp("set_agent_native_status_signals", { agentType: "codex", enabled: false });
+			expect(put.method).toBe("PUT");
+			expect(put.path).toBe("/config/agents/codex/native-status-signals");
+			expect(put.body).toEqual({ enabled: false });
+		});
+
 		it("maps read_plugin_data to GET /api/plugins/{id}/data/{path} with notFoundAsNull", () => {
 			const result = mapCommandToHttp("read_plugin_data", {
 				pluginId: "my-plugin",
