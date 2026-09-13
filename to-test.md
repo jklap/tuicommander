@@ -1909,3 +1909,18 @@ for release) before any of this is observable.
 
 After rebuilding with `make dev`, confirm the running backend uses the refreshed
 Cargo dependency tree; no frontend HMR reload can load these Rust changes.
+
+## COW publish no longer outruns the parent (story `767-3968`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+The origin push moved from the clone to the parent repository and is now gated
+on a successful parent fast-forward. After restarting:
+
+- [ ] Create a COW clone of a repo that HAS an `origin`, commit in the clone,
+      and make the parent's branch diverge (a commit of its own on the same
+      branch, then check out something else). Publish. The parent refusal must
+      appear as before AND `origin` must be unchanged — the origin error names
+      the parent as the reason instead of reporting a successful push.
+- [ ] Publish a clone the parent accepts. `origin` must end up on exactly the
+      commit the parent's branch holds.
+- [ ] In a clone's terminal, `git push origin HEAD` must fail with an unusable
+      URL (`no-push://…`), not contact the network.

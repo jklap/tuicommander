@@ -195,8 +195,16 @@ reported separately:
    `refs/heads/<branch>` is fast-forwarded to it. Fast-forward only: a parent
    branch that has diverged, or that the parent currently has checked out, is
    refused with the reason rather than forced.
-2. **Out to origin** — a push. An unreachable origin is reported on its own, so
-   it never reads as "the parent did not get it".
+2. **Out to origin** — a push, run **from the parent repository** and only after
+   step 1 succeeded. An unreachable origin is reported on its own, so it never
+   reads as "the parent did not get it"; a parent that *refused* the update,
+   however, stops the push, because origin must never move ahead of the parent
+   that vetoed the move. What reaches origin is the ref the parent accepted, not
+   the clone's live branch — the clone may have moved on since.
+
+The clone cannot reach origin by itself: its `origin` remote is given the same
+unpushable push URL as its `parent` remote, so "publish is the only transfer
+path" is an invariant rather than an instruction.
 
 Because the objects are transferred before the ref moves, retrying a refused
 publish costs no transfer.
