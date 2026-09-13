@@ -351,7 +351,7 @@ function replayActiveAgents(store: typeof terminalsStore): void {
 
 /**
  * Discover and load all user plugins from the plugins directory.
- * Call once at app startup after built-in plugins are registered.
+ * Call once at app startup after the disabled-plugin state is synchronized.
  */
 export async function loadUserPlugins(syncDisabled = true): Promise<void> {
 	if (!isTauri()) {

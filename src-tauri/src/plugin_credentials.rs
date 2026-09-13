@@ -240,7 +240,10 @@ mod tests {
 
         // The deny check must be reading the same constant `legacy_entry()`
         // derives from, not a separately typed copy of the literal.
-        assert_eq!(crate::credentials::MCP_UPSTREAM_LEGACY_SERVICE, "tuicommander-mcp");
+        assert_eq!(
+            crate::credentials::MCP_UPSTREAM_LEGACY_SERVICE,
+            "tuicommander-mcp"
+        );
     }
 
     #[test]
@@ -248,10 +251,12 @@ mod tests {
         // A plugin reading a credential for some OTHER tool (e.g. its own
         // aws-cli entry) must still pass the guard — only the host's own vault
         // services and legacy entries are blocked.
-        let result = plugin_read_credential_inner(
-            "some-other-tool-credentials-741-0eae-not-a-host-service",
+        let result =
+            plugin_read_credential_inner("some-other-tool-credentials-741-0eae-not-a-host-service");
+        assert!(
+            result.is_ok(),
+            "expected a plugin-owned service name to be allowed through, got: {result:?}"
         );
-        assert!(result.is_ok(), "expected a plugin-owned service name to be allowed through, got: {result:?}");
     }
 
     #[cfg(target_os = "macos")]

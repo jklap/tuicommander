@@ -669,6 +669,13 @@ export interface PluginHost {
 	openMarkdownFile(absolutePath: string): void;
 
 	/**
+	 * Open a local markdown file as a pinned background tab without changing the
+	 * active pane. Returns false when no registered repository owns the path.
+	 * Requires "ui:markdown" capability. Path must be absolute.
+	 */
+	openMarkdownFileBackground(absolutePath: string): boolean;
+
+	/**
 	 * Play a notification sound. Requires "ui:sound" capability.
 	 * @param sound - One of NOTIFICATION_SOUNDS ("question" | "error" | "completion" | "warning" | "info"). Defaults to "info".
 	 */

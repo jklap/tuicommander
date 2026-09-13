@@ -464,6 +464,14 @@ Opens a local markdown file in the markdown panel. **Requires `"ui:markdown"` ca
 host.openMarkdownFile("/Users/me/.config/com.tuic.commander/plugins/my-plugin/README.md");
 ```
 
+#### host.openMarkdownFileBackground(absolutePath) -> boolean
+
+Opens a local Markdown file as a pinned background tab without changing the active pane. **Requires `"ui:markdown"` capability.** Returns `false` when no registered repository owns the absolute path; otherwise returns `true`, including when the existing tab was reused.
+
+```typescript
+const owned = host.openMarkdownFileBackground("/Users/me/project/plans/feature.md");
+```
+
 #### `host.playNotificationSound(sound?) -> Promise<void>`
 
 Plays a notification sound. **Requires `"ui:sound"` capability.**
@@ -1249,7 +1257,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 |------------|---------|------|
 | `pty:write` | `host.writePty()`, `host.sendAgentInput()` | Can send input to terminals |
 | `pty:read` | `host.invoke("get_input_buffer_content", …)` | Can read the terminal input line buffer |
-| `ui:markdown` | `host.openMarkdownPanel()`, `host.openMarkdownFile()` | Can open panels and files in the UI |
+| `ui:markdown` | `host.openMarkdownPanel()`, `host.openMarkdownFile()`, `host.openMarkdownFileBackground()` | Can open panels and files in the UI |
 | `ui:sound` | `host.playNotificationSound(sound?)` | Can play sounds (question, error, completion, warning, info) |
 | `ui:panel` | `host.openPanel()` | Can render arbitrary HTML in sandboxed iframe |
 | `ui:ticker` | `host.setTicker()`, `host.clearTicker()` | Can post messages to the shared status bar ticker |
@@ -1462,13 +1470,12 @@ Plugins can also write to their log via `host.log(level, message, data)`.
 
 View logs in Settings > Plugins > click "Logs" on any plugin row.
 
-## Built-in Plugins
+## Preinstalled External Plugins
 
-Built-in plugins are TypeScript modules in `src/plugins/` compiled with the app. They have unrestricted access (no capability checks).
+Plan Tracker (`plan`) and Stories Ticker (`stories-ticker`) are external packages installed into the normal plugin directory by a one-time migration. They use only `PluginHost`, declare capabilities in their manifests, and can be disabled, uninstalled, or updated like any other external plugin. The migration marker prevents an explicitly uninstalled package from being recreated on later launches.
 
-| Plugin | File | Section | Detects |
-|--------|------|---------|---------|
-| `plan` | `planPlugin.ts` | ACTIVE PLAN | `plan-file` structured events (repo-scoped) |
+External packages are desktop-only. Browser/PWA mode does not import plugin
+code from the desktop configuration directory.
 
 > **Note:** Session prompt tracking is now a native Rust feature (via `input_line_buffer.rs` and the Activity Dashboard). The former `sessionPromptPlugin` built-in has been removed.
 
@@ -1575,7 +1582,7 @@ Detected when a plan file path appears in terminal output. The emitted `path` is
 - Tilde paths (`~/.claude/plans/bar.md`) are the only ones rewritten — `~` is expanded to the user's home directory
 - Already-absolute paths are passed through unchanged
 
-Relative-to-absolute resolution (against the terminal session's CWD via `host.getSessionCwd`) happens later, in the built-in plan plugin; plans whose CWD cannot be determined are skipped.
+Relative-to-absolute resolution (against the terminal session's CWD via `host.getSessionCwd`) happens later, in the external Plan Tracker plugin; plans whose CWD cannot be determined are skipped.
 
 ```typescript
 { type: "plan-file", path: string }
@@ -1583,7 +1590,7 @@ Relative-to-absolute resolution (against the terminal session's CWD via `host.ge
 //       "/Users/me/.claude/plans/graceful-rolling-quasar.md"
 ```
 
-**Repo scoping:** The built-in `plan` plugin only displays plans from terminals whose CWD matches the active repository in the sidebar. Plans from other projects are silently filtered out.
+**Repo scoping:** Plan Tracker asks `host.openMarkdownFileBackground()` to resolve the repository that owns each absolute plan path. Unowned paths are tracked but not opened, preventing cross-repository tab leakage.
 
 ### rate-limit
 

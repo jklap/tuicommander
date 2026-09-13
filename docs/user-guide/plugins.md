@@ -39,17 +39,20 @@ A plugin directory contains at minimum `manifest.json` and `main.js`.
 
 ### Settings → Plugins → Installed
 
-The Installed tab lists all plugins (built-in and external):
+The Installed tab lists all installed plugins:
 
 - **Toggle switch** — Enable or disable a plugin. Disabled plugins are not loaded but remain installed.
 - **Logs** — Click to expand the plugin's log viewer. Shows recent activity and errors (500-entry ring buffer).
-- **Uninstall** — Remove the plugin directory (confirmation required). Built-in plugins cannot be uninstalled.
+- **Uninstall** — Remove the plugin directory (confirmation required).
 
 Error count badges appear on plugins that have logged errors.
 
-### Built-in Plugins
+### Preinstalled External Plugins
 
-TUICommander ships with built-in plugins (e.g., Plan Tracker). These show a "Built-in" badge in the list. They can be disabled but not uninstalled.
+Plan Tracker and Stories Ticker are ordinary external plugins. TUICommander installs them once when upgrading from the compiled-in implementations, after which they can be disabled, uninstalled, or updated like any other plugin. An explicit uninstall is permanent; later launches do not recreate the plugin.
+
+External plugins load in the desktop app. Browser/PWA mode does not execute
+locally installed plugin code, so these two integrations are unavailable there.
 
 ## How Plugins Work
 

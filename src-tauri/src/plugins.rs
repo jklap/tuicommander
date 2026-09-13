@@ -4,6 +4,7 @@
 //! Each plugin directory contains a `manifest.json` and a JS entry point.
 //!
 //! This module provides:
+//! - `seed_externalized_builtin_plugins()` — one-time Plan/Stories package migration
 //! - `register_plugin_protocol()` — custom `plugin://` URI scheme handler
 //! - `list_user_plugins` — Tauri command returning valid manifests
 //! - `start_plugin_watcher()` — file watcher for hot-reload events
@@ -58,10 +59,9 @@ use tauri::{AppHandle, Emitter};
 ///
 /// Answers "did this plugin declare this capability", NOT "is this caller really
 /// this plugin" — see the module-level note above.
-/// Built-in plugins and their allowed capabilities.
-/// Hardcoded in Rust to maintain the security model — the frontend cannot
-/// self-register arbitrary capabilities for built-in plugins.
-const BUILTIN_PLUGIN_CAPABILITIES: &[(&str, &[&str])] = &[("plan", &["fs:read"])];
+/// Built-in plugins and their allowed capabilities. Plan and Stories moved to
+/// ordinary external packages; keep the table for future native distributions.
+const BUILTIN_PLUGIN_CAPABILITIES: &[(&str, &[&str])] = &[];
 
 fn check_plugin_capability_inner(
     loaded_plugins: &dashmap::DashMap<String, Vec<String>>,
@@ -110,6 +110,88 @@ pub(crate) fn check_plugin_capability(
 /// Root directory for user plugins: `{config_dir}/plugins/`
 fn plugins_dir() -> PathBuf {
     config::config_dir().join("plugins")
+}
+
+// ---------------------------------------------------------------------------
+// One-time migration of former built-ins to external packages
+// ---------------------------------------------------------------------------
+
+const EXTERNALIZED_BUILTINS_MARKER: &str = ".externalized-plan-stories-v1";
+
+struct SeededPlugin {
+    id: &'static str,
+    files: &'static [(&'static str, &'static str)],
+}
+
+const SEEDED_PLUGINS: &[SeededPlugin] = &[
+    SeededPlugin {
+        id: "plan",
+        files: &[
+            (
+                "manifest.json",
+                include_str!("../../plugins/plan/manifest.json"),
+            ),
+            ("main.js", include_str!("../../plugins/plan/main.js")),
+            ("README.md", include_str!("../../plugins/plan/README.md")),
+        ],
+    },
+    SeededPlugin {
+        id: "stories-ticker",
+        files: &[
+            (
+                "manifest.json",
+                include_str!("../../plugins/stories-ticker/manifest.json"),
+            ),
+            (
+                "main.js",
+                include_str!("../../plugins/stories-ticker/main.js"),
+            ),
+            (
+                "README.md",
+                include_str!("../../plugins/stories-ticker/README.md"),
+            ),
+        ],
+    },
+];
+
+/// Install the former built-ins as ordinary external plugins exactly once.
+/// Existing directories win, so a manually installed/newer package is never
+/// overwritten. The marker is written only after both packages are present or
+/// deliberately preserved; uninstalling later therefore remains permanent.
+pub(crate) fn seed_externalized_builtin_plugins(config_dir: &Path) -> Result<(), String> {
+    let marker = config_dir.join(EXTERNALIZED_BUILTINS_MARKER);
+    if marker.exists() {
+        return Ok(());
+    }
+
+    let target_root = config_dir.join("plugins");
+    std::fs::create_dir_all(&target_root)
+        .map_err(|e| format!("Failed to create plugins directory: {e}"))?;
+
+    for plugin in SEEDED_PLUGINS {
+        let target = target_root.join(plugin.id);
+        if target.exists() {
+            continue;
+        }
+
+        let staging = target_root.join(format!(".seed-{}-{}", plugin.id, uuid::Uuid::new_v4()));
+        let install = (|| -> Result<(), String> {
+            std::fs::create_dir(&staging)
+                .map_err(|e| format!("Failed to stage plugin {}: {e}", plugin.id))?;
+            for (name, contents) in plugin.files {
+                std::fs::write(staging.join(name), contents)
+                    .map_err(|e| format!("Failed to seed plugin {}/{}: {e}", plugin.id, name))?;
+            }
+            std::fs::rename(&staging, &target)
+                .map_err(|e| format!("Failed to install seeded plugin {}: {e}", plugin.id))
+        })();
+        if let Err(error) = install {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    }
+
+    crate::config::persist_atomic(&marker, b"1\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -1795,17 +1877,45 @@ mod tests {
     }
 
     #[test]
-    fn check_capability_allows_builtin_plugin() {
+    fn removed_builtin_plugin_has_no_implicit_capabilities() {
         let plugins = dashmap::DashMap::new();
-        assert!(check_plugin_capability_inner(&plugins, "plan", "fs:read").is_ok());
+        let result = check_plugin_capability_inner(&plugins, "plan", "fs:read");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not registered"));
     }
 
     #[test]
-    fn check_capability_rejects_builtin_undeclared_capability() {
-        let plugins = dashmap::DashMap::new();
-        let result = check_plugin_capability_inner(&plugins, "plan", "exec:cli");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Built-in plugin"));
+    fn seeds_externalized_builtins_once_and_keeps_uninstall_permanent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        seed_externalized_builtin_plugins(dir.path()).unwrap();
+
+        for id in ["plan", "stories-ticker"] {
+            let plugin = dir.path().join("plugins").join(id);
+            assert!(plugin.join("manifest.json").is_file());
+            assert!(plugin.join("main.js").is_file());
+            assert!(plugin.join("README.md").is_file());
+        }
+        assert!(dir.path().join(EXTERNALIZED_BUILTINS_MARKER).is_file());
+
+        std::fs::remove_dir_all(dir.path().join("plugins/plan")).unwrap();
+        seed_externalized_builtin_plugins(dir.path()).unwrap();
+        assert!(!dir.path().join("plugins/plan").exists());
+    }
+
+    #[test]
+    fn seeding_preserves_an_existing_external_plugin() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let plan = dir.path().join("plugins/plan");
+        std::fs::create_dir_all(&plan).unwrap();
+        std::fs::write(plan.join("main.js"), "user version").unwrap();
+
+        seed_externalized_builtin_plugins(dir.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(plan.join("main.js")).unwrap(),
+            "user version"
+        );
+        assert!(dir.path().join("plugins/stories-ticker/main.js").is_file());
     }
 
     // -- is_plugin_code_change --
