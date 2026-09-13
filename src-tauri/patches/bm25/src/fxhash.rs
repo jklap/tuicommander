@@ -305,6 +305,27 @@ pub(crate) fn hash<T: std::hash::Hash + ?Sized>(v: &T) -> usize {
 mod tests {
     use super::*;
 
+    /// The fork ships the lockfile it was vendored with. Cargo ignores it —
+    /// `patches/bm25` is a workspace member, so only the workspace lock is
+    /// resolved — but every lockfile-based scanner reads it anyway (GitHub's
+    /// dependency graph, dependabot, `cargo audit --file`). Leaving `fxhash
+    /// 0.2.1` and its checksum in there keeps RUSTSEC-2025-0057 alive in the
+    /// reports even though nothing links the crate any more.
+    #[test]
+    fn the_fork_no_longer_pins_the_unmaintained_fxhash_crate() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for manifest in ["Cargo.toml", "Cargo.toml.orig", "Cargo.lock"] {
+            let path = root.join(manifest);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{} is not readable: {e}", path.display()));
+            assert!(
+                !text.contains("fxhash"),
+                "{manifest} still names fxhash; the algorithm is vendored in this file, \
+                 so the dependency must not survive anywhere a scanner can read it"
+            );
+        }
+    }
+
     /// Pinned against the real `fxhash` 0.2.1 crate (computed offline via a
     /// throwaway `cargo run` against the crates.io release, not derived from
     /// this vendored copy) so a future edit to this file cannot silently drift
