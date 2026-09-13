@@ -736,7 +736,7 @@ fn test_api_retry_blocks_ready_screen_confirm() {
     let mut s = SilenceState::new();
     s.mark_api_retry();
     // Force the ready prompt to look long-stable.
-    s.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM * 2);
+    s.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM * 2);
     assert!(
         !s.note_ready_screen(),
         "ready screen must not confirm idle while an API retry is in flight"
@@ -744,7 +744,7 @@ fn test_api_retry_blocks_ready_screen_confirm() {
 
     // Once the hold expires, the same stable ready prompt confirms idle.
     s.api_retry_hold_until = Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
-    s.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM * 2);
+    s.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM * 2);
     assert!(
         s.note_ready_screen(),
         "ready screen confirms idle after the retry hold expires"
@@ -2110,10 +2110,10 @@ fn test_codex_v0_146_status_row_with_git_branch_does_not_change_detection() {
 fn test_agent_ready_requires_stable_observation() {
     let mut silence = SilenceState::new();
     assert!(!silence.note_ready_screen());
-    assert!(!silence.idle_confirmed);
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    assert!(!silence.idle_confirmed());
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(silence.note_ready_screen());
-    assert!(silence.idle_confirmed);
+    assert!(silence.idle_confirmed());
 }
 
 #[test]
@@ -2133,10 +2133,10 @@ fn test_grok_ready_composer_recovers_long_lived_shell_busy() {
     // Grok ready-screen adapter this bit survived for the whole process.
     silence.note_explicit_state(SHELL_BUSY, false);
     silence.note_real_activity();
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(silence.note_ready_screen());
-    assert!(!silence.explicit_busy);
-    assert!(silence.idle_confirmed);
+    assert!(!silence.explicit_busy());
+    assert!(silence.idle_confirmed());
 }
 
 /// Captured live from grok 0.2.114: the composer moved inside a rounded box, so the old
@@ -2348,10 +2348,10 @@ fn test_opencode_ready_screen_recovers_long_lived_shell_busy() {
     // ready-screen adapter this bit survived for the whole process (#535-d4f5).
     silence.note_explicit_state(SHELL_BUSY, false);
     silence.note_real_activity();
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(silence.note_ready_screen());
-    assert!(!silence.explicit_busy);
-    assert!(silence.idle_confirmed);
+    assert!(!silence.explicit_busy());
+    assert!(silence.idle_confirmed());
 }
 
 #[test]
@@ -2366,15 +2366,15 @@ fn test_only_interpreters_take_the_argv0_detour() {
 fn test_old_ready_prompt_cannot_cancel_new_submission_before_activity() {
     let mut silence = SilenceState::new();
     silence.note_user_submission(true);
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(!silence.note_ready_screen());
-    assert!(silence.explicit_busy);
-    assert!(!silence.idle_confirmed);
+    assert!(silence.explicit_busy());
+    assert!(!silence.idle_confirmed());
 
     silence.note_real_activity();
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(silence.note_ready_screen());
-    assert!(silence.idle_confirmed);
+    assert!(silence.idle_confirmed());
 }
 
 #[test]
@@ -2383,11 +2383,11 @@ fn test_stable_ready_prompt_recovers_missed_hook_idle_after_activity() {
     silence.note_user_submission(true);
     silence.note_explicit_state(SHELL_BUSY, true);
     silence.note_real_activity();
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(silence.note_ready_screen());
-    assert!(!silence.explicit_busy);
-    assert!(!silence.hook_busy);
-    assert!(silence.idle_confirmed);
+    assert!(!silence.explicit_busy());
+    assert!(!silence.hook_busy());
+    assert!(silence.idle_confirmed());
 }
 
 #[test]
@@ -2395,11 +2395,11 @@ fn test_hook_busy_cannot_be_overridden_before_turn_activity() {
     let mut silence = SilenceState::new();
     silence.note_user_submission(true);
     silence.note_explicit_state(SHELL_BUSY, true);
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(!silence.note_ready_screen());
-    assert!(silence.explicit_busy);
-    assert!(silence.hook_busy);
-    assert!(!silence.idle_confirmed);
+    assert!(silence.explicit_busy());
+    assert!(silence.hook_busy());
+    assert!(!silence.idle_confirmed());
 }
 
 #[test]
@@ -2408,15 +2408,15 @@ fn test_fresh_hook_busy_blocks_ready_after_prior_recovery() {
     silence.note_user_submission(true);
     silence.note_explicit_state(SHELL_BUSY, true);
     silence.note_real_activity();
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(silence.note_ready_screen());
 
     silence.note_explicit_state(SHELL_BUSY, true);
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(!silence.note_ready_screen());
-    assert!(silence.explicit_busy);
-    assert!(silence.hook_busy);
-    assert!(!silence.idle_confirmed);
+    assert!(silence.explicit_busy());
+    assert!(silence.hook_busy());
+    assert!(!silence.idle_confirmed());
 }
 
 #[test]
@@ -2456,7 +2456,7 @@ fn test_working_row_cannot_relatch_a_declared_completed_turn() {
             .load(std::sync::atomic::Ordering::Acquire),
         SHELL_IDLE
     );
-    assert!(lifecycle.lock().idle_confirmed);
+    assert!(lifecycle.lock().idle_confirmed());
 }
 
 #[test]
@@ -2514,7 +2514,7 @@ fn test_codex_moving_working_row_reopens_completed_internal_continuation() {
     );
     let lifecycle = lifecycle.lock();
     assert!(!lifecycle.completion_declared_for_epoch(0));
-    assert!(!lifecycle.idle_confirmed);
+    assert!(!lifecycle.idle_confirmed());
 }
 
 #[test]
@@ -2588,8 +2588,8 @@ fn test_claude_active_marker_reopens_premature_stop_hook_completion() {
     );
     let lifecycle = lifecycle.lock();
     assert!(!lifecycle.completion_declared_for_epoch(0));
-    assert!(!lifecycle.explicit_idle);
-    assert!(!lifecycle.idle_confirmed);
+    assert!(!lifecycle.explicit_idle());
+    assert!(!lifecycle.idle_confirmed());
 }
 
 #[test]
@@ -2615,7 +2615,8 @@ fn test_declared_completion_turns_stale_working_screen_into_ready_evidence() {
     {
         let mut lifecycle = lifecycle.lock();
         lifecycle.mark_suggest_candidate(vec!["Review diff".into()], 0);
-        lifecycle.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        lifecycle.screen_ready_pending_since =
+            Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     }
 
     let screen_activity = completion_adjusted_screen_activity(
@@ -2652,8 +2653,8 @@ fn test_interrupt_request_plus_interrupted_screen_confirms_idle() {
     silence.note_explicit_state(SHELL_BUSY, true);
     silence.note_interrupt_requested();
     assert!(silence.note_interrupted_screen());
-    assert!(!silence.explicit_busy);
-    assert!(silence.idle_confirmed);
+    assert!(!silence.explicit_busy());
+    assert!(silence.idle_confirmed());
 }
 
 #[test]
@@ -2661,8 +2662,8 @@ fn test_ctrl_c_alone_never_confirms_idle() {
     let mut silence = SilenceState::new();
     silence.note_explicit_state(SHELL_BUSY, true);
     silence.note_interrupt_requested();
-    assert!(silence.explicit_busy);
-    assert!(!silence.idle_confirmed);
+    assert!(silence.explicit_busy());
+    assert!(!silence.idle_confirmed());
 }
 
 #[test]
@@ -2695,7 +2696,7 @@ fn test_working_screen_recovers_idle_to_busy() {
             .load(Ordering::Acquire),
         SHELL_BUSY
     );
-    assert!(!silence.lock().idle_confirmed);
+    assert!(!silence.lock().idle_confirmed());
 }
 
 #[test]
@@ -2730,7 +2731,7 @@ fn test_explicit_idle_outvotes_stale_working_screen() {
             .load(Ordering::Acquire),
         SHELL_IDLE
     );
-    assert!(silence.lock().idle_confirmed);
+    assert!(silence.lock().idle_confirmed());
 }
 
 #[test]
@@ -2891,7 +2892,7 @@ fn active_screen_matrix_is_stable_and_repairs_false_idle_repeatedly() {
                 SHELL_BUSY,
                 "{sid} failed to repair false idle at iteration {iteration}"
             );
-            assert!(!lifecycle.lock().idle_confirmed);
+            assert!(!lifecycle.lock().idle_confirmed());
         }
     }
 }
@@ -2985,7 +2986,8 @@ fn replay_sanitized_agent_trace(agent: &str, steps: &[SanitizedTraceStep]) -> Si
                     _ => Vec::new(),
                 };
                 if detect_agent_screen_activity(Some(agent), &rows) == AgentScreenActivity::Ready {
-                    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+                    silence.screen_ready_pending_since =
+                        Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
                     silence.note_ready_screen();
                 }
             }
@@ -3010,7 +3012,7 @@ fn sanitized_codex_and_claude_trace_replay_requires_post_submit_consumption() {
                 SanitizedTraceStep::ReadyScreen,
             ],
         );
-        assert!(completed.idle_confirmed, "{agent} completed trace");
+        assert!(completed.idle_confirmed(), "{agent} completed trace");
 
         let silent = replay_sanitized_agent_trace(
             agent,
@@ -3021,7 +3023,7 @@ fn sanitized_codex_and_claude_trace_replay_requires_post_submit_consumption() {
             ],
         );
         assert!(
-            !silent.idle_confirmed,
+            !silent.idle_confirmed(),
             "{agent} silent/no-op submission must remain conservative without positive consumption"
         );
 
@@ -3034,7 +3036,7 @@ fn sanitized_codex_and_claude_trace_replay_requires_post_submit_consumption() {
             ],
         );
         assert!(
-            !partial_redraw.idle_confirmed,
+            !partial_redraw.idle_confirmed(),
             "{agent} partial/alternate-screen redraw must not prove consumption"
         );
     }
@@ -3262,7 +3264,10 @@ fn sanitized_background_command_keeps_agent_working_across_adapters() {
                 SanitizedTraceStep::ReadyScreen,
             ],
         );
-        assert!(silence.idle_confirmed, "{agent} composer is terminal-ready");
+        assert!(
+            silence.idle_confirmed(),
+            "{agent} composer is terminal-ready"
+        );
 
         let state = crate::state::tests_support::make_test_app_state();
         let sid = format!("background-{agent}");
@@ -3586,7 +3591,7 @@ fn background_snapshot_ready_waits_for_newer_generation_and_repairs_working() {
         .get(child_id)
         .unwrap()
         .lock()
-        .ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        .screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
 
     let first_ready = try_timer_idle_transition(
         &state,
@@ -3680,7 +3685,8 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
     state
         .process_snapshot_cache
         .store(Some(vec![process(10, 1, "codex", "codex")]));
-    silence.lock().ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.lock().screen_ready_pending_since =
+        Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(
         !try_timer_idle_transition(
             &state,
@@ -3736,7 +3742,8 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         assert!(!session.background_work);
     }
 
-    silence.lock().ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.lock().screen_ready_pending_since =
+        Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(
         !try_timer_idle_transition(
             &state,
@@ -3912,7 +3919,7 @@ fn background_snapshot_child_absent_releases_declared_completion() {
         .get(child_id)
         .unwrap()
         .lock()
-        .ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        .screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
 
     assert!(
         !try_timer_idle_transition(
@@ -8556,7 +8563,9 @@ fn agent_session(state: &crate::state::AppState, sid: &str, shell: u8) {
         },
     );
     let mut silence = SilenceState::new();
-    silence.idle_confirmed = shell == SHELL_IDLE;
+    if shell == SHELL_IDLE {
+        silence.confirm_idle();
+    }
     state
         .session_maps
         .silence_states
@@ -8598,15 +8607,15 @@ fn completed_agent_session(state: &crate::state::AppState, sid: &str) {
 }
 
 fn assert_new_turn_silence_evidence(silence: &SilenceState) {
-    assert!(silence.explicit_busy);
-    assert!(!silence.hook_busy);
-    assert!(!silence.explicit_idle);
-    assert!(!silence.idle_confirmed);
+    assert!(silence.explicit_busy());
+    assert!(!silence.hook_busy());
+    assert!(!silence.explicit_idle());
+    assert!(!silence.idle_confirmed());
     assert!(silence.last_status_line_at.is_some());
-    assert!(silence.ready_since.is_none());
+    assert!(silence.screen_ready_pending_since.is_none());
     assert!(silence.interrupt_requested_at.is_none());
-    assert!(silence.turn_started_by_input);
-    assert!(!silence.turn_activity_seen);
+    assert!(silence.turn_started_by_input());
+    assert!(!silence.evidence.activity_seen);
     assert!(!silence.completion_declared);
     assert!(silence.pending_suggest_items.is_none());
 }
@@ -9365,7 +9374,7 @@ fn codex_heuristic_idle_is_not_safe_for_injection_or_standby() {
         .get("codex-heuristic")
         .unwrap()
         .lock()
-        .idle_confirmed = false;
+        .force_idle_unconfirmed();
 
     assert!(!idle_is_confirmed(&state, "codex-heuristic"));
     assert!(!should_inject_now(&state, "codex-heuristic"));
@@ -9412,7 +9421,7 @@ fn should_inject_now_false_for_shell_and_confident_question() {
         },
     );
     let mut ready_silence = SilenceState::new();
-    ready_silence.idle_confirmed = true;
+    ready_silence.confirm_idle();
     state
         .session_maps
         .silence_states
@@ -10196,11 +10205,11 @@ fn uncertain_injection_cannot_be_cleared_by_a_stale_ready_screen() {
     let mut silence = SilenceState::new();
     let token = silence.begin_injection_claim(true);
     silence.mark_injection_uncertain(token);
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
 
     assert!(!silence.note_ready_screen());
     assert!(silence.injection_delivery_uncertain);
-    assert!(!silence.idle_confirmed);
+    assert!(!silence.idle_confirmed());
 }
 
 #[test]
@@ -10236,7 +10245,7 @@ fn deliver_reenqueue_recovers_message_when_idle_races_enqueue() {
                 .get("race")
                 .unwrap()
                 .lock()
-                .idle_confirmed = true;
+                .confirm_idle();
             try_shell_transition(&s2, "race", SHELL_BUSY, SHELL_IDLE, false);
             emit_shell_state(&s2, "race", "idle");
             flush_pending_injections(&s2, "race");
@@ -11156,10 +11165,10 @@ fn goose_ready_screen_recovers_long_lived_shell_busy() {
     let mut silence = SilenceState::new();
     silence.note_explicit_state(SHELL_BUSY, false);
     silence.note_real_activity();
-    silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
     assert!(silence.note_ready_screen());
-    assert!(!silence.explicit_busy);
-    assert!(silence.idle_confirmed);
+    assert!(!silence.explicit_busy());
+    assert!(silence.idle_confirmed());
 }
 
 /// What a replay saw on the way through, beyond the events it produced.
@@ -11461,6 +11470,37 @@ fn detection_over_capture_corpus() {
             }
             None if sets > 0 => println!("  awaiting: {sets} set / {clears} cleared → clear"),
             None => {}
+        }
+    }
+}
+
+/// 744-138c baseline/after evidence: dump the exact `ParsedEvent` sequence
+/// produced by replaying every committed `.tcap` fixture, one line per event.
+/// Run before and after the SilenceState/decide() refactor and diff the two
+/// captures — an empty diff is the "bit for bit" proof the story requires.
+/// `#[ignore]` because it is a evidence-capture harness, not a pass/fail gate;
+/// `replay_capture` never touches SilenceState (see its doc comment), so this
+/// is expected to be stable across that refactor by construction.
+#[test]
+#[ignore = "744-138c evidence capture — run manually before/after the refactor"]
+fn dump_committed_tcap_fixture_event_sequences_744() {
+    let mut names: Vec<_> = std::fs::read_dir(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/agent_prompts"),
+    )
+    .expect("readable fixtures dir")
+    .filter_map(|entry| {
+        let path = entry.ok()?.path();
+        (path.extension().and_then(|e| e.to_str()) == Some("tcap"))
+            .then(|| path.file_name().unwrap().to_string_lossy().into_owned())
+    })
+    .collect();
+    names.sort();
+    for name in names {
+        let bytes = agent_prompt_fixture(&name);
+        let events = replay_capture(&bytes, false);
+        println!("=== {name} ===");
+        for event in &events {
+            println!("{event:?}");
         }
     }
 }

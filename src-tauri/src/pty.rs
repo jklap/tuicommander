@@ -1100,6 +1100,195 @@ enum CurrentChatQuestion {
     PromptAnchored(Option<String>),
 }
 
+/// Relative strength of evidence backing a busy/idle/awaiting verdict. A
+/// higher rank overrides a lower one; equal-or-lower rank evidence is
+/// rejected rather than clobbering something stronger already recorded for
+/// the opposite verdict (see `TurnEvidence::record_busy`/`record_idle`).
+///
+/// Ordering matches #744-138c: wall-clock silence is the weakest signal,
+/// screen-content classification is stronger, a background-process check is
+/// stronger still, and an explicit protocol marker (OSC 133/7770, a
+/// submitted line, a `suggest:`/completion marker, raw output volume) is
+/// authoritative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum EvidenceRank {
+    Silence,
+    Screen,
+    Process,
+    Protocol,
+}
+
+/// A single piece of ranked evidence, with the detector name that produced it
+/// (used for `activity_source` in transition logs) and when it was recorded.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Evidence {
+    pub(crate) rank: EvidenceRank,
+    pub(crate) source: &'static str,
+    pub(crate) at: std::time::Instant,
+}
+
+/// The current turn's ranked evidence. Busy and idle are mutually exclusive —
+/// recording one clears the other unless the incoming evidence is too weak to
+/// outrank what is already held (see `record_busy`/`record_idle`). Awaiting is
+/// independent (a session can be busy or idle while a question is pending).
+///
+/// This is the single model #744-138c replaces the nine independently
+/// mutated `SilenceState` booleans with: `completion_declared` and
+/// `explicit_idle` both become Protocol-rank `idle` evidence with different
+/// `source` tags; `explicit_busy`/`hook_busy`/`turn_started_by_input` become
+/// Protocol-rank `busy` evidence tagged `"hook-busy"`/`"osc133-busy"`/
+/// `"user-submit"`; `idle_confirmed` is derived from the recorded idle
+/// evidence's rank/source rather than stored; `ready_since` is the `at` of a
+/// `"agent-ready-screen"` idle evidence (preserved across repeated
+/// observations, reset by any other evidence — see `record_idle`).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TurnEvidence {
+    epoch: u64,
+    busy: Option<Evidence>,
+    idle: Option<Evidence>,
+    awaiting: Option<Evidence>,
+    activity_seen: bool,
+}
+
+impl TurnEvidence {
+    /// Record busy evidence. Rejected (no-op, returns `false`) if idle
+    /// evidence of strictly higher rank is already held — e.g. a stale
+    /// Working screen row (`Screen` rank) cannot reopen a turn an explicit
+    /// OSC idle marker or a declared completion (`Protocol` rank) already
+    /// closed, unless the caller has already decided the reopen is valid and
+    /// passes an elevated rank for it (see `apply_working_evidence`).
+    fn record_busy(&mut self, rank: EvidenceRank, source: &'static str) -> bool {
+        if self.idle.is_some_and(|idle| idle.rank > rank) {
+            return false;
+        }
+        self.busy = Some(Evidence {
+            rank,
+            source,
+            at: std::time::Instant::now(),
+        });
+        self.idle = None;
+        true
+    }
+
+    /// Record idle evidence. Rejected if busy evidence of strictly higher
+    /// rank is already held. `at` is preserved across repeated observations
+    /// of the same (rank, source) — this is the `AGENT_READY_CONFIRM`
+    /// debounce clock a caller reads via the returned `Evidence`.
+    fn record_idle(&mut self, rank: EvidenceRank, source: &'static str) -> bool {
+        if self.busy.is_some_and(|busy| busy.rank > rank) {
+            return false;
+        }
+        let at = match self.idle {
+            Some(existing) if existing.rank == rank && existing.source == source => existing.at,
+            _ => std::time::Instant::now(),
+        };
+        self.idle = Some(Evidence { rank, source, at });
+        self.busy = None;
+        true
+    }
+
+    /// Drop any held idle evidence and its debounce clock without recording
+    /// new busy evidence. Used when a detector determines its own evidence is
+    /// currently invalid (e.g. an unstable/unknown screen, or a ready screen
+    /// gated by `injection_delivery_uncertain`/API-retry/no-activity-yet).
+    fn clear_idle(&mut self) {
+        self.idle = None;
+    }
+
+    /// Record idle evidence unconditionally, bypassing the busy-rank gate in
+    /// `record_idle`. Used only by call sites that have already performed
+    /// their own precise, narrower busy-evidence gate (e.g. `note_ready_screen`
+    /// only withholds ready-confirmation for `"hook-busy"`/`"user-submit"`
+    /// busy evidence with no activity seen yet — a bare `"osc133-busy"`
+    /// marker must NOT block screen-confirmed readiness, unlike the generic
+    /// rank gate `record_idle` applies for e.g. the silence-timeout fallback).
+    fn force_idle(&mut self, rank: EvidenceRank, source: &'static str) -> Evidence {
+        let at = match self.idle {
+            Some(existing) if existing.rank == rank && existing.source == source => existing.at,
+            _ => std::time::Instant::now(),
+        };
+        let evidence = Evidence { rank, source, at };
+        self.idle = Some(evidence);
+        self.busy = None;
+        evidence
+    }
+
+    /// Record awaiting (question/dialog) evidence. Rejected if awaiting
+    /// evidence of strictly higher rank is already held — this is the
+    /// generic form of the old state.rs sticky guard "a low-confidence
+    /// (silence-heuristic) question must not overwrite an already-active
+    /// high-confidence one": confident sources are `Protocol` rank, heuristic
+    /// ones `Screen` rank, so a `Screen` observation is rejected while a
+    /// `Protocol` one is held, and any same-or-higher rank observation
+    /// updates (a confident question's text can still change).
+    pub(crate) fn record_awaiting(&mut self, rank: EvidenceRank, source: &'static str) -> bool {
+        if self.awaiting.is_some_and(|existing| existing.rank > rank) {
+            return false;
+        }
+        self.awaiting = Some(Evidence {
+            rank,
+            source,
+            at: std::time::Instant::now(),
+        });
+        true
+    }
+
+    pub(crate) fn clear_awaiting(&mut self) {
+        self.awaiting = None;
+    }
+
+    /// The rank of the currently recorded awaiting evidence, if any. Used by
+    /// callers that only clear on a WEAK (non-`Protocol`) awaiting verdict —
+    /// mirrors the old `!question_confident` guard in state.rs's status-line
+    /// and question-cleared handling.
+    pub(crate) fn awaiting_rank(&self) -> Option<EvidenceRank> {
+        self.awaiting.map(|a| a.rank)
+    }
+
+    /// True while the recorded idle evidence is strong/current enough to act
+    /// on downstream (standby, peer injection): an explicit protocol marker
+    /// or a screen adapter's confirmed ready/interrupted state, or a plain
+    /// (non-agent) shell's silence timeout. An agent silence-timeout with no
+    /// screen confirmation is NOT confirmed — mirrors the old `idle_confirmed`.
+    fn idle_confirmed(&self) -> bool {
+        match self.idle {
+            Some(Evidence {
+                rank: EvidenceRank::Silence,
+                source,
+                ..
+            }) => source == "silence-timeout-shell",
+            Some(_) => true,
+            None => false,
+        }
+    }
+}
+
+/// The verdict `decide()` reaches for the busy/idle shell-state axis.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Transition {
+    ToBusy(Evidence),
+    ToIdle(Evidence),
+}
+
+/// The single arbiter every busy/idle transition site routes through
+/// (#744-138c). Pure: given the evidence recorded so far and whether the
+/// shell is currently busy, says whether — and on what evidence — it should
+/// flip. All the interesting gating (rank comparisons against the opposite
+/// verdict, debounce, staleness) already happened when the evidence was
+/// recorded (`record_busy`/`record_idle`); this function only compares the
+/// surviving evidence against the current shell state.
+fn decide(
+    evidence: &TurnEvidence,
+    shell_is_busy: bool,
+    _now: std::time::Instant,
+) -> Option<Transition> {
+    if shell_is_busy {
+        evidence.idle.map(Transition::ToIdle)
+    } else {
+        evidence.busy.map(Transition::ToBusy)
+    }
+}
+
 /// Shared state between the PTY reader thread and the silence-detection timer thread.
 #[derive(Clone)]
 pub(crate) struct SilenceState {
@@ -1173,38 +1362,46 @@ pub(crate) struct SilenceState {
     /// current input epoch. Unlike the pending item payload, this survives the
     /// one-shot Suggest event drain so status/list can distinguish completed
     /// work from a merely quiet ready prompt.
+    ///
+    /// Deliberately NOT folded into `TurnEvidence` (#744-138c): a `suggest:`
+    /// marker is consulted by OTHER decisions (`apply_working_evidence`'s
+    /// reopen gate, `completion_adjusted_screen_activity`) as "the agent
+    /// already declared this turn done", but it must NOT itself flip the
+    /// shell atomic to idle — it is parsed mid-output, often while the shell
+    /// still reads BUSY. Recording it as `idle` evidence would make `decide()`
+    /// treat parsing the marker as proof the shell is idle, which is not what
+    /// today's behavior is.
     completion_declared: bool,
     /// Input-turn epoch that declared completion.
     completion_turn_epoch: u64,
-    /// True after an explicit OSC 133 / OSC 7770 busy marker and until an
-    /// explicit idle marker or a confirmed ready screen. Silence alone must not
-    /// override this state: hooks are stronger evidence than output timing.
-    explicit_busy: bool,
-    /// BUSY came from an observed agent hook. A stable ready screen may recover
-    /// from a missed idle hook, but the old prompt cannot do so before submitted
-    /// turn activity is observed.
-    hook_busy: bool,
-    /// An explicit idle marker outranks a stale Working row left in the same
-    /// render chunk. Cleared by the next explicit busy or later real activity.
-    explicit_idle: bool,
+    /// Ranked busy/idle/awaiting evidence for the current turn (#744-138c).
+    /// Replaces eight independently-mutated booleans (explicit_busy, hook_busy,
+    /// explicit_idle, idle_confirmed, turn_started_by_input, turn_activity_seen,
+    /// ready_since, and the screen/protocol distinction previously spread
+    /// across them) with one struct: every busy/idle/awaiting transition
+    /// records `Evidence` here and is arbitrated by `decide()`, instead of
+    /// each call site toggling its own subset of the old flags.
+    evidence: TurnEvidence,
     /// True only after OSC 7770 `state=` was observed (OSC 133 shell markers do
-    /// not prove that an agent's configured hooks are actually running).
+    /// not prove that an agent's configured hooks are actually running). This
+    /// is session-lifetime latch metadata, not per-turn evidence — it never
+    /// resets, so it does not belong in `TurnEvidence`.
     hook_state_seen: bool,
-    /// Whether the current idle state is safe for downstream uses such as
-    /// standby and peer-message injection. Enforced for agents with a verified
-    /// screen adapter; legacy heuristic-only agents retain their prior behavior.
-    idle_confirmed: bool,
-    /// First observation of a stable agent ready prompt.
-    ready_since: Option<std::time::Instant>,
+    /// Last screen classification and when it was computed, shared between the
+    /// reader chunk path (which computes it fresh on every chunk) and the
+    /// silence timer (which reuses this instead of re-classifying, so
+    /// `detect_agent_screen_activity` runs at most once per session per
+    /// `SILENCE_CHECK_INTERVAL` — see `cached_screen_activity()`).
+    cached_screen_activity: AgentScreenActivity,
     /// Recent user request to interrupt (Ctrl-C or bare Escape). This never
     /// changes shell state by itself; it only strengthens a matching interrupted
     /// screen emitted by the agent.
     interrupt_requested_at: Option<std::time::Instant>,
-    /// A user/injected prompt started a turn on an adapter-backed agent.
-    turn_started_by_input: bool,
-    /// Strong activity (real output or Working marker) was observed after that
-    /// submission. Until then, the old ready prompt is not proof of completion.
-    turn_activity_seen: bool,
+    /// Debounce clock for `note_ready_screen`: first observation of a stable
+    /// agent ready prompt. Not part of `TurnEvidence` — it is a pending
+    /// observation, not yet evidence; only committed via `force_idle` once
+    /// stable for `AGENT_READY_CONFIRM`, so busy evidence is not cleared early.
+    screen_ready_pending_since: Option<std::time::Instant>,
     /// Monotonic owner for an IDLE→BUSY transition reserved by terminal
     /// injection. The saved bool is the confirmed-idle value to restore only
     /// when no PTY byte was written and this claim still owns the state.
@@ -1245,15 +1442,11 @@ impl SilenceState {
             pending_suggest_at: None,
             completion_declared: false,
             completion_turn_epoch: 0,
-            explicit_busy: false,
-            hook_busy: false,
-            explicit_idle: false,
+            evidence: TurnEvidence::default(),
             hook_state_seen: false,
-            idle_confirmed: false,
-            ready_since: None,
+            cached_screen_activity: AgentScreenActivity::Unknown,
             interrupt_requested_at: None,
-            turn_started_by_input: false,
-            turn_activity_seen: false,
+            screen_ready_pending_since: None,
             active_injection_claim: None,
             next_injection_claim: 0,
             injection_delivery_uncertain: false,
@@ -1292,7 +1485,7 @@ impl SilenceState {
         let (_, prior_idle_confirmed) = self
             .active_injection_claim
             .filter(|(owner, _)| *owner == token)?;
-        if self.turn_activity_seen || self.hook_busy {
+        if self.evidence.activity_seen || self.busy_source_is("hook-busy") {
             self.active_injection_claim = None;
             return None;
         }
@@ -1300,7 +1493,15 @@ impl SilenceState {
         self.injection_delivery_uncertain = false;
         self.injection_uncertain_since = None;
         self.injection_uncertainty_retryable = false;
-        self.idle_confirmed = prior_idle_confirmed;
+        // Restore the pre-claim idle confirmation without restoring the exact
+        // prior `Evidence` (not retained) — a synthetic marker reproducing the
+        // same `idle_confirmed()` verdict is all any reader consults.
+        let (rank, source) = if prior_idle_confirmed {
+            (EvidenceRank::Protocol, "restored-confirmed-idle")
+        } else {
+            (EvidenceRank::Silence, "silence-timeout-agent")
+        };
+        self.evidence.force_idle(rank, source);
         Some(prior_idle_confirmed)
     }
 
@@ -1343,46 +1544,113 @@ impl SilenceState {
         self.injection_delivery_uncertain = false;
         self.injection_uncertain_since = None;
         self.injection_uncertainty_retryable = false;
-        self.ready_since = None;
+        self.screen_ready_pending_since = None;
         true
+    }
+
+    /// Any recorded busy evidence currently comes from `source` (a Protocol-
+    /// rank explicit marker: `"hook-busy"`/`"osc133-busy"`/`"user-submit"`).
+    fn busy_source_is(&self, source: &str) -> bool {
+        self.evidence.busy.is_some_and(|busy| busy.source == source)
+    }
+
+    /// A Protocol-rank explicit busy marker (OSC hook/shell-integration, or a
+    /// submitted line on a ready-adapter agent) is currently in effect. Narrower
+    /// than "any busy evidence": screen/raw-activity evidence is deliberately
+    /// one-shot (see `apply_working_evidence` and the reader chunk path) and
+    /// never sets this, exactly as the old `explicit_busy` was never set by
+    /// `note_working_screen`/`note_real_activity`.
+    fn explicit_busy(&self) -> bool {
+        matches!(
+            self.evidence.busy.map(|b| b.source),
+            Some("hook-busy" | "osc133-busy" | "user-submit")
+        )
+    }
+
+    /// A Protocol-rank explicit idle marker (OSC hook/shell-integration) is
+    /// the current idle evidence. Narrower than "any idle evidence": a
+    /// screen-confirmed ready/interrupted state does not count — callers that
+    /// need "is idle confirmed at all" want `idle_confirmed()` instead.
+    fn explicit_idle(&self) -> bool {
+        matches!(
+            self.evidence.idle.map(|i| i.source),
+            Some("hook-idle" | "osc133-idle")
+        )
+    }
+
+    pub(crate) fn idle_confirmed(&self) -> bool {
+        self.evidence.idle_confirmed()
+    }
+
+    /// Record awaiting (question/dialog) evidence — see
+    /// `TurnEvidence::record_awaiting`. Exposed on `SilenceState` (rather than
+    /// the `evidence` field, which stays private) so state.rs's PtyParsed
+    /// dispatcher can share the same ranked model without pty.rs giving up
+    /// direct control of the busy/idle axis.
+    pub(crate) fn record_awaiting(&mut self, rank: EvidenceRank, source: &'static str) -> bool {
+        self.evidence.record_awaiting(rank, source)
+    }
+
+    pub(crate) fn clear_awaiting(&mut self) {
+        self.evidence.clear_awaiting();
+    }
+
+    pub(crate) fn awaiting_rank(&self) -> Option<EvidenceRank> {
+        self.evidence.awaiting_rank()
+    }
+
+    /// BUSY evidence came from an observed agent hook (OSC 7770 `state=busy`
+    /// with a live hook), not a bare OSC 133 shell-integration marker.
+    #[cfg(test)]
+    fn hook_busy(&self) -> bool {
+        self.busy_source_is("hook-busy")
+    }
+
+    /// A user/injected prompt started the current turn on a ready-adapter
+    /// agent (`note_user_submission(true)`).
+    #[cfg(test)]
+    fn turn_started_by_input(&self) -> bool {
+        self.busy_source_is("user-submit")
     }
 
     fn note_explicit_state(&mut self, state: u8, hook_state: bool) {
         self.invalidate_injection_claim();
         self.hook_state_seen |= hook_state;
-        self.ready_since = None;
+        self.screen_ready_pending_since = None;
         match state {
             SHELL_BUSY => {
-                self.explicit_busy = true;
-                self.hook_busy = hook_state;
-                self.explicit_idle = false;
-                self.idle_confirmed = false;
+                let source = if hook_state {
+                    "hook-busy"
+                } else {
+                    "osc133-busy"
+                };
+                self.evidence.record_busy(EvidenceRank::Protocol, source);
                 self.last_status_line_at = Some(std::time::Instant::now());
             }
             SHELL_IDLE => {
-                self.explicit_busy = false;
-                self.hook_busy = false;
-                self.explicit_idle = true;
-                self.idle_confirmed = true;
+                let source = if hook_state {
+                    "hook-idle"
+                } else {
+                    "osc133-idle"
+                };
+                self.evidence.record_idle(EvidenceRank::Protocol, source);
                 self.last_status_line_at = None;
                 self.interrupt_requested_at = None;
-                self.turn_started_by_input = false;
-                self.turn_activity_seen = false;
+                self.evidence.activity_seen = false;
             }
             _ => {}
         }
     }
 
     fn note_busy_evidence(&mut self) {
-        self.explicit_idle = false;
-        self.idle_confirmed = false;
-        self.ready_since = None;
+        self.evidence.clear_idle();
+        self.screen_ready_pending_since = None;
     }
 
     fn note_working_screen(&mut self) {
         self.invalidate_injection_claim();
         self.note_busy_evidence();
-        self.turn_activity_seen = true;
+        self.evidence.activity_seen = true;
         // Keep silence-based question/tool-error detection aligned with shell
         // activity. Previously the working marker refreshed last_output_ms but
         // not SilenceState, allowing contradictory question events.
@@ -1392,31 +1660,28 @@ impl SilenceState {
     fn note_real_activity(&mut self) {
         self.invalidate_injection_claim();
         self.note_busy_evidence();
-        self.turn_activity_seen = true;
+        self.evidence.activity_seen = true;
     }
 
     fn note_ready_screen(&mut self) -> bool {
         if self.injection_delivery_uncertain
-            || (self.hook_busy && !self.turn_activity_seen)
-            || (self.turn_started_by_input && !self.turn_activity_seen)
+            || (self.busy_source_is("hook-busy") && !self.evidence.activity_seen)
+            || (self.busy_source_is("user-submit") && !self.evidence.activity_seen)
             || self.is_api_retry_active()
         {
-            self.ready_since = None;
+            self.screen_ready_pending_since = None;
             return false;
         }
         let now = std::time::Instant::now();
-        let since = self.ready_since.get_or_insert(now);
+        let since = *self.screen_ready_pending_since.get_or_insert(now);
         if since.elapsed() < AGENT_READY_CONFIRM {
             return false;
         }
-        self.explicit_busy = false;
-        self.hook_busy = false;
-        self.explicit_idle = false;
-        self.idle_confirmed = true;
+        self.evidence
+            .force_idle(EvidenceRank::Screen, "agent-ready-screen");
         self.last_status_line_at = None;
         self.interrupt_requested_at = None;
-        self.turn_started_by_input = false;
-        self.turn_activity_seen = false;
+        self.evidence.activity_seen = false;
         true
     }
 
@@ -1425,22 +1690,19 @@ impl SilenceState {
             .interrupt_requested_at
             .is_some_and(|at| at.elapsed() < INTERRUPT_PENDING_TTL);
         if pending {
-            self.explicit_busy = false;
-            self.hook_busy = false;
-            self.explicit_idle = false;
-            self.idle_confirmed = true;
+            self.evidence
+                .force_idle(EvidenceRank::Screen, "interrupted-screen");
             self.last_status_line_at = None;
-            self.ready_since = None;
+            self.screen_ready_pending_since = None;
             self.interrupt_requested_at = None;
-            self.turn_started_by_input = false;
-            self.turn_activity_seen = false;
+            self.evidence.activity_seen = false;
             return true;
         }
         self.note_ready_screen()
     }
 
     fn note_unknown_screen(&mut self) {
-        self.ready_since = None;
+        self.screen_ready_pending_since = None;
         if self
             .interrupt_requested_at
             .is_some_and(|at| at.elapsed() >= INTERRUPT_PENDING_TTL)
@@ -1451,7 +1713,7 @@ impl SilenceState {
 
     pub(crate) fn note_interrupt_requested(&mut self) {
         self.interrupt_requested_at = Some(std::time::Instant::now());
-        self.ready_since = None;
+        self.screen_ready_pending_since = None;
     }
 
     pub(crate) fn note_user_submission(&mut self, has_ready_adapter: bool) {
@@ -1459,19 +1721,25 @@ impl SilenceState {
         self.completion_declared = false;
         self.note_busy_evidence();
         if has_ready_adapter {
-            self.explicit_busy = true;
+            self.evidence
+                .record_busy(EvidenceRank::Protocol, "user-submit");
             self.last_status_line_at = Some(std::time::Instant::now());
-            self.turn_started_by_input = true;
-            self.turn_activity_seen = false;
+            self.evidence.activity_seen = false;
         }
     }
 
     #[cfg(test)]
     pub(crate) fn confirm_idle(&mut self) {
-        self.explicit_busy = false;
-        self.hook_busy = false;
-        self.explicit_idle = false;
-        self.idle_confirmed = true;
+        self.evidence
+            .force_idle(EvidenceRank::Protocol, "test-confirmed-idle");
+    }
+
+    /// Test-only: idle, but not confirmed (mirrors an agent silence-timeout
+    /// with no ready-screen adapter — `idle_confirmed()` derives `false`).
+    #[cfg(test)]
+    pub(crate) fn force_idle_unconfirmed(&mut self) {
+        self.evidence
+            .force_idle(EvidenceRank::Silence, "silence-timeout-agent");
     }
 
     /// Called by resize_pty when the terminal is resized.
@@ -1613,7 +1881,7 @@ impl SilenceState {
     /// pauses between status-line updates (API calls, file reads) don't trigger
     /// false question notifications during those gaps.
     fn is_spinner_active(&self) -> bool {
-        self.explicit_busy
+        self.explicit_busy()
             || self
                 .last_status_line_at
                 .map(|t| t.elapsed() < SILENCE_QUESTION_THRESHOLD)
@@ -3267,7 +3535,21 @@ fn detect_goose_screen_activity(rows: &[String]) -> AgentScreenActivity {
     }
 }
 
+/// #744-138c: call counter so a test can measure that the reader chunk path
+/// and the silence timer no longer each classify the screen independently —
+/// see `cached_screen_activity`. Not gated behind `#[cfg(test)]` on the
+/// counter itself (the increment is one relaxed atomic add, negligible), only
+/// the accessor used to read it is test-only.
+static SCREEN_CLASSIFY_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn screen_classify_calls() -> usize {
+    SCREEN_CLASSIFY_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
+    SCREEN_CLASSIFY_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     match agent_type {
         Some("claude") => detect_claude_screen_activity(rows),
         Some("codex") => detect_codex_screen_activity(rows),
@@ -3368,7 +3650,7 @@ fn apply_working_evidence(
         .and_then(|session| session.agent_type.clone());
     let can_reopen_completed = agent_type.as_deref() == Some("claude")
         || (agent_type.as_deref() == Some("codex") && source == "working-screen-movement");
-    let reopened_completion = {
+    let (reopened_completion, evidence_snapshot) = {
         let mut sl = silence.lock();
         let turn_completed = state
             .session_maps
@@ -3378,10 +3660,10 @@ fn apply_working_evidence(
         if turn_completed && !can_reopen_completed {
             return;
         }
-        if sl.explicit_idle && !can_reopen_completed {
+        if sl.explicit_idle() && !can_reopen_completed {
             return;
         }
-        let reopen = can_reopen_completed && (turn_completed || sl.explicit_idle);
+        let reopen = can_reopen_completed && (turn_completed || sl.explicit_idle());
         if reopen {
             // Claude can emit Stop/suggest before a blocking Stop hook finishes;
             // Codex can start an internal continuation without a PTY submission.
@@ -3390,7 +3672,13 @@ fn apply_working_evidence(
         }
         sl.note_working_screen();
         invalidate_background_probe_boundary_locked(state, session_id);
-        reopen
+        // One-shot evidence: it must win THIS decision (working-screen evidence
+        // is deliberately allowed to override even Protocol-rank idle once the
+        // reopen checks above already cleared it), but must not persist and
+        // block a later, unrelated idle evidence recording — see the comment
+        // on the reader chunk path's `real_activity` CAS for the same reasoning.
+        sl.evidence.record_busy(EvidenceRank::Protocol, source);
+        (reopen, sl.evidence.clone())
     };
     if reopened_completion
         && let Some(mut session) = state.session_maps.session_states.get_mut(session_id)
@@ -3404,12 +3692,22 @@ fn apply_working_evidence(
         .get(session_id)
         .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
     if let Some(prev) = prev
-        && prev != SHELL_BUSY
+        && let Some(Transition::ToBusy(evidence)) = decide(
+            &evidence_snapshot,
+            prev == SHELL_BUSY,
+            std::time::Instant::now(),
+        )
         && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
     {
-        tracing::debug!(session_id, activity_source = source, "Shell state → busy");
+        tracing::debug!(
+            session_id,
+            activity_source = evidence.source,
+            rank = ?evidence.rank,
+            "Shell state → busy"
+        );
         emit_shell_state(state, session_id, "busy");
     }
+    silence.lock().evidence.busy = None;
 }
 
 /// A submitted line to a known agent is strong BUSY evidence even before the
@@ -3485,6 +3783,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         tracing::debug!(
             session_id,
             activity_source = "user-submit",
+            rank = ?EvidenceRank::Protocol,
             "Shell state → busy"
         );
     }
@@ -3547,7 +3846,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         .silence_states
         .get(session_id)
         .map(|entry| Arc::clone(entry.value()));
-    let (transitioned, parent_dispatch) = {
+    let (transitioned, evidence, parent_dispatch) = {
         let mut silence_guard = silence.as_ref().map(|silence| silence.lock());
         if target == SHELL_IDLE
             && evidence_turn_epoch.is_some_and(|observed| {
@@ -3569,6 +3868,17 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         if target == SHELL_BUSY {
             stamp_last_output_now(state, session_id, now_epoch_ms());
         }
+        let evidence = match decide(
+            silence_guard
+                .as_deref()
+                .map(|s| &s.evidence)
+                .unwrap_or(&TurnEvidence::default()),
+            target == SHELL_IDLE,
+            std::time::Instant::now(),
+        ) {
+            Some(Transition::ToBusy(evidence) | Transition::ToIdle(evidence)) => Some(evidence),
+            None => None,
+        };
         let prev = match state.session_maps.shell_states.get(session_id) {
             Some(atom) => atom.load(std::sync::atomic::Ordering::Acquire),
             None => return,
@@ -3582,7 +3892,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         {
             arm_explicit_idle_background_probe(state, session_id, turn_epoch);
         }
-        try_shell_transition_locked(
+        let (transitioned, parent_dispatch) = try_shell_transition_locked(
             ShellTransitionRequest {
                 state,
                 session_id,
@@ -3593,12 +3903,21 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
             },
             silence_guard.as_deref_mut(),
             || {},
-        )
+        );
+        (transitioned, evidence, parent_dispatch)
     };
     if let Some(dispatch) = parent_dispatch {
         dispatch_parent_lifecycle(state, dispatch);
     }
     if transitioned {
+        if let Some(evidence) = evidence {
+            tracing::debug!(
+                session_id,
+                activity_source = evidence.source,
+                rank = ?evidence.rank,
+                "Shell state → {label}"
+            );
+        }
         emit_shell_state(state, session_id, label);
         // Publish IDLE before a queued delivery claims IDLE→BUSY again. Reversing
         // this order leaves the backend BUSY while the frontend's last event is
@@ -3799,6 +4118,7 @@ struct TimerIdleTransition {
     transitioned: bool,
     force_cleared_subtasks: bool,
     screen_confirms_idle: bool,
+    evidence: Option<Evidence>,
 }
 
 fn try_timer_idle_transition(
@@ -3814,7 +4134,7 @@ fn try_timer_idle_transition(
     // probe locks the PtySession, which the reader thread holds while it takes
     // this same SilenceState.
     let nested_prompt = agent_type.is_none() && explicit_busy_is_a_nested_prompt(state, session_id);
-    let (transitioned, force_cleared_subtasks, screen_confirms_idle, parent_dispatch) = {
+    let (transitioned, force_cleared_subtasks, screen_confirms_idle, evidence, parent_dispatch) = {
         let mut silence = silence.lock();
         if evidence_turn_epoch.is_some_and(|observed| {
             state
@@ -3827,6 +4147,7 @@ fn try_timer_idle_transition(
                 transitioned: false,
                 force_cleared_subtasks: false,
                 screen_confirms_idle: false,
+                evidence: None,
             };
         }
 
@@ -3849,6 +4170,7 @@ fn try_timer_idle_transition(
                 transitioned: false,
                 force_cleared_subtasks: false,
                 screen_confirms_idle,
+                evidence: None,
             };
         }
 
@@ -3861,7 +4183,7 @@ fn try_timer_idle_transition(
         let decision = if screen_confirms_idle && ready_probe_satisfied {
             IdleDecision::yes(evidence_turn_epoch)
         } else if screen_confirms_idle
-            || (silence.explicit_busy && !nested_prompt)
+            || (silence.explicit_busy() && !nested_prompt)
             || hold_for_ready_confirmation
             || silence.is_api_retry_active()
         {
@@ -3874,11 +4196,25 @@ fn try_timer_idle_transition(
                 transitioned: false,
                 force_cleared_subtasks: false,
                 screen_confirms_idle,
+                evidence: None,
             };
         }
         if !screen_confirms_idle {
-            silence.idle_confirmed = agent_type.is_none();
+            // Silence-timeout evidence, forced in regardless of rank: the
+            // `else if` chain above (mirroring the old checks exactly, incl.
+            // `nested_prompt`) already decided this is allowed, so the generic
+            // busy-rank gate in `record_idle` must not re-reject it.
+            let source = if agent_type.is_none() {
+                "silence-timeout-shell"
+            } else {
+                "silence-timeout-agent"
+            };
+            silence.evidence.force_idle(EvidenceRank::Silence, source);
         }
+        let evidence = match decide(&silence.evidence, true, std::time::Instant::now()) {
+            Some(Transition::ToIdle(evidence)) => Some(evidence),
+            _ => None,
+        };
         let (transitioned, parent_dispatch) = try_shell_transition_locked(
             ShellTransitionRequest {
                 state,
@@ -3895,6 +4231,7 @@ fn try_timer_idle_transition(
             transitioned,
             decision.force_cleared_subtasks,
             screen_confirms_idle,
+            evidence,
             parent_dispatch,
         )
     };
@@ -3905,6 +4242,7 @@ fn try_timer_idle_transition(
         transitioned,
         force_cleared_subtasks,
         screen_confirms_idle,
+        evidence,
     }
 }
 
@@ -4020,14 +4358,14 @@ fn spawn_silence_timer(
                 .session_states
                 .get(&session_id)
                 .and_then(|s| s.agent_type.clone());
-            let screen_activity = state
-                .grid
-                .vt_log_buffers
-                .get(&session_id)
-                .map(|vt| {
-                    detect_agent_screen_activity(agent_type.as_deref(), &vt.lock().screen_rows())
-                })
-                .unwrap_or(AgentScreenActivity::Unknown);
+            // Reused from the reader chunk path (#744-138c) instead of a fresh
+            // `detect_agent_screen_activity` call: with no chunk having
+            // arrived since the last classification, the screen the function
+            // would see is byte-identical, so the cached verdict is the same
+            // answer, not a stale one. Keeps the classifier to at most one
+            // call per session per `SILENCE_CHECK_INTERVAL` (previously two:
+            // one here, one in the reader).
+            let screen_activity = silence.lock().cached_screen_activity;
             let screen_activity =
                 completion_adjusted_screen_activity(&state, &silence, &session_id, screen_activity);
             let tracked_background_work = state
@@ -4073,12 +4411,9 @@ fn spawn_silence_timer(
                     }
                     tracing::debug!(
                         session_id,
-                        activity_source = if transition.screen_confirms_idle {
-                            "agent-ready-screen"
-                        } else {
-                            "silence"
-                        },
-                        idle_confirmed = silence.lock().idle_confirmed,
+                        activity_source = transition.evidence.map(|e| e.source).unwrap_or("unknown"),
+                        rank = ?transition.evidence.map(|e| e.rank),
+                        idle_confirmed = silence.lock().idle_confirmed(),
                         "Shell state → idle"
                     );
                     emit_shell_state(&state, &session_id, "idle");
@@ -5837,6 +6172,11 @@ impl ChunkProcessor {
         }
         {
             let mut sl = silence.lock();
+            // Shared with the silence timer (#744-138c): the screen has not
+            // changed since this classification unless a later chunk arrives
+            // to overwrite it, so the timer reuses this instead of calling
+            // `detect_agent_screen_activity` itself — see `cached_screen_activity`.
+            sl.cached_screen_activity = screen_activity;
             sl.on_chunk(
                 regex_found_question,
                 last_q_line,
@@ -5867,20 +6207,23 @@ impl ChunkProcessor {
         let working_status_moved = changed_rows
             .iter()
             .any(|row| crate::chrome::is_working_status_row(&row.text));
-        if screen_activity == AgentScreenActivity::Working && !explicit_idle_in_chunk {
-            let source = if working_status_moved {
-                "working-screen-movement"
-            } else {
-                "working-screen"
-            };
-            // DEFERRED (2026-09-06) — this is the one SilenceState lock in the
-            // chunk path that is still separate from the coalesced sections
-            // above and below. Folding it in means inlining a helper three
-            // other call sites share, whose early `return`s skip the stamp and
-            // the BUSY transition the tail block performs unconditionally.
-            // Needs its own story; merging it blind changes state transitions.
-            apply_working_evidence(state, silence, session_id, now_epoch_ms(), source);
-        }
+        let apply_working =
+            screen_activity == AgentScreenActivity::Working && !explicit_idle_in_chunk;
+        let working_source = if working_status_moved {
+            "working-screen-movement"
+        } else {
+            "working-screen"
+        };
+        let can_reopen_completed = apply_working && {
+            let working_agent_type = state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .and_then(|session| session.agent_type.clone());
+            working_agent_type.as_deref() == Some("claude")
+                || (working_agent_type.as_deref() == Some("codex")
+                    && working_source == "working-screen-movement")
+        };
 
         // Stamp last_output_ms for real output and for active spinner repaints.
         // Spinner rows (dingbats ✻, braille ⠋, Aider ░█) prove the agent is
@@ -5907,8 +6250,44 @@ impl ChunkProcessor {
         // atomic, `begin_suggest_working_turn` the parser), and the ordering
         // inside the section is the ordering the three had.
         let real_activity = (!chrome_only || has_spinner) && !explicit_idle_in_chunk;
-        let in_resize_grace_after = {
+        // The working-evidence gate (turn_completed/explicit_idle blocking a
+        // stale Working row, unless `can_reopen_completed`) folded in here so
+        // this is the ONLY SilenceState lock in the chunk path — previously
+        // `apply_working_evidence` took its own separate lock ahead of this
+        // one (DEFERRED 2026-09-06). Working evidence and real/spinner
+        // activity are both one-shot busy evidence (see the comment on
+        // `apply_working_evidence`): recorded to win THIS chunk's CAS via
+        // `decide()`, then cleared so they cannot block a later, unrelated
+        // idle-evidence recording (e.g. the silence-timeout fallback for a
+        // plain shell or an agent with no OSC133/hook integration).
+        let (in_resize_grace_after, evidence_snapshot, working_applied, reopened_completion) = {
             let mut sl = silence.lock();
+            let mut working_applied = false;
+            let mut reopened_completion = false;
+            if apply_working {
+                let turn_completed = state
+                    .session_maps
+                    .session_states
+                    .get(session_id)
+                    .is_some_and(|session| sl.completion_declared_for_epoch(session.turn_epoch));
+                let blocked = (turn_completed || sl.explicit_idle()) && !can_reopen_completed;
+                if !blocked {
+                    let reopen = can_reopen_completed && (turn_completed || sl.explicit_idle());
+                    if reopen {
+                        // Claude can emit Stop/suggest before a blocking Stop hook
+                        // finishes; Codex can start an internal continuation
+                        // without a PTY submission. Current semantic movement is
+                        // stronger than either stale boundary.
+                        sl.reset_suggest_memory();
+                        reopened_completion = true;
+                    }
+                    sl.note_working_screen();
+                    invalidate_background_probe_boundary_locked(state, session_id);
+                    sl.evidence
+                        .record_busy(EvidenceRank::Protocol, working_source);
+                    working_applied = true;
+                }
+            }
             if real_activity {
                 if has_spinner {
                     sl.note_working_screen();
@@ -5916,6 +6295,14 @@ impl ChunkProcessor {
                     sl.note_real_activity();
                 }
                 invalidate_background_probe_boundary_locked(state, session_id);
+                if sl.evidence.busy.is_none() {
+                    let source = if has_spinner {
+                        "spinner-active"
+                    } else {
+                        "real-activity"
+                    };
+                    sl.evidence.record_busy(EvidenceRank::Protocol, source);
+                }
             }
             // SIGWINCH reflow repaints content rows for longer than the initial 1s
             // resize grace, but a reflow never grows the buffer — it only repaints
@@ -5933,8 +6320,21 @@ impl ChunkProcessor {
             if !vt_output_grew && sl.is_resize_grace() {
                 sl.on_resize();
             }
-            sl.is_resize_grace()
+            (
+                sl.is_resize_grace(),
+                sl.evidence.clone(),
+                working_applied,
+                reopened_completion,
+            )
         };
+        if working_applied {
+            stamp_last_output_now(state, session_id, now_epoch_ms());
+        }
+        if reopened_completion
+            && let Some(mut session) = state.session_maps.session_states.get_mut(session_id)
+        {
+            session.suggested_actions = None;
+        }
         if real_activity {
             stamp_last_output_now(state, session_id, now_epoch_ms());
         }
@@ -5961,7 +6361,11 @@ impl ChunkProcessor {
         // Load `prev` and drop the shell_states Ref before try_shell_transition (which
         // re-gets the same key): holding a Ref across that second get risks the CONC-C
         // re-entrant-read deadlock (story 099-6526).
-        let prev = if real_activity && !in_resize_grace_after {
+        //
+        // Working-evidence's CAS is unconditional once recorded (matching the
+        // old `apply_working_evidence`, which was never gated by resize grace);
+        // real/spinner activity's CAS keeps its own resize-grace gate.
+        let prev = if working_applied || (real_activity && !in_resize_grace_after) {
             state
                 .session_maps
                 .shell_states
@@ -5971,10 +6375,26 @@ impl ChunkProcessor {
             None
         };
         if let Some(prev) = prev
-            && prev != SHELL_BUSY
+            && let Some(Transition::ToBusy(evidence)) = decide(
+                &evidence_snapshot,
+                prev == SHELL_BUSY,
+                std::time::Instant::now(),
+            )
             && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
         {
+            tracing::debug!(
+                session_id,
+                activity_source = evidence.source,
+                rank = ?evidence.rank,
+                "Shell state → busy"
+            );
             emit_shell_state(state, session_id, "busy");
+        }
+        if working_applied || real_activity {
+            // One-shot: this evidence must not persist to block a later,
+            // unrelated idle-evidence recording (silence-timeout fallback,
+            // ready-screen confirmation) — see the comment above.
+            silence.lock().evidence.busy = None;
         }
 
         // Update terminal mode in SessionState when it changes.
@@ -6526,7 +6946,7 @@ fn idle_is_confirmed(state: &AppState, session_id: &str) -> bool {
         .session_maps
         .silence_states
         .get(session_id)
-        .map(|sl| sl.lock().idle_confirmed)
+        .map(|sl| sl.lock().idle_confirmed())
         .unwrap_or(false);
     if confirmed {
         return true;
@@ -6604,7 +7024,7 @@ fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<Inject
         .session_maps
         .silence_states
         .get(session_id)
-        .map(|silence| silence.lock().idle_confirmed)
+        .map(|silence| silence.lock().idle_confirmed())
         .unwrap_or(false);
     if !try_shell_transition(state, session_id, SHELL_IDLE, SHELL_BUSY, true) {
         return None;

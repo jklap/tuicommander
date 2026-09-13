@@ -609,6 +609,12 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
         session.question_text = None;
         session.question_confident = false;
     }
+    // #744-138c: clear the shared awaiting evidence too, outside the
+    // session_states lock just dropped above (SilenceState → SessionState
+    // lock order — see apply_event_to_session_state's PtyParsed arm).
+    if let Some(silence) = state.session_maps.silence_states.get(session_id) {
+        silence.lock().clear_awaiting();
+    }
     state.emit_pty_event(AppEvent::PtyParsed {
         session_id: session_id.to_string(),
         parsed: serde_json::json!({ "type": "choice-cleared" }).into(),
@@ -3760,6 +3766,14 @@ impl AppState {
 
     /// Apply a single event to the session state accumulator.
     fn apply_event_to_session_state(state: &Arc<AppState>, event: &AppEvent) {
+        // #744-138c: awaiting-evidence side effect on the session's
+        // SilenceState, applied outside the session_states entry lock (see
+        // the PtyParsed arm below) to preserve the SilenceState → SessionState
+        // lock order used throughout pty.rs.
+        enum AwaitingEvidenceOp {
+            Clear,
+            RecordChoicePrompt,
+        }
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -3814,6 +3828,59 @@ impl AppState {
                 // spawning orchestrator's inbox outside the lock below.
                 let mut parked_wait: Option<(String, bool, &'static str)> = None;
 
+                // Ranked awaiting evidence (#744-138c): resolved through the
+                // session's SilenceState BEFORE the session_states entry is
+                // taken below. Lock order is SilenceState → SessionState
+                // everywhere in pty.rs (see note_submitted_input_with_hook);
+                // taking session_states first and reaching into silence_states
+                // while still holding it would invert that order against a
+                // thread that already follows it, and could deadlock.
+                let current_turn_epoch = state
+                    .session_maps
+                    .session_states
+                    .get(session_id)
+                    .map(|s| s.turn_epoch);
+                let epoch_matches =
+                    event_turn_epoch.is_none_or(|epoch| epoch == current_turn_epoch.unwrap_or(0));
+                // Don't let a low-confidence (silence-heuristic) question
+                // overwrite an already-active high-confidence one — e.g. grok
+                // signals an approval prompt via its "Action Required" title
+                // (confident) while its on-screen status line is also parsed as
+                // a low-confidence question. The generic rank gate reproduces
+                // this: a confident (`Protocol`-rank) verdict rejects a
+                // heuristic (`Screen`-rank) one, same-or-higher rank updates.
+                let question_admitted = (event_type == "question" && epoch_matches).then(|| {
+                    let new_confident = parsed
+                        .get("confident")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let (rank, source) = if new_confident {
+                        (crate::pty::EvidenceRank::Protocol, "question-confident")
+                    } else {
+                        (crate::pty::EvidenceRank::Screen, "question-heuristic")
+                    };
+                    state
+                        .session_maps
+                        .silence_states
+                        .get(session_id)
+                        .map(|sl| sl.lock().record_awaiting(rank, source))
+                        .unwrap_or(true)
+                });
+                // "status-line" and "question-cleared" only clear a non-confident
+                // awaiting verdict — the old `!question_confident` sticky guard,
+                // read off the same ranked evidence instead of a raw bool.
+                let awaiting_is_confident = matches!(event_type, "status-line" | "question-cleared")
+                    && state
+                        .session_maps
+                        .silence_states
+                        .get(session_id)
+                        .is_some_and(|sl| {
+                            sl.lock().awaiting_rank() == Some(crate::pty::EvidenceRank::Protocol)
+                        });
+                // Applied to the session's SilenceState AFTER `s` (below) is
+                // dropped, for the same lock-order reason.
+                let mut awaiting_evidence_op: Option<AwaitingEvidenceOp> = None;
+
                 let mut s = state
                     .session_maps.session_states
                     .entry(session_id.clone())
@@ -3823,20 +3890,12 @@ impl AppState {
                     });
                 s.last_activity_ms = now_ms;
                 match event_type {
-                    "question" if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) => {
+                    "question" if epoch_matches => {
                         let new_confident = parsed
                             .get("confident")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        // Don't let a low-confidence (silence-heuristic) question
-                        // overwrite an already-active high-confidence one — e.g. grok
-                        // signals an approval prompt via its "Action Required" title
-                        // (confident) while its on-screen status line is also parsed as
-                        // a low-confidence question. Downgrading question_confident here
-                        // would let the next busy status-line clear awaiting_input,
-                        // making the approval state flicker. The confident question
-                        // clears on user-input instead.
-                        if !(s.awaiting_input && s.question_confident && !new_confident) {
+                        if question_admitted == Some(true) {
                             let was_awaiting = s.awaiting_input;
                             s.awaiting_input = true;
                             s.question_text = parsed
@@ -3868,16 +3927,15 @@ impl AppState {
                             }
                         }
                     }
-                    "question-cleared"
-                        if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) =>
-                    {
+                    "question-cleared" if epoch_matches => {
                         // The silence timer saw the question leave the
                         // screen. It only fires for the heuristic state,
                         // but re-check here: a confident question may
                         // have landed between the check and this event.
-                        if !s.question_confident {
+                        if !awaiting_is_confident {
                             s.awaiting_input = false;
                             s.question_text = None;
+                            awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
                         }
                     }
                     "user-input" => {
@@ -3887,6 +3945,7 @@ impl AppState {
                         s.question_confident = false;
                         s.slash_menu_items = None;
                         s.choice_prompt = None;
+                        awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
                         // Capture as last_prompt if >= 10 words
                         if let Some(content) = parsed.get("content").and_then(|v| v.as_str())
                             && content.split_whitespace().count() >= 10
@@ -3924,9 +3983,10 @@ impl AppState {
                         // awaiting_input flickers. It clears on user-input (the user
                         // answered, state.rs user-input arm). Low-confidence
                         // silence-heuristic questions still yield to the busy signal.
-                        if !s.question_confident {
+                        if !awaiting_is_confident {
                             s.awaiting_input = false;
                             s.question_text = None;
+                            awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
                         }
                         s.rate_limited = false;
                         s.retry_after_ms = None;
@@ -3978,6 +4038,7 @@ impl AppState {
                             as serde::Deserialize>::deserialize(&**parsed)
                         .ok();
                         s.awaiting_input = true;
+                        awaiting_evidence_op = Some(AwaitingEvidenceOp::RecordChoicePrompt);
                         if !was_awaiting {
                             parked_wait = Some((
                                 parsed
@@ -3993,6 +4054,7 @@ impl AppState {
                     "choice-cleared" => {
                         s.choice_prompt = None;
                         s.awaiting_input = false;
+                        awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
                         s.question_text = None;
                         s.question_confident = false;
                     }
@@ -4015,6 +4077,21 @@ impl AppState {
                     _ => {}
                 }
                 drop(s);
+
+                // Applied outside the session_states entry lock — same
+                // lock-order reason as `question_admitted`/`awaiting_is_confident`
+                // above (#744-138c).
+                if let Some(op) = awaiting_evidence_op
+                    && let Some(sl) = state.session_maps.silence_states.get(session_id)
+                {
+                    let mut sl = sl.lock();
+                    match op {
+                        AwaitingEvidenceOp::Clear => sl.clear_awaiting(),
+                        AwaitingEvidenceOp::RecordChoicePrompt => {
+                            sl.record_awaiting(crate::pty::EvidenceRank::Protocol, "choice-prompt");
+                        }
+                    }
+                }
 
                 // Unblock-triggered flush (story 091): user-input just cleared
                 // question_confident. If the agent answered a confident question but
@@ -4897,6 +4974,19 @@ pub(crate) mod tests_support {
         let log_buffer = Arc::new(parking_lot::Mutex::new(
             crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
         ));
+        // `AppState::new` takes `data_dir` explicitly for exactly this reason
+        // (an isolated path per test), but `claude_usage::load_cache_from_disk`
+        // reads `config::config_dir()` instead of the directory it was handed
+        // — in production the two are the same value (`lib.rs` passes
+        // `config::config_dir()` as `data_dir`), so this only diverges in
+        // tests. `config_dir()`'s own process-safe test fallback (never the
+        // real platform directory — see `config.rs`) covers it without this
+        // function needing its own override: setting one here deadlocked
+        // every test that first calls `isolated_config()`-style helpers and
+        // THEN `make_test_app_state()` on the same thread, since
+        // `set_config_dir_override`'s exclusive lock is not reentrant
+        // (`finalize_deletes_once_the_user_confirms` and six siblings in
+        // `worktree.rs` hung until nextest's timeout before this was reverted).
         let mut state = AppState::new(
             data_dir,
             std::env::temp_dir().join("test-worktrees"),
