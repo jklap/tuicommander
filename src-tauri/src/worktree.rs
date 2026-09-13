@@ -756,6 +756,10 @@ pub(crate) struct CreatedWorkspace {
     /// Paths the parent's working tree carried over. Always 0 for a linked
     /// worktree, which starts from a clean checkout of the branch.
     pub(crate) carried_over: usize,
+    /// Git-ignored build directories clonefiled in from the parent so a linked
+    /// worktree starts warm. Always 0 for a COW clone, which copied the whole
+    /// tree in one operation and has nothing left to warm separately.
+    pub(crate) warmed_directories: usize,
     /// What was asked of the parent's uncommitted work. Reported because the
     /// caller needs to know whether an empty tree means "clean policy" or
     /// "nothing was dirty".
@@ -831,6 +835,7 @@ impl CreatedWorkspace {
             },
             "warm_artifacts": {
                 "present": warm,
+                "warmed_directories": self.warmed_directories,
                 "note": setup,
             },
             "isolation": isolation,
@@ -890,12 +895,17 @@ pub(crate) fn create_workspace(
         // makes "the flag is off" testable without a config file.
         crate::cow::cow_creation_enabled(),
         crate::cow::probe_cow_support,
+        crate::cow::clone_tree,
     )
 }
 
-/// [`create_workspace`] with the COW feature flag and the probe injected, so a
-/// test can force either outcome without a config file or a second filesystem
-/// to fail against.
+/// [`create_workspace`] with the COW feature flag, the probe and the tree copy
+/// injected, so a test can force either outcome without a config file or a
+/// second filesystem to fail against.
+///
+/// `copy` is the copy-on-write clone of one directory tree. Warming a linked
+/// worktree must survive it failing, and "survives a failure" is only provable
+/// by making one happen.
 #[allow(dead_code)]
 pub(crate) fn create_workspace_with(
     worktrees_dir: &Path,
@@ -905,6 +915,7 @@ pub(crate) fn create_workspace_with(
     dirty: crate::cow::DirtyPolicy,
     cow_enabled: bool,
     probe: impl Fn(&Path, &Path) -> crate::cow::CowSupport,
+    copy: impl Fn(&Path, &Path) -> Result<(), String>,
 ) -> Result<CreatedWorkspace, String> {
     let src = PathBuf::from(&config.base_repo);
     let dest = worktrees_dir.join(sanitize_name(&config.task_name));
@@ -954,12 +965,20 @@ pub(crate) fn create_workspace_with(
                 degraded_reason: None,
                 warnings: workspace.warnings,
                 carried_over: workspace.carried_over,
+                warmed_directories: 0,
                 dirty_policy: workspace.dirty_policy,
             })
         }
         crate::cow::Mechanism::Worktree { degraded_reason } => {
             let worktree = create_worktree_with_stale_recovery(worktrees_dir, config, base_ref)?;
             let branch = worktree.branch.unwrap_or(branch);
+            // Git checked out the tracked files and nothing else, so every
+            // ignored build directory is missing and this worktree is cold.
+            // Warming it is best-effort BY CONSTRUCTION: the workspace above is
+            // already complete and valid, so a copy that fails costs build time
+            // and nothing else. It must never turn a successful creation into
+            // an error.
+            let warming = crate::cow::warm_worktree_with(&src, &worktree.path, copy);
             Ok(CreatedWorkspace {
                 // A linked worktree's id IS its branch — the identity migration,
                 // the same rule `map_worktree_workspace_paths` applies when it
@@ -969,11 +988,15 @@ pub(crate) fn create_workspace_with(
                 branch,
                 kind: crate::cow::WorkspaceKind::Worktree,
                 degraded_reason,
-                warnings: Vec::new(),
+                // The guards are about cloning, so a worktree has none of
+                // those; what it can report is a directory it failed to warm.
+                warnings: warming.warnings,
                 // A linked worktree is a fresh checkout of the branch: the
                 // parent's uncommitted work stays in the parent, which is the
                 // isolation difference the caller has to be told about.
+                // Warming copies only IGNORED paths, so it adds nothing here.
                 carried_over: 0,
+                warmed_directories: warming.warmed,
                 // Recorded as asked for, not as applied: no dirty policy runs
                 // on a worktree, because there is nothing carried over to clean.
                 dirty_policy: dirty,
@@ -5859,6 +5882,7 @@ branch refs/heads/feat
             dirty,
             true,
             crate::cow::probe_cow_support,
+            crate::cow::clone_tree,
         )
     }
 
@@ -5913,6 +5937,7 @@ branch refs/heads/feat
             DirtyPolicy::Inherit,
             false,
             probe_must_not_run,
+            crate::cow::clone_tree,
         )
         .expect("auto must degrade, not fail");
 
@@ -5941,6 +5966,7 @@ branch refs/heads/feat
             DirtyPolicy::Inherit,
             false,
             probe_must_not_run,
+            crate::cow::clone_tree,
         )
         .expect_err("mode=cow must not silently give a worktree");
 
@@ -5969,6 +5995,7 @@ branch refs/heads/feat
             DirtyPolicy::Inherit,
             false,
             probe_must_not_run,
+            crate::cow::clone_tree,
         )
         .expect("an explicit worktree request is unaffected");
 
@@ -5977,6 +6004,95 @@ branch refs/heads/feat
             created.degraded_reason, None,
             "mode=worktree is a choice, not a degradation"
         );
+    }
+
+    /// A linked worktree reports the ignored build directories it was handed,
+    /// so the MCP response can tell an agent not to reinstall them.
+    #[test]
+    fn a_linked_worktree_reports_the_directories_it_was_warmed_with() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join(".gitignore"), "/build\n").expect("write gitignore");
+        git_cmd(&repo).args(["add", "."]).run().expect("add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "ignore build"])
+            .run()
+            .expect("commit");
+        fs::create_dir_all(repo.join("build")).expect("ignored dir");
+        fs::write(repo.join("build").join("artifact.o"), "warm").expect("write artifact");
+
+        let created = create_workspace_with(
+            &workspaces,
+            &workspace_config(&repo, "feature-warm"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+            false,
+            probe_must_not_run,
+            // The real clonefile: on a filesystem without reflink this still
+            // has to produce a valid workspace, which is the point below.
+            crate::cow::clone_tree,
+        )
+        .expect("warming must never fail creation");
+
+        assert_eq!(created.kind, WorkspaceKind::Worktree);
+        git_cmd(&created.path)
+            .args(["status", "--porcelain"])
+            .run()
+            .expect("the worktree must be usable whether or not warming worked");
+        if created.warnings.is_empty() {
+            assert_eq!(created.warmed_directories, 1);
+            assert_eq!(
+                fs::read_to_string(created.path.join("build").join("artifact.o"))
+                    .expect("warm artifact"),
+                "warm"
+            );
+        } else {
+            // No reflink on this filesystem. That is the degradation the
+            // feature is built to survive, not a failure of this test.
+            assert_eq!(created.warmed_directories, 0);
+        }
+    }
+
+    /// The copy failing must cost build time and nothing else. Injected,
+    /// because a creation path that aborts on a failed warm looks identical to
+    /// one that does not until a copy actually fails.
+    #[test]
+    fn a_failed_warm_still_produces_a_usable_worktree_and_a_warning() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join(".gitignore"), "/build\n").expect("write gitignore");
+        git_cmd(&repo).args(["add", "."]).run().expect("add");
+        git_cmd(&repo)
+            .args(["commit", "-m", "ignore build"])
+            .run()
+            .expect("commit");
+        fs::create_dir_all(repo.join("build")).expect("ignored dir");
+
+        let created = create_workspace_with(
+            &workspaces,
+            &workspace_config(&repo, "feature-cold"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+            false,
+            probe_must_not_run,
+            |_, _| Err("clonefile refused".to_string()),
+        )
+        .expect("a failed warm must not fail creation");
+
+        assert_eq!(created.kind, WorkspaceKind::Worktree);
+        assert_eq!(created.warmed_directories, 0);
+        assert_eq!(created.warnings.len(), 1, "{:?}", created.warnings);
+        assert!(
+            created.warnings[0].contains("build"),
+            "{}",
+            created.warnings[0]
+        );
+        git_cmd(&created.path)
+            .args(["status", "--porcelain"])
+            .run()
+            .expect("a cold worktree is still a worktree");
     }
 
     /// The sub-flag alone must not suffice. Someone who turned COW workspaces
@@ -6020,6 +6136,7 @@ branch refs/heads/feat
             DirtyPolicy::Inherit,
             true,
             crate::cow::probe_cow_support,
+            crate::cow::clone_tree,
         )
         .expect("the fixture must actually produce a clone");
         assert_eq!(created.kind, WorkspaceKind::Cow);
@@ -6068,6 +6185,7 @@ branch refs/heads/feat
             DirtyPolicy::Inherit,
                 true,
             probe_unavailable,
+            crate::cow::clone_tree,
         )
         .expect("auto must degrade, not fail");
 
@@ -6105,6 +6223,7 @@ branch refs/heads/feat
             DirtyPolicy::Inherit,
                 true,
             probe_unavailable,
+            crate::cow::clone_tree,
         )
         .expect_err("mode=cow must not silently give a worktree");
 
@@ -6402,6 +6521,7 @@ branch refs/heads/feat
             DirtyPolicy::Inherit,
                 true,
             probe_unavailable,
+            crate::cow::clone_tree,
         )
         .expect("degrades")
         .instruction_payload();
