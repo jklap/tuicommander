@@ -24,6 +24,7 @@
 
 - [Agent Support](./user-guide/ai-agents.md)
 - [Agent Teams](./user-guide/agent-teams.md)
+- [Project Progress (Planned)](./user-guide/project-progress.md)
 - [AI Chat](./user-guide/ai-chat.md)
 - [Smart Prompts](./user-guide/smart-prompts.md)
 - [Prompt Library](./user-guide/prompt-library.md)

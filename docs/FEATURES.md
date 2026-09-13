@@ -496,7 +496,8 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Also accessible via Command Palette: "Error log"
 
 ### 3.14 Plan Detection
-- Plans are detected via structured `plan-file` events from the output parser and via `plans/` directory watcher
+- Delivered by the preinstalled external Plan Tracker plugin
+- Plans are detected via structured `plan-file` events from the output parser and via a `plans/` directory watcher
 - Auto-open: restores the active plan from `.claude/active-plan.json` on startup; new plans opened as background markdown tabs on first detection (no focus change)
 - Repo-scoped: only processes plans belonging to the active repository
 
@@ -587,6 +588,8 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   4. Agent name (lowest): icon + name of detected agent
   - Color coding: blue < 70%, yellow 70-89%, red pulsing >= 90%
   - The shared usage ticker is absorbed into the badge only when its provider label matches the active Claude or Codex agent; stale results from the previous provider stay hidden during an asynchronous tab switch
+  - The usage poll has no default provider: it stays silent until a Claude or Codex tab is focused, then follows that provider and stays on it while the active tab is a shell. A Codex-only install is therefore never shown a Claude reading (or a Claude "no token") it did not ask for
+  - Codex windows are named by duration (`5h`, `7d`) because the API does not label them, and only the account limit is rendered. A plan whose account limit reports a single window shows a single reading; per-model limits stay in the dashboard, where their model name is visible
 - Shared ticker area: multi-source rotating messages from plugins with source labels, counter badge (1/3 ▸), click-to-cycle, right-click popover, and priority tiers (low/normal/urgent)
 - Update badge: "Update vX.Y.Z" (click to download & install), progress percentage during download
 
@@ -859,13 +862,17 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
   - Dirty policy for the parent's uncommitted work, clone only: `Keep` (default, free), `Drop untracked` (`git clean -fd`, keeps ignored build output), `Reset` (`reset --hard --recurse-submodules`, the only option that costs real disk — 15 MB → 113 MB measured)
   - Capability probe: same volume plus a real copy-on-write copy of one file — never inferred from the filesystem name. The probe and the clone read one shared list of mechanisms (`clonefile`, then reflink), each of which fails rather than degrading to a byte copy
   - Creation guards refuse rather than repair: destination inside the source, linked-worktree source, bare repo, operation in progress (rebase/merge/cherry-pick/revert/bisect), lock held by a live git process. A stale lock is dropped in the copy, never in the source
-  - Clone fixups: inherited `.git/worktrees` admin entries removed, `gc.auto=0`, `core.fsmonitor=false`, a `parent` remote with an unusable push URL, index refreshed
-  - **Publish** (clone rows only): stages the tip under `refs/tuic/published/<id>` in the parent, fast-forwards `refs/heads/<branch>` with a compare-and-swap, then pushes to origin. Parent update and origin push reported independently; a divergent or checked-out parent branch is refused, never forced
-  - Removal gate: refused while unpublished commits exist (counted against remotes and the mirrored parent refs), with the count named in the confirmation on both the sidebar and the manager. `force` defaults to false on all three transports
+  - Clone fixups: inherited `.git/worktrees` admin entries removed, `gc.auto=0`, `core.fsmonitor=false`, a `parent` remote with an unusable push URL, index refreshed, and its own minted workspace id + canonical parent path recorded in its git config
+  - Durable registration: a successful clone is registered in `repositories.json` before the creation call reports success, so a crash cannot leave a real clone with no durable record of it; a registration failure keeps the clone and reports an explicit, recoverable error rather than deleting it. Listing a repository self-heals a lost registration by re-adopting any clone whose own git config carries every marker this backend writes — never a directory missing one, including a clone made before this recovery existed. Repository rows are keyed on a canonical path, so a repo reached through a symlink or a different spelling reuses its existing entry rather than duplicating it. Removal is the mirror image, and never trusts the row alone: before deleting anything, it re-validates the row against the directory it names (same markers, parent-remote evidence, and containment as recovery, plus a real non-symlink `.git` and a matching on-disk workspace id) — unconditionally, so a forged or stale row is refused even with `force=true`. A markerless clone can be registered only through the explicit `worktree_adopt` action (Tauri command, HTTP route, MCP `repo` action), which validates the same parent-remote provenance before writing anything and never touches the working tree, refs, HEAD, or remotes
+  - **Publish** (clone rows only): stages the tip under `refs/tuic/published/<id>` in the parent, fast-forwards `refs/heads/<branch>` with a compare-and-swap, then pushes to origin. Parent update and origin push reported independently; a divergent or checked-out parent branch is refused, never forced. Same implementation behind the Tauri command, `POST /worktrees/publish`, and MCP `repo action=worktree_publish`
+  - Removal gate: refused while unpublished commits exist (counted against remotes and the mirrored parent refs), with the count named in the confirmation on both the sidebar and the manager. `force` defaults to false on all three transports. The count itself is also readable directly via MCP `repo action=worktree_unpublished`
+  - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `N unpublished`, `Published`, `Merged`, or `Unknown`). Published is recoverable but not necessarily merged; unknown blocks removal. Tracked line counts compact above 999 with exact tooltip values
   - MCP creation payload tells the model what carried over, which artifact directories are warm and how large, and that a clone's commits exist only there
-- **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
+  - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
   - Dedicated overlay listing all worktrees across all repos with metadata: branch name, repo badge, PR state (open/merged/closed), dirty stats, last commit timestamp
-  - `clone` and `N unpublished` badges on copy-on-write rows (counted once per panel open)
+  - `clone`, dirty, unpublished, published, merged, and unknown badges from the shared progressive refresh
+  - Clone rows refresh their branch, diff stats, and PR status from the independent repository
+  - Cow-head sidebar icon for copy-on-write rows; linked worktrees keep the fork icon
   - Orphan worktree detection with warning badge and Prune action
   - Repo filter pills and text search for branch names
   - Multi-select with checkboxes and select-all for batch operations
@@ -1643,8 +1650,10 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - `data-pinned` attribute on links sets pinned flag
 - Interactive test page: `docs/examples/sdk-test.html` (see `docs/tuic-sdk.md` for launch instructions)
 
-### 17.5 Built-in Plugins
-- **Plan Tracker** — Detects Claude Code plan files from structured events
+### 17.5 Preinstalled External Plugins
+- **Plan Tracker** — Detects agent plan files from structured events and opens them as background tabs
+- **Stories Ticker** — Shows the active repository's open story count in the shared status ticker
+- Both are seeded once during migration, then remain independently uninstallable and updateable through the plugin catalog
 
 > **Note:** Claude Usage Dashboard was promoted from a plugin to a native SolidJS feature (see section 6.6). It is managed via Settings > Agents > Claude > Usage Dashboard toggle.
 

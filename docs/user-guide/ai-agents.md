@@ -114,6 +114,43 @@ When enabled, PTY sessions receive the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` 
 
 Spawned sessions automatically emit lifecycle events (`session-created`, `session-closed`) so they appear as tabs and clean up on exit.
 
+## TUICommander Agents vs Codex Internal Subagents
+
+This comparison primarily concerns Codex internal subagents. For substantial or
+long-running work, prefer agents spawned through TUICommander. Codex coordinates an
+internal subagent inside the parent conversation and runtime. A TUICommander agent
+runs in its own managed process and session, with a visible terminal and a stable
+address that the parent or user can use later.
+
+| Concern | Codex internal subagent | TUICommander agent |
+|---------|-------------------------|---------------------|
+| **Control** | Controlled through the parent conversation | Visible session with explicit status, input, interrupt, close, and kill controls |
+| **Parent interruption** | Its lifecycle remains coupled to the parent runtime | Continues independently after spawn; its terminal and task handle remain available |
+| **Context** | May inherit parent conversation history | Receives only the assigned brief and files it reads |
+| **Worker output** | Final output normally returns directly to the parent context | Terminal output stays outside the parent context until explicitly requested |
+| **Handoff** | Returned through Codex's internal collaboration mechanism | Worker sends a concise result or blocker through the TUICommander inbox |
+| **Recovery** | Depends on Codex's internal subagent lifecycle | Parent can reconnect, inspect task state, read the inbox, or resume supported agent sessions |
+| **User visibility** | Usually summarized by the parent | Full terminal and lifecycle state remain observable and controllable |
+
+Each worker performs its own model inference and consumes tokens in its own context.
+TUICommander does not reduce total model-token usage: MCP calls, briefs, messages,
+and handoffs also consume coordination tokens. The gain is operational efficiency.
+The parent can assign a focused context, let the worker continue when the parent turn
+or window stops, supervise it directly, and retrieve only the result needed for
+coordination. Unread terminal output does not enter the parent context, but this does
+not make the worker's inference cheaper.
+
+The terminal display itself has no model-token cost; it is rendered locally. A
+provider-wide quota or outage can still affect every agent using that provider.
+Recovery after a process or application restart depends on the selected agent's
+documented session-resume support.
+
+Codex internal subagents remain useful for short, tightly coupled work whose result
+is needed immediately in the current turn. TUICommander agents are more operationally
+efficient for parallel work that benefits from independent context, persistent
+supervision, direct human control, and selective result collection. Claude Code's
+native Agent Teams use a separate lifecycle described in [Agent Teams](agent-teams.md).
+
 ## Session Binding (TUIC_SESSION)
 
 Every terminal tab has a stable UUID that persists across app restarts. This UUID is injected into the PTY shell as the `TUIC_SESSION` environment variable.

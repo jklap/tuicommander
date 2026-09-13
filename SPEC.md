@@ -1,7 +1,7 @@
 # TUICommander Specification
 
-**Version:** 1.7.6
-**Last Updated:** 2026-08-27
+**Version:** 1.7.7
+**Last Updated:** 2026-09-12
 
 ## Overview
 
@@ -369,12 +369,91 @@ second. A parent branch that is checked out is refused; publish is not an
 implicit checkout. The parent update and the origin push fail and are reported
 independently.
 
-**Removal of a clone is gated, not warned.** Deleting it deletes a repository,
-and unpublished commits — reachable from HEAD and from no remote and no
-mirrored parent ref — exist nowhere else. The gate lives in the shared
-id-addressed removal path, so no transport bypasses it, and `force` defaults to
-false on all three. A parent mirror that fails to refresh makes the count err
-high: refusing a removal that might have been safe is the correct direction.
+**Registration is durable, not a client's job.** A clone is registered in
+`repositories.json` before creation reports success — the frontend's own save
+used to be the only writer, leaving a crash-sized window where a clone existed
+with nothing durable naming it. A registration failure keeps the clone and
+reports an explicit, recoverable error rather than deleting it. Every clone
+also carries its own minted id and canonical parent path in its own git config,
+alongside the existing no-push parent-remote evidence, so listing a repository
+self-heals a lost registration by re-adopting any clone whose config carries
+every one of those markers — never a directory missing even one, which is also
+how a clone made before this recovery existed stays invisible rather than
+being silently trusted. The `repositories.json` row itself is keyed on the same
+canonical notion of "this repository" the reader uses, not a raw path string:
+an existing entry reached through a symlink or a different spelling is reused
+rather than duplicated, and a brand-new one is filed under its canonical path.
+
+**Removal of a clone is gated, not warned — and never trusts the row alone.**
+Deleting it deletes a repository. Uncommitted changes are refused before any
+fetch or deletion, and unpublished commits — reachable from HEAD and from no
+remote and no mirrored parent ref — are refused next. The gate lives in the
+shared id-addressed removal path, so no transport bypasses it, and `force`
+defaults to false on all three. The parent mirror is pruned on refresh; a
+refresh failure makes lifecycle unknown and refuses removal, because stale refs
+can under-count as well as over-count. `force` is the explicit authority to discard either class of
+workspace-only work — it is never authority to skip provenance. Before any of
+the above, removal re-validates the row against the directory it names: the
+same marker, parent-remote, and canonical-containment checks recovery already
+requires, plus a real (non-symlink) `.git` and an on-disk workspace id that
+matches the row. A forged, stale, or hand-edited row naming an arbitrary
+directory is refused even with `force=true`; a markerless clone is refused the
+same as recovery refuses to adopt one. Its `repositories.json` row is dropped
+only once the directory is confirmed gone; a failure to drop it is its own
+explicit, recoverable error, never a silently stale row.
+
+**Lifecycle state is one backend verdict, not a diff-stat inference.** Every
+workspace refresh is keyed by opaque workspace id and reports dirty state,
+commit reachability, unpublished count, and removal safety. A no-argument
+`git diff` line count cannot prove any of those: it omits untracked files and a
+clean clone may still own commits that exist nowhere else. `Published` means a
+ref outside the clone preserves `HEAD`; `Merged` means the parent's default
+branch contains that exact `HEAD`. Any inspection failure is `Unknown` and is
+never removal-safe. Destructive UI obtains a fresh verdict, and deletion repeats
+the data-loss guards so a stale confirmation cannot authorize changed state.
+
+**Adoption is the explicit, narrow exception.** A markerless clone —
+including one made before this backend wrote provenance markers — is never
+silently trusted by recovery or removal, but it is still a real clone someone
+may need registered. `worktree_adopt` (Tauri command, HTTP route, MCP `repo`
+action — one shared core, `worktree::adopt_cow_workspace_impl`) takes a parent
+repo and a candidate directory (or an id to reuse, for retrying a call whose
+registration failed) and is itself the confirmation: no separate force flag,
+because it never deletes anything, and the only change it makes to the clone
+is writing its two provenance markers into local git config — HEAD, the index,
+the working tree, untracked files, refs, and remotes are untouched. It
+validates canonical immediate-child containment in the configured worktree
+base, a real `.git`, the candidate's parent-remote evidence (the no-push
+`pushurl` and a `url` resolving to the parent, both predating the provenance
+markers), a checked-out branch, and no id/path collision — only once every
+check passes does it write anything, and what it writes is exactly the two
+markers creation itself would have written.
+
+## Project Progress (Planned)
+
+Progress records meaningful project changes as Project → Workstream → Milestone.
+Events are `started`, `milestone`, `blocked`, and `done`; they describe outcomes,
+decisions, discoveries, and objective state rather than agent task lifecycle.
+The small MCP `progress` reporting tool persists an event and causes its toast in
+one call. Management operations on `repo` pause/resume collection, delete/clear,
+correct state, mark read, and export. Runtime guidance stays compact; the optional
+full prompt is in [Project Progress](docs/user-guide/project-progress.md).
+
+Structured state belongs to the owning project at `.tuic/progress.sqlite3`.
+Managed workspaces resolve to that project's store. Sessions and notifications
+are provenance and presentation, never storage owners. A dedicated Progress panel
+provides cross-project changes, current state, blockers, and timeline; the bell
+provides an aggregate entry point. Reading and toast dismissal preserve history.
+Clear is project-scoped and pauses collection. `progress.md` is a manual export,
+not a second source of truth. V1 has no inference jobs or background LLM costs.
+If SQLite reports corruption, the backend preserves the database and WAL data,
+retains existing SHM state under unique names, creates a validated empty
+replacement, and fails the triggering operation with the preserved paths. The
+caller must retry explicitly; recovery must never make an empty history look like
+the original operation succeeded without data loss.
+
+The implementation contract and story sequence are maintained in
+`plans/project-progress.md`. This feature is planned, not implemented.
 
 ## Persistence
 
@@ -419,8 +498,9 @@ Some frontend-only stores persist to localStorage:
       from Tauri IPC and HTTP; no frontend surface yet
 - [x] Multi-agent support through the canonical `AgentType` registry
 - [x] Git worktree management per task
-- [x] Copy-on-write workspaces: mode/dirty on all three transports, publish
-      into parent and origin, removal gated on unpublished commits
+- [x] Copy-on-write workspaces: mode/dirty, publish into parent and origin,
+      and the unpublished-commit count all on all three transports; removal
+      gated on unpublished commits
 - [x] Agent spawning integration
 - [x] SolidJS migration
 
@@ -468,7 +548,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Command palette (`Cmd+P`)
 - [x] Activity dashboard (`Cmd+Shift+A`)
 - [x] Park repos feature
-- [x] Plugin system (see FEATURES.md section 17)
+- [x] Plugin system (see FEATURES.md section 17), with Plan Tracker and Stories Ticker shipped as one-time-seeded external packages rather than compiled built-ins
 - [x] Remote access / HTTP server
 - [x] Mobile Companion PWA (sessions, live output, question reply, activity feed)
 - [x] MCP Proxy Hub (aggregate upstream MCP servers via HTTP and stdio, tool namespace prefixing, circuit breaker, hot-reload, OS keyring credentials, tool filtering, session-local Grok compatibility through lazy meta-tools)

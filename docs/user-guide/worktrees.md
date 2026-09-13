@@ -47,6 +47,14 @@ A clone is not a full copy: the filesystem shares the blocks until something
 rewrites them. Measured on a 12 GB repository: **19 MB of real disk and 26
 seconds**.
 
+In the sidebar, a copy-on-write clone uses a cow-head icon while a linked
+worktree uses the fork icon. The Worktree Manager also labels clone rows with a
+`clone` badge. Both surfaces use the same backend lifecycle snapshot: `Dirty`,
+`N unpublished`, `Published`, `Merged`, or `Unknown`. `Published` means the tip
+exists in a parent or remote ref; it does not mean the default branch contains
+it. Large tracked-line counts are compacted in the sidebar (`9.9k`), with the
+exact count in the tooltip.
+
 Copy-on-write needs filesystem support (APFS, Btrfs, XFS with reflink…) and both
 directories on the same volume. TUICommander never trusts the filesystem *name*
 for this — it makes a real copy-on-write copy of one file and looks at whether it
@@ -208,11 +216,13 @@ Removing a worktree:
 ### Removing a clone
 
 Deleting a clone deletes a repository, so anything it holds and has not
-published is gone. The removal is therefore **refused** while unpublished
-commits exist, and the confirmation names how many — on both surfaces that
-remove a workspace, the sidebar and the Worktree Manager. Publish first, or
-remove with force to lose them. A count that fails to run refuses as well
-rather than promising nothing is at stake.
+published is gone. Immediately before removal, TUICommander refreshes one
+backend verdict for the exact workspace id. The confirmation separately names
+working-tree dirtiness, unpublished commits, and whether `HEAD` is published or
+merged. Dirty files or unpublished clone commits require an explicit
+destructive confirmation; `Unknown` blocks removal. The backend repeats its
+guards during deletion, so a workspace that changes after the dialog is kept
+visible and reports the refusal.
 
 A clone whose directory no longer looks like a repository is also refused, so a
 stale record cannot authorise deleting whatever now sits at that path. A
@@ -227,7 +237,8 @@ Open the Worktree Manager with `Cmd+Shift+W` (or via the Command Palette → "Wo
 Each worktree row displays:
 - **Branch name** and **repository badge**
 - **`clone` badge** — the workspace is a copy-on-write clone, not a linked worktree. The directory does not say which, and publish and remove behave differently
-- **`N unpublished` badge** — commits that exist only in this clone. Counted once when the panel opens (each count refreshes the parent mirror, so it costs a fetch); a row that has not been counted shows nothing rather than a misleading zero
+- **Current branch name** — clone rows read the branch from the clone itself, so a branch renamed inside the clone is reflected after refresh
+- **Lifecycle badges** — dirty working-tree state and exact commit reachability (`N unpublished`, `Published`, `Merged`, or `Unknown`), from the same progressive refresh used by the sidebar
 - **Dirty status** — file additions/deletions, or "clean"
 - **PR state** — open (with PR number), merged, or closed
 - **Last commit timestamp** — relative time since last activity
@@ -288,6 +299,31 @@ CC should spawn a subagent (Agent tool) with the suggested prompt. The subagent 
 ### Other MCP Clients
 
 Non-Claude Code MCP clients receive the standard `{worktree_path, branch}` response without the `cc_agent_hint` field. These clients can change into the worktree directory directly.
+
+### Publishing and Checking Unpublished Commits (AI Agents)
+
+A copy-on-write clone is an independent repository: commits made inside it exist
+only there until something moves them back. `repo action=worktree_unpublished`
+(requires `path`, the `workspace_id` from `worktree_list`) reports how many
+commits are reachable from the clone's `HEAD` and nowhere else — not on any
+remote, not on the parent's mirrored ref for that branch. It is always `0` for
+a linked worktree, whose objects already live in the parent.
+
+`repo action=worktree_publish` (same two required fields) lands those commits
+in the parent repo and pushes them to origin, using the exact same safe
+staging-ref mechanism as the **Publish** button in the Worktree Manager and the
+HTTP route — one implementation behind all three surfaces. It only ever
+fast-forwards the parent branch: publishing is refused, not forced, if that
+branch is checked out in the parent (or one of its other linked worktrees) or
+if the parent has commits the clone does not, so an agent can never overwrite
+someone else's work by merging a stale same-named ref. The parent update and
+the origin push are reported independently, so a missing or unreachable origin
+does not undo a parent update that already landed. Publishing a linked worktree
+is a no-op — its refs are already shared with the parent.
+
+Both actions run on TUICommander's blocking pool, and the local MCP bridge
+grants them the same generous response window as `worktree_create` and
+`worktree_remove`, since publishing also pushes over the network.
 
 ## External Worktree Detection
 
