@@ -8,6 +8,7 @@
 import type { ShortcutHandlers } from "../hooks/useKeyboardShortcuts";
 import type { ActionName } from "../keybindingDefaults";
 import { keybindingsStore } from "../stores/keybindings";
+import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
 import { comboToDisplay } from "../utils/hotkey";
@@ -108,7 +109,15 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
  * since those aren't useful in a palette.
  */
 export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
-	const entries: ActionEntry[] = [];
+	const entries: ActionEntry[] = [
+		{
+			id: "progress",
+			label: "Open Project Progress",
+			category: "Navigation",
+			keybinding: "",
+			execute: progressStore.toggle,
+		},
+	];
 
 	const handlerMap: Partial<Record<ActionName, () => void>> = {
 		"new-terminal": handlers.createNewTerminal,

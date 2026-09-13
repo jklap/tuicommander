@@ -245,6 +245,15 @@ Ideas/notes panel with per-repo filtering and terminal integration.
 - Count badge in panel header and in the StatusBar toggle button
 - Used notes shown with a checkmark and dimmed styling
 
+### ProgressPanel (`ProgressPanel/`)
+
+Responsive project-history panel shared by the desktop/browser shell and mobile
+PWA. It renders backend-owned project and workstream projections, bounded history
+pages, frozen read watermarks, explicit unavailable-project errors, and live or
+closed provenance. Its controls call the typed Progress commands; the component
+does not derive semantic state. The toolbar bell exposes one aggregate unread row,
+and `progress` in the command palette opens the same panel.
+
 ### ConfirmDialog (`ConfirmDialog/`)
 
 Reusable in-app confirmation dialog that replaces native Tauri `ask()` dialogs (which render as light-mode macOS system sheets). Uses shared `dialog.module.css` for consistent dark-theme styling.
@@ -295,4 +304,5 @@ Native SolidJS component (not a plugin) showing Claude API usage data. Displayed
 | Task Queue | — | Local state in App.tsx |
 | Command Palette | `Cmd+P`; browser toolbar button | `commandPaletteStore.toggle()`; browser mode filters to explicitly supported web/HTTP actions |
 | Activity Dashboard | — | `activityDashboardStore.toggle()` |
+| Project Progress | Command palette / bell | `progressStore.toggle()` |
 | Worktree Manager | `Cmd+Shift+W` | `worktreeManagerStore.toggle()` |

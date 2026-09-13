@@ -84,6 +84,7 @@ const BROWSER_ACTION_IDS = new Set([
 	"block-fold-toggle",
 	"block-search-toggle",
 	"toggle-compose-panel",
+	"progress",
 	"reset-panel-sizes",
 	"search-terminals",
 	"search-files",

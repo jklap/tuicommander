@@ -35,6 +35,13 @@ describe("toastsStore", () => {
 		});
 	});
 
+	it("can keep a dedicated-domain toast out of the MESSAGES bell section", async () => {
+		const { activityStore } = await import("../../stores/activityStore");
+		const before = activityStore.getActive().length;
+		toastsStore.add("Progress", "Recorded", "info", false, undefined, undefined, "/repo", undefined, false);
+		expect(activityStore.getActive()).toHaveLength(before);
+	});
+
 	it("removes a toast by id", () => {
 		testInScope(() => {
 			const id = toastsStore.add("A");

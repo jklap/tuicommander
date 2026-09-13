@@ -1986,3 +1986,14 @@ new `cow_workspaces_enabled` sub-flag, both default false.
       isolated test instance: pause rejects reports, resume accepts only new reports,
       and clear leaves an existing `progress.md` untouched. _(Rust backend change;
       requires restart to load.)_
+
+## Project Progress panel (story `752-8492`, 2026-09-13)
+
+- [ ] In an isolated `TUIC_APP_INSTANCE`, open Progress from the command palette
+      and bell in desktop-width browser mode. Verify long summaries, empty,
+      paused, unavailable-project, and error states.
+- [ ] Repeat at a narrow/mobile viewport; verify scope tabs, workstream controls,
+      provenance, pagination, and destructive confirmation text remain usable.
+- [ ] While the panel is open, report another event and verify the displayed
+      watermark stays frozen, the later event remains unread, and exactly one
+      toast appears without a duplicate MESSAGES row.

@@ -32,6 +32,12 @@ When the search box is empty, recently used actions float to the top, ordered by
 
 Hovering over a row highlights it (same as keyboard selection). Clicking a row executes the action immediately.
 
+### Project Progress
+
+Run **Open Project Progress** to open the cross-project history. This action is
+available in desktop and browser mode. The same view opens from the aggregate
+Progress entry in the notification bell.
+
 ### Powered by the Action Registry
 
 The palette is auto-populated from `actionRegistry.ts`. The desktop app exposes the complete registered action set. Browser mode uses an explicit allowlist and omits actions that require native dialogs, detached OS windows, the native updater, desktop-only MCP configuration, or user-plugin management. This fail-closed policy prevents a newly added desktop action from appearing in the browser before it has a working web or HTTP implementation. Browser-capable plugin actions appear alongside built-in ones.

@@ -10,6 +10,7 @@ import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
 import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
+import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
@@ -18,7 +19,7 @@ import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
-import { isTauri } from "../transport";
+import { isTauri, subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
@@ -332,6 +333,14 @@ export async function initApp(deps: AppInitDeps) {
 	for (const repoPath of repositoriesStore.getPaths()) {
 		repoSettingsStore.loadLocalConfig(repoPath).catch(() => {});
 	}
+
+	// Authoritative reads recover state; only the live event presents a toast,
+	// so refresh and reconnect can never replay historical notifications.
+	void progressStore.refreshAll();
+	subscribeEvents(
+		{ "progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload) },
+		{ onResync: () => void progressStore.refreshAll(progressStore.panelVisible()) },
+	).catch((err) => appLogger.error("app", "Failed to register progress-recorded listener", err));
 
 	// Recover log entries from Rust backend (survives webview reloads)
 	appLogger.hydrateFromRust().catch(() => {});

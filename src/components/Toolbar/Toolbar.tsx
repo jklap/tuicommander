@@ -10,6 +10,7 @@ import { mdTabsStore } from "../../stores/mdTabs";
 import { pluginStore } from "../../stores/pluginStore";
 import type { PrNotification } from "../../stores/prNotifications";
 import { type PrNotificationType, prNotificationsStore } from "../../stores/prNotifications";
+import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
@@ -183,7 +184,8 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 			repoPath,
 		);
 	});
-	const totalBadgeCount = () => activeNotifs().length + visibleActivityCount() + (hasUpdate() ? 1 : 0);
+	const totalBadgeCount = () =>
+		activeNotifs().length + visibleActivityCount() + progressStore.unreadCount + (hasUpdate() ? 1 : 0);
 	// Keys of last-items the user already "saw" by clicking the pill. Ephemeral
 	// (per session): hides the pill without dismissing the underlying notification,
 	// which stays in the bell dropdown until dismissed there.
@@ -550,6 +552,32 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 					</button>
 					<Show when={showNotifPopover()}>
 						<div class={s.popover}>
+							<Show when={progressStore.unreadCount > 0}>
+								<div class={s.sectionHeader}>
+									<span class={s.sectionLabel}>PROGRESS</span>
+								</div>
+								<div
+									class={s.activityItem}
+									onClick={(event) => {
+										event.stopPropagation();
+										setShowNotifPopover(false);
+										progressStore.open(repositoriesStore.state.activeRepoPath);
+									}}
+								>
+									<span class={s.activityItemIcon}>
+										<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+											<path d="M2 13.5h12v1H1.5a.5.5 0 0 1-.5-.5V1h1v12.5zM4 10l2.5-3 2 2L13 3.5l1 1-5.5 7-2-2L5 11z" />
+										</svg>
+									</span>
+									<div class={s.activityItemBody}>
+										<span class={s.activityItemTitle}>Project Progress</span>
+										<span class={s.activityItemSubtitle}>
+											{progressStore.unreadCount} unread change{progressStore.unreadCount === 1 ? "" : "s"} across
+											projects
+										</span>
+									</div>
+								</div>
+							</Show>
 							{/* App update section */}
 							<Show when={hasUpdate()}>
 								<div class={s.notifHeader}>
