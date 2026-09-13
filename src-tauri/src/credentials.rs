@@ -73,6 +73,17 @@ pub(crate) const LEGACY_ENTRIES: &[(&str, &str)] = &[
     ("tuicommander-github", "oauth-token"),
 ];
 
+/// Legacy keyring *service* shared by every `Credential::McpUpstream` entry,
+/// independent of upstream name — unlike `LEGACY_ENTRIES`, whose entries are
+/// per-service, one MCP upstream's legacy account (`user`) sits under this one
+/// service. `security find-generic-password -s <service> -w` matches on
+/// service alone, ignoring account, so a plugin must be denied this service
+/// string outright regardless of which upstream it claims to want. Kept as the
+/// single source of truth `legacy_entry()` reads from below, so
+/// `plugin_credentials::plugin_read_credential_inner`'s deny check can derive
+/// from it instead of hardcoding the string a second time.
+pub(crate) const MCP_UPSTREAM_LEGACY_SERVICE: &str = "tuicommander-mcp";
+
 // ---------------------------------------------------------------------------
 // Credential keys
 // ---------------------------------------------------------------------------
@@ -113,7 +124,7 @@ impl Credential<'_> {
             Self::AiChatApiKey => Some(("tuicommander-ai-chat", "api-key")),
             Self::LlmApiKey => Some(("tuicommander-llm-api", "api-key")),
             Self::GithubOauthToken => Some(("tuicommander-github", "oauth-token")),
-            Self::McpUpstream(name) => Some(("tuicommander-mcp", name)),
+            Self::McpUpstream(name) => Some((MCP_UPSTREAM_LEGACY_SERVICE, name)),
             Self::RemoteSessionToken
             | Self::RelayToken
             | Self::PushVapidPrivateKey
