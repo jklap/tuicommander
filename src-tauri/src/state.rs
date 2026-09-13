@@ -4213,7 +4213,6 @@ impl AppState {
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProgressRecorded { .. }
             | AppEvent::ProposalsReady { .. }
-            | AppEvent::ProgressRecorded { .. }
             | AppEvent::WorktreeCreateFailed { .. }
             // This accumulator's own output. Feeding it back in would make the
             // session state a function of itself; it is a report, not an input.
