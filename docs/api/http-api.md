@@ -18,6 +18,15 @@ Tauri `input` objects: typed list filters, `{eventIds}`,
 revisions; read acknowledges the supplied viewed cursor rather than the latest
 sequence. No route has an implicit all-project destructive target.
 
+`POST /progress/export?path=<absolute-project-path>` accepts either
+`{operation:"preview", options:{includeProvenance}}` or
+`{operation:"write", options, snapshotId, snapshotTimeMs, replace,
+expectedContent}`. Preview returns the rendered Markdown, snapshot identity,
+revision/time, resolved owning-project path, target path, and any existing file
+content required as the write precondition. Write re-reads one database snapshot,
+rejects a changed snapshot or target, and atomically writes only `progress.md` at
+the owning root. Symlink and directory targets are refused.
+
 REST API served by the Axum HTTP server when MCP server is enabled. All Tauri commands are accessible as HTTP endpoints.
 
 ## Base URL

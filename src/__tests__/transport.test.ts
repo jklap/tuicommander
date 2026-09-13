@@ -234,13 +234,33 @@ describe("transport", () => {
 		});
 
 		it("maps typed project progress controls", () => {
-			expect(mapCommandToHttp("progress_status", { project: "/repo a" })).toEqual({ method: "GET", path: "/progress/status?path=%2Frepo%20a" });
-			for (const command of ["progress_list", "progress_delete", "progress_clear", "progress_update", "progress_read"]) {
+			expect(mapCommandToHttp("progress_status", { project: "/repo a" })).toEqual({
+				method: "GET",
+				path: "/progress/status?path=%2Frepo%20a",
+			});
+			for (const command of [
+				"progress_list",
+				"progress_delete",
+				"progress_clear",
+				"progress_update",
+				"progress_read",
+				"progress_export",
+			]) {
 				const input = { marker: command };
-				expect(mapCommandToHttp(command, { project: "/repo a", input })).toEqual({ method: "POST", path: `/progress/${command.slice(9).replace("_", "-")}?path=%2Frepo%20a`, body: input });
+				expect(mapCommandToHttp(command, { project: "/repo a", input })).toEqual({
+					method: "POST",
+					path: `/progress/${command.slice(9).replace("_", "-")}?path=%2Frepo%20a`,
+					body: input,
+				});
 			}
-			expect(mapCommandToHttp("progress_pause", { project: "/repo a" })).toEqual({ method: "POST", path: "/progress/pause?path=%2Frepo%20a" });
-			expect(mapCommandToHttp("progress_resume", { project: "/repo a" })).toEqual({ method: "POST", path: "/progress/resume?path=%2Frepo%20a" });
+			expect(mapCommandToHttp("progress_pause", { project: "/repo a" })).toEqual({
+				method: "POST",
+				path: "/progress/pause?path=%2Frepo%20a",
+			});
+			expect(mapCommandToHttp("progress_resume", { project: "/repo a" })).toEqual({
+				method: "POST",
+				path: "/progress/resume?path=%2Frepo%20a",
+			});
 		});
 
 		it("maps create_pty to POST /sessions", () => {

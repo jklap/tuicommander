@@ -281,6 +281,49 @@ pub struct ProgressMutationReceipt {
     pub affected: usize,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProgressExportOptions {
+    #[serde(default)]
+    pub include_provenance: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "operation",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ProgressExportInput {
+    Preview {
+        #[serde(default)]
+        options: ProgressExportOptions,
+    },
+    Write {
+        options: ProgressExportOptions,
+        snapshot_id: String,
+        snapshot_time_ms: u64,
+        replace: bool,
+        expected_content: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressExportReceipt {
+    pub project_root: String,
+    pub path: String,
+    pub snapshot_id: String,
+    pub snapshot_revision: u64,
+    pub snapshot_time_ms: u64,
+    pub markdown: String,
+    pub file_exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_content: Option<String>,
+    pub written: bool,
+}
+
 /// Caller-supplied report fields. Provenance is derived by the transport.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

@@ -12,6 +12,7 @@
 | `progress_clear` | `project, input.expectedRevision` | `ProgressMutationReceipt` | Atomically clears one project and pauses collection. |
 | `progress_update` | `project, input` | `ProgressMutationReceipt` | Applies revision-guarded typed corrections atomically. |
 | `progress_read` | `project, input.snapshotCursor` | `ProgressMutationReceipt` | Acknowledges exactly the viewed snapshot watermark. |
+| `progress_export` | `project, input` | `ProgressExportReceipt` | Previews or writes the identified project snapshot to owning-root `progress.md`; replacement requires the previewed file content. |
 
 All commands are invoked from the frontend via `invoke(command, args)`. In browser mode, these map to HTTP endpoints (see [HTTP API](http-api.md)).
 

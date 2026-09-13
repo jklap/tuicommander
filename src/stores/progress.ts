@@ -49,6 +49,18 @@ export interface ProgressPage {
 	nextBeforeSequence?: number;
 }
 
+export interface ProgressExportReceipt {
+	projectRoot: string;
+	path: string;
+	snapshotId: string;
+	snapshotRevision: number;
+	snapshotTimeMs: number;
+	markdown: string;
+	fileExists: boolean;
+	existingContent?: string;
+	written: boolean;
+}
+
 export type ProgressCorrection =
 	| { operation: "edit_summary"; eventId: string; summary: string }
 	| { operation: "move_event"; eventId: string; workstreamId: string | null }
@@ -237,6 +249,23 @@ export function createProgressStore() {
 			if (ok) await refreshProject(project, true);
 			return ok;
 		},
+		previewExport: (project: string, includeProvenance: boolean) =>
+			invoke<ProgressExportReceipt>("progress_export", {
+				project,
+				input: { operation: "preview", options: { includeProvenance } },
+			}),
+		writeExport: (project: string, preview: ProgressExportReceipt, includeProvenance: boolean) =>
+			invoke<ProgressExportReceipt>("progress_export", {
+				project,
+				input: {
+					operation: "write",
+					options: { includeProvenance },
+					snapshotId: preview.snapshotId,
+					snapshotTimeMs: preview.snapshotTimeMs,
+					replace: preview.fileExists,
+					expectedContent: preview.existingContent,
+				},
+			}),
 		get unreadCount() {
 			return Object.values(state.projects).reduce((sum, project) => sum + (project.status?.unreadCount ?? 0), 0);
 		},

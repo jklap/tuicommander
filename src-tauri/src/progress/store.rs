@@ -519,6 +519,82 @@ impl ProgressStore {
         })
     }
 
+    pub(crate) fn export_data(&self) -> Result<super::export::ExportData, String> {
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction()
+            .map_err(db_error("begin progress export snapshot"))?;
+        let revision = current_revision(&tx)?;
+        let collection_enabled = tx
+            .query_row(
+                "SELECT collection_enabled FROM project_meta WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(db_error("read progress export collection state"))?
+            != 0;
+        let mut workstream_stmt = tx
+            .prepare(
+                "SELECT id, name, state FROM workstreams
+                 ORDER BY name COLLATE NOCASE, id",
+            )
+            .map_err(db_error("prepare progress export workstreams"))?;
+        let workstreams = workstream_stmt
+            .query_map([], |row| {
+                Ok(super::export::ExportWorkstream {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    state: row.get(2)?,
+                })
+            })
+            .map_err(db_error("query progress export workstreams"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error("read progress export workstreams"))?;
+        drop(workstream_stmt);
+
+        let mut blocker_stmt = tx
+            .prepare(
+                "SELECT e.id, e.sequence, e.revision, e.created_at_ms, e.kind,
+                        e.summary, e.workstream_id, w.name, e.reporter_id,
+                        e.reporter_name, e.session_id, e.workspace_path
+                 FROM blockers b JOIN events e ON e.id=b.event_id
+                 LEFT JOIN workstreams w ON w.id=e.workstream_id
+                 WHERE b.active=1 ORDER BY e.sequence",
+            )
+            .map_err(db_error("prepare progress export blockers"))?;
+        let blockers = blocker_stmt
+            .query_map([], row_to_event)
+            .map_err(db_error("query progress export blockers"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error("read progress export blockers"))?;
+        drop(blocker_stmt);
+
+        let mut event_stmt = tx
+            .prepare(
+                "SELECT e.id, e.sequence, e.revision, e.created_at_ms, e.kind,
+                        e.summary, e.workstream_id, w.name, e.reporter_id,
+                        e.reporter_name, e.session_id, e.workspace_path
+                 FROM events e LEFT JOIN workstreams w ON w.id=e.workstream_id
+                 ORDER BY e.created_at_ms, e.sequence",
+            )
+            .map_err(db_error("prepare progress export history"))?;
+        let events = event_stmt
+            .query_map([], row_to_event)
+            .map_err(db_error("query progress export history"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error("read progress export history"))?;
+        drop(event_stmt);
+        tx.commit()
+            .map_err(db_error("finish progress export snapshot"))?;
+        Ok(super::export::ExportData {
+            revision,
+            collection_enabled,
+            workstreams,
+            blockers,
+            events,
+        })
+    }
+
     /// Rename a workstream while retaining every prior normalized name as an
     /// alias. Transport-level correction commands add revision preconditions;
     /// this storage primitive keeps the identity and grouping invariant atomic.

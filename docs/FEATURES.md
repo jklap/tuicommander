@@ -2173,3 +2173,4 @@ connect rather than failing later inside a spawn.
 - Aggregate notification-bell unread count plus exactly one live toast; Progress events are not duplicated into MESSAGES
 - Pause/resume, selected delete, clear-and-pause, event/workstream corrections and merges, blocker resolution, explicit state changes, and mark-viewed controls
 - Provenance keeps closed sources readable and opens a terminal only when the exact recorded session remains live
+- Manual deterministic `progress.md` preview/export at the owning project root, with optional provenance, snapshot and existing-content preconditions, symlink/directory refusal, and atomic replacement
