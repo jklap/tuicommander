@@ -103,6 +103,39 @@ pub fn select_app_instance(id: Option<&str>) -> Result<(), String> {
         .map_err(|_| "Application instance has already been selected or observed".to_string())
 }
 
+/// Env var read by the desktop binary at the very top of `run()`, before its
+/// first `config_dir()` read. `tuic-remote` already has a proven `--instance`
+/// CLI contract (`tests/app_instance_cli.rs`, story 736-0afd) built on this
+/// same `AppInstance::named`, but the desktop binary cannot reuse that argv
+/// parser: Tauri's own CLI/single-instance plugin already owns argv there, and
+/// a second parser risks fighting it. An env var sidesteps that with zero new
+/// argv handling, and gives a *dev/test* build an enforceable, code-level way
+/// to keep its `repositories.json` (and every other config file) out of Boss's
+/// production config directory — story 763-d219, whose live evidence was 15
+/// throwaway shell-repo rows a debug build had persisted into that shared
+/// document, because AGENTS.md's "no config-dir split" gap was, until this,
+/// documentation of a risk rather than a boundary against it.
+///
+/// Deliberately fails loudly on an invalid id rather than silently falling
+/// back to the default instance: a typo'd `TUIC_APP_INSTANCE` that fell back
+/// silently would defeat the whole guarantee this exists to provide, exactly
+/// the way an un-narrowed classifier would defeat the repair path below it.
+pub const APP_INSTANCE_ENV_VAR: &str = "TUIC_APP_INSTANCE";
+
+/// Apply [`APP_INSTANCE_ENV_VAR`] if set and non-blank. No-op when unset —
+/// every existing installation with no opinion on the matter keeps running as
+/// the default instance, unchanged.
+pub fn select_app_instance_from_env() -> Result<(), String> {
+    let Ok(raw) = std::env::var(APP_INSTANCE_ENV_VAR) else {
+        return Ok(());
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    select_app_instance(Some(trimmed))
+}
+
 /// Return the selected instance, freezing the process to the default if not selected yet.
 pub fn current_app_instance() -> &'static AppInstance {
     APP_INSTANCE.get_or_init(AppInstance::default)

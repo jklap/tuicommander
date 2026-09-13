@@ -427,6 +427,131 @@ pub(crate) enum ResolvedWorkspace {
     Cow(crate::cow::CowRecord),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkspaceCommitStatus {
+    Unmerged,
+    Unpublished,
+    Published,
+    Merged,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkspaceRemovalSafety {
+    Safe,
+    RequiresForce,
+    Unknown,
+}
+
+/// One backend-authored answer for every UI that explains or removes a
+/// workspace. Optional fields mean inspection failed; unknown is never zero.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct WorkspaceLifecycleStatus {
+    pub(crate) dirty: Option<bool>,
+    pub(crate) commit_status: WorkspaceCommitStatus,
+    pub(crate) unpublished_commits: Option<usize>,
+    pub(crate) removal_safety: WorkspaceRemovalSafety,
+    /// Whether the workspace's current dirtiness was already there at
+    /// creation, added later, or both. `None` for a linked worktree (nothing
+    /// is ever inherited — every path starts from a clean checkout) and for a
+    /// COW clone with no recorded creation-time baseline (recovered, adopted,
+    /// or created before this field existed). Context only: a `dirty` badge
+    /// still requires force to remove regardless of what this says.
+    pub(crate) dirty_provenance: Option<crate::cow::DirtyProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+}
+
+fn dirty_at(path: &Path) -> Result<bool, String> {
+    git_cmd(path)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .run()
+        .map(|out| !out.stdout.trim().is_empty())
+        .map_err(|e| format!("could not check the workspace for uncommitted changes: {e}"))
+}
+
+pub(crate) fn inspect_workspace_lifecycle(
+    base_repo: &Path,
+    workspace_id: &str,
+) -> WorkspaceLifecycleStatus {
+    let inspected = (|| -> Result<WorkspaceLifecycleStatus, String> {
+        match resolve_any_workspace(base_repo, workspace_id)? {
+            ResolvedWorkspace::Worktree(workspace) => {
+                let dirty = dirty_at(Path::new(&workspace.path))?;
+                let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
+                let ancestry = git_cmd(Path::new(&workspace.path))
+                    .args(["merge-base", "--is-ancestor", "HEAD", &default_branch])
+                    .run_raw()
+                    .map_err(|e| {
+                        format!("could not compare the worktree with the default branch: {e}")
+                    })?;
+                let merged = match ancestry.status.code() {
+                    Some(0) => true,
+                    Some(1) => false,
+                    code => {
+                        let stderr = String::from_utf8_lossy(&ancestry.stderr).trim().to_string();
+                        return Err(format!(
+                            "could not compare the worktree with the default branch (exit {code:?}): {stderr}"
+                        ));
+                    }
+                };
+                Ok(WorkspaceLifecycleStatus {
+                    dirty: Some(dirty),
+                    commit_status: if merged {
+                        WorkspaceCommitStatus::Merged
+                    } else {
+                        WorkspaceCommitStatus::Unmerged
+                    },
+                    unpublished_commits: Some(0),
+                    removal_safety: if dirty {
+                        WorkspaceRemovalSafety::RequiresForce
+                    } else {
+                        WorkspaceRemovalSafety::Safe
+                    },
+                    // A linked worktree is a fresh checkout of its branch: there
+                    // is no parent working tree it could have inherited dirt
+                    // from, so the notion does not apply.
+                    dirty_provenance: None,
+                    error: None,
+                })
+            }
+            ResolvedWorkspace::Cow(record) => {
+                let dirty = dirty_at(&record.path)?;
+                let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
+                let lifecycle = crate::cow::inspect_cow_lifecycle(&record, &default_branch)?;
+                let commit_status = match lifecycle.commit_status {
+                    crate::cow::CowCommitStatus::Unpublished => WorkspaceCommitStatus::Unpublished,
+                    crate::cow::CowCommitStatus::Published => WorkspaceCommitStatus::Published,
+                    crate::cow::CowCommitStatus::Merged => WorkspaceCommitStatus::Merged,
+                };
+                Ok(WorkspaceLifecycleStatus {
+                    dirty: Some(dirty),
+                    commit_status,
+                    unpublished_commits: Some(lifecycle.unpublished_commits),
+                    removal_safety: if dirty || lifecycle.unpublished_commits > 0 {
+                        WorkspaceRemovalSafety::RequiresForce
+                    } else {
+                        WorkspaceRemovalSafety::Safe
+                    },
+                    dirty_provenance: lifecycle.dirty_provenance,
+                    error: None,
+                })
+            }
+        }
+    })();
+
+    inspected.unwrap_or_else(|error| WorkspaceLifecycleStatus {
+        dirty: None,
+        commit_status: WorkspaceCommitStatus::Unknown,
+        unpublished_commits: None,
+        removal_safety: WorkspaceRemovalSafety::Unknown,
+        dirty_provenance: None,
+        error: Some(error),
+    })
+}
+
 /// Resolve `workspace_id` against BOTH sources: git's own worktree list and the
 /// COW records in the persisted document.
 ///
@@ -519,6 +644,92 @@ pub(crate) fn publish_workspace(
     workspace_id: String,
 ) -> Result<crate::cow::PublishOutcome, String> {
     publish_workspace_impl(&repo_path, &workspace_id)
+}
+
+/// `candidate.path.to_string_lossy()`, `.branch` and `.workspace_id` in one
+/// JSON shape — the response every transport that can adopt a workspace
+/// returns, so a caller does not need `CowRecord` (`cow.rs`-private) to read
+/// what it just registered.
+pub(crate) fn adopted_workspace_json(record: &crate::cow::CowRecord) -> serde_json::Value {
+    serde_json::json!({
+        "workspaceId": record.workspace_id,
+        "branch": record.branch,
+        "path": record.path.to_string_lossy(),
+    })
+}
+
+/// Explicitly adopt a markerless copy-on-write clone this backend lost track
+/// of into `repositories.json`, so a real clone `validate_cow_candidate`
+/// refuses to trust on sight (#756-cf6d's fix, applied retroactively) is not
+/// stranded forever.
+///
+/// The candidate/id universe this checks collisions against is built the same
+/// way [`get_worktree_paths`]'s self-heal builds it for [`crate::cow::recover_cow_workspaces`]
+/// — every linked worktree plus every already-registered COW record — so
+/// adoption and recovery can never disagree about what is already taken.
+pub(crate) fn adopt_cow_workspace_impl(
+    repo_path: &str,
+    candidate_path: &str,
+    workspace_id: Option<&str>,
+) -> Result<crate::cow::CowRecord, String> {
+    let base_repo = PathBuf::from(repo_path);
+    let candidate = PathBuf::from(candidate_path);
+    let worktrees_dir =
+        resolve_worktree_dir_for_repo(&base_repo, &crate::config::config_dir().join("worktrees"));
+
+    let linked = git_cmd(&base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .ok()
+        .map(|out| map_worktree_workspace_paths(&out.stdout))
+        .unwrap_or_default();
+    let existing_records = crate::cow::cow_workspaces_for(&base_repo);
+
+    let taken_ids: std::collections::HashSet<String> = linked
+        .keys()
+        .cloned()
+        .chain(existing_records.iter().map(|r| r.workspace_id.clone()))
+        .collect();
+    let taken_paths: std::collections::HashSet<PathBuf> = linked
+        .values()
+        .map(|w| canonical_or_self(Path::new(&w.path)))
+        .chain(existing_records.iter().map(|r| canonical_or_self(&r.path)))
+        .collect();
+
+    crate::cow::adopt_cow_workspace(
+        &base_repo,
+        &candidate,
+        &worktrees_dir,
+        workspace_id,
+        &taken_ids,
+        &taken_paths,
+    )
+}
+
+/// Tauri command: explicitly adopt a markerless COW clone. See
+/// [`adopt_cow_workspace_impl`] for what is checked; the call itself is the
+/// confirmation — there is no separate "force" flag, because adoption only
+/// ever writes `tuicommander.cow.workspace-id`/`tuicommander.cow.parent` into
+/// the clone's local git config plus a `repositories.json` entry, never HEAD,
+/// the index, the worktree, untracked files, refs or remotes.
+///
+/// Async + `spawn_blocking`: the impl runs `git worktree list`, reads
+/// `repositories.json` and writes local git config, all of which the HTTP
+/// route (`adopt_cow_workspace_http`) already offloaded — see
+/// `docs/backend/command-threading.md`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn adopt_cow_workspace(
+    repo_path: String,
+    candidate_path: String,
+    workspace_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        adopt_cow_workspace_impl(&repo_path, &candidate_path, workspace_id.as_deref())
+            .map(|record| adopted_workspace_json(&record))
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
 }
 
 /// A workspace, however it was built.
@@ -696,13 +907,39 @@ pub(crate) fn create_workspace_with(
         .clone()
         .unwrap_or_else(|| sanitize_name(&config.task_name));
 
+    ensure_branch_has_no_workspace(&src, &branch)?;
+
     match crate::cow::choose_mechanism_with(&src, &dest, mode, probe)? {
         crate::cow::Mechanism::Cow(guards) => {
-            // A clone's id is MINTED: it is a second workspace on a branch that
-            // may already have one, so the branch cannot name it. Minted before
-            // the copy so a failure leaves no id claimed.
+            // A clone's id is MINTED rather than derived from its branch. Branch
+            // ownership is checked above, but ids remain stable if a branch is
+            // later renamed. Minted before the copy so a failure claims no id.
             let workspace_id = crate::cow::mint_workspace_id(&branch, &taken_workspace_ids(&src));
-            let workspace = crate::cow::create_cow_workspace(&src, &dest, &branch, dirty, &guards)?;
+            let workspace = crate::cow::create_cow_workspace(
+                &src,
+                &dest,
+                &branch,
+                dirty,
+                &guards,
+                &workspace_id,
+            )?;
+            // Durably registered BEFORE this can report success: the clone on disk
+            // is otherwise the only place `repositories.json` (and everything that
+            // reads it — listing, refresh, removal) could learn this workspace
+            // exists, and a crash between the copy landing and this write would
+            // leave it silently unreachable. A failure here must not delete the
+            // clone: it is exactly what `recover_cow_workspaces` heals from at the
+            // next restart, and it may hold work that exists nowhere else.
+            if let Err(registration_error) =
+                crate::cow::register_cow_workspace(&src, &workspace_id, &workspace)
+            {
+                return Err(format!(
+                    "created the copy-on-write workspace '{workspace_id}' at '{}' but could not \
+                     register it in repositories.json: {registration_error}. The clone on disk is \
+                     intact — retry registration rather than deleting or recreating it.",
+                    workspace.path.display()
+                ));
+            }
             Ok(CreatedWorkspace {
                 workspace_id,
                 path: workspace.path,
@@ -736,6 +973,40 @@ pub(crate) fn create_workspace_with(
                 dirty_policy: dirty,
             })
         }
+    }
+}
+
+/// A branch keeps the workspace mechanism that already owns it. Creating a
+/// second checkout through the other mechanism would make later branch-only
+/// operations ambiguous, while silently returning the existing checkout would
+/// make a create request look as though it created isolation that it did not.
+fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), String> {
+    let linked = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|e| format!("git worktree list failed: {e}"))?;
+    let linked = map_worktree_workspace_paths(&linked.stdout)
+        .into_iter()
+        .find(|(_, workspace)| workspace.branch == branch);
+    let cow = crate::cow::cow_workspaces_for(base_repo)
+        .into_iter()
+        .find(|workspace| workspace.branch == branch);
+
+    match (linked, cow) {
+        (Some((linked_id, _)), Some(cow)) => Err(format!(
+            "branch '{branch}' is registered as both linked worktree '{linked_id}' and COW workspace '{}'; reconcile the duplicate ownership before creating another workspace",
+            cow.workspace_id
+        )),
+        (Some((workspace_id, workspace)), None) => Err(format!(
+            "branch '{branch}' already belongs to linked worktree '{workspace_id}' at '{}'; reuse that worktree instead of mixing COW and worktree ownership",
+            workspace.path
+        )),
+        (None, Some(workspace)) => Err(format!(
+            "branch '{branch}' already belongs to COW workspace '{}' at '{}'; reuse that COW workspace instead of mixing COW and worktree ownership",
+            workspace.workspace_id,
+            workspace.path.display()
+        )),
+        (None, None) => Ok(()),
     }
 }
 
@@ -1268,7 +1539,30 @@ pub(crate) fn remove_worktree_by_workspace_id(
                 run_script_in_dir(script, &record.path)
                     .map_err(|e| format!("Archive script failed: {e}"))?;
             }
-            crate::cow::remove_cow_workspace(&record, force)?;
+            // The repo's actual configured worktree base — the same directory
+            // creation placed this clone directly under — is what the removal
+            // validator checks containment against before anything is deleted.
+            let worktrees_dir = resolve_worktree_dir_for_repo(
+                &base_repo,
+                &crate::config::config_dir().join("worktrees"),
+            );
+            crate::cow::remove_cow_workspace(&record, force, &worktrees_dir)?;
+            // Unregistered only AFTER the directory is confirmed gone (or was
+            // already gone — `remove_cow_workspace` is idempotent on that). A
+            // failure here must surface rather than be swallowed: unlike a failed
+            // *registration*, there is no clone left on disk for a later restart
+            // to recover the row from, so a silent failure would strand a row
+            // that names a workspace which no longer exists.
+            if let Err(unregister_error) =
+                crate::cow::unregister_cow_workspace(&record.parent_repo, workspace_id)
+            {
+                return Err(format!(
+                    "removed the copy-on-write workspace '{workspace_id}' but could not drop its \
+                     row from repositories.json: {unregister_error}. The directory is gone; the \
+                     stale row must still be cleaned up — retry rather than assuming the workspace \
+                     still exists."
+                ));
+            }
             // No branch to delete in the parent: the clone's refs were its own,
             // and the parent's same-named branch (if any) belongs to the parent.
             return Ok(RemoveWorktreeOutcome {
@@ -1431,6 +1725,24 @@ pub(crate) fn check_worktree_dirty(
     }
 }
 
+/// Return the same workspace lifecycle verdict used by repository refresh and
+/// removal confirmation. This is intentionally a fresh read: a cached sidebar
+/// badge is explanation, not authorization for a destructive action.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn get_workspace_lifecycle(
+    repo_path: String,
+    workspace_id: String,
+) -> Result<WorkspaceLifecycleStatus, String> {
+    tokio::task::spawn_blocking(move || {
+        Ok(inspect_workspace_lifecycle(
+            Path::new(&repo_path),
+            &workspace_id,
+        ))
+    })
+    .await
+    .map_err(|e| format!("workspace lifecycle task failed: {e}"))?
+}
+
 /// Delete a local branch, disposing of the workspace `workspace_id` names.
 ///
 /// Two different objects, two parameters: `branch_name` is the ref to delete,
@@ -1540,7 +1852,16 @@ pub(crate) async fn delete_local_branch(
     keep_worktree: Option<bool>,
 ) -> Result<(), String> {
     let keep_worktree = keep_worktree.unwrap_or(false);
-    delete_local_branch_impl(&repo_path, &branch_name, &workspace_id, keep_worktree)?;
+    {
+        let repo_path = repo_path.clone();
+        let branch_name = branch_name.clone();
+        let workspace_id = workspace_id.clone();
+        tokio::task::spawn_blocking(move || {
+            delete_local_branch_impl(&repo_path, &branch_name, &workspace_id, keep_worktree)
+        })
+        .await
+        .map_err(|e| format!("Task panic: {e}"))??;
+    }
     if keep_worktree {
         state.invalidate_repo_caches(&repo_path);
     } else {
@@ -1689,6 +2010,7 @@ pub(crate) struct WorkspaceWorktree {
     /// the id.
     pub(crate) branch: String,
     pub(crate) path: String,
+    pub(crate) kind: crate::cow::WorkspaceKind,
 }
 
 /// The workspace id a freshly created **git worktree** gets.
@@ -1733,6 +2055,7 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
                 WorkspaceWorktree {
                     branch,
                     path: entry.path,
+                    kind: crate::cow::WorkspaceKind::Worktree,
                 },
             );
         }
@@ -1752,8 +2075,68 @@ pub(crate) fn get_worktree_paths(
         .args(["worktree", "list", "--porcelain"])
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
+    let linked = map_worktree_workspace_paths(&out.stdout);
 
-    Ok(map_worktree_workspace_paths(&out.stdout))
+    // Best-effort self-heal, on the read path every transport already shares:
+    // a marked COW clone whose row is missing from `repositories.json` (the
+    // crash window `register_cow_workspace` now closes going forward, or a
+    // gap predating that fix) is adopted here before the merge below, so it
+    // reappears without any new surface to ask for it. Never fatal to the
+    // listing itself — a scan that finds nothing to recover, or that cannot
+    // even read the directory, must not turn an ordinary list call into an
+    // error.
+    let worktrees_dir =
+        resolve_worktree_dir_for_repo(&base_repo, &crate::config::config_dir().join("worktrees"));
+    let existing_records = crate::cow::cow_workspaces_for(&base_repo);
+    let taken_ids: std::collections::HashSet<String> = linked
+        .keys()
+        .cloned()
+        .chain(existing_records.iter().map(|r| r.workspace_id.clone()))
+        .collect();
+    let taken_paths: std::collections::HashSet<PathBuf> = linked
+        .values()
+        .map(|w| canonical_or_self(Path::new(&w.path)))
+        .chain(existing_records.iter().map(|r| canonical_or_self(&r.path)))
+        .collect();
+    crate::cow::recover_cow_workspaces(&base_repo, &worktrees_dir, &taken_ids, &taken_paths);
+
+    merge_cow_workspace_paths(
+        &base_repo,
+        linked,
+        crate::cow::cow_workspaces_for(&base_repo),
+    )
+}
+
+/// Canonicalize for a set-membership comparison, falling back to the path as
+/// given when it does not exist (a stale record naming a deleted directory
+/// still has to compare as itself, not vanish from the set).
+fn canonical_or_self(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn merge_cow_workspace_paths(
+    base_repo: &Path,
+    mut workspaces: HashMap<String, WorkspaceWorktree>,
+    records: Vec<crate::cow::CowRecord>,
+) -> Result<HashMap<String, WorkspaceWorktree>, String> {
+    for record in records {
+        let candidate = WorkspaceWorktree {
+            branch: record.branch,
+            path: record.path.to_string_lossy().into_owned(),
+            kind: crate::cow::WorkspaceKind::Cow,
+        };
+        if workspaces
+            .insert(record.workspace_id.clone(), candidate)
+            .is_some()
+        {
+            return Err(format!(
+                "workspace id '{}' names both a git worktree and a COW workspace in '{}'",
+                record.workspace_id,
+                base_repo.display()
+            ));
+        }
+    }
+    Ok(workspaces)
 }
 
 /// Resolve one workspace by its opaque id.
@@ -2307,23 +2690,17 @@ impl WorktreeDirtiness {
 /// (Unknown). Folding the second into the first is what let a dirty worktree be
 /// force-removed on a transient git error.
 pub(crate) fn worktree_dirtiness(base_repo: &Path, workspace_id: &str) -> WorktreeDirtiness {
-    let list = match git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
-        .run()
-    {
-        Ok(out) => out.stdout,
-        Err(e) => return WorktreeDirtiness::Unknown(format!("Failed to list worktrees: {e}")),
+    let path = match resolve_any_workspace(base_repo, workspace_id) {
+        Ok(ResolvedWorkspace::Worktree(workspace)) => PathBuf::from(workspace.path),
+        Ok(ResolvedWorkspace::Cow(record)) => record.path,
+        Err(error) if error.starts_with("No workspace found") => return WorktreeDirtiness::Clean,
+        Err(error) => return WorktreeDirtiness::Unknown(error),
     };
 
-    let Some(workspace) = map_worktree_workspace_paths(&list).remove(workspace_id) else {
-        return WorktreeDirtiness::Clean; // No checkout = nothing to lose
-    };
-    let wt_path = PathBuf::from(&workspace.path);
-
-    match git_cmd(&wt_path).args(["status", "--porcelain"]).run() {
-        Ok(out) if out.stdout.trim().is_empty() => WorktreeDirtiness::Clean,
-        Ok(_) => WorktreeDirtiness::Dirty,
-        Err(e) => WorktreeDirtiness::Unknown(format!("Failed to check worktree status: {e}")),
+    match dirty_at(&path) {
+        Ok(false) => WorktreeDirtiness::Clean,
+        Ok(true) => WorktreeDirtiness::Dirty,
+        Err(e) => WorktreeDirtiness::Unknown(e),
     }
 }
 
@@ -3348,6 +3725,7 @@ mod tests {
         // Scenario: branch has unmerged commits, user removes worktree WITHOUT force.
         // Expected: worktree directory removed, but `git branch -d` refuses, so the
         // branch ref survives as a safety net for unpushed commits.
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let repo = setup_test_repo();
         let worktrees_dir = repo.path().join("worktrees");
 
@@ -3398,6 +3776,7 @@ mod tests {
     fn test_remove_worktree_by_workspace_id_force_delete_removes_unmerged_branch() {
         // Scenario: same as above but with force=true (user confirmed via locked-worktree dialog).
         // Expected: branch ref is force-deleted via `git branch -D`.
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let repo = setup_test_repo();
         let worktrees_dir = repo.path().join("worktrees");
 
@@ -3965,6 +4344,7 @@ mod tests {
 
     #[test]
     fn remove_worktree_by_workspace_id_deletes_branch_when_true() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let repo = setup_test_repo();
         let repo_path = repo.path().to_string_lossy().to_string();
         let worktrees_dir = repo.path().join("worktrees");
@@ -3996,6 +4376,7 @@ mod tests {
 
     #[test]
     fn remove_worktree_by_workspace_id_keeps_branch_when_false() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let repo = setup_test_repo();
         let repo_path = repo.path().to_string_lossy().to_string();
         let worktrees_dir = repo.path().join("worktrees");
@@ -4187,6 +4568,83 @@ branch refs/heads/feat
             entry.branch, "main",
             "branch survives as data, not as the key"
         );
+        assert_eq!(entry.kind, crate::cow::WorkspaceKind::Worktree);
+    }
+
+    #[test]
+    fn persisted_cow_workspaces_are_listed_with_their_minted_id_and_kind() {
+        let dir = TempDir::new().expect("temp dir");
+        let cow = dir.path().join("cow");
+        std::fs::create_dir_all(&cow).expect("cow dir");
+        let records = vec![crate::cow::CowRecord {
+            workspace_id: "feature~c0ffee12".to_string(),
+            branch: "feature".to_string(),
+            path: cow.clone(),
+            parent_repo: dir.path().to_path_buf(),
+            dirty_baseline: None,
+        }];
+
+        let listed = super::merge_cow_workspace_paths(dir.path(), HashMap::new(), records)
+            .expect("merge persisted COW");
+        let workspace = listed.get("feature~c0ffee12").expect("COW by id");
+        assert_eq!(workspace.branch, "feature");
+        assert_eq!(workspace.path, cow.to_string_lossy());
+        assert_eq!(workspace.kind, crate::cow::WorkspaceKind::Cow);
+    }
+
+    #[test]
+    fn branch_already_owned_by_a_linked_checkout_cannot_be_mixed_with_cow() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
+        let repo = setup_test_repo();
+        let branch = git_cmd(repo.path())
+            .args(["branch", "--show-current"])
+            .run()
+            .expect("current branch")
+            .stdout;
+
+        let error = super::ensure_branch_has_no_workspace(repo.path(), branch.trim())
+            .expect_err("main checkout already owns its branch");
+        assert!(
+            error.contains("already belongs to linked worktree"),
+            "{error}"
+        );
+        assert!(
+            error.contains("instead of mixing COW and worktree ownership"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn branch_already_owned_by_a_persisted_cow_cannot_be_mixed_with_worktree() {
+        let repo = setup_test_repo();
+        let cow_path = repo.path().join("cow-feature");
+        std::fs::create_dir_all(&cow_path).expect("COW path");
+        let doc = serde_json::json!({
+            "repos": {
+                repo.path().to_string_lossy(): {
+                    "workspaces": {
+                        "feature~c0ffee12": {
+                            "branchName": "feature",
+                            "worktreePath": cow_path,
+                            "kind": "cow",
+                            "parentRepoPath": repo.path(),
+                        }
+                    }
+                }
+            }
+        });
+        let (_guard, _config) = with_repositories_document(doc);
+
+        let error = super::ensure_branch_has_no_workspace(repo.path(), "feature")
+            .expect_err("persisted COW already owns its branch");
+        assert!(
+            error.contains("already belongs to COW workspace"),
+            "{error}"
+        );
+        assert!(
+            error.contains("instead of mixing COW and worktree ownership"),
+            "{error}"
+        );
     }
 
     /// The failure this replaces: a lookup that scanned porcelain for a
@@ -4228,6 +4686,7 @@ branch refs/heads/feat
             super::WorkspaceWorktree {
                 branch: "feat-x".to_string(),
                 path: first.clone(),
+                kind: crate::cow::WorkspaceKind::Worktree,
             },
         );
         map.insert(
@@ -4235,6 +4694,7 @@ branch refs/heads/feat
             super::WorkspaceWorktree {
                 branch: minted.branch,
                 path: second.clone(),
+                kind: crate::cow::WorkspaceKind::Cow,
             },
         );
 
@@ -4515,6 +4975,7 @@ branch refs/heads/feat
 
     #[test]
     fn delete_local_branch_with_worktree() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let repo = setup_test_repo();
         let repo_path = repo.path().to_string_lossy().to_string();
         let worktrees_dir = repo.path().join("worktrees");
@@ -5368,6 +5829,11 @@ branch refs/heads/feat
     #[test]
     fn auto_produces_a_cow_workspace_where_copy_on_write_works() {
         let (_temp, repo, workspaces) = workspace_fixture();
+        // Creating a COW workspace now registers it in `repositories.json`
+        // before returning — the whole point of #756-cf6d — so every test that
+        // produces a real one needs an isolated document, or it writes into
+        // whoever runs the suite's actual config directory.
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
 
         let created = create_workspace(
             &workspaces,
@@ -5391,6 +5857,7 @@ branch refs/heads/feat
     /// workspace, and a linked worktree is one.
     #[test]
     fn auto_degrades_to_a_working_linked_worktree_and_says_why() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
 
         let created = create_workspace_with(
@@ -5426,6 +5893,7 @@ branch refs/heads/feat
 
     #[test]
     fn mode_cow_fails_loudly_naming_the_check_that_said_no() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
 
         let err = create_workspace_with(
@@ -5452,6 +5920,7 @@ branch refs/heads/feat
     /// "unavailable" — the caller can act on "finish your rebase".
     #[test]
     fn mode_cow_reports_a_guard_refusal_rather_than_the_probe() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
         fs::write(repo.join(".git").join("MERGE_HEAD"), "deadbeef").expect("marker");
 
@@ -5469,6 +5938,7 @@ branch refs/heads/feat
 
     #[test]
     fn mode_worktree_forces_a_worktree_even_where_cow_works() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
 
         let created = create_workspace(
@@ -5492,6 +5962,7 @@ branch refs/heads/feat
     /// a repo can be COPIED, and a linked worktree never had that constraint.
     #[test]
     fn mode_worktree_is_not_blocked_by_a_guard_that_only_applies_to_cloning() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
         fs::write(repo.join(".git").join("MERGE_HEAD"), "deadbeef").expect("marker");
 
@@ -5560,6 +6031,7 @@ branch refs/heads/feat
     /// reason that names the containment rather than blaming the filesystem.
     #[test]
     fn a_workspaces_directory_inside_the_repo_degrades_instead_of_failing() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let (_temp, repo, _sibling) = workspace_fixture();
         let inside = repo.join("worktrees");
 
@@ -5593,6 +6065,9 @@ branch refs/heads/feat
     #[test]
     fn the_creation_payload_says_opposite_things_for_the_two_mechanisms() {
         let (_temp, repo, workspaces) = workspace_fixture();
+        // Registration is now part of a successful COW creation — see the note
+        // on `auto_produces_a_cow_workspace_where_copy_on_write_works`.
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
 
         let cloned = create_workspace(
             &workspaces,
@@ -5644,6 +6119,9 @@ branch refs/heads/feat
     fn the_payload_reports_the_dirty_policy_and_what_it_carried_over() {
         let (_temp, repo, workspaces) = workspace_fixture();
         fs::write(repo.join("README.md"), "# Test\nin progress\n").expect("dirty");
+        // Registration is now part of a successful COW creation — see the note
+        // on `auto_produces_a_cow_workspace_where_copy_on_write_works`.
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
 
         let payload = create_workspace(
             &workspaces,
@@ -5679,6 +6157,9 @@ branch refs/heads/feat
             "module.exports = 1;\n",
         )
         .expect("artifact");
+        // Registration is now part of a successful COW creation — see the note
+        // on `auto_produces_a_cow_workspace_where_copy_on_write_works`.
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
 
         let payload = create_workspace(
             &workspaces,
@@ -5708,6 +6189,7 @@ branch refs/heads/feat
 
     #[test]
     fn a_degraded_workspace_says_so_in_the_payload() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
 
         let payload = create_workspace_with(
@@ -5736,6 +6218,9 @@ branch refs/heads/feat
     #[test]
     fn a_cow_workspace_reports_a_minted_id_and_a_worktree_reports_its_branch() {
         let (_temp, repo, workspaces) = workspace_fixture();
+        // Registration is now part of a successful COW creation — see the note
+        // on `auto_produces_a_cow_workspace_where_copy_on_write_works`.
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
 
         let cloned = create_workspace(
             &workspaces,
@@ -5768,21 +6253,45 @@ branch refs/heads/feat
 
     // ── resolving an id against both sources, and publish ────────────────
 
-    /// Point the config dir at a temp dir holding `doc`, so a resolver test
-    /// reads a document we control instead of the user's real one.
-    fn with_repositories_document(doc: serde_json::Value) -> (impl Drop, TempDir) {
+    /// Point the config dir at a temp dir, so anything the code under test
+    /// registers lands in a document we control instead of the user's real one.
+    ///
+    /// Take this FIRST, before any fixture that creates a workspace: an
+    /// override acquired afterwards does not retroactively protect the
+    /// registration `create_workspace` already wrote, which is how worktree
+    /// rows reached Boss's live `repositories.json` (#763-d219). Never take a
+    /// second override while one is live — `set_config_dir_override` holds a
+    /// non-reentrant global lock and the second call deadlocks. Seed a starting
+    /// document with `seed_repositories_document` instead.
+    fn with_temp_config_dir() -> (impl Drop, TempDir) {
         let config = TempDir::new().expect("config dir");
+        let guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        (guard, config)
+    }
+
+    /// Overwrite the repositories document inside an already-overridden config
+    /// dir. Use when the test needs a specific starting state *after* the
+    /// fixture has run.
+    fn seed_repositories_document(config: &TempDir, doc: serde_json::Value) {
         fs::write(
             config.path().join("repositories.json"),
             serde_json::to_string_pretty(&doc).expect("serialize"),
         )
         .expect("write");
-        let guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    }
+
+    /// Point the config dir at a temp dir holding `doc`, so a resolver test
+    /// reads a document we control instead of the user's real one.
+    fn with_repositories_document(doc: serde_json::Value) -> (impl Drop, TempDir) {
+        let (guard, config) = with_temp_config_dir();
+        seed_repositories_document(&config, doc);
         (guard, config)
     }
 
     #[test]
     fn an_id_git_knows_resolves_to_a_worktree() {
+        // Taken before the fixture: create_workspace registers into repositories.json (#763-d219).
+        let (_config_guard, config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
         let created = create_workspace(
             &workspaces,
@@ -5792,11 +6301,14 @@ branch refs/heads/feat
             DirtyPolicy::Inherit,
         )
         .expect("worktree");
-        let (_guard, _config) = with_repositories_document(serde_json::json!({ "repos": {} }));
+        seed_repositories_document(&config_dir, serde_json::json!({ "repos": {} }));
 
         match resolve_any_workspace(&repo, "resolvable").expect("resolves") {
             ResolvedWorkspace::Worktree(worktree) => {
-                assert_eq!(PathBuf::from(worktree.path), created.path);
+                assert_eq!(
+                    std::fs::canonicalize(worktree.path).expect("listed worktree path"),
+                    std::fs::canonicalize(created.path).expect("created worktree path")
+                );
                 assert_eq!(worktree.branch, "resolvable");
             }
             other => panic!("expected a linked worktree, got {other:?}"),
@@ -5808,6 +6320,15 @@ branch refs/heads/feat
     #[test]
     fn an_id_only_the_document_knows_resolves_to_a_cow_workspace() {
         let (_temp, repo, workspaces) = workspace_fixture();
+        // Set BEFORE creating: creation now registers itself, so the override
+        // must already be in place — see the note on
+        // `auto_produces_a_cow_workspace_where_copy_on_write_works`. The doc
+        // this test cares about depends on `created.path`, which does not
+        // exist yet, so it is written below with `replace_repositories_for_test`
+        // rather than a second `with_repositories_document` call — the guard's
+        // exclusive lock is not reentrant, and a second call on this thread
+        // would deadlock against the one already held.
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
         let created = create_workspace(
             &workspaces,
             &workspace_config(&repo, "cloned"),
@@ -5828,7 +6349,7 @@ branch refs/heads/feat
             "git must not report the clone — that is the whole reason for the document"
         );
 
-        let (_guard, _config) = with_repositories_document(serde_json::json!({
+        crate::config::replace_repositories_for_test(serde_json::json!({
             "repos": {
                 repo.to_string_lossy(): {
                     "path": repo.to_string_lossy(),
@@ -5842,7 +6363,8 @@ branch refs/heads/feat
                     }
                 }
             }
-        }));
+        }))
+        .expect("seed the resolvable document");
 
         match resolve_any_workspace(&repo, "cloned~aaaa1111").expect("resolves") {
             ResolvedWorkspace::Cow(record) => {
@@ -5853,11 +6375,211 @@ branch refs/heads/feat
         }
     }
 
+    #[test]
+    fn cow_lifecycle_distinguishes_dirty_unpublished_published_and_merged() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "lifecycle"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow");
+
+        fs::write(created.path.join("work.txt"), "exclusive\n").expect("write");
+        git_cmd(&created.path)
+            .args(["add", "."])
+            .run()
+            .expect("add");
+        git_cmd(&created.path)
+            .args(["commit", "-m", "exclusive work"])
+            .run()
+            .expect("commit");
+
+        let unpublished = inspect_workspace_lifecycle(&repo, &created.workspace_id);
+        assert_eq!(unpublished.dirty, Some(false));
+        assert_eq!(
+            unpublished.commit_status,
+            WorkspaceCommitStatus::Unpublished
+        );
+        assert_eq!(unpublished.unpublished_commits, Some(1));
+        assert_eq!(
+            unpublished.removal_safety,
+            WorkspaceRemovalSafety::RequiresForce
+        );
+
+        fs::write(created.path.join("untracked.txt"), "not in the line diff\n").expect("write");
+        let dirty = inspect_workspace_lifecycle(&repo, &created.workspace_id);
+        assert_eq!(dirty.dirty, Some(true));
+        assert!(matches!(
+            worktree_dirtiness(&repo, &created.workspace_id),
+            WorktreeDirtiness::Dirty
+        ));
+        fs::remove_file(created.path.join("untracked.txt")).expect("clean untracked");
+
+        let published = publish_workspace_impl(&repo.to_string_lossy(), &created.workspace_id)
+            .expect("publish into parent");
+        assert!(published.parent_updated);
+        let published = inspect_workspace_lifecycle(&repo, &created.workspace_id);
+        assert_eq!(published.commit_status, WorkspaceCommitStatus::Published);
+        assert_eq!(published.unpublished_commits, Some(0));
+        assert_eq!(published.removal_safety, WorkspaceRemovalSafety::Safe);
+
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "lifecycle"])
+            .run()
+            .expect("integrate into default branch");
+        let merged = inspect_workspace_lifecycle(&repo, &created.workspace_id);
+        assert_eq!(merged.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(merged.unpublished_commits, Some(0));
+    }
+
+    /// #767-3968: a COW clone carries the parent's dirty files at creation.
+    /// This walks the same workspace through inherited-only, edited-since, and
+    /// cleaned-back-to-clean, asserting the backend distinguishes them rather
+    /// than reporting every dirty clone the same way.
+    #[test]
+    fn cow_lifecycle_reports_dirty_provenance_relative_to_the_creation_baseline() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+
+        // Dirty the parent BEFORE cloning, so the clone inherits it.
+        fs::write(repo.join("README.md"), "# Test\nwork in progress\n").expect("modify");
+        fs::write(repo.join("scratch.txt"), "untracked\n").expect("untracked");
+
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "baseline"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow");
+
+        let inherited = inspect_workspace_lifecycle(&repo, &created.workspace_id);
+        assert_eq!(inherited.dirty, Some(true));
+        assert_eq!(
+            inherited.dirty_provenance,
+            Some(crate::cow::DirtyProvenance::InheritedOnly),
+            "nothing has been edited inside the workspace yet"
+        );
+
+        fs::write(created.path.join("new-work.txt"), "added after creation\n").expect("write");
+        let edited = inspect_workspace_lifecycle(&repo, &created.workspace_id);
+        assert_eq!(
+            edited.dirty_provenance,
+            Some(crate::cow::DirtyProvenance::ChangedSinceCreation)
+        );
+
+        fs::remove_file(created.path.join("new-work.txt")).expect("remove the later edit");
+        git_cmd(&created.path)
+            .args(["checkout", "--", "README.md"])
+            .run()
+            .expect("revert the inherited modification");
+        fs::remove_file(created.path.join("scratch.txt"))
+            .expect("clean the inherited untracked file");
+        let cleaned = inspect_workspace_lifecycle(&repo, &created.workspace_id);
+        assert_eq!(cleaned.dirty, Some(false));
+        assert_eq!(
+            cleaned.dirty_provenance,
+            Some(crate::cow::DirtyProvenance::Clean)
+        );
+    }
+
+    /// A clone this backend registered without ever witnessing its creation —
+    /// stand-in for recovery, adoption, or a clone made before this baseline
+    /// existed — must report no provenance rather than guess one from current
+    /// state alone.
+    #[test]
+    fn cow_lifecycle_reports_no_dirty_provenance_without_a_recorded_baseline() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "legacy"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow");
+
+        // Rewrite the persisted row without a `dirtyBaseline`, as a clone
+        // registered before this field existed (or through recovery/adoption)
+        // would be.
+        crate::config::upsert_workspace_record(
+            &repo.to_string_lossy(),
+            &created.workspace_id,
+            serde_json::json!({
+                "branchName": created.branch,
+                "worktreePath": created.path.to_string_lossy(),
+                "kind": "cow",
+                "parentRepoPath": repo.to_string_lossy(),
+            }),
+        )
+        .expect("rewrite without a baseline");
+
+        fs::write(created.path.join("scratch.txt"), "dirty\n").expect("write");
+        let status = inspect_workspace_lifecycle(&repo, &created.workspace_id);
+        assert_eq!(status.dirty, Some(true));
+        assert_eq!(
+            status.dirty_provenance, None,
+            "no baseline was ever recorded for this workspace — never guess one"
+        );
+    }
+
+    #[test]
+    fn lifecycle_inspection_failure_is_unknown_never_safe() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+
+        let status = inspect_workspace_lifecycle(&repo, "missing");
+
+        assert_eq!(status.dirty, None);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unknown);
+        assert_eq!(status.unpublished_commits, None);
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Unknown);
+        assert!(
+            status
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("No workspace found"))
+        );
+    }
+
+    #[test]
+    fn missing_parent_default_ref_is_an_error_not_published() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "missing-default"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow");
+        let ResolvedWorkspace::Cow(record) =
+            resolve_any_workspace(&repo, &created.workspace_id).expect("resolve cow")
+        else {
+            panic!("expected cow");
+        };
+
+        let error = crate::cow::inspect_cow_lifecycle(&record, "does-not-exist")
+            .expect_err("a missing integration ref is unknown, not merely unmerged");
+
+        assert!(error.contains("exit Some(128)"), "{error}");
+    }
+
     /// The two id spaces are disjoint by construction, so an overlap means a
     /// corrupt record — and picking one silently is how the wrong directory
     /// gets deleted.
     #[test]
     fn an_id_both_sources_claim_is_an_error_rather_than_a_winner() {
+        // Taken before the fixture: create_workspace registers into repositories.json (#763-d219).
+        let (_config_guard, config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
         let created = create_workspace(
             &workspaces,
@@ -5868,20 +6590,23 @@ branch refs/heads/feat
         )
         .expect("worktree");
 
-        let (_guard, _config) = with_repositories_document(serde_json::json!({
-            "repos": {
-                repo.to_string_lossy(): {
-                    "path": repo.to_string_lossy(),
-                    "workspaces": {
-                        "contested": {
-                            "branchName": "contested",
-                            "kind": "cow",
-                            "worktreePath": created.path.to_string_lossy(),
+        seed_repositories_document(
+            &config_dir,
+            serde_json::json!({
+                "repos": {
+                    repo.to_string_lossy(): {
+                        "path": repo.to_string_lossy(),
+                        "workspaces": {
+                            "contested": {
+                                "branchName": "contested",
+                                "kind": "cow",
+                                "worktreePath": created.path.to_string_lossy(),
+                            }
                         }
                     }
                 }
-            }
-        }));
+            }),
+        );
 
         let err = resolve_any_workspace(&repo, "contested").expect_err("must refuse");
         assert!(err.contains("refusing to guess"), "{err}");
@@ -5895,6 +6620,8 @@ branch refs/heads/feat
     /// same branch.
     #[test]
     fn removing_a_linked_worktree_cleans_up_the_parents_admin_entry() {
+        // Taken before the fixture: create_workspace registers into repositories.json (#763-d219).
+        let (_config_guard, config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
         create_workspace(
             &workspaces,
@@ -5906,7 +6633,7 @@ branch refs/heads/feat
         .expect("worktree");
         let admin = repo.join(".git").join("worktrees").join("linked");
         assert!(admin.exists(), "the fixture must start with an admin entry");
-        let (_guard, _config) = with_repositories_document(serde_json::json!({ "repos": {} }));
+        seed_repositories_document(&config_dir, serde_json::json!({ "repos": {} }));
 
         remove_worktree_by_workspace_id(&repo.to_string_lossy(), "linked", true, None, false)
             .expect("removes");
@@ -5924,6 +6651,10 @@ branch refs/heads/feat
     #[test]
     fn removing_a_cow_workspace_by_id_refuses_while_its_commits_are_unpublished() {
         let (_temp, repo, workspaces) = workspace_fixture();
+        // Set BEFORE creating so `create_workspace`'s real registration lands
+        // in this document — the removal calls below address that same
+        // registration by `created.workspace_id`, not a hand-written stand-in.
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
         let created = create_workspace(
             &workspaces,
             &workspace_config(&repo, "cloned"),
@@ -5943,27 +6674,11 @@ branch refs/heads/feat
             .run()
             .expect("commit");
 
-        let (_guard, _config) = with_repositories_document(serde_json::json!({
-            "repos": {
-                repo.to_string_lossy(): {
-                    "path": repo.to_string_lossy(),
-                    "workspaces": {
-                        "cloned~aaaa1111": {
-                            "branchName": "cloned",
-                            "kind": "cow",
-                            "worktreePath": created.path.to_string_lossy(),
-                            "parentRepoPath": repo.to_string_lossy(),
-                        }
-                    }
-                }
-            }
-        }));
-
         // force defaults to false on every transport, and this is the shared
         // entry point all three of them call.
         let err = remove_worktree_by_workspace_id(
             &repo.to_string_lossy(),
-            "cloned~aaaa1111",
+            &created.workspace_id,
             true,
             None,
             false,
@@ -5976,7 +6691,7 @@ branch refs/heads/feat
         // And with force it goes, reporting the branch it was on.
         let outcome = remove_worktree_by_workspace_id(
             &repo.to_string_lossy(),
-            "cloned~aaaa1111",
+            &created.workspace_id,
             true,
             None,
             true,
@@ -5986,11 +6701,84 @@ branch refs/heads/feat
         assert!(!created.path.exists());
     }
 
+    /// The end-to-end path for the P0 trust-boundary case (see
+    /// `cow::tests::removal_refuses_a_forged_row_naming_an_unrelated_repository_outside_the_worktree_base`,
+    /// which exercises `cow::remove_cow_workspace` directly): here the forged
+    /// `kind: "cow"` row is resolved and removed through the actual public
+    /// entry point, `remove_worktree_by_workspace_id`, with the config
+    /// directory override in place so the containment check runs against the
+    /// SAME "actual configured worktree base" production code computes
+    /// (`resolve_worktree_dir_for_repo` off `config::config_dir()`), not a
+    /// stand-in the test hands the validator directly. `force: true` proves
+    /// force waives dirty/unpublished-commit prompts, not provenance.
+    #[test]
+    fn removal_through_the_public_entry_point_refuses_a_forged_row_outside_the_worktree_base() {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({ "repos": {} }));
+
+        // A real, unrelated repository this backend never cloned, sitting
+        // outside the worktree base `remove_worktree_by_workspace_id` resolves
+        // for `repo` (the sibling `repo__wt` dir `workspace_fixture` sets up).
+        let victim = temp.path().join("victim-outside-worktree-base");
+        fs::create_dir_all(&victim).expect("victim dir");
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            git_cmd(&victim).args(args).run().expect("git setup");
+        }
+        fs::write(victim.join("precious.txt"), "someone else's work\n").expect("write");
+        git_cmd(&victim).args(["add", "."]).run().expect("add");
+        git_cmd(&victim)
+            .args(["commit", "-m", "unrelated history"])
+            .run()
+            .expect("commit");
+
+        crate::config::replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                repo.to_string_lossy(): {
+                    "path": repo.to_string_lossy(),
+                    "workspaces": {
+                        "forged~aaaa1111": {
+                            "branchName": "main",
+                            "kind": "cow",
+                            "worktreePath": victim.to_string_lossy(),
+                            "parentRepoPath": repo.to_string_lossy(),
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("seed the forged document");
+
+        let err = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "forged~aaaa1111",
+            true,
+            None,
+            true,
+        )
+        .expect_err("a forged row must be refused through the public entry point, even with force");
+
+        assert!(
+            err.contains("does not validate as a copy-on-write workspace"),
+            "{err}"
+        );
+        assert!(victim.join(".git").is_dir(), "the victim repo was deleted");
+        assert!(
+            victim.join("precious.txt").exists(),
+            "the victim's history was deleted"
+        );
+    }
+
     /// A linked worktree shares its refs with the parent, so publishing is a
     /// question that does not apply — and saying that is not the same as
     /// reporting a success that did nothing.
     #[test]
     fn publishing_a_linked_worktree_is_a_no_op_that_says_why() {
+        // Taken before the fixture: create_workspace registers into repositories.json (#763-d219).
+        let (_config_guard, config_dir) = with_temp_config_dir();
         let (_temp, repo, workspaces) = workspace_fixture();
         create_workspace(
             &workspaces,
@@ -6000,7 +6788,7 @@ branch refs/heads/feat
             DirtyPolicy::Inherit,
         )
         .expect("worktree");
-        let (_guard, _config) = with_repositories_document(serde_json::json!({ "repos": {} }));
+        seed_repositories_document(&config_dir, serde_json::json!({ "repos": {} }));
 
         let outcome =
             publish_workspace_impl(&repo.to_string_lossy(), "shared-refs").expect("no-op");
@@ -6025,6 +6813,9 @@ branch refs/heads/feat
     fn only_the_cow_path_carries_the_parents_uncommitted_work() {
         let (_temp, repo, workspaces) = workspace_fixture();
         fs::write(repo.join("README.md"), "# Test\nin progress\n").expect("dirty");
+        // Registration is now part of a successful COW creation — see the note
+        // on `auto_produces_a_cow_workspace_where_copy_on_write_works`.
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
 
         let cloned = create_workspace(
             &workspaces,
@@ -6045,5 +6836,356 @@ branch refs/heads/feat
 
         assert_eq!(cloned.carried_over, 1);
         assert_eq!(linked.carried_over, 0);
+    }
+
+    // ── durable registration (#756-cf6d) ──────────────────────────────────
+
+    /// The crash window this story closes: before, only the frontend's
+    /// `setWorkspace` + debounced save ever wrote a COW clone into
+    /// `repositories.json`, so a crash between the clone landing and that save
+    /// lost it. Now the backend registers before it can report success, so a
+    /// caller that never touches the frontend — MCP, HTTP, a test calling
+    /// `create_workspace` directly — sees the row immediately.
+    #[test]
+    fn creating_a_cow_workspace_registers_it_before_returning_success() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-registered"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow workspace created");
+
+        let records = crate::cow::cow_workspaces_for(&repo);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0].workspace_id, created.workspace_id);
+        assert_eq!(records[0].branch, "feature-registered");
+        assert_eq!(records[0].path, created.path);
+    }
+
+    /// A registration failure must not cost the clone: it is the one thing a
+    /// later recovery pass can heal this from, and there is nowhere else the
+    /// work exists.
+    #[test]
+    fn a_registration_failure_preserves_the_clone_and_reports_a_recoverable_error() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, config) = with_repositories_document(serde_json::json!({}));
+        fs::write(config.path().join("repositories.json"), "{ not json")
+            .expect("corrupt the document");
+
+        let err = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-unregistered"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect_err("a corrupt repositories.json must refuse, not silently reset");
+
+        assert!(err.contains("could not register"), "{err}");
+        assert!(
+            workspaces
+                .join("feature-unregistered")
+                .join(".git")
+                .is_dir(),
+            "the clone must survive a failed registration, not be deleted"
+        );
+    }
+
+    #[test]
+    fn removing_a_cow_workspace_unregisters_it_once_the_directory_is_gone() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-remove"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow workspace created");
+        assert_eq!(crate::cow::cow_workspaces_for(&repo).len(), 1);
+
+        remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            &created.workspace_id,
+            true,
+            None,
+            false,
+        )
+        .expect("remove");
+
+        assert!(crate::cow::cow_workspaces_for(&repo).is_empty());
+        assert!(!created.path.exists());
+    }
+
+    /// Default removal preserves BOTH the directory and its row when refused:
+    /// dropping the row here would strand the directory with no row pointing
+    /// at it, which is worse than the refusal it is supposed to be safer than.
+    #[test]
+    fn a_refused_removal_preserves_both_the_directory_and_its_row() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-dirty"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow workspace created");
+        fs::write(created.path.join("scratch.txt"), "wip\n").expect("dirty the clone");
+
+        let err = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            &created.workspace_id,
+            true,
+            None,
+            false,
+        )
+        .expect_err("uncommitted changes must refuse removal");
+
+        assert!(err.contains("uncommitted changes"), "{err}");
+        assert!(created.path.exists());
+        assert_eq!(
+            crate::cow::cow_workspaces_for(&repo).len(),
+            1,
+            "the row must survive a refused removal exactly like the directory"
+        );
+    }
+
+    /// `get_worktree_paths` is the read path every transport shares (listing,
+    /// refresh), so it is where a restart's self-heal lives: a marked clone
+    /// whose row is missing — the crash window this story closes, or a gap
+    /// predating the fix — reappears without any new surface to ask for it.
+    #[test]
+    fn get_worktree_paths_recovers_a_cow_clone_missing_from_repositories_json() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-recover"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow workspace created");
+        // Simulate a restart after the row was lost — a hand-restored backup,
+        // or (before this fix) the crash window itself.
+        crate::cow::unregister_cow_workspace(&repo, &created.workspace_id)
+            .expect("simulate a lost row");
+        assert!(crate::cow::cow_workspaces_for(&repo).is_empty());
+
+        let listed = get_worktree_paths(repo.to_string_lossy().to_string()).expect("list");
+
+        let recovered = listed
+            .get(&created.workspace_id)
+            .expect("recovered by its minted id");
+        assert_eq!(recovered.kind, crate::cow::WorkspaceKind::Cow);
+        assert_eq!(recovered.branch, "feature-recover");
+        // Durable, not just an artifact of this one call.
+        assert_eq!(crate::cow::cow_workspaces_for(&repo).len(), 1);
+    }
+
+    /// A linked worktree and a COW clone can sit side by side under the same
+    /// `worktrees_dir` — they are created by the same directory logic — so a
+    /// recovery pass scanning for orphaned clones must leave the worktree
+    /// exactly as `git worktree list` already describes it.
+    #[test]
+    fn get_worktree_paths_recovery_leaves_linked_worktrees_unaffected() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let linked = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-linked"),
+            None,
+            WorkspaceMode::Worktree,
+            DirtyPolicy::Inherit,
+        )
+        .expect("linked worktree created");
+        let cloned = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-cow-sibling"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow workspace created");
+        crate::cow::unregister_cow_workspace(&repo, &cloned.workspace_id)
+            .expect("simulate a lost row");
+
+        let listed = get_worktree_paths(repo.to_string_lossy().to_string()).expect("list");
+
+        let linked_entry = listed
+            .get(&linked.workspace_id)
+            .expect("linked worktree still listed");
+        assert_eq!(linked_entry.kind, crate::cow::WorkspaceKind::Worktree);
+        let recovered = listed
+            .get(&cloned.workspace_id)
+            .expect("cow clone recovered alongside it");
+        assert_eq!(recovered.kind, crate::cow::WorkspaceKind::Cow);
+    }
+
+    // ── explicit adoption, end to end ──────────────────────────────────────
+    //
+    // `adopt_cow_workspace_impl` is what the Tauri command, the HTTP route and
+    // the MCP `repo` action all share. These tests exercise it exactly the way
+    // a real caller would — through `resolve_worktree_dir_for_repo` and the
+    // real `repositories.json` behind `set_config_dir_override` — rather than
+    // `cow.rs`'s narrower unit tests around `adopt_cow_workspace` itself.
+
+    /// A markerless clone is built the same way `create_workspace(.., Cow, ..)`
+    /// would, then has its two provenance markers stripped back out — the
+    /// shape a clone made before those markers existed still has (the `parent`
+    /// remote and its no-push `pushurl` predate them).
+    fn make_markerless_clone_for_adoption(repo: &Path, workspaces: &Path, task: &str) -> PathBuf {
+        let created = create_workspace(
+            workspaces,
+            &workspace_config(repo, task),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow workspace created");
+        assert_eq!(created.kind, WorkspaceKind::Cow);
+        for key in ["tuicommander.cow.workspace-id", "tuicommander.cow.parent"] {
+            git_cmd(&created.path)
+                .args(["config", "--unset", key])
+                .run()
+                .expect("unset marker");
+        }
+        // The clone is registered by `create_workspace` itself; adoption is for
+        // a row `repositories.json` has never heard of.
+        crate::cow::unregister_cow_workspace(repo, &created.workspace_id)
+            .expect("simulate a legacy clone repositories.json never learned about");
+        created.path
+    }
+
+    #[test]
+    fn adopt_cow_workspace_impl_registers_a_markerless_clone_end_to_end() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let candidate =
+            make_markerless_clone_for_adoption(&repo, &workspaces, "feature-legacy-adopt");
+        assert!(
+            crate::cow::cow_workspaces_for(&repo).is_empty(),
+            "sanity: repositories.json must not already know this clone"
+        );
+
+        let record =
+            adopt_cow_workspace_impl(&repo.to_string_lossy(), &candidate.to_string_lossy(), None)
+                .expect("adoption succeeds end to end");
+
+        assert_eq!(record.branch, "feature-legacy-adopt");
+        let records = crate::cow::cow_workspaces_for(&repo);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0].workspace_id, record.workspace_id);
+        assert_eq!(records[0].path, record.path);
+
+        // Adopted, not touched: no reset, no clean, no checkout beyond what the
+        // clone already had.
+        assert!(
+            candidate.join("README.md").exists(),
+            "adoption must not alter the working tree"
+        );
+    }
+
+    #[test]
+    fn adopt_cow_workspace_impl_accepts_a_caller_supplied_id_and_reports_it_through_the_shared_json()
+     {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let candidate =
+            make_markerless_clone_for_adoption(&repo, &workspaces, "feature-legacy-named");
+
+        let record = adopt_cow_workspace_impl(
+            &repo.to_string_lossy(),
+            &candidate.to_string_lossy(),
+            Some("feature-legacy-named~caller0"),
+        )
+        .expect("adoption succeeds");
+        let json = adopted_workspace_json(&record);
+
+        assert_eq!(json["workspaceId"], "feature-legacy-named~caller0");
+        assert_eq!(json["branch"], "feature-legacy-named");
+        assert_eq!(json["path"], record.path.to_string_lossy().to_string());
+    }
+
+    /// The rejection side: a plain repository that was never a COW clone of
+    /// anything carries none of the parent-remote evidence adoption requires,
+    /// however plausible its directory looks. Nothing is registered, and — the
+    /// point of the validation running before any write — nothing is written
+    /// into the candidate's own config either.
+    #[test]
+    fn adopt_cow_workspace_impl_refuses_a_plain_repository_with_no_cow_evidence() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let stray = workspaces.join("stray");
+        fs::create_dir_all(&stray).expect("dir");
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            git_cmd(&stray).args(args).run().expect("git setup");
+        }
+        fs::write(stray.join("f.txt"), "x").expect("write");
+        git_cmd(&stray).args(["add", "."]).run().expect("add");
+        git_cmd(&stray)
+            .args(["commit", "-m", "unrelated"])
+            .run()
+            .expect("commit");
+
+        let err = adopt_cow_workspace_impl(&repo.to_string_lossy(), &stray.to_string_lossy(), None)
+            .expect_err("a plain repository must be refused");
+
+        assert!(err.contains("no-push parent-remote evidence"), "{err}");
+        assert!(crate::cow::cow_workspaces_for(&repo).is_empty());
+        assert!(
+            git_cmd(&stray)
+                .args(["config", "--get", "tuicommander.cow.workspace-id"])
+                .run()
+                .is_err(),
+            "a refused adoption must not write a marker"
+        );
+    }
+
+    /// A path already registered under a different id — including the id an
+    /// already-listed linked worktree occupies — must be refused: adoption
+    /// cannot collide with either id/path universe `get_worktree_paths`'s own
+    /// self-heal already respects.
+    #[test]
+    fn adopt_cow_workspace_impl_refuses_a_candidate_already_registered() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let (_guard, _config) = with_repositories_document(serde_json::json!({}));
+        let created = create_workspace(
+            &workspaces,
+            &workspace_config(&repo, "feature-already-registered"),
+            None,
+            WorkspaceMode::Cow,
+            DirtyPolicy::Inherit,
+        )
+        .expect("cow workspace created and registered");
+        for key in ["tuicommander.cow.workspace-id", "tuicommander.cow.parent"] {
+            git_cmd(&created.path)
+                .args(["config", "--unset", key])
+                .run()
+                .expect("unset marker");
+        }
+        // Row still present in repositories.json — unlike the other tests,
+        // this one is NOT simulating a lost registration.
+
+        let err = adopt_cow_workspace_impl(
+            &repo.to_string_lossy(),
+            &created.path.to_string_lossy(),
+            None,
+        )
+        .expect_err("an already-registered path must be refused");
+
+        assert!(err.contains("already registered"), "{err}");
     }
 }
