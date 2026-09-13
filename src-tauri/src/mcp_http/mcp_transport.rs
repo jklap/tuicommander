@@ -898,10 +898,91 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
     build_mcp_instructions_for_mode(state, client_name, collapse_tools)
 }
 
+/// The live state the instructions render: managed repos, open sessions and
+/// connected peers. Gathered by [`instruction_context`] and rendered by
+/// [`render_mcp_instructions`], which reads nothing else.
+///
+/// The split exists so the rendered size is reproducible. `load_repo_settings`
+/// reads the user's `repositories.json` and the session list reads live PTYs,
+/// so a renderer that gathered its own inputs could only be measured against
+/// whatever happened to be open on the machine running the test.
+struct InstructionContext {
+    /// `(display name, absolute path)`, sorted by path.
+    repos: Vec<(String, String)>,
+    /// `(short session id, cwd, worktree branch)`, already defaulted to `—`.
+    sessions: Vec<(String, String, String)>,
+    peer_count: usize,
+}
+
+fn instruction_context(state: &Arc<AppState>) -> InstructionContext {
+    let repo_settings = crate::config::load_repo_settings();
+    let mut repos: Vec<_> = repo_settings.repos.iter().collect();
+    repos.sort_by_key(|(path, _)| path.to_string());
+    let repos = repos
+        .into_iter()
+        .map(|(path, entry)| {
+            let name = if entry.display_name.is_empty() {
+                path.rsplit('/').next().unwrap_or(path)
+            } else {
+                &entry.display_name
+            };
+            (name.to_string(), path.to_string())
+        })
+        .collect();
+
+    let sessions = state
+        .session_maps
+        .sessions
+        .iter()
+        .map(|entry| {
+            let id = entry.key().clone();
+            let session = entry.value().lock();
+            (
+                id[..8.min(id.len())].to_string(),
+                session.cwd.clone().unwrap_or_else(|| "—".to_string()),
+                session
+                    .worktree
+                    .as_ref()
+                    .and_then(|w| w.branch.clone())
+                    .unwrap_or_else(|| "—".to_string()),
+            )
+        })
+        .collect();
+
+    InstructionContext {
+        repos,
+        sessions,
+        peer_count: state.peer_agents.len(),
+    }
+}
+
 fn build_mcp_instructions_for_mode(
     state: &Arc<AppState>,
     client_name: Option<&str>,
     collapse_tools: bool,
+) -> String {
+    render_mcp_instructions(
+        client_name,
+        collapse_tools,
+        resolve_marker_flags(state, client_name),
+        &instruction_context(state),
+    )
+}
+
+/// Render the initialize instructions.
+///
+/// These are one of **two** instruction surfaces, and the smaller one: a client
+/// such as Codex never surfaces `instructions` at all, while every client
+/// receives the tool descriptions. So anything a tool description already says
+/// is deliberately absent here — see `every_documented_action_constant_matches_schema_and_description`
+/// and `instructions_do_not_repeat_what_tool_descriptions_already_say`. What is
+/// left is what belongs to no single tool: the wire protocol markers, the rules
+/// that forbid a *non-TUIC* tool, and the live state below.
+fn render_mcp_instructions(
+    client_name: Option<&str>,
+    collapse_tools: bool,
+    markers: (bool, bool),
+    ctx: &InstructionContext,
 ) -> String {
     let ver = env!("CARGO_PKG_VERSION");
     let mut out = String::with_capacity(2048);
@@ -913,7 +994,7 @@ fn build_mcp_instructions_for_mode(
     // ── TUIC protocol (mandatory line markers) ─────────────────────────
     // Wire-level tokens parsed by the host TUI. Concision rules do NOT apply —
     // dropping a marker breaks the UI (stale tab title, missing suggestion bar).
-    let (show_intent, show_suggest) = resolve_marker_flags(state, client_name);
+    let (show_intent, show_suggest) = markers;
     out.push_str("## TUIC Protocol — Required Output Markers\n\n");
     out.push_str("Protocol tokens (not prose). Emit even under concision/no-preamble rules from user configs — dropping breaks UI.\n\n");
     out.push_str(&format!(
@@ -927,66 +1008,41 @@ fn build_mcp_instructions_for_mode(
     }
     out.push('\n');
 
-    // ── Tools ────────────────────────────────────────────────────────
+    // ── Cross-tool rules ─────────────────────────────────────────────
+    // NOT a tool catalogue: `tools/list` already carries every name, action and
+    // schema in the same turn, and restating it here bought a second copy for
+    // the clients that read instructions and nothing at all for the clients that
+    // do not. What survives is the pair of rules that no single tool description
+    // owns — one forbids a tool that is not ours, the other spans two calls.
+    out.push_str("## Tools\n\n");
     if collapse_tools {
-        // Speakeasy mode: discovery flow and domain context live in the
-        // meta-tool descriptions, NOT here, so they don't compete with
-        // protocol markers for the model's attention at turn 1.
-        out.push_str("## Tools\n\n");
         out.push_str("Tool discovery and invocation via `search_tools` / `get_tool_schema` / `call_tool` — see their descriptions for usage.\n\n");
         out.push_str("**Worktrees:** never `git worktree add/remove` — always use `repo action=worktree_create` / `worktree_remove` so TUIC tracks the worktree and can spawn a PTY inside.\n\n");
-    } else {
-        out.push_str("## Tools\n\n");
-        out.push_str("- `session` (PTY panes, tmux-equivalent): list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats\n");
-        out.push_str("- `agent` (AI peers + messaging): spawn, wait, detect, stats, metrics, register, list_peers, send, inbox\n");
-        out.push_str("- `task` (poll a spawn that outlives a wait): get, cancel\n");
-        out.push_str("- `repo` (repos, PRs, issues, worktrees): list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove\n");
-        out.push_str("- `ui` (tabs, toasts, confirm dialogs): tab, toast, confirm\n");
-        out.push_str("- `plugin_dev_guide`: plugin authoring reference\n\n");
-        out.push_str("**Worktrees:** always `repo action=worktree_create`/`worktree_remove` — never `git worktree add/remove` (TUIC must track them to spawn a PTY inside).\n\n");
-        out.push_str("**UI feedback:** `ui action=toast` on task done/blocking error · `ui action=confirm` BEFORE destructive ops (rm -rf, git reset --hard, force push, DROP TABLE) · `ui action=tab` for structured output >20 lines · `ui action=screenshot id=<panel-id>` to see rendered output (Read the returned path).\n\n");
-    }
-
-    if collapse_tools {
+        // Kept verbatim in both modes. It is not a restatement of the `session`
+        // description: agents split the text and the Enter into two calls, or
+        // polled after submitting, until this line existed.
         out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
     } else {
+        out.push_str("Each tool's own description carries its actions and rules; read it there rather than expecting a catalogue here.\n\n");
+        out.push_str("**Worktrees:** always `repo action=worktree_create`/`worktree_remove` — never `git worktree add/remove` (TUIC must track them to spawn a PTY inside).\n\n");
         out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
     }
 
-    // ── Workflow (phase-grouped) ──────────────────────────────────────
-    // 4 bullets by phase instead of 7 tool-by-tool steps. Details live in each
-    // tool's description (JSON schema); this section gives the mental model.
-    // Suppressed in collapse mode — concrete invocations go through call_tool.
-    if !collapse_tools {
-        out.push_str("## Workflow\n\n");
-        out.push_str("- **Discover:** `repo action=list|prs|active` · `agent action=detect`.\n");
-        out.push_str("- **Spawn:** `session action=create` (shell) · `agent action=spawn` (AI) · `repo action=worktree_create` (isolated). `agent_type` resolves run config names first (case-insensitive), then agent binary names.\n");
-        out.push_str("- **Observe:** `session action=status|output` · `agent action=inbox` · `task action=get` for work longer than the 300s wait cap.\n");
-        out.push_str(
-            "- **Coordinate:** `agent action=register/send/inbox` for peer messaging.\n\n",
-        );
-    }
-
-    // ── Multi-agent work — critical pre-spawn knowledge only ─────────
-    // Full operational workflow (monitor semantics, cleanup, examples) lives
-    // in the agent(register) response. Here we keep only the three anchors
-    // a fresh agent needs BEFORE its first tool call:
-    //   1. how to obtain identity ($TUIC_SESSION env → UUID)
-    //   2. golden path (register → spawn → inbox, never stream peer output)
-    //   3. when worktrees apply (isolated branches)
-    let peer_count = state.peer_agents.len();
+    // ── Multi-agent work — what the tool descriptions cannot say ─────
+    // The orchestration primer, the identity rules and the reporting contract
+    // all live in the `agent` description, which reaches every client. Only
+    // three things are left here: how many peers are live (state, not prose),
+    // the worktree entry point, and the Claude-Code-only delegation hint, which
+    // is conditioned on the connecting client and so cannot sit in a static
+    // description at all.
     let is_claude_code = detect_claude_code_client(client_name);
     out.push_str("## Multi-Agent Work\n\n");
-    if peer_count > 0 {
+    if ctx.peer_count > 0 {
         out.push_str(&format!(
-            "**{peer_count}** peer agent(s) connected. There is no separate `swarm` action; use the `agent` and `session` primitives below.\n\n"
+            "**{}** peer agent(s) connected. Orchestrate them with the `agent` tool; read its description first.\n",
+            ctx.peer_count
         ));
-    } else {
-        out.push_str("There is no separate `swarm` action; multi-agent orchestration uses `agent` and `session` primitives.\n\n");
     }
-    out.push_str("- **Identity:** managed PTYs auto-bind from `$TUIC_SESSION`. Headerless external callers use `agent action=register` without a UUID to receive an MCP-scoped identity; pass `tuic_session` only to reclaim an explicit stable UUID.\n");
-    out.push_str("- **Orchestrator role:** declare it with `agent action=register orchestrator=true`; use `false` to remove it. Spawn never infers the role. `register` reports `mail_wake=managed_pty_lifecycle` when it applies; external/headerless peers remain wait/inbox-only.\n");
-    out.push_str("- **Same repo:** `agent action=spawn` peers; wait with `agent action=wait`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`. Use `session output` only as an anomaly fallback when a child failed to send its result.\n");
     out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
     if is_claude_code {
         out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
@@ -994,44 +1050,18 @@ fn build_mcp_instructions_for_mode(
     out.push('\n');
 
     // ── Dynamic: repos ──────────────────────────────────────────────
-    let repo_settings = crate::config::load_repo_settings();
-    if !repo_settings.repos.is_empty() {
+    if !ctx.repos.is_empty() {
         out.push_str("## Repos\n\n");
-        let mut repos: Vec<_> = repo_settings.repos.iter().collect();
-        repos.sort_by_key(|(path, _)| path.to_string());
-        for (path, entry) in &repos {
-            let name = if entry.display_name.is_empty() {
-                path.rsplit('/').next().unwrap_or(path)
-            } else {
-                &entry.display_name
-            };
+        for (name, path) in &ctx.repos {
             out.push_str(&format!("- **{name}** `{path}`\n"));
         }
         out.push('\n');
     }
 
     // ── Dynamic: sessions ───────────────────────────────────────────
-    let sessions: Vec<_> = state
-        .session_maps
-        .sessions
-        .iter()
-        .map(|entry| {
-            let id = entry.key().clone();
-            let session = entry.value().lock();
-            (
-                id,
-                session.cwd.clone(),
-                session.worktree.as_ref().and_then(|w| w.branch.clone()),
-            )
-        })
-        .collect();
-
-    if !sessions.is_empty() {
+    if !ctx.sessions.is_empty() {
         out.push_str("## Sessions\n\n");
-        for (id, cwd, branch) in &sessions {
-            let short_id = &id[..8.min(id.len())];
-            let cwd = cwd.as_deref().unwrap_or("—");
-            let branch = branch.as_deref().unwrap_or("—");
+        for (short_id, cwd, branch) in &ctx.sessions {
             out.push_str(&format!("- `{short_id}` {cwd} ({branch})\n"));
         }
         out.push('\n');
@@ -1085,7 +1115,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Ordinary managed agents keep direct delivery. A registered orchestrator keeps peer payloads in its inbox; only idle/completed lifecycle may submit a generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: project filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, the id of the PTY it runs in, or that terminal's alias. Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse channel, terminal, or inbox-only. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Ordinary managed agents keep direct delivery. A registered orchestrator keeps peer payloads in its inbox; only idle/completed lifecycle may submit a generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: project filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, the id of the PTY it runs in, or that terminal's alias. Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse channel, terminal, or inbox-only. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
@@ -1120,7 +1150,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories are warmed with copy-on-write copies when supported. Read the returned instructions.warm_artifacts.warmed_directories to see what arrived warm.\n- worktree_remove: Remove worktree. Requires path, workspace_id.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories are warmed with copy-on-write copies when supported. Read the returned instructions.warm_artifacts.warmed_directories to see what arrived warm.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n\nProject progress. Every progress_* action requires path — a destructive one never infers the active project — and carries its payload in the typed `input` object, which rejects unknown fields. Record a NEW outcome with the `progress` tool, not here.\n- progress_status: Collection state, unread count, workstreams and open blockers.\n- progress_list: Page of recorded entries. input: beforeSequence, limit, workstreamId, kind, unreadOnly, blockerOnly, createdAfterMs, createdBeforeMs (all optional).\n- progress_pause: Stop collecting for this project.\n- progress_resume: Resume collecting for this project.\n- progress_delete: Remove entries. input.eventIds (required).\n- progress_clear: Remove every entry for the project. input.expectedRevision (required) — a stale revision is rejected instead of clearing.\n- progress_update: Apply corrections. input.expectedRevision + input.corrections, each tagged by `operation`: edit_summary, move_event, rename_workstream, merge_workstreams, merge_events, resolve_blocker, set_workstream_state.\n- progress_read: Acknowledge everything up to input.snapshotCursor (required — take it from a progress_list or progress_status response) as read. Returns a revision receipt, not entries.\n- progress_export: Deterministic Markdown snapshot. input.operation=preview renders it and writes nothing; operation=write persists progress.md and needs snapshotId, snapshotTimeMs, replace, expectedContent.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read, progress_export" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove)" },
@@ -1145,7 +1175,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "ui",
-            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound.\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
+            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound.\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- A project outcome — a milestone, a decision, a discovery, a blocker — belongs to the `progress` tool, which records it AND shows a toast. `ui action=toast` is the transient half only: it says something happened and keeps no record of it.\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: tab, toast, confirm, screenshot" },
                 "id": { "type": "string", "description": "Stable identifier for dedup — same id reuses existing tab (action=tab, required)" },
@@ -1237,9 +1267,10 @@ fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value {
 
     let search_desc = format!(
         "Find relevant TUICommander tools by natural-language query. Returns a BM25-ranked \
-         list of tool names + one-line summaries. Use this before calling any tool to discover \
-         what is available, then call `get_tool_schema` for the full input schema of the tool \
-         you want to use.\n\n\
+         list of tool names + one-line summaries. Use it to discover a tool you do not yet \
+         know, then call `get_tool_schema` for its full input schema. A tool already on your \
+         list, or one whose schema you fetched earlier on this connection, is callable \
+         without searching for it again.\n\n\
          Domains available: terminal pane sessions (tmux replacement), AI agent orchestration + \
          messaging, repos/GitHub PRs/worktrees, UI tabs + notifications, plugin authoring \
          reference, app config, diagnostics{upstream_suffix}."
@@ -1271,7 +1302,7 @@ fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value {
         },
         {
             "name": "call_tool",
-            "description": "Invoke a TUICommander tool by name with arguments. Dispatches to native tools or upstream-proxied tools (`{upstream}__{tool}`). The arguments object must match the tool's inputSchema — fetch it via `get_tool_schema` first.\n\nFlow: `search_tools(query=\"…\")` → pick a name → `get_tool_schema(tool_name=…)` → `call_tool(tool_name=…, arguments={…})`.",
+            "description": "Invoke a TUICommander tool by name with arguments. Dispatches to native tools or upstream-proxied tools (`{upstream}__{tool}`). The arguments object must match the tool's inputSchema.\n\nFirst time with a tool: `search_tools(query=\"…\")` → pick a name → `get_tool_schema(tool_name=…)` → `call_tool(tool_name=…, arguments={…})`. After that, call it straight away with the schema you already have; re-fetch it only after a `notifications/tools/list_changed`, which is the one thing that can move it. Never skip discovery for a name you have NOT seen from `search_tools` or `get_tool_schema`: an invented name is a failed call, not a lucky guess.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -3507,6 +3538,64 @@ fn resolve_effective_spawn_cwd(
         })
 }
 
+/// Build the `agent action=spawn` response.
+///
+/// Split out of the spawn handler so its size can be measured without launching
+/// a process — see `mcp_instruction_surface_bytes_stay_within_budget`. Every
+/// field here is a function of the ids passed in: the response carries no static
+/// prose block, because the operational workflow it would otherwise repeat lives
+/// in `agent(register).workflow`, which the caller has already read.
+fn spawn_response(
+    session_id: &str,
+    task_id: &str,
+    peer_name: &str,
+    spawn_ts: u64,
+    caller_tuic: Option<&str>,
+    codex_wrapper_warning: Option<&str>,
+) -> serde_json::Value {
+    let mut response = serde_json::json!({
+        "session_id": session_id,
+        "task_id": task_id,
+        "poll_interval_ms": TASK_POLL_INTERVAL_MS,
+        "name": peer_name,
+        // No `peer_registered` / `communication_ready` / `send_to`: the
+        // first two are constant for every successful spawn, and the third
+        // repeated `session_id` verbatim. `parent_session_id` (or the
+        // `communication_warning` in its place) already reports whether
+        // child-to-parent messaging is available.
+        "server_ts": spawn_ts,
+        "monitor_with": format!("session(action=output, session_id={session_id}) — anomaly fallback only if the child fails to send its result"),
+        "status_with": format!("session(action=status, session_id={session_id})"),
+        "wait_with": format!("session(action=wait, session_id={session_id}, until=idle) — blocks instead of polling"),
+    });
+    if let Some(warning) = codex_wrapper_warning
+        && let Some(obj) = response.as_object_mut()
+    {
+        obj.insert("launch_warning".to_string(), serde_json::json!(warning));
+    }
+    if let Some(parent) = caller_tuic
+        && let Some(obj) = response.as_object_mut()
+    {
+        obj.insert("parent_session_id".to_string(), serde_json::json!(parent));
+        obj.insert(
+            "peer_monitor_with".to_string(),
+            serde_json::json!(format!("agent(action=inbox, since={spawn_ts})")),
+        );
+        obj.insert(
+            "peer_wait_with".to_string(),
+            serde_json::json!(format!(
+                "agent(action=wait, since={spawn_ts}) — blocks until mail; lifecycle mail contains state only, and the child must send its task result"
+            )),
+        );
+    } else if let Some(obj) = response.as_object_mut() {
+        obj.insert(
+            "communication_warning".to_string(),
+            serde_json::json!("Caller has no bound TUIC peer identity; child can receive messages, but child-to-parent messaging is unavailable until the parent calls agent action=register. A headerless caller may omit tuic_session."),
+        );
+    }
+    response
+}
+
 #[cfg(test)]
 fn handle_agent(
     state: &Arc<AppState>,
@@ -3959,50 +4048,14 @@ fn handle_agent_with_parent_cwd(
                 Some(&session_id),
             );
 
-            let mut response = serde_json::json!({
-                "session_id": session_id,
-                "task_id": task_id,
-                "poll_interval_ms": TASK_POLL_INTERVAL_MS,
-                "name": peer_name,
-                // No `peer_registered` / `communication_ready` / `send_to`: the
-                // first two are constant for every successful spawn, and the third
-                // repeated `session_id` verbatim. `parent_session_id` (or the
-                // `communication_warning` in its place) already reports whether
-                // child-to-parent messaging is available.
-                "server_ts": spawn_ts,
-                "monitor_with": format!("session(action=output, session_id={session_id}) — anomaly fallback only if the child fails to send its result"),
-                "status_with": format!("session(action=status, session_id={session_id})"),
-                "wait_with": format!("session(action=wait, session_id={session_id}, until=idle) — blocks instead of polling"),
-            });
-            if let Some(warning) = codex_wrapper_warning
-                && let Some(obj) = response.as_object_mut()
-            {
-                obj.insert("launch_warning".to_string(), serde_json::json!(warning));
-            }
-            if caller_tuic.is_some()
-                && let Some(obj) = response.as_object_mut()
-            {
-                obj.insert(
-                    "parent_session_id".to_string(),
-                    serde_json::json!(caller_tuic),
-                );
-                obj.insert(
-                    "peer_monitor_with".to_string(),
-                    serde_json::json!(format!("agent(action=inbox, since={spawn_ts})")),
-                );
-                obj.insert(
-                    "peer_wait_with".to_string(),
-                    serde_json::json!(format!(
-                        "agent(action=wait, since={spawn_ts}) — blocks until mail; lifecycle mail contains state only, and the child must send its task result"
-                    )),
-                );
-            } else if let Some(obj) = response.as_object_mut() {
-                obj.insert(
-                    "communication_warning".to_string(),
-                    serde_json::json!("Caller has no bound TUIC peer identity; child can receive messages, but child-to-parent messaging is unavailable until the parent calls agent action=register. A headerless caller may omit tuic_session."),
-                );
-            }
-            response
+            spawn_response(
+                &session_id,
+                &task_id,
+                &peer_name,
+                spawn_ts,
+                caller_tuic.as_deref(),
+                codex_wrapper_warning.as_deref(),
+            )
         }
         "stats" => {
             let stats = state.orchestrator_stats();
@@ -12843,31 +12896,37 @@ mod tests {
 
     // ---- build_mcp_instructions collapse mode (story 1081) -------------------
 
+    /// Classic mode keeps a `## Tools` section, but it holds cross-tool rules
+    /// rather than a catalogue — `tools/list` already carries every name and
+    /// action in the same turn. It must also stay free of the meta-tool names,
+    /// which are not callable in this mode.
     #[test]
-    fn instructions_collapse_off_lists_individual_tools() {
+    fn instructions_collapse_off_points_at_tool_descriptions() {
         let state = test_state();
         let out = build_mcp_instructions(&state, None);
-        // Tools bullets + concrete workflow references are present.
         assert!(out.contains("## Tools\n"), "expected classic Tools section");
         assert!(
-            out.contains("- `session` ("),
-            "expected session bullet in tools list"
+            out.contains("Each tool's own description carries its actions and rules"),
+            "classic mode must delegate to the tool descriptions"
         );
-        assert!(out.contains("## Workflow"), "expected Workflow section");
         assert!(!out.contains("## Tools — Lazy Discovery"));
         assert!(!out.contains("search_tools"));
     }
 
+    /// The ack rule is protocol and belongs to the instructions: no tool
+    /// description can state a rule about the *first assistant message*.
+    ///
+    /// Retargeted for #754-affa: the swarm/lifecycle/reporting assertions that
+    /// used to sit here moved to `instructions_do_not_repeat_what_tool_descriptions_already_say`,
+    /// which asserts them on the `agent` description — the surface that reaches
+    /// clients ignoring `instructions` too.
     #[test]
-    fn instructions_scope_ack_to_connection_and_use_agent_session_primitives() {
+    fn instructions_scope_ack_to_the_connection() {
         let state = test_state();
         let out = build_mcp_instructions(&state, None);
         assert!(out.contains("exactly once per MCP connection or reconnect"));
         assert!(out.contains("Never repeat it on each conversational turn"));
-        assert!(out.contains("There is no separate `swarm` action"));
         assert!(!out.contains("Aliases \"swarm\""));
-        assert!(out.contains("Lifecycle notifications carry state only"));
-        assert!(out.contains("workers must report results with `agent action=send`"));
     }
 
     #[test]
@@ -12911,6 +12970,327 @@ mod tests {
         ));
         assert!(!classic.contains("text then"));
         assert!(!collapsed.contains("status after"));
+    }
+
+    // ---- Instruction de-duplication (#754-affa) ------------------------------
+
+    fn tool_description<'a>(defs: &'a serde_json::Value, name: &str) -> &'a str {
+        let def = defs
+            .as_array()
+            .expect("tool definitions are an array")
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("tool '{name}' missing"));
+        def["description"]
+            .as_str()
+            .unwrap_or_else(|| panic!("tool '{name}' has no description"))
+    }
+
+    /// There are two instruction surfaces and they are not equals. Every client
+    /// receives the tool descriptions; a client such as Codex never surfaces
+    /// initialize `instructions`. So a rule that a tool description already
+    /// carries must not be repeated in the instructions — the client that reads
+    /// both pays for it twice, and the client that reads one must not be the one
+    /// left without it.
+    #[test]
+    fn instructions_do_not_repeat_what_tool_descriptions_already_say() {
+        let state = test_state();
+        let classic = build_mcp_instructions_for_mode(&state, None, false);
+        let defs = native_tool_definitions();
+
+        // 1. The tool catalogue is `tools/list` restated in prose.
+        for bullet in [
+            "- `session` (",
+            "- `agent` (",
+            "- `task` (",
+            "- `repo` (",
+            "- `ui` (",
+            "- `plugin_dev_guide`:",
+        ] {
+            assert!(
+                !classic.contains(bullet),
+                "instructions must not restate the tool catalogue: {bullet}"
+            );
+        }
+
+        // 2. The Workflow section restated the `agent` description's primer …
+        assert!(!classic.contains("## Workflow"));
+        let agent = tool_description(&defs, "agent");
+        assert!(agent.contains("There is no separate swarm action"));
+        assert!(agent.contains("Lifecycle notifications carry state only"));
+        assert!(agent.contains("Every worker must report task output or blockers with send"));
+
+        // 3. … and the UI-feedback line restated the `ui` description's Use: block.
+        assert!(!classic.contains("**UI feedback:**"));
+        let ui = tool_description(&defs, "ui");
+        assert!(ui.contains("confirm BEFORE destructive ops"));
+        assert!(ui.contains(">20-line structured output"));
+        assert!(ui.contains("screenshot to visually verify"));
+    }
+
+    /// The orchestrator role, its wake capability and the identity rules used to
+    /// be instructions-only, which left them invisible to exactly the clients
+    /// that most need them (a headerless caller reading no instructions cannot
+    /// learn that `register` is how it gets an identity at all).
+    #[test]
+    fn agent_description_owns_the_orchestrator_role_and_wake_contract() {
+        let defs = native_tool_definitions();
+        let agent = tool_description(&defs, "agent");
+        assert!(
+            agent.contains("orchestrator=true"),
+            "agent description must say how the role is declared"
+        );
+        assert!(
+            agent.contains("spawning a child never infers it"),
+            "agent description must deny role inference from spawn"
+        );
+        assert!(
+            agent.contains("mail_wake=managed_pty_lifecycle"),
+            "agent description must name the wake capability field"
+        );
+        assert!(
+            agent.contains("headerless external caller calls register without tuic_session"),
+            "agent description must keep the identity rule"
+        );
+
+        let state = test_state();
+        let classic = build_mcp_instructions_for_mode(&state, None, false);
+        assert!(
+            !classic.contains("**Orchestrator role:**"),
+            "the orchestrator role moved to the agent description; it must not be repeated"
+        );
+        assert!(
+            !classic.contains("- **Identity:**"),
+            "the identity rule moved to the agent description; it must not be repeated"
+        );
+    }
+
+    /// A recorded project outcome and a transient notification are different
+    /// things. `progress` persists and toasts; `ui action=toast` only toasts.
+    /// The `ui` description is where a caller reaching for a toast finds out.
+    #[test]
+    fn ui_description_routes_semantic_outcomes_to_the_progress_tool() {
+        let defs = native_tool_definitions();
+        let ui = tool_description(&defs, "ui");
+        assert!(
+            ui.contains("`progress` tool"),
+            "ui description must name the progress tool"
+        );
+        assert!(
+            ui.contains("A project outcome"),
+            "ui description must say which outcomes belong to progress"
+        );
+        assert!(
+            ui.contains("keeps no record of it"),
+            "ui description must say what a toast does not do"
+        );
+    }
+
+    /// AC3: discovery must not be demanded for a definition the caller already
+    /// holds, and must not be skipped for a name it has never seen.
+    #[test]
+    fn meta_tools_do_not_demand_a_schema_the_caller_already_has() {
+        let state = test_state();
+        let defs = meta_tool_definitions(&state);
+
+        let call = tool_description(&defs, "call_tool");
+        assert!(
+            call.contains("call it straight away with the schema you already have"),
+            "call_tool must allow reusing a known schema"
+        );
+        assert!(
+            call.contains("notifications/tools/list_changed"),
+            "call_tool must name the one event that invalidates a known schema"
+        );
+        assert!(
+            call.contains("Never skip discovery for a name you have NOT seen"),
+            "call_tool must still forbid inventing tool names"
+        );
+        assert!(
+            !call.contains("fetch it via `get_tool_schema` first"),
+            "the unconditional pre-fetch instruction must be gone"
+        );
+
+        let search = tool_description(&defs, "search_tools");
+        assert!(
+            search.contains("without searching for it again"),
+            "search_tools must exempt a tool the caller already knows"
+        );
+        assert!(
+            !search.contains("before calling any tool"),
+            "search_tools must not demand a search before every call"
+        );
+    }
+
+    /// AC1: reproducible size measurement of every instruction surface an MCP
+    /// client receives.
+    ///
+    /// Reproducible because nothing here reads the host: the instructions
+    /// render from an explicit [`InstructionContext`] instead of the user's
+    /// `repositories.json` and live PTY list, and the spawn response renders
+    /// from fixed ids instead of a launched process.
+    ///
+    /// The upstream dimension measures TUIC's own contribution only — injected
+    /// upstream tools carry stub descriptions, and a real upstream's payload is
+    /// its own bytes, not ours. What the numbers show is that those bytes leave
+    /// `tools/list` entirely under collapse.
+    ///
+    /// Set `TUIC_MCP_SURFACE_DUMP=<path>` to write every measured string out for
+    /// out-of-band tokenizer counts (see docs/backend/mcp-http.md).
+    #[test]
+    fn mcp_instruction_surface_bytes_stay_within_budget() {
+        let state = test_state();
+
+        let empty = InstructionContext {
+            repos: Vec::new(),
+            sessions: Vec::new(),
+            peer_count: 0,
+        };
+        let loaded = InstructionContext {
+            repos: (0..8)
+                .map(|i| (format!("repo-{i}"), format!("/Users/dev/src/repo-{i}")))
+                .collect(),
+            sessions: (0..12)
+                .map(|i| {
+                    (
+                        format!("sess{i:04}"),
+                        format!("/Users/dev/src/repo-{i}"),
+                        format!("feature/branch-{i}"),
+                    )
+                })
+                .collect(),
+            peer_count: 6,
+        };
+
+        let mut dump = serde_json::Map::new();
+        let mut record = |key: &str, text: String| {
+            let bytes = text.len();
+            dump.insert(key.to_string(), serde_json::json!(text));
+            bytes
+        };
+
+        let markers = (true, true);
+        let instructions_classic_empty = record(
+            "instructions.classic.empty",
+            render_mcp_instructions(None, false, markers, &empty),
+        );
+        let instructions_classic_loaded = record(
+            "instructions.classic.loaded",
+            render_mcp_instructions(None, false, markers, &loaded),
+        );
+        let instructions_collapsed_empty = record(
+            "instructions.collapsed.empty",
+            render_mcp_instructions(None, true, markers, &empty),
+        );
+        record(
+            "instructions.collapsed.loaded",
+            render_mcp_instructions(None, true, markers, &loaded),
+        );
+
+        // Discovered schemas: what `get_tool_schema` hands back, per tool.
+        for tool in native_tool_definitions().as_array().unwrap() {
+            let name = tool["name"].as_str().unwrap().to_string();
+            record(
+                &format!("schema.{name}"),
+                serde_json::to_string(tool).unwrap(),
+            );
+        }
+
+        // register response — the other place the workflow prose lives.
+        let register = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "name": "surface"}),
+            Some("surface-register"),
+        );
+        let register_bytes = record(
+            "response.register",
+            serde_json::to_string(&register).unwrap(),
+        );
+
+        // spawn response — no static prose block, so it stays small by design.
+        let spawn_bytes = record(
+            "response.spawn",
+            serde_json::to_string(&spawn_response(
+                "11111111-2222-3333-4444-555555555555",
+                "66666666-7777-8888-9999-000000000000",
+                "worker",
+                1_700_000_000_000,
+                Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+                None,
+            ))
+            .unwrap(),
+        );
+
+        // tools/list, with and without upstreams, classic and collapsed.
+        let tools_classic = record(
+            "tools.classic.no_upstreams",
+            serde_json::to_string(&merged_tool_definitions_for_mode(&state, None, false)).unwrap(),
+        );
+        let tools_collapsed = record(
+            "tools.collapsed.no_upstreams",
+            serde_json::to_string(&merged_tool_definitions_for_mode(&state, None, true)).unwrap(),
+        );
+        state
+            .mcp
+            .upstream_registry
+            .inject_ready_upstream("alpha", &["one", "two", "three"]);
+        state
+            .mcp
+            .upstream_registry
+            .inject_ready_upstream("beta", &["four", "five"]);
+        let tools_classic_upstreams = record(
+            "tools.classic.with_upstreams",
+            serde_json::to_string(&merged_tool_definitions_for_mode(&state, None, false)).unwrap(),
+        );
+        let tools_collapsed_upstreams = record(
+            "tools.collapsed.with_upstreams",
+            serde_json::to_string(&merged_tool_definitions_for_mode(&state, None, true)).unwrap(),
+        );
+
+        if let Ok(path) = std::env::var("TUIC_MCP_SURFACE_DUMP") {
+            std::fs::write(
+                &path,
+                serde_json::to_string_pretty(&serde_json::Value::Object(dump.clone())).unwrap(),
+            )
+            .expect("write surface dump");
+        }
+
+        let measured: Vec<String> = dump
+            .iter()
+            .map(|(k, v)| format!("{k}={}", v.as_str().unwrap().len()))
+            .collect();
+        let measured = measured.join(" ");
+
+        // Budgets are regression guards on the surfaces this story shrank, not
+        // targets. Each is the measured value rounded up to the next 64 bytes.
+        assert!(
+            instructions_classic_empty <= 1600,
+            "classic instructions grew past their budget — {measured}"
+        );
+        assert!(
+            instructions_collapsed_empty <= 1600,
+            "collapsed instructions grew past their budget — {measured}"
+        );
+        assert!(
+            instructions_classic_loaded - instructions_classic_empty <= 1600,
+            "the dynamic repo/session block grew past its budget — {measured}"
+        );
+        assert!(
+            tools_collapsed < tools_classic / 5,
+            "collapse must stay a >=5x reduction — {measured}"
+        );
+        assert!(
+            tools_collapsed_upstreams < tools_classic_upstreams / 5,
+            "collapse must stay a >=5x reduction with upstreams — {measured}"
+        );
+        assert!(
+            spawn_bytes <= 832,
+            "spawn response must stay free of static prose — {measured}"
+        );
+        assert!(
+            register_bytes <= 4608,
+            "register response grew past its budget — {measured}"
+        );
     }
 
     // ---- Swarm Layer 4: MCP tool descriptions (#1165-b124) -------------------
@@ -13015,26 +13395,98 @@ mod tests {
         );
     }
 
+    /// Monitoring guidance is delegated, not dropped.
+    ///
+    /// Retargeted for #754-affa. The original assertion was
+    /// `instructions.contains("status")`, which the removed tool catalogue
+    /// happened to satisfy — a substring that loose cannot tell "documented"
+    /// from "coincidence". The invariant worth keeping is that an orchestrator
+    /// reaching for the observation path still finds it, on the surface that
+    /// every client receives.
     #[test]
-    fn instructions_include_session_status_for_monitoring() {
+    fn monitoring_guidance_lives_in_the_tool_descriptions() {
         let state = test_state();
         let out = build_mcp_instructions(&state, None);
         assert!(
-            out.contains("status"),
-            "instructions must mention session status for multi-agent monitoring"
+            out.contains("Each tool's own description carries its actions and rules"),
+            "instructions must send the reader to the descriptions"
+        );
+
+        let defs = native_tool_definitions();
+        let session = tool_description(&defs, "session");
+        let agent = tool_description(&defs, "agent");
+        assert!(
+            session.contains("- status:"),
+            "session description must document the status action"
+        );
+        assert!(
+            agent.contains("agent action=wait") || agent.contains("wait: Block"),
+            "agent description must document the blocking wait"
+        );
+        assert!(
+            agent.contains("inbox:"),
+            "agent description must document inbox"
         );
     }
 
+    /// Every action a tool advertises must be documented by the tool itself.
+    ///
+    /// Generalised for #754-affa from `instructions_tools_and_definitions_in_sync_for_session_actions`,
+    /// which checked one tool against the initialize instructions. The
+    /// instructions are the surface a client may never read (Codex ignores
+    /// them); the description is the surface every client receives, so that is
+    /// where the action list has to agree with the schema. This is the gate
+    /// that caught nine `progress_*` actions advertised by `REPO_ACTIONS` and
+    /// by the `repo` schema enum while the description body named none of them.
     #[test]
-    fn instructions_tools_and_definitions_in_sync_for_session_actions() {
-        // build_mcp_instructions session bullet must list the same actions as SESSION_ACTIONS.
-        let state = test_state();
-        let out = build_mcp_instructions(&state, None);
-        for action in SESSION_ACTIONS.split(", ") {
-            assert!(
-                out.contains(action),
-                "instructions must mention session action '{action}'"
+    fn every_documented_action_constant_matches_schema_and_description() {
+        let defs = native_tool_definitions();
+
+        // (tool, action constant, description documents each action)
+        // `debug` is the one exemption: its description points at `action=help`,
+        // which returns the full usage guide, so duplicating five action bullets
+        // into a tool that is disabled by default would buy nothing.
+        let cases: [(&str, &str, bool); 7] = [
+            ("session", SESSION_ACTIONS, true),
+            ("agent", AGENT_ACTIONS, true),
+            ("task", TASK_ACTIONS, true),
+            ("repo", REPO_ACTIONS, true),
+            ("ui", UI_ACTIONS, true),
+            ("config", CONFIG_ACTIONS, true),
+            ("debug", DEBUG_ACTIONS, false),
+        ];
+
+        for (tool, actions, documented) in cases {
+            let def = defs
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == tool)
+                .unwrap_or_else(|| panic!("native tool '{tool}' missing"));
+            let enum_desc = def["inputSchema"]["properties"]["action"]["description"]
+                .as_str()
+                .unwrap_or_else(|| panic!("tool '{tool}' has no action description"));
+            let schema_actions: std::collections::BTreeSet<&str> = enum_desc
+                .strip_prefix("One of: ")
+                .unwrap_or_else(|| panic!("tool '{tool}' action description must start with 'One of: ', got: {enum_desc}"))
+                .split(", ")
+                .collect();
+            let constant_actions: std::collections::BTreeSet<&str> = actions.split(", ").collect();
+            assert_eq!(
+                schema_actions, constant_actions,
+                "tool '{tool}': schema enum and its action constant disagree"
             );
+
+            if !documented {
+                continue;
+            }
+            let description = def["description"].as_str().unwrap();
+            for action in &constant_actions {
+                assert!(
+                    description.contains(&format!("{action}:")),
+                    "tool '{tool}' advertises action '{action}' but its description never documents it"
+                );
+            }
         }
     }
 
@@ -17088,8 +17540,10 @@ mod tests {
             );
         }
 
-        let mut session_state = crate::state::SessionState::default();
-        session_state.background_work = true;
+        let session_state = crate::state::SessionState {
+            background_work: true,
+            ..Default::default()
+        };
         state
             .session_maps
             .session_states

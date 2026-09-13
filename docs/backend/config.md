@@ -223,7 +223,7 @@ needs an app restart is what that costs.
 | `default_font_size` | `u16` | `13` | Default font size for reset |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
-| `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Discovered native schemas are unchanged: managed commands still use one `call_tool` invocation of `session action=submit` and receive the bounded receipt in that response. Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools) |
+| `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Discovered native schemas are unchanged: managed commands still use one `call_tool` invocation of `session action=submit` and receive the bounded receipt in that response. Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools). Size figures for both surfaces, and how to reproduce them, are in [Measuring the surfaces](mcp-http.md#measuring-the-surfaces) — the reduction is measured, never estimated |
 | `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
 
 Remote-access secrets under `services` are not persisted in plaintext
@@ -881,12 +881,14 @@ A `.tuic.json` file in the repository root provides team-shareable settings. It 
 
 ## Progress Storage (`.tuic/progress.sqlite3`)
 
-**Module:** `src-tauri/src/progress/` (`store.rs`, `ownership.rs`, `model.rs`)
+**Module:** `src-tauri/src/progress/` (`store.rs`, `ownership.rs`, `model.rs`,
+`export.rs`)
 
 Project-owned Rust history stores reported `started`, `milestone`, `blocked`,
 and `done` outcomes plus derived workstream state independently of sessions and
-workspaces. Story `749-06ff` provides storage only; the MCP/Tauri/HTTP surface is
-added by the following plan step.
+workspaces. The MCP `repo` actions, Tauri commands, and HTTP routes share one
+service layer (`service.rs`), which resolves the owning project before it opens
+the store.
 
 The database lives at `<owning-project-root>/.tuic/progress.sqlite3` with its
 SQLite sidecars. Ownership resolution starts from an authoritative registered
@@ -911,10 +913,23 @@ any WAL/SHM files byte-for-byte under unique `.corrupt-<uuid>` names, creates a
 validated empty replacement, and still returns an error so the caller must
 retry rather than mistake the replacement for the original history.
 
-On first open, the store adds its database, sidecars, recovery lock, and corrupt
-backup pattern to the repository-local `.git/info/exclude`, never tracked
-`.gitignore`. Both the repository watcher and content index honor that exclude,
-so Progress persistence does not emit repository changes or trigger indexing.
+On first open, the store adds its database, sidecars, recovery lock, corrupt
+backup pattern, and the Markdown export lock (`.tuic/progress-export.lock`) to
+the repository-local `.git/info/exclude`, never tracked `.gitignore`. Both the
+repository watcher and content index honor that exclude, so Progress persistence
+does not emit repository changes or trigger indexing. The exported
+`progress.md` is deliberately outside that contract: it is the user's artifact
+and must reach the working tree.
+
+The Markdown export (`export.rs`) reads one committed database snapshot and
+identifies it as `sha256:<digest>` over revision, snapshot time, options, and
+the rendered Markdown. Preview returns that identity with the rendered text and
+any existing target content; write repeats the snapshot, refuses a changed
+identity or a changed/removed target, refuses symlink and non-regular targets,
+and replaces the file atomically through a same-directory temporary file. The
+export never writes to the database, and it never stages, commits, or pushes:
+the only Git interaction it inherits is the exclude registration every store
+open performs.
 
 ## Additional Commands
 

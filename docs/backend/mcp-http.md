@@ -396,7 +396,7 @@ When `collapse_tools: true` in `config.json` (or via Settings > Services & MCP >
 | `get_tool_schema` | Returns the full `{name, description, inputSchema}` for a specific tool |
 | `call_tool` | Dispatches to the named tool — routes to the native handler or `proxy_tool_call` for `{upstream}__{tool}` names |
 
-Rationale: a cold tool list of 100+ tools costs ~35k tokens in every agent turn; the compact surface costs a small fixed budget and the agent fetches other schemas on demand. `progress` stays direct so routine reporting needs no search/schema preflight. Toggling `collapse_tools` fires `notifications/tools/list_changed` so connected clients refresh their tool cache.
+Rationale, measured 2026-09-13 on the running desktop instance with 190 tools connected (see [Measuring the surfaces](#measuring-the-surfaces) for the method): the full list is 154,117 bytes / 35,104 tokens in every agent turn, against 2,810 bytes / 615 tokens for the collapsed surface — which does not grow with the upstream count, because the upstream tools are no longer in the list. The agent fetches other schemas on demand. `progress` stays direct so routine reporting needs no search/schema preflight. Toggling `collapse_tools` fires `notifications/tools/list_changed` so connected clients refresh their tool cache.
 
 TUIC also selects this three-tool surface automatically for an individual Grok
 session when `initialize.clientInfo.name` starts with `grok-shell-`. Grok accepts
@@ -414,6 +414,129 @@ The MCP instructions string returned by `initialize` (`build_mcp_instructions`) 
 The TUIC connection acknowledgment in those instructions is emitted exactly once per MCP connection or reconnect, never once per conversational turn. TUIC protocol context remains in initialize instructions and native core-tool descriptions only; upstream tool descriptions are preserved instead of receiving a repeated TUIC preamble.
 When intent markers are enabled for the connecting agent, initialize instructions require `intent:` at the start of every user task and on material phase changes. The backend stores that dynamic intent independently from the spawn-time PTY description and the last submitted prompt.
 
+### Two instruction surfaces, and which one owns a rule
+
+TUIC teaches a connecting agent through two surfaces, and they do not reach the
+same clients:
+
+| Surface | Who receives it | Owns |
+|---|---|---|
+| `initialize.instructions` (`render_mcp_instructions`) | clients that surface instructions. **Codex does not** | the wire protocol markers, rules about tools that are *not* ours, live state |
+| tool `description` (`native_tool_definitions`) | **every** client, on every `tools/list` | everything about that tool: its actions, its arguments, its semantics |
+
+The rule that follows: a statement a tool description carries is not repeated in
+the instructions. A client reading both paid for it twice, and — worse — the
+client reading only descriptions was the one going without. That is the direction
+story `078-8b2e` set, and `instructions_do_not_repeat_what_tool_descriptions_already_say`
+now enforces it in both directions, asserting the removal *and* the surviving
+copy. Three things moved out of the instructions this way: the per-tool
+catalogue (`tools/list` already carries it in the same turn), the `## Workflow`
+section (the `agent` description's five-line primer restated), and the
+`**UI feedback:**` line (the `ui` description's `Use:` block restated). The
+orchestrator role and its `mail_wake` contract moved *into* the `agent`
+description, where a headerless caller can actually find them.
+
+Two rules stay in the instructions on purpose and are not duplication:
+
+- **Worktrees** — it forbids `git worktree add/remove`, a tool that is not ours.
+  No TUIC tool description is a reliable place to ban a shell command.
+- **Submit** — it spans two calls (text, then Enter) and a polling loop, so it
+  belongs to no single action. Agents split submits until this line existed; it
+  is pinned byte-exact in both modes by
+  `initialize_instructions_pin_the_one_call_submit_rule_in_both_modes`.
+
+There is no "full prompt" mode on the server and none is planned: the long-form
+operator guidance lives in this document, which is the optional surface a human
+opts into, not a per-turn cost every agent pays.
+
+#### Measuring the surfaces
+
+`mcp_instruction_surface_bytes_stay_within_budget` measures every surface a
+client receives and asserts a ceiling on each. It is reproducible because
+nothing in it reads the host: `render_mcp_instructions` takes an explicit
+`InstructionContext` (repos, sessions, peer count) instead of reading the user's
+`repositories.json` and live PTY map, and `spawn_response` renders from fixed
+ids instead of a launched process.
+
+```bash
+# byte counts + the dump
+TUIC_MCP_SURFACE_DUMP=$PWD/.tmp/mcp-surface.json \
+  cargo nextest run --lib -E 'test(mcp_instruction_surface_bytes)'
+
+# token counts from the same dump
+python3 -m venv /tmp/tokvenv && /tmp/tokvenv/bin/pip install tiktoken
+/tmp/tokvenv/bin/python - <<'EOF'
+import json, tiktoken
+enc = tiktoken.get_encoding("o200k_base")
+for k, v in json.load(open(".tmp/mcp-surface.json")).items():
+    print("%-34s %7d bytes %7d tokens" % (k, len(v.encode()), len(enc.encode(v))))
+EOF
+```
+
+**Tokenizer:** tiktoken 0.14.0, encoding `o200k_base`. It is a GPT tokenizer and
+therefore a *proxy* — Anthropic publishes no offline tokenizer, so a Claude token
+count cannot be produced here. Bytes are exact; treat the token column as an
+order-of-magnitude figure and never quote it as a Claude cost.
+
+**Deployed baseline** — measured 2026-09-13 against the running desktop instance
+(TUICommander v1.7.7, `GET /mcp/instructions` and `POST /mcp` `tools/list` on
+`localhost:9876`), 16 repos, 28 sessions, 26 peers, 2 upstream servers:
+
+| Surface | Bytes | Tokens (o200k_base) |
+|---|---:|---:|
+| instructions, static prose | 3,525 | 891 |
+| instructions, dynamic repos + sessions | 3,057 | 1,178 |
+| instructions, total | 6,582 | 2,069 |
+| `tools/list`, 190 tools | 154,117 | 35,104 |
+| `tools/list`, 6 native tools only | 21,990 | 5,127 |
+
+Two things that baseline settles. The `~35k tokens` figure quoted for the
+uncollapsed tool list is real, not folklore — 35,104 measured. And the static
+prose is *not* where the instructions grew: at 891 tokens it still fits the
+1,000-token budget story `1179-1cf9` set, while the dynamic repo/session block
+that no deduplication can touch is now the larger half at 1,178. Read any
+claimed saving against that split before believing it.
+
+**Checkout measurement, before and after the deduplication** — same fixture both
+sides (`test_state`, which leaves `disabled_native_tools` empty, so its classic
+figure covers all nine native tools where production hides `config` and `debug`);
+`.empty` is zero repos/sessions/peers, `.loaded` is 8 repos, 12 sessions, 6 peers:
+
+| Surface | Before (B) | After (B) | Δ | After (tokens) |
+|---|---:|---:|---:|---:|
+| instructions, classic, empty | 3,510 | 1,373 | −2,137 | 334 |
+| instructions, classic, loaded | 4,497 | 2,445 | −2,052 | 738 |
+| instructions, collapsed, empty | 2,300 | 1,417 | −883 | 345 |
+| instructions, collapsed, loaded | 3,287 | 2,489 | −798 | 749 |
+| `schema.repo` | 2,626 | 4,075 | **+1,449** | 899 |
+| `schema.agent` | 6,721 | 7,013 | +292 | 1,627 |
+| `schema.ui` | 3,444 | 3,689 | +245 | 889 |
+| `schema.session` | 5,105 | 5,105 | 0 | 1,219 |
+| `response.register` | 2,882 | 2,882 | 0 | 668 |
+| `response.spawn` | 815 | 815 | 0 | 244 |
+| `tools/list`, classic | 22,423 | 24,409 | +1,986 | 5,685 |
+| `tools/list`, collapsed | 2,377 | 2,758 | +381 | 603 |
+
+And the number that actually matters — instructions plus `tools/list`, which is
+what one connection pays:
+
+| Mode | Before | After | Net |
+|---|---:|---:|---:|
+| classic | 25,933 B | 25,782 B | **−151 B (−0.6%)** |
+| collapsed | 4,677 B | 4,175 B | **−502 B (−10.7%)** |
+
+Read that honestly. The deduplication removed **2,137 bytes** of prose from the
+classic instructions, and about 590 of those bytes did not disappear — they moved
+into the `agent` and `ui` descriptions, where clients ignoring instructions can
+finally see them. Against that, the same change *added* **1,449 bytes** to the
+`repo` description for nine `progress_*` actions that were advertised and
+undocumented. Netting the two leaves classic essentially flat.
+
+So: the story's saving is real but it is not a size saving in classic mode. What
+it bought is that every rule now has exactly one owner, and that owner is the
+surface every client receives. Collapsed mode, where `tools/list` is four tools
+instead of nine, keeps a measurable 10.7%.
+
 ### MCP Native Tools
 
 Nine native tools, organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled. The enabled `progress` tool is additionally kept on the direct collapsed surface.
@@ -423,13 +546,23 @@ Nine native tools, organized by domain. Two (`config`, `debug`) are hidden by de
 | `session` | list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
-| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove | Enabled |
+| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read, progress_export | Enabled |
+| `progress` | *(no actions — records one outcome)* | Enabled |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
-| `config` | get, save | Disabled |
-| `debug` | agent_detection, logs, sessions, invoke_js | Disabled |
+| `config` | get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt | Disabled |
+| `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+
+This table is generated from the same `*_ACTIONS` constants the schemas use, and
+`every_documented_action_constant_matches_schema_and_description` keeps the three
+in step: the constant, the `action` enum in the schema, and a documenting line in
+the tool's own description. It is the gate that closed the gap where `REPO_ACTIONS`
+and the `repo` schema both advertised nine `progress_*` actions that the
+description body never mentioned — invisible to any client reading descriptions
+alone. `debug` is the single exemption: its description points at `action=help`,
+which returns the full usage guide.
 
 #### One session, three addresses
 
