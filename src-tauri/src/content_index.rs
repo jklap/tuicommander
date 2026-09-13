@@ -2221,7 +2221,7 @@ mod tests {
 
     #[test]
     fn a_pre_vendoring_snapshot_still_loads_and_searches_the_same() {
-        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
         let bytes = STANDARD
             .decode(PRE_FXHASH_VENDORING_SNAPSHOT_B64)
             .expect("fixture is valid base64");
