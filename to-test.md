@@ -12,6 +12,7 @@
 
 - [ ] [HUMAN] After restarting `make dev`, launch Claude from a TUIC shell and confirm the generated `--settings` hooks coexist with and execute alongside a same-event hook in global/project settings; confirm OSC 7770 busy/awaiting/idle reaches the tab.
 - [ ] [HUMAN] After restarting `make dev`, launch Codex 0.154, complete a turn, and confirm its payload contains `type`, `turn-id`, and `last-assistant-message`, OSC 7770 idle reaches the PTY, and the existing Codex `notify` command receives the unchanged JSON argument.
+- [ ] On a machine that has `fish` installed, run `cargo nextest run --lib -E 'test(shell_integration)'`. The `tests::launch` matrix runs the inject / skip-when-user-passed / setting-off cases against every shell it finds, but fish is absent from this Mac and from the `ubuntu-22.04` CI image, so the fish half of that matrix has never executed — the fish wrapper is covered only by the structural `fish_wrappers_cover_inject_user_override_skip_and_setting_off` grep. Nothing to change if it passes; delete this item.
 
 Features to test when TUICommander is more usable.
 
@@ -1661,6 +1662,19 @@ Both live in `src-tauri/src/config.rs` / `lib.rs` / `app_instance.rs`, so
 neither is loaded by Vite HMR — `make dev` must be restarted (or `make build`
 for release) before any of this is observable.
 
+**Items 1–3 are pre-staged; do not build the fixture by hand.** An isolated
+instance is already seeded at
+`<config dir>/instances/story763verify/repositories.json` with four rows: the
+real `tuicommander` repo, one legitimate-but-offline git repo that must
+survive, and two temp-root ghosts (`tuic-763-ghost-alpha`, `tuic-763-ghost-beta`)
+shaped exactly like the classifier's own `stale_temp_repo_json` fixture. Run
+`make test TUIC_APP_INSTANCE=story763verify` and check items 1–3 against it.
+A desktop-feature build is required: `src-tauri/target/debug/tuicommander` was
+last built without it and refuses to start the GUI, and `tuic-remote` serves no
+frontend at all (`src-tauri/src/mcp_http/static_files.rs:10-11`). A debug build
+reads `dist/` from disk first (`static_files.rs:14-17`), so the frontend itself
+needs no recompile.
+
 0. [x] A repository row is classified as missing only when filesystem metadata
    returns `NotFound`; permission, invalid-data, and other I/O errors preserve
    the row. _(verified: `config::tests::only_not_found_metadata_errors_prove_the_path_is_missing`
@@ -1727,14 +1741,60 @@ seconds and confirm the duplicate receipt produces no second event.
 
 ## Project Progress panel (story `752-8492`, 2026-09-13)
 
-- [ ] In an isolated `TUIC_APP_INSTANCE`, open Progress from the command palette
-      and bell in desktop-width browser mode. Verify long summaries, empty,
-      paused, unavailable-project, and error states.
-- [ ] Repeat at a narrow/mobile viewport; verify scope tabs, workstream controls,
-      provenance, pagination, and destructive confirmation text remain usable.
+Screenshots captured on an isolated instance (`TUIC_APP_INSTANCE=story752`,
+HTTP `:9877`) in browser mode live in `~/Gits/.tmp/story752/shots/`.
+
+- [x] Open Progress from the command palette in desktop-width browser mode.
+      _(verified: **Open Project Progress** opens `#progress-panel`; shot
+      `10-wide-populated-history.png`.)_
+- [x] Populated list at desktop width, with a long summary that wraps inside the
+      event body. _(verified: shot `10-wide-populated-history.png`, 395-character
+      summary over six lines, kind badge right-aligned, `Source`/`Correct`/`Move`
+      on the meta row.)_
+- [x] Empty state with projects present. _(verified: shot
+      `11-wide-empty-blockers.png` — **No progress matches this view.** under a
+      live state card, with `Delete (0)` and `Merge` correctly disabled.)_
+- [x] Paused state. _(verified: shot `12-wide-paused.png` — **Paused** in the
+      state card, **Pause** became **Resume**, history still listed.)_
+- [x] Unavailable project shown as an error beside working projects, not as a
+      project without progress. _(verified: shot `13-wide-error-unavailable.png`
+      — the project root was deleted underneath a running instance.)_
+- [x] Narrow viewport with data. _(verified: shot `14-narrow-populated.png` at
+      700x950 — scope row wraps, the tab strip scrolls, the error card and the
+      long summary stay readable.)_
+- [x] The bell exposes ONE aggregate Progress row that opens the panel.
+      _(verified: shot `15-bell-aggregate-row.png` — "Project Progress / 9 unread
+      changes across projects".)_
+- [x] A live report shows exactly one toast that names project and workstream and
+      carries an **Open Progress** action. _(verified: shot `03-live-toast.png`.)_
+- [x] An unavailable project shows a red card with its name and the reason, above
+      the list, instead of looking like a project without progress. _(verified:
+      shots `00-error-cards-ownership-bug-prefix.png`, `02-narrow-error-state.png` —
+      both captured before the two backend fixes, kept because they show what a
+      total backend outage looks like in this panel.)_
+- [x] The mobile Progress tab hosts the same panel full-bleed. _(verified: shot
+      `04-mobile-progress-tab.png`. NOTE: the mobile shell never calls
+      `repositoriesStore.hydrate()`, so the tab has no projects to scope and can
+      only show the empty state — the layout is proven, the data path is not.)_
+- [ ] Provenance, pagination (**Load older …**), and the destructive confirmation
+      text, which name the scope and the count and state that existing
+      `progress.md` exports are not deleted. Not captured: the seeded set was
+      below one page and the confirmations are native `window.confirm` dialogs,
+      which a screenshot of the page cannot show.
 - [ ] While the panel is open, report another event and verify the displayed
       watermark stays frozen, the later event remains unread, and exactly one
-  toast appears without a duplicate MESSAGES row.
+      toast appears without a duplicate MESSAGES row.
+
+## Project Progress ownership self-edge (story `752-8492`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+- [ ] Register any repository and open Progress. Every project must list its
+      events. Before the fix, `resolve_owning_project_in` read the repository's
+      own main workspace (`worktreePath` == repo root, no `parentRepoPath`) as an
+      ownership cycle, so `progress_status` and `progress_list` failed for every
+      registered project with
+      `project_unavailable: managed workspace ownership cycle` and the panel
+      showed nothing but red cards.
+- [ ] A genuine two-project ownership cycle must still fail closed.
 
 ## Project Progress export (story `753-9998`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
@@ -1746,6 +1806,29 @@ seconds and confirm the duplicate receipt produces no second event.
   Verify the stale write is refused and the external edit remains unchanged;
   preview again and confirm explicit replacement succeeds.
 
+## Project Progress end-to-end journey (story `755-35c8`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+The `/progress/*` routes are absent from the backend that is running now
+(a `GET /progress/status` on the live instance returns the SPA index page), so
+the whole journey needs a rebuilt instance.
+
+- [ ] In an isolated `TUIC_APP_INSTANCE`, register two projects. Report events
+      into two workstreams in each, including one `blocked`. Verify the panel
+      shows the right project state in the global scope and in each project
+      scope.
+- [ ] Restart the instance. Verify the history, the workstream states, the
+      active blockers, and the unread count all survive the restart.
+- [ ] Correct one event and rename one workstream. Report again with the OLD
+      workstream name and verify the event lands in the renamed workstream.
+- [ ] Pause one project, report into it, and verify the receipt says `paused`
+      and no event and no toast appear. Resume and verify the next report is
+      recorded with no backfill.
+- [ ] Clear one project. Verify its history, workstreams, and read state go
+      away, that collection is paused, and that an existing `progress.md` at
+      that project root is unchanged.
+- [ ] Preview and export `progress.md` in the remaining project and confirm the
+      Markdown matches the panel.
+
 ## Protocol-ranked agent state (story `745-8ff1`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
 - [ ] After restarting `make dev`, run an instrumented agent turn for longer
@@ -1753,3 +1836,72 @@ seconds and confirm the duplicate receipt produces no second event.
       the tab idle before the agent's protocol completion signal arrives.
 - [ ] Disable native/global status instrumentation for one agent and confirm
       its existing Ready-screen fallback still returns the tab to idle.
+
+## Vendored fxhash in the bm25 fork (story `758-ff0d`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+- [ ] Before restarting, note a repo you have searched recently — its content-index
+      snapshot on disk was written by the pre-vendoring binary. After the restart,
+      run a content search in that repo (`?` in the command palette) for a word you
+      know is in it. Results must appear immediately, with `GET :9876/logs` showing
+      the snapshot being restored and NOT `content index rebuilt` for that repo. An
+      empty result set with a successful restore is the exact failure the vendoring
+      had to avoid: the persisted `token.index` values are fxhash32 hashes, so a
+      drifted algorithm still decodes the file and then matches nothing.
+
+## Progress Markdown export (story `753-9998`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+Automated verification already covers the backend contract end to end (unit
+tests plus a live HTTP run against a rebuilt debug instance on `:9877`:
+preview → write → `progress_export_exists` → `progress_export_content_changed`
+with the human edit preserved). What is left is what HTTP cannot observe.
+
+- [ ] Open the Progress panel in the desktop app, pick one project, and check
+      the export card against `docs/frontend/STYLE_GUIDE.md`: the source-metadata
+      checkbox, the preview button, the revision line, and the scrolling
+      Markdown preview block.
+- [ ] Toggle "Include source metadata" while a preview is shown. The preview and
+      its export button must disappear, because that snapshot can no longer be
+      written.
+- [ ] Export once, then export again. The second run must ask for confirmation
+      before replacing the file, and the button must read `Replace progress.md`.
+- [ ] Edit `progress.md` by hand between the preview and the write, then write.
+      The panel must show `progress_export_content_changed` and your edit must
+      still be in the file.
+- [ ] After an export, run `git status` in that project: only `progress.md` may
+      appear. Nothing under `.tuic/` may be listed.
+
+## MCP instruction de-duplication (#754-affa) — needs a `make dev` restart
+
+Rust-only change to `mcp_transport.rs`. Boss's live instance still serves the old
+strings until the backend is restarted; nothing below can be checked before that.
+
+- [ ] After restart, `curl -s localhost:9876/mcp/instructions | jq -r .instructions`.
+      The `## Tools` section must hold three lines (the delegation sentence, the
+      Worktrees rule, the Submit rule) and **no** per-tool bullet list; there must
+      be no `## Workflow` section and no `**UI feedback:**` line. `## Multi-Agent
+      Work` keeps the peer count and the isolated-branches bullet only.
+- [ ] `ack` / `intent:` / `suggest:` markers must be byte-identical to before —
+      they are protocol, and a reworded marker breaks the tab title and the
+      suggestion bar. Compare against a capture of the old output if in doubt.
+- [ ] In a connected agent, ask for the `repo` tool schema: its description must
+      now document all nine `progress_*` actions, which it never did before.
+- [ ] Watch one agent session for a turn. It must still emit `ack` exactly once
+      per connection and `intent:` at each phase change — the markers moved not
+      at all, but this is the cheapest way to notice if they did.
+
+## Progress reachable from `tuic-remote` (#755-35c8 finding) — needs a `make dev` restart
+
+Rust-only routing change in `mcp_http/mod.rs`: the ten `/progress/*` routes moved
+from `build_router` into `shared_routes()`. Before this, a remote/PWA client
+talking to a `tuic-remote` daemon got **404 on the whole Progress feature** — no
+route at all, which looked like an auth failure. Tests cover route existence;
+these check the live surface.
+
+- [ ] Start a headless daemon: `TUIC_APP_INSTANCE=remote-check tuic-remote`, then
+      `curl -u <user>:<pass> 'http://127.0.0.1:<port>/progress/status?path=<repo>'`.
+      It must answer with a status body, not 404.
+- [ ] Same call with **no** credentials from a non-loopback address must still be
+      rejected by the auth middleware — the move must not have widened access.
+- [ ] On the desktop instance, the Progress panel must behave exactly as before:
+      the routes are merged into `build_router` through `shared_routes()` now, so
+      a regression here shows up as the panel 404ing on every call.

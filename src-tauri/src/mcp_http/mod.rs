@@ -149,10 +149,7 @@ fn named_socket_path(id: &str, temp_dir: &std::path::Path) -> std::path::PathBuf
     // named ids, so keep named-instance sockets in the OS temp directory while
     // retaining a deterministic, collision-resistant name for the bridge.
     let digest = Sha256::digest(id.as_bytes());
-    let short_id = digest[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let short_id = hex::encode(&digest[..8]);
     temp_dir.join(format!("tuic-mcp-{short_id}.sock"))
 }
 
@@ -405,8 +402,15 @@ async fn post_progress_report(
     ))
 }
 
-fn progress_auth(addr: &SocketAddr, authenticated: bool) -> Result<(), Response> {
-    guards::require_local_or_auth(addr, authenticated).map_err(IntoResponse::into_response)
+/// Returns the rejection response, or `None` when the caller may proceed.
+///
+/// `Option` rather than `Result`: an axum `Response` is a large value, so a
+/// `Result<(), Response>` makes every success path carry the rejection's size.
+/// The guard has no success payload either, so the `Ok(())` was never read.
+fn progress_auth(addr: &SocketAddr, authenticated: bool) -> Option<Response> {
+    guards::require_local_or_auth(addr, authenticated)
+        .err()
+        .map(IntoResponse::into_response)
 }
 
 async fn get_progress_status(
@@ -414,7 +418,7 @@ async fn get_progress_status(
     auth: Option<Extension<guards::Authenticated>>,
     Query(q): Query<types::PathQuery>,
 ) -> Response {
-    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     json_result(crate::progress::progress_status(&q.path))
@@ -425,7 +429,7 @@ async fn post_progress_list(
     Query(q): Query<types::PathQuery>,
     Json(input): Json<crate::progress::ProgressListInput>,
 ) -> Response {
-    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     json_result(crate::progress::progress_list(&q.path, input))
@@ -435,7 +439,7 @@ async fn post_progress_pause(
     auth: Option<Extension<guards::Authenticated>>,
     Query(q): Query<types::PathQuery>,
 ) -> Response {
-    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     json_result(crate::progress::progress_pause(&q.path))
@@ -445,7 +449,7 @@ async fn post_progress_resume(
     auth: Option<Extension<guards::Authenticated>>,
     Query(q): Query<types::PathQuery>,
 ) -> Response {
-    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     json_result(crate::progress::progress_resume(&q.path))
@@ -456,7 +460,7 @@ async fn post_progress_delete(
     Query(q): Query<types::PathQuery>,
     Json(input): Json<crate::progress::ProgressDeleteInput>,
 ) -> Response {
-    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     json_result(crate::progress::progress_delete(&q.path, input))
@@ -467,7 +471,7 @@ async fn post_progress_clear(
     Query(q): Query<types::PathQuery>,
     Json(input): Json<crate::progress::ProgressClearInput>,
 ) -> Response {
-    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     json_result(crate::progress::progress_clear(&q.path, input))
@@ -478,7 +482,7 @@ async fn post_progress_update(
     Query(q): Query<types::PathQuery>,
     Json(input): Json<crate::progress::ProgressUpdateInput>,
 ) -> Response {
-    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     json_result(crate::progress::progress_update(&q.path, input))
@@ -489,7 +493,7 @@ async fn post_progress_read(
     Query(q): Query<types::PathQuery>,
     Json(input): Json<crate::progress::ProgressReadInput>,
 ) -> Response {
-    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     json_result(crate::progress::progress_read(&q.path, input))
@@ -500,7 +504,7 @@ async fn post_progress_export(
     Query(q): Query<types::PathQuery>,
     Json(input): Json<crate::progress::ProgressExportInput>,
 ) -> Response {
-    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     json_result(crate::progress::progress_export(&q.path, input))
@@ -773,6 +777,24 @@ fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
+        // Progress. Shared, not desktop-only: the store is a SQLite file under
+        // the project root and every handler calls `crate::progress::*`, which
+        // needs no WebView and no Tauri. These lived in `build_router` only,
+        // so a remote/PWA client reaching a `tuic-remote` daemon got 404 on the
+        // whole feature — not an auth failure, no route at all. Each handler
+        // still guards with `require_local_or_auth`: loopback passes on the
+        // address, a remote caller passes because `basic_auth_middleware`
+        // inserts `Authenticated` before the handler runs.
+        .route("/progress/report", post(post_progress_report))
+        .route("/progress/status", get(get_progress_status))
+        .route("/progress/list", post(post_progress_list))
+        .route("/progress/pause", post(post_progress_pause))
+        .route("/progress/resume", post(post_progress_resume))
+        .route("/progress/delete", post(post_progress_delete))
+        .route("/progress/clear", post(post_progress_clear))
+        .route("/progress/update", post(post_progress_update))
+        .route("/progress/read", post(post_progress_read))
+        .route("/progress/export", post(post_progress_export))
         // Session lifecycle
         .route(
             "/sessions",
@@ -1521,16 +1543,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(config_routes::get_repo_local_config)
                 .post(config_routes::save_repo_local_config_http),
         )
-        .route("/progress/report", post(post_progress_report))
-        .route("/progress/status", get(get_progress_status))
-        .route("/progress/list", post(post_progress_list))
-        .route("/progress/pause", post(post_progress_pause))
-        .route("/progress/resume", post(post_progress_resume))
-        .route("/progress/delete", post(post_progress_delete))
-        .route("/progress/clear", post(post_progress_clear))
-        .route("/progress/update", post(post_progress_update))
-        .route("/progress/read", post(post_progress_read))
-        .route("/progress/export", post(post_progress_export))
         // Story 066: config / themes / notes / misc stateless parity (loopback)
         .route(
             "/config/branch-label",
@@ -2621,6 +2633,20 @@ mod tests {
             "/acp/connections/x/interactions",
             "/acp/connections/x/permissions/y/response",
             "/acp/connections/x/elicitations/y/response",
+            // Progress was in NEITHER list, which is how it shipped registered
+            // on `build_router` alone: the guard only catches a path it names.
+            // A feature absent from both lists is not "undecided", it is
+            // unguarded — so pin every route, not a representative one.
+            "/progress/report",
+            "/progress/status",
+            "/progress/list",
+            "/progress/pause",
+            "/progress/resume",
+            "/progress/delete",
+            "/progress/clear",
+            "/progress/update",
+            "/progress/read",
+            "/progress/export",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific
