@@ -1212,6 +1212,18 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Any test that edits a NON-EMPTY config also runs `backup_config_once`,
+    /// which writes into `config_dir()/mcp-backups`. Without an override that
+    /// was the user's real config directory: five `test-*.orig` files sat in
+    /// Boss's `mcp-backups/` from 2026-08-21 until `config_dir` started
+    /// refusing a test build outright (#763-d219). Returned tuple must be bound
+    /// — dropping the guard restores the override immediately.
+    fn with_temp_config_dir() -> (impl Drop, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        (guard, dir)
+    }
+
     /// Seed a config file. Production no longer serializes whole documents —
     /// it splices one member into text it never reformats — so building a
     /// fixture is the only place a `Value` still becomes a file.
@@ -1960,6 +1972,7 @@ mod tests {
         // Presence may stop resolving (tool dropped off PATH) — an entry we
         // already own must still be updated, never left pointing at a stale
         // bridge binary.
+        let _config = with_temp_config_dir();
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("mcp.json");
         let spec = spec_at(config_path.clone());
@@ -2123,6 +2136,7 @@ mod tests {
     fn a_shared_settings_file_we_already_own_keeps_getting_repairs() {
         // Consent was given once; a moved bridge binary must not strand the
         // entry the user asked for.
+        let _config = with_temp_config_dir();
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("settings.json");
         let spec = McpConfigSpec {
@@ -2283,6 +2297,7 @@ mod tests {
         // pi only speaks MCP through the pi-mcp-adapter extension, which owns
         // ~/.pi/agent/mcp.json. No file means no adapter, so writing one would
         // configure nothing and litter the agent directory.
+        let _config = with_temp_config_dir();
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("mcp.json");
         std::fs::write(dir.path().join("settings.json"), "{}").unwrap();

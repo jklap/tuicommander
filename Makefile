@@ -6,6 +6,11 @@ BINARY_NAME=tuicommander
 BUNDLE_ID=com.tuic.commander
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
+# Optional runtime override used by isolated verification sessions. An empty
+# value preserves the production default; TUIC_APP_INSTANCE is intentionally
+# left undefined here so the test target can keep its own default below.
+TUIC_PORT?=
+
 # rtk (Rust Token Killer) is an optional output-compacting proxy: `rtk <cmd>`
 # runs <cmd> and trims its output. It is a personal tool, not a project
 # dependency, so every use below degrades to the raw command when it is absent.
@@ -50,14 +55,26 @@ hooks:
 dev: hooks
 	@pnpm build:sidecar
 	@pnpm exec vite build
-	RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch
+	TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) TUIC_PORT=$(TUIC_PORT) RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch
 
-# Build frontend + launch Tauri dev (for quick manual testing)
+# Build frontend + launch Tauri dev (for quick manual testing).
+#
+# Isolated by default (#763-d219): this target exists specifically for
+# throwaway manual verification, not as a daily-driver launch — unlike `make
+# dev`, which stays on the shared default config directory because it IS
+# Boss's actual long-running instance and switching it would look like every
+# repository had vanished. TUIC_APP_INSTANCE points this one at its own
+# `instances/tuic-test/` config namespace (see docs/backend/config.md), so a
+# verification session can add/remove repositories, worktrees, whatever it
+# needs, without ever touching production `repositories.json`. Override with
+# `make test TUIC_APP_INSTANCE=some-other-id`, or `TUIC_APP_INSTANCE= make
+# test` to opt back into the shared default instance for one run.
+TUIC_APP_INSTANCE?=tuic-test
 test:
 	@echo "Building Vite frontend..."
 	@pnpm exec vite build
-	@echo "Starting Tauri dev..."
-	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore pnpm tauri dev
+	@echo "Starting Tauri dev (isolated config instance: $(TUIC_APP_INSTANCE))..."
+	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) pnpm tauri dev
 
 # Build .app only (default, fast — skips DMG)
 build:

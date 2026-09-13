@@ -1014,6 +1014,9 @@ pub(super) async fn create_session_with_worktree(
         workspace_id: crate::worktree::workspace_id_of_worktree(&branch_name),
         branch: branch_name.clone(),
         worktree_path: worktree_path_str.clone(),
+        // `create_worktree_with_stale_recovery` only ever links a worktree; this
+        // route has no `mode` and cannot produce a clone.
+        kind: crate::cow::WorkspaceKind::Worktree,
     });
 
     let rows = body.config.rows.unwrap_or(24);

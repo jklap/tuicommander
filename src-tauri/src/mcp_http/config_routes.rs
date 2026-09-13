@@ -252,6 +252,36 @@ pub(super) async fn put_repositories(
     }
 }
 
+pub(super) async fn get_stale_temp_repository_candidates() -> impl IntoResponse {
+    Json(crate::config::list_stale_temp_repository_candidates())
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct RepairStaleTempRepositoriesBody {
+    paths: Vec<String>,
+}
+
+pub(super) async fn post_repair_stale_temp_repositories(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RepairStaleTempRepositoriesBody>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp;
+    }
+    match crate::config::repair_stale_temp_repositories_request(body.paths) {
+        Ok(summary) => {
+            state.notify_repositories_changed();
+            (StatusCode::OK, Json(serde_json::to_value(summary).unwrap()))
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
 pub(super) async fn get_pane_layout() -> impl IntoResponse {
     Json(crate::config::load_pane_layout())
 }

@@ -34,6 +34,7 @@ use axum::{
     Json, Router,
     extract::{Path as AxumPath, State},
 };
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
@@ -132,7 +133,26 @@ pub(crate) fn upstream_json_result<T: serde::Serialize>(result: Result<T, String
 /// Default IPC endpoint path for local MCP bridge connections (Unix domain socket).
 #[cfg(unix)]
 pub(crate) fn socket_path() -> std::path::PathBuf {
-    crate::config::config_dir().join("mcp.sock")
+    let instance = crate::app_instance::current_app_instance();
+    let Some(id) = instance.named_id() else {
+        return crate::config::config_dir().join("mcp.sock");
+    };
+
+    named_socket_path(id, &std::env::temp_dir())
+}
+
+#[cfg(unix)]
+fn named_socket_path(id: &str, temp_dir: &std::path::Path) -> std::path::PathBuf {
+    // macOS limits Unix-domain socket paths to 104 bytes. The platform config
+    // directory plus `instances/<id>/mcp.sock` exceeds that limit for ordinary
+    // named ids, so keep named-instance sockets in the OS temp directory while
+    // retaining a deterministic, collision-resistant name for the bridge.
+    let digest = Sha256::digest(id.as_bytes());
+    let short_id = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    temp_dir.join(format!("tuic-mcp-{short_id}.sock"))
 }
 
 /// Resolve which socket path this instance should bind to.
@@ -143,7 +163,19 @@ fn resolve_socket_path() -> std::path::PathBuf {
     if primary.exists() {
         // Try connecting — if it succeeds, another instance is alive on this socket.
         if std::os::unix::net::UnixStream::connect(&primary).is_ok() {
-            let alt = crate::config::config_dir().join(format!("mcp-{}.sock", std::process::id()));
+            let alt = crate::app_instance::current_app_instance()
+                .named_id()
+                .map(|id| {
+                    let base = named_socket_path(id, &std::env::temp_dir());
+                    base.with_file_name(format!(
+                        "{}-{}.sock",
+                        base.file_stem().unwrap_or_default().to_string_lossy(),
+                        std::process::id()
+                    ))
+                })
+                .unwrap_or_else(|| {
+                    crate::config::config_dir().join(format!("mcp-{}.sock", std::process::id()))
+                });
             tracing::info!(
                 source = "mcp_http",
                 primary = %primary.display(),
@@ -836,6 +868,14 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(worktree_routes::unpublished_commits_http),
         )
         .route(
+            "/worktrees/lifecycle",
+            get(worktree_routes::workspace_lifecycle_http),
+        )
+        .route(
+            "/worktrees/adopt",
+            post(worktree_routes::adopt_cow_workspace_http),
+        )
+        .route(
             "/worktrees/run-script",
             post(worktree_routes::run_setup_script_http),
         )
@@ -1068,9 +1108,18 @@ pub(crate) fn resolve_mcp_confirm(state: &Arc<AppState>, request_id: &str, confi
 }
 
 /// Wall-clock bound on producing a response. A handler that wedges holds its
-/// connection forever without this; 120 s is above the slowest legitimate
-/// request (a cold git operation on a large repo) and far below "never".
-pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// connection forever without this; 301 s is above the slowest legitimate
+/// request (a cold COW clone with warm build artifacts) and far below "never".
+///
+/// **Must stay strictly greater than every in-handler deadline this layer
+/// wraps**, or this outer bound fires first, drops the inner future, and the
+/// caller gets a bare 408 instead of the handler's own documented response —
+/// `mcp_transport::CONFIRM_TIMEOUT` (300 s) is the tightest of those, so 301 s
+/// is a deliberate 1 s margin over it, not a rounding choice (#760-c29f). The
+/// local MCP bridge in turn waits 305 s for a confirm or a workspace op,
+/// a 4 s margin over THIS layer — `request_timeout_beats_every_in_handler_deadline`
+/// pins the ordering.
+pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(301);
 
 /// Largest request body any route will buffer.
 ///
@@ -1339,6 +1388,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/config/repositories",
             get(config_routes::get_repositories).put(config_routes::put_repositories),
+        )
+        .route(
+            "/config/repositories/stale-temp",
+            get(config_routes::get_stale_temp_repository_candidates)
+                .post(config_routes::post_repair_stale_temp_repositories),
         )
         .route(
             "/config/pane-layout",
@@ -2104,7 +2158,10 @@ pub async fn start_server(
     // --- TCP listener (only for remote access with auth) ---
     // Supports dual-protocol (HTTP+HTTPS on same port) when TLS cert is available.
     let tcp_handle = if remote_enabled {
-        let base_port = config.services.server.port;
+        let base_port = std::env::var("TUIC_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(config.services.server.port);
         let host = if config.services.server.ipv6_enabled {
             "[::]"
         } else {
@@ -5748,6 +5805,26 @@ mod tests {
         let _ = std::fs::remove_dir(&tmp_dir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn named_instance_socket_path_stays_within_macos_limit() {
+        let path = named_socket_path(
+            "validate-763-20260913-with-a-long-but-valid-instance-name",
+            std::path::Path::new("/var/folders/ab/cdefghijklmnop/T"),
+        );
+        assert!(
+            path.as_os_str().len() < 104,
+            "named instance socket path must fit macOS SUN_LEN: {}",
+            path.display()
+        );
+        assert!(
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("tuic-mcp-")
+        );
+    }
+
     /// Stale mcp-{pid}.sock files (dead PID) should be cleaned up.
     #[cfg(unix)]
     #[test]
@@ -6293,6 +6370,59 @@ mod tests {
             StatusCode::OK,
             "SSE and WebSocket responses return headers at once; the deadline \
              must not apply to how long they then stream"
+        );
+    }
+
+    /// Story 760, end-to-end through the real stack `build_router` assembles —
+    /// not a direct call to `handle_confirm`. Before the fix, `REQUEST_TIMEOUT`
+    /// and `mcp_transport::CONFIRM_TIMEOUT` were both 300s, so the outer
+    /// `with_server_limits` layer could win the race, drop the confirm future,
+    /// and hand the caller a bare 408 instead of the documented
+    /// `{confirmed:false, reason:...}` body — and because the future was
+    /// dropped, the handler's own cleanup (the `confirm_responses` entry, the
+    /// `McpConfirmResolved` event) never ran either. `start_paused` fast-forwards
+    /// both the 300s inner wait and the 301s outer one without real wall-clock
+    /// delay, so this proves the ordering at production values rather than at
+    /// scaled-down stand-ins.
+    #[tokio::test(start_paused = true)]
+    async fn confirm_left_unanswered_resolves_clean_through_the_real_server_stack() {
+        let state = test_state();
+        let mut bus = state.event_bus.subscribe();
+
+        let result = call_mcp_tool(
+            &state,
+            "ui",
+            serde_json::json!({"action": "confirm", "title": "Deploy?"}),
+        )
+        .await;
+
+        // `call_mcp_tool` already asserts the HTTP status is 200; a 408 from the
+        // outer layer would have failed inside it before we ever got here.
+        assert_eq!(result["confirmed"], false);
+        assert!(
+            result["reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("no answer")),
+            "expected the handler's own timeout reason, not a bare 408 body: {result}"
+        );
+        assert!(
+            state.confirm_responses.is_empty(),
+            "the router-level path must still clean up the registry entry, the \
+             same as calling handle_confirm directly"
+        );
+        let saw_resolved = std::iter::from_fn(|| bus.try_recv().ok()).any(|event| {
+            matches!(
+                event,
+                crate::state::AppEvent::McpConfirmResolved {
+                    confirmed: false,
+                    ..
+                }
+            )
+        });
+        assert!(
+            saw_resolved,
+            "clients must still be told to dismiss the dialog even when the \
+             outer layer, not the handler, would previously have cut the connection"
         );
     }
 }

@@ -444,6 +444,26 @@ pub(super) struct PublishWorkspaceRequest {
     pub workspace_id: String,
 }
 
+/// Explicitly adopt a markerless COW clone this backend lost track of. The
+/// request itself is the confirmation — there is no separate force flag,
+/// because adoption never deletes anything and only ever writes the two
+/// `tuicommander.cow.*` markers into the clone's local git config, leaving
+/// HEAD, the index, the working tree, untracked files, refs and remotes
+/// untouched.
+#[derive(Deserialize)]
+pub(super) struct AdoptCowWorkspaceRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    /// The candidate directory to adopt — an immediate child of the repo's
+    /// configured worktree base.
+    #[serde(rename = "candidatePath")]
+    pub candidate_path: String,
+    /// Reuse a specific id — for retrying an adoption whose registry write
+    /// failed. Omitted mints a fresh one, the same way creation does.
+    #[serde(rename = "workspaceId", default)]
+    pub workspace_id: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub(super) struct CheckoutRemoteRequest {
     #[serde(rename = "repoPath")]

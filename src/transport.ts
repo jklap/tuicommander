@@ -653,6 +653,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	save_repositories: {
 		map: (args) => ({ method: "PUT", path: "/config/repositories", body: args.config }),
 	},
+	list_stale_temp_repository_candidates: {
+		map: () => ({ method: "GET", path: "/config/repositories/stale-temp" }),
+	},
+	repair_stale_temp_repositories: {
+		map: (args) => ({ method: "POST", path: "/config/repositories/stale-temp", body: { paths: args.paths } }),
+	},
 
 	// --- Config: pane layout ---
 	load_pane_layout: { map: () => ({ method: "GET", path: "/config/pane-layout" }) },
@@ -793,6 +799,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (_args, p) => ({
 			method: "GET",
 			path: `/repo/worktree-dirty?repoPath=${p("repoPath")}&workspaceId=${p("workspaceId")}`,
+		}),
+	},
+	get_workspace_lifecycle: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/worktrees/lifecycle?repoPath=${p("repoPath")}&workspaceId=${p("workspaceId")}`,
 		}),
 	},
 	list_base_ref_options: {
@@ -1535,6 +1547,17 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: "/worktrees/publish",
 			body: {
 				repoPath: args.repoPath,
+				workspaceId: args.workspaceId,
+			},
+		}),
+	},
+	adopt_cow_workspace: {
+		map: (args) => ({
+			method: "POST",
+			path: "/worktrees/adopt",
+			body: {
+				repoPath: args.repoPath,
+				candidatePath: args.candidatePath,
 				workspaceId: args.workspaceId,
 			},
 		}),
