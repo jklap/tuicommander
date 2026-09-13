@@ -117,8 +117,8 @@ interface RepositoryState {
 
 /**
  * Opaque. Existing records were migrated with `workspaceId = branchName`, so the
- * value looks parseable — but a COW workspace's id has no branch in it. Read
- * `WorkspaceState.branchName` instead of taking the branch out of the key.
+ * value looks parseable, but callers still read `WorkspaceState.branchName`
+ * instead of taking display data out of the key.
  */
 type WorkspaceId = string;
 
@@ -138,9 +138,9 @@ type WorkspaceId = string;
 
 interface WorkspaceState {
   workspaceId: WorkspaceId;        // equal to the key that holds this record
-  branchName: string;              // NOT a key: two workspaces may share it
-  kind: "main" | "worktree" | "cow";
-  parentRepoPath: string | null;   // set only for kind === "cow"
+  branchName: string;              // display data, not a lookup key
+  kind: "main" | "worktree";
+  parentRepoPath: string | null;
   isMain: boolean;
   isShell?: boolean;               // true for non-git directory shell entries
   worktreePath: string | null;
@@ -152,8 +152,7 @@ interface WorkspaceState {
   isMerged: boolean;               // Fully merged into main branch
   lifecycleStatus?: {
     dirty: boolean | null;
-    commitStatus: "unmerged" | "unpublished" | "published" | "merged" | "unknown";
-    unpublishedCommits: number | null;
+    commitStatus: "unmerged" | "merged" | "unknown";
     removalSafety: "safe" | "requires_force" | "unknown";
     error?: string;
   };                               // derived, workspace-id keyed, never deletion authority
@@ -185,8 +184,7 @@ to look up. The two are the same string for everything a linked worktree ever
 created — the identity migration minted `workspaceId = branchName` so nothing
 persisted moved — which is exactly why the parameter is named for the key: a caller
 holding a branch off git output and a caller holding an id off a workspace record
-are indistinguishable at the call site otherwise, and only the second stays correct
-once a COW clone carries a minted id (#728-bc76).
+are indistinguishable at the call site otherwise.
 
 | Method | Description |
 |--------|-------------|

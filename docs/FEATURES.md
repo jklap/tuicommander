@@ -860,27 +860,19 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools
 - Remove via sidebar `×` button or context menu (with confirmation)
-- **Copy-on-write clones**: a workspace can be a block-shared copy of the whole repository (macOS `clonefile` or a reflink copy) instead of a linked worktree — an independent repo, so two workspaces may share a branch and ignored build output (`node_modules`, `target`) arrives warm. Measured on a 12 GB repo: 19 MB of real disk, 26 s
-  - Mechanism picker in the creation dialog: `Auto` (clone where possible, worktree otherwise, with the degrade reason), `Clone` (clone or an error naming the check that refused), `Worktree` (forced). Same `mode` field on MCP `repo action=worktree_create` and the HTTP route
-  - Dirty policy for the parent's uncommitted work, clone only: `Keep` (default, free), `Drop untracked` (`git clean -fd`, keeps ignored build output), `Reset` (`reset --hard --recurse-submodules`, the only option that costs real disk — 15 MB → 113 MB measured)
-  - Capability probe: same volume plus a real copy-on-write copy of one file — never inferred from the filesystem name. The probe and the clone read one shared list of mechanisms (`clonefile`, then reflink), each of which fails rather than degrading to a byte copy
-  - Creation guards refuse rather than repair: destination inside the source, linked-worktree source, bare repo, operation in progress (rebase/merge/cherry-pick/revert/bisect), lock held by a live git process. A stale lock is dropped in the copy, never in the source
-  - Clone fixups: inherited `.git/worktrees` admin entries removed, `gc.auto=0`, `core.fsmonitor=false`, a `parent` remote with an unusable push URL, index refreshed, and its own minted workspace id + canonical parent path recorded in its git config
-  - Durable registration: a successful clone is registered in `repositories.json` before the creation call reports success, so a crash cannot leave a real clone with no durable record of it; a registration failure keeps the clone and reports an explicit, recoverable error rather than deleting it. Listing a repository self-heals a lost registration by re-adopting any clone whose own git config carries every marker this backend writes — never a directory missing one, including a clone made before this recovery existed. Repository rows are keyed on a canonical path, so a repo reached through a symlink or a different spelling reuses its existing entry rather than duplicating it. Removal is the mirror image, and never trusts the row alone: before deleting anything, it re-validates the row against the directory it names (same markers, parent-remote evidence, and containment as recovery, plus a real non-symlink `.git` and a matching on-disk workspace id) — unconditionally, so a forged or stale row is refused even with `force=true`. A markerless clone can be registered only through the explicit `worktree_adopt` action (Tauri command, HTTP route, MCP `repo` action), which validates the same parent-remote provenance before writing anything and never touches the working tree, refs, HEAD, or remotes
-  - **Publish** (clone rows only): stages the tip under `refs/tuic/published/<id>` in the parent, fast-forwards `refs/heads/<branch>` with a compare-and-swap, then pushes to origin. Parent update and origin push reported independently; a divergent or checked-out parent branch is refused, never forced. Same implementation behind the Tauri command, `POST /worktrees/publish`, and MCP `repo action=worktree_publish`
-  - Removal gate: refused while unpublished commits exist (counted against remotes and the mirrored parent refs), with the count named in the confirmation on both the sidebar and the manager. `force` defaults to false on all three transports. The count itself is also readable directly via MCP `repo action=worktree_unpublished`
-  - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `N unpublished`, `Published`, `Merged`, or `Unknown`). Published is recoverable but not necessarily merged; unknown blocks removal. Tracked line counts compact above 999 with exact tooltip values
-  - MCP creation payload tells the model what carried over, which artifact directories are warm and how large, and that a clone's commits exist only there
+- **Warm linked worktrees**: every workspace shares refs and objects with the parent. After `git worktree add`, ignored directories such as `node_modules`, `target`, and `.venv` are copied with clonefile/reflink when supported; tracked paths, ignored files, nested repositories, and the destination ancestor are never copied
+  - Capability is measured against the actual source/destination pair. Unsupported filesystems produce one warning and a valid cold worktree
+  - Parent tracked and untracked changes are not carried into the new checkout
+  - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `Merged`, or `Unknown`); unknown blocks removal
+  - MCP creation payload reports `warm_artifacts.warmed_directories` and states the linked-worktree isolation semantics
   - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
   - Dedicated overlay listing all worktrees across all repos with metadata: branch name, repo badge, PR state (open/merged/closed), dirty stats, last commit timestamp
-  - `clone`, dirty, unpublished, published, merged, and unknown badges from the shared progressive refresh
-  - Clone rows refresh their branch, diff stats, and PR status from the independent repository
-  - Cow-head sidebar icon for copy-on-write rows; linked worktrees keep the fork icon
+  - Dirty, merged, and unknown badges from the shared progressive refresh
   - Orphan worktree detection with warning badge and Prune action
   - Repo filter pills and text search for branch names
   - Multi-select with checkboxes and select-all for batch operations
   - Batch delete and batch merge & archive
-  - Single-row actions: Open Terminal, Publish (clone rows only), Merge & Archive, Delete (disabled on main worktrees)
+  - Single-row actions: Open Terminal, Merge & Archive, Delete (disabled on main worktrees)
 
 ### 7.3 Auto-Fetch
 - Per-repo configurable interval (5/15/30/60 minutes, default: disabled)

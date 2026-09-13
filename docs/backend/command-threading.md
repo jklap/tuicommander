@@ -132,7 +132,7 @@ a detached blocking task instead of inside Tauri `setup`.
 | `warm_content_index` (`fs.rs`) | `warm_index` is an in-memory config read plus a map entry plus a spawn — the build itself already runs in the background. It fires on every repo switch, so it stays cheap by design: the `index_strategy` gate and `ensure_index`'s dedup both short-circuit before any work. |
 | `set_ansi_colors` (`pty.rs`) | Locks *every* vt buffer in a loop on the IPC thread, so the stall grows with session count. Same reordering objection as the row below, and it fires once, when the user picks a theme. |
 | Terminal grid *mutations* (`pty.rs`) | `terminal_scroll`, `terminal_scroll_to`, `terminal_request_frame`, `terminal_exit_alt_screen` still take the vt lock inline. Same stall as the reads, but not the same safety: two `spawn_blocking` hops for one session can run in either order, and `terminal_scroll_to(line)` is absolute, so reordering lands the viewport on the wrong line. They need the coalescing `terminal_scroll_to_offset` already has — which is also why they are the cold path, since the wheel and the scrollbar drag go through the offset command and never touch this lock. |
-| Remaining commands in `worktree.rs`, `tuic_cli.rs`, `tunnels/`, `dictation/`, `plugins.rs`, `agent.rs` | Sync commands still run git subprocesses, keyring calls, hardware enumeration and recursive deletes. `detect_orphan_worktrees`, `detect_all_agent_binaries`, the four named in the 2026-09-12 sweep below and `adopt_cow_workspace` (2026-09-13) are no longer in this set; the other commands remain a starting list for the next sweep. |
+| Remaining commands in `worktree.rs`, `tuic_cli.rs`, `tunnels/`, `dictation/`, `plugins.rs`, `agent.rs` | Sync commands still run git subprocesses, keyring calls, hardware enumeration and recursive deletes. `detect_orphan_worktrees`, `detect_all_agent_binaries` and the four named in the 2026-09-12 sweep below are no longer in this set; the other commands remain a starting list for the next sweep. |
 
 ## Post-merge cleanup (2026-09-12)
 
@@ -173,26 +173,12 @@ deliberate, documented choice rather than converted preemptively; revisit
 together with `save_repositories` if repository writes are ever swept onto the
 blocking pool.
 
-## Adopt COW workspace (2026-09-13)
-
-`adopt_cow_workspace` (`worktree.rs`) was a plain `fn`: it runs `git worktree
-list --porcelain`, reads the existing `repositories.json` records and, inside
-`cow::adopt_cow_workspace`, writes the clone's local git config — all inline on
-the IPC thread. Its HTTP twin (`adopt_cow_workspace_http`,
-`mcp_http/worktree_routes.rs`) already called `adopt_cow_workspace_impl` inside
-`spawn_blocking`, so this was the same drift as the post-merge cleanup dialog:
-the desktop path could stall the WebView on a call the HTTP path already
-offloaded. Moved to `async fn` + `spawn_blocking`, added to the
-`post_merge_cleanup_commands_never_run_on_the_ipc_thread` source-scan test
-below so it cannot regress silently.
-
 ## Managed workspace removal (2026-09-12)
 
 MCP `repo worktree_remove` used to call the blocking removal core directly from
-its async native-tool handler. Removing a COW clone performs Git safety checks
-and recursively deletes the independent repository, including warm build
-artifacts, so a large clone can take tens of seconds even when APFS shares most
-of its blocks. The native MCP path now uses `spawn_blocking`, matching both the
+its async native-tool handler. Removing a linked worktree can recursively
+delete large ignored build artifacts, so it may take tens of seconds. The
+native MCP path now uses `spawn_blocking`, matching both the
 Tauri command and HTTP route. The bridge gives create and remove the same 305 s
 workspace-operation response deadline; its ordinary 10 s deadline cannot report
 a removal failure while the backend is still deleting the workspace.

@@ -311,123 +311,36 @@ Features:
 | Ctrl+F | Toggle favorite |
 | Esc | Close drawer |
 
-## Workspaces: linked worktree versus copy-on-write clone
+## Workspaces: linked worktrees with warm artifacts
 
-A workspace is a linked worktree or a copy-on-write clone of the whole
-repository directory. Both are created by one entry point
-(`worktree::create_workspace`) and land at the same destination, derived from
-the storage strategy and the sanitized task name; the caller asks for a
-workspace, not for a mechanism.
+Every workspace created by TUICommander is a linked Git worktree. Its refs and
+objects are shared with the parent repository, so commits are visible from the
+parent immediately. Git permits a branch to be checked out in only one
+worktree; creation refuses a branch that already has a checkout.
 
-**Mode.** `auto` (default) takes a clone when every guard and the capability
-probe pass and a linked worktree otherwise, carrying the reason it degraded —
-"you got a worktree" without one is indistinguishable from "you asked for a
-worktree". `cow` fails naming the check that refused, because a caller asking
-for a clone wants the isolation and a silent worktree has different semantics.
-`worktree` forces the previous behaviour and reports no degradation, since that
-is a choice rather than a degradation. The clone guards run for `auto` and
-`cow` only: a linked worktree never had them.
+`workspace_id` is explicit on every API and currently equals the checked-out
+branch. Callers must use the returned id rather than derive it from display
+data. Removal, lifecycle inspection, merge, and finalization all address the
+same worktree by that id.
 
-**Capability is measured, never inferred.** Support is decided by a real
-copy-on-write copy of `.git/HEAD`, with a same-volume device-id comparison as a
-cheap pre-filter. A filesystem name says nothing about a specific mount or a
-specific pair of paths. The probe and the clone try the same mechanisms from one
-shared list, because a probe that accepts a mechanism the clone cannot issue
-turns a degrade into an error raised after the decision was already made — and
-every mechanism on that list must fail rather than degrade to a byte copy.
+Creation starts from a clean checkout. Parent tracked or untracked changes are
+not carried into the workspace. Reintroducing tracked changes would be a linked
+worktree operation: pipe `git diff HEAD` in the parent into `git apply` in the
+new worktree.
 
-**Guards refuse; they never repair.** Destination inside the source, a linked
-worktree as source, a bare repo, an in-progress operation marker, or a lock
-held by a live writer each refuse with the reason. Deleting an inherited lock
-or finishing someone else's rebase would turn a torn copy into a
-plausible-looking corrupt one. A *stale* lock is the one exception and is
-dropped in the copy, by the caller, after the copy exists — never in the
-source.
+After `git worktree add`, TUICommander warms Git-ignored directories such as
+`node_modules`, `target`, and `.venv` with copy-on-write filesystem copies.
+Ignored files are never copied, and tracked files remain Git's responsibility.
+The capability probe and copy primitive share the same clonefile/reflink flags;
+unsupported filesystems produce one cold-worktree warning rather than one per
+directory. Warming is best-effort and never invalidates an otherwise complete
+worktree.
 
-**There is no full-copy fallback.** A `cp -c -R` that fails after the probe
-succeeded means something changed underneath; falling back to a recursive copy
-would silently turn a 19 MB clone into a 12 GB one. A clone whose fixups fail
-is removed rather than handed back looking usable.
-
-**Dirty policy** applies to clones only: `inherit` (default, free),
-`clean_untracked` (`clean -fd`, never `-fdx` — the ignored build output is the
-point of the clone), `clean` (`reset --hard --recurse-submodules` then the same
-clean, the only policy that costs real disk).
-
-**Identity.** A linked worktree's `workspace_id` **is** its branch. A clone's id
-is minted, because two workspaces may sit on the same branch and a branch can
-therefore not name one. Every workspace API is keyed on the id; `kind` is
-persisted on the record so lifecycle code never infers the mechanism from the
-path.
-
-**Publish** exists for clones only — a linked worktree shares its refs with the
-parent. It stages the tip under `refs/tuic/published/<id>` in the parent, then
-fast-forwards `refs/heads/<branch>` with a compare-and-swap against the ref it
-read. Fast-forward only: with two workspaces on one branch a divergent parent
-branch is the normal case, and forcing would orphan whichever side published
-second. A parent branch that is checked out is refused; publish is not an
-implicit checkout. The parent update and the origin push fail and are reported
-independently.
-
-**Registration is durable, not a client's job.** A clone is registered in
-`repositories.json` before creation reports success — the frontend's own save
-used to be the only writer, leaving a crash-sized window where a clone existed
-with nothing durable naming it. A registration failure keeps the clone and
-reports an explicit, recoverable error rather than deleting it. Every clone
-also carries its own minted id and canonical parent path in its own git config,
-alongside the existing no-push parent-remote evidence, so listing a repository
-self-heals a lost registration by re-adopting any clone whose config carries
-every one of those markers — never a directory missing even one, which is also
-how a clone made before this recovery existed stays invisible rather than
-being silently trusted. The `repositories.json` row itself is keyed on the same
-canonical notion of "this repository" the reader uses, not a raw path string:
-an existing entry reached through a symlink or a different spelling is reused
-rather than duplicated, and a brand-new one is filed under its canonical path.
-
-**Removal of a clone is gated, not warned — and never trusts the row alone.**
-Deleting it deletes a repository. Uncommitted changes are refused before any
-fetch or deletion, and unpublished commits — reachable from HEAD and from no
-remote and no mirrored parent ref — are refused next. The gate lives in the
-shared id-addressed removal path, so no transport bypasses it, and `force`
-defaults to false on all three. The parent mirror is pruned on refresh; a
-refresh failure makes lifecycle unknown and refuses removal, because stale refs
-can under-count as well as over-count. `force` is the explicit authority to discard either class of
-workspace-only work — it is never authority to skip provenance. Before any of
-the above, removal re-validates the row against the directory it names: the
-same marker, parent-remote, and canonical-containment checks recovery already
-requires, plus a real (non-symlink) `.git` and an on-disk workspace id that
-matches the row. A forged, stale, or hand-edited row naming an arbitrary
-directory is refused even with `force=true`; a markerless clone is refused the
-same as recovery refuses to adopt one. Its `repositories.json` row is dropped
-only once the directory is confirmed gone; a failure to drop it is its own
-explicit, recoverable error, never a silently stale row.
-
-**Lifecycle state is one backend verdict, not a diff-stat inference.** Every
-workspace refresh is keyed by opaque workspace id and reports dirty state,
-commit reachability, unpublished count, and removal safety. A no-argument
-`git diff` line count cannot prove any of those: it omits untracked files and a
-clean clone may still own commits that exist nowhere else. `Published` means a
-ref outside the clone preserves `HEAD`; `Merged` means the parent's default
-branch contains that exact `HEAD`. Any inspection failure is `Unknown` and is
-never removal-safe. Destructive UI obtains a fresh verdict, and deletion repeats
-the data-loss guards so a stale confirmation cannot authorize changed state.
-
-**Adoption is the explicit, narrow exception.** A markerless clone —
-including one made before this backend wrote provenance markers — is never
-silently trusted by recovery or removal, but it is still a real clone someone
-may need registered. `worktree_adopt` (Tauri command, HTTP route, MCP `repo`
-action — one shared core, `worktree::adopt_cow_workspace_impl`) takes a parent
-repo and a candidate directory (or an id to reuse, for retrying a call whose
-registration failed) and is itself the confirmation: no separate force flag,
-because it never deletes anything, and the only change it makes to the clone
-is writing its two provenance markers into local git config — HEAD, the index,
-the working tree, untracked files, refs, and remotes are untouched. It
-validates canonical immediate-child containment in the configured worktree
-base, a real `.git`, the candidate's parent-remote evidence (the no-push
-`pushurl` and a `url` resolving to the parent, both predating the provenance
-markers), a checked-out branch, and no id/path collision — only once every
-check passes does it write anything, and what it writes is exactly the two
-markers creation itself would have written.
+Lifecycle state is one backend verdict keyed by workspace id: working-tree
+dirtiness, whether `HEAD` is merged into the default branch, and removal safety.
+Any inspection failure is `Unknown` and cannot authorize removal. Destructive
+UI obtains a fresh verdict, and deletion repeats the safety checks so a stale
+confirmation cannot authorize changed state.
 
 ## Project Progress
 
@@ -500,9 +413,7 @@ Some frontend-only stores persist to localStorage:
       from Tauri IPC and HTTP; no frontend surface yet
 - [x] Multi-agent support through the canonical `AgentType` registry
 - [x] Git worktree management per task
-- [x] Copy-on-write workspaces: mode/dirty, publish into parent and origin,
-      and the unpublished-commit count all on all three transports; removal
-      gated on unpublished commits
+- [x] Linked workspaces with best-effort copy-on-write warming of ignored directories
 - [x] Agent spawning integration
 - [x] SolidJS migration
 

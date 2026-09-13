@@ -148,65 +148,20 @@ reclaimed only via the hatch. That is safe rather than merely tolerable: Windows
 refuses to unlink a file another process holds open, so the OS enforces the same rule
 the probe does on unix.
 
-## Copy-on-write workspaces (`cow.rs`)
+## Linked-worktree warming (`cow.rs`)
 
-A workspace is a linked worktree or a block-shared clone of the whole repository
-directory. `worktree::create_workspace` is the single entry point;
-`cow::choose_mechanism` holds the policy (`auto` / `cow` / `worktree`). The
-contract — what refuses, what degrades, what is never repaired — is in SPEC.md →
-*Workspaces: linked worktree versus copy-on-write clone*; the user-facing
-behaviour is in `docs/user-guide/worktrees.md`.
+Every managed workspace is a linked Git worktree. After Git creates the clean
+checkout, `cow.rs` asks Git for ignored directories and copy-on-write copies
+those directories from the parent. Tracked paths and ignored files are never
+copied; nested repositories and any directory containing the destination are
+skipped.
 
-The GitReads worktree snapshot includes both linked worktrees and registered COW
-clones. Because a COW clone is an independent repository, Gix cannot discover it
-from the parent repository; its persisted record supplies the path and the
-clone's current `HEAD` supplies the branch. This keeps progressive structure and
-diff-stat refreshes, as well as branch-keyed PR badges, aligned after a branch is
-renamed inside a clone.
-
-What matters at the git-command level:
-
-- **Capability is measured.** `probe_cow_support` compares `st_dev` as a cheap
-  pre-filter and then makes a real copy-on-write copy of `.git/HEAD`. A
-  filesystem name is never evidence.
-- **The probe and the clone read one list of mechanisms**, `COW_COPY_FLAGS`
-  (macOS `cp -c`, then GNU `cp --reflink=always`). They diverged once — the
-  clone hardcoded `-c` — and on Linux the probe therefore answered `Supported`
-  for a copy the clone could not issue, so `mode=auto` returned an error after
-  it had already committed to COW instead of degrading. Every flag in the list
-  must *fail* rather than degrade to a byte copy, which is why
-  `--reflink=auto` is not in it.
-- **The guards read; they never write to the source.** `check_creation_guards`
-  refuses on containment, a linked-worktree or bare source, the six operation
-  markers (`rebase-merge`, `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`,
-  `REVERT_HEAD`, `BISECT_LOG`), and a lock held by a live writer as judged by
-  the same `git_locks` adjudication documented above. A stale lock is returned
-  as a path *relative* to the source so it can only ever be deleted inside the
-  copy.
-- **The fixups are mandatory, not precautionary.** A raw copy inherits
-  `.git/worktrees` entries pointing at the parent's admin dirs, which block
-  checkout of those branches in the clone; it inherits an fsmonitor setting
-  describing another path; and `clonefile` preserves mtime while changing ino
-  and ctime, so every index entry reads stat-dirty. `fixup_clone` removes the
-  inherited admin entries, sets `gc.auto=0` (a gc rewrites packfiles and takes
-  real disk from ~0 to the full repo size), sets `core.fsmonitor=false`, adds a
-  `parent` remote with an unresolvable push URL, refreshes the index, and checks
-  out the branch with `checkout` when the ref already exists — the clone
-  inherits every ref, so `checkout -b` fails on exactly the case the feature
-  exists for.
-- **Publish** stages the tip under `refs/tuic/published/<id>` in the parent
-  (transfer first, ref policy second), then fast-forwards `refs/heads/<branch>`
-  with a compare-and-swap. `~` is a legal character in a minted workspace id and
-  illegal in a ref name, so `staged_ref` sanitizes it. The origin push is then
-  run **from the parent**, on the ref the parent accepted, and only when the
-  compare-and-swap succeeded: the fast-forward check is the single place
-  divergence is adjudicated, so pushing past a refusal would put on the shared
-  remote exactly the history the parent rejected. The clone's own `origin` gets
-  the same unresolvable push URL as `parent`, which makes that an invariant.
-- **Unpublished commits** are `rev-list --count HEAD --not --glob=refs/remotes
-  --glob=refs/parent`, after refreshing and pruning the parent mirror. A failed
-  refresh makes the lifecycle unknown and refuses removal; stale refs can
-  under-count as well as over-count.
+`probe_cow_support` performs a real copy against the source/destination pair so
+an unsupported filesystem produces one warning instead of one failure per
+ignored directory. The probe and copy primitive share `COW_COPY_FLAGS` (macOS
+`cp -c`, then GNU `cp --reflink=always`); neither may silently fall back to a
+byte-for-byte recursive copy. Warming is best-effort: failure leaves a complete,
+valid, cold linked worktree.
 
 ## Tauri Commands
 
@@ -236,11 +191,8 @@ What matters at the git-command level:
 | `get_repo_structure` | `(repo_path: String) -> RepoStructure` | Fast: worktree paths + merged branches only |
 | `get_repo_diff_stats` | `(repo_path: String) -> RepoDiffStats` | Slow: per-worktree diff stats, last commit timestamps, and workspace-id lifecycle verdicts |
 
-Lifecycle is backend-authored from the exact checkout `HEAD`. COW status
-refreshes its mirrored parent refs, counts commits excluded by every parent or
-remote ref, and distinguishes published from default-branch ancestry. Linked
-worktrees use the same dirty/merged/removal vocabulary, while their unpublished
-count is always zero because the parent owns their objects. Any failed check
+Lifecycle is backend-authored from the exact checkout `HEAD`. Linked worktrees
+report dirty state, default-branch ancestry, and removal safety. Any failed check
 serializes as `unknown`, never as clean or safe.
 
 The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. Refresh is single-flight per repository: concurrent requests join the active run and coalesce into one trailing rerun. This guarantees that sustained filesystem events cannot repeatedly cancel Phase 1 and leave deleted worktrees in the persisted sidebar cache. `get_repo_summary` remains for backward compatibility.

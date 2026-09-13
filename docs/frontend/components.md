@@ -129,9 +129,8 @@ Repository tree with branch management.
 - CI ring indicator per branch (from githubStore)
 - PR status badge
 - Compact diff stats (additions/deletions) with exact tooltip counts
-- Workspace lifecycle badge from the backend (`Dirty`, `N unpublished`,
-  `Published`, `Merged`, or `Unknown`); status is keyed by workspace id so
-  same-branch COW siblings do not overwrite one another
+- Workspace lifecycle badge from the backend (`Dirty`, `Merged`, or `Unknown`),
+  keyed by workspace id
 - Context menu (right-click) for repo/branch operations
 - Resizable width via drag handle (200-500px)
 - Keyboard redirect to active terminal
