@@ -2005,3 +2005,21 @@ new `cow_workspaces_enabled` sub-flag, both default false.
       the tab idle before the agent's protocol completion signal arrives.
 - [ ] Disable native/global status instrumentation for one agent and confirm
       its existing Ready-screen fallback still returns the tab to idle.
+
+## Workspace badges after the COW retirement (was story `766-bf4a`, 2026-09-13) — **Rust + frontend, needs a `make dev` restart**
+
+Story `766-bf4a` carried this as its last open criterion and was closed
+`wontfix` with the mechanism. Two of the badge states it listed — `Published`
+and `N unpublished` — no longer exist, because publish and the unpublished
+count only ever applied to a copy-on-write clone. What survives still needs a
+human eye, and no automated check covers badge layout.
+
+- [ ] In an isolated `TUIC_APP_INSTANCE` debug instance, create a linked
+      worktree and screenshot the Sidebar and the Worktree Manager showing the
+      untracked-only, `Dirty`, `Merged` and `Unknown` treatments. No layout
+      regression, and no gap where a `Published` badge used to sit.
+- [ ] Confirm no Publish affordance remains anywhere in the UI. A button that
+      calls a command the backend no longer registers must not be reachable.
+- [ ] Remove a dirty linked worktree. The preflight must still name the dirty
+      state and the exact loss before offering force — that path is not COW and
+      must have survived the removal.
