@@ -871,6 +871,9 @@ const ORCHESTRATOR_WAKE_UNCERTAIN_RETRY: std::time::Duration = std::time::Durati
 /// it can end an agent turn. Ink redraws are multi-chunk (erase, then repaint),
 /// so a single snapshot can briefly show the prompt without its working row.
 const AGENT_READY_CONFIRM: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Escape hatch for a launch-instrumented agent whose terminal-ready screen
+/// remains stable after its authoritative completion signal was lost.
+const PROTOCOL_STALE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// Interrupt intent is only a hint: Ctrl-C/Escape may be ignored or handled
 /// asynchronously. Keep it long enough to correlate the subsequent explicit
@@ -1158,7 +1161,9 @@ impl TurnEvidence {
     /// closed, unless the caller has already decided the reopen is valid and
     /// passes an elevated rank for it (see `apply_working_evidence`).
     fn record_busy(&mut self, rank: EvidenceRank, source: &'static str) -> bool {
-        if self.idle.is_some_and(|idle| idle.rank > rank) {
+        if self.idle.is_some_and(|idle| idle.rank > rank)
+            || self.busy.is_some_and(|busy| busy.rank > rank)
+        {
             return false;
         }
         self.busy = Some(Evidence {
@@ -1175,7 +1180,9 @@ impl TurnEvidence {
     /// of the same (rank, source) — this is the `AGENT_READY_CONFIRM`
     /// debounce clock a caller reads via the returned `Evidence`.
     fn record_idle(&mut self, rank: EvidenceRank, source: &'static str) -> bool {
-        if self.busy.is_some_and(|busy| busy.rank > rank) {
+        if self.busy.is_some_and(|busy| busy.rank > rank)
+            || self.idle.is_some_and(|idle| idle.rank > rank)
+        {
             return false;
         }
         let at = match self.idle {
@@ -1624,7 +1631,12 @@ impl SilenceState {
                 } else {
                     "osc133-busy"
                 };
-                self.evidence.record_busy(EvidenceRank::Protocol, source);
+                let rank = if hook_state {
+                    EvidenceRank::Protocol
+                } else {
+                    EvidenceRank::Screen
+                };
+                self.evidence.record_busy(rank, source);
                 self.last_status_line_at = Some(std::time::Instant::now());
             }
             SHELL_IDLE => {
@@ -1633,7 +1645,12 @@ impl SilenceState {
                 } else {
                     "osc133-idle"
                 };
-                self.evidence.record_idle(EvidenceRank::Protocol, source);
+                let rank = if hook_state {
+                    EvidenceRank::Protocol
+                } else {
+                    EvidenceRank::Screen
+                };
+                self.evidence.record_idle(rank, source);
                 self.last_status_line_at = None;
                 self.interrupt_requested_at = None;
                 self.evidence.activity_seen = false;
@@ -1664,11 +1681,15 @@ impl SilenceState {
     }
 
     fn note_ready_screen(&mut self) -> bool {
-        if self.injection_delivery_uncertain
-            || (self.busy_source_is("hook-busy") && !self.evidence.activity_seen)
-            || (self.busy_source_is("user-submit") && !self.evidence.activity_seen)
-            || self.is_api_retry_active()
-        {
+        if self.evidence.busy.is_some_and(|busy| {
+            busy.rank == EvidenceRank::Protocol
+                && (busy.source != "user-submit" || !self.evidence.activity_seen)
+        }) {
+            self.screen_ready_pending_since
+                .get_or_insert_with(std::time::Instant::now);
+            return false;
+        }
+        if self.injection_delivery_uncertain || self.is_api_retry_active() {
             self.screen_ready_pending_since = None;
             return false;
         }
@@ -1716,16 +1737,27 @@ impl SilenceState {
         self.screen_ready_pending_since = None;
     }
 
-    pub(crate) fn note_user_submission(&mut self, has_ready_adapter: bool) {
+    pub(crate) fn note_user_submission(&mut self, protocol_instrumented: bool) {
         self.interrupt_requested_at = None;
         self.completion_declared = false;
         self.note_busy_evidence();
-        if has_ready_adapter {
+        if protocol_instrumented {
             self.evidence
                 .record_busy(EvidenceRank::Protocol, "user-submit");
             self.last_status_line_at = Some(std::time::Instant::now());
             self.evidence.activity_seen = false;
         }
+    }
+
+    fn protocol_busy_is_stale(&self) -> bool {
+        self.evidence.busy.is_some_and(|busy| {
+            busy.rank == EvidenceRank::Protocol
+                && busy.at.elapsed() >= PROTOCOL_STALE_TIMEOUT
+                && self.last_output_at.elapsed() >= PROTOCOL_STALE_TIMEOUT
+                && self
+                    .screen_ready_pending_since
+                    .is_some_and(|ready| ready.elapsed() >= PROTOCOL_STALE_TIMEOUT)
+        })
     }
 
     #[cfg(test)]
@@ -3677,7 +3709,12 @@ fn apply_working_evidence(
         // reopen checks above already cleared it), but must not persist and
         // block a later, unrelated idle evidence recording — see the comment
         // on the reader chunk path's `real_activity` CAS for the same reasoning.
-        sl.evidence.record_busy(EvidenceRank::Protocol, source);
+        let rank = if reopen {
+            EvidenceRank::Protocol
+        } else {
+            EvidenceRank::Screen
+        };
+        sl.evidence.record_busy(rank, source);
         (reopen, sl.evidence.clone())
     };
     if reopened_completion
@@ -3707,7 +3744,14 @@ fn apply_working_evidence(
         );
         emit_shell_state(state, session_id, "busy");
     }
-    silence.lock().evidence.busy = None;
+    let mut silence = silence.lock();
+    if silence
+        .evidence
+        .busy
+        .is_some_and(|busy| busy.source == source)
+    {
+        silence.evidence.busy = None;
+    }
 }
 
 /// A submitted line to a known agent is strong BUSY evidence even before the
@@ -3723,7 +3767,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
-    let Some(agent_type) = agent_type else {
+    let Some(_agent_type) = agent_type else {
         if let Some(sl) = state.session_maps.silence_states.get(session_id) {
             let mut silence = sl.lock();
             silence.note_user_submission(false);
@@ -3750,7 +3794,12 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
             state.note_marker(session_id, crate::state::MarkerKind::TurnSubmitted);
         }
         after_epoch();
-        silence.note_user_submission(has_ready_screen_adapter(Some(&agent_type)));
+        let protocol_instrumented = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_some_and(|session| session.hook_instrumented);
+        silence.note_user_submission(protocol_instrumented);
         silence.reset_suggest_memory();
         stamp_last_output_now(state, session_id, now_epoch_ms());
         let prev = state
@@ -3835,6 +3884,12 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
     hook_state: bool,
     before_transaction: F,
 ) {
+    if hook_state && matches!(target, SHELL_BUSY | SHELL_IDLE) {
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: serde_json::json!({ "type": "protocol-question-cleared" }).into(),
+        });
+    }
     let evidence_turn_epoch = state
         .session_maps
         .session_states
@@ -4151,7 +4206,20 @@ fn try_timer_idle_transition(
             };
         }
 
+        let protocol_stale =
+            screen_activity == AgentScreenActivity::Ready && silence.protocol_busy_is_stale();
         let screen_confirms_idle = match screen_activity {
+            AgentScreenActivity::Ready if protocol_stale => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    activity_source = "protocol-stale",
+                    "authoritative busy signal became stale on a stable ready screen"
+                );
+                silence
+                    .evidence
+                    .force_idle(EvidenceRank::Process, "protocol-stale");
+                true
+            }
             AgentScreenActivity::Ready => silence.note_ready_screen(),
             AgentScreenActivity::Interrupted => silence.note_interrupted_screen(),
             AgentScreenActivity::Unknown => {
@@ -4268,6 +4336,13 @@ fn completion_adjusted_screen_activity(
         return AgentScreenActivity::Working;
     }
     let silence = silence.lock();
+    if silence
+        .evidence
+        .busy
+        .is_some_and(|busy| busy.rank > EvidenceRank::Screen)
+    {
+        return AgentScreenActivity::Working;
+    }
     if state
         .session_maps
         .session_states
@@ -5734,7 +5809,13 @@ impl ChunkProcessor {
         // Recorded before any parsing so a fixture replays exactly the bytes
         // the detectors saw, chunk boundaries included — those boundaries are
         // themselves a failure mode (a split OSC matches nothing).
-        crate::pty_capture::record(session_id, data.as_bytes());
+        if crate::pty_capture::is_enabled() {
+            let capture_geometry = state.grid.vt_log_buffers.get(session_id).map(|vt| {
+                let vt = vt.lock();
+                (vt.grid_screen_lines() as u16, vt.grid_columns() as u16)
+            });
+            crate::pty_capture::record_with_geometry(session_id, data.as_bytes(), capture_geometry);
+        }
 
         raw_stream_events(&mut self.raw_carry, data, &mut events);
         let agent_active_for_parse = state
@@ -6292,8 +6373,12 @@ impl ChunkProcessor {
                     }
                     sl.note_working_screen();
                     invalidate_background_probe_boundary_locked(state, session_id);
-                    sl.evidence
-                        .record_busy(EvidenceRank::Protocol, working_source);
+                    let rank = if reopen {
+                        EvidenceRank::Protocol
+                    } else {
+                        EvidenceRank::Screen
+                    };
+                    sl.evidence.record_busy(rank, working_source);
                     working_applied = true;
                 }
             }
@@ -6310,7 +6395,7 @@ impl ChunkProcessor {
                     } else {
                         "real-activity"
                     };
-                    sl.evidence.record_busy(EvidenceRank::Protocol, source);
+                    sl.evidence.record_busy(EvidenceRank::Screen, source);
                 }
             }
             // SIGWINCH reflow repaints content rows for longer than the initial 1s
@@ -6403,7 +6488,14 @@ impl ChunkProcessor {
             // One-shot: this evidence must not persist to block a later,
             // unrelated idle-evidence recording (silence-timeout fallback,
             // ready-screen confirmation) — see the comment above.
-            silence.lock().evidence.busy = None;
+            let mut silence = silence.lock();
+            if silence.evidence.busy.is_some_and(|busy| {
+                busy.source == working_source
+                    || busy.source == "spinner-active"
+                    || busy.source == "real-activity"
+            }) {
+                silence.evidence.busy = None;
+            }
         }
 
         // Update terminal mode in SessionState when it changes.
@@ -9171,7 +9263,17 @@ fn write_pty_parts_blocking(
     }
 
     for data in parts {
-        crate::pty_capture::record_input(session_id, data.as_bytes());
+        if crate::pty_capture::is_enabled() {
+            let capture_geometry = state.grid.vt_log_buffers.get(session_id).map(|vt| {
+                let vt = vt.lock();
+                (vt.grid_screen_lines() as u16, vt.grid_columns() as u16)
+            });
+            crate::pty_capture::record_input_with_geometry(
+                session_id,
+                data.as_bytes(),
+                capture_geometry,
+            );
+        }
         apply_desktop_input_bookkeeping(state, session_id, data);
     }
 

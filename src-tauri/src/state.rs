@@ -3949,6 +3949,13 @@ impl AppState {
                             awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
                         }
                     }
+                    "protocol-question-cleared" if epoch_matches => {
+                        s.awaiting_input = false;
+                        s.question_text = None;
+                        s.question_confident = false;
+                        s.choice_prompt = None;
+                        awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
+                    }
                     "user-input" => {
                         // User responded — agent will start working
                         s.awaiting_input = false;

@@ -66,7 +66,7 @@ Disable this per agent with **Settings → Agents → Native status signals** to
 
 Instead of inferring busy/idle/waiting from terminal output, TUICommander can drive an agent's status directly from the agent's **own hook system**.
 
-When enabled, TUIC writes small shell hooks into the agent's settings file that emit `OSC 7770;state=…` on each lifecycle event (busy on prompt/tool start, `awaiting` on an approval/question prompt, idle on stop). The session state then follows the hooks precisely, and the heuristic question-detection above is suppressed for that agent (the silence-idle backstop stays on, so a crashed agent still recovers from "busy").
+When enabled, TUIC writes small shell hooks into the agent's settings file that emit `OSC 7770;state=…` on each lifecycle event (busy on prompt/tool start, `awaiting` on an approval/question prompt, idle on stop). The session state then follows the hooks precisely, and the heuristic question-detection above is suppressed for that agent. Screen and ordinary silence cannot override a protocol-held turn. If its completion signal is lost, a stable Ready screen plus five minutes without PTY output recovers the session and writes a `protocol-stale` warning.
 
 For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP server raises to ask you for input (`MCP server "…" requests your input`, with Accept/Decline). It arrives through Claude's `Elicitation` event and is retracted by `ElicitationResult`; no screen scraping is involved, because that dialog matches none of the question heuristics.
 

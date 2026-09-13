@@ -1997,3 +1997,11 @@ new `cow_workspaces_enabled` sub-flag, both default false.
 - [ ] While the panel is open, report another event and verify the displayed
       watermark stays frozen, the later event remains unread, and exactly one
       toast appears without a duplicate MESSAGES row.
+
+## Protocol-ranked agent state (story `745-8ff1`, 2026-09-13) — **Rust, needs a `make dev` restart**
+
+- [ ] After restarting `make dev`, run an instrumented agent turn for longer
+      than the ordinary silence threshold. A stale Ready repaint must not turn
+      the tab idle before the agent's protocol completion signal arrives.
+- [ ] Disable native/global status instrumentation for one agent and confirm
+      its existing Ready-screen fallback still returns the tab to idle.

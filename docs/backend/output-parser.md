@@ -158,9 +158,10 @@ Enable `POST /diagnostics/capture` before reproducing, stop it afterward, then
 copy the reported `<config dir>/captures/<session-id>.tcap` file into
 `src-tauri/src/fixtures/agent_prompts/`. `/sessions/:id/output` is not a fixture
 source: it is a rendered, bounded ring snapshot and can lose one-shot escape
-sequences. Framed fixtures preserve input/output direction, original chunk
-boundaries, ordering, and monotonic timestamps; legacy `.raw` fixtures remain
-supported as output-only input. Replay also applies the production chrome
+sequences. TUICCAP2 fixtures preserve the initial terminal geometry,
+input/output direction, original chunk boundaries, ordering, and monotonic
+timestamps. The decoder still accepts geometry-less TUICCAP1 and output-only
+`.raw`; their replay must supply independently observed dimensions. Replay also applies the production chrome
 cutoff before the rendered-row parser and hook suppression.
 
 Output-only fixtures cannot express a missing input-side CLEAR. Framed `.tcap`
