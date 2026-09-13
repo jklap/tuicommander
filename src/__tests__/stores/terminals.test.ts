@@ -207,6 +207,70 @@ describe("terminalsStore", () => {
 		});
 	});
 
+	describe("applyAlias()", () => {
+		// Story 761-c847: the backend assigns the alias the instant a PTY spawns,
+		// while the frontend still awaits session creation before calling
+		// setSessionId — so `term-alias-assigned` can arrive before the session
+		// is bound to any terminal. Before this fix, that event was silently
+		// dropped because getTerminalForSession(sessionId) returned null.
+		it("retains an alias that arrives before setSessionId binds the session, and applies it on bind", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				// Alias event races ahead of the bind — no terminal maps to "sess-1" yet.
+				store.applyAlias("sess-1", "tc-1");
+				expect(store.get(id)!.alias).toBeNull();
+
+				store.setSessionId(id, "sess-1");
+				expect(store.get(id)!.alias).toBe("tc-1");
+			});
+		});
+
+		it("applies immediately when the session is already bound", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.setSessionId(id, "sess-2");
+				store.applyAlias("sess-2", "tc-2");
+				expect(store.get(id)!.alias).toBe("tc-2");
+			});
+		});
+
+		it("applies immediately when bound via add() with a sessionId", () => {
+			testInScope(() => {
+				store.applyAlias("sess-3", "tc-3");
+				const id = store.add(makeTerminal({ sessionId: "sess-3" }));
+				expect(store.get(id)!.alias).toBe("tc-3");
+			});
+		});
+
+		it("applies immediately when bound via register() with a sessionId", () => {
+			testInScope(() => {
+				store.applyAlias("sess-4", "tc-4");
+				store.register("term-fixed", { ...makeTerminal(), sessionId: "sess-4" });
+				expect(store.get("term-fixed")!.alias).toBe("tc-4");
+			});
+		});
+
+		it("does not disturb a persisted alias when no alias event ever arrives for the new session", () => {
+			testInScope(() => {
+				const id = store.add({ ...makeTerminal(), alias: "persisted-alias" });
+				store.setSessionId(id, "sess-5");
+				expect(store.get(id)!.alias).toBe("persisted-alias");
+			});
+		});
+
+		it("a retained alias for one session is not applied to a different terminal's bind", () => {
+			testInScope(() => {
+				const idA = store.add(makeTerminal({ name: "A" }));
+				const idB = store.add(makeTerminal({ name: "B" }));
+				store.applyAlias("sess-a", "tc-a");
+				store.setSessionId(idB, "sess-b");
+				expect(store.get(idB)!.alias).toBeNull();
+				store.setSessionId(idA, "sess-a");
+				expect(store.get(idA)!.alias).toBe("tc-a");
+			});
+		});
+	});
+
 	describe("setFontSize()", () => {
 		it("updates font size", () => {
 			testInScope(() => {

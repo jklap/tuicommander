@@ -224,6 +224,21 @@ function createTerminalsStore() {
 	// Plain JS (not in SolidJS store) — maintained in sync with sessionId field.
 	const sessionToTerminal = new Map<string, string>();
 
+	// Session ids whose `term-alias-assigned` event arrived before the session
+	// was bound to a terminal (add/register/setSessionId establish the bind).
+	// The backend assigns the alias the instant the PTY spawns, while the
+	// frontend still awaits session creation before binding it — so the event
+	// can beat the bind. Retained here and applied the instant the bind exists.
+	const pendingAliases = new Map<string, string>();
+
+	/** Apply a retained alias for `sessionId` to `termId`, if one arrived early. */
+	function consumePendingAlias(termId: string, sessionId: string): void {
+		const alias = pendingAliases.get(sessionId);
+		if (alias === undefined) return;
+		pendingAliases.delete(sessionId);
+		setState("terminals", termId, "alias", alias);
+	}
+
 	// Debounced busy tracking: timers + timestamps are plain JS, the boolean state
 	// lives in the SolidJS store (state.debouncedBusy) for reactivity.
 	const busySinceMap = new Map<string, number>();
@@ -438,7 +453,10 @@ function createTerminalsStore() {
 				repoPath: null,
 				...data,
 			});
-			if (data.sessionId) sessionToTerminal.set(data.sessionId, id);
+			if (data.sessionId) {
+				sessionToTerminal.set(data.sessionId, id);
+				consumePendingAlias(id, data.sessionId);
+			}
 			tabOrderingStore.insert(id);
 			return id;
 		},
@@ -485,7 +503,10 @@ function createTerminalsStore() {
 				repoPath: null,
 				...data,
 			});
-			if (data.sessionId) sessionToTerminal.set(data.sessionId, id);
+			if (data.sessionId) {
+				sessionToTerminal.set(data.sessionId, id);
+				consumePendingAlias(id, data.sessionId);
+			}
 		},
 
 		/** Remove a terminal. Sets activeId to null when removing the active terminal —
@@ -626,7 +647,25 @@ function createTerminalsStore() {
 			const prev = state.terminals[id]?.sessionId;
 			if (prev) sessionToTerminal.delete(prev);
 			if (sessionId) sessionToTerminal.set(sessionId, id);
-			setState("terminals", id, "sessionId", sessionId);
+			batch(() => {
+				setState("terminals", id, "sessionId", sessionId);
+				if (sessionId) consumePendingAlias(id, sessionId);
+			});
+		},
+
+		/** Apply a backend-assigned alias for a PTY session. The race-safe entry
+		 *  point for `term-alias-assigned`: if the session isn't bound to a
+		 *  terminal yet (setSessionId/add/register haven't run), the alias is
+		 *  retained and applied the instant the bind is made, instead of being
+		 *  silently dropped. Callers should use this instead of resolving the
+		 *  terminal id themselves via getTerminalForSession. */
+		applyAlias(sessionId: string, alias: string): void {
+			const termId = sessionToTerminal.get(sessionId);
+			if (termId && has(termId)) {
+				setState("terminals", termId, "alias", alias);
+				return;
+			}
+			pendingAliases.set(sessionId, alias);
 		},
 
 		/** Record the repo that owns this terminal (null = no registered repo does).

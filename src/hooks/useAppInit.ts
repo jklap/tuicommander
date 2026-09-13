@@ -547,8 +547,10 @@ export async function initApp(deps: AppInitDeps) {
 
 	listen<{ session_id: string; alias: string }>("term-alias-assigned", (event) => {
 		const { session_id, alias } = event.payload;
-		const termId = terminalsStore.getTerminalForSession(session_id);
-		if (termId) terminalsStore.update(termId, { alias });
+		// applyAlias is race-safe: it retains the alias if this event beats
+		// setSessionId's binding of session_id to a terminal, and applies it
+		// the instant that binding is made — see terminals.ts.
+		terminalsStore.applyAlias(session_id, alias);
 	}).catch((err) => appLogger.error("app", "Failed to register term-alias-assigned listener", err));
 
 	listen<{ session_id: string; standby: boolean }>("session-standby", (event) => {
