@@ -740,6 +740,41 @@ A `.tuic.json` file in the repository root provides team-shareable settings. It 
 
 **Command:** `load_repo_local_config(repo_path)` — returns `RepoLocalConfig` or `null` if file is missing or malformed.
 
+## Progress Storage (`.tuic/progress.sqlite3`)
+
+**Module:** `src-tauri/src/progress/` (`store.rs`, `ownership.rs`, `model.rs`)
+
+Project-owned Rust history stores reported `started`, `milestone`, `blocked`,
+and `done` outcomes plus derived workstream state independently of sessions and
+workspaces. Story `749-06ff` provides storage only; the MCP/Tauri/HTTP surface is
+added by the following plan step.
+
+The database lives at `<owning-project-root>/.tuic/progress.sqlite3` with its
+SQLite sidecars. Ownership resolution starts from an authoritative registered
+project and follows recorded linked, COW, and nested workspace parent records;
+it never uses the focused UI repository or a bare CWD. Unbound callers fail
+with `project_required`, and an inherited COW copy is not a second authority.
+
+Schema version 1 stores project revision state, workstreams and rename aliases,
+events with monotonic sequence numbers and UUIDv7 ids, and independently active
+blockers. Sequence and revision values are not reused after deletion or clear.
+Each operation opens a fresh SQLite connection in WAL mode with a five-second
+busy timeout, leaving SQLite locking as the cross-thread and cross-process
+serialization boundary.
+
+Failures are explicit: `progress_store_unavailable`, `progress_store_busy`,
+`progress_store_incompatible`, `progress_store_corrupt`,
+`progress_store_recovered`, or `progress_store_recovery_failed`. Recovery is
+serialized by `progress.sqlite3.recovery.lock`; it preserves the database and
+any WAL/SHM files byte-for-byte under unique `.corrupt-<uuid>` names, creates a
+validated empty replacement, and still returns an error so the caller must
+retry rather than mistake the replacement for the original history.
+
+On first open, the store adds its database, sidecars, recovery lock, and corrupt
+backup pattern to the repository-local `.git/info/exclude`, never tracked
+`.gitignore`. Both the repository watcher and content index honor that exclude,
+so Progress persistence does not emit repository changes or trigger indexing.
+
 ## Additional Commands
 
 | Command | Module | Description |
