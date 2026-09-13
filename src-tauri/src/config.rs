@@ -90,7 +90,7 @@ pub(crate) fn config_dir() -> PathBuf {
         if let Some(dir) = lock_config_dir_override().clone() {
             return dir;
         }
-        return test_fallback_config_dir().clone();
+        test_fallback_config_dir().clone()
     }
     #[cfg(not(test))]
     {

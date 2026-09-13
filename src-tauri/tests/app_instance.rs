@@ -115,6 +115,31 @@ fn only_the_unnamed_instance_is_default() {
     );
 }
 
+/// The accessor `dev_store::file_path` reads instead of reverse-parsing
+/// `vault_service()`. Its contract is that the id the instance reports is the
+/// same id the vault service was built from, so the two can never drift.
+#[test]
+fn only_a_named_instance_reports_an_id_and_that_id_builds_its_vault_service() {
+    assert_eq!(AppInstance::default().named_id(), None);
+
+    for id in canonical_ids() {
+        let named = AppInstance::named(id).expect("named instance");
+        assert_eq!(named.named_id(), Some(*id));
+        assert!(
+            named.vault_service().ends_with(id),
+            "vault service {:?} does not end with the reported id {id:?}",
+            named.vault_service()
+        );
+        assert_eq!(
+            named.config_dir_from(None, Path::new("/fallback/home")),
+            Path::new("/fallback/home")
+                .join(".tuicommander")
+                .join("instances")
+                .join(named.named_id().expect("named id")),
+        );
+    }
+}
+
 #[test]
 fn instance_selection_is_available_once_and_late_selection_is_rejected() {
     select_app_instance(Some(NAMED_ID)).expect("select named instance");
