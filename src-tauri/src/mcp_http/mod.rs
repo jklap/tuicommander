@@ -699,6 +699,7 @@ const API_PREFIXES: &[&str] = &[
     "metrics",
     "plugins",
     "process",
+    "progress",
     "prompt",
     "registry",
     "repo",
@@ -3460,7 +3461,13 @@ mod tests {
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect();
-        assert_eq!(names, vec!["search_tools", "get_tool_schema", "call_tool"]);
+        // `progress` survives the collapse on purpose — a worker must be able to
+        // report even to a client that cannot hold the full tool surface. See
+        // mcp_transport::tests::merged_tools_collapse_true_keeps_progress_directly_available.
+        assert_eq!(
+            names,
+            vec!["search_tools", "get_tool_schema", "call_tool", "progress"]
+        );
         assert!(!state.config.read().collapse_tools);
     }
 

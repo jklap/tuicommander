@@ -449,6 +449,7 @@ fn progress_read(
     progress::progress_read(&project, input)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn progress_export(
     project: String,

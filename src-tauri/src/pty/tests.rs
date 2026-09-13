@@ -11435,7 +11435,11 @@ fn codex_0154_runtime_hook_idle_reaches_the_pty_state_machine() {
     let bytes = agent_prompt_fixture("codex-0.154-runtime-hook-idle.tcap");
     let capture = crate::pty_capture::decode_capture(&bytes).expect("valid framed capture");
     assert_eq!(capture.geometry, None, "typescript did not record geometry");
-    assert_eq!(capture.records.len(), 1, "transcript is one observed PTY write");
+    assert_eq!(
+        capture.records.len(),
+        1,
+        "transcript is one observed PTY write"
+    );
     assert_eq!(capture.records[0].data.len(), 53_289);
     assert!(
         capture.records[0]
