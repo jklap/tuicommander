@@ -1048,7 +1048,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_adopt, worktree_publish, worktree_unpublished";
+const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_adopt, worktree_publish, worktree_unpublished, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
@@ -1122,7 +1122,7 @@ fn native_tool_definitions() -> serde_json::Value {
             "name": "repo",
             "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a workspace. Requires path. Optional: branch, base_ref, spawn_session, mode, dirty. The response carries the isolation semantics of the workspace you got — read it.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- worktree_adopt: Explicitly register a copy-on-write clone this backend lost track of (no provenance markers, so worktree_list/worktree_remove refuse to trust it on sight). Requires path, candidate_path. The call itself is confirmation — it never deletes anything, and the only change it makes to the clone is writing its two provenance markers into local git config; HEAD, the index, the working tree, untracked files, refs and remotes are untouched. Optional: workspace_id, to reuse a specific id when retrying a call whose registration failed.\n- worktree_unpublished: How many commits exist only in this workspace (reachable from HEAD, from no remote and no mirrored parent ref). Requires path, workspace_id. Always 0 for a linked worktree, whose objects already live in the parent.\n- worktree_publish: Get a workspace's commits into the parent repo and out to origin. Requires path, workspace_id. Reuses the same safe staging-ref implementation as the Tauri command and the HTTP route: the parent update is fast-forward only, refuses a branch checked out in the parent, and never force-merges a divergent same-named parent ref. Reports parent_updated/parent_error and origin_pushed/origin_error independently — a missing/unreachable origin does not undo a parent update. A linked worktree returns no_op_reason instead: its refs are already shared with the parent.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_adopt, worktree_publish, worktree_unpublished" },
+                "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_adopt, worktree_publish, worktree_unpublished, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_adopt, worktree_publish, worktree_unpublished)" },
                 "workspace_id": { "type": "string", "description": "Opaque workspace id from action=worktree_list — never guess it from a branch name (required for action=worktree_remove, worktree_publish, worktree_unpublished). For a linked worktree the id happens to equal the branch, but a COW clone's id is minted independently of its branch, so two workspaces can share a branch while holding different ids; always read the id worktree_list returns rather than assuming one. For action=worktree_adopt (optional), reuse a specific id instead of minting one — for retrying a call whose registration failed." },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty or unpublished workspace state; obtain user confirmation before setting it." },
@@ -1134,6 +1134,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" },
                 "candidate_path": { "type": "string", "description": "Absolute path to the candidate directory to adopt (action=worktree_adopt, required). Must be an immediate child of the repo's configured worktree base." }
+                ,"input": { "type": "object", "description": "Typed action payload for progress_list/delete/clear/update/read. Unknown fields are rejected." }
             }, "required": ["action"] }
         },
         {
@@ -6347,6 +6348,54 @@ async fn handle_repo(
         | "worktree_adopt"
         | "worktree_publish"
         | "worktree_unpublished" => handle_worktree(state, args, is_claude_code).await,
+        "progress_status" | "progress_list" | "progress_pause" | "progress_resume"
+        | "progress_delete" | "progress_clear" | "progress_update" | "progress_read" => {
+            let path = match require_path(args, action) {
+                Ok(path) => path,
+                Err(error) => return error,
+            };
+            if let Err(error) = validate_mcp_repo_path(&path) {
+                return error;
+            }
+            let input = args
+                .get("input")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let action = action.to_string();
+            run_blocking_handler(move || {
+                let result: Result<serde_json::Value, String> = match action.as_str() {
+                    "progress_status" => crate::progress::progress_status(&path)
+                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+                    "progress_list" => serde_json::from_value(input)
+                        .map_err(|e| format!("progress_invalid_request: {e}"))
+                        .and_then(|v| crate::progress::progress_list(&path, v))
+                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+                    "progress_pause" => crate::progress::progress_pause(&path)
+                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+                    "progress_resume" => crate::progress::progress_resume(&path)
+                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+                    "progress_delete" => serde_json::from_value(input)
+                        .map_err(|e| format!("progress_invalid_request: {e}"))
+                        .and_then(|v| crate::progress::progress_delete(&path, v))
+                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+                    "progress_clear" => serde_json::from_value(input)
+                        .map_err(|e| format!("progress_invalid_request: {e}"))
+                        .and_then(|v| crate::progress::progress_clear(&path, v))
+                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+                    "progress_update" => serde_json::from_value(input)
+                        .map_err(|e| format!("progress_invalid_request: {e}"))
+                        .and_then(|v| crate::progress::progress_update(&path, v))
+                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+                    "progress_read" => serde_json::from_value(input)
+                        .map_err(|e| format!("progress_invalid_request: {e}"))
+                        .and_then(|v| crate::progress::progress_read(&path, v))
+                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+                    _ => unreachable!(),
+                };
+                result.unwrap_or_else(|error| serde_json::json!({"error": error}))
+            })
+            .await
+        }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
         )}),

@@ -116,7 +116,7 @@ pub(crate) fn validate_workstream_name(value: &str) -> Result<(), String> {
     validate_text("workstream", value, MAX_WORKSTREAM_CHARS)
 }
 
-fn validate_text(field: &str, value: &str, max: usize) -> Result<(), String> {
+pub(crate) fn validate_text(field: &str, value: &str, max: usize) -> Result<(), String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(format!("{field} must not be empty"));
@@ -180,9 +180,105 @@ pub struct ProjectSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct ProgressPage {
     pub revision: u64,
+    pub snapshot_cursor: u64,
     pub events: Vec<ProgressEvent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_before_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressStatus {
+    pub project_root: String,
+    pub revision: u64,
+    pub snapshot_cursor: u64,
+    pub read_cursor: u64,
+    pub unread_count: u64,
+    pub collection_enabled: bool,
+    pub workstreams: Vec<WorkstreamSnapshot>,
+    pub project_blockers: Vec<ProgressEvent>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProgressListInput {
+    pub before_sequence: Option<u64>,
+    pub limit: Option<usize>,
+    pub workstream_id: Option<String>,
+    pub kind: Option<ProgressKind>,
+    pub unread_only: Option<bool>,
+    pub blocker_only: Option<bool>,
+    pub created_after_ms: Option<u64>,
+    pub created_before_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProgressDeleteInput {
+    pub event_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProgressClearInput {
+    pub expected_revision: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProgressReadInput {
+    pub snapshot_cursor: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "operation",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ProgressCorrection {
+    EditSummary {
+        event_id: String,
+        summary: String,
+    },
+    MoveEvent {
+        event_id: String,
+        workstream_id: Option<String>,
+    },
+    RenameWorkstream {
+        workstream_id: String,
+        name: String,
+    },
+    MergeWorkstreams {
+        source_workstream_ids: Vec<String>,
+        target_workstream_id: String,
+    },
+    MergeEvents {
+        source_event_ids: Vec<String>,
+        target_event_id: String,
+    },
+    ResolveBlocker {
+        event_id: String,
+    },
+    SetWorkstreamState {
+        workstream_id: String,
+        state: WorkstreamState,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProgressUpdateInput {
+    pub expected_revision: u64,
+    pub corrections: Vec<ProgressCorrection>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressMutationReceipt {
+    pub revision: u64,
+    pub affected: usize,
 }
 
 /// Caller-supplied report fields. Provenance is derived by the transport.

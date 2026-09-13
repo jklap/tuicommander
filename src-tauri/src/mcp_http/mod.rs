@@ -405,6 +405,96 @@ async fn post_progress_report(
     ))
 }
 
+fn progress_auth(addr: &SocketAddr, authenticated: bool) -> Result<(), Response> {
+    guards::require_local_or_auth(addr, authenticated).map_err(IntoResponse::into_response)
+}
+
+async fn get_progress_status(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+) -> Response {
+    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_status(&q.path))
+}
+async fn post_progress_list(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(input): Json<crate::progress::ProgressListInput>,
+) -> Response {
+    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_list(&q.path, input))
+}
+async fn post_progress_pause(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+) -> Response {
+    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_pause(&q.path))
+}
+async fn post_progress_resume(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+) -> Response {
+    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_resume(&q.path))
+}
+async fn post_progress_delete(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(input): Json<crate::progress::ProgressDeleteInput>,
+) -> Response {
+    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_delete(&q.path, input))
+}
+async fn post_progress_clear(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(input): Json<crate::progress::ProgressClearInput>,
+) -> Response {
+    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_clear(&q.path, input))
+}
+async fn post_progress_update(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(input): Json<crate::progress::ProgressUpdateInput>,
+) -> Response {
+    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_update(&q.path, input))
+}
+async fn post_progress_read(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(input): Json<crate::progress::ProgressReadInput>,
+) -> Response {
+    if let Err(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_read(&q.path, input))
+}
+
 /// Serve plugin data files over HTTP.
 /// Reuses the same sandboxed read logic as the Tauri `read_plugin_data` command.
 async fn plugin_data_http(AxumPath((plugin_id, path)): AxumPath<(String, String)>) -> Response {
@@ -1432,6 +1522,14 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
                 .post(config_routes::save_repo_local_config_http),
         )
         .route("/progress/report", post(post_progress_report))
+        .route("/progress/status", get(get_progress_status))
+        .route("/progress/list", post(post_progress_list))
+        .route("/progress/pause", post(post_progress_pause))
+        .route("/progress/resume", post(post_progress_resume))
+        .route("/progress/delete", post(post_progress_delete))
+        .route("/progress/clear", post(post_progress_clear))
+        .route("/progress/update", post(post_progress_update))
+        .route("/progress/read", post(post_progress_read))
         // Story 066: config / themes / notes / misc stateless parity (loopback)
         .route(
             "/config/branch-label",
@@ -2426,7 +2524,7 @@ mod tests {
         url.query_pairs_mut()
             .append_pair("path", &project.path().to_string_lossy());
         let uri = &url[url::Position::BeforePath..];
-        let mut request = Request::post(&uri)
+        let mut request = Request::post(uri)
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
             .unwrap();

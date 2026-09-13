@@ -8,6 +8,16 @@ response is a bounded `{ status, revision, eventId? }` receipt. Recorded
 events are published as `progress-recorded` on `/events`; duplicate and paused
 reports emit nothing.
 
+Project controls require the same explicit `path` query and normal route
+authentication. They are `GET /progress/status` and `POST` routes
+`/progress/list`, `/progress/pause`, `/progress/resume`, `/progress/delete`,
+`/progress/clear`, `/progress/update`, and `/progress/read`. Bodies match their
+Tauri `input` objects: typed list filters, `{eventIds}`,
+`{expectedRevision}`, `{expectedRevision, corrections}`, or
+`{snapshotCursor}`. Unknown fields are rejected. Clear/update reject stale
+revisions; read acknowledges the supplied viewed cursor rather than the latest
+sequence. No route has an implicit all-project destructive target.
+
 REST API served by the Axum HTTP server when MCP server is enabled. All Tauri commands are accessible as HTTP endpoints.
 
 ## Base URL

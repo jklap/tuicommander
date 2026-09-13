@@ -1,7 +1,7 @@
 # Project Progress
 
-Status: project-local storage and the compact reporting tool are implemented.
-Controls, the panel, and export described below remain planned.
+Status: project-local storage, the compact reporting tool, and project controls
+are implemented. The panel and export described below remain planned.
 
 Progress answers: **What meaningfully changed since I last looked?**
 It organizes outcomes by project and workstream: capabilities, decisions,
@@ -77,6 +77,12 @@ workspace does not remove project history. The database is local runtime state,
 excluded from Git; Markdown is the portable, optionally versioned export.
 Editing that export does not change the stored history. No background model is
 required to collect, group, display, or export explicit reports.
+
+Controls are project-scoped across MCP `repo` actions, Tauri IPC, and HTTP.
+Delete always names event IDs; clear names one project and supplies its current
+revision. Corrections are typed operations rather than arbitrary database writes.
+Opening a view captures `snapshotCursor`; acknowledging that exact value leaves
+later reports, and reports in every other project, unread.
 
 If the database is corrupt, TUICommander preserves the database and WAL data and
 retains any existing SQLite SHM sidecar under unique `.corrupt-<uuid>` names before
