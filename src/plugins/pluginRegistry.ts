@@ -588,6 +588,14 @@ function createPluginRegistry() {
 				mdTabsStore.add(repoPath, filePath, fsRoot || undefined);
 			},
 
+			openMarkdownFileBackground(absolutePath: string): boolean {
+				requireCapability(pluginId, capabilities, "ui:markdown");
+				const { repoPath, fsRoot, filePath } = locateFile(absolutePath);
+				if (!repoPath) return false;
+				mdTabsStore.addFileBackground(repoPath, filePath, fsRoot || undefined);
+				return true;
+			},
+
 			async playNotificationSound(sound?: NotificationSound): Promise<void> {
 				requireCapability(pluginId, capabilities, "ui:sound");
 				const resolved: NotificationSound = NOTIFICATION_SOUNDS.includes(sound as NotificationSound)

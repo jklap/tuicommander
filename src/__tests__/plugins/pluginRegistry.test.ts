@@ -348,6 +348,59 @@ describe("PluginHost callback guards", () => {
 	});
 });
 
+describe("PluginHost.openMarkdownFileBackground", () => {
+	it("opens an owned file without changing the active markdown tab and deduplicates it", async () => {
+		const repoPath = "/plugin-background-repo";
+		repositoriesStore.add({ path: repoPath, displayName: "background" });
+		const activeId = mdTabsStore.addVirtual("Existing", "test:existing");
+		let opened = false;
+
+		try {
+			await pluginRegistry.register(
+				makePlugin("background-opener", (host) => {
+					opened = host.openMarkdownFileBackground(`${repoPath}/plans/feature.md`);
+					expect(host.openMarkdownFileBackground(`${repoPath}/plans/feature.md`)).toBe(true);
+				}),
+				["ui:markdown"],
+			);
+
+			expect(opened).toBe(true);
+			expect(mdTabsStore.state.activeId).toBe(activeId);
+			expect(mdTabsStore.getIds()).toHaveLength(2);
+			expect(
+				mdTabsStore.getIds().some((id) => {
+					const tab = mdTabsStore.get(id);
+					return tab?.type === "file" && tab.filePath === "plans/feature.md";
+				}),
+			).toBe(true);
+		} finally {
+			repositoriesStore.remove(repoPath);
+		}
+	});
+
+	it("refuses an absolute path outside every registered repository", async () => {
+		let result = true;
+		await pluginRegistry.register(
+			makePlugin("background-opener", (host) => {
+				result = host.openMarkdownFileBackground("/unowned/plans/feature.md");
+			}),
+			["ui:markdown"],
+		);
+
+		expect(result).toBe(false);
+		expect(mdTabsStore.getIds()).toHaveLength(0);
+	});
+
+	it("requires the ui:markdown capability", async () => {
+		await pluginRegistry.register(
+			makePlugin("background-opener", (host) => {
+				expect(() => host.openMarkdownFileBackground("/repo/plan.md")).toThrow(PluginCapabilityError);
+			}),
+			[],
+		);
+	});
+});
+
 // ---------------------------------------------------------------------------
 // PluginHost — markdown provider delegation
 // ---------------------------------------------------------------------------

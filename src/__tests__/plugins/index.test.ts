@@ -3,20 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	syncDisabledList: vi.fn().mockResolvedValue(undefined),
 	loadUserPlugins: vi.fn().mockResolvedValue(undefined),
-	registerBuiltInPlugin: vi.fn(),
-	register: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../plugins/pluginLoader", () => ({
 	isPluginDisabled: vi.fn(() => false),
 	loadUserPlugins: mocks.loadUserPlugins,
-	registerBuiltInPlugin: mocks.registerBuiltInPlugin,
 	syncDisabledList: mocks.syncDisabledList,
 }));
-vi.mock("../../plugins/pluginRegistry", () => ({ pluginRegistry: { register: mocks.register } }));
-vi.mock("../../plugins/planPlugin", () => ({ planPlugin: { id: "plan" } }));
-vi.mock("../../plugins/storiesTickerPlugin", () => ({ storiesTickerPlugin: { id: "stories" } }));
-vi.mock("../../stores/pluginStore", () => ({ pluginStore: { registerPlugin: vi.fn() } }));
 vi.mock("../../features/agentUsage", () => ({ initAgentUsage: vi.fn(), destroyAgentUsage: vi.fn() }));
 
 import { initPlugins } from "../../plugins";
@@ -31,13 +24,9 @@ describe("initPlugins", () => {
 		expect(mocks.loadUserPlugins).toHaveBeenCalledWith(false);
 	});
 
-	it("registers enabled built-in plugins concurrently", async () => {
-		const releases: Array<() => void> = [];
-		mocks.register.mockImplementation(() => new Promise<void>((resolve) => releases.push(resolve)));
+	it("loads external plugins after synchronizing the disabled list", async () => {
+		await initPlugins();
 
-		const loading = initPlugins();
-		await vi.waitFor(() => expect(mocks.register).toHaveBeenCalledTimes(2));
-		for (const release of releases) release();
-		await loading;
+		expect(mocks.syncDisabledList).toHaveBeenCalledBefore(mocks.loadUserPlugins);
 	});
 });

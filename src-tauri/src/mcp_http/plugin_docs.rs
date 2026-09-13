@@ -233,6 +233,7 @@ host.getGitDiff(repoPath, scope?)       // unified diff string (scope: "staged" 
 | `await host.readSessionOutput(sessionId: string, maxLines?: number): Promise<string>` | `pty:read` |
 | `host.openMarkdownPanel(title: string, contentUri: string): void` | `ui:markdown` |
 | `host.openMarkdownFile(absolutePath: string): void` | `ui:markdown` |
+| `host.openMarkdownFileBackground(absolutePath: string): boolean` — opens a pinned background tab; false when no registered repo owns the path | `ui:markdown` |
 | `host.openEditorTab(filePath: string, repoPath: string, opts?: { fsRoot?: string, line?: number }): void` | *(none)* |
 | `await host.playNotificationSound(sound?: "question" \| "error" \| "completion" \| "warning" \| "info"): Promise<void>` | `ui:sound` |
 | `host.openPanel({ id, title, html, onMessage? }): PanelHandle` | `ui:panel` |
