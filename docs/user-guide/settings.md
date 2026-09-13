@@ -167,6 +167,43 @@ Manage the AI-powered actions surfaced in the toolbar, context menus, and comman
 
 See [Smart Prompts](smart-prompts.md) for the full guide.
 
+## Providers Tab
+
+Declares the LLM endpoints TUICommander calls directly — the AI Chat panel, diff triage, and Smart Prompts in API mode. Agent CLIs (Claude Code, Codex, …) keep their own credentials and are configured in the **Agents** tab instead.
+
+The registry lives in `<config_dir>/providers.json`. **API keys are never written there** — they go to the OS keyring under `provider/<provider-id>`.
+
+### Providers
+
+**+ Add** opens the form:
+
+| Field | Description |
+|---------|-------------|
+| **Type** | Anthropic, OpenAI, Google Gemini, DeepSeek, Mistral, Fireworks AI, SambaNova, Moonshot, xAI (Grok), Zhipu AI, OpenRouter, Requesty, LiteLLM, Ollama (local), LM Studio (local), or Custom (OpenAI-compatible). AWS Bedrock and Google Vertex are listed as **coming soon** and are refused on save. |
+| **Label** | Required. Free text — how the provider appears in the model dropdowns, e.g. "Anthropic (personal)". |
+| **Base URL** | Optional, hidden for Anthropic / OpenAI / Gemini. Blank uses the type's default (`http://localhost:11434/v1/` for Ollama, `http://localhost:1234/v1/` for LM Studio). |
+| **API Key** | Required for every type except the local ones (Ollama, LM Studio, LiteLLM). |
+
+Each saved provider is a card showing its type, its key state (**✓ key**, **no key**, or **no key needed**), and a list of its models. Controls per card:
+
+- **Add model** — model name as the provider spells it (e.g. `claude-sonnet-4-5-20241022`) plus a tier (Economic / Standard / Premium). The tier is stored with the model and shown next to it.
+- **API key row** — save a key, or replace / remove an existing one. The key never returns to the UI once saved.
+- **×** — remove the model, or the whole provider.
+
+**Reachability (Ollama only).** An Ollama card probes `/api/tags` when the tab opens and shows **Reachable** or **Not detected**. When it fails, the backend's own wording is shown underneath — the endpoint answered an HTTP error, it did not answer within the timeout, or the connection was refused ("is Ollama running?"). A reachable Ollama also lists the models it actually holds, which is what you type into **Add model**. Other provider types have no probe; use **Test** on a slot instead.
+
+### Slot Assignments
+
+A slot names which model a TUIC feature uses. Each is a dropdown of every model in the registry, plus **Test** — one real request with a 15 s timeout, answering either the model's reply or the failure verbatim.
+
+| Slot | Used by |
+|---------|-------------|
+| **Main** | AI Chat and on-demand PR review. Per-phase AI Chat overrides (`plan`, `search`, `read`, `write`) are set separately in Settings > AI Chat. |
+| **Triage** | Diff triage annotations and automated code analysis. |
+| **Headless / Smart Prompts** | One-shot calls: commit messages, code review, Smart Prompts in API mode. |
+
+The headless slot picks an **agent** rather than a model: any detected agent that has a headless template, or one of its run configurations. Choosing **External API** reveals the model dropdown and routes those calls through the provider registry instead of a CLI.
+
 ## Repository Settings
 
 Per-repository settings accessed via sidebar `⋯` → "Repo Settings".
