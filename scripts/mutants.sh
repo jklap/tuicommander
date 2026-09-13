@@ -32,6 +32,7 @@ MBX_BIN="$HOME/Library/Application Support/mbx/bin"
 command -v cargo-mutants >/dev/null || { echo "cargo-mutants missing: cargo install --locked cargo-mutants"; exit 1; }
 [ -d "$ROOT/dist" ] || { echo "$ROOT/dist missing — run 'pnpm exec vite build' first"; exit 1; }
 ls "$ROOT/src-tauri/binaries"/tuic-bridge-* >/dev/null 2>&1 || { echo "sidecar missing — run 'pnpm build:sidecar' first"; exit 1; }
+[ -f "$ROOT/plugins/plan/manifest.json" ] || { echo "plugins submodule not checked out — run 'git submodule update --init plugins' first"; exit 1; }
 
 mkdir -p "$ROOT/.tmp"
 # Paths relative to src-tauri, with the b/ prefix --in-diff expects.
@@ -48,6 +49,14 @@ git -C "$ROOT" archive HEAD | tar -x -C "$SRC"
 mkdir -p "$SRC/dist" "$SRC/src-tauri/binaries"
 cp -R "$ROOT/dist/." "$SRC/dist/"
 cp -R "$ROOT/src-tauri/binaries/." "$SRC/src-tauri/binaries/"
+# `plugins` is a SUBMODULE: `git archive` writes the gitlink and none of the
+# files under it, so the six include_str! in plugins.rs (plan and
+# stories-ticker) resolve to nothing and the BASELINE build fails — "cargo
+# build failed in an unmutated tree, so no mutants were tested". That reads as
+# a clean run to anything that only checks missed.txt, which stays empty
+# because nothing ever ran.
+mkdir -p "$SRC/plugins"
+cp -R "$ROOT/plugins/." "$SRC/plugins/"
 
 cd "$SRC/src-tauri"
 ulimit -n 10240
