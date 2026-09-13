@@ -2374,6 +2374,8 @@ mod tests {
     fn clear_preserves_monotonic_ids_pauses_and_rejects_stale_revision() {
         let project = git_project();
         let store = ProgressStore::open(project.path()).unwrap();
+        let export = project.path().join("progress.md");
+        fs::write(&export, "# Existing export\n").unwrap();
         let old = store
             .record(&event(ProgressKind::Milestone, "Old.", Some("Arc")))
             .unwrap();
@@ -2391,6 +2393,157 @@ mod tests {
             .record(&event(ProgressKind::Milestone, "New.", Some("Arc")))
             .unwrap();
         assert!(new.sequence > old.sequence);
+        assert_eq!(fs::read_to_string(export).unwrap(), "# Existing export\n");
+    }
+
+    #[test]
+    fn delete_rejects_a_wrong_project_id_without_partial_mutation() {
+        let first = git_project();
+        let second = git_project();
+        let a = ProgressStore::open(first.path()).unwrap();
+        let b = ProgressStore::open(second.path()).unwrap();
+        let owned = a
+            .record(&event(ProgressKind::Milestone, "Owned.", Some("API")))
+            .unwrap();
+        let foreign = b
+            .record(&event(ProgressKind::Milestone, "Foreign.", Some("API")))
+            .unwrap();
+
+        let error = a
+            .delete_events(&[owned.id.clone(), foreign.id])
+            .unwrap_err();
+
+        assert!(error.starts_with("progress_event_not_found:"));
+        assert_eq!(a.list(None, Some(10)).unwrap().events, vec![owned]);
+    }
+
+    #[test]
+    fn corrections_merge_history_and_preserve_the_source_event() {
+        let project = git_project();
+        let store = ProgressStore::open(project.path()).unwrap();
+        let target = store
+            .record(&reported("Target summary.", "target-reporter"))
+            .unwrap();
+        let source = store
+            .record(&NewProgressEvent {
+                kind: ProgressKind::Blocked,
+                summary: "Source blocker.".into(),
+                workstream: Some("Source stream".into()),
+                provenance: ProgressProvenance {
+                    reporter_id: Some("source-reporter".into()),
+                    reporter_name: Some("Source Agent".into()),
+                    session_id: Some("source-session".into()),
+                    workspace_path: Some(project.path().display().to_string()),
+                },
+            })
+            .unwrap();
+        let snapshot = store.snapshot().unwrap();
+        let target_stream = snapshot
+            .workstreams
+            .iter()
+            .find(|stream| stream.name == "Delivery")
+            .unwrap()
+            .id
+            .clone();
+        let source_stream = snapshot
+            .workstreams
+            .iter()
+            .find(|stream| stream.name == "Source stream")
+            .unwrap()
+            .id
+            .clone();
+
+        let first = store
+            .update(&ProgressUpdateInput {
+                expected_revision: snapshot.revision,
+                corrections: vec![
+                    ProgressCorrection::EditSummary {
+                        event_id: target.id.clone(),
+                        summary: "Corrected target.".into(),
+                    },
+                    ProgressCorrection::ResolveBlocker {
+                        event_id: source.id.clone(),
+                    },
+                    ProgressCorrection::MergeWorkstreams {
+                        source_workstream_ids: vec![source_stream],
+                        target_workstream_id: target_stream.clone(),
+                    },
+                    ProgressCorrection::MergeEvents {
+                        source_event_ids: vec![source.id.clone()],
+                        target_event_id: target.id.clone(),
+                    },
+                    ProgressCorrection::SetWorkstreamState {
+                        workstream_id: target_stream,
+                        state: WorkstreamState::Done,
+                    },
+                ],
+            })
+            .unwrap();
+
+        let page = store.list(None, Some(10)).unwrap();
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].id, target.id);
+        assert_eq!(page.events[0].summary, "Corrected target.");
+        assert_eq!(
+            store.snapshot().unwrap().workstreams[0].state,
+            WorkstreamState::Done
+        );
+        assert!(first.revision > snapshot.revision);
+
+        let conn = store.connect().unwrap();
+        let preserved: String = conn
+            .query_row(
+                "SELECT source_event_json FROM merged_event_sources WHERE source_event_id=?1",
+                [&source.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let preserved: serde_json::Value = serde_json::from_str(&preserved).unwrap();
+        assert_eq!(preserved["reporterId"], "source-reporter");
+        assert_eq!(preserved["sessionId"], "source-session");
+        assert_eq!(preserved["summary"], "Source blocker.");
+    }
+
+    #[test]
+    fn clear_and_report_serialize_without_losing_an_accepted_report() {
+        use std::sync::{Arc, Barrier};
+
+        let project = git_project();
+        let store = ProgressStore::open(project.path()).unwrap();
+        let existing = store
+            .record(&event(ProgressKind::Milestone, "Existing.", Some("API")))
+            .unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let clear_store = store.clone();
+        let clear_barrier = barrier.clone();
+        let clear = std::thread::spawn(move || {
+            clear_barrier.wait();
+            clear_store.clear(existing.revision)
+        });
+        let report_store = store.clone();
+        let report = std::thread::spawn(move || {
+            barrier.wait();
+            report_store.report(&reported("Concurrent report.", "race-reporter"))
+        });
+
+        let clear = clear.join().unwrap();
+        let report = report.join().unwrap().unwrap();
+        let page = store.list(None, Some(10)).unwrap();
+        match clear {
+            Ok(_) => {
+                assert_eq!(report.receipt.status, ProgressReceiptStatus::Paused);
+                assert!(page.events.is_empty());
+            }
+            Err(error) => {
+                assert!(error.starts_with("progress_revision_conflict:"));
+                assert_eq!(report.receipt.status, ProgressReceiptStatus::Recorded);
+                assert!(
+                    page.events
+                        .iter()
+                        .any(|event| event.summary == "Concurrent report.")
+                );
+            }
+        }
     }
 
     #[test]
