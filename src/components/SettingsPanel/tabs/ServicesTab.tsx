@@ -19,6 +19,19 @@ export {
 } from "./services/RemoteMachinesPanel";
 export { authFromUpstreamForm, shouldShowAuthorize, startAuthorizeFlow } from "./services/UpstreamMcpPanel";
 
+/** Username the placeholder advertises, and the value used when the field is left blank. */
+export const DEFAULT_AUTH_USERNAME = "admin";
+
+/**
+ * Normalize the remote-access username before it reaches the config.
+ *
+ * An empty username makes `validate_basic_auth` return `NotConfigured`, so the
+ * server answers every Basic Auth attempt with 401 no matter what the client
+ * sends — while the field still shows the `admin` placeholder, which reads as a
+ * default it is not. A password saved on its own used to land exactly there.
+ */
+export const normalizeAuthUsername = (input: string): string => input.trim() || DEFAULT_AUTH_USERNAME;
+
 interface McpStatus {
 	enabled: boolean;
 	running: boolean;
@@ -266,7 +279,11 @@ const LocalServicesPanel: Component = () => {
 		if (!password) return;
 		try {
 			const hash = await rpc<string>("hash_password", { password });
+			// A hash without a username disables Basic Auth entirely, so persist both.
+			const username = normalizeAuthUsername(raUsername());
+			setRaUsername(username);
 			await saveConfigField((c) => {
+				c.services.auth.username = username;
 				c.services.auth.password_hash = hash;
 			});
 			setRaPassword("");
@@ -394,11 +411,14 @@ const LocalServicesPanel: Component = () => {
 									value={raUsername()}
 									placeholder={t("services.placeholder.username", "admin")}
 									onInput={(e) => setRaUsername(e.currentTarget.value)}
-									onChange={() =>
+									onChange={() => {
+										// Blank it out while a password is set and Basic Auth silently stops working.
+										const username = raHasPassword() ? normalizeAuthUsername(raUsername()) : raUsername().trim();
+										setRaUsername(username);
 										saveConfigField((c) => {
-											c.services.auth.username = raUsername();
-										})
-									}
+											c.services.auth.username = username;
+										});
+									}}
 								/>
 							</div>
 							<div class={s.group} style={{ flex: "1", "min-width": 0 }}>
