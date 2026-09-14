@@ -112,6 +112,33 @@ pub(crate) fn bind_pty_identity(
     state.bind_live_pty(identity, session_id);
 }
 
+/// Inject `TUIC_*` worktree/repo context (main checkout, branch, base ref,
+/// etc. — see `script_env::ScriptContext`) into a PTY spawn, so a Run Script
+/// typed into the new terminal — and every command a user types afterward —
+/// can see it, the same way a Setup/Archive script or a Smart Prompt child
+/// already can.
+///
+/// A PTY's env is fixed at spawn time: if the user later `cd`s to a different
+/// worktree in this same tab, these vars keep describing the spawn cwd, not
+/// wherever the shell currently is. `TUIC_SESSION` has the same property, so
+/// this is consistent with the rest of the terminal's identity — don't try to
+/// keep it live off OSC 7, a running process's environment can't be mutated
+/// from outside it.
+///
+/// Every `bind_pty_identity` call site should also call this one, immediately
+/// after, passing the same `cwd` the PTY itself is about to be spawned in.
+pub(crate) fn inject_worktree_env(cmd: &mut CommandBuilder, cwd: Option<&str>) {
+    let Some(cwd) = cwd else {
+        return;
+    };
+    let expanded = crate::cli::expand_tilde(cwd);
+    crate::script_env::ScriptContext::derive(
+        crate::script_env::ScriptKind::Run,
+        std::path::Path::new(&expanded),
+    )
+    .apply_pty(cmd);
+}
+
 fn inject_unix_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
@@ -10480,6 +10507,7 @@ pub(crate) async fn spawn_session_for_agent(
             // No caller-supplied identity on this path, so the PTY key is the
             // identity — see bind_pty_identity.
             bind_pty_identity(&state_for_env, &mut cmd, &session_id_for_env, None);
+            inject_worktree_env(&mut cmd, spawn_cwd.as_deref());
             cmd
         },
     )
