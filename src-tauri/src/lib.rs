@@ -140,6 +140,7 @@ pub(crate) mod remote_mirror;
 pub(crate) mod remote_runtime;
 pub(crate) mod remote_update;
 pub(crate) mod repo_watcher;
+pub(crate) mod script_env;
 pub(crate) mod scrollback_store;
 #[cfg(feature = "desktop")]
 pub(crate) mod selfsigned;
