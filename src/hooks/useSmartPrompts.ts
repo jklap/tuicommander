@@ -8,6 +8,7 @@ import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
 import { writeClipboard } from "../utils/clipboard";
 import { prContextVariables } from "../utils/promptContext";
+import { resolvePromptTreeIn } from "../utils/repoOwnership";
 import { usePty } from "./usePty";
 
 export interface SmartPromptResult {
@@ -264,14 +265,30 @@ export function useSmartPrompts() {
 		const rawMode = prompt.executionMode ?? "inject";
 		const effectiveMode = rawMode === "headless" && resolveHeadlessAgent(prompt).isApi ? "api" : rawMode;
 
-		// Single IPC: extract needed variable names + resolve only those from git.
+		// Resolve variables against the tree (worktree or repo root) that
+		// owns the ACTIVE TERMINAL's cwd, not just "the active repo" — a
+		// worktree tab must see its own branch/diff, not the main
+		// checkout's (the active-repo-vs-worktree-cwd bug: {branch}/{diff}
+		// used to describe the main checkout while the command actually ran
+		// in the worktree). Falls back to today's active-repo behavior when
+		// the cwd belongs to no registered repo, so a plain shell in an
+		// unregistered directory keeps working exactly as before.
+		const activeTerminal = terminalsStore.getActive();
+		const tree = resolvePromptTreeIn(activeTerminal?.cwd, repositoriesStore.state.repositories);
 		const activeRepo = repositoriesStore.getActive();
-		const repoPath = activeRepo?.path ?? "";
+		const repoRoot = tree?.repoPath ?? activeRepo?.path ?? "";
+		const varsPath = tree?.treePath ?? repoRoot;
+
+		// Single IPC: extract needed variable names + resolve only those from git.
 		const { vars: gitVars, needed: varNames } = await invoke<{ vars: Record<string, string>; needed: string[] }>(
 			"resolve_prompt_variables",
-			{ content: prompt.content, repoPath: repoPath || null },
+			{ content: prompt.content, repoPath: varsPath || null },
 		);
-		const allVars = { ...gitVars, ...resolveFrontendVars(repoPath), ...manualVariables };
+		// resolveFrontendVars takes the REPO ROOT specifically, never a
+		// worktree path — repositoriesStore is keyed by repo root, so
+		// passing varsPath here would make its `repositoriesStore.get(...)`
+		// lookup silently miss and drop every pr_* variable.
+		const allVars = { ...gitVars, ...resolveFrontendVars(repoRoot), ...manualVariables };
 		const unresolved = varNames.filter((v) => !(v in allVars));
 		if (unresolved.length > 0) {
 			return { ok: false, reason: "unresolved_variables", output: JSON.stringify(unresolved) };

@@ -39,7 +39,16 @@ vi.mock("../../stores/github", () => ({
 }));
 
 vi.mock("../../stores/repositories", () => ({
-	repositoriesStore: { getActive: vi.fn(), getRevision: vi.fn(), get: vi.fn() },
+	// state.repositories defaults empty so resolvePromptTreeIn(cwd, {}) always
+	// returns null (no registered repo owns any cwd) — every existing test
+	// falls through to the activeRepo-based behavior it already asserted on.
+	// Tests exercising the cwd-vs-active-repo fix itself override this.
+	repositoriesStore: {
+		getActive: vi.fn(),
+		getRevision: vi.fn(),
+		get: vi.fn(),
+		state: { repositories: {} },
+	},
 }));
 
 vi.mock("../../stores/promptLibrary", () => ({
@@ -702,5 +711,102 @@ describe("resolveFrontendVars (via executeSmartPrompt)", () => {
 
 		expect(res.ok).toBe(true);
 		expect(mockedGetBranchPrData).not.toHaveBeenCalled();
+	});
+});
+
+describe("executeSmartPrompt — active-repo-vs-worktree-cwd fix", () => {
+	const mockedInvoke = vi.mocked(invoke);
+	const mockedProcess = vi.mocked(promptLibraryStore.processContent);
+	const mockedGetBranchPrData = vi.mocked(githubStore.getBranchPrData);
+	const mockedRepoGetActive = vi.mocked(repositoriesStore.getActive);
+
+	const REPO_ROOT = "/repo";
+	const WORKTREE_PATH = "/repo__wt/feat-x";
+
+	beforeEach(() => {
+		mockedIsBusy.mockReturnValue(false);
+		mockedProcess.mockResolvedValue("PROCESSED");
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: [] });
+		mockedGetBranchPrData.mockReturnValue(null);
+		// A registered repo whose branch "feat-x" is checked out in a linked
+		// worktree — the shape resolvePromptTreeIn resolves against.
+		(repositoriesStore.state.repositories as Record<string, unknown>) = {
+			[REPO_ROOT]: {
+				path: REPO_ROOT,
+				activeBranch: "main",
+				branches: {
+					"feat-x": { name: "feat-x", worktreePath: WORKTREE_PATH },
+				},
+			},
+		};
+	});
+
+	afterEach(() => {
+		(repositoriesStore.state.repositories as Record<string, unknown>) = {};
+	});
+
+	it("resolves variables against the focused terminal's worktree, not the active repo", async () => {
+		// Active repo (last focused) is unrelated to the worktree the terminal
+		// is actually sitting in.
+		mockedRepoGetActive.mockReturnValue({ path: "/some-other-repo" } as unknown as ReturnType<
+			typeof repositoriesStore.getActive
+		>);
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			cwd: `${WORKTREE_PATH}/src`,
+			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject" }));
+
+		expect(mockedInvoke).toHaveBeenCalledWith("resolve_prompt_variables", {
+			content: "Do something",
+			repoPath: WORKTREE_PATH,
+		});
+	});
+
+	it("falls back to the active repo when the cwd belongs to no registered repo", async () => {
+		mockedRepoGetActive.mockReturnValue({ path: REPO_ROOT } as unknown as ReturnType<
+			typeof repositoriesStore.getActive
+		>);
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			cwd: "/tmp/some/unregistered/dir",
+			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject" }));
+
+		expect(mockedInvoke).toHaveBeenCalledWith("resolve_prompt_variables", {
+			content: "Do something",
+			repoPath: REPO_ROOT,
+		});
+	});
+
+	it("looks up PR variables under the repo root, not the worktree path", async () => {
+		mockedRepoGetActive.mockReturnValue({ path: "/some-other-repo" } as unknown as ReturnType<
+			typeof repositoriesStore.getActive
+		>);
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			cwd: `${WORKTREE_PATH}/src`,
+			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject" }));
+
+		// resolveFrontendVars reads repositoriesStore.get(repoRoot)?.activeBranch
+		// — passing the worktree path here would silently miss (the store is
+		// keyed by repo root) and drop every pr_* variable.
+		expect(mockedGetBranchPrData).not.toHaveBeenCalledWith(WORKTREE_PATH, expect.anything());
 	});
 });

@@ -97,6 +97,42 @@ export function resolveRepoOwnerIn(
 	return { repoPath, branchName };
 }
 
+export interface PromptTree {
+	repoPath: string;
+	branchName: string | null;
+	/** The filesystem root Smart Prompts variables/scripts should resolve
+	 *  against for this path — the linked worktree directory when `path` is
+	 *  inside one, else the repo root. Mirrors `stores/repositories.ts`'s
+	 *  `locateFile`'s own `fsRoot` derivation (a linked worktree is the
+	 *  filesystem root for I/O; the repo root is not). */
+	treePath: string;
+}
+
+/**
+ * Resolve the tree (worktree or repo root) that owns `path`, for Smart
+ * Prompts variable resolution — see `resolveRepoOwnerIn` for the ownership
+ * rule itself; this only adds the `treePath` derivation on top.
+ *
+ * Fixes the active-repo-vs-worktree-cwd bug: `useSmartPrompts.ts` used to
+ * resolve `{branch}`/`{diff}`/etc. against `repositoriesStore.getActive()`
+ * (the last-focused *repo*) while the script/command it substitutes into
+ * actually runs in the *terminal's* cwd — so with a worktree tab focused,
+ * Smart Commit could generate a commit message from the main checkout's diff
+ * and then commit it in the worktree. Returns `null` when no registered repo
+ * claims `path` at all, so callers can fall back to today's behavior rather
+ * than failing outright for an unregistered directory.
+ */
+export function resolvePromptTreeIn(
+	path: string | null | undefined,
+	repos: Record<string, RepositoryState>,
+): PromptTree | null {
+	const owner = resolveRepoOwnerIn(path, repos);
+	if (!owner) return null;
+	const worktreePath = owner.branchName ? repos[owner.repoPath]?.branches[owner.branchName]?.worktreePath : null;
+	const treePath = worktreePath || owner.repoPath;
+	return { repoPath: owner.repoPath, branchName: owner.branchName, treePath };
+}
+
 /**
  * The repository a path belongs to when NO registered repo claims it.
  *
