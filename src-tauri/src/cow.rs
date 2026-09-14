@@ -4,7 +4,6 @@
 //! It still clonefiles git-ignored build directories into a freshly created
 //! linked worktree so dependency and compiler caches arrive warm.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -119,38 +118,33 @@ pub(crate) fn clone_tree(src: &Path, dest: &Path) -> Result<(), String> {
 
 const COW_COPY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(280);
 
+/// Run a copy command under `timeout`, returning its status and stderr.
+///
+/// Delegates to [`crate::git_cli::output_with_deadline`] rather than polling
+/// `try_wait` and reading stderr afterwards. That ordering deadlocks: `cp`
+/// prints one line per unreadable file, and once it has written a pipe buffer's
+/// worth (64 KiB) with nobody draining the other end it blocks in `write` and
+/// can never exit, so the child sat there until the deadline killed it — a
+/// wedge, reported as a timeout. `output_with_deadline` drains both pipes on
+/// reader threads, so a chatty copy finishes and reports its real error.
 fn run_copy_command(
     command: &mut Command,
     timeout: std::time::Duration,
 ) -> Result<(std::process::ExitStatus, String), String> {
-    command
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("could not run copy command: {error}"))?;
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("could not wait for copy command: {error}"))?
-        {
-            let mut stderr = String::new();
-            if let Some(mut pipe) = child.stderr.take() {
-                let _ = pipe.read_to_string(&mut stderr);
-            }
-            return Ok((status, stderr));
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!(
+    let output = crate::git_cli::output_with_deadline(command, timeout).map_err(|error| {
+        match error {
+            // Keep the copy-specific wording: GitError's own Display says "git".
+            crate::git_cli::GitError::TimedOut { after } => format!(
                 "copy-on-write copy exceeded its {} second operation deadline",
-                timeout.as_secs()
-            ));
+                after.as_secs()
+            ),
+            other => format!("could not run copy command: {other}"),
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    })?;
+    Ok((
+        output.status,
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
 }
 
 fn clone_tree_with(
@@ -450,6 +444,33 @@ mod tests {
         assert!(error.contains("cp -c -R"));
         assert!(error.contains("cp --reflink=always -R"));
         assert!(!dest.exists());
+    }
+
+    /// A copy that prints more than a pipe buffer's worth of warnings must still
+    /// finish and report its own exit status. `cp` emits one line per unreadable
+    /// file, and reading stderr only after the child has exited inverts the
+    /// dependency: once the child has written 64 KiB with nobody draining the
+    /// other end it blocks in `write` and can never exit, so a noisy copy wedged
+    /// until the deadline killed it and reported a timeout that never happened.
+    /// The deadline here is deliberately short — a regression fails in seconds
+    /// instead of hanging for the real 280.
+    #[test]
+    fn a_copy_that_floods_stderr_still_reports_its_own_failure() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "i=0; while [ $i -lt 4000 ]; do echo 'cp: cannot read file' >&2; i=$((i+1)); done; exit 1",
+        ]);
+
+        let (status, stderr) =
+            run_copy_command(&mut command, std::time::Duration::from_secs(20)).unwrap();
+
+        assert_eq!(status.code(), Some(1));
+        assert!(
+            stderr.len() > 64 * 1024,
+            "the flood must exceed a pipe buffer, got {} bytes",
+            stderr.len()
+        );
     }
 
     fn warming_fixture() -> (TempDir, PathBuf, PathBuf) {
