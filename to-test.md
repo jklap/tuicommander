@@ -1942,3 +1942,21 @@ these check the live surface.
 - [ ] On the desktop instance, the Progress panel must behave exactly as before:
       the routes are merged into `build_router` through `shared_routes()` now, so
       a regression here shows up as the panel 404ing on every call.
+
+## A turn closed by the foreground probe logs `activity_source=process` — needs a `make dev` restart
+
+`foreground_probe` never constructed `ForegroundProbe::Quiet`, so every close
+that the process table actually answered was logged as `agent-ready-screen`,
+indistinguishable from a screen-only guess (#771-4733). Rust-only — the running
+app keeps the old logging until restart.
+
+- [ ] After restart, let an agent tab finish a turn with nothing running under
+      it, then `curl 'http://localhost:9876/logs' | grep 'Shell state'`: the
+      close must read `activity_source=process rank=Process`, not
+      `agent-ready-screen`.
+- [ ] A tab whose agent still has a `cargo`/`npm` child running when the ready
+      screen appears must still close as `agent-ready-screen` — the probe must
+      not claim an observation it did not make.
+- [ ] After such a close, typing into that tab (or the agent resuming on its
+      own) must turn it BUSY again. A tab stuck IDLE while the agent works is
+      the regression this rank change could cause.

@@ -4118,6 +4118,237 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
     assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 2);
 }
 
+/// Build a codex agent session held BUSY by a Protocol-rank submitted line
+/// that has since produced output, with a ready screen already stable for
+/// `AGENT_READY_CONFIRM`. That is the exact state in which the foreground
+/// probe — and nothing else — decides whether the turn ends (#771-4733).
+fn probe_evidence_fixture(
+    state: &crate::state::AppState,
+    session_id: &str,
+) -> std::sync::Arc<parking_lot::Mutex<SilenceState>> {
+    agent_session(state, session_id, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    {
+        let mut sl = silence.lock();
+        sl.note_user_submission(true);
+        sl.note_real_activity();
+        sl.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    }
+    silence
+}
+
+#[test]
+fn the_foreground_probe_records_process_rank_idle_evidence() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "foreground-probe-records-evidence";
+    let silence = probe_evidence_fixture(&state, session_id);
+
+    // Nothing has been reconciled yet: the probe arms itself and holds the
+    // turn open, contributing no evidence at all.
+    let armed = try_timer_idle_transition(
+        &state,
+        &silence,
+        session_id,
+        AgentScreenActivity::Ready,
+        Some("codex"),
+        Some(0),
+    );
+    assert!(!armed.transitioned);
+    assert!(
+        armed.evidence.is_none(),
+        "an unreconciled probe must not produce evidence"
+    );
+
+    // A snapshot in which the agent stands alone — no meaningful descendant.
+    state
+        .process_snapshot_cache
+        .store(Some(vec![process(10, 1, "codex", "codex")]));
+    assert!(refresh_background_work_from_cached_snapshot(
+        &state,
+        session_id,
+        10,
+        "codex",
+        0,
+        state.process_snapshot_cache.load(),
+    ));
+    assert!(
+        !state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .background_work
+    );
+
+    let closed = try_timer_idle_transition(
+        &state,
+        &silence,
+        session_id,
+        AgentScreenActivity::Ready,
+        Some("codex"),
+        Some(0),
+    );
+    assert!(closed.transitioned);
+    let evidence = closed.evidence.expect("a close must carry its evidence");
+    // These two assertions are the whole point of the story: reduce the probe
+    // back to a boolean gate and the turn still closes, but on the ready
+    // screen that asked for the probe (`Screen`/`agent-ready-screen`) instead
+    // of on the process observation that answered it.
+    assert_eq!(
+        evidence.rank,
+        EvidenceRank::Process,
+        "the probe read the process table, so its evidence is Process rank"
+    );
+    assert_eq!(
+        evidence.source, "process",
+        "activity_source must name the probe, not the screen, and must stay \
+         distinguishable from protocol-stale and from a silence timeout"
+    );
+}
+
+#[test]
+fn a_probe_that_still_sees_work_does_not_claim_process_evidence() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "foreground-probe-still-working";
+    let silence = probe_evidence_fixture(&state, session_id);
+
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            session_id,
+            AgentScreenActivity::Ready,
+            Some("codex"),
+            Some(0),
+        )
+        .transitioned
+    );
+
+    // Same reconciliation, but the tree still holds a build under the agent.
+    state.process_snapshot_cache.store(Some(vec![
+        process(10, 1, "codex", "codex"),
+        process(11, 10, "cargo", "cargo test"),
+    ]));
+    assert!(refresh_background_work_from_cached_snapshot(
+        &state,
+        session_id,
+        10,
+        "codex",
+        0,
+        state.process_snapshot_cache.load(),
+    ));
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .background_work
+    );
+
+    let closed = try_timer_idle_transition(
+        &state,
+        &silence,
+        session_id,
+        AgentScreenActivity::Ready,
+        Some("codex"),
+        Some(0),
+    );
+    // The transition itself is unchanged by this story — a reconciled probe
+    // opened the gate before it and still does. What must NOT happen is the
+    // close claiming a process observation it did not make.
+    assert!(closed.transitioned);
+    let evidence = closed.evidence.expect("a close must carry its evidence");
+    assert_eq!(evidence.rank, EvidenceRank::Screen);
+    assert_eq!(
+        evidence.source, "agent-ready-screen",
+        "a tree that still shows work says nothing about this turn ending"
+    );
+}
+
+/// Raising the close from `Screen` to `Process` raises what the NEXT turn has
+/// to outrank, and a working screen is only `Screen` rank. The reopen survives
+/// because `note_busy_evidence` clears the held idle evidence before
+/// `record_busy` meets the rank gate — delete that `clear_idle` and a session
+/// closed by the probe can never go busy again without a Protocol-rank signal
+/// (#771-4733).
+#[test]
+fn a_process_rank_close_does_not_strand_the_next_turn_idle() {
+    use std::sync::atomic::Ordering;
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "foreground-probe-reopen";
+    let silence = probe_evidence_fixture(&state, session_id);
+
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            session_id,
+            AgentScreenActivity::Ready,
+            Some("codex"),
+            Some(0),
+        )
+        .transitioned
+    );
+    state
+        .process_snapshot_cache
+        .store(Some(vec![process(10, 1, "codex", "codex")]));
+    assert!(refresh_background_work_from_cached_snapshot(
+        &state,
+        session_id,
+        10,
+        "codex",
+        0,
+        state.process_snapshot_cache.load(),
+    ));
+    let closed = try_timer_idle_transition(
+        &state,
+        &silence,
+        session_id,
+        AgentScreenActivity::Ready,
+        Some("codex"),
+        Some(0),
+    );
+    assert!(closed.transitioned);
+    assert_eq!(
+        closed.evidence.map(|e| e.rank),
+        Some(EvidenceRank::Process),
+        "this test is only meaningful after a Process-rank close"
+    );
+
+    // No completion and no hook idle, so this is the ordinary `Screen`-rank
+    // reopen — the weakest evidence that must still be able to start a turn.
+    apply_working_evidence(
+        &state,
+        &silence,
+        session_id,
+        now_epoch_ms(),
+        "working-screen",
+    );
+
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get(session_id)
+            .unwrap()
+            .load(Ordering::Acquire),
+        SHELL_BUSY,
+        "a working screen must reopen a turn the process probe closed"
+    );
+}
+
 #[test]
 fn already_busy_working_evidence_invalidates_only_probe_boundaries() {
     let state = crate::state::tests_support::make_test_app_state();
