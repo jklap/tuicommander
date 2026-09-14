@@ -808,6 +808,7 @@ pub(super) fn spawn_pty_session(
             crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
             crate::pty::bind_pty_identity(&state, &mut cmd, &session_id, None);
             crate::pty::apply_agent_screen_env(&mut cmd, &std::collections::HashMap::new());
+            crate::pty::inject_worktree_env(&mut cmd, cwd.as_deref());
             cmd
         },
     )

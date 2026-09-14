@@ -4823,6 +4823,9 @@ fn handle_agent_with_parent_cwd(
 
             let mut cmd = CommandBuilder::new(&binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
+            // Derived TUIC_* context first, so run-config and caller env below
+            // can still override a same-named value.
+            crate::pty::inject_worktree_env(&mut cmd, effective_cwd.as_deref());
 
             let mut screen_env = resolved
                 .as_ref()
