@@ -57,6 +57,7 @@ const {
 	resolveRelativePath,
 	boardNameFor,
 	classifyLinkTarget,
+	isSupportedExternalScheme,
 	splitPreservingEol,
 	joinPreservingEol,
 	todayIso,
@@ -84,6 +85,7 @@ const {
 	resolveRelativePath: (baseDir: string, rel: string) => string;
 	boardNameFor: (p: string, frontmatterTitle: string | null) => string;
 	classifyLinkTarget: (target: string) => { kind: "external" | "file" };
+	isSupportedExternalScheme: (target: string) => boolean;
 	splitPreservingEol: (content: string) => { lines: string[]; eol: string; trailingNewline: boolean };
 	joinPreservingEol: (parts: { lines: string[]; eol: string; trailingNewline: boolean }) => string;
 	todayIso: (now?: Date) => string;
@@ -209,6 +211,13 @@ describe("parseBoard — the sample fixture", () => {
 		expect(byText(board, "has to be done first").headingPath).toEqual(["Project Alpha", "Backlog", "Setup"]);
 	});
 
+	it("omits a skipped heading level's gap rather than rendering a blank segment", () => {
+		// H1 then H3 with no intervening H2 leaves a sparse hole in the
+		// heading stack — headingPath must not surface it as an empty string.
+		const board2 = parseBoard("# Foo\n### Bar\n- [ ] task", "/repo/board.md");
+		expect(board2.tasks[0].headingPath).toEqual(["Foo", "Bar"]);
+	});
+
 	it("preserves completion/cancelled fields already present on a line", () => {
 		const done = byText(board, "completed task");
 		expect(done.completion).toBe("2026-09-14");
@@ -238,6 +247,14 @@ describe("parseBoard — frontmatter title", () => {
 		expect(boardNameFor("/repo/whatever.md", "Sprint 12")).toBe("Sprint 12");
 		expect(boardNameFor("/repo/whatever.md", "  ")).toBe("whatever");
 		expect(boardNameFor("/repo/whatever.md", "")).toBe("whatever");
+	});
+
+	it("does not treat a leading '---' as frontmatter when it is never closed", () => {
+		// A document that merely opens with a "---" horizontal rule (no closing
+		// delimiter) must not swallow every remaining line as pseudo-frontmatter.
+		const board = parseBoard("---\n- [ ] buy milk\n- [ ] walk dog\n", "/repo/board.md");
+		expect(board.frontmatterTitle).toBeNull();
+		expect(board.tasks).toHaveLength(2);
 	});
 });
 
@@ -321,6 +338,24 @@ describe("link classification and resolution", () => {
 	});
 });
 
+describe("isSupportedExternalScheme", () => {
+	it("accepts http, https, and mailto", () => {
+		expect(isSupportedExternalScheme("https://example.com")).toBe(true);
+		expect(isSupportedExternalScheme("http://example.com")).toBe(true);
+		expect(isSupportedExternalScheme("mailto:me@example.com")).toBe(true);
+	});
+
+	it("rejects any other scheme, matching host.openExternalUrl's own allowlist", () => {
+		expect(isSupportedExternalScheme("ftp://host/path")).toBe(false);
+		expect(isSupportedExternalScheme("vscode://file/x")).toBe(false);
+		expect(isSupportedExternalScheme("javascript:alert(1)")).toBe(false);
+	});
+
+	it("rejects a malformed URL rather than throwing", () => {
+		expect(isSupportedExternalScheme("not a url")).toBe(false);
+	});
+});
+
 describe("resolveRelativePath / dirnameOf", () => {
 	it("resolves .. segments against a base directory", () => {
 		expect(resolveRelativePath("/a/b/c", "../../d.md")).toBe("/a/d.md");
@@ -334,6 +369,13 @@ describe("resolveRelativePath / dirnameOf", () => {
 	it("extracts the parent directory", () => {
 		expect(dirnameOf("/a/b/c.md")).toBe("/a/b");
 		expect(dirnameOf("c.md")).toBe("");
+	});
+
+	it("does not prepend a leading slash onto a Windows drive-letter base directory", () => {
+		// A naive POSIX-only join produced "/C:/Users/..." — an invalid path
+		// with a leading slash before the drive letter.
+		expect(resolveRelativePath("C:\\Users\\foo\\vault", "notes/x.md")).toBe("C:/Users/foo/vault/notes/x.md");
+		expect(resolveRelativePath("C:\\Users\\foo\\vault\\plans", "../notes/x.md")).toBe("C:/Users/foo/vault/notes/x.md");
 	});
 });
 
@@ -369,6 +411,14 @@ describe("dependency graph", () => {
 		const t = board.tasks[0];
 		expect(t.upstream).toHaveLength(0);
 		expect(t.danglingDeps).toEqual(["zzzzzz"]);
+	});
+
+	it("ignores a task that lists its own id as its dependency, rather than wiring a self-loop", () => {
+		const board = parseBoard("- [?] Self-blocked  [id:: t1]  [dependsOn:: t1]", "/repo/board.md");
+		const t = board.tasks[0];
+		expect(t.upstream).toHaveLength(0);
+		expect(t.downstream).toHaveLength(0);
+		expect(t.danglingDeps).toEqual([]); // the id DOES resolve — just to itself, so it's a no-op, not dangling
 	});
 
 	it("buildDependencyGraph can be called directly on a task array", () => {
@@ -497,6 +547,16 @@ describe("setStatusChar", () => {
 describe("removeField / upsertField", () => {
 	it("adds a new bracketed field with the two-space separator style", () => {
 		expect(upsertField("- [x] done", "completion", "2026-09-14")).toBe("- [x] done  [completion:: 2026-09-14]");
+	});
+
+	it("updates the LAST occurrence when a field is duplicated, matching parseBoard's own last-wins read", () => {
+		// parseBoard reads a duplicated field's LAST occurrence into the task's
+		// typed property (e.g. `completion`). If a rewrite updated a DIFFERENT
+		// occurrence, the value driving archivability could silently diverge
+		// from the one a status-drag rewrite just changed.
+		const line = "- [x] done  [completion:: 2020-01-01]  [completion:: 2020-06-01]";
+		const out = upsertField(line, "completion", "2026-09-14");
+		expect(out).toBe("- [x] done  [completion:: 2026-09-14]");
 	});
 
 	it("updates an existing field in place, keeping its bracket style", () => {
@@ -724,6 +784,27 @@ describe("buildBoardHtml", () => {
 		});
 		expect(html).toContain('data-ext="1"');
 		expect(html).toContain('data-ext="0"');
+	});
+
+	it("a relative file link's data-target is the resolved absolute path, not the raw relative target", () => {
+		// Regression test: buildDisplaySpans/renderSpan once read span.absPath
+		// off a span object that never carried it (only the separate,
+		// render-unused `task.links` array did), so every internal relative
+		// link silently rendered its raw, unresolved target instead.
+		const board = parseBoard(
+			"- [ ] This is a file link: [Yazi](../../Notes/Yazi.md)",
+			"/Users/me/vault/plans/board.md",
+		);
+		const columns = groupIntoColumns(board.tasks);
+		const html = buildBoardHtml({
+			boards: [{ id: "b1", name: "Board" }],
+			activeBoardId: "b1",
+			hideArchived: false,
+			search: "",
+			columns,
+		});
+		expect(html).toContain('data-target="/Users/me/Notes/Yazi.md"');
+		expect(html).not.toContain('data-target="../../Notes/Yazi.md"');
 	});
 });
 
