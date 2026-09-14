@@ -187,6 +187,23 @@ describe("parseBoard — the sample fixture", () => {
 		expect(downstream.dependsOn).toEqual(["eqodx8"]);
 	});
 
+	it("falls back to the default priority rank for an unrecognized priority value", () => {
+		const board2 = parseBoard("- [ ] task  [priority:: urgent]", "/repo/board.md");
+		expect(board2.tasks[0].priority).toBe("");
+		expect(board2.tasks[0].priorityRank).toBe(PRIORITY_RANK[""]);
+	});
+
+	it("filters empty entries out of a malformed dependsOn list", () => {
+		const board2 = parseBoard("- [ ] task  [dependsOn:: ,, a1a1a1 ,,]", "/repo/board.md");
+		expect(board2.tasks[0].dependsOn).toEqual(["a1a1a1"]);
+	});
+
+	it("an entirely empty dependsOn value parses as no dependencies at all", () => {
+		const board2 = parseBoard("- [ ] task  [dependsOn:: ]", "/repo/board.md");
+		expect(board2.tasks[0].dependsOn).toEqual([]);
+		expect(board2.tasks[0].danglingDeps).toEqual([]);
+	});
+
 	it("tracks the heading path a task sits under, and nested headings extend it", () => {
 		expect(byText(board, "basic task").headingPath).toEqual(["Project Alpha", "Backlog"]);
 		expect(byText(board, "has to be done first").headingPath).toEqual(["Project Alpha", "Backlog", "Setup"]);

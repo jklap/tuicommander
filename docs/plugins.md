@@ -563,6 +563,8 @@ interface FsChangeEvent {
 }
 ```
 
+**Self-write echo:** a plugin that both watches a file and writes to it (e.g. rewriting a task's status in place) will see its own write come back through the same watch callback shortly after. If the plugin's response to a watch event is "re-read and re-render," an unguarded write-then-watch loop costs a redundant, wasted re-render for every mutation — reading fresh content, re-parsing it, and diffing it against what the user already sees. Guard against it by remembering the content you just wrote and skipping a re-render when a watch-triggered read comes back identical to it. **Order matters**: set that "this was my own write" marker *after* the write's own deliberate, immediate re-render runs — never before. Setting it first makes that immediate re-render mistake itself for the later echo and skip rendering the change it exists to show. See `plugins/md-kanban/main.js`'s `mutateActiveBoardTask` for a worked example (`lastWrittenContent`), and its `main.test.js`'s "does not trigger a second render from its own echo" test for the regression this exact ordering bug produces.
+
 #### `host.writeFile(absolutePath, content) -> Promise<void>`
 
 Write content to a file within `$HOME`. Creates parent directories if needed. Refuses to overwrite directories. Max 10 MB. **Requires `"fs:write"` capability.**
