@@ -354,15 +354,63 @@ pub(crate) fn warm_artifacts(workspace: &Path) -> Vec<WarmArtifact> {
     })
 }
 
+/// Recursive size of `path`, rendered the way `du -sh` renders it.
+///
+/// Walks in Rust rather than shelling out to `du`. That tool does not exist on
+/// Windows, where `Command::output` therefore failed and dropped every warmed
+/// directory out of the report: a copy that had actually worked came back
+/// saying nothing was warmed. It also spares one process per directory on the
+/// platforms that do have it.
+///
+// DEFERRED (2026-09-14) — the other half of the portability gap. `clone_tree`
+// still shells out to `cp -c` / `cp --reflink=always`, which Windows has no
+// equivalent for at all. Deciding what warming even means without reflink is a
+// design question, not a substitution, so it needs Boss before implementation.
 fn directory_size(path: &Path) -> Option<String> {
-    let output = Command::new("du").arg("-sh").arg(path).output().ok()?;
-    if !output.status.success() {
-        return None;
+    Some(human_size(walk_size(path)?))
+}
+
+/// Apparent bytes under `path` — file lengths, not allocated blocks, so this
+/// reads slightly under a bare `du -sh` and matches `du -sh --apparent-size`.
+/// The number exists to say "a warm cache this big arrived", and for that the
+/// content size is the more honest of the two.
+///
+/// Symlinks are counted but never followed, the same choice `du` makes by
+/// default: it keeps a link back into the parent repo from counting that whole
+/// tree, and a cycle from never terminating.
+fn walk_size(path: &Path) -> Option<u64> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if meta.is_symlink() {
+        return Some(0);
     }
-    String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .next()
-        .map(str::to_string)
+    if !meta.is_dir() {
+        return Some(meta.len());
+    }
+    let mut total = 0;
+    for entry in std::fs::read_dir(path).ok()? {
+        let Ok(entry) = entry else { continue };
+        total += walk_size(&entry.path()).unwrap_or(0);
+    }
+    Some(total)
+}
+
+/// The largest unit that keeps the number under 1024, with one decimal below
+/// ten — `du -sh`'s rendering, because this string is read next to sizes the
+/// user has seen from `du` and a second convention would only invite comparison
+/// of two numbers that do not mean the same thing.
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    match unit {
+        0 => format!("{bytes}B"),
+        _ if value < 10.0 => format!("{value:.1}{}", UNITS[unit]),
+        _ => format!("{value:.0}{}", UNITS[unit]),
+    }
 }
 
 fn is_inside(inner: &Path, outer: &Path) -> bool {
@@ -471,6 +519,36 @@ mod tests {
             "the flood must exceed a pipe buffer, got {} bytes",
             stderr.len()
         );
+    }
+
+    /// The report is the only thing telling the user a warm cache arrived, so a
+    /// size it cannot measure removes the directory from the list entirely. On
+    /// Windows `du` is absent and that happened to every directory, every time.
+    #[test]
+    fn a_directory_is_measured_without_leaving_the_process() {
+        let temp = TempDir::new().unwrap();
+        let tree = temp.path().join("cache/deep");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("blob"), vec![0u8; 3000]).unwrap();
+        std::fs::write(temp.path().join("cache/small"), vec![0u8; 1096]).unwrap();
+
+        assert_eq!(
+            directory_size(&temp.path().join("cache")),
+            Some("4.0K".to_string())
+        );
+        assert_eq!(directory_size(&temp.path().join("missing")), None);
+    }
+
+    /// Read next to sizes the user has seen from `du`, so it must round the way
+    /// `du -sh` rounds rather than merely being close.
+    #[test]
+    fn sizes_are_rendered_the_way_du_renders_them() {
+        assert_eq!(human_size(0), "0B");
+        assert_eq!(human_size(1023), "1023B");
+        assert_eq!(human_size(1024), "1.0K");
+        assert_eq!(human_size(10 * 1024), "10K");
+        assert_eq!(human_size(11 * 1024 * 1024), "11M");
+        assert_eq!(human_size(3 * 1024 * 1024 * 1024 / 2), "1.5G");
     }
 
     fn warming_fixture() -> (TempDir, PathBuf, PathBuf) {
