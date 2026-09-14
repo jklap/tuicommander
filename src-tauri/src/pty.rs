@@ -1120,6 +1120,12 @@ enum CurrentChatQuestion {
 /// and `133;D` when it exits — on a long-lived TUI agent, once at launch and
 /// once at death. It knows a process is running and nothing about turns, so it
 /// records at [`EvidenceRank::Screen`] and a stable Ready screen may close it.
+///
+/// [`EvidenceRank::Process`] appears on the idle side only, from the two
+/// places that read the process table: the foreground probe (`"process"`,
+/// `foreground_probe`) and the `"protocol-stale"` give-up. Nothing records it
+/// for busy, and **child exit deliberately records nothing at all** — an exit
+/// removes the session rather than transitioning it (#771-4733).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum EvidenceRank {
     Silence,
@@ -1703,7 +1709,10 @@ impl SilenceState {
         // Only Protocol-rank busy evidence may hold a turn against a stable
         // Ready screen. Deliberately `== Protocol` and not `>= Screen`: the
         // ladder is used asymmetrically here, because Process-rank evidence
-        // (child exit, foreground probe) is about the process, not the turn.
+        // (the foreground probe) is about the process, not the turn. The probe
+        // runs AFTER this returns true and refines the recorded evidence from
+        // `Screen` to `Process` (#771-4733); it never gets to override a
+        // Protocol-rank hold, which is what this guard exists to protect.
         //
         // Do NOT widen this to accept `explicit_busy()`'s sources (#745-8ff1).
         // That set includes `osc133-busy`, which is shell integration and knows
@@ -3138,34 +3147,65 @@ fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
     true
 }
 
-fn ready_probe_satisfied_or_requested(
+/// What the foreground probe knows about the current turn.
+///
+/// It used to be a bare `bool` meaning "satisfied or not applicable", which
+/// gated the idle transition while recording nothing (#771-4733). The gate is
+/// only two of the three answers; the third is a real observation of the
+/// process table and belongs in the evidence model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForegroundProbe {
+    /// A process snapshot taken after the probe was armed was reconciled
+    /// inside this turn, and it found no meaningful live descendant under the
+    /// agent's process root. The agent owns nothing that is still running —
+    /// [`EvidenceRank::Process`] evidence, not a gate result.
+    Quiet,
+    /// The gate is open without a process observation: either the session has
+    /// no agent process to probe at all, or the reconciled snapshot still
+    /// shows work under the agent root. Neither held the transition before
+    /// this change and neither holds it now.
+    Open,
+    /// No snapshot newer than the arming boundary has landed yet. One is now
+    /// armed for this turn; hold the transition until it reconciles.
+    Pending,
+}
+
+fn foreground_probe(
     state: &AppState,
     session_id: &str,
     silence: &Arc<Mutex<SilenceState>>,
-) -> bool {
+) -> ForegroundProbe {
     let still_owns_lifecycle = state
         .session_maps
         .silence_states
         .get(session_id)
         .is_some_and(|current| Arc::ptr_eq(current.value(), silence));
     if !still_owns_lifecycle || !state.session_maps.shell_states.contains_key(session_id) {
-        return false;
+        return ForegroundProbe::Pending;
     }
     let Some(mut session) = state.session_maps.session_states.get_mut(session_id) else {
-        return false;
+        return ForegroundProbe::Pending;
     };
     if session.agent_type.is_none() {
-        return true;
+        return ForegroundProbe::Open;
     }
     let turn_epoch = session.turn_epoch;
     if session.background_probe_satisfied_turn_epoch == Some(turn_epoch) {
-        return true;
+        // `background_work` is the verdict of the snapshot that satisfied the
+        // probe (`set_background_work_for_epoch_with_hook`). Only its negative
+        // is an observation worth ranking: a tree that still shows work says
+        // nothing about *this* turn ending, and it never held the transition.
+        return if session.background_work {
+            ForegroundProbe::Open
+        } else {
+            ForegroundProbe::Quiet
+        };
     }
     if !session.has_pending_background_probe() {
         session.background_probe_turn_epoch = Some(turn_epoch);
         session.background_probe_after_generation = Some(state.process_snapshot_cache.generation());
     }
-    false
+    ForegroundProbe::Pending
 }
 
 /// Invalidate only the process-snapshot boundary for the current working
@@ -4297,9 +4337,12 @@ fn try_timer_idle_transition(
             screen_activity,
             AgentScreenActivity::Ready | AgentScreenActivity::Interrupted
         ) && !screen_confirms_idle;
-        let ready_probe_satisfied = !screen_confirms_idle
-            || ready_probe_satisfied_or_requested(state, session_id, &lifecycle);
-        let decision = if screen_confirms_idle && ready_probe_satisfied {
+        let probe = if screen_confirms_idle {
+            foreground_probe(state, session_id, &lifecycle)
+        } else {
+            ForegroundProbe::Open
+        };
+        let decision = if screen_confirms_idle && probe != ForegroundProbe::Pending {
             IdleDecision::yes(evidence_turn_epoch)
         } else if screen_confirms_idle
             || (silence.explicit_busy() && !nested_prompt)
@@ -4317,6 +4360,19 @@ fn try_timer_idle_transition(
                 screen_confirms_idle,
                 evidence: None,
             };
+        }
+        if probe == ForegroundProbe::Quiet {
+            // The probe looked at the process table and found nothing left
+            // running under the agent. That outranks the ready screen that
+            // asked for it, so the turn closes on `activity_source=process`
+            // rather than on `agent-ready-screen` (#771-4733) — a reader can
+            // now tell a close backed by a live process observation from a
+            // `protocol-stale` give-up and from a bare silence timeout.
+            //
+            // `force_idle`, like the two screen adapters: the `else if` chain
+            // above already decided this transition is allowed, so the generic
+            // busy-rank gate in `record_idle` must not re-reject it.
+            silence.evidence.force_idle(EvidenceRank::Process, "process");
         }
         if !screen_confirms_idle {
             // Silence-timeout evidence, forced in regardless of rank: the
