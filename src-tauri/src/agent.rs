@@ -1488,6 +1488,13 @@ pub(crate) async fn spawn_agent(
             }
 
             crate::pty::apply_agent_screen_env(&mut cmd, &spawn_pty_config.env);
+            crate::pty::inject_worktree_env(
+                &mut cmd,
+                spawn_agent_config
+                    .cwd
+                    .as_deref()
+                    .or(spawn_pty_config.cwd.as_deref()),
+            );
             // Inject env flags (feature flags configured in Settings → Agents)
             for (key, value) in &spawn_pty_config.env {
                 cmd.env(key, value);
