@@ -9,7 +9,7 @@
 
 .container {
   /* Default: no sticky summary bar above the list, so file headers stick at
-   * the true top. A consumer that renders one (PrDiffTab, BranchDiffScrollView)
+   * the true top. A consumer that renders one (PrDiffTab, AllChangesView)
    * overrides this via the `headerHeight` prop, applied as an inline style on
    * this same element — see DiffFileList.tsx. */
   --diff-header-height: 0px;

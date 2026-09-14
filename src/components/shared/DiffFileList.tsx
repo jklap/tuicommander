@@ -15,7 +15,7 @@ export function sectionToRawDiff(section: DiffFileSection): string {
  * Stable per-row keys for a `DiffFileSection[]` list. Keying by `path` alone
  * collides when the same path appears twice (a partially-staged file shows
  * up once from the staged diff and once from the unstaged diff in
- * `BranchDiffScrollView`) — this disambiguates same-path duplicates by their
+ * `AllChangesView`) — this disambiguates same-path duplicates by their
  * occurrence order, which is stable as long as relative ordering among
  * same-path entries doesn't change (it doesn't: staged is always listed
  * before unstaged).
