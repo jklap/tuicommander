@@ -1342,17 +1342,32 @@ impl ConnectionActor {
         ))
     }
 
-    /// Refuse extra roots an agent never said it honours.
+    /// Refuse extra roots, and MCP servers on a transport, an agent never said
+    /// it honours.
     ///
     /// The session request carrying them is baseline, which is the danger: an
     /// agent that does not know the field answers with a session anyway, and
     /// the caller is left believing it spans directories the agent will never
-    /// touch.
+    /// touch. `mcp_servers` rides the same baseline requests and had no gate at
+    /// all, so a caller could hand an agent with `mcpCapabilities.http == false`
+    /// a set of HTTP tools, get a session back, and never be told the agent has
+    /// none of them. Stdio is refused for the same reason `mcp_stdio` publishes
+    /// `ExcludedByContract`: this client does not carry stdio servers, and
+    /// forwarding them anyway made the snapshot and the behaviour disagree.
     fn require_authority(&self, authority: &AcpSessionAuthority) -> Result<(), AcpClientError> {
-        if authority.additional_directories.is_empty() {
-            return Ok(());
+        if !authority.additional_directories.is_empty() {
+            self.require(AcpOperation::AdditionalDirectories)?;
         }
-        self.require(AcpOperation::AdditionalDirectories)
+        for server in &authority.mcp_servers {
+            let operation = mcp_server_operation(server).ok_or_else(|| {
+                AcpClientError::invalid_input(
+                    "MCP server uses a transport this build does not know, so no capability \
+                     covers it",
+                )
+            })?;
+            self.require(operation)?;
+        }
+        Ok(())
     }
 
     /// Write one request and hand back the future that resolves to its answer.
@@ -1413,6 +1428,24 @@ fn content_operation(block: &v1::ContentBlock) -> Option<AcpOperation> {
         v1::ContentBlock::Image(_) => Some(AcpOperation::PromptImage),
         v1::ContentBlock::Audio(_) => Some(AcpOperation::PromptAudio),
         v1::ContentBlock::Resource(_) => Some(AcpOperation::PromptEmbeddedContext),
+        _ => None,
+    }
+}
+
+/// The capability an MCP server entry needs before it may be sent, or `None`
+/// when this build has no operation for its transport.
+///
+/// `v1::McpServer` is `#[non_exhaustive]`, so the wildcard is forced rather than
+/// chosen — an SDK upgrade can add a transport without touching this file. It
+/// therefore answers `None` instead of guessing: an unknown transport has no
+/// capability to check, and the caller refuses it. Inheriting permission from a
+/// neighbouring arm would let a server through on an agent that never
+/// advertised it, which is the whole failure this function exists to prevent.
+fn mcp_server_operation(server: &v1::McpServer) -> Option<AcpOperation> {
+    match server {
+        v1::McpServer::Http(_) => Some(AcpOperation::McpHttp),
+        v1::McpServer::Sse(_) => Some(AcpOperation::McpSse),
+        v1::McpServer::Stdio(_) => Some(AcpOperation::McpStdio),
         _ => None,
     }
 }
