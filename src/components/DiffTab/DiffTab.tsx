@@ -3,7 +3,6 @@ import { usePty } from "../../hooks/usePty";
 import { useRepository } from "../../hooks/useRepository";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
-import { getModifierSymbol } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
@@ -18,9 +17,12 @@ import { DomSearchOverview } from "../shared/DomSearchOverview";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
 import { DiffViewer } from "../ui/DiffViewer";
 import { BranchDiffScrollView } from "./BranchDiffScrollView";
+import { CommentBox } from "./CommentBox";
 import s from "./DiffTab.module.css";
 import { buildPartialPatch, extractHunks, extractSelectedLines } from "./diffPatch";
 import { diffLineCount, isDiffTooLarge } from "./diffSize";
+import { sendDiffComment } from "./sendDiffComment";
+import { createLineSelection } from "./useLineSelection";
 
 export interface DiffTabProps {
 	tabId: string;
@@ -66,12 +68,17 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	const [pendingHunkPatch, setPendingHunkPatch] = createSignal<string | null>(null);
 	const [hoverHunkIdx, setHoverHunkIdx] = createSignal<number | null>(null);
 
-	// Line-level selection state
-	const [selectedLines, setSelectedLines] = createSignal<Set<number>>(new Set<number>());
-	const [selectedHunkIdx, setSelectedHunkIdx] = createSignal<number | null>(null);
-
 	/** Parsed hunks, memoized — re-parsing the whole diff per revert/select op was wasteful */
 	const hunks = createMemo(() => extractHunks(diff()));
+
+	// Line-level drag selection — shared with SessionDiffTab.
+	const lineSelection = createLineSelection({
+		hunks,
+		selectedClass: s.lineSelected,
+		ignoreSelector: `.${s.revertBtn}`,
+	});
+	const selectedLines = lineSelection.selectedLines;
+	const selectedHunkIdx = lineSelection.selectedHunkIdx;
 
 	// Pathological single-file diffs (full-file rewrites) would render thousands
 	// of DOM rows — @git-diff-view has no virtualization. Guard above this line
@@ -85,43 +92,13 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	createEffect(() => {
 		diff();
 		uiStore.state.diffViewMode;
-		setSelectedLines(new Set<number>());
-		setSelectedHunkIdx(null);
+		lineSelection.clear();
 		setForceRenderLarge(false);
-		rowCache = null;
+		lineSelection.invalidate();
 	});
 
 	let contentRef: HTMLElement | undefined;
 
-	/**
-	 * Cached map from each rendered <tr> to its hunk/line position. Built once per
-	 * diff render and reused across every drag mousemove + selection restyle, so
-	 * those handlers don't re-run querySelectorAll("tr") + a full O(rows) walk on
-	 * every pointer event. Invalidated when the diff/mode changes (rows rebuilt).
-	 */
-	type RowInfo = { hunkIdx: number; lineIdx: number; isChange: boolean };
-	let rowCache: { rows: HTMLTableRowElement[]; info: Map<HTMLTableRowElement, RowInfo> } | null = null;
-
-	function getRowCache() {
-		if (rowCache) return rowCache;
-		if (!contentRef) return null;
-		const rows = Array.from(contentRef.querySelectorAll("tr")) as HTMLTableRowElement[];
-		const info = new Map<HTMLTableRowElement, RowInfo>();
-		let hunkIdx = -1;
-		let lineCount = 0;
-		for (const r of rows) {
-			if (r.querySelector("[class*='diff-line-hunk']")) {
-				hunkIdx++;
-				lineCount = 0;
-				info.set(r, { hunkIdx, lineIdx: -1, isChange: false });
-			} else {
-				info.set(r, { hunkIdx, lineIdx: lineCount, isChange: isChangeLine(r) });
-				lineCount++;
-			}
-		}
-		rowCache = { rows, info };
-		return rowCache;
-	}
 	let engine: DomSearchEngine | undefined;
 	let lastSearchTerm = "";
 	let lastSearchOpts: SearchOptions = { caseSensitive: false, regex: false, wholeWord: false };
@@ -273,7 +250,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		} catch (err) {
 			appLogger.error("git", "Failed to revert hunk", err);
 		}
-		clearSelection();
+		lineSelection.clear();
 		// The repo revision bump from git changes will trigger diff reload automatically
 	}
 
@@ -283,120 +260,6 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	}
 
 	const isStaged = () => props.scope === "staged";
-
-	// --- Line-level selection ---
-
-	/** Detect whether a <tr> is an addition, deletion, or neither.
-	 *  The @git-diff-view library marks additions with data-line-new-num only,
-	 *  deletions with data-line-old-num only, and context lines with both. */
-	function isChangeLine(row: Element): boolean {
-		const hasNew = row.querySelector("[data-line-new-num]");
-		const hasOld = row.querySelector("[data-line-old-num]");
-		return !!hasNew !== !!hasOld;
-	}
-
-	/** Find which hunk and line index a DOM element belongs to (via the row cache). */
-	function findLineInfo(el: HTMLElement): { hunkIdx: number; lineIdx: number; isChange: boolean } | null {
-		const row = el.closest("tr") as HTMLTableRowElement | null;
-		if (!row) return null;
-		const cache = getRowCache();
-		const ri = cache?.info.get(row);
-		if (!ri?.isChange || ri.hunkIdx < 0) return null;
-		return { hunkIdx: ri.hunkIdx, lineIdx: ri.lineIdx, isChange: true };
-	}
-
-	// --- Drag-to-select ---
-	let isDragging = false;
-	let dragAnchorLine = -1;
-	let dragAnchorHunk = -1;
-
-	function selectRange(hunkIdx: number, from: number, to: number) {
-		const start = Math.min(from, to);
-		const end = Math.max(from, to);
-		const next = new Set<number>();
-		const h = hunks();
-		if (hunkIdx < h.length) {
-			const hunkLines = h[hunkIdx].split("\n");
-			const bodyStart = hunkLines.findIndex((l) => l.startsWith("@@"));
-			if (bodyStart >= 0) {
-				const body = hunkLines.slice(bodyStart + 1);
-				for (let i = start; i <= end; i++) {
-					if (i < body.length && (body[i].startsWith("+") || body[i].startsWith("-"))) {
-						next.add(i);
-					}
-				}
-			}
-		}
-		setSelectedHunkIdx(hunkIdx);
-		setSelectedLines(next);
-	}
-
-	function handleLineMouseDown(e: MouseEvent) {
-		if ((e.target as HTMLElement).closest(`.${s.revertBtn}`)) return;
-		if (e.button !== 0) return;
-
-		const info = findLineInfo(e.target as HTMLElement);
-		if (!info) return;
-
-		e.preventDefault();
-		isDragging = true;
-		dragAnchorLine = info.lineIdx;
-		dragAnchorHunk = info.hunkIdx;
-
-		if (selectedHunkIdx() !== null && selectedHunkIdx() !== info.hunkIdx) {
-			setSelectedLines(new Set<number>());
-		}
-		setSelectedHunkIdx(info.hunkIdx);
-
-		const next = new Set<number>();
-		next.add(info.lineIdx);
-		setSelectedLines(next);
-		applyLineSelectionStyles();
-	}
-
-	function handleLineMouseMove(e: MouseEvent) {
-		if (!isDragging) return;
-		const info = findLineInfo(e.target as HTMLElement);
-		if (!info || info.hunkIdx !== dragAnchorHunk) return;
-		selectRange(dragAnchorHunk, dragAnchorLine, info.lineIdx);
-		applyLineSelectionStyles();
-	}
-
-	function handleLineMouseUp() {
-		isDragging = false;
-	}
-
-	const globalMouseUp = () => {
-		isDragging = false;
-	};
-	document.addEventListener("mouseup", globalMouseUp);
-	onCleanup(() => document.removeEventListener("mouseup", globalMouseUp));
-
-	/** Apply/remove CSS class on selected rows (via the row cache) */
-	function applyLineSelectionStyles() {
-		const cache = getRowCache();
-		if (!cache) return;
-		const sel = selectedLines();
-		const hIdx = selectedHunkIdx();
-
-		for (const [row, ri] of cache.info) {
-			if (ri.lineIdx < 0) continue; // hunk header row
-			if (ri.hunkIdx === hIdx && sel.has(ri.lineIdx)) {
-				row.classList.add(s.lineSelected);
-			} else {
-				row.classList.remove(s.lineSelected);
-			}
-		}
-	}
-
-	// Re-apply styles when selection changes
-	createEffect(() => {
-		selectedLines();
-		selectedHunkIdx();
-		// Cancel a still-pending RAF on re-run and on unmount.
-		const raf = requestAnimationFrame(() => applyLineSelectionStyles());
-		onCleanup(() => cancelAnimationFrame(raf));
-	});
 
 	function handleRestoreSelected() {
 		const hIdx = selectedHunkIdx();
@@ -409,14 +272,6 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 
 		setPendingHunkPatch(patch);
 		setConfirmVisible(true);
-	}
-
-	function clearSelection() {
-		setSelectedLines(new Set<number>());
-		setSelectedHunkIdx(null);
-		if (contentRef) {
-			contentRef.querySelectorAll(`.${s.lineSelected}`).forEach((el) => el.classList.remove(s.lineSelected));
-		}
 	}
 
 	// --- Comment on selected lines ---
@@ -432,48 +287,30 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	}
 
 	async function handleCommentSend() {
-		const text = commentText().trim();
-		if (!text) return;
-
-		const term = terminalsStore.findTerminalWithSession();
-		if (!term) {
-			setCommentError("No terminal with active session — open a terminal first");
-			return;
-		}
-
 		const hIdx = selectedHunkIdx();
 		if (hIdx === null) return;
 
 		const { lines, startLine, endLine } = extractSelectedLines(diff(), hIdx, selectedLines());
-		if (lines.length === 0) return;
+		const term = terminalsStore.findTerminalWithSession();
 
-		try {
-			const lineRange = startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`;
-			const sanitize = (s: string) => s.replace(/[\r\0]/g, "");
-			const codeSnippet = lines.map((l) => `${l.type}${sanitize(l.content)}`).join("\n");
+		const result = await sendDiffComment(
+			{ filePath: props.filePath, startLine, endLine, lines },
+			commentText(),
+			term?.sessionId,
+			term?.agentType,
+			(sessionId, message, agentType) => pty.sendCommand(sessionId, message, agentType),
+		);
 
-			const message = `[${props.filePath.replace(/[\r\n\0]/g, "")}:${lineRange}]\n${codeSnippet}\n— ${text}`;
-
-			await pty.sendCommand(term.sessionId, message, term.agentType);
-
+		if (result === "ok") {
 			setCommentText("");
 			setCommentError(null);
 			setCommentVisible(false);
-			clearSelection();
-		} catch (err) {
-			appLogger.error("git", "Failed to send comment to terminal", err);
+			lineSelection.clear();
+		} else if (result === "no-terminal") {
+			setCommentError("No terminal with active session — open a terminal first");
+		} else if (result === "error") {
+			appLogger.error("git", "Failed to send comment to terminal");
 			setCommentError("Failed to send — see logs for details");
-		}
-	}
-
-	function handleCommentKeyDown(e: KeyboardEvent) {
-		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-			e.preventDefault();
-			void handleCommentSend();
-		}
-		if (e.key === "Escape") {
-			e.preventDefault();
-			setCommentVisible(false);
 		}
 	}
 
@@ -579,9 +416,9 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 							if (idx >= 0) handleRevertClick(idx);
 						}
 					}}
-					onMouseDown={handleLineMouseDown}
-					onMouseMove={handleLineMouseMove}
-					onMouseUp={handleLineMouseUp}
+					onMouseDown={lineSelection.handlers.onMouseDown}
+					onMouseMove={lineSelection.handlers.onMouseMove}
+					onMouseUp={lineSelection.handlers.onMouseUp}
 				>
 					<Show
 						when={!tooLarge() || forceRenderLarge()}
@@ -602,6 +439,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 							mode={mode()}
 							contentRef={(el: HTMLElement) => {
 								contentRef = el;
+								lineSelection.setContentRef(el);
 							}}
 							emptyMessage={
 								loading()
@@ -624,31 +462,16 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 					<Show when={selectedCount() > 0}>
 						<div class={s.selectionFloater}>
 							<Show when={commentVisible()}>
-								<div class={s.commentBox}>
-									<textarea
-										ref={(el) => {
-											commentTextareaRef = el;
-										}}
-										class={s.commentTextarea}
-										placeholder="Write a comment about the selected lines..."
-										value={commentText()}
-										onInput={(e) => setCommentText(e.currentTarget.value)}
-										onKeyDown={handleCommentKeyDown}
-										rows={3}
-									/>
-									<Show when={commentError()}>
-										<div class={s.commentErrorMsg}>{commentError()}</div>
-									</Show>
-									<div class={s.commentActions}>
-										<span class={s.commentHint}>{getModifierSymbol()}+Enter to send</span>
-										<button class={s.commentCancelBtn} onClick={() => setCommentVisible(false)}>
-											Cancel
-										</button>
-										<button class={s.commentSendBtn} disabled={!commentText().trim()} onClick={handleCommentSend}>
-											Send
-										</button>
-									</div>
-								</div>
+								<CommentBox
+									value={commentText()}
+									error={commentError()}
+									onInput={setCommentText}
+									onSend={handleCommentSend}
+									onCancel={() => setCommentVisible(false)}
+									setTextareaRef={(el) => {
+										commentTextareaRef = el;
+									}}
+								/>
 							</Show>
 							<div class={s.selectionBar}>
 								<Show when={canRestore(props.scope, props.untracked)}>
@@ -665,7 +488,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 								<button
 									class={s.clearSelectionBtn}
 									onClick={() => {
-										clearSelection();
+										lineSelection.clear();
 										setCommentVisible(false);
 									}}
 									title="Clear selection"
@@ -685,6 +508,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 					message={confirmMessage()}
 					confirmLabel={isStaged() ? t("diffTab.unstage", "Unstage") : t("diffTab.discard", "Discard")}
 					kind={isStaged() ? "info" : "warning"}
+					defaultButton="cancel"
 					onConfirm={confirmRevert}
 					onClose={cancelRevert}
 				/>
