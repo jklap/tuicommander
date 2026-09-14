@@ -3770,12 +3770,15 @@ async fn handle_worktree(
                             }
                         }
                     }
-                    if let Some(setup_script) = created.setup_script {
-                        response["setup_script"] = setup_script;
-                    }
-                    if let Some(setup_script_error) = created.setup_script_error {
-                        response["setup_script_error"] = setup_script_error;
-                    }
+                    // The setup script (if configured) no longer runs inline
+                    // here — create_worktree_shared chains it after the file
+                    // sync in the background (spawn_worktree_setup_chain) so
+                    // it can't race the sync, and this tool response returns
+                    // before either finishes. Its outcome is reported via the
+                    // dual-emitted `worktree-setup-script-completed` event,
+                    // not this response — an MCP client has no way to observe
+                    // that today, which is a deliberate, accepted tradeoff for
+                    // fixing the ordering (see worktree.rs's doc comment).
                     // Add structured hint for Claude Code clients to spawn a subagent in the worktree
                     if is_claude_code {
                         let safe_branch = sanitize_branch_for_suggested_prompt(&branch_name);
@@ -7904,6 +7907,45 @@ mod tests {
             body.contains("let force = args[\"force\"].as_bool().unwrap_or(false)")
                 && body.contains("archive.as_deref(),\n                    force,"),
             "native MCP removal must default force to false and forward an explicit true"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_create_no_longer_returns_setup_script_fields() {
+        // Pins the deliberate MCP contract change from the setup-script/
+        // file-sync ordering fix: create_worktree_shared now chains the
+        // setup script in the background (spawn_worktree_setup_chain),
+        // after the file sync, so this tool response can no longer report
+        // setup_script/setup_script_error synchronously — an MCP client
+        // must rely on the worktree-setup-script-completed event instead
+        // (which it currently has no way to observe). No prior test
+        // exercised handle_worktree's "create" arm at all.
+        let repo = create_temp_git_repo_for_mcp_test();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "create",
+                "path": repo.path().to_string_lossy(),
+                "branch": "mcp-create-test",
+            }),
+            false,
+        )
+        .await;
+
+        assert!(
+            response.get("worktree_path").is_some(),
+            "response: {response}"
+        );
+        assert_eq!(response["branch"], "mcp-create-test");
+        assert!(
+            response.get("setup_script").is_none(),
+            "setup_script must not appear in the response: {response}"
+        );
+        assert!(
+            response.get("setup_script_error").is_none(),
+            "setup_script_error must not appear in the response: {response}"
         );
     }
 

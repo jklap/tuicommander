@@ -1087,6 +1087,20 @@ pub(super) async fn create_session_with_worktree(
         // route has no `mode` and cannot produce a clone.
         kind: crate::worktree::WorkspaceKind::Worktree,
     });
+    // This path used to never sync ignored/untracked/copy_paths files at all
+    // (a pre-existing transport-parity gap), and ran the setup script inline
+    // after the PTY spawn below with no ordering guarantee against a sync
+    // that never happened. spawn_worktree_setup_chain fixes both: it syncs
+    // first, then runs the setup script in the background (see its own doc
+    // comment), reporting the outcome via the dual-emitted
+    // worktree-setup-script-completed event rather than in this response.
+    crate::worktree::spawn_worktree_setup_chain(
+        &state,
+        base_repo.clone(),
+        branch_name.clone(),
+        std::path::PathBuf::from(&worktree_path_str),
+    );
+
 
     let rows = body.config.rows.unwrap_or(24);
     let cols = body.config.cols.unwrap_or(80);
@@ -1122,37 +1136,14 @@ pub(super) async fn create_session_with_worktree(
     });
     match spawn {
         Ok(session_id) => {
-            let mut response = serde_json::json!({
+            // setup_script/setup_script_error are no longer part of this
+            // response — the setup script now runs in the background chain
+            // kicked off right after worktree creation, above.
+            let response = serde_json::json!({
                 "session_id": session_id,
                 "worktree_path": worktree_path_str.clone(),
                 "branch": worktree_branch,
             });
-            let repo_for_script = base_repo.clone();
-            let cwd_for_script = worktree_path_str;
-            if let Some(script) = tokio::task::spawn_blocking(move || {
-                crate::config::resolve_effective_setup_script(&repo_for_script)
-            })
-            .await
-            .ok()
-            .flatten()
-            {
-                match tokio::task::spawn_blocking(move || {
-                    crate::worktree::run_setup_script(script, cwd_for_script)
-                })
-                .await
-                {
-                    Ok(Ok(result)) => {
-                        response["setup_script"] = result;
-                    }
-                    Ok(Err(e)) => {
-                        response["setup_script_error"] = serde_json::json!(e);
-                    }
-                    Err(e) => {
-                        response["setup_script_error"] =
-                            serde_json::json!(format!("task panic: {e}"));
-                    }
-                }
-            }
             (StatusCode::CREATED, Json(response))
         }
         Err(err) => err,
@@ -3705,6 +3696,85 @@ mod tests {
         assert_ne!(
             second, "dup-id",
             "duplicate requested id must fall back to a fresh uuid"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_session_with_worktree_runs_the_file_sync() {
+        // This endpoint used to never call the file sync at all — a
+        // pre-existing transport-parity gap (create_worktree_shared/desktop
+        // create_worktree both did) fixed alongside the ordering issue,
+        // since fixing the ordering is meaningless on a path where one of the
+        // two operations doesn't exist. Verifies the sync now runs by
+        // checking a copy_ignored_files-synced file actually lands in the
+        // new worktree.
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        std::fs::write(repo.path().join(".gitignore"), "ignored.txt\n").expect("write gitignore");
+        std::fs::write(repo.path().join("ignored.txt"), "secret-config").expect("write ignored");
+        std::process::Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git add");
+        std::process::Command::new("git")
+            .args(["commit", "-m", "add gitignore"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git commit");
+
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+        crate::config::save_repo_settings(crate::config::RepoSettingsMap {
+            repos: [(
+                repo.path().to_string_lossy().to_string(),
+                crate::config::RepoSettingsEntry {
+                    path: repo.path().to_string_lossy().to_string(),
+                    copy_ignored_files: Some(true),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        })
+        .expect("save repo settings");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = create_session_with_worktree(
+            State(state),
+            Json(CreateSessionWithWorktreeRequest {
+                config: CreateSessionRequest {
+                    rows: None,
+                    cols: None,
+                    shell: None,
+                    cwd: None,
+                    session_id: None,
+                    alias: None,
+                },
+                base_repo: repo.path().to_string_lossy().to_string(),
+                branch_name: "sync-test-branch".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(status, StatusCode::CREATED, "response: {body}");
+        let worktree_path = body["worktree_path"].as_str().expect("worktree_path");
+
+        // The sync runs in the background chain kicked off before the PTY
+        // spawn — poll for it rather than asserting synchronously.
+        let synced = std::path::Path::new(worktree_path).join("ignored.txt");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline && !synced.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            synced.exists(),
+            "copy_ignored_files should have synced ignored.txt into the new worktree"
         );
     }
 }

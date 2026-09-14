@@ -31,90 +31,137 @@ pub(crate) fn resolve_archive_script(repo_path: &str) -> Option<String> {
     None
 }
 
-/// Kick off a background copy of ignored/untracked/explicit-listed files into
-/// a freshly created worktree. Resolves the repo's effective copy settings
+/// Copy ignored/untracked/explicit-listed files into a freshly created
+/// worktree, awaiting completion. Resolves the repo's effective copy settings
 /// from disk (`config::resolve_effective_copy_settings`) itself, so a
 /// worktree created from the desktop app and one created via the MCP HTTP
 /// path (no frontend in the loop) sync identically.
 ///
-/// Fire-and-forget: returns immediately. A repo with both `copy_ignored`/
-/// `copy_untracked` off and an empty `copy_paths` is a no-op with **no**
-/// events at all — a plain worktree creation never shows a sync toast.
-/// Progress/completion are reported via dual-emitted (event_bus + Tauri
-/// window) `worktree-sync-*` events; see `state.rs`'s `AppEvent::WorktreeSync*`
-/// and `sse_routes.rs` for the SSE side.
+/// Returns `None` — and emits nothing at all — when there is nothing
+/// configured to copy (a plain worktree creation never shows a sync toast).
+/// Otherwise dual-emits (event_bus + Tauri window) `worktree-sync-*` events
+/// as it goes and returns the final summary.
 ///
-/// KNOWN, ACCEPTED ORDERING GAP: this is deliberately unsequenced against the
-/// setup script (`resolve_effective_setup_script` / `run_setup_script`) —
-/// that's what "runs in the background, doesn't block worktree creation"
-/// (the explicitly requested design) means. A setup script that depends on a
-/// synced file (e.g. a `copy_paths` entry symlinking `node_modules` so `npm
-/// install` can skip, or a script reading a synced `.env`) can race ahead of
-/// the sync and run without it. Making the two wait on each other would
-/// reintroduce the blocking behavior this was built to avoid; if that
-/// tradeoff ever needs revisiting, the fix is to await this function's
-/// summary before running the setup script, not to make the sync
-/// synchronous.
-pub(crate) fn spawn_worktree_file_sync(
+/// Only called from [`spawn_worktree_setup_chain`], which awaits this before
+/// resolving/running the setup script — seeing that function's doc comment
+/// for why the two must be sequenced this way.
+async fn run_worktree_file_sync(
     state: &Arc<AppState>,
     base_repo: &str,
     branch: &str,
     dest_path: &Path,
-) {
+) -> Option<crate::worktree_sync::SyncSummary> {
     let (copy_ignored, copy_untracked, copy_paths) =
         crate::config::resolve_effective_copy_settings(base_repo);
     if !copy_ignored && !copy_untracked && copy_paths.is_empty() {
-        return;
+        return None;
     }
 
-    let state = Arc::clone(state);
     let source = PathBuf::from(base_repo);
     let dest = dest_path.to_path_buf();
     let repo_path = base_repo.to_string();
     let branch = branch.to_string();
     let explicit = crate::worktree_sync::specs_from_copy_path_entries(&copy_paths);
 
+    emit_worktree_sync_started(state, &repo_path, &branch);
+
+    let repo_path_progress = repo_path.clone();
+    let branch_progress = branch.clone();
+    let state_progress = Arc::clone(state);
+
+    let summary = tokio::task::spawn_blocking(move || {
+        let specs = crate::worktree_sync::build_sync_specs(
+            &source,
+            copy_ignored,
+            copy_untracked,
+            &explicit,
+        );
+        // Throttled: a large ignored tree (e.g. node_modules) can be
+        // thousands of entries — emit at most ~once every 150ms, plus
+        // always on the final entry so completion isn't preceded by a
+        // stale progress count.
+        let mut last_emit = std::time::Instant::now();
+        crate::worktree_sync::sync_paths(&source, &dest, &specs, move |copied, total| {
+            let now = std::time::Instant::now();
+            if copied == total || now.duration_since(last_emit).as_millis() >= 150 {
+                last_emit = now;
+                emit_worktree_sync_progress(
+                    &state_progress,
+                    &repo_path_progress,
+                    &branch_progress,
+                    copied,
+                    total,
+                );
+            }
+        })
+    })
+    .await
+    .unwrap_or_else(|e| crate::worktree_sync::SyncSummary {
+        copied: 0,
+        total: 0,
+        errors: vec![format!("sync task panicked: {e}")],
+    });
+
+    emit_worktree_sync_completed(state, &repo_path, &branch, &summary);
+    Some(summary)
+}
+
+/// Kick off the (file sync → setup script) background chain for a freshly
+/// created worktree, in that order, so a setup script that depends on a
+/// synced file (a `copy_paths` entry symlinking `node_modules`, a synced
+/// `.env`, etc.) can no longer race ahead of the sync and run without it —
+/// the previously "KNOWN, ACCEPTED ORDERING GAP" this replaces.
+///
+/// Fire-and-forget: **worktree creation itself has already returned** by the
+/// time this chain runs, on all three creation paths (desktop `create_worktree`,
+/// MCP HTTP `create_worktree_shared`, MCP HTTP session-with-worktree create in
+/// `mcp_http/session.rs`) — that non-blocking property is unchanged from
+/// before this fix, only the *order* of what happens in the background
+/// changed. This is why the two HTTP paths no longer return
+/// `setup_script`/`setup_script_error` synchronously in their response: that
+/// information doesn't exist yet by the time the response is built. Instead,
+/// once the chain finishes, it dual-emits (event_bus + Tauri window)
+/// `AppEvent::WorktreeSetupScriptCompleted` — silent (no event at all) when
+/// no setup script is configured, matching `run_worktree_file_sync`'s own
+/// nothing-to-do-is-silent precedent.
+pub(crate) fn spawn_worktree_setup_chain(
+    state: &Arc<AppState>,
+    base_repo: String,
+    branch: String,
+    worktree_path: PathBuf,
+) {
+    let state = Arc::clone(state);
     tokio::spawn(async move {
-        emit_worktree_sync_started(&state, &repo_path, &branch);
+        run_worktree_file_sync(&state, &base_repo, &branch, &worktree_path).await;
 
-        let repo_path_progress = repo_path.clone();
-        let branch_progress = branch.clone();
-        let state_progress = Arc::clone(&state);
-
-        let summary = tokio::task::spawn_blocking(move || {
-            let specs = crate::worktree_sync::build_sync_specs(
-                &source,
-                copy_ignored,
-                copy_untracked,
-                &explicit,
-            );
-            // Throttled: a large ignored tree (e.g. node_modules) can be
-            // thousands of entries — emit at most ~once every 150ms, plus
-            // always on the final entry so completion isn't preceded by a
-            // stale progress count.
-            let mut last_emit = std::time::Instant::now();
-            crate::worktree_sync::sync_paths(&source, &dest, &specs, move |copied, total| {
-                let now = std::time::Instant::now();
-                if copied == total || now.duration_since(last_emit).as_millis() >= 150 {
-                    last_emit = now;
-                    emit_worktree_sync_progress(
-                        &state_progress,
-                        &repo_path_progress,
-                        &branch_progress,
-                        copied,
-                        total,
-                    );
-                }
-            })
+        let repo_for_script = base_repo.clone();
+        let Some(script) = tokio::task::spawn_blocking(move || {
+            crate::config::resolve_effective_setup_script(&repo_for_script)
         })
         .await
-        .unwrap_or_else(|e| crate::worktree_sync::SyncSummary {
-            copied: 0,
-            total: 0,
-            errors: vec![format!("sync task panicked: {e}")],
-        });
+        .ok()
+        .flatten() else {
+            return;
+        };
 
-        emit_worktree_sync_completed(&state, &repo_path, &branch, &summary);
+        let cwd_for_script = worktree_path.to_string_lossy().to_string();
+        let outcome =
+            tokio::task::spawn_blocking(move || run_setup_script(script, cwd_for_script)).await;
+
+        let (exit_code, error) = match outcome {
+            Ok(Ok(result)) => (result["exit_code"].as_i64(), None),
+            Ok(Err(e)) => (None, Some(e)),
+            Err(e) => (None, Some(format!("task panic: {e}"))),
+        };
+
+        emit_worktree_setup_script_completed(
+            &state,
+            &base_repo,
+            &branch,
+            &worktree_path.to_string_lossy(),
+            exit_code,
+            error,
+        );
     });
 }
 
@@ -186,6 +233,39 @@ fn emit_worktree_sync_completed(
                 "copied": summary.copied,
                 "total": summary.total,
                 "errors": summary.errors,
+            }),
+        );
+    }
+}
+
+fn emit_worktree_setup_script_completed(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+    exit_code: Option<i64>,
+    error: Option<String>,
+) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeSetupScriptCompleted {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            worktree_path: worktree_path.to_string(),
+            exit_code,
+            error: error.clone(),
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-setup-script-completed",
+            serde_json::json!({
+                "repoPath": repo_path,
+                "branch": branch,
+                "worktreePath": worktree_path,
+                "exitCode": exit_code,
+                "error": error,
             }),
         );
     }
@@ -1207,7 +1287,12 @@ pub(crate) async fn create_worktree(
     .map_err(|error| format!("Task panic: {error}"))??;
 
     state.invalidate_repo_caches(&base_repo);
-    spawn_worktree_file_sync(&state, &base_repo, &workspace.branch, &workspace.path);
+    spawn_worktree_setup_chain(
+        &state,
+        base_repo.clone(),
+        workspace.branch.clone(),
+        workspace.path.clone(),
+    );
     Ok(serde_json::json!({
         "status": "ok",
         "name": workspace.path.file_name().map(|name| name.to_string_lossy().to_string()),
@@ -3101,6 +3186,21 @@ pub(crate) fn archive_worktree_dir(
 ///   timeout can `killpg` the whole tree (SIGTERM, then SIGKILL after a short
 ///   grace period if it hasn't exited). Windows gets a plain `child.kill()` —
 ///   no process-group equivalent here today.
+///
+/// **Accepted, not a gap**: the two reader threads' `read_to_end` buffers are
+/// unbounded — a script that writes gigabytes to stdout/stderr grows this
+/// process's memory by that much before `timeout` ever has a chance to fire.
+/// Unlike the untrusted-PTY-escape-sequence caps elsewhere in this codebase
+/// (arbitrary process output, wire-driven), the script text itself is always
+/// either user-authored in Settings (Setup/Archive Script — same trust level
+/// as `POST /config/execute-shell-script`) or comes from the same
+/// `require_local_or_auth`-gated caller as the rest of the MCP HTTP surface
+/// (`run_setup_script_http`) — there is no untrusted party who can hand this
+/// function a script without already being able to run arbitrary code
+/// locally. A misbehaving (not malicious) script is bounded by `timeout`
+/// eventually killing it, just not by memory. Do not "fix" this with a
+/// silent truncation cap unless a real OOM report shows up — a cap changes
+/// `stdout`/`stderr`'s contract for every existing caller.
 fn run_shell_capture(
     script: &str,
     cwd: &Path,

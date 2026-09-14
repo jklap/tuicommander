@@ -225,7 +225,7 @@ serving a configuration the disk disagrees with. See
 | `DELETE` | `/worktrees` | Remove worktree |
 | `GET` | `/worktrees/paths?path=` | Get linked-worktree paths for a repo, keyed by workspace id and carrying `kind` |
 | `GET` | `/worktrees/lifecycle?repoPath=&workspaceId=` | Fresh dirty/commit/removal-safety verdict for one exact workspace; unknown fails closed |
-| `POST` | `/worktrees/run-script` | Run a setup script in a directory; returns exit code and captured output |
+| `POST` | `/worktrees/run-script` | Run a Setup/Archive/Run script (`{script, cwd}`) with the `TUIC_*` env injected and a timeout enforced — loopback or authenticated only, see below |
 
 ### Dictation and Desktop Integration
 
