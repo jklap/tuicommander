@@ -9171,6 +9171,7 @@ dependencies = [
  "genai",
  "gh-token",
  "gix",
+ "gix-imara-diff",
  "glob",
  "grep-matcher",
  "grep-regex",
