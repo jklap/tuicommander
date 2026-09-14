@@ -244,7 +244,7 @@ fn parse_remote_owner_slug(url: &str) -> Option<(String, String)> {
     Some((owner, slug))
 }
 
-fn detect_base_branch(repo_path: &str) -> Option<String> {
+pub(crate) fn detect_base_branch(repo_path: &str) -> Option<String> {
     let output = git_output(
         repo_path,
         &["branch", "--list", "main", "master", "develop"],

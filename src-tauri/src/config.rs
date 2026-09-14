@@ -4105,6 +4105,32 @@ pub(crate) fn resolve_effective_setup_script(repo_path: &str) -> Option<String> 
     resolve_setup_script_from(&settings, &defaults, repo_path)
 }
 
+/// Resolve the effective base branch for a repo, following the same
+/// per-repo-override > `.tuic.json` > global-defaults chain as the frontend resolver,
+/// then resolving the `"automatic"` sentinel (the default) to a real branch
+/// name via `prompt::detect_base_branch`. Returns `None` only when detection
+/// itself fails (no main/master/develop branch found) — used by
+/// `script_env::ScriptContext` for `TUIC_BASE_BRANCH`.
+pub(crate) fn resolve_effective_base_branch(repo_path: &str) -> Option<String> {
+    let settings: RepoSettingsMap = load_json_config(REPO_SETTINGS_FILE);
+    let defaults: RepoDefaultsConfig = load_json_config(REPO_DEFAULTS_FILE);
+    let local = load_repo_local_config_from_path(std::path::Path::new(repo_path));
+    // Same three-tier chain as the frontend's `repoSettings.ts` resolver and
+    // `resolve_effective_copy_settings`: per-repo app setting > `.tuic.json` >
+    // global default.
+    let configured = settings
+        .repos
+        .get(repo_path)
+        .and_then(|e| e.base_branch.clone())
+        .or_else(|| local.and_then(|l| l.base_branch))
+        .unwrap_or_else(|| defaults.base_branch.clone());
+    if configured.is_empty() || configured == "automatic" {
+        crate::prompt::detect_base_branch(repo_path)
+    } else {
+        Some(configured)
+    }
+}
+
 fn resolve_setup_script_from(
     settings: &RepoSettingsMap,
     defaults: &RepoDefaultsConfig,
@@ -8360,6 +8386,42 @@ mod tests {
         assert_eq!(config.delete_branch_on_remove, Some(false));
         assert_eq!(config.pr_merge_strategy, Some(MergeStrategy::Squash));
         assert!(config.copy_ignored_files.is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_effective_base_branch_honours_tuic_json_below_the_per_repo_override() {
+        let config_dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(config_dir.path().to_path_buf());
+        let repo = TempDir::new().unwrap();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        fs::write(
+            repo.path().join(".tuic.json"),
+            r#"{"base_branch": "release"}"#,
+        )
+        .unwrap();
+
+        // No per-repo app setting: the committed `.tuic.json` beats the global default.
+        assert_eq!(
+            resolve_effective_base_branch(&repo_path),
+            Some("release".to_string())
+        );
+
+        // A per-repo app setting still wins over `.tuic.json`.
+        let mut map = RepoSettingsMap::default();
+        map.repos.insert(
+            repo_path.clone(),
+            RepoSettingsEntry {
+                path: repo_path.clone(),
+                base_branch: Some("develop".to_string()),
+                ..RepoSettingsEntry::default()
+            },
+        );
+        save_repo_settings(RepoSettingsMap::default(), map).expect("save repo settings");
+        assert_eq!(
+            resolve_effective_base_branch(&repo_path),
+            Some("develop".to_string())
+        );
     }
 
     #[test]
