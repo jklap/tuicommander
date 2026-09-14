@@ -81,6 +81,7 @@
 - [Output Parser](./backend/output-parser.md)
 - [Error Classification](./backend/error-classification.md)
 - [Git Operations](./backend/git.md)
+- [Session Diff Review](./backend/session-review.md)
 - [GitHub Integration](./backend/github.md)
 - [MCP & HTTP Server](./backend/mcp-http.md)
 - [ACP Client for ego](./backend/acp.md)

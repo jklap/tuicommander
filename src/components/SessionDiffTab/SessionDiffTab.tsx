@@ -175,12 +175,37 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 		});
 	}
 
-	// Default every file to expanded once a review loads, so the reviewer
-	// doesn't have to click through every row to see anything.
+	// Default every file to expanded the first time a session's review
+	// loads, so the reviewer doesn't have to click through every row to see
+	// anything. Keyed on the review's own session_id (not merely "review()
+	// changed") and merges rather than replaces on any later update for the
+	// *same* session — a live session's ~2s debounced poll refresh (and a
+	// post-revert refetch) also update `review()`, and unconditionally
+	// resetting on every update silently re-expanded every file the user
+	// had just collapsed moments earlier.
+	let expandedDefaultsForSession: string | null = null;
+	let knownFileIds = new Set<string>();
 	createEffect(() => {
 		const r = review();
 		if (!r) return;
-		setExpandedFiles(new Set(r.files.map((f) => f.abs_path)));
+		const ids = r.files.map((f) => f.abs_path);
+		if (expandedDefaultsForSession !== r.session_id) {
+			expandedDefaultsForSession = r.session_id;
+			knownFileIds = new Set(ids);
+			setExpandedFiles(new Set(ids));
+			return;
+		}
+		// Same session, a later refresh (live poll or post-revert refetch):
+		// only auto-expand files we haven't seen before — never re-expand one
+		// the user has since collapsed just because it's still present.
+		const newlyAppeared = ids.filter((id) => !knownFileIds.has(id));
+		knownFileIds = new Set(ids);
+		if (newlyAppeared.length === 0) return;
+		setExpandedFiles((prev) => {
+			const next = new Set(prev);
+			for (const id of newlyAppeared) next.add(id);
+			return next;
+		});
 	});
 
 	function handleOpenFile(absPath: string) {
