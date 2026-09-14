@@ -2375,7 +2375,7 @@ pub fn remove_worktree_by_workspace_id_with_confirmation(
         repo_path,
         workspace_id,
         delete_branch,
-        archive_script,
+        archive_script.map(UserScript::bare),
         force,
         override_lock,
         expected_fingerprint,
@@ -2393,7 +2393,7 @@ pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
     repo_path: &str,
     workspace_id: &str,
     delete_branch: bool,
-    archive_script: Option<&str>,
+    archive_script: Option<UserScript<'_>>,
     force: bool,
     override_lock: bool,
     expected_fingerprint: Option<&str>,
@@ -2424,7 +2424,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     repo_path: &str,
     workspace_id: &str,
     delete_branch: bool,
-    archive_script: Option<&str>,
+    archive_script: Option<UserScript<'_>>,
     force: bool,
     override_lock: bool,
     expected_fingerprint: Option<&str>,
@@ -2545,7 +2545,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     // Run archive/cleanup script before deletion (if configured)
     if let Some(script) = archive_script
         && !missing_checkout
-        && !script.is_empty()
+        && !script.script.is_empty()
     {
         run_script_in_dir(script, &worktree_path)
             .map_err(|e| format!("Archive script failed: {e}"))?;
@@ -3796,7 +3796,7 @@ fn repair_archived_submodules(
 pub fn archive_worktree(
     base_repo: &Path,
     workspace_id: &str,
-    archive_script: Option<&str>,
+    archive_script: Option<UserScript<'_>>,
 ) -> Result<String, String> {
     // Resolve the checkout by id — the archive directory name is derived from the
     // record's branch, so a same-branch sibling can never be the one moved away.
@@ -3818,7 +3818,7 @@ pub fn archive_worktree(
 
     // Run archive script before archiving (if configured)
     if let Some(script) = archive_script
-        && !script.is_empty()
+        && !script.script.is_empty()
     {
         run_script_in_dir(script, &wt_path).map_err(|e| format!("Archive script failed: {e}"))?;
     }
@@ -3887,6 +3887,35 @@ pub fn archive_worktree(
 /// on it.
 const SCRIPT_TIMEOUT: Duration = Duration::from_secs(900);
 
+/// A user-authored Setup/Archive Script plus the extra environment the host
+/// application wants it to see.
+///
+/// tuic-git cannot derive app-level context itself (TUICommander's config
+/// dir, per-repo base-branch settings live in the app crate), so the caller
+/// supplies `env`: given the directory the script is about to run in, it
+/// returns the `(name, value)` pairs to set on top of the fully inherited
+/// parent environment. `PATH` is always set by the runner afterwards, so a
+/// pair naming it has no effect.
+#[derive(Clone, Copy)]
+pub struct UserScript<'a> {
+    pub script: &'a str,
+    pub env: &'a dyn Fn(&Path) -> Vec<(String, String)>,
+}
+
+impl<'a> UserScript<'a> {
+    /// A script with no extra environment beyond the inherited one.
+    pub fn bare(script: &'a str) -> Self {
+        Self {
+            script,
+            env: &no_extra_env,
+        }
+    }
+}
+
+fn no_extra_env(_: &Path) -> Vec<(String, String)> {
+    Vec::new()
+}
+
 /// Keep cmd.exe's PATH below its environment-value limit, with the first
 /// spelling of each directory retained. Callers put the resolved Git dir first.
 #[cfg(any(windows, test))]
@@ -3919,6 +3948,7 @@ fn run_shell_script(
     script: &str,
     cwd: &Path,
     timeout: Duration,
+    extra_env: &[(String, String)],
 ) -> Result<std::process::Output, String> {
     let (shell, flag) = if cfg!(target_os = "windows") {
         ("cmd", "/C")
@@ -3928,6 +3958,9 @@ fn run_shell_script(
 
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(flag).arg(script).current_dir(cwd);
+    // Host-supplied context first, so the PATH set below always wins over a
+    // pair that happens to name it.
+    cmd.envs(extra_env.iter().map(|(k, v)| (k, v)));
     let path = tuic_core::cli::enriched_path();
     #[cfg(windows)]
     let path = tuic_core::cli::which_cli("git")
@@ -3959,8 +3992,8 @@ fn run_shell_script(
 /// Run a shell script in a directory and return an error if it exits non-zero.
 ///
 /// Used by archive/delete operations to run cleanup scripts before the operation.
-fn run_script_in_dir(script: &str, cwd: &Path) -> Result<(), String> {
-    let output = run_shell_script(script, cwd, SCRIPT_TIMEOUT)?;
+fn run_script_in_dir(script: UserScript<'_>, cwd: &Path) -> Result<(), String> {
+    let output = run_shell_script(script.script, cwd, SCRIPT_TIMEOUT, &(script.env)(cwd))?;
 
     let exit_code = output.status.code().unwrap_or(-1);
     if exit_code != 0 {
@@ -3977,13 +4010,24 @@ fn run_script_in_dir(script: &str, cwd: &Path) -> Result<(), String> {
 /// Used to execute setup/run scripts after worktree creation.
 /// The script is passed to `sh -c` (Unix) or `cmd /C` (Windows).
 pub fn run_setup_script(script: String, cwd: String) -> Result<serde_json::Value, String> {
+    run_setup_script_with_env(script, cwd, &no_extra_env)
+}
+
+/// [`run_setup_script`] with host-supplied extra environment: `env` receives
+/// the resolved (tilde-expanded, existing) working directory and returns the
+/// pairs to set on top of the inherited environment — see [`UserScript`].
+pub fn run_setup_script_with_env(
+    script: String,
+    cwd: String,
+    env: &dyn Fn(&Path) -> Vec<(String, String)>,
+) -> Result<serde_json::Value, String> {
     let cwd = tuic_core::cli::expand_tilde(&cwd);
     let cwd_path = Path::new(&cwd);
     if !cwd_path.exists() {
         return Err(format!("Working directory does not exist: {cwd}"));
     }
 
-    let output = run_shell_script(&script, cwd_path, SCRIPT_TIMEOUT)?;
+    let output = run_shell_script(&script, cwd_path, SCRIPT_TIMEOUT, &env(cwd_path))?;
 
     Ok(serde_json::json!({
         "exit_code": output.status.code().unwrap_or(-1),
@@ -6183,7 +6227,7 @@ branch refs/heads/feat
         let dir = TempDir::new().expect("temp dir");
 
         let started = std::time::Instant::now();
-        let err = run_shell_script("sleep 30", dir.path(), Duration::from_millis(300))
+        let err = run_shell_script("sleep 30", dir.path(), Duration::from_millis(300), &[])
             .expect_err("a script that never finishes must fail");
         let waited = started.elapsed();
 
@@ -6202,7 +6246,7 @@ branch refs/heads/feat
     fn run_shell_script_keeps_output_of_a_script_that_finishes_in_time() {
         let dir = TempDir::new().expect("temp dir");
 
-        let out = run_shell_script("echo alive", dir.path(), Duration::from_secs(30))
+        let out = run_shell_script("echo alive", dir.path(), Duration::from_secs(30), &[])
             .expect("a fast script must succeed");
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "alive");
     }
@@ -6247,37 +6291,65 @@ branch refs/heads/feat
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "found");
     }
 
-    // --- "current behavior" pins for the TUIC_* env-injection work ---
-    // These assert what run_setup_script/run_script_in_dir do TODAY (no env
-    // injection at all). The `_today_` ones are deleted once script_env.rs is
-    // wired in (see script_env.rs's own tests for the replacement coverage);
-    // the others (parent-env inheritance, the -1 exit-code collision) are
-    // invariants that must survive that change and are kept.
+    // --- Host-supplied script environment. The app crate derives the TUIC_*
+    // context (script_env.rs) and passes it in through `UserScript::env` /
+    // `run_setup_script_with_env`; its own tests cover the variable values.
+    // These pin the plumbing: the pairs reach the child, computed for the
+    // directory the script actually runs in, and never displace PATH. ---
 
     #[test]
-    #[serial_test::serial]
-    fn run_setup_script_today_sets_no_tuic_env() {
-        // Can't assert an absolute count: this binary may itself be running
-        // inside a TUICommander-spawned PTY (TUIC_SESSION/TUIC_CONFIG_DIR/
-        // TUIC_PTY_TTY already ambient), and other tests transiently set their
-        // own TUIC_* vars (e.g. diff_triage's TUIC_REVIEW_CONFIDENCE_THRESHOLD
-        // tests) — hence #[serial_test::serial] to avoid racing those. Compare
-        // before/after instead: run_setup_script must add exactly zero.
-        let before = std::env::vars()
-            .filter(|(k, _)| k.starts_with("TUIC_"))
-            .count();
-
+    fn run_setup_script_with_env_passes_host_pairs_for_the_resolved_cwd() {
         let dir = TempDir::new().expect("temp dir");
         let cwd = dir.path().to_string_lossy().to_string();
-        // `|| true` so a shell with no matching lines (grep -c prints 0 and
-        // exits 1) doesn't turn into a script failure.
-        let result = run_setup_script("env | grep -c '^TUIC_' || true".to_string(), cwd)
+        let seen = std::sync::Mutex::new(None);
+        let result =
+            run_setup_script_with_env("echo \"$TUIC_TEST_HOST_PAIR\"".to_string(), cwd, &|p| {
+                *seen.lock().unwrap() = Some(p.to_path_buf());
+                vec![("TUIC_TEST_HOST_PAIR".to_string(), "from-host".to_string())]
+            })
             .expect("should succeed");
-        assert_eq!(result["exit_code"], 0);
+        assert_eq!(result["stdout"].as_str().unwrap().trim(), "from-host");
+        assert_eq!(seen.lock().unwrap().as_deref(), Some(dir.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_pairs_cannot_replace_the_enriched_path() {
+        let dir = TempDir::new().expect("temp dir");
+        let cwd = dir.path().to_string_lossy().to_string();
+        let result = run_setup_script_with_env("echo \"$PATH\"".to_string(), cwd, &|_| {
+            vec![("PATH".to_string(), "/host/supplied".to_string())]
+        })
+        .expect("should succeed");
         assert_eq!(
             result["stdout"].as_str().unwrap().trim(),
-            before.to_string(),
-            "run_setup_script should pass through the ambient TUIC_* count unchanged today"
+            tuic_core::cli::enriched_path()
+        );
+    }
+
+    #[test]
+    fn run_script_in_dir_passes_host_pairs_for_its_cwd() {
+        let dir = TempDir::new().expect("temp dir");
+        // run_script_in_dir only reports success/failure, not output, so route
+        // the assertion through a marker file instead of stdout.
+        let marker = dir.path().join("kind.txt");
+        let script = format!("echo \"$TUIC_TEST_HOST_PAIR\" > {}", marker.display());
+        let expected_cwd = dir.path().to_path_buf();
+        let env = move |p: &Path| {
+            assert_eq!(p, expected_cwd);
+            vec![("TUIC_TEST_HOST_PAIR".to_string(), "archive".to_string())]
+        };
+        let result = run_script_in_dir(
+            UserScript {
+                script: &script,
+                env: &env,
+            },
+            dir.path(),
+        );
+        assert!(result.is_ok(), "script should succeed: {:?}", result);
+        assert_eq!(
+            fs::read_to_string(&marker).expect("read marker").trim(),
+            "archive"
         );
     }
 
@@ -6301,28 +6373,8 @@ branch refs/heads/feat
             result["stdout"].as_str().unwrap().trim(),
             "parent-value-abc123",
             "run_setup_script must keep inheriting the full parent environment \
-             (no env_clear) even after TUIC_* injection lands"
+             (no env_clear) even with TUIC_* injection wired in"
         );
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn run_script_in_dir_today_sets_no_tuic_env() {
-        // See run_setup_script_today_sets_no_tuic_env for why this compares
-        // before/after rather than asserting a hardcoded zero.
-        let before = std::env::vars()
-            .filter(|(k, _)| k.starts_with("TUIC_"))
-            .count();
-
-        let dir = TempDir::new().expect("temp dir");
-        // run_script_in_dir only reports success/failure, not output, so route
-        // the assertion through a marker file instead of stdout.
-        let marker = dir.path().join("tuic-count.txt");
-        let script = format!("env | grep -c '^TUIC_' > {} || true", marker.display());
-        let result = run_script_in_dir(&script, dir.path());
-        assert!(result.is_ok(), "script should succeed: {:?}", result);
-        let count = fs::read_to_string(&marker).expect("read marker");
-        assert_eq!(count.trim(), before.to_string());
     }
 
     #[test]
@@ -6341,14 +6393,14 @@ branch refs/heads/feat
     #[test]
     fn run_script_in_dir_succeeds_with_zero_exit() {
         let dir = TempDir::new().expect("temp dir");
-        let result = run_script_in_dir("echo hello", dir.path());
+        let result = run_script_in_dir(UserScript::bare("echo hello"), dir.path());
         assert!(result.is_ok());
     }
 
     #[test]
     fn run_script_in_dir_fails_with_nonzero_exit() {
         let dir = TempDir::new().expect("temp dir");
-        let result = run_script_in_dir("exit 1", dir.path());
+        let result = run_script_in_dir(UserScript::bare("exit 1"), dir.path());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("exit code 1"));
     }
@@ -6357,7 +6409,10 @@ branch refs/heads/feat
     fn run_script_in_dir_runs_in_correct_directory() {
         let dir = TempDir::new().expect("temp dir");
         fs::write(dir.path().join("test-file.txt"), "content").expect("write");
-        let result = run_script_in_dir(&print_file_script("test-file.txt"), dir.path());
+        let result = run_script_in_dir(
+            UserScript::bare(&print_file_script("test-file.txt")),
+            dir.path(),
+        );
         assert!(result.is_ok());
     }
 
@@ -6375,7 +6430,11 @@ branch refs/heads/feat
         // Script creates a marker file inside the worktree dir; archive should still succeed
         let marker = worktrees_dir.join("archive-marker.txt");
         let script = touch_script(&marker.display().to_string());
-        let result = archive_worktree(repo.path(), "archive-script-test", Some(&script));
+        let result = archive_worktree(
+            repo.path(),
+            "archive-script-test",
+            Some(UserScript::bare(&script)),
+        );
         assert!(
             result.is_ok(),
             "archive with script should succeed: {:?}",
@@ -6395,7 +6454,11 @@ branch refs/heads/feat
         };
         let wt = create_worktree_internal(&worktrees_dir, &config, None).expect("create worktree");
         // Script exits non-zero — archive should be blocked
-        let result = archive_worktree(repo.path(), "archive-block-test", Some("exit 1"));
+        let result = archive_worktree(
+            repo.path(),
+            "archive-block-test",
+            Some(UserScript::bare("exit 1")),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Archive script failed"));
         // Worktree should still exist (not archived)
@@ -8390,7 +8453,9 @@ branch refs/heads/feat
             &repo.to_string_lossy(),
             "missing-with-script",
             false,
-            Some("printf 'would run only in a live checkout'"),
+            Some(UserScript::bare(
+                "printf 'would run only in a live checkout'",
+            )),
             true,
             false,
             None,

@@ -196,7 +196,10 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
         repo_path,
         workspace_id,
         delete_branch,
-        archive_script,
+        archive_script.map(|script| UserScript {
+            script,
+            env: &archive_script_env,
+        }),
         force,
         override_lock,
         expected_fingerprint,
@@ -223,7 +226,10 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
         repo_path,
         workspace_id,
         delete_branch,
-        archive_script,
+        archive_script.map(|script| UserScript {
+            script,
+            env: &archive_script_env,
+        }),
         force,
         override_lock,
         expected_fingerprint,
@@ -1597,10 +1603,40 @@ pub(crate) fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOpti
     tuic_git::worktree::list_base_ref_options(repo_path)
 }
 
-#[cfg(feature = "desktop")]
-#[tauri::command]
+/// `TUIC_*` context (`script_env.rs`) for an Archive Script about to run in
+/// `cwd` — the worktree being archived or deleted.
+fn archive_script_env(cwd: &Path) -> Vec<(String, String)> {
+    crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Archive, cwd)
+        .std_pairs()
+}
+
+/// tuic-git's `archive_worktree` with the Archive Script given its `TUIC_*`
+/// context. Shadows the glob re-export so every app-crate caller gets it.
+pub(crate) fn archive_worktree(
+    base_repo: &Path,
+    workspace_id: &str,
+    archive_script: Option<&str>,
+) -> Result<String, String> {
+    tuic_git::worktree::archive_worktree(
+        base_repo,
+        workspace_id,
+        archive_script.map(|script| UserScript {
+            script,
+            env: &archive_script_env,
+        }),
+    )
+}
+
+/// Run a Setup Script with its `TUIC_*` context. Not desktop-gated: the HTTP
+/// twins (`POST /worktrees/run-script`, post-create setup in
+/// worktree_routes.rs/session.rs) call this too, so the headless build injects
+/// the same variables.
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn run_setup_script(script: String, cwd: String) -> Result<serde_json::Value, String> {
-    tuic_git::worktree::run_setup_script(script, cwd)
+    tuic_git::worktree::run_setup_script_with_env(script, cwd, &|cwd| {
+        crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Setup, cwd)
+            .std_pairs()
+    })
 }
 
 #[cfg(test)]
@@ -2783,5 +2819,186 @@ mod tests {
             assert_eq!(error, "No pending orphan cleanup for this repository");
             assert_eq!(pending_answer(&state, "/repo"), None);
         }
+    }
+
+    // --- TUIC_* env injection into Setup/Archive Scripts (script_env.rs,
+    // passed to tuic-git's runner as data via `UserScript::env` /
+    // `run_setup_script_with_env`). ---
+
+    #[cfg(unix)]
+    #[test]
+    fn run_setup_script_sets_enriched_path() {
+        let dir = TempDir::new().expect("temp dir");
+        let cwd = dir.path().to_string_lossy().to_string();
+
+        let result = run_setup_script("echo \"$PATH\"".to_string(), cwd).expect("should succeed");
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(
+            result["stdout"].as_str().unwrap().trim(),
+            crate::cli::enriched_path(),
+            "run_setup_script should enrich PATH the same way git subprocesses already do"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_setup_script_injects_worktree_context() {
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = WorktreeConfig {
+            task_name: "env-inject-test".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("env-inject-test".to_string()),
+            create_branch: true,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None).expect("create worktree");
+        let cwd = wt.path.to_string_lossy().to_string();
+
+        let result = run_setup_script(
+            "echo \"$TUIC_MAIN_REPO_PATH|$TUIC_BRANCH|$TUIC_WORKTREE_NAME|$TUIC_IS_WORKTREE\""
+                .to_string(),
+            cwd,
+        )
+        .expect("should succeed");
+        assert_eq!(result["exit_code"], 0);
+        let stdout = result["stdout"].as_str().unwrap().trim();
+        let parts: Vec<&str> = stdout.split('|').collect();
+        assert_eq!(
+            parts[0],
+            repo.path().canonicalize().unwrap().to_string_lossy(),
+            "TUIC_MAIN_REPO_PATH should be the main checkout: {stdout}"
+        );
+        assert_eq!(parts[1], "env-inject-test");
+        assert_eq!(parts[2], "env-inject-test");
+        assert_eq!(parts[3], "true");
+    }
+
+    /// RAII guard restoring an env var's prior value (or absence) on drop —
+    /// runs even if the body panics.
+    struct EnvVarGuard(&'static str, Option<String>);
+
+    impl EnvVarGuard {
+        fn unset(key: &'static str) -> Self {
+            let guard = EnvVarGuard(key, std::env::var(key).ok());
+            unsafe { std::env::remove_var(key) };
+            guard
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.1.take() {
+                Some(previous) => unsafe { std::env::set_var(self.0, previous) },
+                None => unsafe { std::env::remove_var(self.0) },
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn run_setup_script_does_not_set_unknown_vars() {
+        // TUIC_BRANCH is process-global env state, and this test may itself
+        // be running inside a live TUIC-hosted terminal (which sets it
+        // ambiently for its own child processes) — Setup/Archive Scripts get
+        // full parent-env inheritance, so an ambient TUIC_BRANCH would
+        // otherwise leak straight through and falsely read as "SET". Clear it
+        // for the duration of this test only.
+        let _env_guard = EnvVarGuard::unset("TUIC_BRANCH");
+
+        // Detached HEAD: TUIC_BRANCH should be entirely absent, not empty.
+        let repo = setup_test_repo();
+        let sha = git_cmd(repo.path())
+            .args(["rev-parse", "HEAD"])
+            .run()
+            .expect("rev-parse")
+            .stdout;
+        let sha = sha.trim();
+        git_cmd(repo.path())
+            .args(["checkout", sha])
+            .run()
+            .expect("checkout detached");
+
+        let cwd = repo.path().to_string_lossy().to_string();
+        let result = run_setup_script(
+            "if [ -z \"${TUIC_BRANCH+x}\" ]; then echo UNSET; else echo \"SET:$TUIC_BRANCH\"; fi"
+                .to_string(),
+            cwd,
+        )
+        .expect("should succeed");
+        assert_eq!(result["stdout"].as_str().unwrap().trim(), "UNSET");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_setup_script_reports_script_kind_setup() {
+        let dir = TempDir::new().expect("temp dir");
+        let cwd = dir.path().to_string_lossy().to_string();
+        let result = run_setup_script("echo \"$TUIC_SCRIPT_KIND\"".to_string(), cwd)
+            .expect("should succeed");
+        assert_eq!(result["stdout"].as_str().unwrap().trim(), "setup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_script_receives_the_worktree_being_archived() {
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = WorktreeConfig {
+            task_name: "archive-env-test".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("archive-env-test".to_string()),
+            create_branch: true,
+        };
+        create_worktree_internal(&worktrees_dir, &config, None).expect("create worktree");
+        // Marker written outside the worktree so it survives the archive move.
+        let marker = repo.path().join("archive-env-marker.txt");
+        let script = format!(
+            "echo \"$TUIC_SCRIPT_KIND|$TUIC_WORKTREE_NAME|$TUIC_MAIN_REPO_PATH\" > {}",
+            marker.display()
+        );
+        let result = archive_worktree(repo.path(), "archive-env-test", Some(&script));
+        assert!(result.is_ok(), "archive should succeed: {:?}", result);
+
+        let content = fs::read_to_string(&marker).expect("read marker");
+        let parts: Vec<&str> = content.trim().split('|').collect();
+        assert_eq!(parts[0], "archive");
+        assert_eq!(parts[1], "archive-env-test");
+        assert_eq!(
+            parts[2],
+            repo.path().canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_archive_script_receives_its_worktree_context() {
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = WorktreeConfig {
+            task_name: "delete-env-test".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("delete-env-test".to_string()),
+            create_branch: true,
+        };
+        create_worktree_internal(&worktrees_dir, &config, None).expect("create worktree");
+        let marker = repo.path().join("delete-env-marker.txt");
+        let script = format!(
+            "echo \"$TUIC_SCRIPT_KIND|$TUIC_WORKTREE_NAME\" > {}",
+            marker.display()
+        );
+        remove_worktree_by_workspace_id_with_confirmation(
+            &repo.path().to_string_lossy(),
+            "delete-env-test",
+            false,
+            Some(&script),
+            false,
+            false,
+            None,
+        )
+        .expect("remove should succeed");
+
+        let content = fs::read_to_string(&marker).expect("read marker");
+        assert_eq!(content.trim(), "archive|delete-env-test");
     }
 }

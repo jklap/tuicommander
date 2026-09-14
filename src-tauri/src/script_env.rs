@@ -64,7 +64,7 @@ impl ScriptKind {
 }
 
 /// Derived `TUIC_*` context for a single script invocation. Build with
-/// [`ScriptContext::derive`], then apply with [`ScriptContext::apply_std`],
+/// [`ScriptContext::derive`], then apply with [`ScriptContext::std_pairs`],
 /// [`ScriptContext::apply_pty`], or [`ScriptContext::as_map`] depending on
 /// the target command type.
 pub(crate) struct ScriptContext {
@@ -175,16 +175,17 @@ impl ScriptContext {
         out
     }
 
-    /// Apply to a plain `std::process::Command` (Setup Script, Archive
-    /// Script) — keeps full parent-env inheritance (no `env_clear`, these
-    /// scripts are user-authored in Settings and trusted) and additionally
-    /// enriches `PATH` the same way every git subprocess already gets
-    /// (`cli::enriched_path`), since these scripts previously got neither.
-    pub(crate) fn apply_std(&self, cmd: &mut std::process::Command) {
-        for (k, v) in self.pairs() {
-            cmd.env(k, v);
-        }
-        cmd.env("PATH", crate::cli::enriched_path());
+    /// As owned pairs for a Setup/Archive Script (`tuic_git::worktree::UserScript`),
+    /// which tuic-git's runner sets on its own plain `std::process::Command` —
+    /// keeping full parent-env inheritance (no `env_clear`, these scripts are
+    /// user-authored in Settings and trusted). `PATH` is not in the list: that
+    /// runner already enriches it (`cli::enriched_path`, plus the resolved Git
+    /// directory on Windows), and setting it here would undo the Windows part.
+    pub(crate) fn std_pairs(&self) -> Vec<(String, String)> {
+        self.pairs()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
     }
 
     /// Every key `pairs()` can ever emit — used by `apply_pty` to clear a key
@@ -206,7 +207,7 @@ impl ScriptContext {
     ];
 
     /// Apply to a PTY spawn (every interactive terminal, via
-    /// `pty::inject_worktree_env`). Unlike `apply_std`, this clears every key
+    /// `pty::inject_worktree_env`). Unlike `std_pairs`, this clears every key
     /// this context does NOT set (e.g. `TUIC_MAIN_REPO_PATH` for a non-repo
     /// cwd) rather than only ever adding — `ScriptContext::derive` is a pure
     /// function of the cwd path, so its result must not be able to inherit a
