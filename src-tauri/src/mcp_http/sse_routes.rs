@@ -291,6 +291,7 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::WorktreeSyncStarted { .. } => "worktree-sync-started",
         AppEvent::WorktreeSyncProgress { .. } => "worktree-sync-progress",
         AppEvent::WorktreeSyncCompleted { .. } => "worktree-sync-completed",
+        AppEvent::WorktreeSetupScriptCompleted { .. } => "worktree-setup-script-completed",
     }
 }
 
@@ -574,6 +575,24 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "copied": copied,
                 "total": total,
                 "errors": errors,
+            })
+        }
+        AppEvent::WorktreeSetupScriptCompleted {
+            repo_path,
+            branch,
+            worktree_path,
+            exit_code,
+            error,
+        } => {
+            // camelCase keys mirror the Tauri window
+            // `worktree-setup-script-completed` event — see
+            // `worktree::spawn_worktree_setup_chain`.
+            serde_json::json!({
+                "repoPath": repo_path,
+                "branch": branch,
+                "worktreePath": worktree_path,
+                "exitCode": exit_code,
+                "error": error,
             })
         }
     }
@@ -889,6 +908,28 @@ mod tests {
         assert_eq!(body["copied"], 9);
         assert_eq!(body["total"], 10);
         assert_eq!(body["errors"][0], "missing.txt: source path does not exist");
+    }
+
+    #[test]
+    fn worktree_setup_script_completed_uses_camelcase_matching_window_event() {
+        // `worktree::spawn_worktree_setup_chain` dual-emits this on the bus
+        // (SSE) AND the Tauri window with identical camelCase keys.
+        let event = AppEvent::WorktreeSetupScriptCompleted {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            worktree_path: "/repo/worktrees/feat-x".into(),
+            exit_code: Some(1),
+            error: None,
+        };
+        assert_eq!(event_type_name(&event), "worktree-setup-script-completed");
+        let body = event_payload(&event);
+        assert_eq!(body["repoPath"], "/repo");
+        assert_eq!(body["branch"], "feat-x");
+        assert_eq!(body["worktreePath"], "/repo/worktrees/feat-x");
+        assert_eq!(body["exitCode"], 1);
+        assert!(body["error"].is_null());
+        assert!(body.get("repo_path").is_none());
+        assert!(body.get("worktree_path").is_none());
     }
 
     #[test]

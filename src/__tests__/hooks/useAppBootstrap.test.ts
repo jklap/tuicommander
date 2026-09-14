@@ -64,6 +64,7 @@ function makeOptions(overrides: Partial<AppBootstrapOptions> = {}): AppBootstrap
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
 		handleWorktreeCreateFailed: vi.fn(),
+		handleWorktreeSetupScriptCompleted: vi.fn(),
 		getDefaultFontSize: () => 14,
 		detectAgents: vi.fn().mockResolvedValue(undefined),
 		restoreDetachedPanels: vi.fn(),

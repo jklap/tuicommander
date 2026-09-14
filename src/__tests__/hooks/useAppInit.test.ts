@@ -52,6 +52,7 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
 		handleWorktreeCreateFailed: vi.fn(),
+		handleWorktreeSetupScriptCompleted: vi.fn(),
 		getDefaultFontSize: () => 14,
 		stores: {
 			hydrate: vi.fn().mockResolvedValue(undefined),

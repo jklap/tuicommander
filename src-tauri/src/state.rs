@@ -376,6 +376,27 @@ pub enum AppEvent {
         total: usize,
         errors: Vec<String>,
     },
+    /// A worktree's Setup Script finished running in the background, after
+    /// `worktree::spawn_worktree_setup_chain` awaited the file sync above.
+    /// Fired only when a setup script was actually configured — silent
+    /// otherwise, matching `WorktreeSync*`'s own "nothing to do" precedent.
+    /// Worktree creation itself has already returned by this point on every
+    /// creation path (desktop, MCP HTTP worktree-create, MCP HTTP
+    /// session-with-worktree-create): this event, not a synchronous response
+    /// field, is how a script's outcome is reported.
+    #[serde(rename = "worktree-setup-script-completed")]
+    WorktreeSetupScriptCompleted {
+        repo_path: String,
+        branch: String,
+        worktree_path: String,
+        /// `None` when the script never produced an exit code at all (spawn
+        /// failure, task panic) — see `error` for that case.
+        exit_code: Option<i64>,
+        /// `None` on a clean run (including a non-zero exit code, which is
+        /// still reported via `exit_code`) — `Some` only for a spawn/panic
+        /// failure, mirroring `run_setup_script`'s own `Result` shape.
+        error: Option<String>,
+    },
 }
 
 impl AppEvent {
@@ -3951,7 +3972,8 @@ impl AppState {
             | AppEvent::WorktreeCreateFailed { .. }
             | AppEvent::WorktreeSyncStarted { .. }
             | AppEvent::WorktreeSyncProgress { .. }
-            | AppEvent::WorktreeSyncCompleted { .. } => {}
+            | AppEvent::WorktreeSyncCompleted { .. }
+            | AppEvent::WorktreeSetupScriptCompleted { .. } => {}
         }
     }
 

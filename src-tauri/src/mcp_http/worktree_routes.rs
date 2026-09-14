@@ -17,8 +17,6 @@ pub(super) struct CreatedWorktree {
     pub worktree: crate::state::WorktreeInfo,
     pub path: String,
     pub branch: String,
-    pub setup_script: Option<serde_json::Value>,
-    pub setup_script_error: Option<serde_json::Value>,
 }
 
 pub(super) async fn list_worktrees_http(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -86,18 +84,18 @@ pub(super) async fn create_worktree_http(
         Err(response) => return response,
     };
 
-    let mut response = serde_json::json!({
+    // The setup script (if configured) is no longer run inline here — it's
+    // chained after the file sync in the background by create_worktree_shared
+    // (spawn_worktree_setup_chain), reported via the dual-emitted
+    // `worktree-setup-script-completed` event rather than this response, so
+    // ordering against the sync is guaranteed regardless of how long either
+    // step takes.
+    let response = serde_json::json!({
         "name": created.worktree.name,
         "path": &created.path,
         "branch": created.worktree.branch,
         "base_repo": created.worktree.base_repo.to_string_lossy(),
     });
-    if let Some(setup_script) = created.setup_script {
-        response["setup_script"] = setup_script;
-    }
-    if let Some(setup_script_error) = created.setup_script_error {
-        response["setup_script_error"] = setup_script_error;
-    }
 
     (StatusCode::CREATED, Json(response))
 }
@@ -197,40 +195,21 @@ pub(super) async fn create_worktree_shared(
                     }),
                 );
             }
-            let mut setup_script = None;
-            let mut setup_script_error = None;
-            let repo_for_script = base_repo.clone();
-            let cwd_for_script = wt_path.clone();
-            if let Some(script) = tokio::task::spawn_blocking(move || {
-                crate::config::resolve_effective_setup_script(&repo_for_script)
-            })
-            .await
-            .ok()
-            .flatten()
-            {
-                match tokio::task::spawn_blocking(move || {
-                    crate::worktree::run_setup_script(script, cwd_for_script)
-                })
-                .await
-                {
-                    Ok(Ok(result)) => {
-                        setup_script = Some(result);
-                    }
-                    Ok(Err(e)) => {
-                        setup_script_error = Some(serde_json::json!(e));
-                    }
-                    Err(e) => {
-                        setup_script_error = Some(serde_json::json!(format!("task panic: {e}")));
-                    }
-                }
-            }
-            crate::worktree::spawn_worktree_file_sync(state, &base_repo, &branch_name, &wt.path);
+            // File sync, then (only once it's done) the setup script — see
+            // spawn_worktree_setup_chain's doc comment for why the two must
+            // be sequenced, and why this response no longer carries
+            // setup_script/setup_script_error inline (reported later via the
+            // dual-emitted worktree-setup-script-completed event instead).
+            crate::worktree::spawn_worktree_setup_chain(
+                state,
+                base_repo.clone(),
+                branch_name.clone(),
+                wt.path.clone(),
+            );
             Ok(CreatedWorktree {
                 worktree: wt,
                 path: wt_path,
                 branch: branch_name,
-                setup_script,
-                setup_script_error,
             })
         }
         Err(e) => Err((
@@ -669,18 +648,14 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial]
-    async fn create_worktree_shared_runs_setup_script_before_file_sync() {
-        // Pins today's ORDER, which worktree.rs's own doc comment on
-        // spawn_worktree_file_sync calls a "KNOWN, ACCEPTED ORDERING GAP":
-        // create_worktree_shared awaits the setup script to completion before
-        // it ever calls spawn_worktree_file_sync (which itself just does a
-        // fire-and-forget tokio::spawn). So a setup script that depends on a
-        // copy_ignored_files-synced file can never see it — deterministically,
-        // not just as a timing flake, since the sync task isn't even spawned
-        // yet by the time the script has already finished running.
-        //
-        // This test is inverted (not deleted) once the ordering fix lands:
-        // see create_worktree_shared_runs_the_file_sync_before_the_setup_script.
+    async fn create_worktree_shared_runs_the_file_sync_before_the_setup_script() {
+        // Inverted version of the pre-fix pin (see git history for what it
+        // asserted): worktree.rs's spawn_worktree_setup_chain now awaits the
+        // file sync before resolving/running the setup script, so a script
+        // depending on a copy_ignored_files-synced file always sees it.
+        // Both steps run in the background after create_worktree_shared has
+        // already returned — hence the polling loop below instead of a
+        // synchronous assertion on the response.
         let repo = create_temp_git_repo();
         // An ignored file in the source repo — copy_ignored_files is what the
         // sync would carry into the new worktree.
@@ -719,7 +694,7 @@ mod tests {
         .expect("save repo settings");
 
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        let result = create_worktree_shared(
+        create_worktree_shared(
             &state,
             repo.path().to_string_lossy().to_string(),
             "order-test-branch".to_string(),
@@ -728,17 +703,25 @@ mod tests {
         .await
         .expect("worktree should be created");
 
-        assert!(
-            result.setup_script.is_some(),
-            "setup script should have run: {:?}",
-            result.setup_script_error
-        );
-        let outcome = std::fs::read_to_string(&marker).expect("read order marker");
+        // The sync + setup script now run in a background chain, after
+        // create_worktree_shared has already returned — poll for the marker
+        // rather than asserting on it synchronously.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut outcome = None;
+        while std::time::Instant::now() < deadline {
+            if let Ok(content) = std::fs::read_to_string(&marker) {
+                outcome = Some(content);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let outcome =
+            outcome.expect("setup script should have run in the background within the timeout");
         assert_eq!(
             outcome.trim(),
-            "missing",
-            "TODAY the setup script runs before the file sync has a chance to \
-             copy the ignored file — this is the documented ordering gap"
+            "present",
+            "the setup script must see the file the sync copied in, now that the \
+             background chain awaits the sync before running the script"
         );
     }
 

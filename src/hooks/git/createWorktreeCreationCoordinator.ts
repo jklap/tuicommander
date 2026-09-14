@@ -40,7 +40,6 @@ interface WorktreeCreationCoordinatorDeps {
 			createBranch?: boolean,
 			baseRef?: string,
 		) => Promise<PendingCreation["result"] & { status: "ok" | "pending" }>;
-		runSetupScript: (script: string, cwd: string) => Promise<{ exit_code: number; stdout: string; stderr: string }>;
 		getDiffStats: (path: string) => Promise<{ additions: number; deletions: number }>;
 	};
 	pty: {
@@ -177,20 +176,14 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		repositoriesStore.setBranch(repoPath, result.branch, { worktreePath: result.path });
 		repositoriesStore.setActiveBranch(repoPath, result.branch);
 
+		// The setup script (if configured) is no longer run from here — the
+		// backend now chains it after the worktree file sync, in the
+		// background (worktree::spawn_worktree_setup_chain), so it can't
+		// race a copy_ignored_files/copy_untracked_files/copy_paths sync the
+		// script might depend on. Its outcome (if any script is configured)
+		// arrives via the "worktree-setup-script-completed" event — see
+		// useAppInit.ts's listener — rather than being awaited here.
 		const effective = repoSettingsStore.getEffective(repoPath);
-		if (effective?.setupScript) {
-			try {
-				deps.setStatusInfo(`Running setup script in ${displayName}...`);
-				const scriptResult = await deps.repo.runSetupScript(effective.setupScript, result.path);
-				if (scriptResult.exit_code !== 0) {
-					appLogger.warn("git", `Setup script failed (exit ${scriptResult.exit_code})`, scriptResult.stderr);
-					deps.setStatusInfo(`Setup script failed (exit ${scriptResult.exit_code})`);
-				}
-			} catch (err) {
-				appLogger.warn("git", "Setup script execution error", err);
-				deps.setStatusInfo(`Setup script failed: ${err}`);
-			}
-		}
 
 		const termId = await handleAddTerminalToBranch(repoPath, result.branch);
 

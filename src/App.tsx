@@ -477,6 +477,7 @@ const App: Component = () => {
 		handleBranchSelect: gitOps.handleBranchSelect,
 		refreshAllBranchStats: gitOps.refreshAllBranchStats,
 		handleWorktreeCreateFailed: gitOps.handleWorktreeCreateFailed,
+		handleWorktreeSetupScriptCompleted: gitOps.handleWorktreeSetupScriptCompleted,
 		getDefaultFontSize,
 		detectAgents: agentDetection.detectAll,
 		restoreDetachedPanels: detachedPanelBridge.restoreDetachedPanels,

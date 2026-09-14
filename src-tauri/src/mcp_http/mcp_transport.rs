@@ -3650,12 +3650,15 @@ async fn handle_worktree(
                             }
                         }
                     }
-                    if let Some(setup_script) = created.setup_script {
-                        response["setup_script"] = setup_script;
-                    }
-                    if let Some(setup_script_error) = created.setup_script_error {
-                        response["setup_script_error"] = setup_script_error;
-                    }
+                    // The setup script (if configured) no longer runs inline
+                    // here — create_worktree_shared chains it after the file
+                    // sync in the background (spawn_worktree_setup_chain) so
+                    // it can't race the sync, and this tool response returns
+                    // before either finishes. Its outcome is reported via the
+                    // dual-emitted `worktree-setup-script-completed` event,
+                    // not this response — an MCP client has no way to observe
+                    // that today, which is a deliberate, accepted tradeoff for
+                    // fixing the ordering (see worktree.rs's doc comment).
                     // Add structured hint for Claude Code clients to spawn a subagent in the worktree
                     if is_claude_code {
                         let safe_branch = sanitize_branch_for_suggested_prompt(&branch_name);

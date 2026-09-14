@@ -457,6 +457,8 @@ Default values applied to new repositories when no per-repo override exists.
 | `setup_script` | `String` | `""` | Default setup script |
 | `run_script` | `String` | `""` | Default run command |
 | `archive_script` | `String` | `""` | Default archive script |
+| `setup_script_timeout_secs` | `u64` | `600` | Setup script timeout — a hung script is killed (process group, on Unix) and `run_setup_script` returns `Err` |
+| `archive_script_timeout_secs` | `u64` | `120` | Archive script timeout — a timeout aborts the archive/remove, same as a non-zero exit |
 
 **Commands:** `load_repo_defaults()`, `save_repo_defaults(config)`
 

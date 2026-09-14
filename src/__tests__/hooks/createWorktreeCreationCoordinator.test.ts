@@ -58,7 +58,6 @@ describe("createWorktreeCreationCoordinator", () => {
 				branch: "new-worktree",
 				base_repo: REPO,
 			}),
-			runSetupScript: vi.fn().mockResolvedValue({ exit_code: 0, stdout: "", stderr: "" }),
 			getDiffStats: vi.fn().mockResolvedValue({ additions: 0, deletions: 0 }),
 			...(depOverrides.repo as Record<string, unknown> | undefined),
 		};

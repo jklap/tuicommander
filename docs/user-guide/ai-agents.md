@@ -264,6 +264,29 @@ Per-agent environment variables can be injected into every new terminal session.
 
 This is useful for enabling feature flags (e.g., `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) without manually running `export` commands. Flags are organized by category with toggle, enum, and number types.
 
+## Worktree Context (TUIC_*)
+
+Every terminal spawned in a worktree (and every Setup/Archive/Run script — see the Settings guide's Scripts Tab, and Smart Prompt shell/headless scripts) gets a `TUIC_*` context describing the repo/branch it's in, in addition to `TUIC_SESSION` above:
+
+| Variable | Value |
+|---|---|
+| `TUIC_SCRIPT_KIND` | `setup` \| `archive` \| `run` \| `prompt` |
+| `TUIC_APP_VERSION` | TUICommander's version |
+| `TUIC_CONFIG_DIR` | The app's config directory |
+| `TUIC_WORKTREE_PATH` | The directory the script/terminal runs in |
+| `TUIC_WORKTREE_NAME` | Its basename |
+| `TUIC_WORKTREES_DIR` | Its parent directory |
+| `TUIC_MAIN_REPO_PATH` | The main checkout (not this worktree) |
+| `TUIC_REPO_NAME` | The main checkout's basename |
+| `TUIC_IS_WORKTREE` | `"true"`/`"false"` |
+| `TUIC_BRANCH` | The current branch — **absent** (not empty) on detached HEAD |
+| `TUIC_BASE_REF` | The persisted base ref this branch was cut from, if any |
+| `TUIC_BASE_BRANCH` | The repo's configured/detected base branch |
+
+A value that can't be resolved is **omitted from the environment entirely**, never set to an empty string — a `set -u` script fails loudly rather than silently running against an empty branch name.
+
+**A PTY's env is fixed at spawn time.** If you `cd` to a different worktree in the same tab, these vars keep describing the tab's original spawn directory, not wherever the shell currently is — the same property `TUIC_SESSION` already has. There is no way to keep them live off `cd`; a running process's environment can't be mutated from outside it.
+
 ## Tips
 
 - **Multiple agents on the same repo** — Use split panes (`Cmd+\`) to run two agents side by side on the same branch
