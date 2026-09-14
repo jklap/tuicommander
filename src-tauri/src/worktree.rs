@@ -257,6 +257,9 @@ pub(crate) fn delete_integrated_local_branch(
     )
 }
 
+/// Test-only since the post-create chain (`spawn_worktree_setup_chain`) owns
+/// the production warm.
+#[cfg(test)]
 pub fn spawn_background_warm(
     source: PathBuf,
     destination: PathBuf,
@@ -294,91 +297,238 @@ pub(crate) fn resolve_archive_script(repo_path: &str) -> Option<String> {
     None
 }
 
-/// Kick off a background copy of ignored/untracked/explicit-listed files into
-/// a freshly created worktree. Resolves the repo's effective copy settings
+/// Copy ignored/untracked/explicit-listed files into a freshly created
+/// worktree, awaiting completion. Resolves the repo's effective copy settings
 /// from disk (`config::resolve_effective_copy_settings`) itself, so a
 /// worktree created from the desktop app and one created via the MCP HTTP
 /// path (no frontend in the loop) sync identically.
 ///
-/// Fire-and-forget: returns immediately. A repo with both `copy_ignored`/
-/// `copy_untracked` off and an empty `copy_paths` is a no-op with **no**
-/// events at all — a plain worktree creation never shows a sync toast.
-/// Progress/completion are reported via dual-emitted (event_bus + Tauri
-/// window) `worktree-sync-*` events; see `state.rs`'s `AppEvent::WorktreeSync*`
-/// and `sse_routes.rs` for the SSE side.
+/// Returns `None` — and emits nothing at all — when there is nothing
+/// configured to copy (a plain worktree creation never shows a sync toast).
+/// Otherwise dual-emits (event_bus + Tauri window) `worktree-sync-*` events
+/// as it goes and returns the final summary.
 ///
-/// KNOWN, ACCEPTED ORDERING GAP: this is deliberately unsequenced against the
-/// setup script (`resolve_effective_setup_script` / `run_setup_script`) —
-/// that's what "runs in the background, doesn't block worktree creation"
-/// (the explicitly requested design) means. A setup script that depends on a
-/// synced file (e.g. a `copy_paths` entry symlinking `node_modules` so `npm
-/// install` can skip, or a script reading a synced `.env`) can race ahead of
-/// the sync and run without it. Making the two wait on each other would
-/// reintroduce the blocking behavior this was built to avoid; if that
-/// tradeoff ever needs revisiting, the fix is to await this function's
-/// summary before running the setup script, not to make the sync
-/// synchronous.
-pub(crate) fn spawn_worktree_file_sync(
+/// Only called from [`spawn_worktree_setup_chain`], which awaits this before
+/// resolving/running the setup script — seeing that function's doc comment
+/// for why the two must be sequenced this way.
+async fn run_worktree_file_sync(
     state: &Arc<AppState>,
     base_repo: &str,
     branch: &str,
     dest_path: &Path,
-) {
+) -> Option<crate::worktree_sync::SyncSummary> {
     let (copy_ignored, copy_untracked, copy_paths) =
         crate::config::resolve_effective_copy_settings(base_repo);
     if !copy_ignored && !copy_untracked && copy_paths.is_empty() {
-        return;
+        return None;
     }
 
-    let state = Arc::clone(state);
     let source = PathBuf::from(base_repo);
     let dest = dest_path.to_path_buf();
     let repo_path = base_repo.to_string();
     let branch = branch.to_string();
     let explicit = crate::worktree_sync::specs_from_copy_path_entries(&copy_paths);
 
-    tokio::spawn(async move {
-        emit_worktree_sync_started(&state, &repo_path, &branch);
+    emit_worktree_sync_started(state, &repo_path, &branch);
 
-        let repo_path_progress = repo_path.clone();
-        let branch_progress = branch.clone();
-        let state_progress = Arc::clone(&state);
+    let repo_path_progress = repo_path.clone();
+    let branch_progress = branch.clone();
+    let state_progress = Arc::clone(state);
 
-        let summary = tokio::task::spawn_blocking(move || {
-            let specs = crate::worktree_sync::build_sync_specs(
-                &source,
-                copy_ignored,
-                copy_untracked,
-                &explicit,
+    let summary = tokio::task::spawn_blocking(move || {
+        let specs = crate::worktree_sync::build_sync_specs(
+            &source,
+            copy_ignored,
+            copy_untracked,
+            &explicit,
+        );
+        // Throttled: a large ignored tree (e.g. node_modules) can be
+        // thousands of entries — emit at most ~once every 150ms, plus
+        // always on the final entry so completion isn't preceded by a
+        // stale progress count.
+        let mut last_emit = std::time::Instant::now();
+        crate::worktree_sync::sync_paths(&source, &dest, &specs, move |copied, total| {
+            let now = std::time::Instant::now();
+            if copied == total || now.duration_since(last_emit).as_millis() >= 150 {
+                last_emit = now;
+                emit_worktree_sync_progress(
+                    &state_progress,
+                    &repo_path_progress,
+                    &branch_progress,
+                    copied,
+                    total,
+                );
+            }
+        })
+    })
+    .await
+    .unwrap_or_else(|e| crate::worktree_sync::SyncSummary {
+        copied: 0,
+        total: 0,
+        errors: vec![format!("sync task panicked: {e}")],
+    });
+
+    emit_worktree_sync_completed(state, &repo_path, &branch, &summary);
+    Some(summary)
+}
+
+/// Marks a still-`pending` warm `failed` if the chain that owns it is dropped
+/// (task panic, runtime shutdown) before it publishes the real status, so a
+/// workspace can never read `pending` forever. `finish_warm` is token-checked,
+/// so firing after a removal cleared the token is a harmless no-op.
+struct ChainPendingWarmGuard {
+    destination: PathBuf,
+    token: u64,
+    armed: bool,
+}
+
+impl Drop for ChainPendingWarmGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            finish_warm(
+                &self.destination,
+                self.token,
+                serde_json::json!({"status": "failed", "reason": "worktree setup chain stopped before it finished"}),
             );
-            // Throttled: a large ignored tree (e.g. node_modules) can be
-            // thousands of entries — emit at most ~once every 150ms, plus
-            // always on the final entry so completion isn't preceded by a
-            // stale progress count.
-            let mut last_emit = std::time::Instant::now();
-            crate::worktree_sync::sync_paths(&source, &dest, &specs, move |copied, total| {
-                let now = std::time::Instant::now();
-                if copied == total || now.duration_since(last_emit).as_millis() >= 150 {
-                    last_emit = now;
-                    emit_worktree_sync_progress(
-                        &state_progress,
-                        &repo_path_progress,
-                        &branch_progress,
-                        copied,
-                        total,
-                    );
+        }
+    }
+}
+
+/// Kick off the post-create background chain for a freshly created worktree:
+/// **CoW warm → file sync → Setup Script**, strictly in that order.
+///
+/// - The file sync AWAITS the warm: both write into the same destination, and
+///   running them concurrently let either one win (CoW benefit lost, or every
+///   synced path reported "destination already exists"), or an interleaved
+///   `cp -c -R` nest directories.
+/// - The Setup Script awaits the sync, so a script that depends on a synced
+///   file (a `copy_paths` entry symlinking `node_modules`, a synced `.env`)
+///   can no longer run before it exists — the old "KNOWN, ACCEPTED ORDERING
+///   GAP".
+/// - `warm_token` is the token from `begin_warm` (`None` on a creation path
+///   that does not warm, e.g. `POST /sessions/worktree`). The warm status is
+///   published only after the LAST step, so the workspace reads
+///   `warm_artifacts.status == "pending"` until the whole chain is done — the
+///   setup script itself still observes `pending`, as it did when main ran it
+///   before the warm. A removal that clears the token mid-chain stops the
+///   remaining steps (nothing more is written into a removed checkout).
+///
+/// Fire-and-forget for the caller: worktree creation has already returned by
+/// the time this runs, on every creation path (desktop `create_worktree`, HTTP
+/// `create_worktree_shared` incl. MCP `repo worktree_create`, HTTP
+/// `create_session_with_worktree`). That is why no creation response carries
+/// `setup_script`/`setup_script_error` any more: the outcome does not exist yet
+/// when the response is built. Once the script finishes, the chain dual-emits
+/// (event_bus + Tauri window) `AppEvent::WorktreeSetupScriptCompleted` —
+/// silent when no setup script is configured, matching
+/// `run_worktree_file_sync`'s nothing-to-do-is-silent precedent.
+pub(crate) fn spawn_worktree_setup_chain(
+    state: &Arc<AppState>,
+    base_repo: String,
+    branch: String,
+    worktree_path: PathBuf,
+    warm_token: Option<u64>,
+) -> tokio::task::JoinHandle<()> {
+    let state = Arc::clone(state);
+    let warm = warm_token.map(|token| (token, crate::cow::warm_worktree));
+    tokio::spawn(run_worktree_setup_chain(
+        state,
+        base_repo,
+        branch,
+        worktree_path,
+        warm,
+    ))
+}
+
+/// The body of [`spawn_worktree_setup_chain`], with the warm step injectable
+/// so tests can observe the ordering deterministically.
+pub(crate) async fn run_worktree_setup_chain<W>(
+    state: Arc<AppState>,
+    base_repo: String,
+    branch: String,
+    worktree_path: PathBuf,
+    warm: Option<(u64, W)>,
+) where
+    W: FnOnce(&Path, &Path) -> tuic_git::cow::WarmingReport + Send + 'static,
+{
+    let mut guard = warm.as_ref().map(|(token, _)| ChainPendingWarmGuard {
+        destination: worktree_path.clone(),
+        token: *token,
+        armed: true,
+    });
+
+    // 1. CoW warm (awaited; its status is held back until the end).
+    let mut warm_result: Option<(u64, serde_json::Value)> = None;
+    if let Some((token, warm_fn)) = warm {
+        let source = PathBuf::from(&base_repo);
+        let destination = worktree_path.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            tuic_git::worktree::run_background_warm_blocking(&source, &destination, token, warm_fn)
+        })
+        .await;
+        match outcome {
+            Ok(Some(status)) => warm_result = Some((token, status)),
+            // Removed before the copy could start: nothing may be written
+            // into this checkout any more.
+            Ok(None) => {
+                if let Some(guard) = guard.as_mut() {
+                    guard.armed = false;
                 }
-            })
+                return;
+            }
+            Err(error) => {
+                warm_result = Some((
+                    token,
+                    serde_json::json!({"status": "failed", "reason": format!("warm task panicked: {error}")}),
+                ));
+            }
+        }
+    }
+    let still_current =
+        |token: Option<u64>| token.is_none_or(|token| warm_token_is_current(&worktree_path, token));
+    let token = warm_result.as_ref().map(|(token, _)| *token);
+
+    // 2. File sync, only after the warm has finished writing.
+    if still_current(token) {
+        run_worktree_file_sync(&state, &base_repo, &branch, &worktree_path).await;
+    }
+
+    // 3. Setup Script, only after the sync.
+    if still_current(token) {
+        let repo_for_script = base_repo.clone();
+        let script = tokio::task::spawn_blocking(move || {
+            crate::config::resolve_effective_setup_script(&repo_for_script)
         })
         .await
-        .unwrap_or_else(|e| crate::worktree_sync::SyncSummary {
-            copied: 0,
-            total: 0,
-            errors: vec![format!("sync task panicked: {e}")],
-        });
+        .ok()
+        .flatten();
+        if let Some(script) = script {
+            let cwd_for_script = worktree_path.to_string_lossy().to_string();
+            let outcome =
+                tokio::task::spawn_blocking(move || run_setup_script(script, cwd_for_script)).await;
+            let (exit_code, error) = match outcome {
+                Ok(Ok(result)) => (result["exit_code"].as_i64(), None),
+                Ok(Err(e)) => (None, Some(e)),
+                Err(e) => (None, Some(format!("task panic: {e}"))),
+            };
+            emit_worktree_setup_script_completed(
+                &state,
+                &base_repo,
+                &branch,
+                &worktree_path.to_string_lossy(),
+                exit_code,
+                error,
+            );
+        }
+    }
 
-        emit_worktree_sync_completed(&state, &repo_path, &branch, &summary);
-    });
+    // 4. Only now does the workspace stop reading `pending`.
+    if let Some((token, status)) = warm_result {
+        finish_warm(&worktree_path, token, status);
+    }
+    if let Some(guard) = guard.as_mut() {
+        guard.armed = false;
+    }
 }
 
 fn emit_worktree_sync_started(state: &Arc<AppState>, repo_path: &str, branch: &str) {
@@ -454,6 +604,38 @@ fn emit_worktree_sync_completed(
     }
 }
 
+fn emit_worktree_setup_script_completed(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+    exit_code: Option<i64>,
+    error: Option<String>,
+) {
+    #[cfg(feature = "desktop")]
+    let payload = crate::state::worktree_setup_script_completed_payload(
+        repo_path,
+        branch,
+        worktree_path,
+        exit_code,
+        error.as_deref(),
+    );
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeSetupScriptCompleted {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            worktree_path: worktree_path.to_string(),
+            exit_code,
+            error,
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit("worktree-setup-script-completed", payload);
+    }
+}
+
 /// Resolve the worktree base directory for a given repo + storage strategy.
 ///
 /// - `Sibling`: `{repo_parent}/{repo_name}__wt/`
@@ -525,14 +707,18 @@ pub(crate) async fn create_worktree(
     .map_err(|error| format!("Task panic: {error}"))??;
 
     let token = begin_warm(&workspace.path);
-    spawn_background_warm(
-        PathBuf::from(&base_repo),
-        workspace.path.clone(),
-        token,
-        crate::cow::warm_worktree,
-    );
     state.invalidate_repo_caches(&base_repo);
-    spawn_worktree_file_sync(&state, &base_repo, &workspace.branch, &workspace.path);
+    // warm -> file sync -> Setup Script, in that order, in the background. The
+    // chain owns the warm handle (it awaits it before the sync starts) and
+    // publishes the warm status only once the last step is done, so the
+    // workspace reads `pending` until then.
+    spawn_worktree_setup_chain(
+        &state,
+        base_repo.clone(),
+        workspace.branch.clone(),
+        workspace.path.clone(),
+        Some(token),
+    );
     Ok(ipc_worktree_response(&workspace, &base_repo))
 }
 

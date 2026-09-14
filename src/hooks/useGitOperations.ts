@@ -794,6 +794,30 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			writePty: deps.pty.write,
 		});
 
+	/** Handle the `worktree-setup-script-completed` event. The setup script
+	 *  (if configured) now runs in a Rust background chain, after
+	 *  spawn_worktree_setup_chain awaits the file sync — see
+	 *  worktree.rs's doc comment — so this is the only way its outcome
+	 *  reaches the frontend; `setupNewWorktree` no longer awaits it inline. */
+	const handleWorktreeSetupScriptCompleted = (payload: {
+		repoPath: string;
+		branch: string;
+		worktreePath: string;
+		exitCode: number | null;
+		error: string | null;
+	}) => {
+		const { branch, exitCode, error } = payload;
+		if (error) {
+			appLogger.warn("git", "Setup script execution error", payload);
+			deps.setStatusInfo(`Setup script failed: ${error}`);
+		} else if (exitCode !== null && exitCode !== 0) {
+			appLogger.warn("git", `Setup script failed (exit ${exitCode})`, payload);
+			deps.setStatusInfo(`Setup script failed (exit ${exitCode})`);
+		} else {
+			appLogger.debug("git", `Setup script finished in ${branch}`, payload);
+		}
+	};
+
 	return {
 		currentRepoPath,
 		currentBranch,
@@ -830,6 +854,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setWorktreeDialogState,
 		creatingWorktreeRepos,
 		removingBranches,
+		handleWorktreeSetupScriptCompleted,
 		handleNewTab,
 		resolveNewTabTarget,
 		handleRunCommand,

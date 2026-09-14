@@ -10,6 +10,11 @@ import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import { effectiveMergeMethod, isMergeHeadChanged, isMergeMethodNotAllowed } from "../../utils/prMerge";
 import { type AgentSeed, buildAgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
+import {
+	armSetupScriptWaiter,
+	type SetupNewWorktreeOptions,
+	type SetupScriptWaiter,
+} from "./createWorktreeCreationCoordinator";
 
 interface WorktreeWorkflowCoordinatorDeps {
 	repo: {
@@ -80,6 +85,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 		result: PendingCreation["result"],
 		displayName: string,
 		agentSeed?: AgentSeed,
+		options?: SetupNewWorktreeOptions,
 	) => Promise<void>;
 	refreshAllBranchStats: () => Promise<void>;
 }
@@ -105,6 +111,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 
 		const branch = autofixBranchName(issueNumber);
 		const agentSeed = await buildAgentSeed(prompt, repoPath);
+		let setupWaiter: SetupScriptWaiter | undefined;
 
 		try {
 			// Fork the auto-fix branch off the repo's default branch (main/master).
@@ -112,10 +119,12 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 			const base = baseRefs.find((r) => r.is_default)?.name ?? baseRefs[0]?.name ?? "main";
 
 			deps.setStatusInfo(`Creating auto-fix worktree ${branch}...`);
+			setupWaiter = repoSettingsStore.getEffective(repoPath)?.setupScript ? armSetupScriptWaiter(repoPath) : undefined;
 			const result = await deps.repo.createWorktree(repoPath, branch, true, base);
 
-			await setupNewWorktree(repoPath, result, branch, agentSeed);
+			await setupNewWorktree(repoPath, result, branch, agentSeed, { setupWaiter });
 		} catch (err) {
+			setupWaiter?.cancel();
 			appLogger.error("git", "Failed to create auto-fix worktree", err);
 			deps.setStatusInfo(`Failed to create auto-fix worktree: ${err}`);
 		} finally {
@@ -173,6 +182,9 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				},
 				result.branch,
 				await buildAgentSeed(result.prompt, repoPath),
+				// start_conflict_assist creates the worktree itself; no backend
+				// setup chain runs for it, so the Setup Script runs from here.
+				{ runSetupScriptHere: true },
 			);
 		} catch (err) {
 			appLogger.error("git", `Failed to start conflict assist for PR #${prNumber}`, err);

@@ -1,63 +1,15 @@
 use crate::AppState;
+use axum::Extension;
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use super::guards::{Authenticated, require_local_or_auth};
 use super::types::*;
 use super::{err_500, json_result, validate_repo_path};
-
-struct PendingWarmGuard {
-    destination: std::path::PathBuf,
-    token: u64,
-    armed: bool,
-}
-
-impl Drop for PendingWarmGuard {
-    fn drop(&mut self) {
-        if self.armed {
-            crate::worktree::finish_warm(
-                &self.destination,
-                self.token,
-                serde_json::json!({"status": "failed", "reason": "creation request cancelled before warming started"}),
-            );
-        }
-    }
-}
-
-async fn run_setup_then_warm(
-    script: Option<String>,
-    source: std::path::PathBuf,
-    destination: std::path::PathBuf,
-    token: u64,
-    warm: impl FnOnce(&std::path::Path, &std::path::Path) -> crate::cow::WarmingReport + Send + 'static,
-) -> (
-    Option<serde_json::Value>,
-    Option<serde_json::Value>,
-    tokio::task::JoinHandle<()>,
-) {
-    let mut pending_guard = PendingWarmGuard {
-        destination: destination.clone(),
-        token,
-        armed: true,
-    };
-    let mut setup_result = None;
-    let mut setup_error = None;
-    if let Some(script) = script {
-        let cwd = destination.to_string_lossy().into_owned();
-        match tokio::task::spawn_blocking(move || crate::worktree::run_setup_script(script, cwd))
-            .await
-        {
-            Ok(Ok(result)) => setup_result = Some(result),
-            Ok(Err(error)) => setup_error = Some(serde_json::json!(error)),
-            Err(error) => setup_error = Some(serde_json::json!(format!("task panic: {error}"))),
-        }
-    }
-    let task = crate::worktree::spawn_background_warm(source, destination, token, warm);
-    pending_guard.armed = false;
-    (setup_result, setup_error, task)
-}
 
 pub(super) struct CreatedWorktree {
     pub worktree: crate::state::WorktreeInfo,
@@ -71,8 +23,6 @@ pub(super) struct CreatedWorktree {
     /// dirtiness and finalize all take an id.
     pub workspace_id: String,
     pub branch: String,
-    pub setup_script: Option<serde_json::Value>,
-    pub setup_script_error: Option<serde_json::Value>,
 }
 
 pub(super) async fn list_worktrees_http(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -142,7 +92,11 @@ pub(super) async fn create_worktree_http(
         Err(response) => return response,
     };
 
-    let mut response = serde_json::json!({
+    // No setup_script/setup_script_error here: create_worktree_shared hands
+    // the Setup Script to the background chain (warm -> sync -> script,
+    // spawn_worktree_setup_chain); its outcome is the dual-emitted
+    // `worktree-setup-script-completed` event, not this response.
+    let response = serde_json::json!({
         "name": created.worktree.name,
         "path": &created.path,
         // The instruction payload rides on both transports identically: the
@@ -155,14 +109,40 @@ pub(super) async fn create_worktree_http(
         "branch": created.worktree.branch,
         "base_repo": created.worktree.base_repo.to_string_lossy(),
     });
-    if let Some(setup_script) = created.setup_script {
-        response["setup_script"] = setup_script;
-    }
-    if let Some(setup_script_error) = created.setup_script_error {
-        response["setup_script_error"] = setup_script_error;
-    }
 
     (StatusCode::CREATED, Json(response))
+}
+
+/// `POST /worktrees/run-script` — HTTP counterpart of the `run_setup_script`
+/// Tauri command. The script runs a real process, so it goes to a blocking
+/// pool rather than stalling the axum worker for its whole duration.
+///
+/// This runs an arbitrary shell script, so `require_local_or_auth` is
+/// load-bearing, not boilerplate — it must never become LAN-reachable
+/// without authentication. Response shape is exactly
+/// `{exit_code, stdout, stderr}`, identical to the Tauri command, so the
+/// existing `transport.ts` mapping needs no `transform`.
+pub(super) async fn run_setup_script_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<RunSetupScriptRequest>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    // `~` stays accepted (the documented contract); the expanded path is what
+    // gets validated, so `..`/relative paths are still refused.
+    let cwd = crate::cli::expand_tilde(&body.cwd);
+    if let Err(e) = validate_repo_path(&cwd) {
+        return e.into_response();
+    }
+    let result =
+        tokio::task::spawn_blocking(move || crate::worktree::run_setup_script(body.script, cwd))
+            .await;
+    match result {
+        Ok(r) => json_result(r),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
 }
 
 pub(super) async fn create_worktree_shared(
@@ -214,14 +194,9 @@ pub(super) async fn create_worktree_shared(
             let branch_name = workspace.branch.clone();
             let workspace_id = workspace.workspace_id.clone();
             let warm_token = crate::worktree::begin_warm(&workspace.path);
-            let mut pending_guard = PendingWarmGuard {
-                destination: workspace.path.clone(),
-                token: warm_token,
-                armed: true,
-            };
-            // Built before the setup script runs: the payload describes what the
-            // workspace ARRIVED with, and a script that installs something does
-            // not change what was already warm.
+            // Built before the chain runs: the payload describes what the
+            // workspace ARRIVED with (warm still pending), and a script that
+            // installs something does not change what was already warm.
             let instructions = workspace.instruction_payload_pending();
             state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
                 repo_path: base_repo.clone(),
@@ -230,25 +205,19 @@ pub(super) async fn create_worktree_shared(
                 worktree_path: wt_path.clone(),
                 kind: workspace.kind,
             });
-            let warm_source = std::path::PathBuf::from(&base_repo);
-            let warm_destination = workspace.path.clone();
-            let repo_for_script = base_repo.clone();
-            let script = tokio::task::spawn_blocking(move || {
-                crate::config::resolve_effective_setup_script(&repo_for_script)
-            })
-            .await
-            .ok()
-            .flatten();
-            pending_guard.armed = false;
-            let (setup_script, setup_script_error, _warm_task) = run_setup_then_warm(
-                script,
-                warm_source,
-                warm_destination,
-                warm_token,
-                crate::cow::warm_worktree,
-            )
-            .await;
-            crate::worktree::spawn_worktree_file_sync(state, &base_repo, &branch_name, &workspace.path);
+            // CoW warm -> file sync -> Setup Script, in the background. The
+            // chain awaits the warm before the sync touches the destination,
+            // and keeps warm_artifacts.status `pending` until the script is
+            // done; this response returns before any of it finishes, so it
+            // carries no setup_script/setup_script_error (the outcome arrives
+            // as the dual-emitted worktree-setup-script-completed event).
+            crate::worktree::spawn_worktree_setup_chain(
+                state,
+                base_repo.clone(),
+                branch_name.clone(),
+                workspace.path.clone(),
+                Some(warm_token),
+            );
             Ok(CreatedWorktree {
                 worktree: crate::state::WorktreeInfo {
                     name: workspace
@@ -264,8 +233,6 @@ pub(super) async fn create_worktree_shared(
                 instructions,
                 workspace_id,
                 branch: branch_name,
-                setup_script,
-                setup_script_error,
             })
         }
         Err(e) => Err((
@@ -723,22 +690,6 @@ pub(super) struct RunSetupScriptRequest {
     pub cwd: String,
 }
 
-/// `POST /worktrees/run-script` — mirror of the `run_setup_script` command.
-/// The script runs a real process, so it goes to a blocking pool rather than
-/// stalling the axum worker for its whole duration.
-pub(super) async fn run_setup_script_http(
-    Json(body): Json<RunSetupScriptRequest>,
-) -> impl IntoResponse {
-    let res = tokio::task::spawn_blocking(move || {
-        crate::worktree::run_setup_script(body.script, body.cwd)
-    })
-    .await;
-    match res {
-        Ok(r) => json_result(r),
-        Err(e) => err_500(&format!("task panic: {e}")),
-    }
-}
-
 #[cfg(test)]
 mod warm_tests {
     use super::*;
@@ -871,9 +822,113 @@ mod warm_tests {
         crate::worktree::clear_warm(&created.worktree.path);
     }
 
+    /// Commit a `.gitignore` for `ignored.txt` and create that ignored file, so
+    /// `copy_ignored_files` has exactly one thing to sync.
+    #[cfg(unix)]
+    fn add_ignored_file(repo: &std::path::Path) {
+        std::fs::write(repo.join(".gitignore"), "ignored.txt\n").unwrap();
+        std::fs::write(repo.join("ignored.txt"), "secret-config").unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["add", ".gitignore"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["commit", "-m", "add gitignore"])
+            .run()
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    fn save_repo_entry(repo: &std::path::Path, entry: crate::config::RepoSettingsEntry) {
+        let key = repo.to_string_lossy().to_string();
+        crate::config::save_repo_settings(
+            crate::config::RepoSettingsMap::default(),
+            crate::config::RepoSettingsMap {
+                repos: [(
+                    key.clone(),
+                    crate::config::RepoSettingsEntry { path: key, ..entry },
+                )]
+                .into_iter()
+                .collect(),
+            },
+        )
+        .unwrap();
+    }
+
+    /// The chain's whole contract in one run: the warm finishes before the
+    /// sync writes anything, the sync finishes before the setup script runs,
+    /// the script's outcome is reported on the bus AFTER the sync's, and the
+    /// workspace only stops reading `pending` once the chain is done.
     #[cfg(unix)]
     #[tokio::test]
-    async fn cancelled_create_marks_pending_warm_failed() {
+    async fn setup_chain_runs_warm_then_sync_then_setup_and_reports_completion() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        add_ignored_file(&repo);
+        let marker = temp.path().join("order.txt");
+        save_repo_entry(
+            &repo,
+            crate::config::RepoSettingsEntry {
+                copy_ignored_files: Some(true),
+                setup_script: Some(format!(
+                    "if [ -f warm.marker ] && [ -f ignored.txt ]; then echo ordered > '{0}'; else echo wrong > '{0}'; fi",
+                    marker.display()
+                )),
+                ..Default::default()
+            },
+        );
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+
+        crate::worktree::run_worktree_setup_chain(
+            Arc::clone(&state),
+            repo.to_string_lossy().into_owned(),
+            "chain-order".into(),
+            destination.clone(),
+            Some((token, |_: &std::path::Path, dest: &std::path::Path| {
+                assert!(
+                    !dest.join("ignored.txt").exists(),
+                    "the file sync must not write before the warm finishes"
+                );
+                std::fs::write(dest.join("warm.marker"), "warm").unwrap();
+                crate::cow::WarmingReport::default()
+            })),
+        )
+        .await;
+
+        assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "ordered");
+        assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
+        let mut order = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            match event {
+                crate::state::AppEvent::WorktreeSyncCompleted { copied, .. } => {
+                    order.push(format!("sync:{copied}"));
+                }
+                crate::state::AppEvent::WorktreeSetupScriptCompleted {
+                    exit_code, error, ..
+                } => {
+                    assert_eq!(exit_code, Some(0));
+                    assert_eq!(error, None);
+                    order.push("setup".into());
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(order, ["sync:1", "setup"]);
+        crate::worktree::clear_warm(&destination);
+    }
+
+    /// The warm is already done when the setup script starts, yet the
+    /// workspace still reads `pending`: the status is published only after
+    /// the last step of the chain.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn setup_script_observes_pending_after_the_warm_finished() {
         let temp = tempfile::TempDir::new().unwrap();
         let config = tempfile::TempDir::new().unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
@@ -881,26 +936,70 @@ mod warm_tests {
         let started = temp.path().join("setup.started");
         let gate = temp.path().join("setup.release");
         set_gated_setup_script(&started, &gate);
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        let repo_path = repo.to_string_lossy().into_owned();
-        let state_for_create = Arc::clone(&state);
-        let repo_for_create = repo_path.clone();
-        let create = tokio::spawn(async move {
-            create_worktree_shared(
-                &state_for_create,
-                repo_for_create,
-                "cancelled-setup".into(),
-                None,
-            )
-            .await
-        });
+        let chain = tokio::spawn(crate::worktree::run_worktree_setup_chain(
+            state,
+            repo.to_string_lossy().into_owned(),
+            "pending-chain".into(),
+            destination.clone(),
+            Some((token, |_: &std::path::Path, dest: &std::path::Path| {
+                std::fs::write(dest.join("warm.marker"), "warm").unwrap();
+                crate::cow::WarmingReport::default()
+            })),
+        ));
 
         wait_for_file(&started, "setup script did not start").await;
-        let paths = crate::worktree::get_worktree_paths(repo_path).unwrap();
-        let path = std::path::PathBuf::from(&paths["cancelled-setup"].path);
-        assert_eq!(crate::worktree::warm_status(&path)["status"], "pending");
-        create.abort();
-        let _ = create.await;
+        assert!(destination.join("warm.marker").exists());
+        assert_eq!(
+            crate::worktree::warm_status(&destination)["status"],
+            "pending"
+        );
+        std::fs::write(&gate, "release").unwrap();
+        chain.await.unwrap();
+        assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
+        crate::worktree::clear_warm(&destination);
+    }
+
+    /// A chain that stops before publishing (task aborted, runtime shutting
+    /// down) must not leave the workspace reading `pending` forever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn aborted_setup_chain_marks_pending_warm_failed() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        let started = temp.path().join("setup.started");
+        let gate = temp.path().join("setup.release");
+        set_gated_setup_script(&started, &gate);
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let chain = tokio::spawn(crate::worktree::run_worktree_setup_chain(
+            state,
+            repo.to_string_lossy().into_owned(),
+            "aborted-chain".into(),
+            destination.clone(),
+            Some((token, |_: &std::path::Path, _: &std::path::Path| {
+                crate::cow::WarmingReport::default()
+            })),
+        ));
+
+        wait_for_file(&started, "setup script did not start").await;
+        assert_eq!(
+            crate::worktree::warm_status(&destination)["status"],
+            "pending"
+        );
+        chain.abort();
+        let _ = chain.await;
+        assert_eq!(
+            crate::worktree::warm_status(&destination)["status"],
+            "failed"
+        );
         std::fs::write(&gate, "release").unwrap();
         wait_for_file(
             &gate.with_extension("finished"),
@@ -908,8 +1007,62 @@ mod warm_tests {
         )
         .await;
         wait_for_setup_exit(&gate.with_extension("pid")).await;
-        assert_eq!(crate::worktree::warm_status(&path)["status"], "failed");
-        crate::worktree::clear_warm(&path);
+        crate::worktree::clear_warm(&destination);
+    }
+
+    /// A removal that wins the race against a queued warm clears the token;
+    /// the chain must then write nothing more into the removed checkout —
+    /// no warm, no sync, no setup script, no completion event.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn setup_chain_stops_when_the_workspace_was_removed_before_the_warm() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        add_ignored_file(&repo);
+        let marker = temp.path().join("ran.txt");
+        save_repo_entry(
+            &repo,
+            crate::config::RepoSettingsEntry {
+                copy_ignored_files: Some(true),
+                setup_script: Some(format!("echo ran > '{}'", marker.display())),
+                ..Default::default()
+            },
+        );
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
+        crate::worktree::clear_warm(&destination);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+
+        crate::worktree::run_worktree_setup_chain(
+            Arc::clone(&state),
+            repo.to_string_lossy().into_owned(),
+            "removed-chain".into(),
+            destination.clone(),
+            Some((
+                token,
+                |_: &std::path::Path, _: &std::path::Path| -> crate::cow::WarmingReport {
+                    panic!("a cleared token must not warm")
+                },
+            )),
+        )
+        .await;
+
+        assert!(!marker.exists(), "setup script ran for a removed workspace");
+        assert!(!destination.join("ignored.txt").exists());
+        while let Ok(event) = events.try_recv() {
+            assert!(
+                !matches!(
+                    event,
+                    crate::state::AppEvent::WorktreeSyncStarted { .. }
+                        | crate::state::AppEvent::WorktreeSetupScriptCompleted { .. }
+                ),
+                "no chain step may run after removal"
+            );
+        }
     }
 
     #[tokio::test]
@@ -938,59 +1091,6 @@ mod warm_tests {
         release.send(()).unwrap();
         task.await.unwrap();
         assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
-        crate::worktree::clear_warm(&destination);
-    }
-
-    #[tokio::test]
-    async fn setup_finishes_before_warm_reads_the_workspace() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let source = temp.path().join("source");
-        let destination = temp.path().join("workspace");
-        std::fs::create_dir(&destination).unwrap();
-        let token = crate::worktree::begin_warm(&destination);
-        assert_eq!(
-            crate::worktree::warm_status(&destination)["status"],
-            "pending"
-        );
-        let (setup, error, warm_task) = run_setup_then_warm(
-            Some("echo ready > setup.marker".into()),
-            source,
-            destination.clone(),
-            token,
-            |_, destination| {
-                assert!(destination.join("setup.marker").exists());
-                crate::cow::WarmingReport::default()
-            },
-        )
-        .await;
-        assert!(setup.is_some(), "setup result: {error:?}");
-        assert!(error.is_none(), "{error:?}");
-        warm_task.await.unwrap();
-        assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
-        crate::worktree::clear_warm(&destination);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn setup_script_observes_pending_before_warm_starts() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let destination = temp.path().join("workspace");
-        std::fs::create_dir(&destination).unwrap();
-        let token = crate::worktree::begin_warm(&destination);
-        let (setup, error, task) = run_setup_then_warm(
-            Some("sleep 2; echo setup > setup.marker".into()),
-            temp.path().to_path_buf(),
-            destination.clone(),
-            token,
-            |_, dest| {
-                assert_eq!(crate::worktree::warm_status(dest)["status"], "pending");
-                assert!(dest.join("setup.marker").exists());
-                crate::cow::WarmingReport::default()
-            },
-        )
-        .await;
-        assert!(setup.is_some(), "{error:?}");
-        task.await.unwrap();
         crate::worktree::clear_warm(&destination);
     }
 }
@@ -1149,18 +1249,14 @@ mod survivor_tests {
     #[cfg(unix)]
     #[tokio::test]
     #[serial_test::serial]
-    async fn create_worktree_shared_runs_setup_script_before_file_sync() {
-        // Pins today's ORDER, which worktree.rs's own doc comment on
-        // spawn_worktree_file_sync calls a "KNOWN, ACCEPTED ORDERING GAP":
-        // create_worktree_shared awaits the setup script to completion before
-        // it ever calls spawn_worktree_file_sync (which itself just does a
-        // fire-and-forget tokio::spawn). So a setup script that depends on a
-        // copy_ignored_files-synced file can never see it — deterministically,
-        // not just as a timing flake, since the sync task isn't even spawned
-        // yet by the time the script has already finished running.
-        //
-        // This test is inverted (not deleted) once the ordering fix lands:
-        // see create_worktree_shared_runs_the_file_sync_before_the_setup_script.
+    async fn create_worktree_shared_runs_the_file_sync_before_the_setup_script() {
+        // Inverted version of the pre-fix pin (see git history for what it
+        // asserted): worktree.rs's spawn_worktree_setup_chain now awaits the
+        // CoW warm and then the file sync before resolving/running the setup
+        // script, so a script depending on a copy_ignored_files-synced file
+        // always sees it. All steps run in the background after
+        // create_worktree_shared has already returned — hence the polling loop
+        // below instead of a synchronous assertion on the response.
         let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
@@ -1202,7 +1298,7 @@ mod survivor_tests {
         .expect("save repo settings");
 
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        let result = create_worktree_shared(
+        create_worktree_shared(
             &state,
             repo.to_string_lossy().to_string(),
             "order-test-branch".to_string(),
@@ -1211,17 +1307,214 @@ mod survivor_tests {
         .await
         .expect("worktree should be created");
 
-        assert!(
-            result.setup_script.is_some(),
-            "setup script should have run: {:?}",
-            result.setup_script_error
-        );
-        let outcome = std::fs::read_to_string(&marker).expect("read order marker");
+        // The warm, sync and setup script run in a background chain, after
+        // create_worktree_shared has already returned — poll for the marker
+        // rather than asserting on it synchronously.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut outcome = None;
+        while std::time::Instant::now() < deadline {
+            if let Ok(content) = std::fs::read_to_string(&marker) {
+                outcome = Some(content);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let outcome =
+            outcome.expect("setup script should have run in the background within the timeout");
         assert_eq!(
             outcome.trim(),
-            "missing",
-            "TODAY the setup script runs before the file sync has a chance to \
-             copy the ignored file — this is the documented ordering gap"
+            "present",
+            "the setup script must see the file the sync copied in, now that the \
+             background chain awaits the sync before running the script"
         );
+    }
+
+    // --- run_setup_script_http: the IPC/HTTP parity route ---
+
+    fn loopback() -> SocketAddr {
+        "127.0.0.1:1".parse().unwrap()
+    }
+    fn lan() -> SocketAddr {
+        "192.168.1.2:1".parse().unwrap()
+    }
+    fn authed() -> Option<Extension<Authenticated>> {
+        Some(Extension(Authenticated))
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_rejects_unauthenticated_non_loopback() {
+        // This route is arbitrary shell execution — must never become
+        // LAN-reachable without authentication.
+        let resp = run_setup_script_http(
+            ConnectInfo(lan()),
+            None,
+            Json(RunSetupScriptRequest {
+                script: "echo hi".to_string(),
+                cwd: "/tmp".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_rejects_a_relative_or_traversing_cwd() {
+        for cwd in ["relative/dir", "/tmp/../etc"] {
+            let resp = run_setup_script_http(
+                ConnectInfo(loopback()),
+                None,
+                Json(RunSetupScriptRequest {
+                    script: "echo hi".to_string(),
+                    cwd: cwd.to_string(),
+                }),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{cwd}");
+        }
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_loopback_passes_guard() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("temp dir");
+        let resp = run_setup_script_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(RunSetupScriptRequest {
+                script: "echo hi".to_string(),
+                cwd: dir.path().to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_authenticated_remote_passes_guard() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("temp dir");
+        let resp = run_setup_script_http(
+            ConnectInfo(lan()),
+            authed(),
+            Json(RunSetupScriptRequest {
+                script: "echo hi".to_string(),
+                cwd: dir.path().to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_returns_the_same_shape_as_the_tauri_command() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("temp dir");
+        let resp = run_setup_script_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(RunSetupScriptRequest {
+                script: "echo hello".to_string(),
+                cwd: dir.path().to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json(resp).await;
+        assert_eq!(body["exit_code"], 0);
+        assert_eq!(body["stdout"].as_str().unwrap().trim(), "hello");
+        assert_eq!(body["stderr"], "");
+        // Exactly these three keys — no extra fields the frontend/`transport.ts`
+        // mapping (which passes this response through with no `transform`)
+        // wouldn't know about.
+        let obj = body.as_object().expect("object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["exit_code", "stderr", "stdout"]);
+    }
+
+    #[tokio::test]
+    async fn post_worktrees_run_script_does_not_match_the_branch_delete_route() {
+        // Adjacency guard: /worktrees/run-script (POST, static segment) and
+        // /worktrees/{branch} (DELETE, single dynamic segment) coexist in the
+        // same axum router. axum 0.8's matchit prioritises static segments
+        // over dynamic ones, so this should never actually collide — but the
+        // two are similar enough (same prefix, one segment deep) that a
+        // future refactor could get this wrong silently. A minimal router
+        // registering both real handlers, not the full app (which needs
+        // mod.rs's private test helpers) — routing behavior is a property of
+        // the route table, not of auth/state wiring, so this is self-contained.
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mini_router = axum::Router::new()
+            .route(
+                "/worktrees/run-script",
+                axum::routing::post(run_setup_script_http),
+            )
+            .route(
+                "/worktrees/{branch}",
+                axum::routing::delete(remove_worktree_http),
+            )
+            .with_state(state);
+
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("temp dir");
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/worktrees/run-script")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({
+                    "script": "echo hi",
+                    "cwd": dir.path().to_string_lossy(),
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(loopback()));
+
+        let response = mini_router.oneshot(request).await.unwrap();
+        // Must not be routed as a DELETE-only /{branch} match producing 405,
+        // and must not 404 — it should reach run_setup_script_http and succeed.
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_rejects_malformed_json_body() {
+        // Boundary/corrupt-data case: run_setup_script_http's Json<RunSetupScriptRequest>
+        // extractor can't be exercised by calling the handler function directly with a
+        // hand-built struct (the compiler would force every field to exist) — a genuinely
+        // malformed/incomplete wire body only surfaces axum's own extraction rejection
+        // when it goes through the real router, hence the same mini-router as the
+        // adjacency test above rather than a direct handler call.
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mini_router = axum::Router::new()
+            .route(
+                "/worktrees/run-script",
+                axum::routing::post(run_setup_script_http),
+            )
+            .with_state(state);
+
+        // Missing the required "cwd" field entirely.
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/worktrees/run-script")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({"script": "echo hi"}).to_string(),
+            ))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(loopback()));
+        let response = mini_router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // Not valid JSON at all.
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/worktrees/run-script")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("not json"))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(loopback()));
+        let response = mini_router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

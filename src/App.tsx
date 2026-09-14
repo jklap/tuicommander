@@ -488,6 +488,7 @@ const App: Component = () => {
 		setStatusInfo,
 		handleBranchSelect: gitOps.handleBranchSelect,
 		refreshAllBranchStats: gitOps.refreshAllBranchStats,
+		handleWorktreeSetupScriptCompleted: gitOps.handleWorktreeSetupScriptCompleted,
 		getDefaultFontSize,
 		detectAgents: agentDetection.detectAll,
 		restoreDetachedPanels: detachedPanelBridge.restoreDetachedPanels,
