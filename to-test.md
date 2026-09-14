@@ -30,7 +30,53 @@ no items left goes too. What stays open must carry its own stated reason.
 > WebView gets the same change over Vite HMR. If a browser check of a frontend fix
 > shows nothing, check `dist/index.html`'s mtime before blaming the code.
 
-## Customizable notification sounds — per-event preset/custom-file picker (2026-09-11, **Rust change — needs `make dev` restart**)
+## Finder Service ad-hoc code signing fix (2026-09-14, **Rust change — needs `make dev` restart or a real reinstall**)
+
+Boss reported the "New TUICommander Tab Here" Finder Service failing with
+"The Service cannot be run because it is not configured correctly." Root
+cause confirmed empirically: the installed `~/Library/Services/New
+TUICommander Tab Here.workflow` had **no code signature at all**
+(`codesign -dv` → "code object is not signed at all"), and Gatekeeper
+assessments are enabled (`spctl --status`) — the documented failure mode for
+third-party Automator "Run Shell Script" Services. `finder_service.rs`'s
+`install_into` now ad-hoc signs the bundle after copying it
+(`/usr/bin/codesign --force --deep --sign -`), best-effort so it never fails
+the install if `codesign` is unavailable. A follow-up `/code-review` pass
+caught two real gaps in the first version, both fixed: it used a bare
+`codesign` (PATH-dependent) instead of the absolute path the sibling `pbs`
+call in this file already uses; and a signing failure was only a separate,
+easy-to-miss warning log, now surfaced in the same log line as "Finder
+Service installed" (`signed: false`). The review also suggested dropping
+`--deep` per Apple's TN2206 guidance — tested against a fresh copy of the
+real bundle and found this actually breaks signing outright (`codesign`
+refuses `Contents/document.wflow` as an unsigned "subcomponent" without it),
+so `--deep` was kept; see AGENTS.md's Finder Service section for the
+verified reason.
+
+Manually reinstalling a freshly ad-hoc-signed copy on Boss's machine did not
+error and `codesign -dv` now shows `Signature=adhoc`. `spctl -a -t execute`
+still reports "rejected" for the signed copy, but that assessment type is for
+Mach-O executables — a `.workflow` bundle has none, so it's unclear whether
+that's meaningful for the real Finder→Services-menu dispatch path. **Needs a
+real right-click-in-Finder test** to confirm the dialog is actually gone —
+uninstall + reinstall via the app's Settings UI (or `make dev` + a fresh
+"Install Finder Service" click) after the rebuild, then right-click a folder
+in Finder and pick "New TUICommander Tab Here."
+
+**Separately, `tuic open-here`/any `tuic://` deep link fired while the app is
+already running currently does nothing visible** — confirmed unrelated to
+this fix and unrelated to frontend/Rust deep-link code (`open -a <exact
+running app bundle path> 'tuic://...'` delivers and logs correctly instantly;
+bare `open 'tuic://...'` — what `tuic open-here` actually calls — never
+reaches the app at all). Root cause: **two copies of TUICommander.app are
+registered under the same bundle id `com.tuic.commander`** on this machine —
+`/Applications/TUICommander.app` (v1.7.4-nightly, Aug 13) and the running dev
+build under `src-tauri/target/release/bundle/macos/` (v1.7.6-nightly) — so
+macOS Launch Services' `tuic://` scheme resolution is ambiguous/stale. This
+is an install-hygiene issue on Boss's machine, not a code bug — needs the
+stale `/Applications` copy removed or replaced and Launch Services refreshed
+before `tuic open-here` will work again. Not fixed as part of this session
+(touching `/Applications` needs Boss's own OK).
 
 Settings > Notifications: each event's row gains a `<select>` next to its
 enable checkbox — Default, another event's tone borrowed as a preset (Chime /

@@ -42,3 +42,15 @@ Finder → the installed service bundle → the bundled `tuic` CLI's `tuic open-
 the [CLI guide](cli.md#opening-a-plain-terminal-at-a-path)) → a `tuic://open-terminal` link that
 TUICommander's already-running deep-link handler picks up. No extra permissions or native macOS
 integration code are involved beyond the one-time service install.
+
+## Troubleshooting
+
+**"The Service cannot be run because it is not configured correctly"** — this is macOS Gatekeeper
+rejecting an unsigned copy of the service bundle. Remove and re-add Finder Integration (Settings >
+General > Finder Integration) to install a freshly signed copy.
+
+**Nothing happens when you invoke the service, or run `tuic open-here` yourself, even though
+TUICommander is running** — this is usually a stale second copy of TUICommander.app on your Mac
+(for example, an old release in `/Applications` alongside a newer one you run some other way).
+macOS can resolve the `tuic://` link to the wrong, non-running copy and silently drop it. Removing
+the extra copy fixes it.

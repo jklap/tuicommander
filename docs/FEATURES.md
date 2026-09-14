@@ -1722,7 +1722,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 
 ### 17.4.2 Finder Service (macOS, "New TUICommander Tab Here")
 - Right-click a folder (or a file — its parent directory is used) in Finder and choose **New TUICommander Tab Here** to open a terminal pane there
-- Ships as a hand-authored Automator `.workflow` bundle (`src-tauri/services/`) installed into `~/Library/Services/` — no native `NSServices`/Cocoa code, no install step beyond copying the bundle
+- Ships as a hand-authored Automator `.workflow` bundle (`src-tauri/services/`) installed into `~/Library/Services/` and ad-hoc code-signed there (required for Gatekeeper to let Finder's Services menu run it) — no native `NSServices`/Cocoa code
 - Install/uninstall from **Settings → General → Finder Integration**, or accept the one-time first-run prompt (never repeated once dismissed, mirrors the `tuic` CLI install prompt)
 - Chain: Finder → the bundle's shell action → `tuic open-here <paths...>` → launches TUICommander if it isn't running → `tuic://open-terminal` deep link
 - **Which repo the new pane opens in** (`resolvePlacementForCwd`, `src/stores/terminalPlacement.ts`):

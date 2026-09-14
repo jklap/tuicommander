@@ -63,9 +63,13 @@ pub(crate) fn install_finder_service(app: tauri::AppHandle) -> Result<(), String
         let source = resolve_bundle_source(&app)?;
         let target_dir =
             services_dir().ok_or_else(|| "Could not resolve ~/Library/Services".to_string())?;
-        install_into(&source, &target_dir)?;
+        let signed = install_into(&source, &target_dir)?;
         refresh_services_menu();
-        tracing::info!(source = "finder_service", "Finder Service installed");
+        tracing::info!(
+            source = "finder_service",
+            signed,
+            "Finder Service installed"
+        );
         Ok(())
     }
 }
@@ -143,8 +147,12 @@ fn status_in(services_dir: &Path) -> bool {
 }
 
 /// Copy `source` (the bundle directory) into `target_dir/<BUNDLE_NAME>`,
-/// replacing any existing copy. Path-injected for tests.
-fn install_into(source: &Path, target_dir: &Path) -> Result<(), String> {
+/// replacing any existing copy. Path-injected for tests. Returns whether the
+/// copy was successfully ad-hoc signed afterward (see [`ad_hoc_sign`]) — a
+/// `false` here means the bundle is installed but may still hit the
+/// Gatekeeper rejection this signing step exists to prevent, which is worth
+/// surfacing to the caller rather than only a buried log line.
+fn install_into(source: &Path, target_dir: &Path) -> Result<bool, String> {
     std::fs::create_dir_all(target_dir)
         .map_err(|e| format!("Failed to create {}: {e}", target_dir.display()))?;
     let dest = target_dir.join(BUNDLE_NAME);
@@ -156,7 +164,62 @@ fn install_into(source: &Path, target_dir: &Path) -> Result<(), String> {
             )
         })?;
     }
-    copy_dir_recursive(source, &dest)
+    copy_dir_recursive(source, &dest)?;
+    Ok(ad_hoc_sign(&dest))
+}
+
+/// Absolute path to `codesign` — this function only ever runs behind
+/// `#[cfg(target_os = "macos")]` at the real call site, where this path is
+/// part of the OS itself, never PATH-dependent. Mirrors `refresh_services_menu`
+/// in this same file, which hardcodes `pbs`'s path for the same reason.
+const CODESIGN_PATH: &str = "/usr/bin/codesign";
+
+/// Ad-hoc code-sign the installed bundle. A hand-copied `.workflow` bundle
+/// carries no signature at all (`codesign -dv` reports "code object is not
+/// signed at all"), and with Gatekeeper assessments enabled this is the
+/// documented cause of Finder's generic "The Service cannot be run because
+/// it is not configured correctly" dialog for third-party Automator Services
+/// that run a shell script — `automator -i` (this bundle's own verification
+/// method, see the module doc comment) does not go through the same
+/// Gatekeeper-gated Services-menu dispatch path, so it never caught this.
+///
+/// `--deep` is required here, not just a defensive extra: verified empirically
+/// that plain `codesign --force --sign -` on this exact bundle fails outright
+/// ("code object is not signed at all — In subcomponent:
+/// .../Contents/document.wflow", exit 1) — `.workflow`'s `document.wflow`
+/// apparently counts as a nested component codesign wants sealed, even though
+/// it's a data file, not executable code. Apple's TN2206 guidance is that
+/// developer-authored signing should generally avoid `--deep` (it can produce
+/// an invalid/incorrectly scoped signature for nested *code*), but that
+/// doesn't hold for this bundle shape — don't "fix" this by removing it again
+/// without re-testing a fresh copy the same way.
+///
+/// Best-effort: never fails the install — `codesign` may be absent (non-macOS
+/// test hosts) or a fake test-fixture bundle's plist may not parse, and the
+/// bundle already works when copied by hand and re-signed manually, so a
+/// failure here just leaves it as unsigned as it always was. Returns whether
+/// signing succeeded so the caller can log it alongside the install itself,
+/// rather than this warning being the only trace of a real, silent failure.
+fn ad_hoc_sign(bundle: &Path) -> bool {
+    match std::process::Command::new(CODESIGN_PATH)
+        .args(["--force", "--deep", "--sign", "-"])
+        .arg(bundle)
+        .output()
+    {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            tracing::warn!(
+                source = "finder_service",
+                stderr = %String::from_utf8_lossy(&output.stderr),
+                "Ad-hoc signing of Finder Service bundle failed"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::warn!(source = "finder_service", error = %e, "Could not run codesign");
+            false
+        }
+    }
 }
 
 /// Remove the bundle from `target_dir`, if present. Not an error when absent —
@@ -230,6 +293,34 @@ mod tests {
             std::fs::read(dest.join("Contents").join("document.wflow")).unwrap(),
             b"fake-document-wflow"
         );
+    }
+
+    /// `ad_hoc_sign` is best-effort: a bundle whose `Info.plist` isn't real
+    /// plist XML (like this test fixture) makes `codesign` fail outright
+    /// (confirmed empirically: `errSecCoreFoundationUnknown`, exit 1), and
+    /// `install_into` must still report success — a signing failure must
+    /// never turn a working install into a reported failure.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn install_into_succeeds_even_when_the_bundle_cannot_be_code_signed() {
+        let source_root = tempfile::tempdir().unwrap();
+        let source = write_fake_bundle(source_root.path());
+        let target_root = tempfile::tempdir().unwrap();
+
+        let dest = target_root.path().join(BUNDLE_NAME);
+        assert!(
+            !std::process::Command::new(CODESIGN_PATH)
+                .args(["--force", "--deep", "--sign", "-"])
+                .arg(&source)
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "test fixture assumption broken: codesign now accepts a fake plist"
+        );
+
+        assert!(install_into(&source, target_root.path()).is_ok());
+        assert!(dest.join("Contents").join("Info.plist").exists());
     }
 
     #[test]

@@ -215,6 +215,44 @@ This is how the shipped bundle was actually verified (single item, multi-item se
 file) before being committed — not just plist-linted. Reuse this technique for any future Automator
 Service/Quick Action work in this repo rather than reasoning about the `.wflow` schema from memory.
 
+**`automator -i` passing does NOT mean the Service works from Finder's real right-click menu — it
+bypasses Gatekeeper's Services-menu dispatch entirely.** A 2026-09-14 bug report ("The Service cannot
+be run because it is not configured correctly" from a real Finder right-click) traced to the
+installed bundle having no code signature at all (`codesign -dv` → "code object is not signed at
+all"), which Gatekeeper (`spctl --status` → assessments enabled) rejects when Finder's Services
+menu dispatches a third-party Automator "Run Shell Script" action — but `automator -i` against the
+same unsigned bundle runs it just fine, because it never goes through that Gatekeeper-gated path.
+Fixed in `finder_service.rs`'s `install_into`: ad-hoc sign the bundle right after copying it
+(`/usr/bin/codesign --force --deep --sign -` — absolute path, matching the sibling `pbs` call in
+this same file), best-effort so a missing `codesign` or an unsignable bundle never fails the
+install (though the caller now logs whether signing actually succeeded alongside the "Finder
+Service installed" line, so a real failure isn't only a buried separate warning). **`--deep` is
+required, not just defensive** — a `/code-review` pass suggested dropping it per Apple's TN2206
+guidance (which generally warns against `--deep` for developer-authored signing), but testing a
+fresh copy without it fails outright: `codesign` reports the bundle as still "not signed at all",
+naming `Contents/document.wflow` as an unsigned "subcomponent" it refuses to seal without `--deep`.
+If you touch this signing step again, verify any change against a fresh copy of the real bundle,
+not just the guidance's general advice. If you change this bundle again, `automator -i` proves the
+workflow logic is correct, but only a real Finder right-click (or `codesign -dv` on the installed
+copy showing a signature) proves it will actually run from the Services menu.
+
+**A stale second copy of TUICommander.app sharing the same bundle id silently breaks every
+`tuic://` deep link (including `open-here`) while showing no error at all.** Also found
+2026-09-14: with both `/Applications/TUICommander.app` (an older install) and a locally-built
+`make dev`/release copy present on disk, both registered `com.tuic.commander` /
+`CFBundleURLSchemes: [tuic]` with Launch Services, and macOS resolved `open 'tuic://...'` (which
+is exactly what `tuic open-here`/`tuic_cli::open_deep_link` calls) to the stale copy instead of
+the one actually running — the URL was silently dropped, with zero log output on either the Rust
+or frontend side, even for a deep link that should trigger the JS handler's "unrecognised command"
+warning. Confirmed via `open -a <the exact running app bundle path> 'tuic://...'`, which delivered
+and logged instantly, proving the deep-link plumbing itself was never the problem. This is an
+install-hygiene issue, not a code bug, and there's no code fix for it — if a `tuic://` link (or
+the Finder Service, which goes through the same CLI call) appears to silently do nothing while the
+app is definitely running, check for a duplicate `TUICommander.app` elsewhere (`/Applications` is
+the usual culprit next to a dev build) before assuming the deep-link code regressed. See "Test
+instance vs orchestrator instance" above — routinely running a second instance for testing is this
+repo's normal workflow, which is exactly what makes this collision easy to hit by accident.
+
 **`tuic://open-terminal` deliberately has no confirmation dialog**, unlike `open-repo`'s unknown-path
 branch. This was a considered decision, not an oversight — do not "fix" it by adding one. Rationale:
 spawning a pane starts an idle shell and executes nothing; `tuic new` already has zero confirmation
