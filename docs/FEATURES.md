@@ -945,6 +945,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - `Cmd+F` search in diff tabs via SearchBar + DomSearchEngine
 - Submodule entries are filtered from working tree status (not shown as regular files)
 - Standalone DiffPanel removed in v0.9.0 (see section 3.2)
+- **Session Diff Review** — step through everything a Claude Code session changed, reconstructed from its transcript (`~/.claude/projects/`) and, where available, its `~/.claude/file-history/` pre-edit backups — no new agent instrumentation. Opens as a tab (Command Palette: "Session diff review"), defaulting to the focused terminal's live agent session or the most recent session for the repo, with a picker to switch sessions. Two views: grouped-by-file (default — cumulative diff per file, with the file's individual edits collapsible underneath) or flat chronological (every edit, across all files, in the order the agent made them). Actions per step/file: open the file at that change, comment on selected lines (sent to the agent terminal, same format as the regular Diff tab), copy the diff, and revert — a single step (`git apply --reverse`, keeping every later edit) or a whole file back to its session-start content (byte-exact when a backup is available, reconstructed otherwise, or deletion if the session created the file). A file whose content at session start couldn't be determined, or that's changed outside the session since, is flagged rather than guessed at. Subagent edits are included by default (toggle to exclude).
 
 ---
 
@@ -1573,6 +1574,7 @@ All data persisted to platform config directory via Rust:
 | `Cmd+B` | Quick branch switch (fuzzy search) |
 | `Cmd+Shift+D` | Git Panel (opens on last active tab) |
 | `Cmd+G` | Git Panel — Branches tab |
+| _unbound_ | Session diff review — step through everything a Claude Code session changed (Command Palette: `open-session-review`) |
 
 ### Branches Panel (when panel is focused)
 | Shortcut | Action |

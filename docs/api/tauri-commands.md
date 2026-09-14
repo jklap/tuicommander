@@ -127,6 +127,17 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 | `create_branch` | `path, name, start_point, checkout` | `()` | Create a new branch from `start_point` (defaults to HEAD). `checkout=true` switches to it immediately |
 | `get_recent_branches` | `path, limit` | `Vec<String>` | Recently checked-out branches from reflog, ordered by recency |
 
+## Session Diff Review (`session_review.rs`)
+
+Reconstructs a step-by-step, per-file edit review from a Claude Code session transcript (`~/.claude/projects/<slug>/<uuid>.jsonl`) — no new agent instrumentation, purely a reconstruction from files Claude Code already writes. See [`docs/backend/session-review.md`](../backend/session-review.md) for the transcript format, the 5-tier base-resolution strategy, and the two revert mechanisms.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `list_review_sessions` | `repo_path, limit?, include_counts?, claude_config_dir?` | `Vec<SessionSummary>` | Recent Claude Code sessions for the repo's project slug, newest first. `include_counts` (default false) scans each transcript's edit/file counts — only the first `limit` (default 20, capped 50) entries |
+| `get_session_review` | `repo_path, session_id, include_subagents?, claude_config_dir?` | `SessionReview` | Full chronological edit timeline + per-file cumulative diffs for one session. `include_subagents` (default true) merges in `subagents/*.jsonl` transcripts |
+| `revert_session_step` | `repo_path, session_id, tool_use_id, dry_run?, claude_config_dir?` | `RevertResult` | Undo one step, keeping every later step (`git apply --reverse` in-repo; string-substitution reversal out-of-repo). Keyed by the transcript's own `tool_use_id`, never a client-supplied patch. `dry_run` checks feasibility without touching the working tree |
+| `revert_file_to_session_start` | `repo_path, session_id, abs_path, force?, dry_run?, claude_config_dir?` | `RevertResult` | Restore a file to its content at session start (byte-exact backup restore, reconstructed-content write, or delete if the session created it). Refuses when the file has drifted since unless `force: true` |
+
 ## Commit Graph (`git_graph.rs`)
 
 | Command | Args | Returns | Description |

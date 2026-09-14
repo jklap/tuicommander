@@ -168,6 +168,17 @@ tracked under the invoking `-L`/`-S` label, so it never touches a different labe
 | `GET` | `/repo/changelog?path=&sinceTag=` | AI changelog `{markdown, json}` (Headless slot) |
 | `POST` | `/repo/conflict-assist` | Worktree + rebase; reports verified/unverified clean or conflicts, base source, warning, and agent prompt |
 
+### Session Diff Review
+
+See [`docs/backend/session-review.md`](./session-review.md).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/repo/session-review/sessions?path=&limit=&include_counts=` | List recent Claude Code sessions for the repo, newest first |
+| `GET` | `/repo/session-review?path=&session_id=&include_subagents=` | Full step timeline + per-file cumulative diffs for one session |
+| `POST` | `/repo/session-review/revert-step` | Undo one step, keyed by `tool_use_id`, keeping every later step |
+| `POST` | `/repo/session-review/revert-file` | Restore a file to its session-start content (or delete it if created this session) |
+
 ### Configuration
 
 | Method | Path | Description |

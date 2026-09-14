@@ -166,6 +166,37 @@ pub(crate) struct RevertResult {
 
 // ─────────────────────────── Discovery helpers ──────────────────────────────
 
+/// Reject anything that isn't a bare UUID before it's used as a path
+/// component. `session_id` is caller-supplied on every public command in this
+/// module and is joined directly into a filesystem path
+/// (`project_dir.join(format!("{session_id}.jsonl"))`,
+/// `project_dir.join(session_id).join("subagents")`) — without this check a
+/// crafted `session_id` like `"../../other-project/other-uuid"` reads a
+/// completely different project's session transcript instead of one under
+/// the caller's own `repo_path`. Every command that accepts a `session_id`
+/// directly from the transport (not one this module derived itself by
+/// listing a directory) must call this before using it in any path join.
+fn validate_session_id(session_id: &str) -> Result<(), String> {
+    let bytes = session_id.as_bytes();
+    let valid = bytes.len() == 36
+        && bytes[8] == b'-'
+        && bytes[13] == b'-'
+        && bytes[18] == b'-'
+        && bytes[23] == b'-'
+        && bytes.iter().enumerate().all(|(i, &b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("Invalid session id: {session_id:?}"))
+    }
+}
+
 /// `<projects>/<slug>/` for a repo path, honoring `CLAUDE_CONFIG_DIR`.
 fn project_dir_for(repo_path: &str, cfg: Option<&str>) -> Option<PathBuf> {
     let path =
@@ -472,6 +503,22 @@ fn scan_transcript(
 
 // ─────────────────────────── Replay / diffing ───────────────────────────────
 
+/// Locate `needle` in `haystack` for a single (non-`replace_all`)
+/// substitution. `str::find` treats an empty needle as matching at *every*
+/// position — concretely, always "found" at offset 0 — which would silently
+/// substitute at the wrong location for a pure-deletion edit (`new_string ==
+/// ""`, the common case) or a hypothetical pure-insertion edit (`old_string
+/// == ""`). Neither direction can be located unambiguously from content
+/// alone without hunk context, so treat an empty needle as unlocatable
+/// rather than guessing an offset and corrupting the file.
+fn find_single_occurrence(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        None
+    } else {
+        haystack.find(needle)
+    }
+}
+
 /// Apply one step forward against `content`. `Err` names the mismatch.
 fn apply_forward(content: &str, e: &RawEdit) -> Result<String, String> {
     match e.kind {
@@ -485,7 +532,7 @@ fn apply_forward(content: &str, e: &RawEdit) -> Result<String, String> {
                 }
                 Ok(content.replace(old, new))
             } else {
-                match content.find(old) {
+                match find_single_occurrence(content, old) {
                     Some(idx) => {
                         let mut s = String::with_capacity(content.len());
                         s.push_str(&content[..idx]);
@@ -526,7 +573,7 @@ fn apply_reverse(content: &str, e: &RawEdit) -> Result<String, String> {
                 }
                 Ok(content.replace(new, old))
             } else {
-                match content.find(new) {
+                match find_single_occurrence(content, new) {
                     Some(idx) => {
                         let mut s = String::with_capacity(content.len());
                         s.push_str(&content[..idx]);
@@ -621,13 +668,33 @@ fn unified_patch(
     (patch, additions, deletions)
 }
 
+/// Canonicalize `path`, falling back to canonicalizing its parent (and
+/// rejoining the file name) when the path itself doesn't exist — e.g. a
+/// file this session created and later deleted. Comparing a non-canonical
+/// path against a canonicalized repo root (the naive fallback) misclassifies
+/// a genuinely in-repo file whenever the repo root sits behind a symlink
+/// (common for worktrees), since only the *file* component failed to
+/// resolve, not the directory tree above it. Falls back to the raw path
+/// only when no ancestor resolves either.
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    if let Ok(c) = path.canonicalize() {
+        return c;
+    }
+    if let Some(parent) = path.parent()
+        && let Some(name) = path.file_name()
+        && let Ok(c) = parent.canonicalize()
+    {
+        return c.join(name);
+    }
+    path.to_path_buf()
+}
+
 /// Classify an absolute path against the (canonicalized) repo root.
 fn classify_path(canonical_repo: &Option<PathBuf>, abs: &Path) -> (Option<String>, bool) {
     let Some(repo) = canonical_repo else {
         return (None, false);
     };
-    let canon = abs.canonicalize().ok();
-    let target = canon.as_deref().unwrap_or(abs);
+    let target = canonicalize_best_effort(abs);
     match target.strip_prefix(repo) {
         Ok(rel) => (Some(rel.to_string_lossy().replace('\\', "/")), true),
         Err(_) => (None, false),
@@ -1167,6 +1234,12 @@ pub(crate) async fn list_review_sessions(
 struct CachedReview {
     len: u64,
     mtime: std::time::SystemTime,
+    /// Part of the cache key, not just informational: a cached review built
+    /// with one value of `include_subagents` must never be served back for a
+    /// request with the other value, or toggling the "subagent edits"
+    /// checkbox silently no-ops until the transcript's mtime happens to
+    /// change for an unrelated reason.
+    include_subagents: bool,
     review: SessionReview,
 }
 
@@ -1177,15 +1250,18 @@ fn review_cache() -> &'static Mutex<HashMap<PathBuf, CachedReview>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn get_cached_review(transcript: &Path) -> Option<SessionReview> {
+fn get_cached_review(transcript: &Path, include_subagents: bool) -> Option<SessionReview> {
     let meta = std::fs::metadata(transcript).ok()?;
     let mtime = meta.modified().ok()?;
     let map = review_cache().lock().ok()?;
     let entry = map.get(transcript)?;
-    (entry.len == meta.len() && entry.mtime == mtime).then(|| entry.review.clone())
+    (entry.len == meta.len()
+        && entry.mtime == mtime
+        && entry.include_subagents == include_subagents)
+        .then(|| entry.review.clone())
 }
 
-fn put_cached_review(transcript: &Path, review: &SessionReview) {
+fn put_cached_review(transcript: &Path, include_subagents: bool, review: &SessionReview) {
     let Ok(meta) = std::fs::metadata(transcript) else {
         return;
     };
@@ -1206,9 +1282,21 @@ fn put_cached_review(transcript: &Path, review: &SessionReview) {
         CachedReview {
             len: meta.len(),
             mtime,
+            include_subagents,
             review: review.clone(),
         },
     );
+}
+
+/// Evict any cached review for `transcript`, regardless of the
+/// `include_subagents` it was cached under. Must be called after any revert
+/// mutates the working tree — a revert changes files on disk, not the
+/// transcript itself, so the `(len, mtime)` cache key would otherwise keep
+/// serving the stale pre-revert review indefinitely.
+fn invalidate_cached_review(transcript: &Path) {
+    if let Ok(mut map) = review_cache().lock() {
+        map.remove(transcript);
+    }
 }
 
 // ─────────────────────────── Commands ───────────────────────────────────────
@@ -1223,6 +1311,7 @@ pub(crate) async fn get_session_review(
 ) -> Result<SessionReview, String> {
     let include_subagents = include_subagents.unwrap_or(true);
     tokio::task::spawn_blocking(move || {
+        validate_session_id(&session_id)?;
         let project_dir = project_dir_for(&repo_path, claude_config_dir.as_deref())
             .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
         let transcript = project_dir.join(format!("{session_id}.jsonl"));
@@ -1232,7 +1321,7 @@ pub(crate) async fn get_session_review(
                 transcript.display()
             ));
         }
-        if let Some(cached) = get_cached_review(&transcript) {
+        if let Some(cached) = get_cached_review(&transcript, include_subagents) {
             return Ok(cached);
         }
         let repo = PathBuf::from(&repo_path);
@@ -1248,7 +1337,7 @@ pub(crate) async fn get_session_review(
             &session_id,
             claude_config_dir.as_deref(),
         )?;
-        put_cached_review(&transcript, &review);
+        put_cached_review(&transcript, include_subagents, &review);
         Ok(review)
     })
     .await
@@ -1292,7 +1381,7 @@ fn revert_step_via_substitution(edit: &RawEdit, dry_run: bool) -> Result<RevertR
                 }
                 current.replace(new, old)
             } else {
-                match current.find(new) {
+                match find_single_occurrence(&current, new) {
                     Some(idx) => {
                         let mut s = String::with_capacity(current.len());
                         s.push_str(&current[..idx]);
@@ -1359,69 +1448,80 @@ pub(crate) async fn revert_session_step(
 ) -> Result<RevertResult, String> {
     let dry_run = dry_run.unwrap_or(false);
     let repo_for_bump = repo_path.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<RevertResult, String> {
-        let project_dir = project_dir_for(&repo_path, claude_config_dir.as_deref())
-            .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
-        let transcript = project_dir.join(format!("{session_id}.jsonl"));
-        if !transcript.is_file() {
-            return Err(format!(
-                "Session transcript not found: {}",
-                transcript.display()
-            ));
-        }
-        let repo = PathBuf::from(&repo_path);
-        let subs = subagent_transcripts(&project_dir, &session_id);
-        let review = build_session_review(
-            &repo,
-            &transcript,
-            &subs,
-            &session_id,
-            claude_config_dir.as_deref(),
-        )?;
-
-        let Some(step) = review.steps.iter().find(|s| s.tool_use_id == tool_use_id) else {
-            return Err(format!(
-                "No step with tool_use_id {tool_use_id} in this session"
-            ));
-        };
-
-        if step.in_repo {
-            if step.patch.trim().is_empty() {
-                return Ok(RevertResult {
-                    applied: false,
-                    method: "git_apply_reverse".into(),
-                    abs_path: step.abs_path.clone(),
-                    message: Some("Nothing to revert — this step made no change".into()),
-                });
-            }
-            match crate::git::apply_reverse_patch_impl(&repo_path, &step.patch, None, dry_run) {
-                Ok(()) => Ok(RevertResult {
-                    applied: !dry_run,
-                    method: "git_apply_reverse".into(),
-                    abs_path: step.abs_path.clone(),
-                    message: dry_run.then(|| "This step can be reverted".into()),
-                }),
-                Err(e) => Ok(RevertResult {
-                    applied: false,
-                    method: "git_apply_reverse".into(),
-                    abs_path: step.abs_path.clone(),
-                    message: Some(e),
-                }),
-            }
-        } else {
-            let Some(edit) = find_raw_edit_by_tool_use_id(&transcript, &subs, &tool_use_id) else {
+    let (result, transcript) =
+        tokio::task::spawn_blocking(move || -> Result<(RevertResult, PathBuf), String> {
+            validate_session_id(&session_id)?;
+            let project_dir = project_dir_for(&repo_path, claude_config_dir.as_deref())
+                .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
+            let transcript = project_dir.join(format!("{session_id}.jsonl"));
+            if !transcript.is_file() {
                 return Err(format!(
-                    "Could not re-locate step {tool_use_id} in the transcript"
+                    "Session transcript not found: {}",
+                    transcript.display()
+                ));
+            }
+            let repo = PathBuf::from(&repo_path);
+            let subs = subagent_transcripts(&project_dir, &session_id);
+            let review = build_session_review(
+                &repo,
+                &transcript,
+                &subs,
+                &session_id,
+                claude_config_dir.as_deref(),
+            )?;
+
+            let Some(step) = review.steps.iter().find(|s| s.tool_use_id == tool_use_id) else {
+                return Err(format!(
+                    "No step with tool_use_id {tool_use_id} in this session"
                 ));
             };
-            revert_step_via_substitution(&edit, dry_run)
-        }
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking join error: {e}"))??;
+
+            let result = if step.in_repo {
+                if step.patch.trim().is_empty() {
+                    RevertResult {
+                        applied: false,
+                        method: "git_apply_reverse".into(),
+                        abs_path: step.abs_path.clone(),
+                        message: Some("Nothing to revert — this step made no change".into()),
+                    }
+                } else {
+                    match crate::git::apply_reverse_patch_impl(
+                        &repo_path,
+                        &step.patch,
+                        None,
+                        dry_run,
+                    ) {
+                        Ok(()) => RevertResult {
+                            applied: !dry_run,
+                            method: "git_apply_reverse".into(),
+                            abs_path: step.abs_path.clone(),
+                            message: dry_run.then(|| "This step can be reverted".into()),
+                        },
+                        Err(e) => RevertResult {
+                            applied: false,
+                            method: "git_apply_reverse".into(),
+                            abs_path: step.abs_path.clone(),
+                            message: Some(e),
+                        },
+                    }
+                }
+            } else {
+                let Some(edit) = find_raw_edit_by_tool_use_id(&transcript, &subs, &tool_use_id)
+                else {
+                    return Err(format!(
+                        "Could not re-locate step {tool_use_id} in the transcript"
+                    ));
+                };
+                revert_step_via_substitution(&edit, dry_run)?
+            };
+            Ok((result, transcript))
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking join error: {e}"))??;
 
     if result.applied {
         crate::git::bump_working_tree_epoch(&repo_for_bump);
+        invalidate_cached_review(&transcript);
     }
     Ok(result)
 }
@@ -1440,89 +1540,97 @@ pub(crate) async fn revert_file_to_session_start(
     let force = force.unwrap_or(false);
     let dry_run = dry_run.unwrap_or(false);
     let repo_for_bump = repo_path.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<RevertResult, String> {
-        let project_dir = project_dir_for(&repo_path, claude_config_dir.as_deref())
-            .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
-        let transcript = project_dir.join(format!("{session_id}.jsonl"));
-        if !transcript.is_file() {
-            return Err(format!("Session transcript not found: {}", transcript.display()));
-        }
-        let repo = PathBuf::from(&repo_path);
-        let subs = subagent_transcripts(&project_dir, &session_id);
-        let built = build_session_review_full(&repo, &transcript, &subs, &session_id, claude_config_dir.as_deref())?;
-
-        let Some(file) = built.review.files.iter().find(|f| f.abs_path == abs_path) else {
-            return Err(format!("No file review entry for {abs_path} in this session"));
-        };
-
-        if file.drifted_from_disk && !force {
-            return Ok(RevertResult {
-                applied: false,
-                method: "write_base".into(),
-                abs_path: abs_path.clone(),
-                message: Some(
-                    "This file has changed outside the session since it was last touched; pass force to overwrite anyway"
-                        .into(),
-                ),
-            });
-        }
-
-        match file.base_source {
-            BaseSource::Unknown => Ok(RevertResult {
-                applied: false,
-                method: "write_base".into(),
-                abs_path: abs_path.clone(),
-                message: Some("Could not determine this file's content at session start".into()),
-            }),
-            BaseSource::CreatedInSession => {
-                if !dry_run {
-                    let _ = std::fs::remove_file(&abs_path);
-                }
-                Ok(RevertResult {
-                    applied: !dry_run,
-                    method: "delete_file".into(),
-                    abs_path: abs_path.clone(),
-                    message: dry_run.then(|| "File would be deleted (created this session)".into()),
-                })
+    let (result, transcript) = tokio::task::spawn_blocking(
+        move || -> Result<(RevertResult, PathBuf), String> {
+            validate_session_id(&session_id)?;
+            let project_dir = project_dir_for(&repo_path, claude_config_dir.as_deref())
+                .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
+            let transcript = project_dir.join(format!("{session_id}.jsonl"));
+            if !transcript.is_file() {
+                return Err(format!("Session transcript not found: {}", transcript.display()));
             }
-            BaseSource::Backup if built.backup_bytes.contains_key(&abs_path) => {
-                let bytes = &built.backup_bytes[&abs_path];
-                if !dry_run {
-                    std::fs::write(&abs_path, bytes).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
-                }
-                Ok(RevertResult {
-                    applied: !dry_run,
-                    method: "restore_backup".into(),
-                    abs_path: abs_path.clone(),
-                    message: dry_run.then(|| "File would be restored from its session-start backup".into()),
-                })
-            }
-            _ => match built.file_bases.get(&abs_path) {
-                Some(base_text) => {
-                    if !dry_run {
-                        std::fs::write(&abs_path, base_text).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
-                    }
-                    Ok(RevertResult {
-                        applied: !dry_run,
+            let repo = PathBuf::from(&repo_path);
+            let subs = subagent_transcripts(&project_dir, &session_id);
+            let built = build_session_review_full(&repo, &transcript, &subs, &session_id, claude_config_dir.as_deref())?;
+
+            let Some(file) = built.review.files.iter().find(|f| f.abs_path == abs_path) else {
+                return Err(format!("No file review entry for {abs_path} in this session"));
+            };
+
+            if file.drifted_from_disk && !force {
+                return Ok((
+                    RevertResult {
+                        applied: false,
                         method: "write_base".into(),
                         abs_path: abs_path.clone(),
-                        message: dry_run.then(|| "File would be restored to its reconstructed session-start content".into()),
-                    })
-                }
-                None => Ok(RevertResult {
+                        message: Some(
+                            "This file has changed outside the session since it was last touched; pass force to overwrite anyway"
+                                .into(),
+                        ),
+                    },
+                    transcript,
+                ));
+            }
+
+            let result = match file.base_source {
+                BaseSource::Unknown => RevertResult {
                     applied: false,
                     method: "write_base".into(),
                     abs_path: abs_path.clone(),
                     message: Some("Could not determine this file's content at session start".into()),
-                }),
-            },
-        }
-    })
+                },
+                BaseSource::CreatedInSession => {
+                    if !dry_run {
+                        let _ = std::fs::remove_file(&abs_path);
+                    }
+                    RevertResult {
+                        applied: !dry_run,
+                        method: "delete_file".into(),
+                        abs_path: abs_path.clone(),
+                        message: dry_run.then(|| "File would be deleted (created this session)".into()),
+                    }
+                }
+                BaseSource::Backup if built.backup_bytes.contains_key(&abs_path) => {
+                    let bytes = &built.backup_bytes[&abs_path];
+                    if !dry_run {
+                        std::fs::write(&abs_path, bytes).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
+                    }
+                    RevertResult {
+                        applied: !dry_run,
+                        method: "restore_backup".into(),
+                        abs_path: abs_path.clone(),
+                        message: dry_run.then(|| "File would be restored from its session-start backup".into()),
+                    }
+                }
+                _ => match built.file_bases.get(&abs_path) {
+                    Some(base_text) => {
+                        if !dry_run {
+                            std::fs::write(&abs_path, base_text).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
+                        }
+                        RevertResult {
+                            applied: !dry_run,
+                            method: "write_base".into(),
+                            abs_path: abs_path.clone(),
+                            message: dry_run.then(|| "File would be restored to its reconstructed session-start content".into()),
+                        }
+                    }
+                    None => RevertResult {
+                        applied: false,
+                        method: "write_base".into(),
+                        abs_path: abs_path.clone(),
+                        message: Some("Could not determine this file's content at session start".into()),
+                    },
+                },
+            };
+            Ok((result, transcript))
+        },
+    )
     .await
     .map_err(|e| format!("spawn_blocking join error: {e}"))??;
 
     if result.applied {
         crate::git::bump_working_tree_epoch(&repo_for_bump);
+        invalidate_cached_review(&transcript);
     }
     Ok(result)
 }
@@ -2541,5 +2649,268 @@ mod tests {
             std::fs::read_to_string(&abs).unwrap(),
             "line one\nline two\n"
         );
+    }
+
+    #[tokio::test]
+    async fn revert_out_of_repo_deletion_edit_does_not_corrupt_at_offset_zero() {
+        // A pure-deletion edit (new_string == "") has no anchor to locate by
+        // content search alone — str::find("") always matches at offset 0,
+        // so naively reversing it would insert `old` back at the very start
+        // of the file regardless of where the deletion actually happened.
+        // This must report "not found" instead of silently corrupting.
+        let (_dir, repo) = fixture_repo();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let abs = outside_dir
+            .path()
+            .join("notes.md")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&abs, "line one\nline three\n").unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        let tb = TranscriptBuilder::new(&repo_str);
+        let tb = tb.edit(&abs, "line two\n", "", false);
+        let step_id = tb.last_tool_use_id();
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let result = revert_session_step(
+            repo_str,
+            session_id,
+            step_id,
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !result.applied,
+            "must not silently apply an unlocatable reversal"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&abs).unwrap(),
+            "line one\nline three\n",
+            "file content must be untouched, not corrupted at offset 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn revert_invalidates_the_review_cache() {
+        // A revert mutates the working tree, not the transcript, so the
+        // review cache's (len, mtime) key never changes on its own —
+        // get_session_review must invalidate the stale entry itself, or a
+        // caller re-fetching right after a revert (exactly what
+        // SessionDiffTab.tsx does) keeps seeing the pre-revert result.
+        //
+        // Observable: before the revert, disk holds the post-edit content,
+        // so reverse-folding it against the transcript's one edit succeeds
+        // (BaseSource::Reconstructed). After the revert, disk holds the
+        // pre-edit content again, so reverse-folding the *same* edit against
+        // it no longer finds the substituted text and fails
+        // (BaseSource::Unknown). A cache hit would keep reporting
+        // Reconstructed; only a fresh parse reports Unknown.
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "a1\na2-changed\na3\n").unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        let tb = TranscriptBuilder::new(&repo_str).edit(&abs, "a2\n", "a2-changed\n", false);
+        let step_id = tb.last_tool_use_id();
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let cfg_str = cfg.path().to_string_lossy().to_string();
+
+        let before = get_session_review(
+            repo_str.clone(),
+            session_id.clone(),
+            Some(false),
+            Some(cfg_str.clone()),
+        )
+        .await
+        .unwrap();
+        let file_before = before.files.iter().find(|f| f.abs_path == abs).unwrap();
+        assert_eq!(file_before.base_source, BaseSource::Reconstructed);
+
+        let result = revert_session_step(
+            repo_str.clone(),
+            session_id.clone(),
+            step_id,
+            Some(false),
+            Some(cfg_str.clone()),
+        )
+        .await
+        .unwrap();
+        assert!(result.applied, "revert failed: {:?}", result.message);
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "a1\na2\na3\n");
+
+        let after = get_session_review(repo_str, session_id, Some(false), Some(cfg_str))
+            .await
+            .unwrap();
+        let file_after = after.files.iter().find(|f| f.abs_path == abs).unwrap();
+        assert_eq!(
+            file_after.base_source,
+            BaseSource::Unknown,
+            "stale cache: get_session_review after a revert must recompute against the new disk state"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_key_includes_subagent_flag() {
+        // A cached review built with include_subagents=true must never be
+        // served back for a request with include_subagents=false (or vice
+        // versa) just because the transcript's (len, mtime) is unchanged —
+        // otherwise toggling the "subagent edits" checkbox silently no-ops.
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("sub3.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "orig\n").unwrap();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).subagent_edit(
+            "worker1",
+            &abs,
+            "orig\n",
+            "changed\n",
+        );
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let repo_str = repo.to_string_lossy().to_string();
+        let cfg_str = cfg.path().to_string_lossy().to_string();
+
+        let with_subs = get_session_review(
+            repo_str.clone(),
+            session_id.clone(),
+            Some(true),
+            Some(cfg_str.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(with_subs.steps.len(), 1);
+
+        let without_subs = get_session_review(repo_str, session_id, Some(false), Some(cfg_str))
+            .await
+            .unwrap();
+        assert_eq!(
+            without_subs.steps.len(),
+            0,
+            "cache must not serve the include_subagents=true result for an include_subagents=false request"
+        );
+    }
+
+    #[test]
+    fn classify_path_resolves_a_since_deleted_in_repo_file_via_parent_canonicalization() {
+        // The file itself doesn't exist (never created on disk in this
+        // test, standing in for one the session created then deleted), so
+        // `abs.canonicalize()` fails — but its parent directory (the repo
+        // root, which on macOS commonly sits behind a /var -> /private/var
+        // symlink even for a plain tempdir) does exist and does resolve.
+        // Falling back to the raw, non-canonical path in that case would
+        // wrongly compare against the *canonicalized* repo root and
+        // misclassify a genuinely in-repo file as outside it.
+        let (_dir, repo) = fixture_repo();
+        let canonical_repo = Some(repo.canonicalize().unwrap());
+        let abs = repo.join("gone.txt");
+        let (rel, in_repo) = classify_path(&canonical_repo, &abs);
+        assert!(
+            in_repo,
+            "a file under an existing repo directory must classify as in-repo even if the file itself doesn't exist"
+        );
+        assert_eq!(rel.as_deref(), Some("gone.txt"));
+    }
+
+    // ── session_id validation (path-traversal guard) ─────────────────────
+    //
+    // `session_id` is joined directly into a filesystem path
+    // (`project_dir.join(format!("{session_id}.jsonl"))`) on every command
+    // that accepts it from a caller. Without validation, a crafted
+    // `session_id` like `"../other-slug/other-uuid"` would read a
+    // completely different project's session transcript.
+
+    #[test]
+    fn validate_session_id_accepts_a_real_uuid() {
+        assert!(validate_session_id("6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f").is_ok());
+    }
+
+    #[test]
+    fn validate_session_id_rejects_path_traversal() {
+        assert!(validate_session_id("../other-slug/other-uuid").is_err());
+        assert!(validate_session_id("../../../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn validate_session_id_rejects_a_path_separator() {
+        assert!(validate_session_id("foo/bar").is_err());
+        assert!(validate_session_id("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn validate_session_id_rejects_wrong_length_and_missing_hyphens() {
+        assert!(validate_session_id("").is_err());
+        assert!(validate_session_id("6d1d4349dbe24a438f2e9b1c3a4d5e6f").is_err()); // no hyphens
+        assert!(validate_session_id("6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6").is_err()); // 1 char short
+    }
+
+    #[test]
+    fn validate_session_id_rejects_non_hex_characters() {
+        assert!(validate_session_id("gggggggg-dbe2-4a43-8f2e-9b1c3a4d5e6f").is_err());
+    }
+
+    #[tokio::test]
+    async fn get_session_review_rejects_a_traversal_session_id_before_touching_disk() {
+        let (_dir, repo) = fixture_repo();
+        let cfg = tempfile::tempdir().unwrap();
+        let err = get_session_review(
+            repo.to_string_lossy().to_string(),
+            "../../../../etc/passwd".to_string(),
+            None,
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("Invalid session id"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn revert_session_step_rejects_a_traversal_session_id() {
+        let (_dir, repo) = fixture_repo();
+        let cfg = tempfile::tempdir().unwrap();
+        let err = revert_session_step(
+            repo.to_string_lossy().to_string(),
+            "../../elsewhere".to_string(),
+            "toolu_x".to_string(),
+            None,
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("Invalid session id"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn revert_file_to_session_start_rejects_a_traversal_session_id() {
+        let (_dir, repo) = fixture_repo();
+        let cfg = tempfile::tempdir().unwrap();
+        let err = revert_file_to_session_start(
+            repo.to_string_lossy().to_string(),
+            "../../elsewhere".to_string(),
+            "/some/file.ts".to_string(),
+            None,
+            None,
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("Invalid session id"), "got: {err}");
     }
 }
