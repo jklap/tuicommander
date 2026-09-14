@@ -959,6 +959,7 @@ fn spawn_pty_launch_with_emitter(
             if let Some(mut command) = direct {
                 crate::pty::bind_pty_identity(&state, &mut command, &session_id, None);
                 crate::pty::apply_agent_screen_env(&mut command, &std::collections::HashMap::new());
+                crate::pty::inject_worktree_env(&mut command, cwd.as_deref());
                 return command;
             }
             let mut cmd = build_shell_command(&shell);
@@ -978,6 +979,7 @@ fn spawn_pty_launch_with_emitter(
                 requested.tuic_session.as_deref(),
             );
             crate::pty::apply_agent_screen_env(&mut cmd, &std::collections::HashMap::new());
+            crate::pty::inject_worktree_env(&mut cmd, cwd.as_deref());
             if let Some(command) = &requested.startup_command {
                 let (env, command) = crate::session_resume::shell_launch(command);
                 for (key, value) in env {
