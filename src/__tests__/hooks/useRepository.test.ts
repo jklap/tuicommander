@@ -150,4 +150,80 @@ describe("useRepository", () => {
 			expect(result).toEqual({});
 		});
 	});
+
+	describe("listReviewSessions()", () => {
+		it("calls invoke with camelCase args and returns the list", async () => {
+			const sessions = [{ session_id: "s1" }];
+			mockInvoke.mockResolvedValueOnce(sessions);
+			const result = await repo.listReviewSessions("/repos/my-repo", 10, true);
+			expect(result).toEqual(sessions);
+			expect(mockInvoke).toHaveBeenCalledWith("list_review_sessions", {
+				repoPath: "/repos/my-repo",
+				limit: 10,
+				includeCounts: true,
+			});
+		});
+
+		it("swallows an error and returns an empty array", async () => {
+			mockInvoke.mockRejectedValueOnce(new Error("boom"));
+			const result = await repo.listReviewSessions("/repos/my-repo");
+			expect(result).toEqual([]);
+		});
+	});
+
+	describe("getSessionReview()", () => {
+		it("calls invoke with camelCase args and returns the review", async () => {
+			const review = { session_id: "s1", steps: [], files: [] };
+			mockInvoke.mockResolvedValueOnce(review);
+			const result = await repo.getSessionReview("/repos/my-repo", "s1", false);
+			expect(result).toEqual(review);
+			expect(mockInvoke).toHaveBeenCalledWith("get_session_review", {
+				repoPath: "/repos/my-repo",
+				sessionId: "s1",
+				includeSubagents: false,
+			});
+		});
+
+		it("rethrows on error rather than returning an empty review", async () => {
+			mockInvoke.mockRejectedValueOnce(new Error("boom"));
+			await expect(repo.getSessionReview("/repos/my-repo", "s1")).rejects.toThrow("boom");
+		});
+	});
+
+	describe("revertSessionStep()", () => {
+		it("calls invoke with tool_use_id, not a step index, and rethrows on error", async () => {
+			const result = { applied: true, method: "git_apply_reverse", abs_path: "/f.ts", message: null };
+			mockInvoke.mockResolvedValueOnce(result);
+			const got = await repo.revertSessionStep("/repos/my-repo", "s1", "toolu_abc", true);
+			expect(got).toEqual(result);
+			expect(mockInvoke).toHaveBeenCalledWith("revert_session_step", {
+				repoPath: "/repos/my-repo",
+				sessionId: "s1",
+				toolUseId: "toolu_abc",
+				dryRun: true,
+			});
+
+			mockInvoke.mockRejectedValueOnce(new Error("boom"));
+			await expect(repo.revertSessionStep("/repos/my-repo", "s1", "toolu_abc")).rejects.toThrow("boom");
+		});
+	});
+
+	describe("revertFileToSessionStart()", () => {
+		it("calls invoke with absPath/force/dryRun and rethrows on error", async () => {
+			const result = { applied: true, method: "restore_backup", abs_path: "/f.ts", message: null };
+			mockInvoke.mockResolvedValueOnce(result);
+			const got = await repo.revertFileToSessionStart("/repos/my-repo", "s1", "/f.ts", true, false);
+			expect(got).toEqual(result);
+			expect(mockInvoke).toHaveBeenCalledWith("revert_file_to_session_start", {
+				repoPath: "/repos/my-repo",
+				sessionId: "s1",
+				absPath: "/f.ts",
+				force: true,
+				dryRun: false,
+			});
+
+			mockInvoke.mockRejectedValueOnce(new Error("boom"));
+			await expect(repo.revertFileToSessionStart("/repos/my-repo", "s1", "/f.ts")).rejects.toThrow("boom");
+		});
+	});
 });

@@ -4,6 +4,7 @@ import { appLogger } from "../stores/appLogger";
 import type { WorkspaceLifecycleStatus } from "../stores/workspaceIdentity";
 import type { GitOpKind } from "../stores/repositories";
 import type { RepoInfo } from "../types";
+import type { RevertResult, SessionReview, SessionSummary } from "../types/sessionDiff";
 
 // ---------------------------------------------------------------------------
 // TCC (macOS permission) error detection — global, shown once per session
@@ -199,6 +200,46 @@ export function useRepository() {
 			appLogger.error("git", "Failed to get file diff", err);
 			return "";
 		}
+	}
+
+	/** Recent Claude Code sessions that touched this repo, newest first. */
+	async function listReviewSessions(repoPath: string, limit?: number, includeCounts?: boolean): Promise<SessionSummary[]> {
+		try {
+			return await invoke<SessionSummary[]>("list_review_sessions", { repoPath, limit, includeCounts });
+		} catch (err) {
+			appLogger.error("git", "Failed to list Claude sessions", err);
+			return [];
+		}
+	}
+
+	/** Every Write/Edit a session made, as chronological steps + per-file rollups.
+	 *  Rethrows — an empty `{steps:[],files:[]}` must never be confused with a
+	 *  real backend failure, so callers track their own error state instead of
+	 *  trusting a swallowed-to-empty result to mean "no edits". */
+	async function getSessionReview(repoPath: string, sessionId: string, includeSubagents?: boolean): Promise<SessionReview> {
+		return await invoke<SessionReview>("get_session_review", { repoPath, sessionId, includeSubagents });
+	}
+
+	/** Undo one step, keeping every later step. Throws — the caller surfaces the failure. */
+	async function revertSessionStep(
+		repoPath: string,
+		sessionId: string,
+		toolUseId: string,
+		dryRun?: boolean,
+	): Promise<RevertResult> {
+		return await invoke<RevertResult>("revert_session_step", { repoPath, sessionId, toolUseId, dryRun });
+	}
+
+	/** Restore a file to its content at session start (or delete it if the
+	 *  session created it). Throws — the caller surfaces the failure. */
+	async function revertFileToSessionStart(
+		repoPath: string,
+		sessionId: string,
+		absPath: string,
+		force?: boolean,
+		dryRun?: boolean,
+	): Promise<RevertResult> {
+		return await invoke<RevertResult>("revert_file_to_session_start", { repoPath, sessionId, absPath, force, dryRun });
 	}
 
 	/** Markdown file entry with git status */
@@ -508,5 +549,9 @@ export function useRepository() {
 		switchBranch,
 		runSetupScript,
 		getRecentCommits,
+		listReviewSessions,
+		getSessionReview,
+		revertSessionStep,
+		revertFileToSessionStart,
 	};
 }
