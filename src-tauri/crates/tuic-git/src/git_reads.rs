@@ -1078,7 +1078,7 @@ pub fn git_reads() -> &'static GitReadsRouter {
     ROUTER.get_or_init(GitReadsRouter::new)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_fixtures {
     use std::path::{Path, PathBuf};
     use std::process::Command;

@@ -1134,3 +1134,34 @@ pub(super) struct RemoteConnectionTokenRequest {
     pub base_url: String,
     pub username: String,
 }
+
+#[derive(Deserialize)]
+pub(super) struct SessionListQuery {
+    pub path: String,
+    pub limit: Option<u32>,
+    pub include_counts: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SessionReviewQuery {
+    pub path: String,
+    pub session_id: String,
+    pub include_subagents: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RevertStepRequest {
+    pub path: String,
+    pub session_id: String,
+    pub tool_use_id: String,
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RevertFileRequest {
+    pub path: String,
+    pub session_id: String,
+    pub abs_path: String,
+    pub force: Option<bool>,
+    pub dry_run: Option<bool>,
+}

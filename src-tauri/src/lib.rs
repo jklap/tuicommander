@@ -143,6 +143,7 @@ pub(crate) mod repo_watcher;
 pub(crate) mod scrollback_store;
 #[cfg(feature = "desktop")]
 pub(crate) mod selfsigned;
+pub(crate) mod session_review;
 mod shell_integration;
 #[cfg(feature = "desktop")]
 pub(crate) mod sleep_prevention;
@@ -2616,6 +2617,10 @@ pub fn run() {
             git::get_file_diff,
             git::get_gutter_changes,
             git::get_recent_commits,
+            session_review::list_review_sessions,
+            session_review::get_session_review,
+            session_review::revert_session_step,
+            session_review::revert_file_to_session_start,
             list_markdown_files,
             read_file,
             read_editor_file,
