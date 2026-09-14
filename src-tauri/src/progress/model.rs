@@ -78,6 +78,23 @@ pub struct ProgressProvenance {
     pub workspace_path: Option<String>,
 }
 
+impl ProgressProvenance {
+    /// A local caller — the desktop IPC command or `POST /progress/report` —
+    /// identifies no reporter and no session. The only thing it knows about
+    /// itself is the workspace it named in the request.
+    ///
+    /// This exists as a constructor because both entry points built the same
+    /// literal by hand and neither was tested: mutating the field away
+    /// survived the whole suite in both places (measured 2026-09-14). One
+    /// construction site is one place to test.
+    pub fn for_workspace(workspace_path: &str) -> Self {
+        Self {
+            workspace_path: Some(workspace_path.to_string()),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NewProgressEvent {
@@ -455,5 +472,22 @@ mod tests {
         });
         assert_rejects_unknown_field!(ProgressExportOptions, {"includeProvenance": true});
         assert_rejects_unknown_field!(ProgressExportInput, {"operation": "preview"});
+    }
+
+    /// The workspace path is what an export with `includeProvenance` prints as
+    /// the source of an event, so losing it costs the reader the only clue to
+    /// where a report came from. Both local entry points used to build this by
+    /// hand and a mutation that deleted the field survived in both.
+    #[test]
+    fn a_local_report_is_attributed_to_the_workspace_it_named() {
+        let provenance = ProgressProvenance::for_workspace("/Users/me/project");
+        assert_eq!(
+            provenance.workspace_path.as_deref(),
+            Some("/Users/me/project")
+        );
+        // A local caller is anonymous: it is not an MCP peer and not a PTY.
+        assert_eq!(provenance.reporter_id, None);
+        assert_eq!(provenance.reporter_name, None);
+        assert_eq!(provenance.session_id, None);
     }
 }
